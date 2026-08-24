@@ -22,7 +22,6 @@ PACKAGE_ROOT = PROJECT_ROOT / "src" / "kalpamani"
 
 #: Packages that must contain no implementation modules during bootstrap.
 EMPTY_BY_DESIGN = (
-    "broker",
     "data",
     "execution",
     "risk",
@@ -33,6 +32,10 @@ EMPTY_BY_DESIGN = (
     "strategies/pullback",
     "strategies/pead",
 )
+
+#: Phase 1 permits exactly one module under broker/, per ADR-0002: a read-only
+#: account boundary. Anything else there needs a new ADR.
+BROKER_ALLOWED_MODULES = ["account.py"]
 
 #: Import names of brokerage/engine clients that must not be reachable yet.
 FORBIDDEN_IMPORTS = ("ib_insync", "ibapi", "ib_async", "QuantConnect", "AlgorithmImports")
@@ -48,6 +51,16 @@ def test_package_contains_no_implementation_yet(relative_package: str) -> None:
     assert modules == [], (
         f"kalpamani/{relative_package} must stay empty during bootstrap, found: {modules}. "
         "Implementing it requires explicit phase approval."
+    )
+
+
+def test_broker_package_contains_only_the_readonly_boundary() -> None:
+    """ADR-0002 permits a read-only account boundary and nothing more."""
+    package_dir = PACKAGE_ROOT / "broker"
+    modules = sorted(p.name for p in package_dir.glob("*.py") if p.name != "__init__.py")
+    assert modules == BROKER_ALLOWED_MODULES, (
+        f"kalpamani/broker must contain only {BROKER_ALLOWED_MODULES} during Phase 1, "
+        f"found: {modules}. Extending the brokerage surface requires a new ADR."
     )
 
 
