@@ -1,0 +1,11 @@
+# Normalize text line endings in the repository; check out native on Windows.
+* text=auto
+
+# Keep the authoritative blueprint byte-exact. Never apply text conversion.
+*.pdf binary
+docs/architecture/KalpaMani_Blueprint_V2_1.pdf binary
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.zip binary
