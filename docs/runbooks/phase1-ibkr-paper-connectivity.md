@@ -188,9 +188,11 @@ IBKR sends an **IB Key / IBKR Mobile** push notification. Approve it on your pho
 waits. This is an operational responsibility of the human operator, never automated and
 never delegated to an AI.
 
-You do **not** need to launch TWS or IB Gateway yourself: the `quantconnect/lean` engine
-image runs IB Gateway inside the container. If a deployment ever proves otherwise, document
-the requirement rather than working around it.
+You do **not** need to launch TWS or IB Gateway yourself. **Confirmed on the 2026-08-24
+deployment:** the `quantconnect/lean` image runs **IBAutomater** which starts **IBGateway
+version 1034 (Build 10.39.1f)** inside the container, drives its Swing UI, clicks
+*IB API* -> *Paper Trading* -> *Paper Log In*, and reports `Trading mode: paper`. No
+operator-launched TWS/IB Gateway process is involved.
 
 ---
 
@@ -203,6 +205,16 @@ Three independent confirmations — all three must agree:
    `^df|^du|^di` → `paper`, `^f|^i|^u` → `live`. Confirm the deployment reports
    `trading-mode: paper`.
 3. **Reported equity.** The paper account reports a simulated balance (≈ USD 1,000,000).
+
+**Observed confirmation lines** (verified 2026-08-24). Grep the deployment log for:
+
+```
+InteractiveBrokersBrokerage.OnIbAutomaterOutputDataReceived(): Click button: [Paper Trading]
+InteractiveBrokersBrokerage.OnIbAutomaterOutputDataReceived(): Trading mode: paper
+InteractiveBrokersBrokerage.OnIbAutomaterOutputDataReceived(): Click button: [Paper Log In]
+```
+
+If `Trading mode:` reads anything other than `paper`, **abort immediately**.
 
 `kalpamani.broker.account.BrokerAccountMode.classify()` implements the same rule and
 returns `UNKNOWN` for anything unrecognised, so ambiguity fails closed.
@@ -305,6 +317,7 @@ KalpaMani-created position or open order.
 | `You are not logged in` | QuantConnect not authenticated | Run `lean login` yourself (§3) |
 | Deployment rejected on organization/node | Organization tier lacks local live deployment | Licensing blocker — stop; do not work around it |
 | LEAN shuts down shortly after start | Delayed data not enabled and no market-data subscription | Redeploy with delayed data **enabled** |
+| `LoginFailed - Login failed. Please check the validity of your login credentials.` | IBKR rejected the credentials | See §11.1 — usually the **paper** password |
 | Hangs waiting to connect | 2FA not approved | Approve the IB Key push on IBKR Mobile |
 | `Interactive Brokers Lite accounts do not support API trading` | Account is IBKR Lite | Upgrade to IBKR Pro |
 | Connection drops every Sunday ~21:00 UTC | Mandatory IBKR weekly restart | Expected — approve 2FA (§9) |
@@ -312,6 +325,45 @@ KalpaMani-created position or open order.
 | `docker: daemon not running` | Docker Desktop stopped | Start Docker Desktop |
 | Preflight fails on git-ignore | `.gitignore` regression | **Stop.** Fix before entering any credential |
 | Edits to the algorithm have no effect | Edited the `.runtime/` copy | Edit `lean/projects/...` and re-run preflight |
+
+### 11.1 Diagnosing `LoginFailed`
+
+Observed on the first deployment attempt (2026-08-24). The failure timeline:
+
+```
+23:53:10.806  Trading mode: paper            <- paper mode selected correctly
+23:53:10.808  Click button: [Paper Log In]
+23:53:11.806  Window title: [Authenticating...]
+23:53:11.832  IBAutomater error - Code: LoginFailed
+```
+
+**Read the gap.** The rejection came **26 milliseconds** after the authenticating window
+appeared, and the log contained **zero** references to IB Key, IBKR Mobile or two-factor
+authentication. That distinguishes two very different failures:
+
+| Elapsed | Meaning |
+|---|---|
+| **Milliseconds**, no 2FA lines | IBKR **rejected the credentials outright**. No challenge was ever issued. |
+| **Tens of seconds to minutes**, 2FA lines present | A push **was** sent and went unapproved — approve it on IBKR Mobile. |
+
+Causes to check, most likely first:
+
+1. **The paper account has its own separate username and password.** This is the usual
+   culprit. IBKR paper credentials are *not* the live account credentials. Reset the paper
+   password in IBKR Account Management (*Settings -> Account Settings -> Paper Trading
+   Account*) and use that password.
+2. **Secure Login System not set to IB Key via IBKR Mobile.** LEAN states this is required:
+   *Account Manage Account -> Settings -> User Settings -> Security -> Secure Login System*,
+   then select **"IB Key Security via IBKR Mobile"**.
+3. **Username typo**, or leading/trailing whitespace pasted into the prompt.
+4. **IBKR Lite account.** Lite does not support API trading; IBKR **Pro** is required.
+5. **Password expired or contains characters** the automater mishandles — reset it to a
+   straightforward alphanumeric password and retry.
+
+Verify the corrected credentials by logging into the IBKR **paper** account in a browser
+*before* redeploying. That isolates a credential problem from a LEAN problem in one step.
+
+Re-running the wizard re-prompts for all values; nothing needs to be edited by hand.
 
 ---
 
