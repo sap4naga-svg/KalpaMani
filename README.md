@@ -195,9 +195,9 @@ be committed.
 from kalpamani import load_settings
 
 settings = load_settings()
-settings.environment            # Environment.RESEARCH
-settings.strategy_capital_usd   # Decimal("80000")
-settings.live_trading_enabled   # False — always, at bootstrap
+settings.environment  # Environment.RESEARCH
+settings.strategy_capital_usd  # Decimal("80000")
+settings.live_trading_enabled  # False — always, at bootstrap
 print(settings.describe_safety_posture())
 ```
 
