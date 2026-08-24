@@ -119,10 +119,16 @@ Once authenticated, scaffold the LEAN workspace **inside the untracked runtime a
 
 ```bash
 cd .runtime/lean
-../../.runtime/tools/leanvenv/Scripts/lean.exe init --language python
+../tools/leanvenv/Scripts/lean.exe init --language python --organization "<your organization name>"
 ```
 
-This creates `lean.json` and a `data/` directory there. Both are git-ignored.
+This creates `lean.json` and a `data/` directory there (~210 MB of free sample data). Both
+are git-ignored. The `--organization` value is recorded as the *working organization* and is
+what local live deployment later uses for module licensing — which is why no node prompt
+appears at deploy time.
+
+The directory must be empty when `lean init` runs. If a synced project is already present,
+move it aside and re-run `scripts/phase1_preflight.py` afterwards to restore it.
 
 ---
 
@@ -151,16 +157,24 @@ shell history and the process table. Let the wizard prompt instead.
 
 ### Prompts you will answer
 
-| Prompt | Answer |
-|---|---|
-| *Select a brokerage* | **Interactive Brokers** |
-| *Username* | your IBKR username |
-| *Account id* | your IBKR **paper** id — must begin `DU`, `DF` or `DI` |
-| *Account password* | your IBKR password — input is masked (`prompt-password`) |
-| *Weekly restart UTC time (hh:mm:ss)* | accept the default `21:00:00` (see §9) |
-| *Select a live data provider* | **Interactive Brokers** |
-| *Enable delayed market data (true/false)?* | **true** — see below |
-| *Select an organization / node* | your QuantConnect organization and a live node |
+| # | Prompt | Answer | Secret? |
+|---|---|---|---|
+| 1 | *Select a brokerage* | **Interactive Brokers** | no |
+| 2 | *Username* | your IBKR username | yes |
+| 3 | *Account id* | your IBKR **paper** id — must begin `DU`, `DF` or `DI` | sensitive |
+| 4 | *Account password* | your IBKR password — **masked** (`prompt-password`) | yes |
+| 5 | *Weekly restart UTC time (hh:mm:ss)* | accept the default `21:00:00` (see §9) | no |
+| 6 | *Select a live data feed* | **Interactive Brokers** | no |
+| 7 | *Enable delayed market data (true/false)?* | **true** — see below | no |
+
+**No organization or node prompt.** Local deployment reads the working organization from
+`.runtime/lean/lean.json`, set by `lean init --organization`. Node selection applies only to
+*cloud* live deployment, which we are not using.
+
+**No initial cash or holdings prompt.** The IBKR module declares no `live-cash-balance` or
+`live-holdings` option, so LEAN reads cash and positions from the brokerage itself. Nothing
+asks you to type a capital figure — and if anything ever does, **do not enter USD 80,000**:
+that is KalpaMani's allocation, not a brokerage balance.
 
 **Delayed data must be enabled.** LEAN's own guidance: *"If delayed market data is
 disabled, live trading will stop and LEAN will shut down"* when you subscribe to a security
