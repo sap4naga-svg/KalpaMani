@@ -634,6 +634,82 @@ def confirm_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
     return _recompute(replace(record, orders=orders))
 
 
+#: The sign LEAN reports on a fill, per role. LEAN quantities are SIGNED:
+#: a BUY fills positive, a SELL fills negative.
+_EXPECTED_FILL_SIGN: dict[OrderRole, int] = {
+    OrderRole.ENTRY: 1,
+    OrderRole.PROTECTIVE: -1,
+    OrderRole.EXIT: -1,
+}
+
+_SIDE_SIGN: dict[str, int] = {"BUY": 1, "SELL": -1}
+
+
+def expected_fill_sign(order: SubmittedOrder) -> int:
+    """The sign a fill for this order must carry.
+
+    Derived from the recorded side AND cross-checked against the role, because
+    the two are independent facts and a record where they disagree is not one to
+    act on.
+
+    Raises:
+        StateStoreError: if the side is unrecognised, or side and role disagree.
+    """
+    side_sign = _SIDE_SIGN.get(order.side.strip().upper())
+    role_sign = _EXPECTED_FILL_SIGN.get(order.role)
+    if side_sign is None or role_sign is None or side_sign != role_sign:
+        raise StateStoreError(
+            f"Order {order.client_order_id} records role={order.role.value} with "
+            f"side={order.side!r}; those disagree about direction. Refusing to interpret a "
+            "fill against a record that contradicts itself."
+        )
+    return side_sign
+
+
+def absolute_fill_quantity(order: SubmittedOrder, signed_quantity: int) -> int:
+    """Validate a SIGNED broker fill against the order, then drop the sign.
+
+    LEAN reports fill quantities signed by direction. The accounting below is
+    written in absolute quantities -- ``open_long_quantity`` derives direction
+    from the *role*, not from the sign -- so the sign has to come off somewhere.
+    Dropping it silently throws away a safety signal, and testing it as
+    ``> 0`` throws away the fill itself: that is the defect this replaces, where
+    every protective and exit SELL fill was discarded, leaving durable state
+    convinced it still held a position the broker had already closed.
+
+    So the sign is *checked* first and dropped second:
+
+    ==============  ==============  ========================
+    Role            Expected sign   A contradiction means
+    ==============  ==============  ========================
+    ENTRY           positive        a BUY that filled short
+    PROTECTIVE      negative        a stop that filled long
+    EXIT            negative        a close that filled long
+    ==============  ==============  ========================
+
+    Raises:
+        StateStoreError: on a zero fill, or if the direction contradicts the
+            recorded order. Neither is applied: a broker event that disagrees
+            with our own record of what we asked for is contradictory evidence,
+            and acting on it could add to a position we meant to close.
+    """
+    if signed_quantity == 0:
+        raise StateStoreError(
+            f"Zero-quantity fill for {order.client_order_id} reached fill accounting. A "
+            "zero fill is not an event to apply."
+        )
+    expected = expected_fill_sign(order)
+    if (signed_quantity > 0) != (expected > 0):
+        wanted = "positive" if expected > 0 else "negative"
+        raise StateStoreError(
+            f"CONTRADICTORY FILL DIRECTION: {order.role.value} order {order.client_order_id} "
+            f"was submitted {order.side} and must fill {wanted}, but the broker reported "
+            f"{signed_quantity:+d}. Refusing to apply it -- a fill in the wrong direction "
+            "means our record and the broker disagree about what this order is."
+        )
+    return abs(signed_quantity)
+
+
 def apply_fill(
     record: TradeRecord,
     *,
@@ -697,8 +773,10 @@ __all__ = [
     "SubmittedOrder",
     "TradeRecord",
     "TradeStateStore",
+    "absolute_fill_quantity",
     "apply_fill",
     "confirm_cancel",
+    "expected_fill_sign",
     "fence_dispatch",
     "mark_acknowledged",
     "mark_rejected",

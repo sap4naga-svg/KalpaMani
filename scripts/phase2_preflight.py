@@ -341,6 +341,21 @@ def check_algorithm_structure(main_source: str) -> bool:
             "portfolio" not in _attributes(adapter["initialize"]),
         ),
         (
+            "the adapter preserves the SIGN of a broker fill quantity",
+            not [
+                node
+                for node in ast.walk(adapter_tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "abs"
+                and any(
+                    isinstance(inner, ast.Attribute) and inner.attr == "fill_quantity"
+                    for arg in node.args
+                    for inner in ast.walk(arg)
+                )
+            ],
+        ),
+        (
             "no stdlib name is exposed to star-import shadowing",
             not [
                 alias.asname or alias.name

@@ -4,6 +4,23 @@ Every decision Phase 2 makes lives here: when to arm, what recovery may
 re-dispatch, how a broker event is applied, when to halt. The LEAN algorithm
 supplies broker I/O through :class:`BrokerPort` and nothing else.
 
+The adapter contract
+--------------------
+Three layers, each with one job, and the boundary between them matters:
+
+``LeanBrokerPort`` (in ``main.py``)
+    Translates LEAN types. **Preserves ``OrderEvent.fill_quantity`` including its
+    SIGN.** It must never call ``abs()``: the sign is broker semantics, and
+    throwing it away here would discard a safety signal before anyone could check
+    it.
+:class:`Phase2Cycle`
+    Validates the sign against the durable order -- a BUY must fill positive, a
+    SELL negative -- and only then drops it.
+:mod:`kalpamani.execution.state_store`
+    Receives **absolute** quantities only. ``open_long_quantity`` derives
+    direction from the order's *role*, not from the arithmetic sign, so a signed
+    quantity reaching it would double-count direction.
+
 Why this is not in ``main.py``
 ------------------------------
 It was, and that was the problem. ``main.py`` cannot be imported outside a LEAN
@@ -65,7 +82,11 @@ from kalpamani.execution.identity import is_valid_client_order_id
 from kalpamani.execution.lifecycle import TradeState
 from kalpamani.execution.reconciliation import BrokerView
 from kalpamani.execution.session import SessionVerificationError, verify_paper_session
-from kalpamani.execution.state_store import TradeRecord
+from kalpamani.execution.state_store import (
+    StateStoreError,
+    TradeRecord,
+    absolute_fill_quantity,
+)
 from kalpamani.execution.trading_window import (
     TradingWindowError,
     assert_within_certification_window,
@@ -85,7 +106,7 @@ class EventStatus(StrEnum):
     CANCEL_PENDING = "CANCEL_PENDING"
     CANCELED = "CANCELED"
     INVALID = "INVALID"
-    #: A fill event carrying a non-zero filled quantity.
+    #: A fill event carrying a non-zero filled quantity, of EITHER sign.
     FILL = "FILL"
     #: Anything else, including a zero-quantity event. Recorded, never acted on.
     OTHER = "OTHER"
@@ -97,6 +118,9 @@ class OrderEventFacts:
 
     client_order_id: str
     status: EventStatus
+    #: SIGNED, exactly as LEAN reports it: a BUY fills positive, a SELL negative.
+    #: The adapter must NOT take its absolute value -- the sign is a safety
+    #: signal, validated here against the durable order before it is dropped.
     fill_quantity: int = 0
     fill_price: Decimal = Decimal(0)
     #: Stable per-order event identity, so repeated delivery is a true no-op.
@@ -473,10 +497,33 @@ class Phase2Cycle:
             self._coordinator.acknowledge(record, tag)
             return
 
-        if facts.status is not EventStatus.FILL or facts.fill_quantity <= 0:
+        if facts.status is not EventStatus.FILL or facts.fill_quantity == 0:
             return
 
-        quantity = abs(int(facts.fill_quantity))
+        # LEAN fill quantities are SIGNED. Testing `> 0` here silently discarded
+        # every protective and exit SELL fill, leaving durable state convinced it
+        # still held a position the broker had already closed -- and the next
+        # reconciliation halting on a disagreement it had caused itself.
+        #
+        # The sign is a safety signal, so it is validated against the recorded
+        # order before it is dropped. Only the absolute quantity reaches the
+        # accounting layer, which derives direction from the role.
+        order = record.orders.get(tag)
+        if order is None:
+            self._raise_halt(
+                f"Fill for {tag}, which this execution has no record of submitting.",
+                kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
+            )
+            return
+        try:
+            quantity = absolute_fill_quantity(order, int(facts.fill_quantity))
+        except StateStoreError as exc:
+            self._port.error(f"[CONTRADICTORY-FILL] {exc}")
+            self._raise_halt(
+                f"contradictory broker fill for {tag}: {exc}",
+                kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
+            )
+            return
 
         if tag == identity.entry_order_id:
             # ONE durable write: the entry fill, the lifecycle transition, the

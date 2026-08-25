@@ -396,32 +396,6 @@ them), which is why the allowlist exists at all; it is simply no longer the defa
 itself — a second durable halt would only add a manual chore for a condition already permanent,
 and the cycle re-halts on `FAILED` every time regardless.
 
-### 19. Clearing a halt is gated, and never overrides broker or lifecycle truth — added 2026-08-25
-
-The confirmation phrase is an assertion of **intent**, not of fact. On its own it must never make
-an unsafe trade resumable, so `--clear-halt` re-establishes every invariant it can before the
-phrase is even considered (`assert_halt_clearable`):
-
-| Gate | On failure |
-|---|---|
-| deployment session classifies PAPER, never LIVE or unknown | REFUSED |
-| durable state readable and internally coherent | REFUSED |
-| the trade is bound to *this* deployment account | REFUSED |
-| no order left holding an unresolved `SEND_FENCED` | REFUSED |
-| no long recorded without confirmed protection | REFUSED |
-| no short recorded at all | REFUSED |
-
-**What it deliberately does not claim.** `--clear-halt` runs on the host, with no brokerage
-connection: local-versus-broker position agreement, unexpected working SPY orders and an
-accidental short at IBKR cannot be checked there. They are checked where they can be — inside a
-deployment, on every cycle, by `reconcile()` and `assert_eligible_to_arm()`. So clearing lifts
-the **deployment latch and nothing else**: the next run still re-proves the account, still
-reconciles, and still halts if anything disagrees. The script prints those caveats rather than
-implying a completeness it does not have.
-
-Clearing also never revives a lifecycle. `TradeState.FAILED` is terminal; a cleared halt on a
-FAILED trade buys a read-only reconciliation pass, and the cycle halts again on the next tick.
-
 ### 16. Broker facts survive a terminal lifecycle — added 2026-08-25
 
 Round 7 kept event ingestion alive across a halt. That was necessary and not sufficient,
@@ -482,6 +456,71 @@ Arm receipts are also now cross-checked against the trade record — same intent
 binding, same consumed flag. Two receipts that agree with each other but describe a different
 trade are contradictory evidence, and fail closed.
 
+### 19. Clearing a halt is gated, and never overrides broker or lifecycle truth — added 2026-08-25
+
+The confirmation phrase is an assertion of **intent**, not of fact. On its own it must never make
+an unsafe trade resumable, so `--clear-halt` re-establishes every invariant it can before the
+phrase is even considered (`assert_halt_clearable`):
+
+| Gate | On failure |
+|---|---|
+| deployment session classifies PAPER, never LIVE or unknown | REFUSED |
+| durable state readable and internally coherent | REFUSED |
+| the trade is bound to *this* deployment account | REFUSED |
+| no order left holding an unresolved `SEND_FENCED` | REFUSED |
+| no long recorded without confirmed protection | REFUSED |
+| no short recorded at all | REFUSED |
+
+**What it deliberately does not claim.** `--clear-halt` runs on the host, with no brokerage
+connection: local-versus-broker position agreement, unexpected working SPY orders and an
+accidental short at IBKR cannot be checked there. They are checked where they can be — inside a
+deployment, on every cycle, by `reconcile()` and `assert_eligible_to_arm()`. So clearing lifts
+the **deployment latch and nothing else**: the next run still re-proves the account, still
+reconciles, and still halts if anything disagrees. The script prints those caveats rather than
+implying a completeness it does not have.
+
+Clearing also never revives a lifecycle. `TradeState.FAILED` is terminal; a cleared halt on a
+FAILED trade buys a read-only reconciliation pass, and the cycle halts again on the next tick.
+
+### 20. Fill quantities are signed; the sign is a safety signal — added 2026-08-25
+
+LEAN reports fill quantities **signed by direction**: a BUY fills positive, a SELL negative.
+The cycle filtered fill events with `fill_quantity <= 0`, which meant **every protective and
+every exit SELL fill was silently discarded**. Durable state went on believing it held a
+position the broker had already closed, and the next reconciliation halted on a disagreement
+the system had caused itself.
+
+Found by independent review of the Round-9 bundle, and reproduced on both paths. The test suite
+could not see it: the event fixture defaulted to `+1` for BUY and SELL alike, so the tests were
+feeding the cycle a direction the broker never sends.
+
+**Decision.** Three layers, each with one job:
+
+| Layer | Responsibility |
+|---|---|
+| `LeanBrokerPort` (`main.py`) | Preserves `OrderEvent.fill_quantity` **including its sign**. Never calls `abs()`. |
+| `Phase2Cycle` | **Validates** the sign against the durable order, then drops it. |
+| `state_store` | Receives **absolute** quantities only. |
+
+The last row is why the sign cannot simply be passed through: `open_long_quantity` derives
+direction from the order's *role*, so a signed quantity reaching it would double-count
+direction.
+
+Validation is not a formality — a fill in the wrong direction means our record and the broker
+disagree about what an order *is*:
+
+| Role | Expected | A contradiction means |
+|---|---|---|
+| ENTRY | positive | a BUY that filled short |
+| PROTECTIVE | negative | a stop that filled long |
+| EXIT | negative | a close that filled long |
+
+A contradiction is **not applied** and raises a durable, manual-clearance halt. Side and role
+are cross-checked against each other too: they are independent facts, and a record where they
+disagree is not one to act on.
+
+The fixture now requires an explicit sign at every call site — no default — and the preflight
+asserts structurally that the adapter never takes `abs()` of a fill quantity.
 ---
 
 ## Consequences

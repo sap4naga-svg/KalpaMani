@@ -38,32 +38,21 @@ from kalpamani.execution.session import IB_ACCOUNT_KEY, account_fingerprint
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_BRANCH = "main"
 OUTPUT_DIR = REPO_ROOT / ".runtime" / "review"
-OUTPUT_ZIP = OUTPUT_DIR / "phase2-round9-review.zip"
+OUTPUT_ZIP = OUTPUT_DIR / "phase2-round10-review.zip"
 
 #: The deployment configuration. Read ONLY to learn what must never appear in
 #: the bundle. Its contents never enter the bundle.
 LEAN_DEPLOYMENT_CONFIG = REPO_ROOT / ".runtime" / "lean" / "lean.json"
 
-#: Tracked paths a reviewer needs. Globs are resolved against tracked files only.
-INCLUDE_GLOBS = (
-    "CLAUDE.md",
-    "README.md",
-    "pyproject.toml",
-    "docs/decisions/*.md",
-    "docs/architecture/*.md",
-    "docs/runbooks/phase2-paper-order-lifecycle.md",
-    "src/kalpamani/**/*.py",
-    "lean/projects/phase2_order_lifecycle/main.py",
-    "scripts/phase1_preflight.py",
-    "scripts/phase2_arm.py",
-    "scripts/phase2_preflight.py",
-    "scripts/phase2_review_bundle.py",
-    "tests/unit/test_phase2_order_safety.py",
-    "tests/unit/test_phase1_broker_safety.py",
-    "tests/unit/test_bootstrap_scope.py",
-    "tests/integration/test_phase2_production_path.py",
-    "tests/integration/test_phase2_cycle_orchestration.py",
-)
+#: EXCLUDED from the bundle. Everything else that is tracked goes in, so the
+#: full test suite runs from an extraction -- an earlier bundle hand-picked
+#: files, and a reviewer could only run the Phase-2 subset from it.
+#:
+#: The Blueprint PDF is the proprietary architecture document: 300+ KB of binary
+#: a reviewer of this PR does not need, and which no text scan can meaningfully
+#: inspect. Its governing content is quoted in CLAUDE.md and the ADRs, which ARE
+#: included.
+EXCLUDE_SUFFIXES = (".pdf",)
 
 #: Brokerage account shape, including the letter some IBKR ids carry in third
 #: position -- an earlier version of this pattern missed exactly those.
@@ -101,22 +90,29 @@ def tracked_files() -> list[str]:
 
 
 def selected_files() -> list[str]:
-    tracked = tracked_files()
-    chosen: list[str] = []
-    for pattern in INCLUDE_GLOBS:
-        chosen.extend(f for f in tracked if Path(f).match(pattern) or f == pattern)
-    return sorted(set(chosen))
+    """Every tracked file, minus explicit exclusions.
+
+    Tracked-by-default is the safe direction here: `.runtime/` is untracked, so
+    credentials, LEAN configuration and IBKR logs cannot be reached at all, while
+    a reviewer gets a tree complete enough to run `pytest` against.
+    """
+    return sorted(f for f in tracked_files() if not f.lower().endswith(EXCLUDE_SUFFIXES))
 
 
-def tracked_content(path: str) -> bytes:
-    """Read from the COMMIT, not the working tree. Untracked bytes cannot leak."""
+def tracked_content(path: str) -> bytes | None:
+    """Read from the COMMIT, not the working tree. Untracked bytes cannot leak.
+
+    Returns ``None`` only when git could not produce the object. An EMPTY result
+    with a clean exit is a legitimately empty tracked file -- the repository has
+    eleven `.gitkeep` placeholders -- and must not be mistaken for a failure.
+    """
     result = subprocess.run(  # noqa: S603
         ["git", "show", f"HEAD:{path}"],  # noqa: S607
         cwd=REPO_ROOT,
         capture_output=True,
         check=False,
     )
-    return result.stdout
+    return result.stdout if result.returncode == 0 else None
 
 
 def forbidden_needles() -> list[tuple[str, str]]:
@@ -213,6 +209,17 @@ Contents
   CHANGED_FILES.txt     files the branch touches
   source/               {len(files)} tracked files, read from the commit
 
+Reproducing the validation
+--------------------------
+  cd source && python -m pip install -r /dev/null 2>/dev/null; python -m pytest -q
+
+`pyproject.toml` sets `pythonpath = ["src"]`, so the suite runs from `source/`
+with no install step. Requires pytest; ruff and mypy are optional.
+
+The tree is COMPLETE apart from `docs/architecture/*.pdf` (the proprietary
+Blueprint, excluded deliberately). Every test in the repository is present and
+should pass.
+
 Where to start
 --------------
   source/docs/decisions/ADR-0004-*.md        the design and every amendment
@@ -239,11 +246,14 @@ def main() -> int:
         print("  FAIL: no tracked files matched the include list")
         return 1
 
-    staged: dict[str, bytes] = {f"source/{path}": tracked_content(path) for path in files}
-    empty = [name for name, blob in staged.items() if not blob]
-    if empty:
-        print(f"  FAIL: {len(empty)} selected file(s) read back empty from HEAD")
+    read = {path: tracked_content(path) for path in files}
+    unreadable = [path for path, blob in read.items() if blob is None]
+    if unreadable:
+        print(f"  FAIL: {len(unreadable)} selected file(s) could not be read from HEAD")
         return 1
+    staged: dict[str, bytes] = {
+        f"source/{path}": blob for path, blob in read.items() if blob is not None
+    }
 
     patch = run("git", "diff", f"{BASE_BRANCH}...HEAD")
     changed = run("git", "diff", "--stat", f"{BASE_BRANCH}...HEAD")

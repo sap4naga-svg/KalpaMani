@@ -109,8 +109,11 @@ from kalpamani.execution.state_store import (
     StateCorruptError,
     StateMissingError,
     StateStoreError,
+    SubmittedOrder,
     TradeRecord,
+    absolute_fill_quantity,
     apply_fill,
+    expected_fill_sign,
     fence_dispatch,
     record_order_intent,
 )
@@ -1488,3 +1491,82 @@ def test_stdlib_names_are_not_exposed_to_star_import_shadowing() -> None:
         "`from AlgorithmImports import *`. The star import can silently rebind them to a "
         "..NET type. Import the module and qualify the name instead."
     )
+
+
+# --------------------------------------------------------------------------
+# Round 10 -- LEAN fill quantities are SIGNED; the sign is a safety signal
+# --------------------------------------------------------------------------
+
+
+def submitted(role: OrderRole, side: str) -> SubmittedOrder:
+    return SubmittedOrder(
+        client_order_id="km-deadbeef-X-0", role=role, symbol="SPY", side=side, quantity=1
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "side", "signed"),
+    [
+        (OrderRole.ENTRY, "BUY", 1),
+        (OrderRole.PROTECTIVE, "SELL", -1),
+        (OrderRole.EXIT, "SELL", -1),
+        (OrderRole.EXIT, "SELL", -3),
+    ],
+)
+def test_a_fill_in_the_recorded_direction_loses_only_its_sign(
+    role: OrderRole, side: str, signed: int
+) -> None:
+    assert absolute_fill_quantity(submitted(role, side), signed) == abs(signed)
+
+
+@pytest.mark.parametrize(
+    ("role", "side", "signed"),
+    [
+        (OrderRole.ENTRY, "BUY", -1),
+        (OrderRole.PROTECTIVE, "SELL", 1),
+        (OrderRole.EXIT, "SELL", 1),
+    ],
+)
+def test_a_fill_against_the_recorded_direction_fails_closed(
+    role: OrderRole, side: str, signed: int
+) -> None:
+    """Our record and the broker disagree about what this order is."""
+    with pytest.raises(StateStoreError, match="CONTRADICTORY FILL DIRECTION"):
+        absolute_fill_quantity(submitted(role, side), signed)
+
+
+def test_a_zero_quantity_fill_never_reaches_accounting() -> None:
+    with pytest.raises(StateStoreError, match="Zero-quantity"):
+        absolute_fill_quantity(submitted(OrderRole.ENTRY, "BUY"), 0)
+
+
+def test_a_record_whose_role_and_side_disagree_is_not_interpreted() -> None:
+    """Two independent facts. A record where they conflict is not one to act on."""
+    for role, side in ((OrderRole.ENTRY, "SELL"), (OrderRole.PROTECTIVE, "BUY")):
+        with pytest.raises(StateStoreError, match="disagree about direction"):
+            expected_fill_sign(submitted(role, side))
+    with pytest.raises(StateStoreError, match="disagree about direction"):
+        expected_fill_sign(submitted(OrderRole.ENTRY, "sideways"))
+
+
+def test_the_adapter_does_not_strip_the_fill_sign() -> None:
+    """`abs()` in main.py would discard the signal before anyone could check it.
+
+    The layering: the adapter preserves LEAN's sign, Phase2Cycle validates it
+    against the durable order, and only the accounting layer sees an absolute
+    quantity.
+    """
+    tree = ast.parse(PHASE2_MAIN.read_text(encoding="utf-8"))
+    stripped = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "abs"
+        and any(
+            isinstance(inner, ast.Attribute) and inner.attr == "fill_quantity"
+            for arg in node.args
+            for inner in ast.walk(arg)
+        )
+    ]
+    assert not stripped, "main.py takes abs() of a fill quantity; the sign must reach the cycle"
