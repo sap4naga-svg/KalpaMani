@@ -200,15 +200,28 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 
 ## 9. Current phase
 
-**BOOTSTRAP / FOUNDATION — COMPLETE (local).**
+**PHASE 1 — IBKR PAPER CONNECTIVITY (validated 2026-08-24, one criterion outstanding).**
 
-Implemented: repository structure, governance, security posture, safe configuration
-foundation (environment + strategy capital), safety tests, lint/type/test tooling.
+Bootstrap complete. Phase 1 read-only connectivity **proven against the live IBKR Paper
+account**: LEAN -> IBKR Paper connected, account confirmed PAPER three ways, SPY subscribed
+(exactly one symbol, delayed data), broker account state observed, and — the point of the
+exercise — the broker reported **USD 1,000,000** while KalpaMani strategy capital stayed at
+**USD 80,000** (12.50x divergence, logged explicitly). **Zero orders, zero positions.**
 
-**Not implemented and not authorized:** IBKR connectivity of any kind; LEAN brokerage
-connection; order submission (paper or live); Breakout / Pullback / PEAD strategy logic;
-short-selling logic; AI Research or Challenger agents; the portfolio/risk engine; data
-purchases; production cloud infrastructure; options; leverage; X/social signals.
+Outstanding: a `[MARKET-DATA] FIRST EVENT RECEIVED` bar, which requires a run while SPY is
+trading (~04:00-20:00 ET with extended hours). The validated run was outside that window.
+
+**Operational finding — read this.** LEAN's IBAutomater unselects IB Gateway's
+**[Read-Only API]** checkbox and selects every **[Bypass ... for API Orders]** precaution on
+every start. Enabling IBKR Read-Only Access does **not** protect an automated deployment.
+The zero-order guarantee rests entirely on our own code having no order path, which is why
+that is enforced statically by `scripts/phase1_preflight.py` and
+`tests/unit/test_phase1_broker_safety.py` rather than trusted to a broker setting.
+
+**Still not implemented and not authorized:** order submission of any kind (paper or live);
+Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger
+agents; the portfolio/risk engine; data purchases; production cloud infrastructure; options;
+leverage; X/social signals.
 
 **Next phase (requires explicit approval): PHASE 1 — IBKR PAPER CONNECTIVITY.**
 Objective: LEAN → IBKR Paper → subscribe to one liquid U.S. equity → receive market data

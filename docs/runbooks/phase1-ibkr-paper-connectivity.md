@@ -225,26 +225,46 @@ returns `UNKNOWN` for anything unrecognised, so ambiguity fails closed.
 
 ## 8. What success looks like
 
-Look for these log lines:
+**Observed on the validated run (2026-08-24).** Engine log:
+
+```
+Trading mode: paper
+Window title: [<ACCT> Trader Workstation Configuration (Simulated Trading)]
+HandleManagedAccounts(): Account list: <ACCT>
+HandleAccountSummary(): Tag: AccountType, Value: INDIVIDUAL
+Brokerage.OnAccountChanged(): Account USD Balance: 1000000.00
+Connect() finished successfully
+Subscribe Processed: SPY (STK SPY USD Smart ARCA) # SubscribedSymbols.Count: 1
+ErrorCode: 10167 - Requested market data is not subscribed. Displaying delayed market data.
+Event Name "EveryDay: Every 1 min", scheduled to run.
+```
+
+Algorithm log:
 
 ```
 KalpaMani Phase 1 -- IBKR PAPER CONNECTIVITY SMOKE TEST
 MODE: READ-ONLY. This algorithm submits NO orders and creates NO positions.
+live_mode=True
 Subscribed symbol: SPY (resolution=Minute)
 KalpaMani allocated strategy capital: USD 80,000
-
-[BROKER-STATE:initialize] equity_usd=... cash_usd=... holdings=0 open_orders=0
-
-[MARKET-DATA] FIRST EVENT RECEIVED -- data pipeline is live.
-[MARKET-DATA]   symbol      : SPY
-[MARKET-DATA]   bar time    : ...
-[MARKET-DATA]   close       : ...
-
+[BROKER-STATE:initialize] NOT READ -- brokerage cash is applied after initialize() returns.
+[BROKER-STATE:scheduled-1] equity_usd=1000000.0 cash_usd=1000000.0 holdings=0 open_orders=0
 [CAPITAL-SEPARATION] Broker equity is NOT KalpaMani strategy capital.
-[CAPITAL-SEPARATION]   broker reported equity : USD 1000000
+[CAPITAL-SEPARATION]   broker reported equity : USD 1000000.0
 [CAPITAL-SEPARATION]   KalpaMani allocation   : USD 80000
+[CAPITAL-SEPARATION]   unallocated difference : USD 920000.0
 [CAPITAL-SEPARATION]   CONFIRMED DISTINCT: broker equity is 12.50x the KalpaMani allocation.
+[CAPITAL-SEPARATION]   KalpaMani strategy capital remains USD 80,000 and is unaffected by the
+                       brokerage balance.
 ```
+
+The `[CAPITAL-SEPARATION]` block is the point of the whole exercise: the broker reported
+USD 1,000,000 and KalpaMani stayed at USD 80,000.
+
+**Market-data timing.** `[MARKET-DATA] FIRST EVENT RECEIVED` only appears when SPY is
+actually trading. With `extended_market_hours=True` that is roughly 04:00-20:00 ET on a
+trading day. A run started outside that window connects and observes account state
+normally but will never log a bar -- that is the market being closed, not a fault.
 
 > **Note:** `initialize()` runs *before* LEAN applies brokerage cash
 > (`Setup(): Initializing algorithm...` precedes `Setup(): Setting USD cash to ...`).
