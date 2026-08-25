@@ -37,16 +37,14 @@ from pathlib import Path
 
 import pytest
 
-from kalpamani.broker.account import BrokerAccountMode, BrokerAccountSnapshot
 from kalpamani.broker.orders import OrderRequest, OrderRequestError, OrderSide, OrderType
 from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD, StrategyCapital
 from kalpamani.common.environment import Environment
-from kalpamani.common.errors import BrokerModeError
 from kalpamani.common.settings import LIVE_TRADING_HARD_DISABLED, Settings
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
     PHASE2_INTENT_NATURAL_KEY,
-    PHASE2_MAX_NOTIONAL_USD,
+    PHASE2_MAX_REFERENCE_NOTIONAL_USD,
     ExecutionArmError,
     ExecutionArmRequest,
     Phase2EnvelopeError,
@@ -80,6 +78,12 @@ from kalpamani.execution.reconciliation import (
     reconcile,
     required_protection_quantity,
 )
+from kalpamani.execution.session import (
+    BrokerSessionEvidence,
+    SessionVerificationError,
+    account_fingerprint,
+    verify_paper_session,
+)
 from kalpamani.execution.state_store import (
     STATE_SCHEMA_VERSION,
     JsonTradeStateStore,
@@ -105,17 +109,13 @@ SPY_PRICE = Decimal("766.38")
 # --------------------------------------------------------------------------
 
 
-def snapshot(
-    mode: BrokerAccountMode = BrokerAccountMode.PAPER,
+def evidence(
     account_id: str = PAPER_ACCOUNT_ID,
-) -> BrokerAccountSnapshot:
-    return BrokerAccountSnapshot(
-        account_id=account_id,
-        mode=mode,
-        equity_usd=IBKR_PAPER_SIMULATED_EQUITY_USD,
-        cash_usd=IBKR_PAPER_SIMULATED_EQUITY_USD,
-        holdings_count=0,
-        open_orders_count=0,
+    trading_mode: str = "paper",
+) -> BrokerSessionEvidence:
+    """Session evidence as read from LEAN's own deployment configuration."""
+    return BrokerSessionEvidence(
+        account_id=account_id, trading_mode=trading_mode, source="test-deployment-config"
     )
 
 
@@ -123,7 +123,7 @@ def arm_request(**overrides: object) -> ExecutionArmRequest:
     defaults: dict[str, object] = {
         "confirmation": PHASE2_CONFIRMATION_PHRASE,
         "settings": Settings(environment=Environment.PAPER),
-        "broker_snapshot": snapshot(),
+        "session_evidence": evidence(),
         "symbol": "SPY",
         "quantity": 1,
         "reference_price": SPY_PRICE,
@@ -180,10 +180,19 @@ def filled_record(identity: TradeIdentity, filled: int = 1) -> TradeRecord:
 
 
 def test_live_account_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
-    with pytest.raises(BrokerModeError):
+    with pytest.raises(SessionVerificationError):
         authorize_trade_intent(
-            arm_request(broker_snapshot=snapshot(BrokerAccountMode.LIVE, LIVE_ACCOUNT_ID)),
-            store,
+            arm_request(session_evidence=evidence(LIVE_ACCOUNT_ID, "live")), store
+        )
+
+
+def test_live_trading_mode_cannot_arm_even_with_paper_looking_id(
+    store: JsonTradeStateStore,
+) -> None:
+    """A paper-looking id does not override LEAN's own trading-mode evidence."""
+    with pytest.raises(SessionVerificationError):
+        authorize_trade_intent(
+            arm_request(session_evidence=evidence(PAPER_ACCOUNT_ID, "live")), store
         )
 
 
@@ -206,10 +215,28 @@ def test_research_environment_cannot_arm_phase2(store: JsonTradeStateStore) -> N
 
 def test_unknown_account_mode_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
     """Ambiguity is an abort condition, never an assumption of safety."""
-    with pytest.raises(BrokerModeError):
-        authorize_trade_intent(
-            arm_request(broker_snapshot=snapshot(BrokerAccountMode.UNKNOWN, "???")), store
-        )
+    with pytest.raises(SessionVerificationError):
+        authorize_trade_intent(arm_request(session_evidence=evidence("XX999", "paper")), store)
+
+
+def test_armed_account_must_match_deployed_account() -> None:
+    """The arm and the deployment must never be two values that can disagree."""
+    deployed = evidence("DU1111111")
+    armed_fingerprint = account_fingerprint("DU2222222")
+    with pytest.raises(SessionVerificationError, match="does not match"):
+        verify_paper_session(deployed, expected_fingerprint=armed_fingerprint)
+
+
+def test_matching_account_fingerprint_passes() -> None:
+    deployed = evidence(PAPER_ACCOUNT_ID)
+    verify_paper_session(deployed, expected_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID))
+
+
+def test_fingerprint_never_reveals_the_account_id() -> None:
+    fingerprint = account_fingerprint(PAPER_ACCOUNT_ID)
+    assert PAPER_ACCOUNT_ID not in fingerprint
+    assert "1234567" not in fingerprint
+    assert evidence().describe().count(PAPER_ACCOUNT_ID) == 0
 
 
 def test_arm_requires_test_mode_and_explicit_flag(store: JsonTradeStateStore) -> None:
@@ -247,13 +274,13 @@ def test_notional_above_ceiling_rejected(store: JsonTradeStateStore) -> None:
     """If SPY trades above the ceiling we abort; we do not size down, because 1 is minimum."""
     with pytest.raises(Phase2EnvelopeError):
         authorize_trade_intent(
-            arm_request(reference_price=PHASE2_MAX_NOTIONAL_USD + Decimal("0.01")), store
+            arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD + Decimal("0.01")), store
         )
 
 
 def test_notional_at_ceiling_allowed(store: JsonTradeStateStore) -> None:
     identity, record = authorize_trade_intent(
-        arm_request(reference_price=PHASE2_MAX_NOTIONAL_USD), store
+        arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD), store
     )
     assert record.state is TradeState.AUTHORIZED
     assert identity.trade_intent_id
@@ -580,9 +607,7 @@ def test_strategy_capital_remains_80000(store: JsonTradeStateStore) -> None:
 
 def test_broker_million_cannot_control_sizing(store: JsonTradeStateStore) -> None:
     """The paper account reports 1,000,000. Phase 2 still buys exactly 1 share."""
-    rich = snapshot()
-    assert rich.equity_usd == IBKR_PAPER_SIMULATED_EQUITY_USD
-    _, record = authorize_trade_intent(arm_request(broker_snapshot=rich), store)
+    _, record = authorize_trade_intent(arm_request(), store)
     assert record.requested_quantity == 1
 
     observed = StrategyCapital().observe_broker_equity(IBKR_PAPER_SIMULATED_EQUITY_USD)

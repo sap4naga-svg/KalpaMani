@@ -71,6 +71,9 @@ class SubmittedOrder:
     quantity: int
     submitted: bool = False
     acknowledged: bool = False
+    #: A cancellation was ASKED FOR. The broker may still be working the order.
+    cancel_requested: bool = False
+    #: The broker CONFIRMED the cancellation. Only this makes the order inert.
     cancelled: bool = False
     filled_quantity: int = 0
     #: Broker-assigned handle. Recorded for audit; never derived from, never
@@ -117,12 +120,33 @@ class TradeRecord:
 
     @property
     def open_long_quantity(self) -> int:
-        """Long quantity believed held, per local records."""
+        """Long quantity believed held, per local records.
+
+        A filled PROTECTIVE stop closes the long just as surely as a deliberate
+        exit does. Counting only entry-minus-exit would leave the system
+        believing it still held a position the stop had already sold -- and it
+        would then try to sell it again, opening a short.
+        """
         entry = self.order_for_role(OrderRole.ENTRY)
-        exit_order = self.order_for_role(OrderRole.EXIT)
         held = entry.filled_quantity if entry else 0
-        closed = exit_order.filled_quantity if exit_order else 0
+        closed = sum(
+            order.filled_quantity
+            for order in self.orders.values()
+            if order.role in (OrderRole.EXIT, OrderRole.PROTECTIVE)
+        )
         return held - closed
+
+    @property
+    def protective_fill_quantity(self) -> int:
+        """Quantity closed by the protective stop firing, if it did."""
+        protective = self.order_for_role(OrderRole.PROTECTIVE)
+        return protective.filled_quantity if protective else 0
+
+    @property
+    def has_working_protection(self) -> bool:
+        """Whether protection is believed live: submitted, unfilled, not confirmed cancelled."""
+        protective = self.order_for_role(OrderRole.PROTECTIVE)
+        return bool(protective and protective.is_open)
 
     def describe(self) -> str:
         """Log-safe summary. No account identifier, no secret."""
@@ -131,7 +155,7 @@ class TradeRecord:
             f"state={self.state.value} symbol={self.symbol} "
             f"requested={self.requested_quantity} filled={self.filled_quantity} "
             f"protected={self.protected_quantity} entries={self.entry_count} "
-            f"arm_consumed={self.arm_consumed}"
+            f"long={self.open_long_quantity} arm_consumed={self.arm_consumed}"
         )
 
 
@@ -183,6 +207,7 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
                 quantity=int(raw["quantity"]),
                 submitted=bool(raw["submitted"]),
                 acknowledged=bool(raw["acknowledged"]),
+                cancel_requested=bool(raw.get("cancel_requested", False)),
                 cancelled=bool(raw["cancelled"]),
                 filled_quantity=int(raw["filled_quantity"]),
                 broker_order_id=raw.get("broker_order_id"),
@@ -370,14 +395,49 @@ def apply_fill(
         applied_fill_ids=(*order.applied_fill_ids, fill_id),
         acknowledged=True,
     )
-    updated = replace(record, orders=orders)
-    entry = updated.order_for_role(OrderRole.ENTRY)
-    protective = updated.order_for_role(OrderRole.PROTECTIVE)
+    return _recompute(replace(record, orders=orders))
+
+
+def _recompute(record: TradeRecord) -> TradeRecord:
+    """Recompute derived totals from the orders that actually exist."""
+    entry = record.order_for_role(OrderRole.ENTRY)
+    protective = record.order_for_role(OrderRole.PROTECTIVE)
     return replace(
-        updated,
+        record,
         filled_quantity=entry.filled_quantity if entry else 0,
-        protected_quantity=(protective.quantity if protective and not protective.cancelled else 0),
+        # Protection counts only while the broker could still act on it: not
+        # confirmed cancelled, and not already filled.
+        protected_quantity=protective.quantity if protective and protective.is_open else 0,
     )
+
+
+def request_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that a cancellation was REQUESTED. The order is still working.
+
+    Deliberately does NOT mark the order cancelled. A request is not a
+    confirmation, and treating it as one would let the exit proceed while a live
+    stop could still fire -- the exact path to an accidental short.
+    """
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot request cancellation of unknown order {client_order_id}.")
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(order, cancel_requested=True)
+    return _recompute(replace(record, orders=orders))
+
+
+def confirm_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that the broker CONFIRMED a cancellation.
+
+    Only this makes the order inert, drops ``protected_quantity`` to zero, and
+    makes the closing order eligible.
+    """
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot confirm cancellation of unknown order {client_order_id}.")
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(order, cancelled=True, cancel_requested=True)
+    return _recompute(replace(record, orders=orders))
 
 
 def usd(amount: Decimal | int | str) -> Decimal:
@@ -395,6 +455,8 @@ __all__ = [
     "TradeRecord",
     "TradeStateStore",
     "apply_fill",
+    "confirm_cancel",
     "record_order_intent",
+    "request_cancel",
     "usd",
 ]

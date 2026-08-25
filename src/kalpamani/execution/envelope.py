@@ -19,12 +19,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kalpamani.broker.account import BrokerAccountMode, BrokerAccountSnapshot, require_paper_account
+from kalpamani.broker.account import BrokerAccountMode
 from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD, StrategyCapital
 from kalpamani.common.environment import Environment
 from kalpamani.common.errors import SafetyViolationError
 from kalpamani.common.settings import Settings
 from kalpamani.execution.identity import TradeIdentity
+from kalpamani.execution.session import BrokerSessionEvidence, verify_paper_session
 from kalpamani.execution.state_store import TradeRecord, TradeStateStore
 
 # ---------------------------------------------------------------------------
@@ -37,9 +38,27 @@ PHASE2_SYMBOL = "SPY"
 PHASE2_SIDE = "BUY"
 #: Exactly one share. Not a maximum to size up to -- the only permitted value.
 PHASE2_QUANTITY = 1
-#: Hard notional ceiling. If SPY trades above this, Phase 2 aborts rather than
-#: proceeding with a smaller size, because the permitted size is already 1.
-PHASE2_MAX_NOTIONAL_USD = Decimal("1000")
+#: Outer notional we are willing to tolerate on the resulting fill, in USD.
+#:
+#: NOTE ON SEMANTICS. Phase 2 submits a MARKET order, and a market order cannot
+#: mathematically guarantee its fill notional -- the fill price is whatever the
+#: book gives. So this is NOT a hard maximum fill notional, and calling it one
+#: would be false. It is the tolerance the certification accepts.
+PHASE2_FILL_NOTIONAL_TOLERANCE_USD = Decimal("1000")
+
+#: Fraction of the tolerance reserved as slippage headroom.
+PHASE2_NOTIONAL_SAFETY_BUFFER = Decimal("0.20")
+
+#: PRE-SUBMISSION REFERENCE-NOTIONAL GUARD, in USD.
+#:
+#: This is what is actually enforced, and it is enforced against the *reference*
+#: price observed before submission -- not against the fill. The 20% buffer means
+#: the fill would have to slip more than a fifth above the observed price to
+#: breach the tolerance above, which for 1 share of SPY in liquid hours is not a
+#: realistic outcome.
+PHASE2_MAX_REFERENCE_NOTIONAL_USD = PHASE2_FILL_NOTIONAL_TOLERANCE_USD * (
+    Decimal(1) - PHASE2_NOTIONAL_SAFETY_BUFFER
+)
 #: One trade intent, one entry order. Ever.
 PHASE2_MAX_TRADE_INTENTS = 1
 PHASE2_MAX_ENTRY_ORDERS = 1
@@ -77,7 +96,9 @@ class ExecutionArmRequest:
     #: Operator's explicit intent. Must be exactly the confirmation phrase.
     confirmation: str
     settings: Settings
-    broker_snapshot: BrokerAccountSnapshot
+    #: Evidence read from LEAN's own deployment configuration -- NOT an operator
+    #: parameter. This is what ties the arm to the session actually connected.
+    session_evidence: BrokerSessionEvidence
     symbol: str
     quantity: int
     reference_price: Decimal
@@ -92,19 +113,6 @@ class ExecutionArmRequest:
 #: The operator must type this exactly. A boolean flag can be set by a stray
 #: environment variable; a specific phrase cannot be arrived at by accident.
 PHASE2_CONFIRMATION_PHRASE = "ARM PHASE2 PAPER BUY 1 SPY"
-
-
-def verify_paper_session(snapshot: BrokerAccountSnapshot) -> None:
-    """Prove the connected session is paper, or abort.
-
-    Configuration is not evidence. This checks the account snapshot actually
-    obtained from the broker, and refuses both LIVE and UNKNOWN. Ambiguity is an
-    abort condition, never an assumption of safety.
-
-    Raises:
-        BrokerModeError: if the account is live or unclassifiable.
-    """
-    require_paper_account(snapshot)
 
 
 def check_envelope(request: ExecutionArmRequest) -> None:
@@ -128,11 +136,13 @@ def check_envelope(request: ExecutionArmRequest) -> None:
             f"Reference price must be positive, got {request.reference_price}. Without a "
             "trustworthy price the notional ceiling cannot be enforced."
         )
-    if request.notional_usd > PHASE2_MAX_NOTIONAL_USD:
+    if request.notional_usd > PHASE2_MAX_REFERENCE_NOTIONAL_USD:
         raise Phase2EnvelopeError(
-            f"Notional {request.notional_usd} USD exceeds the Phase 2 ceiling of "
-            f"{PHASE2_MAX_NOTIONAL_USD} USD. Aborting rather than reducing size: the "
-            "permitted quantity is already the minimum."
+            f"Reference notional {request.notional_usd} USD exceeds the pre-submission guard "
+            f"of {PHASE2_MAX_REFERENCE_NOTIONAL_USD} USD "
+            f"(tolerance {PHASE2_FILL_NOTIONAL_TOLERANCE_USD} USD less a "
+            f"{PHASE2_NOTIONAL_SAFETY_BUFFER:%} slippage buffer). Aborting rather than "
+            "reducing size: the permitted quantity is already the minimum."
         )
 
 
@@ -164,7 +174,8 @@ def check_authorization(request: ExecutionArmRequest) -> None:
         raise ExecutionArmError(
             "live_trading_enabled is true. Phase 2 must never run against live trading."
         )
-    verify_paper_session(request.broker_snapshot)
+    # Deployment-derived evidence, refusing LIVE and UNKNOWN alike.
+    verify_paper_session(request.session_evidence)
 
 
 def check_no_prior_test_trade(store: TradeStateStore, trade_intent_id: str) -> None:
@@ -281,7 +292,8 @@ def describe_envelope() -> str:
     """Log-safe summary of the envelope, for the preflight banner."""
     return (
         f"symbol={PHASE2_SYMBOL} side={PHASE2_SIDE} quantity={PHASE2_QUANTITY} "
-        f"max_notional_usd={PHASE2_MAX_NOTIONAL_USD} "
+        f"max_reference_notional_usd={PHASE2_MAX_REFERENCE_NOTIONAL_USD} "
+        f"fill_notional_tolerance_usd={PHASE2_FILL_NOTIONAL_TOLERANCE_USD} "
         f"max_intents={PHASE2_MAX_TRADE_INTENTS} max_entries={PHASE2_MAX_ENTRY_ORDERS} "
         f"account_mode={BrokerAccountMode.PAPER.value}"
     )
@@ -289,10 +301,12 @@ def describe_envelope() -> str:
 
 __all__ = [
     "PHASE2_CONFIRMATION_PHRASE",
+    "PHASE2_FILL_NOTIONAL_TOLERANCE_USD",
     "PHASE2_INTENT_NATURAL_KEY",
     "PHASE2_MAX_ENTRY_ORDERS",
-    "PHASE2_MAX_NOTIONAL_USD",
+    "PHASE2_MAX_REFERENCE_NOTIONAL_USD",
     "PHASE2_MAX_TRADE_INTENTS",
+    "PHASE2_NOTIONAL_SAFETY_BUFFER",
     "PHASE2_QUANTITY",
     "PHASE2_SIDE",
     "PHASE2_SYMBOL",
@@ -307,5 +321,4 @@ __all__ = [
     "check_no_prior_test_trade",
     "describe_envelope",
     "protective_stop_price",
-    "verify_paper_session",
 ]

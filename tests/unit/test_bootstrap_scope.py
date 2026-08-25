@@ -40,10 +40,12 @@ BROKER_ALLOWED_MODULES = ["account.py", "orders.py"]
 #: Phase 2 permits exactly these modules under execution/, per ADR-0004.
 #: Widening the execution surface is an ADR-level change.
 EXECUTION_ALLOWED_MODULES = [
+    "coordinator.py",
     "envelope.py",
     "identity.py",
     "lifecycle.py",
     "reconciliation.py",
+    "session.py",
     "state_store.py",
 ]
 

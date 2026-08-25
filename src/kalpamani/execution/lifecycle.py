@@ -97,8 +97,10 @@ _ALLOWED: dict[TradeState, frozenset[TradeState]] = {
         {_S.PARTIALLY_FILLED, _S.FILLED, _S.PROTECTION_SUBMITTED, _S.RECOVERING, _S.FAILED}
     ),
     _S.FILLED: frozenset({_S.PROTECTION_SUBMITTED, _S.RECOVERING, _S.FAILED}),
-    _S.PROTECTION_SUBMITTED: frozenset({_S.PROTECTED, _S.RECOVERING, _S.FAILED}),
-    _S.PROTECTED: frozenset({_S.EXIT_REQUESTED, _S.RECOVERING, _S.FAILED}),
+    # CLOSED is reachable directly from both: a protective stop that fires closes
+    # the position without any deliberate exit order ever being sent.
+    _S.PROTECTION_SUBMITTED: frozenset({_S.PROTECTED, _S.CLOSED, _S.RECOVERING, _S.FAILED}),
+    _S.PROTECTED: frozenset({_S.EXIT_REQUESTED, _S.CLOSED, _S.RECOVERING, _S.FAILED}),
     # RECOVERING may only be left after successful broker reconciliation, which
     # lands it back on whichever position-bearing state the broker confirms.
     _S.RECOVERING: frozenset(
