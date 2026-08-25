@@ -47,6 +47,7 @@ EXECUTION_ALLOWED_MODULES = [
     "reconciliation.py",
     "session.py",
     "state_store.py",
+    "trading_window.py",
 ]
 
 #: Import names of brokerage/engine clients that must not be reachable yet.

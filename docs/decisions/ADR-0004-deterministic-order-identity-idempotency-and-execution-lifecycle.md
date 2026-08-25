@@ -234,6 +234,106 @@ The order-capable boundary lives in `kalpamani.execution` and `kalpamani.broker`
 under `strategies/`, `research/`, `portfolio/` and `risk/` **must not** import it. Enforced
 by test, not convention. Phase 2 adds execution plumbing and **no** strategy logic.
 
+### 11. A trade is bound to an ACCOUNT, and the binding is re-proven — added 2026-08-25
+
+Verifying the session at arming time proves the account was right *then*. Arming happens
+only when no trade exists, so every subsequent cycle — recovery, reconciliation, a
+protective re-dispatch, a controlled exit — was running against whatever session the
+process happened to be connected to now, with nothing tying the two together.
+
+The gap that opens:
+
+```
+paper account A fills the entry
+the protective intent is durable but unfenced
+the process restarts against account B
+recovery sees a local unfenced intent -- and dispatches it into B
+```
+
+Local state knows nothing about B, so nothing else would have stopped it.
+
+**Decision.** `TradeRecord.account_fingerprint` (schema v4) records the fingerprint of the
+brokerage account the trade was **armed** against, taken from the verified
+`BrokerSessionEvidence` — never from a parameter. A fingerprint, never the raw identifier,
+so persisting it spreads no account id into state files, logs or Git.
+
+The binding is re-proven **twice**, at two different distances from the broker:
+
+| Where | When | On failure |
+|---|---|---|
+| `_on_cycle` | every cycle that has a trade, **before any broker state is read** | abort |
+| `Phase2Coordinator.fence_dispatch` | immediately before *every* broker order call | refuse to fence, so no call |
+
+The second is not redundant. A check made several methods earlier proves nothing about the
+moment an order actually leaves, and `fence_dispatch` is the only door every order passes
+through. Order of operations there: re-read durable state → refuse a stale caller → prove
+the account → **persist the fence** → *then* the caller contacts the broker. The fence
+stays before the broker call (§4a); nothing about this weakens it.
+
+LIVE, UNKNOWN, a different paper account, and a record carrying **no** binding at all are
+all abort conditions. A missing binding fails closed rather than skipping the check.
+
+### 12. Recovery reconciles before it re-dispatches — added 2026-08-25
+
+Recovery is the only path that can put an order on the wire without a human, and it was
+deciding to re-send *before* reconciling. The required order is now:
+
+```
+prove the same PAPER account
+    -> load broker truth
+    -> adopt positive broker evidence
+    -> reconcile position and protection
+    -> only then decide what may be re-dispatched
+```
+
+An unfenced PROTECTIVE or EXIT may be re-dispatched **only** when local long equals the
+broker position, the broker shows no working protection for this execution, and the account
+is proven. Otherwise the plan raises and nothing is sent: re-dispatching a stop for a
+position the broker does not show could sell what we do not hold, and that is a short.
+
+### 13. Failing closed does not mean going blind — added 2026-08-25
+
+The abort latch dropped broker events. That is not failing closed, it is failing *deaf*:
+
+```
+ENTRY fenced, broker call made
+an unrelated error latches the abort
+the ENTRY then FILLS
+the event is dropped -- no fill recorded, no protective intent
+the broker holds a naked SPY long this process cannot see
+```
+
+**Decision.** Two separate concepts, deliberately not one flag:
+
+- **normal progression** — new trading decisions. Halted by the latch.
+- **broker event ingestion** — acknowledgements, fills, cancellations, rejections for orders
+  already sent. **Never** halted. Dropping them would not stop anything happening at the
+  broker; it would only stop us knowing about it.
+
+One action survives the halt, because it *reduces* risk rather than taking it: if an already
+dispatched ENTRY fills afterwards, the fill and its protective intent are written (one
+atomic write, §4a), the account binding is re-proven at the fence, broker truth must be
+unambiguous, and the protective stop is dispatched. It never submits another entry, never
+clears the halt, and never resumes autonomous trading. If protection cannot be dispatched
+safely, the position is surfaced as **UNPROTECTED POSITION** for manual handling.
+
+### 14. Regular hours are enforced, not recommended — added 2026-08-25
+
+The entry is a MARKET order, which asks the book for whatever price it has. Outside a liquid
+regular session that is not a meaningful certification, and a "1 share of SPY" reference
+guard stops being a realistic bound on what fills. The runbook said "market hours only";
+that was an instruction to a human, in a system whose subscription uses
+`extended_market_hours=True`.
+
+**Decision.** Two gates, both required, checked **before** the arm is consumed:
+
+1. the exchange says the regular session is open (`QCAlgorithm.is_market_open`, which knows
+   holidays, half days and early closes — we do not re-implement a calendar);
+2. the clock is inside **09:45–15:30 America/New_York**, excluding both auctions.
+
+Outside the window the deployment stays read-only and says why; the one-time arm is **not**
+consumed, so a mistimed launch costs nothing. TEST parameter — not production strategy logic.
+
 ---
 
 ## Consequences

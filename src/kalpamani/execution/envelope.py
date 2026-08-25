@@ -250,6 +250,11 @@ def authorize_trade_intent(
         state=transition(TradeState.CREATED, TradeState.AUTHORIZED),
         requested_quantity=request.quantity,
         arm_consumed=True,
+        # Bind the trade to the account it was armed against. The fingerprint
+        # comes from the VERIFIED deployment evidence, never from a parameter,
+        # so the arm and the session cannot be two independent values that
+        # disagree. Every later broker contact re-proves this binding.
+        account_fingerprint=request.session_evidence.fingerprint,
     )
     return identity, record
 
@@ -266,6 +271,12 @@ def assert_arm_not_reusable(record: TradeRecord) -> None:
         raise ExecutionArmError(
             f"Recovered record {record.trade_intent_id} does not have the arm marked "
             "consumed. Contradictory state; failing closed rather than guessing."
+        )
+    if not record.account_fingerprint:
+        raise ExecutionArmError(
+            f"Recovered record {record.trade_intent_id} is not bound to a brokerage account. "
+            "An unbound record cannot be proven to belong to the connected session, so it "
+            "must never reach the broker. Failing closed."
         )
     if record.entry_count > PHASE2_MAX_ENTRY_ORDERS:
         raise ExecutionArmError(

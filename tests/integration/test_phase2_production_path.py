@@ -60,11 +60,17 @@ pytestmark = pytest.mark.integration
 
 SPY_PRICE = Decimal("766.38")
 PAPER_ACCOUNT_ID = "DU1234567"
+#: A SECOND paper account. Same broker, same mode, different account -- the case
+#: a mode-only check cannot see.
+OTHER_PAPER_ACCOUNT_ID = "DU7654321"
+LIVE_ACCOUNT_ID = "U7654321"
 
 
-def evidence(account_id: str = PAPER_ACCOUNT_ID) -> BrokerSessionEvidence:
+def evidence(
+    account_id: str = PAPER_ACCOUNT_ID, trading_mode: str = "paper"
+) -> BrokerSessionEvidence:
     return BrokerSessionEvidence(
-        account_id=account_id, trading_mode="paper", source="test-deployment-config"
+        account_id=account_id, trading_mode=trading_mode, source="test-deployment-config"
     )
 
 
@@ -122,14 +128,28 @@ class Broker:
         )
 
 
-def make_coordinator(tmp_path: Path) -> tuple[Phase2Coordinator, JsonTradeStateStore, Path, Path]:
+def make_coordinator(
+    tmp_path: Path, *, account_id: str = PAPER_ACCOUNT_ID, trading_mode: str = "paper"
+) -> tuple[Phase2Coordinator, JsonTradeStateStore, Path, Path]:
+    """A coordinator whose CURRENT session is the given account.
+
+    The session provider stands in for LEAN's deployment configuration, so a
+    test can present a different account -- LIVE, or a second paper account --
+    and prove nothing reaches the broker.
+    """
     storage = tmp_path / "storage"
     project = tmp_path / "project"
     storage.mkdir()
     project.mkdir()
     store = JsonTradeStateStore(storage / "phase2_trade_state.json")
     identity = TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1)
-    coordinator = Phase2Coordinator(store, identity, storage_root=storage, project_root=project)
+    coordinator = Phase2Coordinator(
+        store,
+        identity,
+        storage_root=storage,
+        project_root=project,
+        session_provider=lambda: evidence(account_id, trading_mode),
+    )
     return coordinator, store, storage, project
 
 
@@ -149,21 +169,30 @@ def fence_only(coordinator: Phase2Coordinator, pending: PendingOrder) -> TradeRe
 
 
 def drive_to_protected(coordinator: Phase2Coordinator, broker: Broker) -> TradeRecord:
-    """Run the real production path up to a broker-confirmed PROTECTED position."""
+    """Run the real production path up to a broker-confirmed PROTECTED position.
+
+    This is THE happy path every downstream lifecycle, failure and restart test
+    builds on, so it uses the exact orchestration `main.py` performs -- entry
+    fill and protective intent in ONE atomic call. It previously used the older
+    ``on_fill`` + ``plan_protection`` pair, which meant a large part of the suite
+    was validating a second, pseudo-production sequence that production no longer
+    takes.
+    """
     record = coordinator.authorize(arm_request(), evidence())
 
     pending = coordinator.begin_entry(record)
     record = dispatch(coordinator, broker, pending)
     broker.fill(pending.request.client_order_id, PHASE2_QUANTITY)
-    record = coordinator.on_fill(
+
+    record, protection = coordinator.apply_entry_fill_and_prepare_protection(
         record,
         client_order_id=pending.request.client_order_id,
         fill_id="7-1",
         fill_quantity=PHASE2_QUANTITY,
+        fill_price=SPY_PRICE,
     )
-
-    protection = coordinator.plan_protection(record, SPY_PRICE)
     assert protection is not None
+
     record = dispatch(coordinator, broker, protection)
     record = coordinator.reconcile(record, broker.view())  # adopts -> ACKNOWLEDGED
     return coordinator.confirm_protection(record, broker.view())
@@ -644,13 +673,24 @@ def test_restart_after_protection_submits_no_further_entry(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
-def restart(storage: Path, project: Path) -> Phase2Coordinator:
-    """A brand-new coordinator over the same durable state: a restarted process."""
+def restart(
+    storage: Path,
+    project: Path,
+    *,
+    account_id: str = PAPER_ACCOUNT_ID,
+    trading_mode: str = "paper",
+) -> Phase2Coordinator:
+    """A brand-new coordinator over the same durable state: a restarted process.
+
+    ``account_id`` is the session the restarted process finds itself connected
+    to, which is not necessarily the one the trade was armed against.
+    """
     return Phase2Coordinator(
         JsonTradeStateStore(storage / "phase2_trade_state.json"),
         TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
         storage_root=storage,
         project_root=project,
+        session_provider=lambda: evidence(account_id, trading_mode),
     )
 
 
@@ -1261,3 +1301,238 @@ def test_foreign_order_details_are_not_exposed(tmp_path: Path) -> None:
     message = str(excinfo.value)
     assert "12345" not in message, "foreign order size must not be logged"
     assert "1 non-KalpaMani" in message
+
+
+# ---------------------------------------------------------------------------
+# Round 7 -- the trade is bound to an ACCOUNT, and the binding is re-proven
+# on every cycle and again at the dispatch boundary
+# ---------------------------------------------------------------------------
+
+
+def unfenced_protective(tmp_path: Path) -> tuple[Phase2Coordinator, Broker, Path, Path]:
+    """A durable state with an open long and a protective intent never sent."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    record = entered(coordinator, broker)
+    _record, protection = fill_entry_atomically(coordinator, broker, record)
+    assert protection is not None
+    return coordinator, broker, storage, project
+
+
+def long_only_view(long: int, identity: TradeIdentity) -> BrokerView:
+    """Broker truth with a position and no working orders."""
+    return BrokerView(positions=(BrokerPositionView(PHASE2_SYMBOL, long),), open_orders=())
+
+
+def test_authorized_record_carries_the_account_fingerprint(tmp_path: Path) -> None:
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    record = coordinator.authorize(arm_request(), evidence())
+
+    assert record.account_fingerprint == account_fingerprint(PAPER_ACCOUNT_ID)
+    persisted = store.require(coordinator.identity.trade_intent_id)
+    assert persisted.account_fingerprint == account_fingerprint(PAPER_ACCOUNT_ID)
+    assert PAPER_ACCOUNT_ID not in persisted.describe(), "the raw id is never persisted or logged"
+
+
+def test_unbound_record_fails_closed_at_the_binding_check(tmp_path: Path) -> None:
+    """A record with no account binding must never reach a broker."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    record = coordinator.authorize(arm_request(), evidence())
+    unbound = replace(record, account_fingerprint=None)
+
+    with pytest.raises(SessionVerificationError, match="no account binding"):
+        coordinator.assert_session_binding(unbound)
+
+
+@pytest.mark.parametrize(
+    ("account_id", "trading_mode", "expected"),
+    [
+        (LIVE_ACCOUNT_ID, "live", "requires 'paper'"),
+        ("XX999", "", "Phase 2 requires"),
+        (OTHER_PAPER_ACCOUNT_ID, "paper", "does not match the deployed"),
+    ],
+    ids=["live", "unknown", "different-paper"],
+)
+def test_session_binding_rejects_live_unknown_and_other_paper_accounts(
+    tmp_path: Path, account_id: str, trading_mode: str, expected: str
+) -> None:
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    record = coordinator.authorize(arm_request(), evidence())
+
+    resumed = restart(storage, project, account_id=account_id, trading_mode=trading_mode)
+    with pytest.raises(SessionVerificationError, match=expected):
+        resumed.assert_session_binding(record)
+
+
+def test_dispatch_boundary_refuses_a_wrong_session(tmp_path: Path) -> None:
+    """Defence in depth: the fence itself re-proves the account, so no order can
+    leave on the strength of a check made several methods earlier."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+
+    wrong = restart(storage, project, account_id=OTHER_PAPER_ACCOUNT_ID)
+    with pytest.raises(SessionVerificationError):
+        wrong.fence_dispatch(pending.record, pending.request.client_order_id)
+
+    persisted = JsonTradeStateStore(storage / "phase2_trade_state.json").require(
+        coordinator.identity.trade_intent_id
+    )
+    entry = persisted.orders[coordinator.identity.entry_order_id]
+    assert entry.dispatch is DispatchState.INTENT_RECORDED, "no fence, therefore no broker call"
+    assert broker.submissions == []
+
+
+# ---------------------------------------------------------------------------
+# Round 7 -- recovery verifies the account and reconciles BEFORE it re-dispatches
+# ---------------------------------------------------------------------------
+
+
+def test_recovery_against_a_live_account_submits_nothing(tmp_path: Path) -> None:
+    """A. Armed on PAPER account A; restart evidence says LIVE."""
+    _coordinator, broker, storage, project = unfenced_protective(tmp_path)
+    submissions_before = len(broker.submissions)
+
+    resumed = restart(storage, project, account_id=LIVE_ACCOUNT_ID, trading_mode="live")
+    recovered = resumed.load()
+    assert recovered is not None
+    with pytest.raises(SessionVerificationError):
+        resumed.assess_recovery(recovered, broker.view())
+
+    assert len(broker.submissions) == submissions_before, "zero broker submissions"
+
+
+def test_recovery_against_a_different_paper_account_submits_nothing(tmp_path: Path) -> None:
+    """B. Armed on PAPER account A; restart lands on PAPER account B."""
+    _coordinator, broker, storage, project = unfenced_protective(tmp_path)
+    submissions_before = len(broker.submissions)
+
+    resumed = restart(storage, project, account_id=OTHER_PAPER_ACCOUNT_ID)
+    recovered = resumed.load()
+    assert recovered is not None
+    with pytest.raises(SessionVerificationError, match="does not match the deployed"):
+        resumed.assess_recovery(recovered, broker.view())
+
+    assert len(broker.submissions) == submissions_before, "zero broker submissions"
+
+
+def test_unfenced_protective_is_not_redispatched_when_broker_shows_no_position(
+    tmp_path: Path,
+) -> None:
+    """C. Local long=1, broker long=0. A stop for a position the broker does not
+    show could sell what we do not hold."""
+    _coordinator, broker, storage, project = unfenced_protective(tmp_path)
+    submissions_before = len(broker.submissions)
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    with pytest.raises(ReconciliationError):
+        resumed.assess_recovery(recovered, long_only_view(0, resumed.identity))
+
+    assert len(broker.submissions) == submissions_before
+
+
+def test_unfenced_exit_is_not_redispatched_when_broker_shows_no_position(
+    tmp_path: Path,
+) -> None:
+    """D. Same rule for the closing SELL."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
+    coordinator.begin_exit(record, broker.view())  # intent recorded, never fenced
+    submissions_before = len(broker.submissions)
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    with pytest.raises(ReconciliationError):
+        resumed.assess_recovery(recovered, long_only_view(0, resumed.identity))
+
+    assert len(broker.submissions) == submissions_before
+
+
+def test_recovery_redispatches_exactly_once_when_everything_agrees(tmp_path: Path) -> None:
+    """E. Same PAPER account, matching broker state: one permitted dispatch."""
+    coordinator, broker, storage, project = unfenced_protective(tmp_path)
+    identity = coordinator.identity
+    submissions_before = len(broker.submissions)
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    plan = resumed.assess_recovery(recovered, broker.view())
+
+    assert len(plan.redispatch) == 1
+    assert plan.redispatch[0].request.client_order_id == identity.protective_order_id
+    for pending in plan.redispatch:
+        dispatch(resumed, broker, pending)
+    assert len(broker.submissions) == submissions_before + 1
+
+    # And a SECOND recovery pass must not send it again: it is fenced now.
+    again = restart(storage, project)
+    once_more = again.load()
+    assert once_more is not None
+    with pytest.raises(ReconciliationError, match="Send fence held"):
+        again.assess_recovery(
+            once_more, BrokerView(positions=(BrokerPositionView(PHASE2_SYMBOL, 1),), open_orders=())
+        )
+    assert len(broker.submissions) == submissions_before + 1
+
+
+# ---------------------------------------------------------------------------
+# Round 7 -- a halt blocks NEW normal activity; it does not erase broker truth
+# ---------------------------------------------------------------------------
+
+
+def test_entry_filling_after_a_halt_is_recorded_and_protected(tmp_path: Path) -> None:
+    """The production sequence main.py runs when an already-dispatched ENTRY
+    fills after normal progression has been halted.
+
+    Dropping the event would leave the fill unrecorded, no protective intent,
+    and a naked long at the broker this process cannot see.
+    """
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = entered(coordinator, broker)  # ENTRY fenced and sent
+    normal_progression_halted = True  # an unrelated error halts the algorithm
+
+    # The event still arrives, and is still ingested.
+    record, protection = fill_entry_atomically(coordinator, broker, record)
+    assert protection is not None
+
+    # Risk-reducing, and only when broker truth is unambiguous (main.py's
+    # _dispatch_protection).
+    coordinator.reconcile(record, broker.view())
+    dispatch(coordinator, broker, protection)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.open_long_quantity == 1, "the fill is durable"
+    assert sum(1 for o in persisted.orders.values() if o.role is OrderRole.PROTECTIVE) == 1
+    assert broker.count(OrderRole.PROTECTIVE) == 1, "exactly one protection order"
+    assert broker.count(OrderRole.ENTRY) == 1, "no second entry"
+    assert normal_progression_halted, "normal progression stays halted"
+
+
+def test_protection_is_refused_after_a_halt_when_broker_state_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """If the position cannot be confirmed, surface UNPROTECTED rather than
+    sending a stop against something we cannot see."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    record = entered(coordinator, broker)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
+    assert protection is not None
+
+    with pytest.raises(ReconciliationError):
+        coordinator.reconcile(record, long_only_view(0, coordinator.identity))
+    assert broker.count(OrderRole.PROTECTIVE) == 0

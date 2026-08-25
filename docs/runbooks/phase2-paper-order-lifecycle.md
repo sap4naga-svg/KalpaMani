@@ -138,6 +138,24 @@ Three independent confirmations, all of which must agree (Phase 1 evidence model
 script and the algorithm refuse `UNKNOWN` as well as `LIVE`. **Ambiguity is an abort
 condition, never an assumption of safety.**
 
+### The trade is bound to the account it was armed on
+
+`TradeRecord.account_fingerprint` records **which** paper account authorised the trade. From
+then on, every cycle that has a trade re-proves the connected session against it *before*
+reading any broker state, and every single order re-proves it again at the send fence,
+immediately before the broker call.
+
+| Restart lands on | Result |
+|---|---|
+| the same paper account | normal recovery |
+| a **different paper** account | abort — zero orders |
+| a **live** account | abort — zero orders |
+| an unclassifiable account | abort — zero orders |
+| a record with **no** binding | abort — zero orders |
+
+A fingerprint is stored, never the account id. `[SESSION-BOUND] same PAPER account as armed:`
+in the log is this check passing.
+
 ### Where the algorithm's evidence actually comes from
 
 Configuration you supply is **not** evidence. The algorithm reads LEAN's own merged
@@ -473,6 +491,63 @@ the stop. The system recognises this, moves to `CLOSED`, and will **not** send a
 for a position that no longer exists — which would open a short. Expect
 `[EXIT-FILL] protective stop filled; the long is closed by the stop`, then final
 reconciliation to flat.
+
+---
+
+## 13.5 The execution window — the entry will not fire outside it
+
+Phase 2 submits a MARKET order, so it only runs in a liquid regular session.
+
+```
+09:45 - 15:30  America/New_York   regular session only   (TEST window)
+```
+
+Both gates must hold: the **exchange calendar** says the regular session is open (holidays,
+half days and early closes included), and the **clock** is inside the window. The opening
+and closing auctions are deliberately excluded.
+
+Outside the window you will see, once per cycle:
+
+```
+[PHASE2-ARM] entry not eligible: ... Staying read-only.
+```
+
+**The arm is not consumed.** A launch at the wrong time costs nothing — leave it running and
+it will arm when the window opens, or stop it and relaunch later. The preflight prints
+`Window open right now` as a convenience; the algorithm's check is the one that decides, and
+it is the only one that knows the exchange calendar.
+
+---
+
+## 13.6 What a halt does and does not stop
+
+A halt (`[PHASE2-ABORT]`) stops **new normal activity**. It does **not** stop KalpaMani
+recording what the broker does with orders already sent.
+
+| After a halt | Behaviour |
+|---|---|
+| Reconcile cycle | stops |
+| New entry | impossible |
+| Autonomous progression | stops |
+| Acknowledgements, fills, cancellations, rejections | **still recorded durably** |
+| An already-dispatched ENTRY that then fills | fill + protective intent written, and the **stop is dispatched** |
+
+That last row is deliberate. Declining to protect a position that has actually filled would
+leave it naked — the outcome halting exists to avoid. It is a one-off risk-reducing action:
+no second entry, the halt is never cleared, and autonomous trading does not resume.
+
+```
+[POST-HALT-PROTECT] entry filled after normal progression was halted. Dispatching the
+protective stop as a deterministic risk-reducing action; normal progression REMAINS halted
+```
+
+If broker truth is ambiguous at that moment, nothing is sent and you get instead:
+
+```
+[UNPROTECTED-POSITION] PROTECT OR CLOSE THE POSITION MANUALLY.
+```
+
+Do exactly that, in IBKR, by hand. Do not restart hoping it resolves itself.
 
 ---
 

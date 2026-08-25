@@ -66,7 +66,8 @@ from kalpamani.execution.lifecycle import TradeState
 #: Bumped when the persisted shape changes. Unknown versions fail closed.
 #: v2 introduced the explicit dispatch model in place of a boolean "submitted".
 #: v3 replaced DISPATCH_ATTEMPTED with the SEND_FENCED send fence.
-STATE_SCHEMA_VERSION = 3
+#: v4 bound each record to the brokerage account it was armed against.
+STATE_SCHEMA_VERSION = 4
 
 
 class StateStoreError(SafetyViolationError):
@@ -219,6 +220,19 @@ class TradeRecord:
     #: restart -- that is what stops recovery from re-arming.
     arm_consumed: bool = False
     failure_reason: str | None = None
+    #: Fingerprint of the brokerage account this trade was ARMED against.
+    #:
+    #: The trade is bound to an account, not merely to a mode. Without this, a
+    #: restart pointed at a different account could look like a normal recovery:
+    #: paper account A holds the position, the process comes back against
+    #: account B, and local state -- which knows nothing about B -- would happily
+    #: authorise a protective or exit order into the wrong account.
+    #:
+    #: A fingerprint, never the raw identifier, so persisting it spreads no
+    #: account id into state files, logs or Git. Optional in the dataclass only
+    #: because dataclass defaults require it; every code path that can reach the
+    #: broker treats ``None`` as a fail-closed condition.
+    account_fingerprint: str | None = None
     #: Optimistic-concurrency revision. Incremented by every successful write.
     #: A put whose revision is behind the stored one is refused.
     revision: int = 0
@@ -285,6 +299,7 @@ class TradeRecord:
             f"requested={self.requested_quantity} filled={self.filled_quantity} "
             f"protected={self.protected_quantity} entries={self.entry_count} "
             f"long={self.open_long_quantity} arm_consumed={self.arm_consumed} "
+            f"account={self.account_fingerprint or '(unbound)'} "
             f"dispatch=[{dispatches}]"
         )
 
@@ -362,6 +377,7 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
             orders=orders,
             arm_consumed=bool(payload.get("arm_consumed", False)),
             failure_reason=payload.get("failure_reason"),
+            account_fingerprint=payload.get("account_fingerprint"),
             revision=int(payload.get("revision", 0)),
         )
     except (KeyError, TypeError, ValueError) as exc:

@@ -26,6 +26,7 @@ Safety over automatic liveness.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
@@ -57,13 +58,16 @@ from kalpamani.execution.reconciliation import (
 from kalpamani.execution.session import (
     ArmReceipt,
     BrokerSessionEvidence,
+    SessionVerificationError,
     arm_receipt_paths,
     assert_arm_available,
+    load_session_evidence,
     verify_paper_session,
     write_arm_receipt,
 )
 from kalpamani.execution.state_store import (
     DispatchState,
+    StaleWriteError,
     TradeRecord,
     TradeStateStore,
     apply_fill,
@@ -111,10 +115,17 @@ class Phase2Coordinator:
         *,
         storage_root: Path,
         project_root: Path,
+        session_provider: Callable[[], BrokerSessionEvidence] = load_session_evidence,
     ) -> None:
         self._store = store
         self._identity = identity
         self._receipt_paths = arm_receipt_paths(storage_root, project_root)
+        #: Reads the CURRENT brokerage session from LEAN's own deployment
+        #: configuration. Injected so tests can present a different session --
+        #: a LIVE account, or a second paper account -- and prove that nothing
+        #: reaches the broker. It defaults to the real reader, so production
+        #: cannot accidentally get a permissive stub.
+        self._session_provider = session_provider
 
     @property
     def identity(self) -> TradeIdentity:
@@ -133,6 +144,41 @@ class Phase2Coordinator:
         if record is not None:
             assert_arm_not_reusable(record)
         return record
+
+    # -- Session binding ---------------------------------------------------
+
+    def assert_session_binding(self, record: TradeRecord) -> BrokerSessionEvidence:
+        """Prove the CURRENT session is the same PAPER account this trade was armed on.
+
+        Verifying the session once, at arming time, is not enough. Arming happens
+        only when no trade exists; every later cycle -- recovery, reconciliation,
+        a protective re-dispatch, an exit -- runs against whatever session the
+        process is connected to *now*. Without this, the sequence is:
+
+            paper account A fills the entry
+            the protective intent is durable but unfenced
+            the process restarts against account B
+            recovery sees a local unfenced intent and dispatches it into B
+
+        A local record knows nothing about B, so nothing else would stop it.
+
+        Returns:
+            The verified evidence, so callers can log it without reading it twice.
+
+        Raises:
+            SessionVerificationError: if the record carries no binding, if the
+                session is LIVE or unclassifiable, or if it is a different
+                account from the one armed.
+        """
+        evidence = self._session_provider()
+        if not record.account_fingerprint:
+            raise SessionVerificationError(
+                f"Trade {record.trade_intent_id} carries no account binding, so the connected "
+                "session cannot be proven to be the account it was armed against. Failing "
+                "closed: an unbound record must never reach a broker."
+            )
+        verify_paper_session(evidence, expected_fingerprint=record.account_fingerprint)
+        return evidence
 
     # -- Arming ------------------------------------------------------------
 
@@ -166,15 +212,38 @@ class Phase2Coordinator:
     # -- Dispatch bookkeeping ----------------------------------------------
 
     def fence_dispatch(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
-        """Acquire and persist the SEND FENCE. Call this BEFORE the broker call.
+        """Verify the session, then acquire and persist the SEND FENCE.
 
-        Returns only once the fence is durable, so the caller may then contact
-        the broker knowing that a crash at any later point cannot be mistaken for
-        "never sent".
+        The last thing that runs before a broker call, and therefore the right
+        place for the last check. Defence in depth: a verification performed
+        several methods earlier proves the session was right *then*, and every
+        order still has to pass through here.
+
+        The order of operations is deliberate:
+
+        1. re-read the CURRENT durable record -- not the caller's copy;
+        2. refuse a stale caller (it is holding a view that has since moved on);
+        3. prove the connected session is the armed PAPER account;
+        4. persist the fence;
+        5. *then* the caller contacts the broker.
+
+        Step 4 stays before the broker call. That is the round-4 fence and it is
+        not negotiable: writing it afterwards would leave ``INTENT_RECORDED``
+        after a successful send, and recovery would issue a second order.
+
+        Raises:
+            SessionVerificationError: if the session is not the armed account.
+            StaleWriteError: if the caller's record is behind durable state.
         """
-        updated = fence_dispatch(record, client_order_id)
-        updated = self._store.put(updated)
-        return updated
+        stored = self._store.require(record.trade_intent_id)
+        if stored.revision > record.revision:
+            raise StaleWriteError(
+                f"Refusing to dispatch {client_order_id} from a stale record: durable revision "
+                f"{stored.revision} is ahead of the caller's {record.revision}. The caller is "
+                "acting on a view of the trade that has since moved on. Re-read and retry."
+            )
+        self.assert_session_binding(stored)
+        return self._store.put(fence_dispatch(stored, client_order_id))
 
     def acknowledge(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
         """Record a broker acknowledgement for one order (LEAN ``SUBMITTED``).
@@ -610,13 +679,29 @@ class Phase2Coordinator:
         cancelled, or simply not be visible yet. Never resend; fail closed for
         human reconciliation.
 
-        Positive broker evidence is adopted first, which is what resolves the
-        common case without human involvement.
+        Ordering
+        --------
+        Recovery is the only path that can put an order on the wire without a
+        human, so the safety checks run *before* it concludes anything:
+
+            prove the same PAPER account
+                -> adopt positive broker evidence
+                -> reconcile position and protection against the broker
+                -> only then decide what may be re-dispatched
+
+        Reconciling last would have meant deciding to re-send while local and
+        broker views still disagreed -- exactly the state in which "the broker
+        does not have it" is not a claim anyone can make.
 
         Raises:
-            ReconciliationError: on any fenced-but-unconfirmed order, or an
-                unfenced ENTRY.
+            SessionVerificationError: if the session is not the armed account.
+            ReconciliationError: on any fenced-but-unconfirmed order, an unfenced
+                ENTRY, or any disagreement with broker truth.
         """
+        # STEP 1. The account, before anything is read from broker state.
+        self.assert_session_binding(record)
+
+        # STEP 2-3. Broker truth, with positive evidence adopted.
         adopted = self.adopt_broker_evidence(record, broker)
         notes: list[str] = []
         redispatch: list[PendingOrder] = []
@@ -641,6 +726,16 @@ class Phase2Coordinator:
                 "hand before restarting."
             )
 
+        # STEP 4. Reconcile BEFORE deciding anything may be re-sent. A
+        # contradictory position is not a state to act from: re-dispatching a
+        # stop for a position the broker does not show could sell what we do not
+        # hold, and that is a short.
+        reconcile(adopted, self._identity, broker)
+
+        # STEP 5. Only now.
+        broker_long = broker.position_quantity(adopted.symbol)
+        broker_protective = broker.open_protective_quantity(self._identity)
+
         for order in adopted.unfenced_orders():
             if order.role is OrderRole.ENTRY:
                 raise ReconciliationError(
@@ -651,6 +746,19 @@ class Phase2Coordinator:
             if adopted.open_long_quantity <= 0:
                 notes.append(f"{order.role.value} intent is moot: no open long")
                 continue
+            if adopted.open_long_quantity != broker_long:
+                raise ReconciliationError(
+                    f"Refusing to re-dispatch {order.role.value} {order.client_order_id}: local "
+                    f"long {adopted.open_long_quantity} does not match the broker position "
+                    f"{broker_long} for {adopted.symbol}. A SELL sized from a position the "
+                    "broker does not confirm could open a short."
+                )
+            if broker_protective > 0:
+                raise ReconciliationError(
+                    f"Refusing to re-dispatch {order.role.value} {order.client_order_id}: the "
+                    f"broker already shows {broker_protective} unit(s) of working protection "
+                    "for this execution. A second SELL alongside it is a duplicate."
+                )
             if order.role is OrderRole.PROTECTIVE:
                 notes.append("PROTECTIVE intent never fenced (never sent): UNPROTECTED")
                 redispatch.append(

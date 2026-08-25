@@ -31,7 +31,9 @@ The 20 required proofs, in order:
 
 from __future__ import annotations
 
+import ast
 import json
+from datetime import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -94,10 +96,18 @@ from kalpamani.execution.state_store import (
     apply_fill,
     record_order_intent,
 )
+from kalpamani.execution.trading_window import (
+    PHASE2_TIME_ZONE,
+    PHASE2_WINDOW_CLOSE,
+    PHASE2_WINDOW_OPEN,
+    TradingWindowError,
+    assert_within_certification_window,
+)
 
 pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PHASE2_MAIN = PROJECT_ROOT / "lean" / "projects" / "phase2_order_lifecycle" / "main.py"
 PAPER_ACCOUNT_ID = "DU1234567"
 LIVE_ACCOUNT_ID = "U7654321"
 IBKR_PAPER_SIMULATED_EQUITY_USD = Decimal("1000000")
@@ -155,6 +165,7 @@ def filled_record(identity: TradeIdentity, filled: int = 1) -> TradeRecord:
         state=TradeState.ENTRY_ACKNOWLEDGED,
         requested_quantity=1,
         arm_consumed=True,
+        account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
     )
     record = record_order_intent(
         record,
@@ -798,6 +809,126 @@ def test_protective_stop_is_below_fill_and_wide() -> None:
     assert stop == (SPY_PRICE * Decimal("0.90")).quantize(Decimal("0.01"))
 
 
+def test_recovered_record_without_an_account_binding_is_refused(
+    identity: TradeIdentity,
+) -> None:
+    """State written before accounts were bound, or tampered with, is not usable.
+
+    Refusing is the point: an unbound record cannot be proven to belong to the
+    session that is connected now, so it must never reach a broker.
+    """
+    from dataclasses import replace
+
+    unbound = replace(filled_record(identity), account_fingerprint=None)
+    with pytest.raises(ExecutionArmError, match="not bound to a brokerage account"):
+        assert_arm_not_reusable(unbound)
+
+
 def test_protective_stop_rejects_bad_price() -> None:
     with pytest.raises(Phase2EnvelopeError):
         protective_stop_price(Decimal("0"))
+
+
+# --------------------------------------------------------------------------
+# Round 7 -- the regular-hours certification window is CODE, not a runbook line
+# --------------------------------------------------------------------------
+
+
+def test_window_accepts_the_liquid_middle_of_the_session() -> None:
+    for moment in (time(9, 45), time(12, 0), time(15, 30)):
+        assert_within_certification_window(moment, regular_session_open=True)
+
+
+@pytest.mark.parametrize(
+    "moment",
+    [time(4, 0), time(9, 29), time(9, 44), time(15, 31), time(16, 1), time(19, 30)],
+)
+def test_window_rejects_the_auctions_and_extended_hours(moment: time) -> None:
+    with pytest.raises(TradingWindowError, match="outside the Phase 2 certification window"):
+        assert_within_certification_window(moment, regular_session_open=True)
+
+
+def test_a_closed_exchange_is_refused_however_good_the_clock_looks() -> None:
+    """Only the calendar knows about holidays and early closes."""
+    with pytest.raises(TradingWindowError, match="regular session is not open"):
+        assert_within_certification_window(time(12, 0), regular_session_open=False)
+
+
+def test_window_bounds_are_the_documented_test_window() -> None:
+    assert (PHASE2_WINDOW_OPEN, PHASE2_WINDOW_CLOSE) == (time(9, 45), time(15, 30))
+    assert PHASE2_TIME_ZONE == "America/New_York"
+
+
+# --------------------------------------------------------------------------
+# Round 7 -- main.py structure: a halt must not drop broker events
+# --------------------------------------------------------------------------
+
+
+def _phase2_function(name: str) -> ast.FunctionDef:
+    tree = ast.parse(PHASE2_MAIN.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found in {PHASE2_MAIN}")
+
+
+def _attributes(node: ast.AST) -> set[str]:
+    return {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+
+
+def _called_methods(node: ast.AST) -> set[str]:
+    return {
+        n.func.attr
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+
+
+def _first_line_calling(node: ast.AST, method: str) -> int:
+    lines = [
+        n.lineno
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == method
+    ]
+    assert lines, f"{method} is never called"
+    return min(lines)
+
+
+def test_broker_event_ingestion_is_not_gated_on_the_halt_latch() -> None:
+    """An order already at the broker can still fill after a halt. Returning
+    early would not stop that -- it would only stop us recording it."""
+    assert "_normal_progression_halted" not in _attributes(_phase2_function("on_order_event"))
+
+
+def test_the_reconcile_cycle_is_gated_on_the_halt_latch() -> None:
+    """The other half of the same rule: no NEW normal decisions after a halt."""
+    assert "_normal_progression_halted" in _attributes(_phase2_function("_on_cycle"))
+
+
+def test_an_entry_fill_routes_protection_through_the_guarded_path() -> None:
+    called = _called_methods(_phase2_function("on_order_event"))
+    assert "_dispatch_protection" in called
+    assert "_dispatch" not in called, "protection must not bypass the post-halt guard"
+
+
+def test_the_fence_is_acquired_before_any_broker_order_call() -> None:
+    """Round 4, asserted structurally so it cannot be reordered by accident."""
+    dispatch_fn = _phase2_function("_dispatch")
+    fence_line = _first_line_calling(dispatch_fn, "fence_dispatch")
+    for order_api in ("market_order", "stop_market_order"):
+        assert fence_line < _first_line_calling(dispatch_fn, order_api)
+
+
+def test_every_cycle_with_a_trade_re_proves_the_account_binding() -> None:
+    cycle = _phase2_function("_on_cycle")
+    called = _called_methods(cycle)
+    assert "assert_session_binding" in called
+    assert _first_line_calling(cycle, "assert_session_binding") < _first_line_calling(
+        cycle, "assess_recovery"
+    )
+
+
+def test_arming_checks_the_window_before_consuming_the_arm() -> None:
+    arm = _phase2_function("_maybe_arm")
+    assert "_window_eligible" in _called_methods(arm)
+    assert _first_line_calling(arm, "_window_eligible") < _first_line_calling(arm, "authorize")

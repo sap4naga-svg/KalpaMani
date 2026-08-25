@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import ast
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,11 @@ from kalpamani.execution.session import (
     verify_paper_session,
 )
 from kalpamani.execution.state_store import JsonTradeStateStore, StateStoreError
+from kalpamani.execution.trading_window import (
+    PHASE2_TIME_ZONE,
+    describe_window,
+    within_certification_window,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "phase2_order_lifecycle"
@@ -192,6 +198,86 @@ def check_order_surface() -> bool:
     if entry_calls > 2:
         _fail(f"{entry_calls} market_order call sites; Phase 2 allows at most 2 (entry, exit)")
         ok = False
+
+    return check_algorithm_structure(source) and ok
+
+
+def check_algorithm_structure(source: str) -> bool:
+    """Assert the structural safety properties a substring search cannot see.
+
+    Substring checks catch a forbidden API. They do not catch a guard that has
+    been moved, reordered or made unreachable, and each of those has been a real
+    finding in this review cycle. These are the same properties the unit tests
+    assert; checked again here so a hand-edited runtime copy cannot skip them.
+    """
+    tree = ast.parse(source)
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+    def attributes(name: str) -> set[str]:
+        return {n.attr for n in ast.walk(functions[name]) if isinstance(n, ast.Attribute)}
+
+    def first_call_line(name: str, method: str) -> int:
+        lines = [
+            n.lineno
+            for n in ast.walk(functions[name])
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == method
+        ]
+        return min(lines) if lines else -1
+
+    required = ("_on_cycle", "on_order_event", "_dispatch", "_dispatch_protection", "_maybe_arm")
+    missing = [name for name in required if name not in functions]
+    if missing:
+        _fail(f"algorithm is missing required methods: {', '.join(missing)}")
+        return False
+
+    ok = True
+    properties: list[tuple[str, bool]] = [
+        (
+            "SEND FENCE is acquired before any broker order call",
+            0
+            < first_call_line("_dispatch", "fence_dispatch")
+            < min(
+                line
+                for line in (
+                    first_call_line("_dispatch", "market_order"),
+                    first_call_line("_dispatch", "stop_market_order"),
+                )
+                if line > 0
+            ),
+        ),
+        (
+            "every cycle re-proves the account binding before recovery",
+            0
+            < first_call_line("_on_cycle", "assert_session_binding")
+            < first_call_line("_on_cycle", "assess_recovery"),
+        ),
+        (
+            "the reconcile cycle is gated on the halt latch",
+            "_normal_progression_halted" in attributes("_on_cycle"),
+        ),
+        (
+            "broker event ingestion is NOT gated on the halt latch",
+            "_normal_progression_halted" not in attributes("on_order_event"),
+        ),
+        (
+            "an entry fill protects through the guarded path",
+            "_dispatch_protection" in attributes("on_order_event"),
+        ),
+        (
+            "the regular-hours window is checked before the arm is consumed",
+            0
+            < first_call_line("_maybe_arm", "_window_eligible")
+            < first_call_line("_maybe_arm", "authorize"),
+        ),
+    ]
+    for label, holds in properties:
+        if holds:
+            print(f"  OK  : {label}")
+        else:
+            _fail(label)
+            ok = False
     return ok
 
 
@@ -227,6 +313,28 @@ def check_deployment_session() -> bool:
         _fail(str(exc))
         return False
     print(f"  OK  : {evidence.describe()}")
+
+    # If a trade already exists, it is bound to the account it was ARMED
+    # against. Deploying it against a different account is caught at runtime,
+    # but catching it here means it is caught before the process ever connects.
+    if RUNTIME_STATE.exists():
+        try:
+            records = JsonTradeStateStore(RUNTIME_STATE).all_records()
+        except StateStoreError:
+            return True  # reported in full by check_durable_state
+        for record in records:
+            try:
+                verify_paper_session(evidence, expected_fingerprint=record.account_fingerprint)
+            except SessionVerificationError as exc:
+                _fail(f"{record.trade_intent_id}: {exc}")
+                return False
+            if not record.account_fingerprint:
+                _fail(
+                    f"{record.trade_intent_id} carries no account binding, so it cannot be "
+                    "proven to belong to this deployment. Failing closed."
+                )
+                return False
+            print(f"  OK  : {record.trade_intent_id} is bound to this deployment account")
     return True
 
 
@@ -278,6 +386,28 @@ def check_durable_state() -> bool:
     return ok
 
 
+def _window_now() -> str:
+    """Whether the clock is currently inside the certification window.
+
+    Reports the clock only. The exchange calendar -- holidays, half days, early
+    closes -- is the algorithm's check at runtime, because only LEAN has it, and
+    the algorithm gates on it regardless of what this row says.
+
+    Informational, and deliberately best-effort: KalpaMani carries no runtime
+    dependencies, and a bare Windows host has no IANA time-zone database. A
+    missing database degrades this row, never the preflight.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        now = datetime.now(ZoneInfo(PHASE2_TIME_ZONE)).time()
+    except ZoneInfoNotFoundError:
+        return f"UNKNOWN (no {PHASE2_TIME_ZONE} tz database on this host; LEAN checks at runtime)"
+    verdict = "YES" if within_certification_window(now) else "NO -- entry will not be authorized"
+    return f"{verdict} (now {now.isoformat(timespec='minutes')} {PHASE2_TIME_ZONE})"
+
+
 def print_checklist() -> None:
     print("Launch checklist -- review before deploying")
     config = RUNTIME_PROJECT / "config.json"
@@ -315,6 +445,8 @@ def print_checklist() -> None:
             f"USD {PHASE2_FILL_NOTIONAL_TOLERANCE_USD} (market order: not enforceable)",
         ),
         ("Max intents / entries", "1 / 1"),
+        ("Execution window", describe_window()),
+        ("Window open right now", _window_now()),
         ("EXECUTION ARM", armed),
         ("Strategy capital", f"USD {DEFAULT_STRATEGY_CAPITAL_USD:,}"),
         ("Live trading hard-disabled", str(LIVE_TRADING_HARD_DISABLED)),

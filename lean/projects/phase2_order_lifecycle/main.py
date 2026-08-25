@@ -24,6 +24,12 @@ from kalpamani.execution.reconciliation import (
 )
 from kalpamani.execution.session import load_session_evidence, verify_paper_session
 from kalpamani.execution.state_store import JsonTradeStateStore
+from kalpamani.execution.trading_window import (
+    PHASE2_TIME_ZONE,
+    TradingWindowError,
+    assert_within_certification_window,
+    describe_window,
+)
 
 # endregion
 
@@ -64,6 +70,12 @@ class Phase2OrderLifecycle(QCAlgorithm):
     # -- Setup -------------------------------------------------------------
 
     def initialize(self) -> None:
+        # Pin the algorithm time zone so `self.time` is unambiguously the
+        # exchange-local time the certification window is expressed in. LEAN
+        # already defaults US equities to New York; stating it removes the
+        # assumption rather than relying on it.
+        self.set_time_zone(PHASE2_TIME_ZONE)
+
         if not self.live_mode:
             self.set_start_date(2024, 1, 2)
             self.set_end_date(2024, 1, 5)
@@ -89,7 +101,19 @@ class Phase2OrderLifecycle(QCAlgorithm):
 
         self._entries_submitted_this_session = 0
         self._recovery_logged = False
-        self._aborted = False
+        self._session_logged = False
+
+        # Two DIFFERENT things, deliberately not one flag.
+        #
+        # Failing closed means "no new normal trading decisions". It does not
+        # mean "pretend orders already working at the broker no longer exist".
+        # An order sent before a halt can still acknowledge, fill, cancel or
+        # reject, and every one of those events must still be recorded durably
+        # -- otherwise a halt between an entry send and its fill would leave the
+        # fill unrecorded, no protective intent created, and a naked long at the
+        # broker that this process cannot even see.
+        self._normal_progression_halted = False
+        self._broker_event_ingestion_enabled = True
 
         self.log("=" * 78)
         self.log("KalpaMani Phase 2 -- CONTROLLED IBKR PAPER ORDER LIFECYCLE")
@@ -99,6 +123,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
         self.log(f"[PHASE2-ARM] exit_requested={self._exit_requested}")
         self.log(f"[PHASE2-ARM] live_trading_hard_disabled={LIVE_TRADING_HARD_DISABLED}")
         self.log(f"[PHASE2-ARM] strategy_capital_usd={DEFAULT_STRATEGY_CAPITAL_USD}")
+        self.log(f"[PHASE2-ARM] execution_window={describe_window()}")
         self.log(f"[PHASE2-ARM] durable_state={STATE_PATH}")
         self.log("[PHASE2-ARM] Broker state is NOT read here; LEAN applies brokerage cash")
         self.log("[PHASE2-ARM] after initialize() returns. Work happens on the schedule.")
@@ -174,19 +199,31 @@ class Phase2OrderLifecycle(QCAlgorithm):
 
     def _on_cycle(self) -> None:
         """Reconcile first, always. Only then consider acting."""
-        if self._aborted:
+        if self._normal_progression_halted:
             return
         try:
             record = self._coordinator.load()
-            broker = self._broker_view()
 
             if record is None:
+                broker = self._broker_view()
                 self._log_state(broker, "no-trade")
                 self._maybe_arm(broker)
                 return
 
+            # An existing trade is bound to the account it was ARMED against.
+            # Re-prove that binding against the session connected RIGHT NOW,
+            # before any broker state is inspected or acted upon. Verifying only
+            # at arming time would leave recovery free to dispatch a protective
+            # or exit order into whatever account a restart happened to land on.
+            evidence = self._coordinator.assert_session_binding(record)
+            if not self._session_logged:
+                self._session_logged = True
+                self.log(f"[SESSION-BOUND] same PAPER account as armed: {evidence.describe()}")
+
+            broker = self._broker_view()
+
             if record.state is TradeState.FAILED:
-                self._abort(
+                self._halt(
                     f"durable lifecycle is FAILED: {record.failure_reason or '(no reason)'}. "
                     "Refusing to resume normal progression."
                 )
@@ -202,6 +239,8 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 )
                 self.log("[IDEMPOTENCY-PASS] recovery adopts existing state; no entry replay")
 
+                # Recovery verifies the account, adopts broker evidence and
+                # reconciles BEFORE it concludes anything may be re-sent.
                 plan = self._coordinator.assess_recovery(record, broker)
                 record = plan.record
                 self.log(f"[RECOVERY] dispatch assessment: {plan.describe()}")
@@ -220,7 +259,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
             self.log(f"[RECONCILE] {record.describe()}")
             self._progress(record, broker)
         except Exception as exc:
-            self._abort(f"{type(exc).__name__}: {exc}")
+            self._halt(f"{type(exc).__name__}: {exc}")
 
     def _log_state(self, broker: BrokerView, context: str) -> None:
         self.log(
@@ -246,6 +285,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
             # the disarmed dry run is for.
             verify_paper_session(evidence)
             self.log(f"[RECONCILE] session verified PAPER: {evidence.describe()}")
+            self.log(f"[RECONCILE] execution window eligible: {self._window_eligible()}")
             return
 
         # No position AND no working order on the symbol, from ANY source.
@@ -254,7 +294,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
         try:
             self._coordinator.assert_eligible_to_arm(broker)
         except Exception as exc:
-            self._abort(f"pre-arm eligibility refused: {exc}")
+            self._halt(f"pre-arm eligibility refused: {exc}")
             return
 
         # The armed account must BE the deployed account. The binding is
@@ -262,7 +302,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
         # None here would silently drop the check -- fail-open.
         armed_fingerprint = self.get_parameter("phase2_account_fingerprint") or ""
         if not armed_fingerprint:
-            self._abort(
+            self._halt(
                 "Arm carries no phase2_account_fingerprint. The arm is not bound to a "
                 "brokerage account, so it cannot be verified against the deployment. "
                 "Re-arm with scripts/phase2_arm.py."
@@ -270,6 +310,14 @@ class Phase2OrderLifecycle(QCAlgorithm):
             return
         verify_paper_session(evidence, expected_fingerprint=armed_fingerprint)
         self.log(f"[PHASE2-ARM] session verified PAPER: {evidence.describe()}")
+
+        # Regular hours, enforced -- not merely written down in the runbook.
+        # The entry is a MARKET order, so it only means anything in a liquid
+        # regular session. Checked BEFORE authorize(), so an ineligible time
+        # never consumes the one-time arm; the deployment simply stays
+        # read-only and says why.
+        if not self._window_eligible():
+            return
 
         price = Decimal(str(self.securities[self._symbol].price))
         if price <= 0:
@@ -296,11 +344,39 @@ class Phase2OrderLifecycle(QCAlgorithm):
         self._dispatch(pending)
         self._entries_submitted_this_session += 1
 
+    def _window_eligible(self) -> bool:
+        """Whether the exchange calendar AND the clock both permit an entry now.
+
+        The exchange answers the calendar question -- holidays, half days, early
+        closes -- because only it knows. The window narrows that to the liquid
+        middle of the session.
+        """
+        try:
+            assert_within_certification_window(
+                self.time.time(),
+                regular_session_open=bool(self.is_market_open(self._symbol)),
+            )
+        except TradingWindowError as exc:
+            self.log(f"[PHASE2-ARM] entry not eligible: {exc}")
+            return False
+        return True
+
     # -- Order events -------------------------------------------------------
 
     def on_order_event(self, order_event: OrderEvent) -> None:
-        """Route broker events to the coordinator. No lifecycle logic here."""
-        if self._aborted:
+        """Route broker events to the coordinator. No lifecycle logic here.
+
+        Deliberately NOT gated on the halt flag. Dropping events while halted
+        would not stop anything happening at the broker -- it would only stop us
+        knowing about it. An order already on the wire can still acknowledge,
+        fill, cancel or reject after a halt, and each of those is broker truth
+        that has to be recorded durably.
+
+        A halt blocks new NORMAL activity, which `_on_cycle` and `_maybe_arm`
+        honour. The single exception, below, is protecting a position that
+        actually filled: that reduces risk rather than taking it.
+        """
+        if not self._broker_event_ingestion_enabled:  # never set false; kept explicit
             return
         try:
             order = self.transactions.get_order_by_id(order_event.order_id)
@@ -313,7 +389,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
 
             record = self._coordinator.load()
             if record is None:
-                self._abort(f"Order event for {tag} with no durable trade record.")
+                self._halt(f"Order event for {tag} with no durable trade record.")
                 return
 
             # EXACT enum comparison. LEAN defines BOTH CANCEL_PENDING and
@@ -335,7 +411,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 if expected:
                     self.log(f"[EXIT-REQUEST] requested cancellation CONFIRMED for {tag}")
                 else:
-                    self._abort(
+                    self._halt(
                         f"{tag} was CANCELED without KalpaMani requesting it. Lifecycle "
                         f"latched {record.state.value}."
                     )
@@ -347,7 +423,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 # way the session must stop -- logging an abort label without
                 # actually aborting would leave the execution path live.
                 self._coordinator.on_order_rejected(record, tag)
-                self._abort(f"broker REJECTED {tag} (OrderStatus.INVALID). No retry, ever.")
+                self._halt(f"broker REJECTED {tag} (OrderStatus.INVALID). No retry, ever.")
                 return
 
             if status == OrderStatus.SUBMITTED:
@@ -384,7 +460,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
                     self.log("[PROTECTION-SUBMIT] skipped: nothing to protect")
                 else:
                     self.log("[PROTECTION-SUBMIT] intent + stop price durable; fencing now")
-                    self._dispatch(protection)
+                    self._dispatch_protection(record, protection)
                 return
 
             record = self._coordinator.on_fill(
@@ -400,7 +476,45 @@ class Phase2OrderLifecycle(QCAlgorithm):
             if tag == self._coordinator.identity.protective_order_id:
                 self.log("[EXIT-FILL] protective stop filled; the long is closed by the stop")
         except Exception as exc:
-            self._abort(f"order-event handling failed: {type(exc).__name__}: {exc}")
+            self._halt(f"order-event handling failed: {type(exc).__name__}: {exc}")
+
+    def _dispatch_protection(self, record, protection: PendingOrder) -> None:
+        """Protect a position that actually filled, halted or not.
+
+        An entry that has already filled is a real long. Declining to protect it
+        because normal progression is halted would leave it naked -- the very
+        outcome halting is meant to avoid. So protection is the one action that
+        survives a halt, and only as a deterministic risk-reducing step:
+
+        * the fill and the protective intent are already durable (one write);
+        * the session must still be the armed PAPER account (`_dispatch` proves
+          this at the fence, immediately before the broker call);
+        * and after a halt, broker truth must be unambiguous before we act.
+
+        It never submits another ENTRY, never clears the halt, and never resumes
+        autonomous trading. If protection cannot be dispatched safely, the
+        position is surfaced as UNPROTECTED for manual handling.
+        """
+        if self._normal_progression_halted:
+            try:
+                self._coordinator.reconcile(record, self._broker_view())
+            except Exception as exc:
+                self.error(
+                    f"[UNPROTECTED-POSITION] entry filled after the halt, but broker state is "
+                    f"ambiguous ({type(exc).__name__}: {exc}). Refusing to send a stop against "
+                    "a position we cannot confirm."
+                )
+                self.error(
+                    "[UNPROTECTED-POSITION] PROTECT OR CLOSE THE POSITION MANUALLY. No further "
+                    "automatic action will be taken."
+                )
+                return
+            self.error(
+                "[POST-HALT-PROTECT] entry filled after normal progression was halted. "
+                "Dispatching the protective stop as a deterministic risk-reducing action; "
+                "normal progression REMAINS halted and no second entry is possible."
+            )
+        self._dispatch(protection)
 
     # -- Progression --------------------------------------------------------
 
@@ -443,10 +557,15 @@ class Phase2OrderLifecycle(QCAlgorithm):
 
     # -- Failure ------------------------------------------------------------
 
-    def _abort(self, reason: str) -> None:
-        self._aborted = True
+    def _halt(self, reason: str) -> None:
+        """Latch normal progression off. Broker events keep being ingested."""
+        self._normal_progression_halted = True
         self.error(f"[PHASE2-ABORT] {reason}")
-        self.error("[PHASE2-ABORT] Halting. No further orders will be submitted this session.")
+        self.error(
+            "[PHASE2-ABORT] Normal progression halted: no new entry, no autonomous trading. "
+            "Broker events for orders already sent are still recorded, and a position that "
+            "fills after this point will still be protected."
+        )
 
     # -- Shutdown -----------------------------------------------------------
 
@@ -457,7 +576,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
         self.log("=" * 78)
         self.log("KalpaMani Phase 2 -- SHUTDOWN RECONCILIATION")
         self.log(f"  entry orders submitted this session : {self._entries_submitted_this_session}")
-        self.log(f"  aborted                             : {self._aborted}")
+        self.log(f"  normal progression halted           : {self._normal_progression_halted}")
         self.log(f"  {PHASE2_SYMBOL} position                        : {spy_quantity}")
         self.log(f"  open orders                         : {open_orders}")
         self.log(f"  total orders                        : {self.transactions.orders_count}")
