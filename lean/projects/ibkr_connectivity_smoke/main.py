@@ -37,6 +37,10 @@ SMOKE_TEST_TICKER = "SPY"
 #: How many data events between periodic account observations.
 ACCOUNT_OBSERVATION_INTERVAL = 60
 
+#: Minutes between scheduled account observations. Scheduled rather than
+#: data-driven so broker state is still proven when the market is closed.
+OBSERVATION_INTERVAL_MINUTES = 1
+
 
 class IbkrConnectivitySmoke(QCAlgorithm):
     """Read-only IBKR Paper connectivity proof. Submits nothing, holds nothing."""
@@ -52,11 +56,18 @@ class IbkrConnectivitySmoke(QCAlgorithm):
             self.set_cash(KALPAMANI_STRATEGY_CAPITAL_USD)
 
         # Exactly one subscription.
-        self._symbol = self.add_equity(SMOKE_TEST_TICKER, Resolution.MINUTE).symbol
+        # extended_market_hours=True so a connectivity run started outside regular
+        # trading hours can still receive data. Purely a data-subscription setting;
+        # it grants no order capability and changes no leverage.
+        self._symbol = self.add_equity(
+            SMOKE_TEST_TICKER, Resolution.MINUTE, extended_market_hours=True
+        ).symbol
 
         self._data_event_count = 0
         self._first_data_event_logged = False
         self._order_events_seen = 0
+        self._observation_count = 0
+        self._capital_separation_logged = False
 
         self.log("=" * 78)
         self.log("KalpaMani Phase 1 -- IBKR PAPER CONNECTIVITY SMOKE TEST")
@@ -66,7 +77,28 @@ class IbkrConnectivitySmoke(QCAlgorithm):
         self.log(f"KalpaMani allocated strategy capital: USD {KALPAMANI_STRATEGY_CAPITAL_USD:,}")
         self.log("=" * 78)
 
-        self._observe_broker_account("initialize")
+        # Deliberately NOT observing broker state here.
+        #
+        # Verified 2026-08-24: LEAN calls initialize() BEFORE it applies brokerage
+        # cash. Engine log ordering was:
+        #     00:13:48.876  BrokerageSetupHandler.Setup(): Initializing algorithm...
+        #     00:13:49.037  BrokerageSetupHandler.Setup(): Setting USD cash to 1000000.00
+        # Reading self.portfolio here returns LEAN's default placeholder (100,000),
+        # not the broker balance, and reporting that as "broker state" would be a
+        # fabricated number presented as fact. Observation happens on a schedule
+        # instead, once setup has completed.
+        self.log(
+            "[BROKER-STATE:initialize] NOT READ -- brokerage cash is applied after "
+            "initialize() returns. Broker state is observed on a schedule instead."
+        )
+
+        # Observe on a timer rather than from on_data, so account state is proven
+        # even when the market is closed and no bars arrive.
+        self.schedule.on(
+            self.date_rules.every_day(),
+            self.time_rules.every(timedelta(minutes=OBSERVATION_INTERVAL_MINUTES)),
+            self._scheduled_observation,
+        )
 
     # -- Market data --------------------------------------------------------
 
@@ -87,12 +119,26 @@ class IbkrConnectivitySmoke(QCAlgorithm):
             self.log(f"[MARKET-DATA]   volume      : {bar.volume}")
             self.log("-" * 78)
             self._observe_broker_account("first-market-data-event")
-            self._log_capital_separation()
+            if not self._capital_separation_logged:
+                self._capital_separation_logged = True
+                self._log_capital_separation()
 
         if self._data_event_count % ACCOUNT_OBSERVATION_INTERVAL == 0:
             self._observe_broker_account(f"data-event-{self._data_event_count}")
 
     # -- Brokerage observation ---------------------------------------------
+
+    def _scheduled_observation(self) -> None:
+        """Observe broker state on the algorithm clock, independent of market data.
+
+        This is what proves the account is readable during a connectivity test
+        run outside market hours, when no bar will ever arrive.
+        """
+        self._observation_count += 1
+        self._observe_broker_account(f"scheduled-{self._observation_count}")
+        if not self._capital_separation_logged:
+            self._capital_separation_logged = True
+            self._log_capital_separation()
 
     def _observe_broker_account(self, context: str) -> None:
         """Log broker-authoritative account state. READ ONLY.

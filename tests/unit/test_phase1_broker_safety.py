@@ -13,6 +13,7 @@ aspirational, covering:
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 from decimal import Decimal
 from pathlib import Path
@@ -171,6 +172,40 @@ def test_smoke_test_subscribes_to_exactly_one_symbol() -> None:
     assert source.count("add_equity(") == 1
     for forbidden in ("add_option(", "add_future(", "add_forex(", "add_crypto(", "add_universe("):
         assert forbidden not in source, f"Phase 1 must not use {forbidden}"
+
+
+def test_initialize_does_not_read_broker_portfolio() -> None:
+    """LEAN applies brokerage cash AFTER initialize() returns.
+
+    Verified against engine logs on 2026-08-24:
+
+        00:13:48.876  BrokerageSetupHandler.Setup(): Initializing algorithm...
+        00:13:49.037  BrokerageSetupHandler.Setup(): Setting USD cash to 1000000.00
+
+    Reading ``self.portfolio`` inside initialize() therefore returns LEAN's
+    default placeholder (100,000), not the broker balance. Reporting that as
+    broker state publishes a fabricated number as fact, so the algorithm must
+    not touch the portfolio there at all.
+    """
+    tree = ast.parse(SMOKE_TEST_MAIN.read_text(encoding="utf-8"))
+    initialize = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "initialize"
+    )
+    attributes = {n.attr for n in ast.walk(initialize) if isinstance(n, ast.Attribute)}
+    for forbidden in ("portfolio", "total_portfolio_value"):
+        assert forbidden not in attributes, (
+            f"initialize() reads {forbidden!r}, which is not broker state yet. "
+            "Observe broker state on a schedule, after LEAN applies brokerage cash."
+        )
+
+
+def test_broker_state_is_observed_on_a_schedule_not_only_from_data() -> None:
+    """Account state must be provable when the market is closed and no bar arrives."""
+    source = SMOKE_TEST_MAIN.read_text(encoding="utf-8")
+    assert "self.schedule.on(" in source
+    assert "_scheduled_observation" in source
 
 
 def test_smoke_test_capital_constant_matches_the_config_module() -> None:
