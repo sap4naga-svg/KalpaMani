@@ -84,6 +84,8 @@ from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
     BrokerView,
+    OwnershipBasis,
+    OwnershipError,
     ReconciliationError,
     UnprotectedPositionError,
     assert_flat,
@@ -92,6 +94,7 @@ from kalpamani.execution.reconciliation import (
     plan_exit,
     reconcile,
     required_protection_quantity,
+    resolve_ownership,
 )
 from kalpamani.execution.session import (
     ArmReceipt,
@@ -115,6 +118,7 @@ from kalpamani.execution.state_store import (
     apply_fill,
     expected_fill_sign,
     fence_dispatch,
+    record_broker_ids,
     record_order_intent,
 )
 from kalpamani.execution.trading_window import (
@@ -531,7 +535,16 @@ def test_protection_of_wrong_side_is_not_protection(identity: TradeIdentity) -> 
     record = filled_record(identity, filled=1)
     broker = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
-        open_orders=(BrokerOrderView(identity.protective_order_id, "SPY", "BUY", 1, is_open=True),),
+        open_orders=(
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "BUY",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
+        ),
     )
     with pytest.raises(UnprotectedPositionError):
         assert_protected(record, identity, broker)
@@ -542,7 +555,14 @@ def test_correct_protection_satisfies_assert_protected(identity: TradeIdentity) 
     broker = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
         open_orders=(
-            BrokerOrderView(identity.protective_order_id, "SPY", "SELL", 1, is_open=True),
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "SELL",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     assert_protected(record, identity, broker)  # must not raise
@@ -576,7 +596,14 @@ def test_exit_plan_cancels_protection_first(identity: TradeIdentity) -> None:
     broker = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
         open_orders=(
-            BrokerOrderView(identity.protective_order_id, "SPY", "SELL", 1, is_open=True),
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "SELL",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     plan = plan_exit(record, identity, broker)
@@ -589,7 +616,14 @@ def test_closing_with_live_stop_is_refused(identity: TradeIdentity) -> None:
     still_protected = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
         open_orders=(
-            BrokerOrderView(identity.protective_order_id, "SPY", "SELL", 1, is_open=True),
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "SELL",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     plan = plan_exit(record, identity, still_protected)
@@ -602,14 +636,28 @@ def test_closing_allowed_once_protection_cancelled(identity: TradeIdentity) -> N
     before = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
         open_orders=(
-            BrokerOrderView(identity.protective_order_id, "SPY", "SELL", 1, is_open=True),
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "SELL",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     plan = plan_exit(record, identity, before)
     after_cancel = BrokerView(
         positions=(BrokerPositionView("SPY", 1),),
         open_orders=(
-            BrokerOrderView(identity.protective_order_id, "SPY", "SELL", 1, is_open=False),
+            BrokerOrderView(
+                identity.protective_order_id,
+                "SPY",
+                "SELL",
+                1,
+                is_open=False,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     assert_safe_to_close(plan, identity, after_cancel)  # must not raise
@@ -1570,3 +1618,188 @@ def test_the_adapter_does_not_strip_the_fill_sign() -> None:
         )
     ]
     assert not stripped, "main.py takes abs() of a fill quantity; the sign must reach the cycle"
+
+
+# --------------------------------------------------------------------------
+# Round 11 -- ownership is established by evidence, never by resemblance
+# --------------------------------------------------------------------------
+
+OUR_BROKER_ID = "4"
+ENTRY_BROKER_ID = "3"
+STRANGER_BROKER_ID = "9999"
+
+
+def bound_record(identity: TradeIdentity) -> TradeRecord:
+    """A PROTECTED record whose orders carry durable broker-native identity."""
+    record = protected_record(identity)
+    record = record_broker_ids(record, identity.entry_order_id, (ENTRY_BROKER_ID,))
+    return record_broker_ids(record, identity.protective_order_id, (OUR_BROKER_ID,))
+
+
+def rehydrated(**overrides: object) -> BrokerOrderView:
+    """The protective stop as LEAN rebuilds it after a restart: NO tag."""
+    base: dict[str, object] = {
+        "client_order_id": "",
+        "symbol": "SPY",
+        "side": "SELL",
+        "quantity": 1,
+        "is_open": True,
+        "tag": "",
+        "broker_order_ids": (OUR_BROKER_ID,),
+        "lean_order_id": "1",
+        "order_type": "StopMarket",
+        "stop_price": "689.74",
+    }
+    return BrokerOrderView(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def test_a_tagless_order_is_owned_when_the_broker_id_matches(identity: TradeIdentity) -> None:
+    resolved, basis = resolve_ownership(rehydrated(), bound_record(identity), identity)
+    assert resolved == identity.protective_order_id
+    assert basis is OwnershipBasis.BROKER_ID
+
+
+def test_a_tag_still_wins_when_it_is_present(identity: TradeIdentity) -> None:
+    view = rehydrated(tag=identity.protective_order_id)
+    resolved, basis = resolve_ownership(view, bound_record(identity), identity)
+    assert resolved == identity.protective_order_id
+    assert basis is OwnershipBasis.TAG
+
+
+@pytest.mark.parametrize(
+    ("label", "overrides"),
+    [
+        ("wrong broker id", {"broker_order_ids": (STRANGER_BROKER_ID,)}),
+        ("no broker id at all", {"broker_order_ids": ()}),
+    ],
+)
+def test_identical_attributes_alone_NEVER_create_ownership(  # noqa: N802
+    identity: TradeIdentity, label: str, overrides: dict[str, object]
+) -> None:
+    """Somebody else can place a stop that looks exactly like ours.
+
+    Shape proves nothing. Adopting on resemblance would let KalpaMani cancel an
+    order belonging to another party, or believe such an order was protecting
+    its own position.
+    """
+    resolved, basis = resolve_ownership(rehydrated(**overrides), bound_record(identity), identity)
+    assert resolved is None, label
+    assert basis is OwnershipBasis.NONE
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("symbol", "AAPL"),
+        ("side", "BUY"),
+        ("quantity", 2),
+        ("order_type", "Market"),
+        ("stop_price", "700.00"),
+    ],
+)
+def test_a_matching_broker_id_with_contradictory_attributes_fails_closed(
+    identity: TradeIdentity, field: str, value: object
+) -> None:
+    """Attributes validate the identity that evidence established.
+
+    A disagreement is a contradiction, not a near-miss.
+    """
+    with pytest.raises(OwnershipError, match="contradict"):
+        resolve_ownership(rehydrated(**{field: value}), bound_record(identity), identity)
+
+
+def test_one_broker_id_matching_two_durable_orders_is_ambiguous(
+    identity: TradeIdentity,
+) -> None:
+    record = protected_record(identity)
+    record = record_broker_ids(record, identity.entry_order_id, (OUR_BROKER_ID,))
+    record = record_broker_ids(record, identity.protective_order_id, (OUR_BROKER_ID,))
+    with pytest.raises(OwnershipError, match="Ambiguous identity"):
+        resolve_ownership(rehydrated(), record, identity)
+
+
+def test_a_tag_and_a_broker_id_naming_different_orders_contradict(
+    identity: TradeIdentity,
+) -> None:
+    """The tag names the PROTECTIVE order; the broker id belongs to the ENTRY."""
+    record = bound_record(identity)
+    # Drop the tag target so broker-id resolution is reached with a stale tag.
+    record = replace(
+        record,
+        orders={cid: o for cid, o in record.orders.items() if cid != identity.protective_order_id},
+    )
+    view = rehydrated(tag=identity.protective_order_id, broker_order_ids=(ENTRY_BROKER_ID,))
+    with pytest.raises(OwnershipError, match="contradict"):
+        resolve_ownership(view, record, identity)
+
+
+def test_nothing_is_owned_before_a_trade_record_exists(identity: TradeIdentity) -> None:
+    resolved, basis = resolve_ownership(rehydrated(), None, identity)
+    assert resolved is None
+    assert basis is OwnershipBasis.NONE
+
+
+def test_a_broker_id_is_adopted_once_and_never_silently_replaced(
+    identity: TradeIdentity,
+) -> None:
+    record = record_broker_ids(protected_record(identity), identity.protective_order_id, ("4",))
+    assert record.orders[identity.protective_order_id].broker_order_ids == ("4",)
+    again = record_broker_ids(record, identity.protective_order_id, ("4",))
+    assert again.orders[identity.protective_order_id].broker_order_ids == ("4",)
+    # A different one is not an update; it would re-point the record at another
+    # order, and the broker id is the only identity that survives a restart.
+    with pytest.raises(StateStoreError, match="would CHANGE"):
+        record_broker_ids(record, identity.protective_order_id, ("5",))
+
+
+def test_a_v4_record_migrates_to_an_EMPTY_broker_identity(tmp_path: Path) -> None:  # noqa: N802
+    """v4 never captured broker ids.
+
+    The honest migration is "none", which the resolver treats as no restart
+    identity -- never as a wildcard that would match anything.
+    """
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "trades": {
+                    "ti-x": {
+                        "trade_intent_id": "ti-x",
+                        "execution_id": "ex-x",
+                        "natural_key": "k",
+                        "attempt": 1,
+                        "symbol": "SPY",
+                        "state": "PROTECTED",
+                        "requested_quantity": 1,
+                        "filled_quantity": 1,
+                        "protected_quantity": 1,
+                        "arm_consumed": True,
+                        "account_fingerprint": account_fingerprint(PAPER_ACCOUNT_ID),
+                        "revision": 3,
+                        "orders": {
+                            "km-a-PROTECTIVE-0": {
+                                "client_order_id": "km-a-PROTECTIVE-0",
+                                "role": "PROTECTIVE",
+                                "symbol": "SPY",
+                                "side": "SELL",
+                                "quantity": 1,
+                                "dispatch": "ACKNOWLEDGED",
+                                "cancel_requested": False,
+                                "filled_quantity": 0,
+                                "broker_order_id": None,
+                                "applied_fill_ids": [],
+                                "stop_price": "689.74",
+                            }
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = JsonTradeStateStore(path).require("ti-x")
+    order = record.orders["km-a-PROTECTIVE-0"]
+    assert order.broker_order_ids == ()
+    assert order.has_broker_identity is False
+    assert record.state is TradeState.PROTECTED

@@ -22,7 +22,7 @@ from kalpamani.execution.envelope import (
     describe_envelope,
 )
 from kalpamani.execution.halt import JsonHaltStore, halt_state_path
-from kalpamani.execution.identity import TradeIdentity, is_valid_client_order_id
+from kalpamani.execution.identity import TradeIdentity
 from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
@@ -80,31 +80,47 @@ class LeanBrokerPort:
     # -- Observation --------------------------------------------------------
 
     def view(self) -> BrokerView:
-        """Broker truth: positions, and EVERY open order -- ours and foreign."""
+        """Broker truth: positions, and EVERY open order -- ours and foreign.
+
+        Ownership is NOT decided here. The adapter reports raw identity and the
+        cycle resolves it against durable state, because only durable state
+        knows which broker ids are ours.
+        """
         algorithm = self._algorithm
         positions = tuple(
             BrokerPositionView(symbol=str(h.symbol.value), quantity=int(h.quantity))
             for h in algorithm.portfolio.values()
             if h.invested
         )
-        open_orders = []
-        for index, order in enumerate(algorithm.transactions.get_open_orders()):
-            tag = str(order.tag or "")
-            # Foreign orders are RETAINED so the pre-arm gate can see them -- an
-            # unrelated working order on our symbol makes ownership ambiguous.
-            # Their identity is redacted: unrelated order details are not ours
-            # to log, and orders_owned_by() excludes them from lifecycle logic.
-            client_order_id = tag if is_valid_client_order_id(tag) else f"<foreign-{index}>"
-            open_orders.append(
-                BrokerOrderView(
-                    client_order_id=client_order_id,
-                    symbol=str(order.symbol.value),
-                    side="BUY" if order.quantity > 0 else "SELL",
-                    quantity=abs(int(order.quantity)),
-                    is_open=True,
-                )
-            )
-        return BrokerView(positions=positions, open_orders=tuple(open_orders))
+        open_orders = tuple(
+            self._order_view(order) for order in algorithm.transactions.get_open_orders()
+        )
+        return BrokerView(positions=positions, open_orders=open_orders)
+
+    def _order_view(self, order) -> BrokerOrderView:
+        """One LEAN order as raw identity plus attributes.
+
+        `Order.Tag` is where our client order id lives, and LEAN does not send it
+        to IBKR -- so an order LEAN re-hydrates after a restart comes back with a
+        BLANK tag. `Order.BrokerId` is the value that survives, observed
+        identical across a real IBKR Paper reconnect. `Order.Id` does NOT survive;
+        it is reassigned, so it is reported only for addressing a cancellation
+        within this process.
+        """
+        return BrokerOrderView(
+            client_order_id="",  # resolved by the cycle, never by the adapter
+            symbol=str(order.symbol.value),
+            side="BUY" if order.quantity > 0 else "SELL",
+            quantity=abs(int(order.quantity)),
+            is_open=True,
+            tag=str(order.tag or ""),
+            broker_order_ids=tuple(str(b) for b in (order.broker_id or []) if str(b)),
+            lean_order_id=str(order.id),
+            order_type=str(order.type),
+            stop_price=(
+                str(order.stop_price) if getattr(order, "stop_price", None) is not None else None
+            ),
+        )
 
     def reference_price(self) -> decimal.Decimal:
         return decimal.Decimal(str(self._algorithm.securities[self._symbol].price))
@@ -154,11 +170,13 @@ class LeanBrokerPort:
                 tag=request.client_order_id,
             )
 
-    def cancel(self, client_order_id: str) -> None:
-        """Cancel one of OUR orders, matched by tag. Foreign orders are untouched."""
-        for order in self._algorithm.transactions.get_open_orders():
-            if str(order.tag or "") == client_order_id:
-                self._algorithm.transactions.cancel_order(order.id)
+    def cancel(self, lean_order_id: str) -> None:
+        """Cancel exactly the LEAN order the cycle resolved as ours.
+
+        Addressed by LEAN order id. Never by tag -- gone after a restart -- and
+        never by symbol or shape, which could be a stranger's order.
+        """
+        self._algorithm.transactions.cancel_order(int(lean_order_id))
 
     # -- Reporting ----------------------------------------------------------
 
@@ -249,7 +267,10 @@ class Phase2OrderLifecycle(QCAlgorithm):
         order = self.transactions.get_order_by_id(order_event.order_id)
         self._cycle.on_order_event(
             OrderEventFacts(
-                client_order_id=str(order.tag or ""),
+                # The whole order, not just an id: after a restart the tag is
+                # blank and the cycle must re-establish ownership from the
+                # broker-native id.
+                order=self._port._order_view(order),
                 status=self._classify(order_event),
                 fill_quantity=int(order_event.fill_quantity),
                 fill_price=decimal.Decimal(str(order_event.fill_price)),

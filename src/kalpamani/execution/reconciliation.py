@@ -13,11 +13,13 @@ sent -- ordering, not tidiness.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
+from enum import StrEnum
 
 from kalpamani.common.errors import SafetyViolationError
 from kalpamani.execution.identity import OrderRole, TradeIdentity, is_valid_client_order_id
-from kalpamani.execution.state_store import TradeRecord
+from kalpamani.execution.state_store import SubmittedOrder, TradeRecord
 
 
 class ReconciliationError(SafetyViolationError):
@@ -32,15 +34,59 @@ class UnprotectedPositionError(SafetyViolationError):
     """
 
 
+class OwnershipBasis(StrEnum):
+    """How an open order was identified as ours -- or not."""
+
+    #: The LEAN tag carried our client order id. Only possible in the process
+    #: that submitted the order.
+    TAG = "TAG"
+    #: The broker-native id matched a durable record. Survives a restart.
+    BROKER_ID = "BROKER_ID"
+    #: Not ours, or not provably ours. Never adopted, never modified.
+    NONE = "NONE"
+
+
+class OwnershipError(SafetyViolationError):
+    """An open order cannot be attributed safely: ambiguous or contradictory."""
+
+
+def normalise_order_type(raw: str) -> str:
+    """Fold ``StopMarket`` / ``STOP_MARKET`` / ``stop_market`` to one token."""
+    return "".join(ch for ch in raw.upper() if ch.isalnum())
+
+
+#: The order type each role must have, normalised.
+EXPECTED_ORDER_TYPE: dict[OrderRole, str] = {
+    OrderRole.ENTRY: "MARKET",
+    OrderRole.PROTECTIVE: "STOPMARKET",
+    OrderRole.EXIT: "MARKET",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class BrokerOrderView:
-    """One open order as the broker reports it."""
+    """One open order as the broker reports it, plus how we identified it."""
 
+    #: Resolved KalpaMani identity, or a redacted ``<foreign-N>`` placeholder.
+    #: Set by :func:`resolve_broker_view`, not by the adapter.
     client_order_id: str
     symbol: str
     side: str
     quantity: int
     is_open: bool
+    #: Raw LEAN tag. BLANK on an order LEAN re-hydrated after a restart: the tag
+    #: is never sent to IBKR, so it cannot come back.
+    tag: str = ""
+    #: Broker-native ids (``Order.BrokerId``). The only identity proven to
+    #: survive a restart. Never printed in normal logs.
+    broker_order_ids: tuple[str, ...] = ()
+    #: LEAN's process-local order id. Used ONLY to address a cancellation within
+    #: the current process, and never as durable identity -- it is reassigned on
+    #: restart, which was observed directly.
+    lean_order_id: str = ""
+    order_type: str = ""
+    stop_price: str | None = None
+    ownership: OwnershipBasis = OwnershipBasis.NONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,15 +110,38 @@ class BrokerView:
     def orders_owned_by(self, identity: TradeIdentity) -> tuple[BrokerOrderView, ...]:
         """Open orders attributable to this execution.
 
-        Orders whose tag is not a KalpaMani client order id, or belongs to a
-        different execution, are somebody else's. They are never adopted and
-        never modified (ADR-0002: we do not touch what we do not own).
+        Reads the resolution :func:`resolve_broker_view` already performed. An
+        order that could not be attributed carries a ``<foreign-N>`` placeholder
+        and is excluded: never adopted, never modified (ADR-0002 -- we do not
+        touch what we do not own).
         """
         return tuple(
             o
             for o in self.open_orders
-            if is_valid_client_order_id(o.client_order_id) and identity.owns(o.client_order_id)
+            if o.ownership is not OwnershipBasis.NONE
+            and is_valid_client_order_id(o.client_order_id)
+            and identity.owns(o.client_order_id)
         )
+
+    def owned_order(self, client_order_id: str) -> BrokerOrderView | None:
+        """The single resolved view for one of our orders, or None.
+
+        Raises:
+            OwnershipError: if more than one open order resolved to the same
+                client order id. Two live orders claiming one identity is not a
+                state to cancel or close from.
+        """
+        matches = [
+            o
+            for o in self.open_orders
+            if o.ownership is not OwnershipBasis.NONE and o.client_order_id == client_order_id
+        ]
+        if len(matches) > 1:
+            raise OwnershipError(
+                f"{len(matches)} open orders resolve to {client_order_id}. Ambiguous ownership; "
+                "refusing to act on either."
+            )
+        return matches[0] if matches else None
 
     def open_protective_quantity(self, identity: TradeIdentity) -> int:
         return sum(
@@ -197,6 +266,125 @@ def assert_protected(
             "Highest-severity Phase 2 failure. Do NOT submit another entry; surface this "
             "and stop normal progression."
         )
+
+
+def _assert_attributes_agree(view: BrokerOrderView, durable: SubmittedOrder) -> None:
+    """Attributes VALIDATE an identity; they never create one.
+
+    Reached only after a tag or a broker id has already established which order
+    this is. A disagreement here means the identity we established and the order
+    the broker is describing are not the same thing, which is a contradiction
+    rather than a near-miss.
+
+    Raises:
+        OwnershipError: on any disagreement.
+    """
+    problems: list[str] = []
+    if view.symbol != durable.symbol:
+        problems.append(f"symbol {view.symbol} != {durable.symbol}")
+    if view.side.strip().upper() != durable.side.strip().upper():
+        problems.append(f"side {view.side} != {durable.side}")
+    if view.quantity != durable.quantity:
+        problems.append(f"quantity {view.quantity} != {durable.quantity}")
+    if view.order_type:
+        expected = EXPECTED_ORDER_TYPE.get(durable.role, "")
+        if expected and normalise_order_type(view.order_type) != expected:
+            problems.append(
+                f"order type {view.order_type} is not {expected} for {durable.role.value}"
+            )
+    if durable.role is OrderRole.PROTECTIVE and view.stop_price and durable.stop_price:
+        if Decimal(view.stop_price) != Decimal(durable.stop_price):
+            problems.append(f"stop price {view.stop_price} != {durable.stop_price}")
+    if problems:
+        raise OwnershipError(
+            f"An open order was identified as {durable.client_order_id} "
+            f"({durable.role.value}) but its attributes contradict that record: "
+            + "; ".join(problems)
+            + ". Refusing to adopt it."
+        )
+
+
+def resolve_ownership(
+    view: BrokerOrderView,
+    record: TradeRecord | None,
+    identity: TradeIdentity,
+) -> tuple[str | None, OwnershipBasis]:
+    """Attribute one open order, by evidence and never by resemblance.
+
+    The hierarchy, strongest first:
+
+    1. **TAG.** The LEAN tag carries our client order id. Only available in the
+       process that submitted the order -- the tag is not sent to IBKR.
+    2. **BROKER ID.** The broker-native id matches exactly one durable order.
+       This is what survives a restart, proven on a real IBKR Paper reconnect.
+    3. **Attributes** then VALIDATE whichever identity was established. They are
+       never allowed to establish one: a manual SELL stop for 1 SPY at the same
+       price is indistinguishable by shape, and adopting it would let KalpaMani
+       cancel a stranger's order or believe a stranger's order protects it.
+    4. Otherwise the order is FOREIGN. Never adopted, never cancelled, never
+       answered with a compensating order.
+
+    Raises:
+        OwnershipError: if a broker id matches more than one durable order, or
+            if attributes contradict the established identity.
+    """
+    if record is None:
+        return None, OwnershipBasis.NONE
+
+    tag = view.tag.strip()
+    if is_valid_client_order_id(tag) and identity.owns(tag) and tag in record.orders:
+        _assert_attributes_agree(view, record.orders[tag])
+        return tag, OwnershipBasis.TAG
+
+    if view.broker_order_ids:
+        incoming = set(view.broker_order_ids)
+        matches = [
+            durable
+            for durable in record.orders.values()
+            if durable.broker_order_ids and incoming & set(durable.broker_order_ids)
+        ]
+        if len(matches) > 1:
+            raise OwnershipError(
+                f"A broker order id matches {len(matches)} durable KalpaMani orders "
+                f"({', '.join(sorted(m.client_order_id for m in matches))}). Ambiguous "
+                "identity; refusing to attribute it to any of them."
+            )
+        if matches:
+            durable = matches[0]
+            if is_valid_client_order_id(tag) and tag != durable.client_order_id:
+                raise OwnershipError(
+                    f"An open order carries the tag {tag} but its broker id belongs to "
+                    f"{durable.client_order_id}. The two identities contradict each other; "
+                    "refusing to adopt it."
+                )
+            _assert_attributes_agree(view, durable)
+            return durable.client_order_id, OwnershipBasis.BROKER_ID
+
+    return None, OwnershipBasis.NONE
+
+
+def resolve_broker_view(
+    view: BrokerView,
+    record: TradeRecord | None,
+    identity: TradeIdentity,
+) -> BrokerView:
+    """Attribute every open order in a raw broker view.
+
+    Unattributed orders keep a redacted ``<foreign-N>`` placeholder: they stay
+    VISIBLE, because any working order on our symbol must block a new entry,
+    while staying excluded from anything that touches an order.
+    """
+    resolved: list[BrokerOrderView] = []
+    for index, raw in enumerate(view.open_orders):
+        client_order_id, basis = resolve_ownership(raw, record, identity)
+        resolved.append(
+            replace(
+                raw,
+                client_order_id=client_order_id or f"<foreign-{index}>",
+                ownership=basis,
+            )
+        )
+    return replace(view, open_orders=tuple(resolved))
 
 
 def assert_symbol_has_no_open_orders(
@@ -349,10 +537,13 @@ def assert_flat(
 
 
 __all__ = [
+    "EXPECTED_ORDER_TYPE",
     "BrokerOrderView",
     "BrokerPositionView",
     "BrokerView",
     "ExitPlan",
+    "OwnershipBasis",
+    "OwnershipError",
     "ReconciliationError",
     "ReconciliationResult",
     "UnprotectedPositionError",
@@ -360,7 +551,10 @@ __all__ = [
     "assert_protected",
     "assert_safe_to_close",
     "assert_symbol_has_no_open_orders",
+    "normalise_order_type",
     "plan_exit",
     "reconcile",
     "required_protection_quantity",
+    "resolve_broker_view",
+    "resolve_ownership",
 ]

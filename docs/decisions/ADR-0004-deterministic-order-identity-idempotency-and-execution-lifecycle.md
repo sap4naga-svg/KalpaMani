@@ -521,6 +521,52 @@ disagree is not one to act on.
 
 The fixture now requires an explicit sign at every call site — no default — and the preflight
 asserts structurally that the adapter never takes `abs()` of a fill quantity.
+
+### 21. Order ownership is broker-native, not tag-based — added 2026-08-25
+
+Phase 2 used LEAN's `Order.Tag` as the durable ownership key. That assumption is invalid across
+a restart, and it stranded a live protected paper position on the first certification run.
+
+LEAN does not send the tag to IBKR, so an order LEAN re-hydrates from the broker comes back with
+a **blank** tag. Observed directly, read-only, against the order still open at IBKR:
+
+```
+[IDENTITY-DIAG] order 0: symbol=SPY side=SELL qty=1 type=STOP_MARKET
+                tag_present=False  broker_id_present=True  lean_id_present=True
+```
+
+| Identity | Survives a restart | Role |
+|---|---|---|
+| `Order.Tag` (our client order id) | **NO** | primary only within the submitting process |
+| `Order.BrokerId` | **YES** — same value before and after | **the restart identity** |
+| `Order.Id` (LEAN-local) | **NO** — reassigned | addresses a cancellation in *this* process only |
+| IB `PermId` | visible in IB brokerage trace; **not proven** reachable from `QCAlgorithm` | not used |
+
+**Decision — a strict hierarchy.** `resolve_ownership()` attributes an open order by evidence:
+
+1. **Tag** — if present and ours.
+2. **Broker id** — exact intersection with exactly **one** durable order. More than one is
+   ambiguous and fails closed.
+3. **Attributes** (symbol, side, quantity, order type, stop price) then **validate** whichever
+   identity was established. They may never *create* one: a manual SELL stop for 1 SPY at the
+   same price is indistinguishable by shape, and adopting on resemblance would let KalpaMani
+   cancel a stranger's order, or believe a stranger's order was protecting it.
+4. Otherwise **foreign** — never adopted, never cancelled, never answered with a compensating
+   order. Still counted, so any working order on the symbol blocks a new entry.
+
+A tag and a broker id naming *different* durable orders is a contradiction, not a tie-break.
+
+**Consequences.** `SubmittedOrder.broker_order_ids` is a durable collection (schema **v5**, with
+an explicit v4 migration), captured at acknowledgement and from positive broker evidence, and
+refused if it would ever change. `BrokerOrderView` carries raw identity and the adapter no longer
+decides ownership — the cycle resolves it, because only durable state knows which broker ids are
+ours. Event routing uses the same resolver, since a re-hydrated order's events are also anonymous.
+Cancellation targets the resolved order's **current** LEAN order id: never by tag, never by
+symbol, never "the first SELL stop".
+
+**Known limit.** A durable order whose broker id was never recorded has *no* restart identity and
+resolves to foreign — correctly. That is the state of the position open at the time of writing:
+it predates this capture, so the repair cannot retroactively identify it.
 ---
 
 ## Consequences

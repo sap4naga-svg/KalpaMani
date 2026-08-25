@@ -43,6 +43,7 @@ from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
     BrokerView,
+    OwnershipBasis,
 )
 from kalpamani.execution.session import BrokerSessionEvidence, account_fingerprint
 from kalpamani.execution.state_store import DispatchState, JsonTradeStateStore, TradeRecord
@@ -70,8 +71,17 @@ class FakePort:
 
     def __init__(self) -> None:
         self.position = 0
-        self.working: dict[str, BrokerOrderView] = {}
+        #: Every order ever submitted, keyed by the durable client order id.
+        #: The VIEWS carry raw identity only -- the adapter never resolves.
+        self.orders: dict[str, BrokerOrderView] = {}
+        self.open_ids: set[str] = set()
+        self.cancelled_lean_ids: list[str] = []
         self.submitted: list[OrderRequest] = []
+        #: LEAN order ids are process-local and reassigned on restart; broker
+        #: ids are not. Modelled separately, because that difference is the
+        #: whole point of the ownership resolver.
+        self._next_lean_id = 1
+        self._next_broker_id = 3
         self.cancelled: list[str] = []
         self.logs: list[str] = []
         self.errors: list[str] = []
@@ -90,21 +100,30 @@ class FakePort:
             raise error
         return BrokerView(
             positions=(BrokerPositionView(PHASE2_SYMBOL, self.position),),
-            open_orders=tuple(self.working.values()),
+            open_orders=tuple(self.orders[cid] for cid in sorted(self.open_ids)),
         )
 
     def submit(self, request: OrderRequest) -> None:
         self.submitted.append(request)
-        self.working[request.client_order_id] = BrokerOrderView(
-            client_order_id=request.client_order_id,
+        self.orders[request.client_order_id] = BrokerOrderView(
+            client_order_id="",  # raw: the adapter never resolves ownership
             symbol=request.symbol,
             side=request.side.value,
             quantity=request.quantity,
             is_open=True,
+            tag=request.client_order_id,
+            broker_order_ids=(str(self._next_broker_id),),
+            lean_order_id=str(self._next_lean_id),
+            order_type="Market" if request.stop_price is None else "StopMarket",
+            stop_price=str(request.stop_price) if request.stop_price is not None else None,
         )
+        self.open_ids.add(request.client_order_id)
+        self._next_lean_id += 1
+        self._next_broker_id += 1
 
-    def cancel(self, client_order_id: str) -> None:
-        self.cancelled.append(client_order_id)
+    def cancel(self, lean_order_id: str) -> None:
+        self.cancelled_lean_ids.append(lean_order_id)
+        self.cancelled.append(lean_order_id)
 
     def reference_price(self) -> Decimal:
         return self.price
@@ -130,11 +149,25 @@ class FakePort:
     # -- Test helpers -------------------------------------------------------
 
     def fill(self, client_order_id: str, quantity: int) -> None:
-        order = self.working.pop(client_order_id)
+        order = self.orders[client_order_id]
+        self.open_ids.discard(client_order_id)
         self.position += quantity if order.side == "BUY" else -quantity
 
     def confirm_cancel(self, client_order_id: str) -> None:
-        self.working.pop(client_order_id, None)
+        self.open_ids.discard(client_order_id)
+
+    def rehydrate(self) -> None:
+        """Model what LEAN actually does on a restart, as observed at IBKR.
+
+        The tag is NOT sent to IBKR, so an order LEAN rebuilds from the broker
+        comes back with a BLANK tag and a NEWLY ASSIGNED LEAN order id. The
+        broker id is the same value it had before. Reproduced from a real
+        reconnect: the stop kept its broker id and lost everything else.
+        """
+        next_lean_id = 1
+        for cid in sorted(self.open_ids):
+            self.orders[cid] = replace(self.orders[cid], tag="", lean_order_id=str(next_lean_id))
+            next_lean_id += 1
 
     def count(self, role: OrderRole) -> int:
         return sum(1 for r in self.submitted if r.role is role)
@@ -180,7 +213,9 @@ def make_cycle(
     return cycle, coordinator, store
 
 
-def fill_event(client_order_id: str, quantity: int, fill_id: str = "7-1") -> OrderEventFacts:
+def fill_event(
+    port: FakePort, client_order_id: str, quantity: int, fill_id: str = "7-1"
+) -> OrderEventFacts:
     """A LEAN fill event. ``quantity`` is SIGNED and has no default, deliberately.
 
     LEAN reports a BUY fill positive and a SELL fill negative. The old fixture
@@ -190,7 +225,7 @@ def fill_event(client_order_id: str, quantity: int, fill_id: str = "7-1") -> Ord
     has to state the sign the broker would actually report.
     """
     return OrderEventFacts(
-        client_order_id=client_order_id,
+        order=port.orders[client_order_id],
         status=EventStatus.FILL,
         fill_quantity=quantity,
         fill_price=SPY_PRICE,
@@ -198,8 +233,8 @@ def fill_event(client_order_id: str, quantity: int, fill_id: str = "7-1") -> Ord
     )
 
 
-def status_event(client_order_id: str, status: EventStatus) -> OrderEventFacts:
-    return OrderEventFacts(client_order_id=client_order_id, status=status)
+def status_event(port: FakePort, client_order_id: str, status: EventStatus) -> OrderEventFacts:
+    return OrderEventFacts(order=port.orders[client_order_id], status=status)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +255,7 @@ def test_happy_path_arms_protects_exits_and_reconciles(tmp_path: Path) -> None:
     # The entry fills. Fill, lifecycle and protective intent land together, and
     # the stop is dispatched from the SAME event.
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     assert port.count(OrderRole.PROTECTIVE) == 1
     protective = port.submitted[-1]
     assert protective.stop_price == (SPY_PRICE * Decimal("0.90")).quantize(Decimal("0.01"))
@@ -232,14 +267,17 @@ def test_happy_path_arms_protects_exits_and_reconciles(tmp_path: Path) -> None:
     # The operator redeploys asking for the exit. Same durable state.
     exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
     exiting.on_cycle()
-    assert port.cancelled == [identity.protective_order_id]
+    # Addressed by the RESOLVED LEAN order id, not by tag or by shape.
+    assert port.cancelled_lean_ids == [port.orders[identity.protective_order_id].lean_order_id]
 
     # CANCEL_PENDING is not confirmation.
-    exiting.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCEL_PENDING))
+    exiting.on_order_event(
+        status_event(port, identity.protective_order_id, EventStatus.CANCEL_PENDING)
+    )
     assert store.require(identity.trade_intent_id).protected_quantity == 1
 
     port.confirm_cancel(identity.protective_order_id)
-    exiting.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCELED))
+    exiting.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
     assert store.require(identity.trade_intent_id).protected_quantity == 0
     assert not exiting.halted, "a REQUESTED cancellation is expected, not a failure"
 
@@ -247,7 +285,7 @@ def test_happy_path_arms_protects_exits_and_reconciles(tmp_path: Path) -> None:
     assert port.count(OrderRole.EXIT) == 1
 
     port.fill(identity.exit_order_id, 1)
-    exiting.on_order_event(fill_event(identity.exit_order_id, -1, fill_id="9-1"))
+    exiting.on_order_event(fill_event(port, identity.exit_order_id, -1, fill_id="9-1"))
     exiting.on_cycle()
 
     assert store.require(identity.trade_intent_id).state is TradeState.RECONCILED
@@ -310,7 +348,7 @@ def test_the_exit_is_never_gated_on_the_window(tmp_path: Path) -> None:
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
 
     # The session is now closed outright -- no entry could be authorised.
@@ -318,9 +356,10 @@ def test_the_exit_is_never_gated_on_the_window(tmp_path: Path) -> None:
 
     exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
     exiting.on_cycle()
-    assert port.cancelled == [identity.protective_order_id]
+    # Addressed by the RESOLVED LEAN order id, not by tag or by shape.
+    assert port.cancelled_lean_ids == [port.orders[identity.protective_order_id].lean_order_id]
     port.confirm_cancel(identity.protective_order_id)
-    exiting.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCELED))
+    exiting.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
     exiting.on_cycle()
     assert port.count(OrderRole.EXIT) == 1, "the exit must not wait for market hours"
 
@@ -407,7 +446,7 @@ def test_an_event_from_a_foreign_session_cannot_mutate_the_trade(
     # ours -- a tag proves nothing about which account the event came from.
     foreign, _, _ = make_cycle(tmp_path, port, account_id=account_id, trading_mode=trading_mode)
     port.fill(identity.entry_order_id, 1)
-    foreign.on_order_event(fill_event(identity.entry_order_id, +1))
+    foreign.on_order_event(fill_event(port, identity.entry_order_id, +1))
 
     after = store.require(identity.trade_intent_id)
     assert after == before, "the account-bound record must be untouched"
@@ -432,7 +471,7 @@ def test_an_entry_filling_after_a_halt_is_recorded_and_protected(tmp_path: Path)
 
     # The entry -- already at the broker -- now fills.
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.open_long_quantity == 1, "the fill is durable"
@@ -462,7 +501,7 @@ def test_a_late_entry_fill_after_FAILED_is_still_recorded_and_protected(  # noqa
     assert store.require(identity.trade_intent_id).state is TradeState.FAILED
 
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.state is TradeState.FAILED, "terminal stays terminal"
@@ -486,7 +525,7 @@ def test_late_protective_and_exit_fills_after_FAILED_remain_recordable(  # noqa:
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
 
     record = store.require(identity.trade_intent_id)
@@ -495,7 +534,7 @@ def test_late_protective_and_exit_fills_after_FAILED_remain_recordable(  # noqa:
     # The stop fires after the failure. That closes the long, and pretending
     # otherwise would leave us believing we still hold it.
     port.fill(identity.protective_order_id, 1)
-    cycle.on_order_event(fill_event(identity.protective_order_id, -1, fill_id="8-1"))
+    cycle.on_order_event(fill_event(port, identity.protective_order_id, -1, fill_id="8-1"))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.state is TradeState.FAILED
@@ -517,7 +556,7 @@ def test_protection_after_a_halt_is_refused_when_broker_truth_is_ambiguous(
     assert cycle.halted
 
     # The entry fills at the broker, but the broker view disagrees: no position.
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
 
     assert port.count(OrderRole.PROTECTIVE) == 0, "no stop against a position we cannot confirm"
     assert port.said("UNPROTECTED-POSITION")
@@ -536,13 +575,13 @@ def test_a_safety_halt_survives_a_restart_and_does_not_resume(tmp_path: Path) ->
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
 
     # The stop is cancelled by someone else. Protection vanished; that is a
     # safety violation and needs a human.
     port.confirm_cancel(identity.protective_order_id)
-    cycle.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCELED))
+    cycle.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
     assert cycle.halted
     assert cycle.halt is not None and cycle.halt.kind is HaltKind.MANUAL_CLEARANCE_REQUIRED
 
@@ -651,7 +690,7 @@ def test_an_unexpected_exception_with_a_trade_at_risk_halts_durably(tmp_path: Pa
 
     # The operator reconciles against IBKR by hand; the broker confirms the
     # order exists, which resolves the ambiguity the fence stood for.
-    resumed.on_order_event(status_event(identity.entry_order_id, EventStatus.SUBMITTED))
+    resumed.on_order_event(status_event(port, identity.entry_order_id, EventStatus.SUBMITTED))
     assert (
         store.require(identity.trade_intent_id).orders[identity.entry_order_id].dispatch
         is DispatchState.ACKNOWLEDGED
@@ -692,7 +731,7 @@ def test_clearing_a_halt_cannot_revive_a_FAILED_trade(tmp_path: Path) -> None:  
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
 
     coordinator.fail(store.require(identity.trade_intent_id), "a durable failure")
@@ -769,7 +808,7 @@ def test_A_entry_fill_positive_records_and_protects(tmp_path: Path) -> None:  # 
     cycle.on_cycle()
 
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.entry_order_id].filled_quantity == 1
@@ -786,18 +825,18 @@ def test_B_exit_fill_negative_closes_the_position(tmp_path: Path) -> None:  # no
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
 
     exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
     exiting.on_cycle()
     port.confirm_cancel(identity.protective_order_id)
-    exiting.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCELED))
+    exiting.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
     exiting.on_cycle()
     assert port.count(OrderRole.EXIT) == 1
 
     port.fill(identity.exit_order_id, 1)  # the broker goes flat
-    exiting.on_order_event(fill_event(identity.exit_order_id, -1))
+    exiting.on_order_event(fill_event(port, identity.exit_order_id, -1))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.exit_order_id].filled_quantity == 1
@@ -817,12 +856,12 @@ def test_C_protective_fill_negative_closes_the_position(tmp_path: Path) -> None:
     identity = coordinator.identity
     cycle.on_cycle()
     port.fill(identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
     cycle.on_cycle()
     assert store.require(identity.trade_intent_id).state is TradeState.PROTECTED
 
     port.fill(identity.protective_order_id, 1)  # the stop fires; broker goes flat
-    cycle.on_order_event(fill_event(identity.protective_order_id, -1, fill_id="8-1"))
+    cycle.on_order_event(fill_event(port, identity.protective_order_id, -1, fill_id="8-1"))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.protective_order_id].filled_quantity == 1
@@ -842,7 +881,7 @@ def at_entry_filled(tmp_path: Path, port: FakePort) -> tuple[Phase2Cycle, Phase2
     cycle, coordinator, _ = make_cycle(tmp_path, port)
     cycle.on_cycle()
     port.fill(coordinator.identity.entry_order_id, 1)
-    cycle.on_order_event(fill_event(coordinator.identity.entry_order_id, +1))
+    cycle.on_order_event(fill_event(port, coordinator.identity.entry_order_id, +1))
     cycle.on_cycle()
     return cycle, coordinator
 
@@ -854,7 +893,7 @@ def test_D_entry_filling_NEGATIVE_is_refused(tmp_path: Path) -> None:  # noqa: N
     identity = coordinator.identity
     cycle.on_cycle()
 
-    cycle.on_order_event(fill_event(identity.entry_order_id, -1))
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, -1))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.entry_order_id].filled_quantity == 0, "not applied"
@@ -871,7 +910,7 @@ def test_E_protective_filling_POSITIVE_is_refused(tmp_path: Path) -> None:  # no
     identity = coordinator.identity
     store = JsonTradeStateStore(tmp_path / "storage" / "phase2_trade_state.json")
 
-    cycle.on_order_event(fill_event(identity.protective_order_id, +1, fill_id="8-1"))
+    cycle.on_order_event(fill_event(port, identity.protective_order_id, +1, fill_id="8-1"))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.protective_order_id].filled_quantity == 0, "not applied"
@@ -890,11 +929,11 @@ def test_F_exit_filling_POSITIVE_is_refused(tmp_path: Path) -> None:  # noqa: N8
     exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
     exiting.on_cycle()
     port.confirm_cancel(identity.protective_order_id)
-    exiting.on_order_event(status_event(identity.protective_order_id, EventStatus.CANCELED))
+    exiting.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
     exiting.on_cycle()
     assert port.count(OrderRole.EXIT) == 1
 
-    exiting.on_order_event(fill_event(identity.exit_order_id, +1, fill_id="9-1"))
+    exiting.on_order_event(fill_event(port, identity.exit_order_id, +1, fill_id="9-1"))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.exit_order_id].filled_quantity == 0, "not applied"
@@ -912,7 +951,7 @@ def test_G_a_repeated_signed_SELL_fill_is_a_true_no_op(tmp_path: Path) -> None: 
 
     port.fill(identity.protective_order_id, 1)
     for _ in range(4):
-        cycle.on_order_event(fill_event(identity.protective_order_id, -1, fill_id="8-1"))
+        cycle.on_order_event(fill_event(port, identity.protective_order_id, -1, fill_id="8-1"))
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.protective_order_id].filled_quantity == 1
@@ -920,3 +959,155 @@ def test_G_a_repeated_signed_SELL_fill_is_a_true_no_op(tmp_path: Path) -> None: 
     assert persisted.state is TradeState.CLOSED
     assert not cycle.halted
     assert port.position == 0
+
+
+# ---------------------------------------------------------------------------
+# Round 11 -- ownership after a restart, when the LEAN tag is gone
+#
+# Reproduced from a real IBKR Paper reconnect: LEAN re-hydrated our protective
+# stop correctly, but the tag -- where the client order id lives -- is never
+# sent to IBKR, so it came back blank with a NEW LEAN order id. Only the broker
+# id was the same. Ownership by tag alone stranded a live protected position.
+# ---------------------------------------------------------------------------
+
+
+def protected_then_restarted(
+    tmp_path: Path, port: FakePort
+) -> tuple[Phase2Cycle, Phase2Coordinator, JsonTradeStateStore]:
+    """Drive to PROTECTED, then model LEAN losing the tag on a restart."""
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
+    cycle.on_cycle()
+    assert store.require(identity.trade_intent_id).state is TradeState.PROTECTED
+
+    durable = store.require(identity.trade_intent_id).orders[identity.protective_order_id]
+    assert durable.broker_order_ids, "the broker id must be captured BEFORE the restart"
+
+    port.rehydrate()
+    assert port.orders[identity.protective_order_id].tag == "", "the tag is gone"
+    resumed, resumed_coordinator, _ = make_cycle(tmp_path, port)
+    return resumed, resumed_coordinator, store
+
+
+def test_a_tagless_rehydrated_protective_is_recognised_by_broker_id(tmp_path: Path) -> None:
+    """The live failure, now passing. Read-only: nothing is sent."""
+    port = FakePort()
+    resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    submitted_before = len(port.submitted)
+
+    resumed.on_cycle()
+    resumed.on_cycle()
+
+    resolved = resumed._resolved_view(store.require(identity.trade_intent_id))
+    owned = resolved.orders_owned_by(identity)
+    assert [o.client_order_id for o in owned] == [identity.protective_order_id]
+    assert owned[0].ownership is OwnershipBasis.BROKER_ID
+    assert resolved.open_protective_quantity(identity) == 1
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.state is TradeState.PROTECTED
+    assert persisted.protected_quantity == 1
+    assert not resumed.halted, "reconciliation agrees again"
+    assert len(port.submitted) == submitted_before, "zero re-dispatch, zero new ENTRY"
+    assert port.cancelled_lean_ids == [], "zero cancellations"
+    assert port.count(OrderRole.EXIT) == 0
+
+
+def test_a_tagless_protective_CANCELED_event_maps_to_the_durable_order(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    port = FakePort()
+    resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    resumed.on_cycle()
+
+    # Someone cancels it at the broker. The event arrives with no tag.
+    port.confirm_cancel(identity.protective_order_id)
+    resumed.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.protective_order_id].dispatch is DispatchState.CANCELLED
+    assert persisted.protected_quantity == 0
+    assert persisted.state is TradeState.FAILED, "unrequested: protection vanished"
+    assert resumed.halted
+
+
+def test_a_tagless_protective_negative_fill_closes_the_long(tmp_path: Path) -> None:
+    """The stop fires after a restart. It must still close the position."""
+    port = FakePort()
+    resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    resumed.on_cycle()
+
+    port.fill(identity.protective_order_id, 1)
+    resumed.on_order_event(fill_event(port, identity.protective_order_id, -1, fill_id="8-1"))
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.protective_order_id].filled_quantity == 1
+    assert persisted.open_long_quantity == 0
+    assert persisted.state is TradeState.CLOSED
+    assert port.position == 0, "flat, never short"
+
+    exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
+    exiting.on_cycle()
+    assert port.count(OrderRole.EXIT) == 0, "no SELL for what the stop already sold"
+
+
+def test_a_tagless_protective_INVALID_event_maps_and_fails_closed(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    port = FakePort()
+    resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    resumed.on_cycle()
+
+    resumed.on_order_event(status_event(port, identity.protective_order_id, EventStatus.INVALID))
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.protective_order_id].dispatch is DispatchState.REJECTED
+    assert persisted.state is TradeState.FAILED
+    assert persisted.open_long_quantity == 1
+    assert resumed.halted
+    assert resumed.halt is not None and resumed.halt.manual_clear_required
+
+
+def test_cancellation_after_a_restart_targets_the_rehydrated_order(tmp_path: Path) -> None:
+    """Addressed by the CURRENT LEAN order id, resolved from the broker id."""
+    port = FakePort()
+    _resumed, coordinator, _store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    new_lean_id = port.orders[identity.protective_order_id].lean_order_id
+
+    exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
+    exiting.on_cycle()
+
+    assert port.cancelled_lean_ids == [new_lean_id]
+    assert not exiting.halted
+
+
+def test_a_foreign_identical_stop_is_never_cancelled(tmp_path: Path) -> None:
+    """Same symbol, same side, same quantity, same stop price -- and not ours."""
+    port = FakePort()
+    resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    ours = port.orders[identity.protective_order_id]
+
+    # A stranger's stop that is indistinguishable by shape.
+    port.orders["foreign-stop"] = replace(
+        ours, tag="", broker_order_ids=("9999",), lean_order_id="77"
+    )
+    port.open_ids.add("foreign-stop")
+
+    resolved = resumed._resolved_view(store.require(identity.trade_intent_id))
+    foreign = [o for o in resolved.open_orders if o.lean_order_id == "77"]
+    assert len(foreign) == 1
+    assert foreign[0].ownership is OwnershipBasis.NONE
+    assert foreign[0].client_order_id.startswith("<foreign-")
+
+    exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
+    exiting.on_cycle()
+    assert "77" not in port.cancelled_lean_ids, "a stranger order must never be cancelled"

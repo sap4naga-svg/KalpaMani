@@ -76,6 +76,7 @@ from kalpamani.execution.state_store import (
     fence_dispatch,
     mark_acknowledged,
     mark_rejected,
+    record_broker_ids,
     record_order_intent,
     request_cancel,
 )
@@ -302,7 +303,13 @@ class Phase2Coordinator:
         self.assert_session_binding(stored)
         return self._store.put(fence_dispatch(stored, client_order_id))
 
-    def acknowledge(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
+    def acknowledge(
+        self,
+        record: TradeRecord,
+        client_order_id: str,
+        *,
+        broker_order_ids: tuple[str, ...] = (),
+    ) -> TradeRecord:
         """Record a broker acknowledgement for one order (LEAN ``SUBMITTED``).
 
         Faster than waiting for the next reconciliation cycle to adopt it, and
@@ -315,7 +322,7 @@ class Phase2Coordinator:
             DispatchState.SEND_FENCED,
         ):
             return record
-        updated = mark_acknowledged(record, client_order_id)
+        updated = mark_acknowledged(record, client_order_id, broker_order_ids=broker_order_ids)
         updated = self._store.put(updated)
         return updated
 
@@ -332,8 +339,17 @@ class Phase2Coordinator:
             local = updated.orders.get(order.client_order_id)
             if local is None or not order.is_open:
                 continue
-            if local.dispatch in (DispatchState.INTENT_RECORDED, DispatchState.SEND_FENCED):
-                updated = mark_acknowledged(updated, order.client_order_id)
+            if local.dispatch not in (DispatchState.INTENT_RECORDED, DispatchState.SEND_FENCED):
+                # Already confirmed. Still adopt identity if it was not captured.
+                updated = record_broker_ids(updated, order.client_order_id, order.broker_order_ids)
+                continue
+            # Capture broker-native identity from positive broker evidence.
+            # This is the value that survives a restart, and the first
+            # certification run stranded a position precisely because it was
+            # never written down.
+            updated = mark_acknowledged(
+                updated, order.client_order_id, broker_order_ids=order.broker_order_ids
+            )
         if updated is not record:
             updated = self._store.put(updated)
         return updated

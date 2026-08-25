@@ -36,6 +36,7 @@ from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
     BrokerView,
+    OwnershipBasis,
     ReconciliationError,
     UnprotectedPositionError,
 )
@@ -100,6 +101,7 @@ class Broker:
         request = pending.request
         self.submissions.append((request.role, request.client_order_id))
         self.working[request.client_order_id] = BrokerOrderView(
+            ownership=OwnershipBasis.TAG,
             client_order_id=request.client_order_id,
             symbol=request.symbol,
             side=request.side.value,
@@ -1250,7 +1252,14 @@ def test_existing_kalpamani_spy_order_blocks_arming(tmp_path: Path) -> None:
     view = BrokerView(
         positions=(BrokerPositionView(PHASE2_SYMBOL, 0),),
         open_orders=(
-            BrokerOrderView(identity.entry_order_id, PHASE2_SYMBOL, "BUY", 1, is_open=True),
+            BrokerOrderView(
+                identity.entry_order_id,
+                PHASE2_SYMBOL,
+                "BUY",
+                1,
+                is_open=True,
+                ownership=OwnershipBasis.TAG,
+            ),
         ),
     )
     with pytest.raises(ReconciliationError):

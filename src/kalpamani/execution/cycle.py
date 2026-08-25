@@ -78,9 +78,14 @@ from kalpamani.execution.halt import (
     OperationalHalt,
     classify_halt,
 )
-from kalpamani.execution.identity import is_valid_client_order_id
 from kalpamani.execution.lifecycle import TradeState
-from kalpamani.execution.reconciliation import BrokerView
+from kalpamani.execution.reconciliation import (
+    BrokerOrderView,
+    BrokerView,
+    OwnershipError,
+    resolve_broker_view,
+    resolve_ownership,
+)
 from kalpamani.execution.session import SessionVerificationError, verify_paper_session
 from kalpamani.execution.state_store import (
     StateStoreError,
@@ -114,9 +119,14 @@ class EventStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class OrderEventFacts:
-    """One broker event, normalised. No LEAN type crosses this boundary."""
+    """One broker event, normalised. No LEAN type crosses this boundary.
 
-    client_order_id: str
+    Carries the ORDER, not just an id, because after a restart the LEAN tag is
+    blank and ownership has to be re-established from the broker-native id. The
+    adapter supplies raw identity; the cycle resolves it.
+    """
+
+    order: BrokerOrderView
     status: EventStatus
     #: SIGNED, exactly as LEAN reports it: a BUY fills positive, a SELL negative.
     #: The adapter must NOT take its absolute value -- the sign is a safety
@@ -131,15 +141,23 @@ class BrokerPort(Protocol):
     """Broker I/O, as the LEAN adapter provides it."""
 
     def view(self) -> BrokerView:
-        """Broker truth: positions and every open order, ours and foreign."""
+        """Broker truth: positions and every open order, ours and foreign.
+
+        Returns RAW views -- tag, broker ids, LEAN order id and attributes -- with
+        ownership unresolved. The cycle resolves them against durable state.
+        """
         ...
 
     def submit(self, request: OrderRequest) -> None:
         """Place the order. Called only after its send fence is durable."""
         ...
 
-    def cancel(self, client_order_id: str) -> None:
-        """Ask the broker to cancel one of our orders. Never a foreign order."""
+    def cancel(self, lean_order_id: str) -> None:
+        """Cancel exactly the LEAN order with this process-local id.
+
+        Addressed by LEAN order id, never by tag or symbol: after a restart the
+        tag is gone, and "the first SELL stop on SPY" could be a stranger's.
+        """
         ...
 
     def reference_price(self) -> Decimal:
@@ -203,6 +221,7 @@ class Phase2Cycle:
         #: Whether broker truth was successfully read in the current cycle.
         #: Reported on the failure path; see ExecutionRisk.
         self._broker_state_established = True
+        self._diagnosed = False
 
     # -- Status ------------------------------------------------------------
 
@@ -236,13 +255,14 @@ class Phase2Cycle:
     def on_cycle(self) -> None:
         """Reconcile first, always. Only then consider acting."""
         if self.halted:
+            self._diagnose_identity_once()
             return
         self._broker_state_established = False
         try:
             record = self._coordinator.load()
 
             if record is None:
-                broker = self._port.view()
+                broker = self._resolved_view(None)
                 self._broker_state_established = True
                 self._log_state(broker, "no-trade")
                 self._maybe_arm(broker)
@@ -258,7 +278,7 @@ class Phase2Cycle:
                     f"[SESSION-BOUND] same PAPER account as armed: {evidence.describe()}"
                 )
 
-            broker = self._port.view()
+            broker = self._resolved_view(record)
             self._broker_state_established = True
 
             if record.state is TradeState.FAILED:
@@ -308,6 +328,51 @@ class Phase2Cycle:
             self._progress(record, broker)
         except Exception as exc:
             self._raise_halt(f"{type(exc).__name__}: {exc}", error=exc)
+
+    def _diagnose_identity_once(self) -> None:
+        """Read-only identity report, emitted once while halted.
+
+        A halt stops decisions, not observation. An operator staring at a halted
+        deployment needs to know whether the orders actually open at the broker
+        can be recognised as ours at all -- and that question is answerable
+        without touching anything.
+
+        Writes nothing. Orders nothing. Cancels nothing. Reports conclusions
+        only: no broker id, no tag value, no account identifier.
+        """
+        if self._diagnosed:
+            return
+        self._diagnosed = True
+        try:
+            record = self._coordinator.load()
+            raw = self._port.view()
+            self._port.log(f"[IDENTITY-DIAG] open orders at the broker: {len(raw.open_orders)}")
+            for index, order in enumerate(raw.open_orders):
+                try:
+                    resolved, basis = resolve_ownership(order, record, self._coordinator.identity)
+                except OwnershipError as exc:
+                    self._port.error(f"[IDENTITY-DIAG] order {index}: CONTRADICTORY -- {exc}")
+                    continue
+                self._port.log(
+                    f"[IDENTITY-DIAG] order {index}: symbol={order.symbol} side={order.side} "
+                    f"qty={order.quantity} type={order.order_type} "
+                    f"tag_present={bool(order.tag)} "
+                    f"broker_id_present={bool(order.broker_order_ids)} "
+                    f"lean_id_present={bool(order.lean_order_id)} "
+                    f"resolved={'YES' if resolved else 'NO'} basis={basis.value}"
+                )
+            for durable in record.orders.values() if record else ():
+                self._port.log(
+                    f"[IDENTITY-DIAG] durable {durable.role.value}: dispatch="
+                    f"{durable.dispatch.value} broker_identity_recorded="
+                    f"{'YES' if durable.has_broker_identity else 'NO'}"
+                )
+        except Exception as exc:
+            self._port.error(f"[IDENTITY-DIAG] unavailable: {type(exc).__name__}: {exc}")
+
+    def _resolved_view(self, record: TradeRecord | None) -> BrokerView:
+        """Broker truth with every open order attributed, or marked foreign."""
+        return resolve_broker_view(self._port.view(), record, self._coordinator.identity)
 
     def _log_recovery(self, record: TradeRecord) -> None:
         self._port.log(f"[RECOVERY] recovered {record.describe()}")
@@ -415,16 +480,26 @@ class Phase2Cycle:
         already on the wire can still acknowledge, fill, cancel or reject
         afterwards, and each of those is broker truth that has to be recorded.
         """
-        tag = facts.client_order_id
-        if not is_valid_client_order_id(tag) or not self._coordinator.identity.owns(tag):
-            return  # not ours
         try:
             record = self._coordinator.load()
             if record is None:
+                return  # nothing of ours can exist yet
+
+            # OWNERSHIP FIRST. After a restart the tag is blank, so an event for
+            # our own protective stop arrives anonymous. Resolve it the same way
+            # reconciliation does -- tag, then broker id, then attribute
+            # validation -- or do not apply it at all.
+            try:
+                tag, _basis = resolve_ownership(facts.order, record, self._coordinator.identity)
+            except OwnershipError as exc:
+                self._port.error(f"[UNRESOLVED-EVENT] {exc}")
                 self._raise_halt(
-                    f"Order event for {tag} with no durable trade record.",
+                    f"contradictory ownership for a broker event: {exc}",
                     kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
                 )
+                return
+            if tag is None:
+                self._unattributed_event(record, facts)
                 return
 
             # ACCOUNT-BIND INGESTION. A client order id proves only that *some*
@@ -450,12 +525,32 @@ class Phase2Cycle:
             self._port.log(
                 f"[ORDER-EVENT] order={tag} status={facts.status.value} qty={facts.fill_quantity}"
             )
-            self._apply_event(record, facts)
+            self._apply_event(record, facts, tag)
         except Exception as exc:
             self._raise_halt(f"order-event handling failed: {type(exc).__name__}: {exc}", error=exc)
 
-    def _apply_event(self, record: TradeRecord, facts: OrderEventFacts) -> None:
-        tag = facts.client_order_id
+    def _unattributed_event(self, record: TradeRecord, facts: OrderEventFacts) -> None:
+        """An event we cannot prove is ours. Never applied.
+
+        Usually harmless -- a foreign order on another symbol. But an
+        unattributable event on OUR symbol while we hold a position could be the
+        very order that protects us, arriving without identity, and continuing
+        as though nothing happened would be guessing.
+        """
+        if facts.order.symbol != record.symbol or record.open_long_quantity <= 0:
+            return
+        self._port.error(
+            f"[UNRESOLVED-EVENT] a {facts.status.value} event on {record.symbol} could not be "
+            "attributed by tag or by broker id, while a KalpaMani position is open. It was "
+            "NOT applied."
+        )
+        self._raise_halt(
+            f"unattributable {facts.status.value} event on {record.symbol} while long "
+            f"{record.open_long_quantity}.",
+            kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
+        )
+
+    def _apply_event(self, record: TradeRecord, facts: OrderEventFacts, tag: str) -> None:
         identity = self._coordinator.identity
 
         if facts.status is EventStatus.CANCEL_PENDING:
@@ -494,7 +589,11 @@ class Phase2Cycle:
             return
 
         if facts.status is EventStatus.SUBMITTED:
-            self._coordinator.acknowledge(record, tag)
+            # Capture the broker-native id here: it is the identity that will
+            # survive the next restart, and the only chance to record it.
+            self._coordinator.acknowledge(
+                record, tag, broker_order_ids=facts.order.broker_order_ids
+            )
             return
 
         if facts.status is not EventStatus.FILL or facts.fill_quantity == 0:
@@ -600,7 +699,7 @@ class Phase2Cycle:
         stopped = self.halted or record.state is TradeState.FAILED
         if stopped:
             try:
-                self._coordinator.reconcile(record, self._port.view())
+                self._coordinator.reconcile(record, self._resolved_view(record))
             except Exception as exc:
                 self._port.error(
                     f"[UNPROTECTED-POSITION] an entry filled after progression stopped, but "
@@ -646,10 +745,25 @@ class Phase2Cycle:
                 self._port.log("[EXIT-REQUEST] exit requested")
 
             if broker.open_protective_quantity(identity) > 0:
+                # Address the cancellation at the CURRENT re-hydrated order, found
+                # by resolved identity. Never by tag (gone after a restart), never
+                # by symbol, never "the first SELL stop" -- that could be a
+                # stranger's order.
+                target = broker.owned_order(identity.protective_order_id)
+                if target is None or not target.lean_order_id:
+                    self._raise_halt(
+                        "the protective order shows as working but could not be addressed for "
+                        "cancellation; refusing to cancel anything else.",
+                        kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
+                    )
+                    return
                 record, should_cancel = self._coordinator.begin_protection_cancel(record)
                 if should_cancel:
-                    self._port.cancel(identity.protective_order_id)
-                    self._port.log("[EXIT-REQUEST] cancel requested ONCE; awaiting CANCELED event")
+                    self._port.cancel(target.lean_order_id)
+                    self._port.log(
+                        f"[EXIT-REQUEST] cancel requested ONCE for the protective order "
+                        f"(resolved by {target.ownership.value}); awaiting CANCELED event"
+                    )
                 else:
                     self._port.log("[EXIT-REQUEST] awaiting broker cancellation confirmation")
                 return

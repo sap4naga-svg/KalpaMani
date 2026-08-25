@@ -67,7 +67,15 @@ from kalpamani.execution.lifecycle import TradeState
 #: v2 introduced the explicit dispatch model in place of a boolean "submitted".
 #: v3 replaced DISPATCH_ATTEMPTED with the SEND_FENCED send fence.
 #: v4 bound each record to the brokerage account it was armed against.
-STATE_SCHEMA_VERSION = 4
+#: v5 made broker-native order ids a durable collection, because the LEAN tag
+#:    does not survive a restart and the broker id does.
+STATE_SCHEMA_VERSION = 5
+
+#: Versions this code can read. Anything else fails closed. A version listed
+#: here is migrated DELIBERATELY on read (see `_migrate`), never parsed
+#: hopefully -- and the migrated record is written back at the current version
+#: by the next put().
+READABLE_SCHEMA_VERSIONS: frozenset[int] = frozenset({4, STATE_SCHEMA_VERSION})
 
 
 class StateStoreError(SafetyViolationError):
@@ -150,14 +158,26 @@ class SubmittedOrder:
     #: A cancellation was ASKED FOR. The broker may still be working the order.
     cancel_requested: bool = False
     filled_quantity: int = 0
-    #: Broker-assigned handle. Recorded for audit; never derived from, never
-    #: branched on (ADR-0002 §4).
-    broker_order_id: str | None = None
+    #: Broker-assigned identifiers, as LEAN exposes them on ``Order.BrokerId``.
+    #:
+    #: THE restart identity. A LEAN ``Order.Tag`` -- where our client order id
+    #: lives -- is not sent to IBKR and is therefore absent from an order LEAN
+    #: re-hydrates after a restart; the broker id is the same value before and
+    #: after. Proven on a real IBKR Paper restart, not assumed.
+    #:
+    #: A collection because LEAN models it as one, and because an order that is
+    #: updated can accumulate more than one. Never printed in normal logs.
+    broker_order_ids: tuple[str, ...] = ()
     #: Fill identities already applied, so a repeated fill event is a no-op.
     applied_fill_ids: tuple[str, ...] = ()
     #: Stop price as a decimal string, for STOP orders only. Durable so that an
     #: undispatched protective intent can be rebuilt exactly on recovery.
     stop_price: str | None = None
+
+    @property
+    def has_broker_identity(self) -> bool:
+        """Whether this order can be recognised after a restart at all."""
+        return bool(self.broker_order_ids)
 
     @property
     def send_fenced(self) -> bool:
@@ -342,10 +362,30 @@ def _serialise(record: TradeRecord) -> dict[str, Any]:
             "role": order.role.value,
             "dispatch": order.dispatch.value,
             "applied_fill_ids": list(order.applied_fill_ids),
+            "broker_order_ids": list(order.broker_order_ids),
         }
         for cid, order in record.orders.items()
     }
     return payload
+
+
+def _migrate(version: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade an older payload to the current shape, explicitly.
+
+    Migration is deliberate and narrow. v4 stored at most one broker id under
+    ``broker_order_id``; v5 stores a collection. A v4 record that never captured
+    one migrates to an EMPTY collection -- which is the honest answer, and which
+    the ownership resolver treats as "no restart identity", not as a wildcard.
+    """
+    if version >= STATE_SCHEMA_VERSION:
+        return payload
+    orders = {}
+    for cid, raw in payload.get("orders", {}).items():
+        upgraded = dict(raw)
+        legacy = upgraded.pop("broker_order_id", None)
+        upgraded.setdefault("broker_order_ids", [legacy] if legacy else [])
+        orders[cid] = upgraded
+    return {**payload, "orders": orders}
 
 
 def _deserialise(payload: dict[str, Any]) -> TradeRecord:
@@ -360,7 +400,7 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
                 dispatch=DispatchState(raw["dispatch"]),
                 cancel_requested=bool(raw.get("cancel_requested", False)),
                 filled_quantity=int(raw["filled_quantity"]),
-                broker_order_id=raw.get("broker_order_id"),
+                broker_order_ids=tuple(raw.get("broker_order_ids", ())),
                 applied_fill_ids=tuple(raw.get("applied_fill_ids", ())),
                 stop_price=raw.get("stop_price"),
             )
@@ -415,13 +455,15 @@ class JsonTradeStateStore:
             ) from exc
 
         version = raw.get("schema_version")
-        if version != STATE_SCHEMA_VERSION:
+        if version not in READABLE_SCHEMA_VERSIONS:
             raise StateCorruptError(
-                f"Durable trade state schema version {version!r} is not the expected "
-                f"{STATE_SCHEMA_VERSION}. State written by a different version of this "
-                "code must be migrated deliberately, not parsed hopefully."
+                f"Durable trade state schema version {version!r} is not one this code can "
+                f"read ({sorted(READABLE_SCHEMA_VERSIONS)}). State written by a different "
+                "version must be migrated deliberately, not parsed hopefully."
             )
-        return {tid: _deserialise(p) for tid, p in raw.get("trades", {}).items()}
+        return {
+            tid: _deserialise(_migrate(int(version), p)) for tid, p in raw.get("trades", {}).items()
+        }
 
     def get(self, trade_intent_id: str) -> TradeRecord | None:
         return self._load().get(trade_intent_id)
@@ -552,26 +594,69 @@ def record_order_intent(
     return _recompute(replace(record, orders=orders))
 
 
+def _merged_broker_ids(order: SubmittedOrder, incoming: tuple[str, ...]) -> tuple[str, ...]:
+    """Adopt broker ids once, and refuse to let them change afterwards.
+
+    A broker id is the only identity that survives a restart, so it has to be
+    stable. Adopting one when none is known is normal -- acknowledgement can
+    arrive before LEAN has populated it. A DIFFERENT one later is not an update;
+    it means this record and the broker disagree about which order this is.
+
+    Raises:
+        StateStoreError: if a known broker id would be replaced by another.
+    """
+    if not incoming:
+        return order.broker_order_ids
+    if not order.broker_order_ids:
+        return tuple(dict.fromkeys(incoming))
+    if set(incoming) != set(order.broker_order_ids):
+        raise StateStoreError(
+            f"Broker identity for {order.client_order_id} would CHANGE "
+            f"({len(order.broker_order_ids)} recorded, {len(incoming)} offered, and they "
+            "differ). A broker id is the only identity that survives a restart; silently "
+            "replacing it would re-point this record at a different order. Failing closed."
+        )
+    return order.broker_order_ids
+
+
+def record_broker_ids(
+    record: TradeRecord, client_order_id: str, broker_order_ids: tuple[str, ...]
+) -> TradeRecord:
+    """Persist the broker-native identity of an order we submitted."""
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot record broker ids for unknown order {client_order_id}.")
+    merged = _merged_broker_ids(order, broker_order_ids)
+    if merged == order.broker_order_ids:
+        return record
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(order, broker_order_ids=merged)
+    return _recompute(replace(record, orders=orders))
+
+
 def _advance_dispatch(
     record: TradeRecord,
     client_order_id: str,
     target: DispatchState,
     *,
-    broker_order_id: str | None = None,
+    broker_order_ids: tuple[str, ...] = (),
 ) -> TradeRecord:
     order = record.orders.get(client_order_id)
     if order is None:
         raise StateStoreError(f"Cannot move unknown order {client_order_id} to {target.value}.")
+    merged = _merged_broker_ids(order, broker_order_ids)
     if _DISPATCH_RANK[target] <= _DISPATCH_RANK[order.dispatch]:
-        # Never regress. A repeat of the same step is a harmless no-op; a step
-        # backwards would discard broker evidence we already hold.
-        return record
+        # Never regress the dispatch state. A repeat of the same step is a
+        # harmless no-op; a step backwards would discard broker evidence we
+        # already hold. Broker ids may still be adopted here, because
+        # acknowledgement can arrive before LEAN has populated them.
+        if merged == order.broker_order_ids:
+            return record
+        orders = dict(record.orders)
+        orders[client_order_id] = replace(order, broker_order_ids=merged)
+        return _recompute(replace(record, orders=orders))
     orders = dict(record.orders)
-    orders[client_order_id] = replace(
-        order,
-        dispatch=target,
-        broker_order_id=broker_order_id or order.broker_order_id,
-    )
+    orders[client_order_id] = replace(order, dispatch=target, broker_order_ids=merged)
     return _recompute(replace(record, orders=orders))
 
 
@@ -589,11 +674,17 @@ def mark_acknowledged(
     record: TradeRecord,
     client_order_id: str,
     *,
-    broker_order_id: str | None = None,
+    broker_order_ids: tuple[str, ...] = (),
 ) -> TradeRecord:
-    """Record positive broker evidence that the order is working."""
+    """Record positive broker evidence that the order is working.
+
+    This is where broker-native identity is captured. It has to be: the LEAN tag
+    is gone after a restart, so an order whose broker id was never recorded
+    cannot be recognised as ours again -- which is exactly what stranded the
+    first certification run.
+    """
     return _advance_dispatch(
-        record, client_order_id, DispatchState.ACKNOWLEDGED, broker_order_id=broker_order_id
+        record, client_order_id, DispatchState.ACKNOWLEDGED, broker_order_ids=broker_order_ids
     )
 
 
@@ -762,6 +853,7 @@ def usd(amount: Decimal | int | str) -> Decimal:
 
 
 __all__ = [
+    "READABLE_SCHEMA_VERSIONS",
     "STATE_SCHEMA_VERSION",
     "TERMINAL_DISPATCH",
     "DispatchState",
@@ -780,6 +872,7 @@ __all__ = [
     "fence_dispatch",
     "mark_acknowledged",
     "mark_rejected",
+    "record_broker_ids",
     "record_order_intent",
     "request_cancel",
     "usd",
