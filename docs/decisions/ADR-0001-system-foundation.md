@@ -119,8 +119,14 @@ strategy packages are empty by design, and a test enforces that.
 
 ## Follow-ups
 
-- **ADR-0002** — Point-in-time data provider selection (after the Phase-0 audit).
-- **ADR-0003** — `BrokerAdapter` interface definition (before Phase 1 implementation).
+> **Numbering corrected 2026-08-24.** This list originally assigned ADR-0002 to
+> point-in-time data provider selection. The `BrokerAdapter` boundary was needed first,
+> for Phase 1, so it takes ADR-0002 and the remaining items shift down. Corrected in a
+> new commit rather than by rewriting the pushed bootstrap history.
+
+- **ADR-0002** — `BrokerAdapter` and the brokerage boundary (before Phase 1
+  implementation). **Created.**
+- **ADR-0003** — Point-in-time data provider selection (after the Phase-0 audit).
 - **ADR-0004** — Order idempotency and deterministic client/order ID scheme (before any
   automated order testing).
 - **ADR-00xx** — Live-execution Gate 2 authorization mechanism (before live trading is

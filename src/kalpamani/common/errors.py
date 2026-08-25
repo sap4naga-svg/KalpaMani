@@ -41,10 +41,29 @@ class CapitalIntegrityError(SafetyViolationError):
     """
 
 
+class BrokerModeError(SafetyViolationError):
+    """The brokerage account mode is not the one this phase permits.
+
+    Raised when a connected account is live, or when its mode cannot be
+    positively established. Ambiguity is treated as a failure, never as an
+    implicit "probably paper": an unrecognised account identifier fails closed.
+    """
+
+
+class OrderSubmissionForbiddenError(SafetyViolationError):
+    """An order submission was attempted in a phase that forbids all orders.
+
+    Phase 1 is read-only. There is no order-submission path, and this exists so
+    that any future attempt to introduce one out of phase fails loudly.
+    """
+
+
 __all__ = [
+    "BrokerModeError",
     "CapitalIntegrityError",
     "ConfigurationError",
     "KalpaManiError",
     "LiveTradingDisabledError",
+    "OrderSubmissionForbiddenError",
     "SafetyViolationError",
 ]

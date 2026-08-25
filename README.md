@@ -3,9 +3,11 @@
 An autonomous long/short **U.S. equity swing & momentum trading system** with deterministic
 risk and selective, bounded AI research.
 
-> **Status: BOOTSTRAP / FOUNDATION.** No brokerage connectivity, no strategy logic and no
-> order path exists. Live trading is hard-disabled. This repository currently contains
-> architecture, governance, security posture and a safe configuration foundation only.
+> **Status: PHASE 1 COMPLETE — IBKR PAPER CONNECTIVITY VALIDATED (2026-08-25).** Read-only
+> connectivity to the live IBKR Paper account is proven end to end: connected, account
+> confirmed PAPER, SPY subscribed, market data received, broker account state observed,
+> clean shutdown. **Zero orders, zero positions** — no order path exists. Live trading
+> remains hard-disabled. No strategy logic yet.
 
 ---
 
@@ -71,7 +73,7 @@ JOURNAL + ATTRIBUTION + HEALTH
 | Control | State |
 |---|---|
 | Live trading | **HARD-DISABLED** (two independent gates; Gate 2 not implemented) |
-| Brokerage connectivity | **None implemented** |
+| Brokerage connectivity | IBKR **Paper** only, **read-only** — validated 2026-08-24 |
 | Order submission | **Impossible** — no order path exists |
 | Default environment | `RESEARCH` (cannot reach a broker even in principle) |
 | Leverage | None |
@@ -109,6 +111,15 @@ Strategy capital is a **deliberate human allocation**, not the broker balance. T
 paper account may report **USD 1,000,000**; that simulated number must never become
 KalpaMani strategy capital. `StrategyCapital` is immutable and offers no path by which an
 observed broker equity can overwrite the allocation.
+
+**Proven against the live paper account (2026-08-25):**
+
+```
+[BROKER-STATE:scheduled-1] equity_usd=1000000.0 cash_usd=1000000.0 holdings=0 open_orders=0
+[CAPITAL-SEPARATION]   broker reported equity : USD 1000000.0
+[CAPITAL-SEPARATION]   KalpaMani allocation   : USD 80000
+[CAPITAL-SEPARATION]   CONFIRMED DISTINCT: broker equity is 12.50x the KalpaMani allocation.
+```
 
 Initial configuration defaults (Blueprint V2.1 §10) — **research parameters, not
 performance expectations**:
@@ -211,8 +222,6 @@ never printed, logged, committed or pasted into an AI chat session.
 
 Nothing below exists yet, and none of it is authorized:
 
-- IBKR connectivity of any kind (no TWS/IB Gateway, no live or paper connection)
-- LEAN brokerage connection or any algorithm project
 - Order submission — paper or live
 - Breakout, Pullback and PEAD strategy logic
 - Short-selling logic, borrow checks, SSR/squeeze controls
@@ -226,15 +235,17 @@ Nothing below exists yet, and none of it is authorized:
 
 ## Next planned phase
 
-**PHASE 1 — IBKR PAPER CONNECTIVITY** *(requires explicit written approval)*
+**PHASE 2 — ONE TINY PAPER ORDER** *(not started, requires explicit written approval)*
 
 ```
-LEAN -> IBKR PAPER -> subscribe to one liquid U.S. equity -> receive market data
-     -> read brokerage/account state -> NO ORDER SUBMISSION -> clean shutdown + reconciliation
+one tiny PAPER order -> fill handling -> immediate protection -> reconciliation -> clean exit
 ```
 
-Phase 1 must also prove that KalpaMani strategy capital remains **$80,000** even when the
-IBKR Paper account reports a NetLiquidation of **$1,000,000**.
+Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme (**ADR-0004**) must
+be defined **before** any automated order testing.
+
+Phase 1 is complete: all thirteen acceptance criteria satisfied, including a SPY bar
+received at 05:15 ET pre-market on delayed IBKR data.
 
 ---
 
