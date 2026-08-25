@@ -159,7 +159,7 @@ class Phase2Coordinator:
             ),
             self._receipt_paths,
         )
-        self._store.put(record)
+        record = self._store.put(record)
         return record
 
     # -- Dispatch bookkeeping ----------------------------------------------
@@ -172,7 +172,7 @@ class Phase2Coordinator:
         "never sent".
         """
         updated = fence_dispatch(record, client_order_id)
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     def acknowledge(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
@@ -188,7 +188,7 @@ class Phase2Coordinator:
         ):
             return record
         updated = mark_acknowledged(record, client_order_id)
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     def adopt_broker_evidence(self, record: TradeRecord, broker: BrokerView) -> TradeRecord:
@@ -206,7 +206,7 @@ class Phase2Coordinator:
             if local.dispatch in (DispatchState.INTENT_RECORDED, DispatchState.SEND_FENCED):
                 updated = mark_acknowledged(updated, order.client_order_id)
         if updated is not record:
-            self._store.put(updated)
+            updated = self._store.put(updated)
         return updated
 
     # -- Entry -------------------------------------------------------------
@@ -227,7 +227,7 @@ class Phase2Coordinator:
             quantity=PHASE2_QUANTITY,
         )
         pending = replace(pending, state=transition(pending.state, TradeState.ENTRY_SUBMITTED))
-        self._store.put(pending)
+        pending = self._store.put(pending)
         return PendingOrder(request=self._entry_request(), record=pending)
 
     def _entry_request(self) -> OrderRequest:
@@ -241,6 +241,73 @@ class Phase2Coordinator:
         )
 
     # -- Fills and rejections ----------------------------------------------
+
+    def apply_entry_fill_and_prepare_protection(
+        self,
+        record: TradeRecord,
+        *,
+        client_order_id: str,
+        fill_id: str,
+        fill_quantity: int,
+        fill_price: Decimal,
+    ) -> tuple[TradeRecord, PendingOrder | None]:
+        """Record an ENTRY fill and create its protective intent in ONE durable write.
+
+        These were two writes. A crash between them left a durable state with an
+        open long and **no protective order at all** -- which recovery could not
+        even see, because it inspects existing orders. The long could stay naked
+        indefinitely.
+
+        Building the whole record in memory and persisting once removes that
+        state entirely: after an entry fill is processed there is no durable
+        moment where ``open_long_quantity > 0`` and no protective intent exists.
+
+        The stop price is derived from the **actual fill price** and persisted as
+        part of the protective intent, so recovery reconstructs the exact stop
+        without asking the market for a fresh price.
+
+        Returns:
+            The persisted record, and the protective order to fence and dispatch
+            (``None`` when there is nothing to protect or protection already
+            exists).
+        """
+        filled = apply_fill(
+            record,
+            client_order_id=client_order_id,
+            fill_id=fill_id,
+            fill_quantity=fill_quantity,
+        )
+        if filled is record:  # duplicate fill event: a true no-op
+            return record, None
+
+        filled = self._advance_after_entry_fill(filled)
+
+        quantity = required_protection_quantity(filled)
+        if quantity <= 0 or filled.order_for_role(OrderRole.PROTECTIVE) is not None:
+            filled = self._store.put(filled)
+            return filled, None
+
+        stop_price = protective_stop_price(fill_price)
+        prepared = record_order_intent(
+            filled,
+            client_order_id=self._identity.protective_order_id,
+            role=OrderRole.PROTECTIVE,
+            symbol=PHASE2_SYMBOL,
+            side="SELL",
+            quantity=quantity,
+            stop_price=str(stop_price),
+        )
+        prepared = replace(
+            prepared, state=transition(prepared.state, TradeState.PROTECTION_SUBMITTED)
+        )
+
+        # THE atomic write: entry fill, lifecycle, protective intent and durable
+        # stop price all land together or not at all.
+        prepared = self._store.put(prepared)
+
+        return prepared, PendingOrder(
+            request=self._protective_request(quantity, stop_price), record=prepared
+        )
 
     def on_fill(
         self,
@@ -266,7 +333,7 @@ class Phase2Coordinator:
         elif order.role in (OrderRole.PROTECTIVE, OrderRole.EXIT):
             updated = self._advance_after_closing_fill(updated)
 
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     def on_order_rejected(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
@@ -280,11 +347,16 @@ class Phase2Coordinator:
             UnprotectedPositionError: if a long is exposed by the rejection.
         """
         updated = mark_rejected(record, client_order_id)
-        self._store.put(updated)
+        updated = self._store.put(updated)
 
         order = updated.orders[client_order_id]
         if order.role is OrderRole.ENTRY:
-            return updated
+            # No retry, ever. Latch the lifecycle so nothing downstream proceeds.
+            return self.fail(
+                updated,
+                f"ENTRY {client_order_id} was REJECTED by the broker (OrderStatus.INVALID). "
+                "Phase 2 never answers a rejection with a second entry.",
+            )
         if updated.open_long_quantity > 0:
             raise UnprotectedPositionError(
                 f"UNPROTECTED POSITION: {order.role.value} order {client_order_id} was REJECTED "
@@ -348,7 +420,7 @@ class Phase2Coordinator:
             stop_price=str(stop_price),
         )
         pending = replace(pending, state=transition(pending.state, TradeState.PROTECTION_SUBMITTED))
-        self._store.put(pending)
+        pending = self._store.put(pending)
         return PendingOrder(request=self._protective_request(quantity, stop_price), record=pending)
 
     def _protective_request(self, quantity: int, stop_price: Decimal) -> OrderRequest:
@@ -368,7 +440,7 @@ class Phase2Coordinator:
         if record.state is not TradeState.PROTECTION_SUBMITTED:
             return record
         updated = replace(record, state=transition(record.state, TradeState.PROTECTED))
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     # -- Exit --------------------------------------------------------------
@@ -378,7 +450,7 @@ class Phase2Coordinator:
         if record.state is TradeState.EXIT_REQUESTED:
             return record
         updated = replace(record, state=transition(record.state, TradeState.EXIT_REQUESTED))
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     def begin_protection_cancel(self, record: TradeRecord) -> tuple[TradeRecord, bool]:
@@ -394,7 +466,7 @@ class Phase2Coordinator:
         if protective.cancel_requested:
             return record, False  # already asked; awaiting CANCELED confirmation
         updated = request_cancel(record, protective.client_order_id)
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated, True
 
     def confirm_protection_cancel(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
@@ -410,7 +482,7 @@ class Phase2Coordinator:
         if protective is None or protective.dispatch is DispatchState.CANCELLED:
             return record
         updated = confirm_cancel(record, protective.client_order_id)
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     def begin_exit(self, record: TradeRecord, broker: BrokerView) -> PendingOrder:
@@ -427,7 +499,7 @@ class Phase2Coordinator:
             quantity=plan.exit_quantity,
         )
         pending = replace(pending, state=transition(pending.state, TradeState.EXIT_SUBMITTED))
-        self._store.put(pending)
+        pending = self._store.put(pending)
         return PendingOrder(
             request=self._exit_request(plan.exit_quantity, plan.symbol), record=pending
         )
@@ -490,6 +562,15 @@ class Phase2Coordinator:
                 "broker's order history by hand."
             )
 
+        if adopted.open_long_quantity > 0 and adopted.order_for_role(OrderRole.PROTECTIVE) is None:
+            raise ReconciliationError(
+                f"NAKED LONG: {adopted.open_long_quantity} {adopted.symbol} is held with no "
+                "protective intent of any kind on record. The entry fill and its protection "
+                "are written atomically, so this state should be unreachable; its presence "
+                "means durable state cannot be trusted. Protect or close the position by "
+                "hand before restarting."
+            )
+
         for order in adopted.unfenced_orders():
             if order.role is OrderRole.ENTRY:
                 raise ReconciliationError(
@@ -527,7 +608,7 @@ class Phase2Coordinator:
         if record.state is TradeState.RECONCILED:
             return record
         updated = replace(record, state=transition(record.state, TradeState.RECONCILED))
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
     # -- Failure -----------------------------------------------------------
@@ -539,7 +620,7 @@ class Phase2Coordinator:
         updated = replace(
             record, state=transition(record.state, TradeState.FAILED), failure_reason=reason
         )
-        self._store.put(updated)
+        updated = self._store.put(updated)
         return updated
 
 

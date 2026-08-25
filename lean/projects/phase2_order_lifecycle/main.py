@@ -22,11 +22,7 @@ from kalpamani.execution.reconciliation import (
     BrokerPositionView,
     BrokerView,
 )
-from kalpamani.execution.session import (
-    account_fingerprint,
-    load_session_evidence,
-    verify_paper_session,
-)
+from kalpamani.execution.session import load_session_evidence, verify_paper_session
 from kalpamani.execution.state_store import JsonTradeStateStore
 
 # endregion
@@ -207,7 +203,10 @@ class Phase2OrderLifecycle(QCAlgorithm):
                     record = self._dispatch(pending)
 
             self._log_state(broker, record.state.value)
-            self._coordinator.reconcile(record, broker)
+            # reconcile() may adopt broker evidence and return a NEWER record
+            # (SEND_FENCED -> ACKNOWLEDGED). Use the returned one: progressing
+            # with the older object would discard that evidence.
+            record = self._coordinator.reconcile(record, broker)
             self.log(f"[RECONCILE] {record.describe()}")
             self._progress(record, broker)
         except Exception as exc:
@@ -250,12 +249,18 @@ class Phase2OrderLifecycle(QCAlgorithm):
             self._abort("Pre-order reconciliation found existing KalpaMani orders.")
             return
 
-        # The armed account must BE the deployed account. The arm script derives
-        # its value from this same deployment config, so the two cannot be
-        # independent values that disagree -- and this re-checks it anyway.
-        armed_account = self.get_parameter("ibkr_account_id") or ""
-        expected = account_fingerprint(armed_account) if armed_account else None
-        verify_paper_session(evidence, expected_fingerprint=expected)
+        # The armed account must BE the deployed account. The binding is
+        # REQUIRED: an absent fingerprint disables nothing, it aborts. Passing
+        # None here would silently drop the check -- fail-open.
+        armed_fingerprint = self.get_parameter("phase2_account_fingerprint") or ""
+        if not armed_fingerprint:
+            self._abort(
+                "Arm carries no phase2_account_fingerprint. The arm is not bound to a "
+                "brokerage account, so it cannot be verified against the deployment. "
+                "Re-arm with scripts/phase2_arm.py."
+            )
+            return
+        verify_paper_session(evidence, expected_fingerprint=armed_fingerprint)
         self.log(f"[PHASE2-ARM] session verified PAPER: {evidence.describe()}")
 
         price = Decimal(str(self.securities[self._symbol].price))
@@ -323,9 +328,12 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 return
 
             if status == OrderStatus.INVALID:
-                # Raises UnprotectedPositionError when a long is exposed.
+                # Raises UnprotectedPositionError when a long is exposed; for an
+                # ENTRY it returns after latching the record to FAILED. Either
+                # way the session must stop -- logging an abort label without
+                # actually aborting would leave the execution path live.
                 self._coordinator.on_order_rejected(record, tag)
-                self.error(f"[PHASE2-ABORT] broker REJECTED {tag} (OrderStatus.INVALID)")
+                self._abort(f"broker REJECTED {tag} (OrderStatus.INVALID). No retry, ever.")
                 return
 
             if status == OrderStatus.SUBMITTED:
@@ -339,26 +347,43 @@ class Phase2OrderLifecycle(QCAlgorithm):
             # present on this version via the QuantConnect stubs. Repeated
             # delivery of the same event is therefore a true no-op.
             fill_id = f"{order_event.order_id}-{order_event.id}"
+            quantity = abs(int(order_event.fill_quantity))
+
+            if tag == self._coordinator.identity.entry_order_id:
+                # ONE durable write: the entry fill, the lifecycle transition,
+                # the protective intent and its stop price (derived from the
+                # ACTUAL fill price) all land together. There is therefore no
+                # durable moment with an open long and no protective intent.
+                record, protection = self._coordinator.apply_entry_fill_and_prepare_protection(
+                    record,
+                    client_order_id=tag,
+                    fill_id=fill_id,
+                    fill_quantity=quantity,
+                    fill_price=Decimal(str(order_event.fill_price)),
+                )
+                self.log(
+                    f"[FILL] {tag} filled={record.filled_quantity} "
+                    f"long={record.open_long_quantity} price={order_event.fill_price} "
+                    f"fill_id={fill_id}"
+                )
+                if protection is None:
+                    self.log("[PROTECTION-SUBMIT] skipped: nothing to protect")
+                else:
+                    self.log("[PROTECTION-SUBMIT] intent + stop price durable; fencing now")
+                    self._dispatch(protection)
+                return
+
             record = self._coordinator.on_fill(
                 record,
                 client_order_id=tag,
                 fill_id=fill_id,
-                fill_quantity=abs(int(order_event.fill_quantity)),
+                fill_quantity=quantity,
             )
             self.log(
                 f"[FILL] {tag} filled={record.filled_quantity} long={record.open_long_quantity} "
                 f"price={order_event.fill_price} fill_id={fill_id}"
             )
-
-            if tag == self._coordinator.identity.entry_order_id:
-                protection = self._coordinator.plan_protection(
-                    record, Decimal(str(order_event.fill_price))
-                )
-                if protection is None:
-                    self.log("[PROTECTION-SUBMIT] skipped: nothing filled, nothing to protect")
-                else:
-                    self._dispatch(protection)
-            elif tag == self._coordinator.identity.protective_order_id:
+            if tag == self._coordinator.identity.protective_order_id:
                 self.log("[EXIT-FILL] protective stop filled; the long is closed by the stop")
         except Exception as exc:
             self._abort(f"order-event handling failed: {type(exc).__name__}: {exc}")

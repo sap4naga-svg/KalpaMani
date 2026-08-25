@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kalpamani.broker.account import BrokerAccountMode, redact_account_id
+from kalpamani.broker.account import redact_account_id
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
     PHASE2_FILL_NOTIONAL_TOLERANCE_USD,
@@ -49,6 +49,10 @@ from kalpamani.execution.session import (
     verify_paper_session,
 )
 
+#: Parameter that binds the arm to one specific brokerage account. Stored as a
+#: fingerprint, never as a raw account id, and REQUIRED for the arm to count.
+ACCOUNT_FINGERPRINT_KEY = "phase2_account_fingerprint"
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "phase2_order_lifecycle"
 RUNTIME_PROJECT = REPO_ROOT / ".runtime" / "lean" / PROJECT_NAME
@@ -63,7 +67,7 @@ ARM_KEYS = (
     "explicit_execution_arm",
     "phase2_confirmation",
     "phase2_exit_requested",
-    "ibkr_account_id",
+    ACCOUNT_FINGERPRINT_KEY,
 )
 
 
@@ -95,12 +99,15 @@ def save_config(config: dict[str, object]) -> None:
 def show_status() -> int:
     config = load_config()
     params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
+    fingerprint = str(params.get(ACCOUNT_FINGERPRINT_KEY, "") or "")
+    # An arm without an account binding is NOT armed. Reporting it as armed
+    # would be fail-open, and would contradict what the runbook promises.
     armed = (
         str(params.get("phase2_test_mode", "")).lower() == "true"
         and str(params.get("explicit_execution_arm", "")).lower() == "true"
         and params.get("phase2_confirmation") == PHASE2_CONFIRMATION_PHRASE
+        and bool(fingerprint)
     )
-    account_id = str(params.get("ibkr_account_id", ""))
     print("=" * 78)
     print("KalpaMani Phase 2 execution arm")
     print("=" * 78)
@@ -108,10 +115,7 @@ def show_status() -> int:
     print(f"  git-ignored         : {'YES' if is_git_ignored(RUNTIME_CONFIG) else 'NO -- ABORT'}")
     print(f"  ARMED               : {'YES' if armed else 'NO (read/reconcile only)'}")
     print(f"  exit requested      : {params.get('phase2_exit_requested', 'false')}")
-    if account_id:
-        mode = BrokerAccountMode.classify(account_id)
-        print(f"  account (redacted)  : {redact_account_id(account_id)}")
-        print(f"  account mode        : {mode.value}{'' if mode.is_paper else '  <-- NOT PAPER'}")
+    print(f"  account binding     : {fingerprint or '(absent -- arm cannot be valid)'}")
     print(f"  envelope            : {describe_envelope()}")
     print("=" * 78)
     return 0
@@ -159,6 +163,7 @@ def arm(confirmation: str) -> int:
 
     account_id = evidence.account_id
     mode = evidence.mode
+    fingerprint = evidence.fingerprint
 
     config = load_config()
     params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
@@ -168,7 +173,9 @@ def arm(confirmation: str) -> int:
             "explicit_execution_arm": "true",
             "phase2_confirmation": PHASE2_CONFIRMATION_PHRASE,
             "phase2_exit_requested": "false",
-            "ibkr_account_id": account_id,
+            # A fingerprint, not the account id. The runtime requires it and
+            # aborts if it is missing or does not match the deployment.
+            ACCOUNT_FINGERPRINT_KEY: fingerprint,
         }
     )
     config["parameters"] = params
@@ -198,8 +205,7 @@ def disarm(request_exit: bool = False) -> int:
     config = load_config()
     params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
     for key in ARM_KEYS:
-        if key != "ibkr_account_id":
-            params.pop(key, None)
+        params.pop(key, None)
     if request_exit:
         params["phase2_exit_requested"] = "true"
         params["phase2_test_mode"] = "true"

@@ -28,7 +28,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kalpamani.broker.account import BrokerAccountMode, redact_account_id
 from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD
 from kalpamani.common.settings import LIVE_TRADING_HARD_DISABLED
 from kalpamani.execution.envelope import (
@@ -288,16 +287,17 @@ def print_checklist() -> None:
         import json
 
         params = json.loads(config.read_text(encoding="utf-8")).get("parameters", {})
+        binding = str(params.get("phase2_account_fingerprint", "") or "")
+        # An arm without an account binding is NOT armed. Anything else would be
+        # fail-open, and would contradict what the runbook promises.
         if (
             str(params.get("phase2_test_mode", "")).lower() == "true"
             and str(params.get("explicit_execution_arm", "")).lower() == "true"
             and params.get("phase2_confirmation") == PHASE2_CONFIRMATION_PHRASE
+            and binding
         ):
             armed = "YES -- an entry order may be placed"
-        account_id = str(params.get("ibkr_account_id", ""))
-        if account_id:
-            mode = BrokerAccountMode.classify(account_id)
-            account_line = f"{redact_account_id(account_id)}  mode={mode.value}"
+        account_line = binding or "(no account binding)"
 
     rows = [
         ("Project (tracked source)", str(TRACKED_PROJECT.relative_to(REPO_ROOT))),
@@ -305,7 +305,7 @@ def print_checklist() -> None:
         ("Durable state path", str(RUNTIME_STATE.relative_to(REPO_ROOT))),
         ("Runtime git-ignored", "YES" if is_git_ignored(RUNTIME_PROJECT) else "NO -- ABORT"),
         ("Brokerage", "Interactive Brokers (PAPER only)"),
-        ("Account (redacted)", account_line),
+        ("Arm account binding", account_line),
         ("Permitted symbol", PHASE2_SYMBOL),
         ("Permitted side", "BUY (long only)"),
         ("Permitted quantity", f"{PHASE2_QUANTITY} (exact, not a ceiling)"),

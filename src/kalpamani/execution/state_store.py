@@ -86,6 +86,16 @@ class StateCorruptError(StateStoreError):
     """Durable state exists but cannot be parsed or is internally inconsistent."""
 
 
+class StaleWriteError(StateStoreError):
+    """An older in-memory record tried to overwrite newer durable state.
+
+    Field-level monotonicity is not enough on its own: writing a whole stale
+    record would roll back *every* field, including broker evidence adopted since
+    the stale copy was taken. Refusing loudly turns a silent rollback into a
+    visible failure.
+    """
+
+
 class DispatchState(StrEnum):
     """How far an order has got toward the broker, stated honestly.
 
@@ -110,6 +120,20 @@ class DispatchState(StrEnum):
 TERMINAL_DISPATCH: frozenset[DispatchState] = frozenset(
     {DispatchState.FILLED, DispatchState.CANCELLED, DispatchState.REJECTED}
 )
+
+#: Dispatch progress is MONOTONIC. A stale in-memory record must never be able
+#: to write an order back to an earlier state -- e.g. an object captured before
+#: reconciliation adopted ACKNOWLEDGED must not push it back to SEND_FENCED,
+#: which would re-open the "may not have been sent" ambiguity on an order the
+#: broker has positively confirmed.
+_DISPATCH_RANK: dict[DispatchState, int] = {
+    DispatchState.INTENT_RECORDED: 0,
+    DispatchState.SEND_FENCED: 1,
+    DispatchState.ACKNOWLEDGED: 2,
+    DispatchState.FILLED: 3,
+    DispatchState.CANCELLED: 3,
+    DispatchState.REJECTED: 3,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +219,9 @@ class TradeRecord:
     #: restart -- that is what stops recovery from re-arming.
     arm_consumed: bool = False
     failure_reason: str | None = None
+    #: Optimistic-concurrency revision. Incremented by every successful write.
+    #: A put whose revision is behind the stored one is refused.
+    revision: int = 0
 
     def order_for_role(self, role: OrderRole) -> SubmittedOrder | None:
         for order in self.orders.values():
@@ -276,8 +303,12 @@ class TradeStateStore(Protocol):
         """Return the record, or raise :class:`StateMissingError`."""
         ...
 
-    def put(self, record: TradeRecord) -> None:
-        """Persist ``record`` atomically."""
+    def put(self, record: TradeRecord) -> TradeRecord:
+        """Persist ``record`` atomically and return it with the bumped revision.
+
+        Raises:
+            StaleWriteError: if ``record`` is behind the stored revision.
+        """
         ...
 
     def all_records(self) -> list[TradeRecord]:
@@ -331,6 +362,7 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
             orders=orders,
             arm_consumed=bool(payload.get("arm_consumed", False)),
             failure_reason=payload.get("failure_reason"),
+            revision=int(payload.get("revision", 0)),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise StateCorruptError(
@@ -386,12 +418,32 @@ class JsonTradeStateStore:
             )
         return record
 
-    def put(self, record: TradeRecord) -> None:
+    def put(self, record: TradeRecord) -> TradeRecord:
         """Persist atomically: write a temp file, fsync, then replace.
 
         A crash part-way through leaves the previous good file untouched.
+
+        Refuses a stale write. If the stored record has advanced past the one
+        being written, the caller is holding an out-of-date object and
+        persisting it would roll back everything learned since.
+
+        Returns:
+            The persisted record, carrying the incremented revision. Callers
+            must use this, not the object they passed in.
+
+        Raises:
+            StaleWriteError: if ``record`` is behind the stored revision.
         """
         trades = self._load()
+        existing = trades.get(record.trade_intent_id)
+        if existing is not None and existing.revision > record.revision:
+            raise StaleWriteError(
+                f"Refusing a stale write for {record.trade_intent_id}: stored revision "
+                f"{existing.revision} is newer than the in-memory revision {record.revision}. "
+                "Persisting it would discard state adopted since this copy was taken. "
+                "Re-read the record and retry."
+            )
+        record = replace(record, revision=record.revision + 1)
         trades[record.trade_intent_id] = record
         payload = {
             "schema_version": STATE_SCHEMA_VERSION,
@@ -415,6 +467,7 @@ class JsonTradeStateStore:
         except BaseException:
             Path(handle.name).unlink(missing_ok=True)
             raise
+        return record
 
     def all_records(self) -> list[TradeRecord]:
         return list(self._load().values())
@@ -491,6 +544,10 @@ def _advance_dispatch(
     order = record.orders.get(client_order_id)
     if order is None:
         raise StateStoreError(f"Cannot move unknown order {client_order_id} to {target.value}.")
+    if _DISPATCH_RANK[target] <= _DISPATCH_RANK[order.dispatch]:
+        # Never regress. A repeat of the same step is a harmless no-op; a step
+        # backwards would discard broker evidence we already hold.
+        return record
     orders = dict(record.orders)
     orders[client_order_id] = replace(
         order,
@@ -615,6 +672,7 @@ __all__ = [
     "TERMINAL_DISPATCH",
     "DispatchState",
     "JsonTradeStateStore",
+    "StaleWriteError",
     "StateCorruptError",
     "StateMissingError",
     "StateStoreError",

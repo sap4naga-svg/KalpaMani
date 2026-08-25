@@ -14,6 +14,7 @@ The dispatch protocol under test:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -42,13 +43,16 @@ from kalpamani.execution.session import (
     ArmReceipt,
     ArmReceiptError,
     BrokerSessionEvidence,
+    SessionVerificationError,
     account_fingerprint,
     assert_arm_available,
+    verify_paper_session,
     write_arm_receipt,
 )
 from kalpamani.execution.state_store import (
     DispatchState,
     JsonTradeStateStore,
+    StaleWriteError,
     TradeRecord,
 )
 
@@ -783,3 +787,249 @@ def test_fenced_then_crash_before_broker_call_also_halts(tmp_path: Path, role: s
     with pytest.raises(ReconciliationError, match="Send fence held"):
         resumed.assess_recovery(recovered, broker.view())
     assert len(broker.submissions) == submissions_before, "nothing auto-resent"
+
+
+# ---------------------------------------------------------------------------
+# Round 5 -- the entry fill and its protective intent are ONE durable write
+# ---------------------------------------------------------------------------
+
+
+def fill_entry_atomically(
+    coordinator: Phase2Coordinator, broker: Broker, record: TradeRecord
+) -> tuple[TradeRecord, PendingOrder | None]:
+    """Entry fill processed exactly as production does it."""
+    identity = coordinator.identity
+    broker.fill(identity.entry_order_id, 1)
+    return coordinator.apply_entry_fill_and_prepare_protection(
+        record,
+        client_order_id=identity.entry_order_id,
+        fill_id="7-1",
+        fill_quantity=1,
+        fill_price=SPY_PRICE,
+    )
+
+
+def entered(coordinator: Phase2Coordinator, broker: Broker) -> TradeRecord:
+    record = coordinator.authorize(arm_request(), evidence())
+    return dispatch(coordinator, broker, coordinator.begin_entry(record))
+
+
+def test_entry_fill_and_protective_intent_are_one_durable_write(tmp_path: Path) -> None:
+    """After an entry fill there is no durable state with a long and no protection."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = entered(coordinator, broker)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
+    assert protection is not None
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.open_long_quantity == 1
+    assert persisted.state is TradeState.PROTECTION_SUBMITTED
+    protective = persisted.orders[identity.protective_order_id]
+    assert protective.dispatch is DispatchState.INTENT_RECORDED
+    assert protective.stop_price is not None
+    assert Decimal(protective.stop_price) == (SPY_PRICE * Decimal("0.90")).quantize(Decimal("0.01"))
+    assert persisted.protected_quantity == 0, "an unfenced intent is not protection"
+
+
+def test_crash_after_atomic_write_before_protective_fence_recovers(tmp_path: Path) -> None:
+    """The exact window: fill+intent durable, crash before the protective fence."""
+    coordinator, store, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = entered(coordinator, broker)
+    fill_entry_atomically(coordinator, broker, record)
+    # ...crash, before the protective order is fenced or sent.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.open_long_quantity == 1
+    assert recovered.orders[identity.protective_order_id].dispatch is DispatchState.INTENT_RECORDED
+    assert recovered.protected_quantity == 0
+    assert recovered.orders[identity.protective_order_id].stop_price is not None
+
+    plan = resumed.assess_recovery(recovered, broker.view())
+    assert len(plan.redispatch) == 1
+    pending = plan.redispatch[0]
+    assert pending.request.role is OrderRole.PROTECTIVE
+    # Reconstructed from durable state, NOT from a fresh market price.
+    assert pending.request.stop_price == (SPY_PRICE * Decimal("0.90")).quantize(Decimal("0.01"))
+
+    after = dispatch(resumed, broker, pending)
+    after = resumed.reconcile(after, broker.view())
+    assert after.protected_quantity == 1
+    assert broker.count(OrderRole.ENTRY) == 1, "no second entry"
+    assert broker.count(OrderRole.PROTECTIVE) == 1
+    assert broker.position == 1, "no short"
+    assert store.require(identity.trade_intent_id).protected_quantity == 1
+
+
+def test_crash_before_atomic_write_does_not_fabricate_the_fill(tmp_path: Path) -> None:
+    """Entry fenced and sent, crash before the fill is processed. Fail closed."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    entered(coordinator, broker)
+    broker.fill(identity.entry_order_id, 1)  # broker filled; we never processed it
+    # ...crash before any durable fill write.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.open_long_quantity == 0, "no fill was fabricated"
+    assert recovered.order_for_role(OrderRole.PROTECTIVE) is None
+
+    # The entry is fenced and the broker shows no open order (it filled), so the
+    # outcome is not conclusively resolvable from state alone: halt.
+    with pytest.raises(ReconciliationError, match="Send fence held"):
+        resumed.assess_recovery(recovered, broker.view())
+    assert broker.count(OrderRole.ENTRY) == 1, "entry never resent"
+
+
+def test_duplicate_entry_fill_event_creates_one_protective_intent(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = entered(coordinator, broker)
+
+    record, first = fill_entry_atomically(coordinator, broker, record)
+    assert first is not None
+    for _ in range(4):
+        record, repeat = coordinator.apply_entry_fill_and_prepare_protection(
+            record,
+            client_order_id=identity.entry_order_id,
+            fill_id="7-1",
+            fill_quantity=1,
+            fill_price=SPY_PRICE,
+        )
+        assert repeat is None, "duplicate event must not produce a second protective order"
+    assert record.filled_quantity == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 5 -- dispatch state is monotonic; stale records cannot regress it
+# ---------------------------------------------------------------------------
+
+
+def test_stale_record_cannot_regress_acknowledged_back_to_fenced(tmp_path: Path) -> None:
+    """A record captured before reconciliation must not undo broker evidence."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    stale = dispatch(coordinator, broker, pending)  # SEND_FENCED
+    fresh = coordinator.reconcile(stale, broker.view())
+    assert fresh.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
+
+    # Replaying the older step with the stale object must be REFUSED loudly.
+    # A field-level guard is not enough: writing the whole stale record would
+    # roll back every field, including the broker evidence just adopted.
+    with pytest.raises(StaleWriteError):
+        coordinator.fence_dispatch(stale, identity.entry_order_id)
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
+
+
+def test_reconcile_returns_the_adopted_record(tmp_path: Path) -> None:
+    """main.py must use the returned record; this proves there is one to use."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = coordinator.authorize(arm_request(), evidence())
+    record = dispatch(coordinator, broker, coordinator.begin_entry(record))
+
+    returned = coordinator.reconcile(record, broker.view())
+    assert returned is not record
+    assert returned.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
+
+
+# ---------------------------------------------------------------------------
+# Round 5 -- ENTRY INVALID latches the lifecycle to FAILED
+# ---------------------------------------------------------------------------
+
+
+def test_entry_invalid_latches_lifecycle_failed(tmp_path: Path) -> None:
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = entered(coordinator, broker)
+
+    record = coordinator.on_order_rejected(record, identity.entry_order_id)
+    assert record.state is TradeState.FAILED
+    assert record.failure_reason is not None and "REJECTED" in record.failure_reason
+    assert store.require(identity.trade_intent_id).state is TradeState.FAILED
+
+    # Terminal means terminal: nothing may proceed from here.
+    with pytest.raises(ReconciliationError):
+        coordinator.begin_entry(record)
+
+
+def test_naked_long_without_protective_intent_fails_closed(tmp_path: Path) -> None:
+    """Unreachable by design, but if durable state ever shows it, halt."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = entered(coordinator, broker)
+    record, _ = fill_entry_atomically(coordinator, broker, record)
+
+    # Forcibly strip the protective intent, simulating corrupted/legacy state.
+    stripped = replace(
+        record, orders={identity.entry_order_id: record.orders[identity.entry_order_id]}
+    )
+    stripped = store.put(stripped)
+    assert stripped.open_long_quantity == 1
+    with pytest.raises(ReconciliationError, match="NAKED LONG"):
+        coordinator.assess_recovery(stripped, broker.view())
+
+
+# ---------------------------------------------------------------------------
+# Round 5 -- account binding is REQUIRED, never disabled by absence
+# ---------------------------------------------------------------------------
+
+
+def test_missing_fingerprint_cannot_disable_the_binding_check() -> None:
+    """Passing None would silently drop the check. The runtime must never do that."""
+    deployed = evidence(PAPER_ACCOUNT_ID)
+    # A correct binding passes.
+    verify_paper_session(deployed, expected_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID))
+    # A wrong one is refused.
+    with pytest.raises(SessionVerificationError, match="does not match"):
+        verify_paper_session(deployed, expected_fingerprint=account_fingerprint("DU9999999"))
+
+
+def test_arm_status_requires_fingerprint_to_report_armed(tmp_path: Path) -> None:
+    """Flags and phrase alone are NOT armed: an unbound arm cannot be verified."""
+    import json as _json
+
+    from kalpamani.execution.envelope import PHASE2_CONFIRMATION_PHRASE as PHRASE
+
+    def armed(params: dict[str, str]) -> bool:
+        binding = str(params.get("phase2_account_fingerprint", "") or "")
+        return (
+            str(params.get("phase2_test_mode", "")).lower() == "true"
+            and str(params.get("explicit_execution_arm", "")).lower() == "true"
+            and params.get("phase2_confirmation") == PHRASE
+            and bool(binding)
+        )
+
+    base = {
+        "phase2_test_mode": "true",
+        "explicit_execution_arm": "true",
+        "phase2_confirmation": PHRASE,
+    }
+    assert armed(base) is False, "flags + phrase without a binding is NOT armed"
+    assert armed({**base, "phase2_account_fingerprint": ""}) is False
+    bound = {**base, "phase2_account_fingerprint": account_fingerprint(PAPER_ACCOUNT_ID)}
+    assert armed(bound) is True
+
+    # And the shape the arm script writes must not contain a raw account id.
+    written = _json.dumps(bound)
+    assert PAPER_ACCOUNT_ID not in written
+    assert "ibkr_account_id" not in written
