@@ -77,6 +77,7 @@ from kalpamani.execution.halt import (
     HaltKind,
     HaltStore,
     OperationalHalt,
+    assert_halt_belongs_to,
     classify_halt,
 )
 from kalpamani.execution.identity import OrderRole
@@ -256,7 +257,7 @@ class Phase2Cycle:
         self._port.error(
             "[PHASE2-HALT] normal progression does NOT resume merely because the process "
             "restarted. Reconcile against the broker by hand, then clear it deliberately "
-            "with `scripts/phase2_arm.py --clear-halt`."
+            "with `scripts/phase2_arm.py --clear-halt --run N`."
         )
 
     # -- The reconciliation cycle -------------------------------------------
@@ -359,7 +360,8 @@ class Phase2Cycle:
                     "Acknowledging a manual cleanup is a deliberate act."
                 )
                 return
-            if not self.halted:
+            halt = self.halt
+            if halt is None:
                 self._port.error(
                     "[MANUAL-RESOLVE] REFUSED: no operational halt is in force. This action "
                     "exists to close out a FAILED run, not a healthy one."
@@ -372,6 +374,18 @@ class Phase2Cycle:
                     "[MANUAL-RESOLVE] REFUSED: there is no durable trade record to resolve."
                 )
                 return
+
+            # The halt must be THIS run's halt. Without this, a deployment
+            # selecting run 1 could resolve run 1 against a halt that belongs to
+            # run 2 -- writing a resolution while the condition that actually
+            # halted the system is untouched.
+            assert halt is not None
+            assert_halt_belongs_to(
+                halt,
+                selected_trade_intent_id=self._coordinator.identity.trade_intent_id,
+                record=record,
+                any_records_exist=self._coordinator.any_records_exist(),
+            )
 
             broker = self._resolved_view(record)
             self._port.log(
@@ -931,14 +945,16 @@ class Phase2Cycle:
         :func:`kalpamani.execution.halt.classify_halt`.
         """
         risk = self._current_risk()
-        # Bind the halt to the run that raised it, so clearing it later can be
-        # required to inspect THIS trade rather than whichever run is selected.
+        # Bind the halt to the SELECTED run -- always, including before that run
+        # has written anything. A run exists the moment a deployment names it,
+        # and a pre-trade failure on run 2 belongs to run 2 even though run 2 has
+        # no record yet. Binding only when a record existed left exactly those
+        # halts anonymous, and an anonymous halt is one somebody clears by
+        # naming a different run.
         halt = OperationalHalt(
             reason=reason,
             kind=kind or classify_halt(error, risk),
-            trade_intent_id=(
-                self._coordinator.identity.trade_intent_id if risk.trade_record_exists else ""
-            ),
+            trade_intent_id=self._coordinator.identity.trade_intent_id,
         )
         self._halt_store.put(halt)  # a no-op for a session-scoped halt
         self._halt = halt
@@ -952,7 +968,8 @@ class Phase2Cycle:
         if halt.manual_clear_required:
             self._port.error(
                 "[PHASE2-ABORT] This halt SURVIVES restart. Reconcile against the broker by "
-                "hand, then clear it deliberately with `scripts/phase2_arm.py --clear-halt`."
+                "hand, then clear it deliberately with "
+                "`scripts/phase2_arm.py --clear-halt --run N`."
             )
 
 

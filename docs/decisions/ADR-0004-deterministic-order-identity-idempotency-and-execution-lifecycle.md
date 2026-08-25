@@ -643,6 +643,40 @@ codes must be read locally rather than asserting either.
 
 The common shape: a check that was precise enough for one run becomes a wildcard for many.
 "Any record", "a state file", "some run" — each was fine until there were two of something.
+
+### 24. A run exists before its record does — added 2026-08-25
+
+The last multi-run wiring class. Every one of these treated "has a `TradeRecord`" as a proxy
+for "is a run", and those are different questions: a certification run exists the moment a
+deployment names it, which is **before** it writes anything.
+
+**Durable halts bind to the SELECTED run, always.** Binding only when a record existed left
+pre-trade failures anonymous — a run-2 startup failure produced an unbound halt that run 2
+could not clear by name while run 1 could, purely because run 1 had a record. Every durable
+halt now carries the selected identity.
+
+**Halt ownership is judged against the selected identity, not inferred from a record.**
+`assert_halt_belongs_to` takes the selected `trade_intent_id` explicitly. A bound halt matches
+its own run *even with no record yet* — there is nothing to gate on, and refusing would leave
+the halt clearable only by naming the wrong run. Unbound halts remain a narrow, documented
+legacy path for the historical run-1 halt; nothing new writes one and it is never a wildcard.
+
+**Manual resolution proves the halt is this run's.** It previously checked only that *a* halt
+existed. A deployment selecting run 1 could therefore resolve run 1 against a halt belonging to
+run 2 — writing a resolution while the condition that actually halted the system went
+untouched.
+
+**`--request-exit` names its run.** Left to whichever run sat in the config, an exit could
+target a historical terminal run — which holds nothing — while the run actually holding a
+position carried on. A run with no durable record, or a terminal one, is refused: a completed
+run is evidence, not an exit target.
+
+**Preflight fails without a usable run.** The engine refuses to initialize without one, so
+reporting green would bless a deployment that cannot start — armed or disarmed.
+
+Operator instructions were updated to show the mandatory `--run N`, and a test asserts no line
+that teaches `--clear-halt` or `--request-exit` omits it. The commands are a safety surface;
+documentation that drifts from them is a defect, not a typo.
 ---
 
 ## Consequences

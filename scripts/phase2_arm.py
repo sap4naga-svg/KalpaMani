@@ -313,6 +313,53 @@ def arm(confirmation: str, run_number: int | None) -> int:
     return 0
 
 
+def request_exit_for_run(run_number: int | None) -> int:
+    """Ask the NEXT deployment to close the position held by one specific run.
+
+    Run-scoped on purpose. Left to whichever run happened to sit in the config,
+    an exit request could target a historical terminal run -- which holds no
+    position -- while the run that actually holds one carries on untouched.
+    """
+    if run_number is None:
+        print("REFUSED: --run is required for --request-exit.")
+        print("  An exit closes the position of ONE certification run. Name it.")
+        print("  Example:  --request-exit --run 2")
+        return 1
+    if run_number < 1:
+        print(f"REFUSED: --run must be a positive integer, got {run_number}.")
+        return 1
+
+    record = load_trade_record_for_run(run_number)
+    if record is None:
+        print(f"REFUSED: run {run_number} has no durable trade record, so it holds nothing")
+        print("  to exit. Check the run number.")
+        return 1
+    if is_terminal(record.state):
+        print(f"REFUSED: run {run_number} is terminal ({record.state.value}).")
+        print("  A completed run is evidence, not an exit target. It holds no position for")
+        print("  KalpaMani to close.")
+        return 1
+
+    config = load_config()
+    params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
+    params.update(
+        {
+            "phase2_test_mode": "false",
+            "explicit_execution_arm": "false",
+            "phase2_confirmation": "",
+            "phase2_exit_requested": "true",
+            RUN_NUMBER_KEY: str(run_number),
+        }
+    )
+    config["parameters"] = params
+    save_config(config)
+    print(f"Exit requested for certification run {run_number}.")
+    print(f"  target state : {record.state.value}")
+    print("  The arm is cleared; the next deployment cancels protection, waits for the")
+    print("  CANCELED confirmation, then closes the position. No new entry is possible.")
+    return 0
+
+
 def disarm(request_exit: bool = False) -> int:
     config = load_config()
     params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
@@ -371,7 +418,12 @@ def clear_halt(confirmation: str, run_number: int | None) -> int:
         any_records = bool(
             JsonTradeStateStore(RUNTIME_STATE).all_records() if RUNTIME_STATE.exists() else []
         )
-        assert_halt_belongs_to(halt, record, any_records_exist=any_records)
+        assert_halt_belongs_to(
+            halt,
+            selected_trade_intent_id=certification_identity(run_number).trade_intent_id,
+            record=record,
+            any_records_exist=any_records,
+        )
         caveats = assert_halt_clearable(record, evidence)
     except (HaltClearanceError, SessionVerificationError, StateStoreError) as exc:
         print(str(exc))
@@ -430,7 +482,7 @@ def main() -> int:
     group.add_argument(
         "--request-exit",
         action="store_true",
-        help="clear the arm and request the controlled exit on the next cycle",
+        help="clear the arm and request the controlled exit for --run N",
     )
     parser.add_argument("--confirm", default="", help="the exact confirmation phrase")
     parser.add_argument(
@@ -448,7 +500,7 @@ def main() -> int:
     if args.disarm:
         return disarm()
     if args.request_exit:
-        return disarm(request_exit=True)
+        return request_exit_for_run(args.run)
     return arm(args.confirm, args.run)
 
 

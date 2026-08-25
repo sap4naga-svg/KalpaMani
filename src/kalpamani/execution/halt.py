@@ -348,60 +348,55 @@ class JsonHaltStore:
 
 def assert_halt_belongs_to(
     halt: OperationalHalt,
-    record: TradeRecord | None,
     *,
+    selected_trade_intent_id: str,
+    record: TradeRecord | None,
     any_records_exist: bool,
 ) -> None:
-    """Assert the halt being cleared is the halt this run raised.
+    """Assert the halt being cleared is the halt the SELECTED run raised.
 
-    Clearing a halt validates the selected run against the gates below. If the
-    halt actually belongs to a *different* run, those gates inspect the wrong
-    trade -- and a manually resolved run would happily authorise the clearance
-    of a halt protecting a live one. That is fail-open, so the binding is
-    checked before anything else.
+    Judged against the selected certification identity, not against whether a
+    ``TradeRecord`` happens to exist. Those are different questions, and
+    conflating them was the defect: a run is selected the moment a deployment
+    names it, which is **before** its record is created. A pre-trade failure on
+    run 2 belongs to run 2 even though run 2 has written nothing yet.
 
-    Unbound halts
-    -------------
-    A halt written before run binding existed names no run. Returning early on
-    those was itself fail-open: with run 1 resolved and no run-2 record,
-    ``--run 2`` selected ``record=None``, every remaining gate had nothing to
-    inspect, and the halt cleared. "No record" is not proof that the run you
-    named is the right one.
-
-    So an unbound halt is judged by whether any trade exists at all:
-
-    * **Trades exist** -- the selected run must resolve to a real durable record,
-      which then faces every normal gate. An arbitrary or not-yet-existing run
-      cannot clear it.
-    * **No trades exist** -- a genuine pre-trade halt (a cold-start fault before
-      anything was armed). There is no trade to protect and no gate a wrong run
-      could bypass, so clearing is permitted. This is stated deliberately rather
-      than falling out of a missing check.
+    Bound halt
+        The selected run must match. A mismatch is refused. A match is accepted
+        **even with no record yet** -- there is nothing to gate on, and refusing
+        would leave a pre-trade halt clearable only by naming the wrong run.
+    Legacy unbound halt
+        Written before halts carried a run at all. Narrow migration behaviour,
+        kept only so the historical run-1 halt stays clearable: if any trade
+        exists the selected run must resolve to a real record, otherwise there
+        is genuinely nothing to protect. **Never a wildcard**, and nothing new
+        writes one.
 
     Raises:
-        HaltClearanceError: if the halt names a different run, if it names a run
-            at all while none was selected, or if an unbound halt is cleared
-            against a run that has no durable record while other runs do.
+        HaltClearanceError: on any mismatch, or on an unbound halt cleared
+            against a run with no durable record while other runs have one.
     """
-    if not halt.is_trade_bound:
-        if any_records_exist and record is None:
+    if halt.is_trade_bound:
+        if not selected_trade_intent_id:
             raise HaltClearanceError(
-                "REFUSED: this halt names no certification run, and the run you selected has "
-                "no durable record -- while other runs do. Clearing it would validate nothing: "
-                "every gate below inspects a trade, and there is no trade selected to inspect. "
-                "Name the run this halt actually protects."
+                "REFUSED: this halt belongs to a specific certification run, but no run was "
+                "selected. Name the run whose halt you are clearing."
+            )
+        if halt.trade_intent_id != selected_trade_intent_id:
+            raise HaltClearanceError(
+                f"REFUSED: this halt belongs to run {halt.trade_intent_id}, but the selected "
+                f"run is {selected_trade_intent_id}. Clearing it would validate the wrong "
+                "trade -- the gates would inspect a run that is not the one being protected."
             )
         return
-    if record is None:
+
+    # LEGACY ONLY. Halts raised by this code always carry a run.
+    if any_records_exist and record is None:
         raise HaltClearanceError(
-            "REFUSED: this halt belongs to a specific certification run, but no run was "
-            "selected. Pass the run whose halt you are clearing."
-        )
-    if halt.trade_intent_id != record.trade_intent_id:
-        raise HaltClearanceError(
-            f"REFUSED: this halt belongs to run {halt.trade_intent_id}, but the selected run "
-            f"is {record.trade_intent_id}. Clearing it would validate the wrong trade -- the "
-            "gates would inspect a run that is not the one being protected."
+            "REFUSED: this halt predates run binding and names no certification run, and the "
+            "run you selected has no durable record -- while other runs do. Clearing it would "
+            "validate nothing: every gate below inspects a trade, and there is no trade "
+            "selected to inspect. Name the run this halt actually protects."
         )
 
 
@@ -462,6 +457,14 @@ def assert_halt_clearable(
         "only from inside a deployment.",
     ]
     if record is None:
+        # The PRE-TRADE clearance path: a run was selected and something failed
+        # before it wrote anything. There is no trade to gate on, so the session
+        # checks above are the whole of what can be verified here.
+        caveats.append(
+            "This run has no durable trade record yet, so no position, protection or send "
+            "fence could be checked -- there are none. The halt was raised before the run "
+            "wrote anything."
+        )
         return caveats
 
     if not record.account_fingerprint:

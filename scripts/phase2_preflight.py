@@ -478,8 +478,14 @@ def check_arm_receipts(state_present: bool) -> bool:
     print("[5/6] Arm receipts")
     run = selected_run_number()
     if run is None:
-        print("  INFO: no usable certification run selected; receipts cannot be scoped")
-        return True
+        # The engine now REFUSES to initialize without one, so reporting this
+        # green would bless a deployment that cannot start.
+        _fail(
+            "no usable certification run is selected (phase2_run_number missing, empty, "
+            "malformed, zero or negative). The engine refuses to initialize without one, so "
+            "this deployment cannot run at all -- armed or disarmed."
+        )
+        return False
     print(f"  INFO: certification run {run}")
 
     # "A state file exists" is too coarse: the file may hold run 1 while the
@@ -534,7 +540,7 @@ def check_operational_halt() -> bool:
     _fail(
         f"a durable operational halt is in force ({halt.describe()}): {halt.reason} "
         "Redeploying does NOT clear it. Reconcile against the broker by hand, then clear it "
-        "with `scripts/phase2_arm.py --clear-halt`."
+        "with `scripts/phase2_arm.py --clear-halt --run N`."
     )
     return False
 

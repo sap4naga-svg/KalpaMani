@@ -173,6 +173,10 @@ class Phase2Coordinator:
             assert_arm_not_reusable(record)
         return record
 
+    def any_records_exist(self) -> bool:
+        """Whether ANY certification run has durable state. Used by halt clearance."""
+        return bool(self._store.all_records())
+
     # -- Session binding ---------------------------------------------------
 
     def current_session(self) -> BrokerSessionEvidence:

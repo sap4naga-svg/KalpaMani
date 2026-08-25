@@ -337,8 +337,11 @@ not re-arm, does not re-enter, and does not duplicate protection.
 ## 11. Controlled exit
 
 ```bash
-.venv\Scripts\python.exe scripts\phase2_arm.py --request-exit
+.venv\Scripts\python.exe scripts\phase2_arm.py --request-exit --run N
 ```
+
+`--run N` is mandatory and names the run that holds the position. A run with no durable
+record, or a terminal one, is refused: a completed run is evidence, not an exit target.
 
 Then redeploy. Ordering is **mandatory**:
 
@@ -638,8 +641,12 @@ is not a catch-all.
 To clear one, reconcile against IBKR **by hand first**, then:
 
 ```bash
-.venv\Scripts\python.exe scripts\phase2_arm.py --clear-halt --confirm "CLEAR PHASE2 HALT"
+.venv\Scripts\python.exe scripts\phase2_arm.py --clear-halt --run N --confirm "CLEAR PHASE2 HALT"
 ```
+
+`--run N` names the certification run whose halt you are clearing, and it is mandatory. A
+halt belongs to one run and clearing it validates that run's trade; naming a different run
+is refused rather than silently validating the wrong thing.
 
 The gates run **before** the phrase is considered, and any of these refuses outright:
 

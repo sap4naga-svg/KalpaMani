@@ -190,51 +190,6 @@ def test_a_run_cannot_be_armed_twice(workspace: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_clear_halt_refuses_when_the_halt_belongs_to_another_run() -> None:
-    """THE regression. Run 2 holds an unresolved SEND FENCE and owns the halt;
-    run 1 was manually resolved and would sail through every gate.
-
-    With the loader hard-coded to run 1, clearing would have validated the wrong
-    trade and deleted a halt protecting a live one.
-    """
-    run_two = certification_identity(2)
-    halt = OperationalHalt(
-        "run 2 send fence unresolved",
-        HaltKind.MANUAL_CLEARANCE_REQUIRED,
-        trade_intent_id=run_two.trade_intent_id,
-    )
-    resolved_run_one = replace(
-        record_for(1, state=TradeState.FAILED),
-        resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
-    )
-
-    with pytest.raises(HaltClearanceError, match="belongs to run"):
-        assert_halt_belongs_to(halt, resolved_run_one, any_records_exist=True)
-
-
-def test_clear_halt_accepts_the_run_that_raised_it() -> None:
-    run_two = certification_identity(2)
-    halt = OperationalHalt(
-        "run 2 halted", HaltKind.MANUAL_CLEARANCE_REQUIRED, trade_intent_id=run_two.trade_intent_id
-    )
-    assert_halt_belongs_to(halt, record_for(2, state=TradeState.FAILED), any_records_exist=True)
-
-
-def test_a_trade_bound_halt_refuses_a_missing_run() -> None:
-    halt = OperationalHalt(
-        "bound", HaltKind.MANUAL_CLEARANCE_REQUIRED, trade_intent_id="ti-whatever"
-    )
-    with pytest.raises(HaltClearanceError, match="no run was selected"):
-        assert_halt_belongs_to(halt, None, any_records_exist=True)
-
-
-def test_an_unbound_legacy_halt_does_not_pretend_to_belong_to_a_run() -> None:
-    """A v1 halt predates run binding. It is UNBOUND, not "yours"."""
-    halt = OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED)
-    assert halt.is_trade_bound is False
-    assert_halt_belongs_to(halt, record_for(1), any_records_exist=True)
-
-
 def test_run_2_unresolved_send_fence_cannot_be_bypassed(workspace: Path) -> None:
     """Even with the right run selected, the fence still blocks clearance."""
     identity = certification_identity(2)
@@ -372,47 +327,6 @@ def test_an_unbound_halt_is_not_cleared_by_an_arbitrary_run(workspace: Path) -> 
     assert halt_store.get() is not None, "the halt survives"
 
 
-def test_an_unbound_halt_may_be_cleared_against_the_run_that_exists(workspace: Path) -> None:
-    """Same world, correct run: the gates get a real record to judge."""
-    halt_store = ARM.JsonHaltStore(ARM.halt_state_path(workspace / "storage"))
-    halt_store.put(OperationalHalt("legacy, unbound", HaltKind.MANUAL_CLEARANCE_REQUIRED))
-    resolved = replace(
-        record_for(1, state=TradeState.FAILED),
-        resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
-    )
-    store(workspace).put(resolved)
-
-    caveats = ARM.assert_halt_clearable(resolved, evidence())
-    assert any("stays FAILED" in c for c in caveats)
-    assert_halt_belongs_to(
-        OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED),
-        resolved,
-        any_records_exist=True,
-    )
-
-
-def test_a_genuine_pre_trade_unbound_halt_may_be_cleared(workspace: Path) -> None:
-    """Stated deliberately rather than falling out of a missing check.
-
-    A cold-start fault before anything was armed leaves no trade to protect and
-    no gate a wrong run could bypass.
-    """
-    assert_halt_belongs_to(
-        OperationalHalt("data farm down", HaltKind.MANUAL_CLEARANCE_REQUIRED),
-        None,
-        any_records_exist=False,
-    )
-
-
-def test_an_unbound_halt_with_trades_present_refuses_a_missing_record() -> None:
-    with pytest.raises(HaltClearanceError, match="names no certification run"):
-        assert_halt_belongs_to(
-            OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED),
-            None,
-            any_records_exist=True,
-        )
-
-
 # ---------------------------------------------------------------------------
 # Round 14 -- the engine has no run-1 default
 # ---------------------------------------------------------------------------
@@ -522,3 +436,213 @@ def test_arming_is_permitted_once_the_halt_is_gone(workspace: Path) -> None:
     store(workspace).put(record_for(1, state=TradeState.FAILED))
     assert ARM.arm(PHASE2_CONFIRMATION_PHRASE, 2) == 0
     assert params(workspace)[ARM.RUN_NUMBER_KEY] == "2"
+
+
+# ---------------------------------------------------------------------------
+# Round 15 -- a halt belongs to the SELECTED run, record or no record
+# ---------------------------------------------------------------------------
+
+
+def test_a_bound_pre_trade_halt_is_clearable_by_its_own_run(workspace: Path) -> None:
+    """Run 2 is selected and something fails before run 2 writes anything.
+
+    The halt is run 2's, and run 2 must be able to clear it -- there is simply
+    no trade to gate on yet.
+    """
+    halt = OperationalHalt(
+        "pre-trade failure",
+        HaltKind.MANUAL_CLEARANCE_REQUIRED,
+        trade_intent_id=certification_identity(2).trade_intent_id,
+    )
+    assert_halt_belongs_to(
+        halt,
+        selected_trade_intent_id=certification_identity(2).trade_intent_id,
+        record=None,
+        any_records_exist=True,
+    )
+    caveats = ARM.assert_halt_clearable(None, evidence())
+    assert any("no durable trade record yet" in c for c in caveats)
+
+
+def test_a_bound_run_2_pre_trade_halt_refuses_run_1(workspace: Path) -> None:
+    """The regression. Run 1 is historical and has a real record; run 2 does
+    not. Naming run 1 must not clear a halt that belongs to run 2."""
+    halt_store = ARM.JsonHaltStore(ARM.halt_state_path(workspace / "storage"))
+    halt_store.put(
+        OperationalHalt(
+            "run 2 pre-trade failure",
+            HaltKind.MANUAL_CLEARANCE_REQUIRED,
+            trade_intent_id=certification_identity(2).trade_intent_id,
+        )
+    )
+    store(workspace).put(
+        replace(
+            record_for(1, state=TradeState.FAILED),
+            resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
+        )
+    )
+
+    assert ARM.clear_halt("CLEAR PHASE2 HALT", 1) == 1
+    assert halt_store.get() is not None, "the halt survives being named as run 1"
+
+    # ...and run 2 may proceed through the pre-trade clearance path.
+    assert ARM.clear_halt("CLEAR PHASE2 HALT", 2) == 0
+    assert halt_store.get() is None
+
+
+# ---------------------------------------------------------------------------
+# Round 15 -- --request-exit names its run
+# ---------------------------------------------------------------------------
+
+
+def test_request_exit_requires_a_run(workspace: Path) -> None:
+    assert ARM.request_exit_for_run(None) == 1
+    assert params(workspace) == {}
+
+
+def test_request_exit_refuses_a_run_with_no_record(workspace: Path) -> None:
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+    assert ARM.request_exit_for_run(2) == 1
+    assert params(workspace) == {}
+
+
+def test_request_exit_refuses_a_terminal_run(workspace: Path) -> None:
+    """A completed run is evidence, not an exit target -- it holds no position."""
+    store(workspace).put(
+        replace(
+            record_for(1, state=TradeState.FAILED),
+            resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
+        )
+    )
+    assert ARM.request_exit_for_run(1) == 1
+    assert params(workspace) == {}
+
+
+def test_request_exit_targets_the_named_active_run(workspace: Path) -> None:
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+    store(workspace).put(record_for(2, state=TradeState.PROTECTED))
+
+    assert ARM.request_exit_for_run(2) == 0
+    written = params(workspace)
+    assert written["phase2_exit_requested"] == "true"
+    assert written[ARM.RUN_NUMBER_KEY] == "2"
+    assert written["explicit_execution_arm"] == "false", "the arm is cleared, not kept"
+
+
+# ---------------------------------------------------------------------------
+# Round 15 -- preflight fails when the engine could not initialize
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "two", "0", "-3"])
+def test_preflight_fails_without_a_usable_run(workspace: Path, raw: object) -> None:
+    """The engine refuses to initialize without one, so green here would bless a
+    deployment that cannot start -- armed or disarmed."""
+    config = workspace / "phase2_order_lifecycle" / "config.json"
+    parameters = {} if raw is None else {"phase2_run_number": raw}
+    config.write_text(json.dumps({"parameters": parameters}), encoding="utf-8")
+
+    assert PREFLIGHT.selected_run_number() is None
+    assert PREFLIGHT.check_arm_receipts(state_present=False) is False
+
+
+@pytest.mark.parametrize("run", [1, 2])
+def test_preflight_accepts_an_explicit_run(workspace: Path, run: int) -> None:
+    select_run(workspace, run)
+    assert PREFLIGHT.selected_run_number() == run
+    assert PREFLIGHT.check_arm_receipts(state_present=False) is True
+
+
+# ---------------------------------------------------------------------------
+# Round 15 -- operator documentation shows the mandatory --run
+# ---------------------------------------------------------------------------
+
+
+def test_no_operator_instruction_omits_the_run_selector() -> None:
+    """`--run` is mandatory; every string that teaches the command must say so."""
+    stale: list[str] = []
+    for path in [
+        REPO_ROOT / "scripts" / "phase2_arm.py",
+        REPO_ROOT / "scripts" / "phase2_preflight.py",
+        REPO_ROOT / "src" / "kalpamani" / "execution" / "cycle.py",
+        REPO_ROOT / "docs" / "runbooks" / "phase2-paper-order-lifecycle.md",
+    ]:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            # Only lines that TEACH the command: an actual invocation naming the
+            # script. Flag definitions and prose references are not instructions.
+            if "phase2_arm.py" not in line or "add_argument" in line:
+                continue
+            for flag in ("--clear-halt", "--request-exit"):
+                if flag in line and "--run" not in line:
+                    stale.append(f"{path.name}: {line.strip()[:88]}")
+    assert not stale, "operator instructions omitting --run:\n" + "\n".join(stale)
+
+
+# ---------------------------------------------------------------------------
+# Round 15 -- halt ownership, judged against the SELECTED identity
+# ---------------------------------------------------------------------------
+
+
+def bound_halt(run: int) -> OperationalHalt:
+    return OperationalHalt(
+        f"run {run} halted",
+        HaltKind.MANUAL_CLEARANCE_REQUIRED,
+        trade_intent_id=certification_identity(run).trade_intent_id,
+    )
+
+
+def test_a_bound_halt_refuses_a_different_run() -> None:
+    with pytest.raises(HaltClearanceError, match="belongs to run"):
+        assert_halt_belongs_to(
+            bound_halt(2),
+            selected_trade_intent_id=certification_identity(1).trade_intent_id,
+            record=record_for(1, state=TradeState.FAILED),
+            any_records_exist=True,
+        )
+
+
+def test_a_bound_halt_accepts_the_run_that_raised_it() -> None:
+    assert_halt_belongs_to(
+        bound_halt(2),
+        selected_trade_intent_id=certification_identity(2).trade_intent_id,
+        record=record_for(2, state=TradeState.FAILED),
+        any_records_exist=True,
+    )
+
+
+def test_a_bound_halt_refuses_when_no_run_is_selected() -> None:
+    with pytest.raises(HaltClearanceError, match="no run was selected"):
+        assert_halt_belongs_to(
+            bound_halt(2), selected_trade_intent_id="", record=None, any_records_exist=True
+        )
+
+
+def test_a_legacy_unbound_halt_is_not_a_wildcard() -> None:
+    """Kept only so the historical run-1 halt stays clearable. Nothing new
+    writes one, and it never matches a run that has no record."""
+    legacy = OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED)
+    assert legacy.is_trade_bound is False
+
+    with pytest.raises(HaltClearanceError, match="predates run binding"):
+        assert_halt_belongs_to(
+            legacy,
+            selected_trade_intent_id=certification_identity(2).trade_intent_id,
+            record=None,
+            any_records_exist=True,
+        )
+    assert_halt_belongs_to(
+        legacy,
+        selected_trade_intent_id=certification_identity(1).trade_intent_id,
+        record=record_for(1, state=TradeState.FAILED),
+        any_records_exist=True,
+    )
+
+
+def test_a_genuine_pre_trade_legacy_halt_may_be_cleared() -> None:
+    """No trade exists anywhere: nothing to protect, no gate a wrong run bypasses."""
+    assert_halt_belongs_to(
+        OperationalHalt("data farm down", HaltKind.MANUAL_CLEARANCE_REQUIRED),
+        selected_trade_intent_id=certification_identity(2).trade_intent_id,
+        record=None,
+        any_records_exist=False,
+    )
