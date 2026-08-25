@@ -360,10 +360,53 @@ Causes to check, most likely first:
 5. **Password expired or contains characters** the automater mishandles — reset it to a
    straightforward alphanumeric password and retry.
 
-Verify the corrected credentials by logging into the IBKR **paper** account in a browser
-*before* redeploying. That isolates a credential problem from a LEAN problem in one step.
+#### The exact IBKR dialog tells you which it is
 
-Re-running the wizard re-prompts for all values; nothing needs to be edited by hand.
+IBAutomater logs the IB Gateway dialog title verbatim. Grep for it:
+
+```
+Window title: [Unrecognized Username or Password]
+Login failed: Passwords are case sensitive.
+```
+
+`Unrecognized Username or Password` is **definitive**: the username or password is wrong.
+It rules out 2FA, Secure Login System configuration and account permissions entirely. A
+2FA or permissions problem produces a *different* dialog.
+
+#### CRITICAL: re-running does NOT re-prompt for credentials
+
+**`lean live deploy` caches IB settings in `.runtime/lean/lean.json` and silently reuses
+them.** It re-prompts for the brokerage and data-feed *selection*, but **not** for the
+username, account id, password, delayed-data flag or weekly restart time.
+
+A deployment that failed on bad credentials will therefore **fail again, identically**, no
+matter how many times you re-run it. This was observed on 2026-08-24: the second attempt
+never prompted for credentials and reproduced the same `LoginFailed` two seconds faster.
+
+Clear the cache before retrying:
+
+```bash
+python scripts/clear_ib_credentials.py
+```
+
+It refuses to touch a file git does not ignore, removes only `ib-*` keys, and reports what
+it removed **by name only** — values are never read or printed. The next deploy will prompt
+again.
+
+#### Fixing the credentials
+
+1. **Confirm the paper username.** IBKR Client Portal ->
+   *Settings -> Account Settings -> Paper Trading Account*. The paper account has its **own
+   username**, usually auto-generated and unrelated to the live username.
+2. **Reset the paper password** on that same page. Paper passwords are separate from the
+   live password and are a common source of this failure.
+3. **Verify in a browser before redeploying.** Log in to the IBKR web portal with the paper
+   username and password. If the browser rejects them, the problem is the credentials, not
+   LEAN — and you have saved yourself another full container start.
+4. **Passwords are case sensitive** (IBKR says so in the dialog). Watch for a stuck caps
+   lock, a trailing space from a paste, or characters your password manager transformed.
+5. Only if the browser login *succeeds* but LEAN still fails should you look at Secure Login
+   System, IBKR Pro vs Lite, or the module version.
 
 ---
 
