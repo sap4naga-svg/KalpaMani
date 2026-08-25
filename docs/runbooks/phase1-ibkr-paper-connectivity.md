@@ -261,10 +261,26 @@ KalpaMani allocated strategy capital: USD 80,000
 The `[CAPITAL-SEPARATION]` block is the point of the whole exercise: the broker reported
 USD 1,000,000 and KalpaMani stayed at USD 80,000.
 
-**Market-data timing.** `[MARKET-DATA] FIRST EVENT RECEIVED` only appears when SPY is
-actually trading. With `extended_market_hours=True` that is roughly 04:00-20:00 ET on a
-trading day. A run started outside that window connects and observes account state
-normally but will never log a bar -- that is the market being closed, not a fault.
+**Market data, confirmed 2026-08-25:**
+
+```
+[MARKET-DATA] FIRST EVENT RECEIVED -- data pipeline is live.
+[MARKET-DATA]   symbol      : SPY
+[MARKET-DATA]   bar time    : 2026-08-25 05:15:00
+[MARKET-DATA]   algo utc    : 2026-08-25 09:15:00.000472+00:00
+[MARKET-DATA]   close       : 766.38
+[MARKET-DATA]   volume      : 360.0
+[BROKER-STATE:first-market-data-event] equity_usd=1000000.0 cash_usd=1000000.0 holdings=0 open_orders=0
+```
+
+**Timing matters.** That bar arrived at **05:15 ET -- pre-market**, more than four hours
+before the regular open, because the subscription sets `extended_market_hours=True`. You do
+**not** need to wait for 09:30 ET. Bars flow roughly **04:00-20:00 ET** on a trading day,
+and the first one appears within about a minute of connecting.
+
+A run started outside that window connects and observes account state normally but will
+never log a bar. That is the market being closed, not a fault -- and the scheduled observer
+still proves account state, so such a run is not wasted.
 
 > **Note:** `initialize()` runs *before* LEAN applies brokerage cash
 > (`Setup(): Initializing algorithm...` precedes `Setup(): Setting USD cash to ...`).

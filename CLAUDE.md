@@ -200,7 +200,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 
 ## 9. Current phase
 
-**PHASE 1 — IBKR PAPER CONNECTIVITY (validated 2026-08-24, one criterion outstanding).**
+**PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND VALIDATED (2026-08-25).**
 
 Bootstrap complete. Phase 1 read-only connectivity **proven against the live IBKR Paper
 account**: LEAN -> IBKR Paper connected, account confirmed PAPER three ways, SPY subscribed
@@ -208,8 +208,9 @@ account**: LEAN -> IBKR Paper connected, account confirmed PAPER three ways, SPY
 exercise — the broker reported **USD 1,000,000** while KalpaMani strategy capital stayed at
 **USD 80,000** (12.50x divergence, logged explicitly). **Zero orders, zero positions.**
 
-Outstanding: a `[MARKET-DATA] FIRST EVENT RECEIVED` bar, which requires a run while SPY is
-trading (~04:00-20:00 ET with extended hours). The validated run was outside that window.
+Market data confirmed: a SPY bar was received at **05:15 ET pre-market** (close 766.38,
+volume 360) within a minute of connecting, on delayed IBKR data. All thirteen Phase 1
+acceptance criteria are satisfied.
 
 **Operational finding — read this.** LEAN's IBAutomater unselects IB Gateway's
 **[Read-Only API]** checkbox and selects every **[Bypass ... for API Orders]** precaution on

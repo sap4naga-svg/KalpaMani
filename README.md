@@ -3,10 +3,11 @@
 An autonomous long/short **U.S. equity swing & momentum trading system** with deterministic
 risk and selective, bounded AI research.
 
-> **Status: PHASE 1 — IBKR PAPER CONNECTIVITY VALIDATED (2026-08-24).** Read-only
-> connectivity to the live IBKR Paper account is proven: connected, account confirmed PAPER,
-> SPY subscribed, broker account state observed. **Zero orders, zero positions** — no order
-> path exists. Live trading remains hard-disabled. No strategy logic yet.
+> **Status: PHASE 1 COMPLETE — IBKR PAPER CONNECTIVITY VALIDATED (2026-08-25).** Read-only
+> connectivity to the live IBKR Paper account is proven end to end: connected, account
+> confirmed PAPER, SPY subscribed, market data received, broker account state observed,
+> clean shutdown. **Zero orders, zero positions** — no order path exists. Live trading
+> remains hard-disabled. No strategy logic yet.
 
 ---
 
@@ -111,7 +112,7 @@ paper account may report **USD 1,000,000**; that simulated number must never bec
 KalpaMani strategy capital. `StrategyCapital` is immutable and offers no path by which an
 observed broker equity can overwrite the allocation.
 
-**Proven against the live paper account on 2026-08-24:**
+**Proven against the live paper account (2026-08-25):**
 
 ```
 [BROKER-STATE:scheduled-1] equity_usd=1000000.0 cash_usd=1000000.0 holdings=0 open_orders=0
@@ -243,8 +244,8 @@ one tiny PAPER order -> fill handling -> immediate protection -> reconciliation 
 Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme (**ADR-0004**) must
 be defined **before** any automated order testing.
 
-Outstanding from Phase 1: a market-data bar, which requires a run while SPY is trading
-(~04:00–20:00 ET with extended hours). Everything else is validated.
+Phase 1 is complete: all thirteen acceptance criteria satisfied, including a SPY bar
+received at 05:15 ET pre-market on delayed IBKR data.
 
 ---
 
