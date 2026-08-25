@@ -567,6 +567,49 @@ symbol, never "the first SELL stop".
 **Known limit.** A durable order whose broker id was never recorded has *no* restart identity and
 resolves to foreign — correctly. That is the state of the position open at the time of writing:
 it predates this capture, so the repair cannot retroactively identify it.
+
+### 22. A failed run stays failed, and the next run is a new identity — added 2026-08-25
+
+Certification run 1 failed: the restart-ownership defect (§21) left a live protected paper
+position the automated lifecycle could not recover. A human closes the broker; the system has
+to record that honestly.
+
+**Manual resolution.** An operator-gated action (`RESOLVE PHASE2 MANUAL CLOSE`) records that a
+human closed the position. It runs inside a deployment because it re-verifies the fact against
+a fresh `BrokerView` — same PAPER account, no position, no working order on the symbol from any
+source — and it **never submits, cancels, replaces or modifies a broker order**. It refuses if
+the account is not actually flat, if the phrase is wrong, or if no halt is in force.
+
+The run becomes terminal **`FAILED`** with `MANUAL_BROKER_CLOSE_AFTER_RESTART_IDENTITY_FAILURE`
+— **never `RECONCILED`**. `TradeRecord.resolution` (schema **v6**) distinguishes an automated
+outcome from a manual one, because "the lifecycle closed this" and "a human closed this after
+the lifecycle failed" are different facts and durable state has to be able to say which.
+Everything the run produced survives: the entry fill, the protective order, the broker
+evidence, the failure history, the revisions, the identifiers.
+
+**Run 2 is a new identity, not a retry.** `certification_natural_key(n)` is deterministic — no
+timestamp, no UUID — so a restart of the same run derives the same ids while a different run
+derives genuinely different ones. Run 1 keeps its historical key for the same reason its
+receipts keep their filenames: that is where its evidence is. A new run requires explicit human
+authorisation, is never derived from a failure, and is permitted only when every earlier run is
+terminal and the broker is flat.
+
+**Arm receipts are run-scoped.** A consumed run-1 receipt must never read as "run 2 is
+consumed", and a missing run-2 receipt must not be masked by run 1 existing. Separate filenames
+give both, without deleting evidence.
+
+**The pre-restart checkpoint.** On reaching `PROTECTED`, and before anyone stops LEAN, the
+deployment asserts it could actually survive a restart: long 1, broker protection 1, internal
+protection 1, protective `ACKNOWLEDGED`, exactly one owned protective order, and — the one that
+matters — **the protective broker id is durable**. Run 1 stopped without it, which is precisely
+why it was unrecoverable. On failure the deployment halts rather than becoming restartable, and
+it does **not** cancel the stop. The log says `protective_broker_identity=RECORDED`, never the
+value.
+
+**No rescue adoption.** The round-11 option of adopting the old stop by shape is deliberately
+abandoned. The ownership rule stays: tag, or exact durable broker identity, or foreign.
+Attributes only validate. A rescue path would have been the one place shape could create
+ownership, and one exception is how a rule stops being a rule.
 ---
 
 ## Consequences

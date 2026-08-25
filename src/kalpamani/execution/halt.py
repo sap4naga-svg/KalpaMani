@@ -65,7 +65,7 @@ from kalpamani.common.errors import SafetyViolationError
 from kalpamani.execution.identity import OrderRole
 from kalpamani.execution.lifecycle import TradeState
 from kalpamani.execution.session import BrokerSessionEvidence
-from kalpamani.execution.state_store import DispatchState, TradeRecord
+from kalpamani.execution.state_store import DispatchState, ResolutionKind, TradeRecord
 
 #: Bumped when the persisted shape changes. Unknown versions fail closed.
 HALT_SCHEMA_VERSION = 1
@@ -404,6 +404,17 @@ def assert_halt_clearable(
             "the IBKR order history by hand and resolve the ambiguity FIRST; clearing the halt "
             "would let a deployment act while it still cannot say whether an order is live."
         )
+
+    if record.resolution is ResolutionKind.MANUAL_BROKER_CLOSE:
+        # A human closed the position and the flat state was verified against the
+        # broker before the resolution was recorded. The record still shows the
+        # long the automated run opened -- that is the preserved evidence, not a
+        # live exposure -- so the position checks below no longer apply.
+        caveats.append(
+            "This run was resolved by a MANUAL BROKER CLOSE and stays FAILED. It is not "
+            "reconciled, and clearing this halt does not make it so."
+        )
+        return caveats
 
     long_quantity = record.open_long_quantity
     if long_quantity < 0:

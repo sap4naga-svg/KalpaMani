@@ -69,13 +69,14 @@ from kalpamani.execution.lifecycle import TradeState
 #: v4 bound each record to the brokerage account it was armed against.
 #: v5 made broker-native order ids a durable collection, because the LEAN tag
 #:    does not survive a restart and the broker id does.
-STATE_SCHEMA_VERSION = 5
+#: v6 recorded HOW a trade was resolved -- by the lifecycle, or by a human.
+STATE_SCHEMA_VERSION = 6
 
 #: Versions this code can read. Anything else fails closed. A version listed
 #: here is migrated DELIBERATELY on read (see `_migrate`), never parsed
 #: hopefully -- and the migrated record is written back at the current version
 #: by the next put().
-READABLE_SCHEMA_VERSIONS: frozenset[int] = frozenset({4, STATE_SCHEMA_VERSION})
+READABLE_SCHEMA_VERSIONS: frozenset[int] = frozenset({4, 5, STATE_SCHEMA_VERSION})
 
 
 class StateStoreError(SafetyViolationError):
@@ -103,6 +104,23 @@ class StaleWriteError(StateStoreError):
     the stale copy was taken. Refusing loudly turns a silent rollback into a
     visible failure.
     """
+
+
+class ResolutionKind(StrEnum):
+    """How a trade reached its terminal state.
+
+    A failed certification and a failed certification a human then cleaned up by
+    hand are different facts, and durable state has to be able to say which.
+    Collapsing them would let a record whose broker position was closed manually
+    read exactly like one the lifecycle closed itself.
+    """
+
+    #: The lifecycle resolved it, or has not resolved it yet. The default.
+    AUTOMATED = "AUTOMATED"
+    #: A human closed the broker position and the open orders by hand, and the
+    #: flat state was verified against the broker before this was recorded.
+    #: The trade stays FAILED: it is NOT reconciled, and never becomes so.
+    MANUAL_BROKER_CLOSE = "MANUAL_BROKER_CLOSE"
 
 
 class DispatchState(StrEnum):
@@ -240,6 +258,11 @@ class TradeRecord:
     #: restart -- that is what stops recovery from re-arming.
     arm_consumed: bool = False
     failure_reason: str | None = None
+    #: How this trade was resolved. Terminal FAILED plus MANUAL_BROKER_CLOSE says
+    #: the automated lifecycle failed AND a human closed the broker afterwards --
+    #: which is the truth, and is not the same thing as RECONCILED.
+    resolution: ResolutionKind = ResolutionKind.AUTOMATED
+    resolution_reason: str | None = None
     #: Fingerprint of the brokerage account this trade was ARMED against.
     #:
     #: The trade is bound to an account, not merely to a mode. Without this, a
@@ -322,6 +345,7 @@ class TradeRecord:
             f"protected={self.protected_quantity} entries={self.entry_count} "
             f"long={self.open_long_quantity} arm_consumed={self.arm_consumed} "
             f"account_binding={'present' if self.account_fingerprint else 'ABSENT'} "
+            f"resolution={self.resolution.value} "
             f"dispatch=[{dispatches}]"
         )
 
@@ -356,6 +380,7 @@ class TradeStateStore(Protocol):
 def _serialise(record: TradeRecord) -> dict[str, Any]:
     payload = asdict(record)
     payload["state"] = record.state.value
+    payload["resolution"] = record.resolution.value
     payload["orders"] = {
         cid: {
             **asdict(order),
@@ -379,6 +404,11 @@ def _migrate(version: int, payload: dict[str, Any]) -> dict[str, Any]:
     """
     if version >= STATE_SCHEMA_VERSION:
         return payload
+    payload = {
+        **payload,
+        "resolution": payload.get("resolution", ResolutionKind.AUTOMATED.value),
+        "resolution_reason": payload.get("resolution_reason"),
+    }
     orders = {}
     for cid, raw in payload.get("orders", {}).items():
         upgraded = dict(raw)
@@ -420,6 +450,8 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
             arm_consumed=bool(payload.get("arm_consumed", False)),
             failure_reason=payload.get("failure_reason"),
             account_fingerprint=payload.get("account_fingerprint"),
+            resolution=ResolutionKind(payload.get("resolution", ResolutionKind.AUTOMATED.value)),
+            resolution_reason=payload.get("resolution_reason"),
             revision=int(payload.get("revision", 0)),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -858,6 +890,7 @@ __all__ = [
     "TERMINAL_DISPATCH",
     "DispatchState",
     "JsonTradeStateStore",
+    "ResolutionKind",
     "StaleWriteError",
     "StateCorruptError",
     "StateMissingError",

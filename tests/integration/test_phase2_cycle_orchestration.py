@@ -26,14 +26,20 @@ from kalpamani.common.settings import Settings
 from kalpamani.execution.coordinator import Phase2Coordinator
 from kalpamani.execution.cycle import EventStatus, OrderEventFacts, Phase2Cycle
 from kalpamani.execution.envelope import (
+    MANUAL_CLOSE_REASON,
     PHASE2_CONFIRMATION_PHRASE,
     PHASE2_INTENT_NATURAL_KEY,
+    PHASE2_MANUAL_RESOLUTION_PHRASE,
     PHASE2_SYMBOL,
+    ExecutionArmError,
+    certification_identity,
+    check_no_prior_test_trade,
 )
 from kalpamani.execution.halt import (
     HaltClearanceError,
     HaltKind,
     JsonHaltStore,
+    OperationalHalt,
     assert_halt_clearable,
     halt_state_path,
 )
@@ -46,7 +52,12 @@ from kalpamani.execution.reconciliation import (
     OwnershipBasis,
 )
 from kalpamani.execution.session import BrokerSessionEvidence, account_fingerprint
-from kalpamani.execution.state_store import DispatchState, JsonTradeStateStore, TradeRecord
+from kalpamani.execution.state_store import (
+    DispatchState,
+    JsonTradeStateStore,
+    ResolutionKind,
+    TradeRecord,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -1111,3 +1122,247 @@ def test_a_foreign_identical_stop_is_never_cancelled(tmp_path: Path) -> None:
     exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
     exiting.on_cycle()
     assert "77" not in port.cancelled_lean_ids, "a stranger order must never be cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Round 12 -- a failed run is closed out by hand, and STAYS failed
+# ---------------------------------------------------------------------------
+
+
+def make_resolution_cycle(
+    tmp_path: Path, port: FakePort, *, confirmation: str
+) -> tuple[Phase2Cycle, Phase2Coordinator, JsonTradeStateStore]:
+    storage = tmp_path / "storage"
+    project = tmp_path / "project"
+    storage.mkdir(exist_ok=True)
+    project.mkdir(exist_ok=True)
+    store = JsonTradeStateStore(storage / "phase2_trade_state.json")
+    coordinator = Phase2Coordinator(
+        store,
+        certification_identity(1),
+        storage_root=storage,
+        project_root=project,
+        session_provider=lambda: evidence(),
+    )
+    cycle = Phase2Cycle(
+        coordinator,
+        port,
+        JsonHaltStore(halt_state_path(storage)),
+        settings=Settings(environment=Environment.PAPER),
+        manual_resolution_requested=True,
+        resolution_confirmation=confirmation,
+    )
+    cycle.start()
+    return cycle, coordinator, store
+
+
+def failed_run_with_open_position(
+    tmp_path: Path, port: FakePort
+) -> tuple[Phase2Coordinator, JsonTradeStateStore]:
+    """Run 1 as it actually ended: PROTECTED, halted, position still at the broker."""
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
+    cycle.on_cycle()
+    JsonHaltStore(halt_state_path(tmp_path / "storage")).put(
+        OperationalHalt("restart identity failure", HaltKind.MANUAL_CLEARANCE_REQUIRED)
+    )
+    return coordinator, store
+
+
+def test_manual_resolution_is_REFUSED_while_the_broker_is_not_flat(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    """The whole point of the gate. Recording a close that has not happened
+    would turn durable state into a comfortable fiction."""
+    port = FakePort()
+    coordinator, store = failed_run_with_open_position(tmp_path, port)
+    before = store.require(coordinator.identity.trade_intent_id)
+    assert port.position == 1
+    sent_before = len(port.submitted)
+
+    cycle, _, _ = make_resolution_cycle(
+        tmp_path, port, confirmation=PHASE2_MANUAL_RESOLUTION_PHRASE
+    )
+    cycle.on_cycle()
+
+    assert store.require(coordinator.identity.trade_intent_id) == before, "state untouched"
+    assert port.said("REFUSED")
+    assert port.said("NOT flat")
+    assert len(port.submitted) == sent_before, "the resolution action sends nothing"
+    assert port.cancelled_lean_ids == []
+
+
+def test_manual_resolution_is_REFUSED_without_the_exact_phrase(tmp_path: Path) -> None:  # noqa: N802
+    port = FakePort()
+    coordinator, store = failed_run_with_open_position(tmp_path, port)
+    port.fill(coordinator.identity.protective_order_id, 1)  # a human closes it
+    before = store.require(coordinator.identity.trade_intent_id)
+
+    cycle, _, _ = make_resolution_cycle(tmp_path, port, confirmation="resolve phase2")
+    cycle.on_cycle()
+
+    assert store.require(coordinator.identity.trade_intent_id) == before
+    assert port.said("confirmation phrase does not match")
+
+
+def test_manual_resolution_records_FAILED_and_never_RECONCILED(tmp_path: Path) -> None:  # noqa: N802
+    """A human closed the position. The automated lifecycle did not."""
+    port = FakePort()
+    coordinator, store = failed_run_with_open_position(tmp_path, port)
+    identity = coordinator.identity
+    before = store.require(identity.trade_intent_id)
+
+    # The operator flattens the account by hand, outside KalpaMani.
+    port.fill(identity.protective_order_id, 1)
+    assert port.position == 0 and port.open_ids == set()
+    sent_before = len(port.submitted)
+
+    cycle, _, _ = make_resolution_cycle(
+        tmp_path, port, confirmation=PHASE2_MANUAL_RESOLUTION_PHRASE
+    )
+    cycle.on_cycle()
+
+    after = store.require(identity.trade_intent_id)
+    # FAILED, and deliberately NOT reconciled: the automated lifecycle did not
+    # close this position, and the durable record must not claim it did.
+    assert after.state is TradeState.FAILED
+    assert after.state.value != TradeState.RECONCILED.value
+    assert after.resolution is ResolutionKind.MANUAL_BROKER_CLOSE
+    assert after.resolution_reason == MANUAL_CLOSE_REASON
+    assert len(port.submitted) == sent_before, "the resolution action sends nothing"
+    assert port.cancelled_lean_ids == []
+
+    # Every scrap of Run-1 evidence survives.
+    assert after.trade_intent_id == before.trade_intent_id
+    assert after.execution_id == before.execution_id
+    assert after.orders.keys() == before.orders.keys()
+    assert after.orders[identity.entry_order_id].filled_quantity == 1
+    assert after.orders[identity.protective_order_id].stop_price is not None
+    assert after.open_long_quantity == 1, "the long the automated run opened is preserved"
+    assert after.arm_consumed is True
+    assert after.revision > before.revision
+
+
+def test_a_manually_resolved_run_can_have_its_halt_cleared(tmp_path: Path) -> None:
+    """It is not an unprotected position any more -- a human closed it, and the
+    flat state was verified before the resolution was recorded."""
+    port = FakePort()
+    coordinator, store = failed_run_with_open_position(tmp_path, port)
+    identity = coordinator.identity
+    port.fill(identity.protective_order_id, 1)
+    cycle, _, _ = make_resolution_cycle(
+        tmp_path, port, confirmation=PHASE2_MANUAL_RESOLUTION_PHRASE
+    )
+    cycle.on_cycle()
+
+    resolved = store.require(identity.trade_intent_id)
+    caveats = assert_halt_clearable(resolved, evidence())
+    assert any("stays FAILED" in c for c in caveats)
+
+
+def test_a_failed_run_blocks_a_NEW_run_until_it_is_terminal(tmp_path: Path) -> None:  # noqa: N802
+    """Run 2 is a deliberate authorisation, not an automatic retry -- and it
+    cannot start on top of an unresolved earlier run."""
+    port = FakePort()
+    coordinator, store = failed_run_with_open_position(tmp_path, port)
+    assert store.require(coordinator.identity.trade_intent_id).state is TradeState.PROTECTED
+
+    with pytest.raises(ExecutionArmError, match="Unresolved prior trade"):
+        check_no_prior_test_trade(store, certification_identity(2).trade_intent_id)
+
+    port.fill(coordinator.identity.protective_order_id, 1)
+    cycle, _, _ = make_resolution_cycle(
+        tmp_path, port, confirmation=PHASE2_MANUAL_RESOLUTION_PHRASE
+    )
+    cycle.on_cycle()
+
+    # Terminal now, so a new run is permitted to be authorised.
+    check_no_prior_test_trade(store, certification_identity(2).trade_intent_id)
+
+
+# ---------------------------------------------------------------------------
+# Round 12 -- the pre-restart identity checkpoint
+# ---------------------------------------------------------------------------
+
+
+def test_reaching_PROTECTED_reports_the_restart_checkpoint(tmp_path: Path) -> None:  # noqa: N802
+    port = FakePort()
+    cycle, coordinator, _ = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
+    cycle.on_cycle()
+
+    assert port.said("protective_broker_identity=RECORDED")
+    assert port.said("restart is survivable")
+    assert not cycle.halted
+
+
+def test_PROTECTED_without_a_durable_broker_identity_halts_before_any_restart(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    """Exactly what stranded Run 1: ACKNOWLEDGED, but no identity written down.
+
+    The deployment must refuse to become restartable rather than create another
+    position nobody can recover -- and it must not cancel the stop to do so.
+    """
+    port = FakePort()
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+    cycle.on_order_event(fill_event(port, identity.entry_order_id, +1))
+
+    # Model the Run-1 world: the broker exposes no id to capture.
+    port.orders[identity.protective_order_id] = replace(
+        port.orders[identity.protective_order_id], broker_order_ids=()
+    )
+    cycle.on_cycle()
+
+    assert cycle.halted
+    assert cycle.halt is not None and cycle.halt.manual_clear_required
+    assert port.said("NOT restart-safe")
+    assert port.said("durable protective broker identity ABSENT")
+    assert port.cancelled_lean_ids == [], "the stop is left untouched"
+    assert store.require(identity.trade_intent_id).open_long_quantity == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 12 -- the controlled exit, driven entirely through a tagless order
+# ---------------------------------------------------------------------------
+
+
+def test_the_controlled_exit_works_end_to_end_after_a_restart(tmp_path: Path) -> None:
+    """The lifecycle Run 1 could not finish, completed on a re-hydrated order."""
+    port = FakePort()
+    _resumed, coordinator, store = protected_then_restarted(tmp_path, port)
+    identity = coordinator.identity
+    rehydrated_lean_id = port.orders[identity.protective_order_id].lean_order_id
+    assert port.orders[identity.protective_order_id].tag == ""
+
+    exiting, _, _ = make_cycle(tmp_path, port, exit_requested=True)
+    exiting.on_cycle()
+    assert port.cancelled_lean_ids == [rehydrated_lean_id], "resolved from the broker id"
+
+    port.confirm_cancel(identity.protective_order_id)
+    exiting.on_order_event(status_event(port, identity.protective_order_id, EventStatus.CANCELED))
+    assert store.require(identity.trade_intent_id).protected_quantity == 0
+    assert not exiting.halted, "a REQUESTED cancellation is expected"
+
+    exiting.on_cycle()
+    assert port.count(OrderRole.EXIT) == 1
+
+    port.fill(identity.exit_order_id, 1)
+    exiting.on_order_event(fill_event(port, identity.exit_order_id, -1, fill_id="9-1"))
+    exiting.on_cycle()
+
+    final = store.require(identity.trade_intent_id)
+    assert final.state is TradeState.RECONCILED
+    assert final.open_long_quantity == 0
+    assert port.position == 0, "flat, and never short"
+    assert port.count(OrderRole.ENTRY) == 1
+    assert not exiting.halted

@@ -48,11 +48,14 @@ from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
     PHASE2_INTENT_NATURAL_KEY,
     PHASE2_MAX_REFERENCE_NOTIONAL_USD,
+    PHASE2_RUN_1_NATURAL_KEY,
     ExecutionArmError,
     ExecutionArmRequest,
     Phase2EnvelopeError,
     assert_arm_not_reusable,
     authorize_trade_intent,
+    certification_identity,
+    certification_natural_key,
     protective_stop_price,
 )
 from kalpamani.execution.halt import (
@@ -102,13 +105,17 @@ from kalpamani.execution.session import (
     BrokerSessionEvidence,
     SessionVerificationError,
     account_fingerprint,
+    arm_receipt_paths,
+    assert_arm_available,
     assert_arm_matches_record,
+    read_arm_receipts,
     verify_paper_session,
     write_arm_receipt,
 )
 from kalpamani.execution.state_store import (
     STATE_SCHEMA_VERSION,
     JsonTradeStateStore,
+    ResolutionKind,
     StateCorruptError,
     StateMissingError,
     StateStoreError,
@@ -222,7 +229,9 @@ def filled_record(identity: TradeIdentity, filled: int = 1) -> TradeRecord:
 def test_live_account_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
     with pytest.raises(SessionVerificationError):
         authorize_trade_intent(
-            arm_request(session_evidence=evidence(LIVE_ACCOUNT_ID, "live")), store
+            arm_request(session_evidence=evidence(LIVE_ACCOUNT_ID, "live")),
+            store,
+            identity=certification_identity(1),
         )
 
 
@@ -232,19 +241,27 @@ def test_live_trading_mode_cannot_arm_even_with_paper_looking_id(
     """A paper-looking id does not override LEAN's own trading-mode evidence."""
     with pytest.raises(SessionVerificationError):
         authorize_trade_intent(
-            arm_request(session_evidence=evidence(PAPER_ACCOUNT_ID, "live")), store
+            arm_request(session_evidence=evidence(PAPER_ACCOUNT_ID, "live")),
+            store,
+            identity=certification_identity(1),
         )
 
 
 def test_live_environment_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(settings=Settings(environment=Environment.LIVE)), store)
+        authorize_trade_intent(
+            arm_request(settings=Settings(environment=Environment.LIVE)),
+            store,
+            identity=certification_identity(1),
+        )
 
 
 def test_research_environment_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
     with pytest.raises(ExecutionArmError):
         authorize_trade_intent(
-            arm_request(settings=Settings(environment=Environment.RESEARCH)), store
+            arm_request(settings=Settings(environment=Environment.RESEARCH)),
+            store,
+            identity=certification_identity(1),
         )
 
 
@@ -256,7 +273,11 @@ def test_research_environment_cannot_arm_phase2(store: JsonTradeStateStore) -> N
 def test_unknown_account_mode_cannot_arm_phase2(store: JsonTradeStateStore) -> None:
     """Ambiguity is an abort condition, never an assumption of safety."""
     with pytest.raises(SessionVerificationError):
-        authorize_trade_intent(arm_request(session_evidence=evidence("XX999", "paper")), store)
+        authorize_trade_intent(
+            arm_request(session_evidence=evidence("XX999", "paper")),
+            store,
+            identity=certification_identity(1),
+        )
 
 
 def test_armed_account_must_match_deployed_account() -> None:
@@ -281,16 +302,22 @@ def test_fingerprint_never_reveals_the_account_id() -> None:
 
 def test_arm_requires_test_mode_and_explicit_flag(store: JsonTradeStateStore) -> None:
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(phase2_test_mode=False), store)
+        authorize_trade_intent(
+            arm_request(phase2_test_mode=False), store, identity=certification_identity(1)
+        )
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(explicit_execution_arm=False), store)
+        authorize_trade_intent(
+            arm_request(explicit_execution_arm=False), store, identity=certification_identity(1)
+        )
 
 
 def test_arm_requires_exact_confirmation_phrase(store: JsonTradeStateStore) -> None:
     """A boolean can be set by a stray env var; a phrase cannot be typed by accident."""
     for wrong in ("", "yes", "arm phase2 paper buy 1 spy", PHASE2_CONFIRMATION_PHRASE + "!"):
         with pytest.raises(ExecutionArmError):
-            authorize_trade_intent(arm_request(confirmation=wrong), store)
+            authorize_trade_intent(
+                arm_request(confirmation=wrong), store, identity=certification_identity(1)
+            )
 
 
 # --------------------------------------------------------------------------
@@ -301,26 +328,34 @@ def test_arm_requires_exact_confirmation_phrase(store: JsonTradeStateStore) -> N
 @pytest.mark.parametrize("symbol", ["QQQ", "AAPL", "SPXL", "spy", "SPY "])
 def test_non_spy_symbol_rejected(store: JsonTradeStateStore, symbol: str) -> None:
     with pytest.raises(Phase2EnvelopeError):
-        authorize_trade_intent(arm_request(symbol=symbol), store)
+        authorize_trade_intent(
+            arm_request(symbol=symbol), store, identity=certification_identity(1)
+        )
 
 
 @pytest.mark.parametrize("quantity", [0, 2, 10, 100, -1])
 def test_quantity_other_than_one_rejected(store: JsonTradeStateStore, quantity: int) -> None:
     with pytest.raises(Phase2EnvelopeError):
-        authorize_trade_intent(arm_request(quantity=quantity), store)
+        authorize_trade_intent(
+            arm_request(quantity=quantity), store, identity=certification_identity(1)
+        )
 
 
 def test_notional_above_ceiling_rejected(store: JsonTradeStateStore) -> None:
     """If SPY trades above the ceiling we abort; we do not size down, because 1 is minimum."""
     with pytest.raises(Phase2EnvelopeError):
         authorize_trade_intent(
-            arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD + Decimal("0.01")), store
+            arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD + Decimal("0.01")),
+            store,
+            identity=certification_identity(1),
         )
 
 
 def test_notional_at_ceiling_allowed(store: JsonTradeStateStore) -> None:
     identity, record = authorize_trade_intent(
-        arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD), store
+        arm_request(reference_price=PHASE2_MAX_REFERENCE_NOTIONAL_USD),
+        store,
+        identity=certification_identity(1),
     )
     assert record.state is TradeState.AUTHORIZED
     assert identity.trade_intent_id
@@ -328,7 +363,9 @@ def test_notional_at_ceiling_allowed(store: JsonTradeStateStore) -> None:
 
 def test_non_positive_price_rejected(store: JsonTradeStateStore) -> None:
     with pytest.raises(Phase2EnvelopeError):
-        authorize_trade_intent(arm_request(reference_price=Decimal("0")), store)
+        authorize_trade_intent(
+            arm_request(reference_price=Decimal("0")), store, identity=certification_identity(1)
+        )
 
 
 # --------------------------------------------------------------------------
@@ -337,10 +374,10 @@ def test_non_positive_price_rejected(store: JsonTradeStateStore) -> None:
 
 
 def test_second_trade_intent_rejected(store: JsonTradeStateStore) -> None:
-    _, record = authorize_trade_intent(arm_request(), store)
+    _, record = authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
     store.put(record)
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(), store)
+        authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
 
 
 def test_unresolved_prior_trade_blocks_arming(
@@ -358,7 +395,7 @@ def test_unresolved_prior_trade_blocks_arming(
     )
     store.put(stale)
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(), store)
+        authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
 
 
 def test_second_entry_order_id_cannot_even_be_derived(identity: TradeIdentity) -> None:
@@ -441,11 +478,11 @@ def test_restart_recovers_record_and_cannot_resubmit_entry(
 
 
 def test_restart_cannot_rearm(store: JsonTradeStateStore) -> None:
-    _, record = authorize_trade_intent(arm_request(), store)
+    _, record = authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
     store.put(record)
     assert record.arm_consumed is True
     with pytest.raises(ExecutionArmError):
-        authorize_trade_intent(arm_request(), store)
+        authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
 
 
 def test_record_without_consumed_arm_fails_closed(identity: TradeIdentity) -> None:
@@ -682,7 +719,9 @@ def test_flat_state_accepted(identity: TradeIdentity) -> None:
 
 
 def test_strategy_capital_remains_80000(store: JsonTradeStateStore) -> None:
-    identity, record = authorize_trade_intent(arm_request(), store)
+    identity, record = authorize_trade_intent(
+        arm_request(), store, identity=certification_identity(1)
+    )
     assert StrategyCapital().allocated_usd == Decimal("80000")
     assert DEFAULT_STRATEGY_CAPITAL_USD == Decimal("80000")
     assert record.requested_quantity == 1
@@ -691,7 +730,7 @@ def test_strategy_capital_remains_80000(store: JsonTradeStateStore) -> None:
 
 def test_broker_million_cannot_control_sizing(store: JsonTradeStateStore) -> None:
     """The paper account reports 1,000,000. Phase 2 still buys exactly 1 share."""
-    _, record = authorize_trade_intent(arm_request(), store)
+    _, record = authorize_trade_intent(arm_request(), store, identity=certification_identity(1))
     assert record.requested_quantity == 1
 
     observed = StrategyCapital().observe_broker_equity(IBKR_PAPER_SIMULATED_EQUITY_USD)
@@ -701,7 +740,10 @@ def test_broker_million_cannot_control_sizing(store: JsonTradeStateStore) -> Non
 def test_capital_mismatch_refuses_to_arm(store: JsonTradeStateStore) -> None:
     with pytest.raises(ExecutionArmError):
         authorize_trade_intent(
-            arm_request(), store, capital=StrategyCapital(allocated_usd=Decimal("1000000"))
+            arm_request(),
+            store,
+            identity=certification_identity(1),
+            capital=StrategyCapital(allocated_usd=Decimal("1000000")),
         )
 
 
@@ -1803,3 +1845,118 @@ def test_a_v4_record_migrates_to_an_EMPTY_broker_identity(tmp_path: Path) -> Non
     assert order.broker_order_ids == ()
     assert order.has_broker_identity is False
     assert record.state is TradeState.PROTECTED
+
+
+# --------------------------------------------------------------------------
+# Round 12 -- certification runs have distinct deterministic identities
+# --------------------------------------------------------------------------
+
+
+def test_run_1_keeps_its_historical_natural_key() -> None:
+    """Run 1 is the durable evidence of a failed certification. Rewriting its
+    key would orphan the record we are required to preserve."""
+    assert certification_natural_key(1) == PHASE2_RUN_1_NATURAL_KEY
+    assert certification_natural_key(1) == "phase2-certification/SPY/long/1"
+
+
+def test_a_later_run_gets_a_genuinely_different_identity() -> None:
+    one, two, three = (certification_identity(n) for n in (1, 2, 3))
+    ids = {one.trade_intent_id, two.trade_intent_id, three.trade_intent_id}
+    assert len(ids) == 3
+    assert one.execution_id != two.execution_id
+    assert one.entry_order_id != two.entry_order_id
+    assert one.protective_order_id != two.protective_order_id
+    assert certification_natural_key(2) == "phase2-certification/SPY/long/1/run-2"
+
+
+def test_run_identity_is_deterministic_not_timestamped() -> None:
+    assert certification_identity(2).trade_intent_id == certification_identity(2).trade_intent_id
+
+
+@pytest.mark.parametrize("run_number", [0, -1])
+def test_a_run_number_must_be_a_deliberate_positive_choice(run_number: int) -> None:
+    with pytest.raises(Phase2EnvelopeError, match="run number"):
+        certification_natural_key(run_number)
+
+
+# --------------------------------------------------------------------------
+# Round 12 -- arm receipts belong to one run
+# --------------------------------------------------------------------------
+
+
+def test_receipt_paths_are_run_scoped_and_run_1_keeps_its_filenames(tmp_path: Path) -> None:
+    storage, project = tmp_path / "s", tmp_path / "p"
+    run_one = arm_receipt_paths(
+        storage, project, certification_identity(1).trade_intent_id, legacy=True
+    )
+    run_two = arm_receipt_paths(storage, project, certification_identity(2).trade_intent_id)
+    assert [p.name for p in run_one] == ["phase2_arm_receipt.json", ".phase2_arm_receipt.json"]
+    assert set(run_one).isdisjoint(set(run_two)), "the two runs cannot collide"
+    assert all(certification_identity(2).trade_intent_id in p.name for p in run_two)
+
+
+def test_a_consumed_run_1_receipt_never_makes_run_2_look_armed(tmp_path: Path) -> None:
+    """A consumed receipt from a failed run is evidence, not this run's arm."""
+    storage, project = tmp_path / "s", tmp_path / "p"
+    run_one = arm_receipt_paths(
+        storage, project, certification_identity(1).trade_intent_id, legacy=True
+    )
+    write_arm_receipt(
+        ArmReceipt(
+            trade_intent_id=certification_identity(1).trade_intent_id,
+            account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+            consumed=True,
+        ),
+        run_one,
+    )
+    run_two = arm_receipt_paths(storage, project, certification_identity(2).trade_intent_id)
+
+    # Run 2 sees no receipt at all, so a missing one is NOT masked by run 1...
+    assert read_arm_receipts(run_two) == []
+    # ...and run 1 being consumed does not fail run 2 closed on a lost-state check.
+    assert_arm_available(run_two, trade_state_present=False)
+    # Run 1 evidence is untouched and still says consumed.
+    assert read_arm_receipts(run_one)[0].consumed is True
+
+
+# --------------------------------------------------------------------------
+# Round 12 -- how a run was resolved is durable
+# --------------------------------------------------------------------------
+
+
+def test_resolution_defaults_to_automated(identity: TradeIdentity) -> None:
+    record = filled_record(identity)
+    assert record.resolution is ResolutionKind.AUTOMATED
+    assert "resolution=AUTOMATED" in record.describe()
+
+
+def test_a_v5_record_migrates_to_automated_resolution(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "trades": {
+                    "ti-x": {
+                        "trade_intent_id": "ti-x",
+                        "execution_id": "ex-x",
+                        "natural_key": "k",
+                        "attempt": 1,
+                        "symbol": "SPY",
+                        "state": "FAILED",
+                        "requested_quantity": 1,
+                        "filled_quantity": 1,
+                        "protected_quantity": 0,
+                        "arm_consumed": True,
+                        "account_fingerprint": account_fingerprint(PAPER_ACCOUNT_ID),
+                        "revision": 3,
+                        "orders": {},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = JsonTradeStateStore(path).require("ti-x")
+    assert record.resolution is ResolutionKind.AUTOMATED
+    assert record.resolution_reason is None

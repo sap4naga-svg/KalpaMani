@@ -63,9 +63,21 @@ PHASE2_MAX_REFERENCE_NOTIONAL_USD = PHASE2_FILL_NOTIONAL_TOLERANCE_USD * (
 PHASE2_MAX_TRADE_INTENTS = 1
 PHASE2_MAX_ENTRY_ORDERS = 1
 
-#: Stable natural key for the single Phase 2 certification intent. Deterministic
-#: input to identity derivation, so every restart derives the same ids.
-PHASE2_INTENT_NATURAL_KEY = "phase2-certification/SPY/long/1"
+#: Natural key of certification RUN 1. Historical: it predates run scoping, and
+#: it is NOT rewritten -- run 1 is the durable evidence of a failed certification
+#: and changing its key would orphan the record we are required to preserve.
+PHASE2_RUN_1_NATURAL_KEY = "phase2-certification/SPY/long/1"
+
+#: Kept as the run-1 alias so existing callers and evidence keep resolving.
+PHASE2_INTENT_NATURAL_KEY = PHASE2_RUN_1_NATURAL_KEY
+
+#: The operator phrase that records a manual broker close. Distinct from the arm
+#: phrase on purpose: acknowledging a cleanup and authorising an order are not
+#: the same act and must not share a confirmation.
+PHASE2_MANUAL_RESOLUTION_PHRASE = "RESOLVE PHASE2 MANUAL CLOSE"
+
+#: Why a run was resolved by hand. Deliberately not "reconciled".
+MANUAL_CLOSE_REASON = "MANUAL_BROKER_CLOSE_AFTER_RESTART_IDENTITY_FAILURE"
 
 #: Deliberately wide TEST stop distance, expressed as a fraction below fill price.
 #:
@@ -113,6 +125,32 @@ class ExecutionArmRequest:
 #: The operator must type this exactly. A boolean flag can be set by a stray
 #: environment variable; a specific phrase cannot be arrived at by accident.
 PHASE2_CONFIRMATION_PHRASE = "ARM PHASE2 PAPER BUY 1 SPY"
+
+
+def certification_natural_key(run_number: int) -> str:
+    """The deterministic natural key for one certification run.
+
+    Deterministic on purpose -- no timestamp, no UUID -- so every restart of the
+    same run derives the same identifiers, while a *different* run derives
+    genuinely different ones. A failed run keeps its identity forever; the next
+    attempt does not inherit it.
+
+    Raises:
+        Phase2EnvelopeError: if ``run_number`` is not a positive integer.
+    """
+    if run_number < 1:
+        raise Phase2EnvelopeError(
+            f"Certification run number must be >= 1, got {run_number}. A run number is a "
+            "deliberate human choice, not something to default into."
+        )
+    if run_number == 1:
+        return PHASE2_RUN_1_NATURAL_KEY
+    return f"{PHASE2_RUN_1_NATURAL_KEY}/run-{run_number}"
+
+
+def certification_identity(run_number: int) -> TradeIdentity:
+    """Derive the full identity for a certification run."""
+    return TradeIdentity.derive(certification_natural_key(run_number), attempt=1)
 
 
 def check_envelope(request: ExecutionArmRequest) -> None:
@@ -211,6 +249,7 @@ def authorize_trade_intent(
     request: ExecutionArmRequest,
     store: TradeStateStore,
     *,
+    identity: TradeIdentity,
     capital: StrategyCapital | None = None,
 ) -> tuple[TradeIdentity, TradeRecord]:
     """Run every gate and, if all pass, create the single authorised trade intent.
@@ -230,7 +269,6 @@ def authorize_trade_intent(
     check_authorization(request)
     check_envelope(request)
 
-    identity = TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1)
     check_no_prior_test_trade(store, identity.trade_intent_id)
 
     allocated = (capital or StrategyCapital()).allocated_usd
@@ -311,14 +349,17 @@ def describe_envelope() -> str:
 
 
 __all__ = [
+    "MANUAL_CLOSE_REASON",
     "PHASE2_CONFIRMATION_PHRASE",
     "PHASE2_FILL_NOTIONAL_TOLERANCE_USD",
     "PHASE2_INTENT_NATURAL_KEY",
+    "PHASE2_MANUAL_RESOLUTION_PHRASE",
     "PHASE2_MAX_ENTRY_ORDERS",
     "PHASE2_MAX_REFERENCE_NOTIONAL_USD",
     "PHASE2_MAX_TRADE_INTENTS",
     "PHASE2_NOTIONAL_SAFETY_BUFFER",
     "PHASE2_QUANTITY",
+    "PHASE2_RUN_1_NATURAL_KEY",
     "PHASE2_SIDE",
     "PHASE2_SYMBOL",
     "PHASE2_TEST_STOP_FRACTION",
@@ -327,6 +368,8 @@ __all__ = [
     "Phase2EnvelopeError",
     "assert_arm_not_reusable",
     "authorize_trade_intent",
+    "certification_identity",
+    "certification_natural_key",
     "check_authorization",
     "check_envelope",
     "check_no_prior_test_trade",

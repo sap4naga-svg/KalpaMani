@@ -67,6 +67,7 @@ from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD, StrategyCapit
 from kalpamani.common.settings import Settings
 from kalpamani.execution.coordinator import PendingOrder, Phase2Coordinator
 from kalpamani.execution.envelope import (
+    PHASE2_MANUAL_RESOLUTION_PHRASE,
     PHASE2_QUANTITY,
     PHASE2_SYMBOL,
     ExecutionArmRequest,
@@ -78,6 +79,7 @@ from kalpamani.execution.halt import (
     OperationalHalt,
     classify_halt,
 )
+from kalpamani.execution.identity import OrderRole
 from kalpamani.execution.lifecycle import TradeState
 from kalpamani.execution.reconciliation import (
     BrokerOrderView,
@@ -88,6 +90,7 @@ from kalpamani.execution.reconciliation import (
 )
 from kalpamani.execution.session import SessionVerificationError, verify_paper_session
 from kalpamani.execution.state_store import (
+    DispatchState,
     StateStoreError,
     TradeRecord,
     absolute_fill_quantity,
@@ -201,6 +204,8 @@ class Phase2Cycle:
         exit_requested: bool = False,
         armed_fingerprint: str = "",
         capital: StrategyCapital | None = None,
+        manual_resolution_requested: bool = False,
+        resolution_confirmation: str = "",
     ) -> None:
         self._coordinator = coordinator
         self._port = port
@@ -212,6 +217,9 @@ class Phase2Cycle:
         self._exit_requested = exit_requested
         self._armed_fingerprint = armed_fingerprint
         self._capital = capital or StrategyCapital()
+        self._manual_resolution_requested = manual_resolution_requested
+        self._resolution_confirmation = resolution_confirmation
+        self._resolution_attempted = False
 
         #: A durable halt is read at construction, so a restart does NOT resume.
         self._halt: OperationalHalt | None = halt_store.get()
@@ -222,6 +230,7 @@ class Phase2Cycle:
         #: Reported on the failure path; see ExecutionRisk.
         self._broker_state_established = True
         self._diagnosed = False
+        self._restart_checkpoint_passed = False
 
     # -- Status ------------------------------------------------------------
 
@@ -254,6 +263,11 @@ class Phase2Cycle:
 
     def on_cycle(self) -> None:
         """Reconcile first, always. Only then consider acting."""
+        if self._manual_resolution_requested:
+            # A repair action, so it runs DESPITE the halt -- the halt is exactly
+            # what it exists to resolve. It never touches the broker.
+            self._attempt_manual_resolution()
+            return
         if self.halted:
             self._diagnose_identity_once()
             return
@@ -328,6 +342,55 @@ class Phase2Cycle:
             self._progress(record, broker)
         except Exception as exc:
             self._raise_halt(f"{type(exc).__name__}: {exc}", error=exc)
+
+    def _attempt_manual_resolution(self) -> None:
+        """Record a human broker close against a failed run. Once, then stop.
+
+        Writes down a fact a human established, after re-verifying it here. It
+        submits nothing, cancels nothing and modifies nothing at the broker.
+        """
+        if self._resolution_attempted:
+            return
+        self._resolution_attempted = True
+        try:
+            if self._resolution_confirmation != PHASE2_MANUAL_RESOLUTION_PHRASE:
+                self._port.error(
+                    "[MANUAL-RESOLVE] REFUSED: the confirmation phrase does not match. "
+                    "Acknowledging a manual cleanup is a deliberate act."
+                )
+                return
+            if not self.halted:
+                self._port.error(
+                    "[MANUAL-RESOLVE] REFUSED: no operational halt is in force. This action "
+                    "exists to close out a FAILED run, not a healthy one."
+                )
+                return
+
+            record = self._coordinator.load()
+            if record is None:
+                self._port.error(
+                    "[MANUAL-RESOLVE] REFUSED: there is no durable trade record to resolve."
+                )
+                return
+
+            broker = self._resolved_view(record)
+            self._port.log(
+                f"[MANUAL-RESOLVE] broker check: {PHASE2_SYMBOL} position="
+                f"{broker.position_quantity(PHASE2_SYMBOL)} "
+                f"open_orders_any_source={broker.open_order_count_for_symbol(PHASE2_SYMBOL)}"
+            )
+            resolved = self._coordinator.resolve_manually(record, broker)
+            self._port.log(f"[MANUAL-RESOLVE] recorded: {resolved.describe()}")
+            self._port.log(
+                "[MANUAL-RESOLVE] the run is terminal FAILED and stays FAILED. It is NOT "
+                "reconciled: the automated lifecycle did not close this position."
+            )
+            self._port.log(
+                "[MANUAL-RESOLVE] clear the halt deliberately, then authorise a NEW "
+                "certification run with its own run number."
+            )
+        except Exception as exc:
+            self._port.error(f"[MANUAL-RESOLVE] REFUSED: {type(exc).__name__}: {exc}")
 
     def _diagnose_identity_once(self) -> None:
         """Read-only identity report, emitted once while halted.
@@ -739,6 +802,9 @@ class Phase2Cycle:
             record = self._coordinator.confirm_protection(record, broker)
             self._port.log("[PROTECTION-ACK] broker confirms protection matches filled quantity")
 
+        if record.state is TradeState.PROTECTED and record.open_long_quantity > 0:
+            self._assert_restart_ready(record, broker)
+
         if self._exit_requested and record.open_long_quantity > 0:
             if record.state is TradeState.PROTECTED:
                 record = self._coordinator.request_exit(record)
@@ -795,6 +861,59 @@ class Phase2Cycle:
             )
         return ExecutionRisk.from_record(
             record, broker_state_established=self._broker_state_established
+        )
+
+    def _assert_restart_ready(self, record: TradeRecord, broker: BrokerView) -> None:
+        """Refuse to be restartable until the position could be recovered.
+
+        A restart is only survivable if the protective order can be recognised
+        afterwards, and that requires its broker-native id to be durable BEFORE
+        the process stops. Run 1 stopped without it and stranded a live protected
+        position -- recoverable by no amount of later cleverness, because the
+        identity was simply never written down.
+
+        Checked once per deployment, on reaching PROTECTED. On failure the
+        deployment halts: it does not cancel the stop, and it does not proceed to
+        a restart that could not be recovered from.
+        """
+        if self._restart_checkpoint_passed:
+            return
+        identity = self._coordinator.identity
+        protective = record.order_for_role(OrderRole.PROTECTIVE)
+        owned = [
+            o
+            for o in broker.orders_owned_by(identity)
+            if o.client_order_id == identity.protective_order_id
+        ]
+        problems: list[str] = []
+        if record.open_long_quantity != PHASE2_QUANTITY:
+            problems.append(f"long={record.open_long_quantity}")
+        if broker.open_protective_quantity(identity) != PHASE2_QUANTITY:
+            problems.append(f"broker_protective={broker.open_protective_quantity(identity)}")
+        if record.protected_quantity != PHASE2_QUANTITY:
+            problems.append(f"internal_protective={record.protected_quantity}")
+        if protective is None or protective.dispatch is not DispatchState.ACKNOWLEDGED:
+            problems.append("protective not ACKNOWLEDGED")
+        if len(owned) != 1:
+            problems.append(f"owned_protective_orders={len(owned)}")
+        if protective is None or not protective.has_broker_identity:
+            problems.append("durable protective broker identity ABSENT")
+
+        if problems:
+            self._port.error("[RESTART-CHECKPOINT] NOT restart-safe: " + "; ".join(problems) + ".")
+            self._raise_halt(
+                "the protective order could not be proven recoverable across a restart. "
+                "Halting BEFORE creating another unrecoverable state. The stop is left "
+                "untouched.",
+                kind=HaltKind.MANUAL_CLEARANCE_REQUIRED,
+            )
+            return
+
+        self._restart_checkpoint_passed = True
+        self._port.log(
+            "[RESTART-CHECKPOINT] long=1 broker_protective=1 internal_protective=1 "
+            "protective_dispatch=ACKNOWLEDGED owned_protective_orders=1 "
+            "protective_broker_identity=RECORDED -- restart is survivable"
         )
 
     def _raise_halt(

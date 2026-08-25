@@ -17,12 +17,11 @@ from kalpamani.common.settings import LIVE_TRADING_HARD_DISABLED, Settings
 from kalpamani.execution.coordinator import Phase2Coordinator
 from kalpamani.execution.cycle import EventStatus, OrderEventFacts, Phase2Cycle
 from kalpamani.execution.envelope import (
-    PHASE2_INTENT_NATURAL_KEY,
     PHASE2_SYMBOL,
+    certification_identity,
     describe_envelope,
 )
 from kalpamani.execution.halt import JsonHaltStore, halt_state_path
-from kalpamani.execution.identity import TradeIdentity
 from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
@@ -208,7 +207,12 @@ class Phase2OrderLifecycle(QCAlgorithm):
             PHASE2_SYMBOL, Resolution.MINUTE, extended_market_hours=True
         ).symbol
 
-        identity = TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1)
+        # The certification RUN is a deliberate human choice, never derived and
+        # never auto-incremented after a failure. Each run gets a genuinely
+        # different deterministic identity, so a failed run keeps its evidence
+        # and the next attempt cannot inherit it.
+        run_number = int(self.get_parameter("phase2_run_number") or 1)
+        identity = certification_identity(run_number)
         coordinator = Phase2Coordinator(
             JsonTradeStateStore(STATE_PATH),
             identity,
@@ -227,11 +231,14 @@ class Phase2OrderLifecycle(QCAlgorithm):
             exit_requested=self._flag("phase2_exit_requested"),
             armed_fingerprint=self.get_parameter("phase2_account_fingerprint") or "",
             capital=StrategyCapital(),
+            manual_resolution_requested=self._flag("phase2_manual_resolution"),
+            resolution_confirmation=self.get_parameter("phase2_resolution_confirmation") or "",
         )
 
         self.log("=" * 78)
         self.log("KalpaMani Phase 2 -- CONTROLLED IBKR PAPER ORDER LIFECYCLE")
         self.log(f"[PHASE2-ARM] envelope: {describe_envelope()}")
+        self.log(f"[PHASE2-ARM] certification_run={run_number}")
         self.log(f"[PHASE2-ARM] identity: {identity.describe()}")
         self.log(f"[PHASE2-ARM] execution_window={describe_window()}")
         self.log(f"[PHASE2-ARM] live_trading_hard_disabled={LIVE_TRADING_HARD_DISABLED}")

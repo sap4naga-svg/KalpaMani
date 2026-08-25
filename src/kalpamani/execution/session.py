@@ -397,11 +397,32 @@ def assert_arm_available(
         )
 
 
-def arm_receipt_paths(storage_root: Path, project_root: Path) -> tuple[Path, ...]:
-    """The two independent receipt locations, on different container mounts."""
+def arm_receipt_paths(
+    storage_root: Path,
+    project_root: Path,
+    trade_intent_id: str = "",
+    *,
+    legacy: bool = False,
+) -> tuple[Path, ...]:
+    """The two independent receipt locations for ONE certification run.
+
+    Receipts are run-scoped. A consumed receipt from a failed run is evidence
+    that run was armed -- it must survive, and it must never be read as "the
+    next run is already consumed". Equally, a missing receipt for the new run
+    must not be masked by the old one being present. Separate filenames give
+    both properties without deleting anything.
+
+    ``legacy`` keeps run 1 on the filenames it actually wrote, for the same
+    reason its natural key is not rewritten: that is where its evidence is.
+    """
+    if legacy or not trade_intent_id:
+        return (
+            storage_root / "phase2_arm_receipt.json",
+            project_root / ".phase2_arm_receipt.json",
+        )
     return (
-        storage_root / "phase2_arm_receipt.json",
-        project_root / ".phase2_arm_receipt.json",
+        storage_root / f"phase2_arm_receipt-{trade_intent_id}.json",
+        project_root / f".phase2_arm_receipt-{trade_intent_id}.json",
     )
 
 

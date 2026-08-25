@@ -34,7 +34,9 @@ from pathlib import Path
 from kalpamani.broker.orders import OrderRequest, OrderSide, OrderType
 from kalpamani.common.capital import StrategyCapital
 from kalpamani.execution.envelope import (
+    MANUAL_CLOSE_REASON,
     PHASE2_QUANTITY,
+    PHASE2_RUN_1_NATURAL_KEY,
     PHASE2_SYMBOL,
     ExecutionArmRequest,
     assert_arm_not_reusable,
@@ -68,6 +70,7 @@ from kalpamani.execution.session import (
 )
 from kalpamani.execution.state_store import (
     DispatchState,
+    ResolutionKind,
     StaleWriteError,
     TradeRecord,
     TradeStateStore,
@@ -121,7 +124,14 @@ class Phase2Coordinator:
     ) -> None:
         self._store = store
         self._identity = identity
-        self._receipt_paths = arm_receipt_paths(storage_root, project_root)
+        # Receipts are scoped to THIS run, so a consumed receipt from a failed
+        # run survives as evidence without being read as this run's arm.
+        self._receipt_paths = arm_receipt_paths(
+            storage_root,
+            project_root,
+            identity.trade_intent_id,
+            legacy=identity.natural_key == PHASE2_RUN_1_NATURAL_KEY,
+        )
         #: Reads the CURRENT brokerage session from LEAN's own deployment
         #: configuration. Injected so tests can present a different session --
         #: a LIVE account, or a second paper account -- and prove that nothing
@@ -253,7 +263,9 @@ class Phase2Coordinator:
         before the arm counts as consumed; a partial write refuses to arm.
         """
         verify_paper_session(evidence)
-        identity, record = authorize_trade_intent(request, self._store, capital=capital)
+        identity, record = authorize_trade_intent(
+            request, self._store, identity=self._identity, capital=capital
+        )
         self._identity = identity
 
         write_arm_receipt(
@@ -370,6 +382,48 @@ class Phase2Coordinator:
                 "assume, and not liquidating it. Resolve manually."
             )
         assert_symbol_has_no_open_orders(broker, PHASE2_SYMBOL, self._identity)
+
+    # -- Manual resolution -------------------------------------------------
+
+    def resolve_manually(self, record: TradeRecord, broker: BrokerView) -> TradeRecord:
+        """Record that a HUMAN closed the broker position after a failed run.
+
+        This never touches the broker. It writes down a fact a human has already
+        established, and only once that fact is re-verified here: the same PAPER
+        account, no position, and no working order on the symbol from any source.
+
+        The trade becomes terminal **FAILED**, not RECONCILED. The automated
+        lifecycle did not close this position and saying otherwise would turn the
+        durable record of a failed certification into a false one. Everything the
+        run produced -- the entry fill, the protective order, the broker
+        evidence, the failure history, the revisions, the identifiers -- is left
+        exactly as it was.
+
+        Raises:
+            SessionVerificationError: if this is not the armed account.
+            ReconciliationError: if the broker is not actually flat for the symbol.
+        """
+        self.assert_session_binding(record)
+        try:
+            self.assert_eligible_to_arm(broker)
+        except ReconciliationError as exc:
+            raise ReconciliationError(
+                "Refusing to record a manual resolution: the broker is NOT flat for "
+                f"{PHASE2_SYMBOL}. {exc} A manual close is recorded only after it has "
+                "actually happened."
+            ) from exc
+
+        state = record.state
+        if state is not TradeState.FAILED:
+            state = transition(state, TradeState.FAILED)
+        updated = replace(
+            record,
+            state=state,
+            failure_reason=record.failure_reason or MANUAL_CLOSE_REASON,
+            resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
+            resolution_reason=MANUAL_CLOSE_REASON,
+        )
+        return self._store.put(updated)
 
     def begin_entry(self, record: TradeRecord) -> PendingOrder:
         """Write-ahead-record the single entry order, then hand it back to dispatch."""
