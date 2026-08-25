@@ -7,8 +7,8 @@ review identified.
 The dispatch protocol under test:
 
     pending = coordinator.begin_*(...)      # intent durably recorded
+    coordinator.fence_dispatch(...)         # SEND FENCE durable -- BEFORE the call
     broker.submit(pending)                  # the broker call
-    coordinator.confirm_dispatch(...)       # attempt durably recorded
     coordinator.reconcile(...)              # broker evidence adopted -> ACKNOWLEDGED
 """
 
@@ -130,9 +130,18 @@ def make_coordinator(tmp_path: Path) -> tuple[Phase2Coordinator, JsonTradeStateS
 
 
 def dispatch(coordinator: Phase2Coordinator, broker: Broker, pending: PendingOrder) -> TradeRecord:
-    """The full production dispatch protocol, as main.py performs it."""
+    """The full production dispatch protocol, as main.py performs it.
+
+    FENCE FIRST, then the broker call. That ordering is the whole point.
+    """
+    record = coordinator.fence_dispatch(pending.record, pending.request.client_order_id)
     broker.submit(pending)
-    return coordinator.confirm_dispatch(pending.record, pending.request.client_order_id)
+    return record
+
+
+def fence_only(coordinator: Phase2Coordinator, pending: PendingOrder) -> TradeRecord:
+    """Acquire the fence and stop -- simulating a crash before the broker call."""
+    return coordinator.fence_dispatch(pending.record, pending.request.client_order_id)
 
 
 def drive_to_protected(coordinator: Phase2Coordinator, broker: Broker) -> TradeRecord:
@@ -357,7 +366,7 @@ def test_exit_intent_never_dispatched_is_redispatched(tmp_path: Path) -> None:
 
     plan = coordinator.assess_recovery(persisted, broker.view())
     assert [p.request.role for p in plan.redispatch] == [OrderRole.EXIT]
-    assert any("EXIT intent never dispatched" in n for n in plan.notes)
+    assert any("EXIT intent never fenced" in n for n in plan.notes)
     assert broker.count(OrderRole.EXIT) == 0, "still not sent twice"
 
 
@@ -372,7 +381,7 @@ def test_entry_intent_never_dispatched_fails_closed(tmp_path: Path) -> None:
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.entry_order_id].dispatch is DispatchState.INTENT_RECORDED
-    with pytest.raises(ReconciliationError, match="never dispatched"):
+    with pytest.raises(ReconciliationError, match="never fenced"):
         coordinator.assess_recovery(persisted, broker.view())
 
 
@@ -384,12 +393,12 @@ def test_ambiguous_dispatch_never_resends(tmp_path: Path) -> None:
 
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
-    # Broker call attempted, but the broker shows nothing and never acknowledged.
-    coordinator.confirm_dispatch(pending.record, identity.entry_order_id)
+    # Fence acquired; the broker shows nothing and never acknowledged.
+    coordinator.fence_dispatch(pending.record, identity.entry_order_id)
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.entry_order_id].dispatch_outcome_unknown is True
-    with pytest.raises(ReconciliationError, match="Dispatch outcome unknown"):
+    with pytest.raises(ReconciliationError, match="Send fence held"):
         coordinator.assess_recovery(persisted, broker.view())
     assert broker.count(OrderRole.ENTRY) == 0
 
@@ -403,7 +412,7 @@ def test_broker_evidence_promotes_dispatched_order_to_acknowledged(tmp_path: Pat
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
     record = dispatch(coordinator, broker, pending)
-    assert record.orders[identity.entry_order_id].dispatch is DispatchState.DISPATCH_ATTEMPTED
+    assert record.orders[identity.entry_order_id].dispatch is DispatchState.SEND_FENCED
 
     record = coordinator.adopt_broker_evidence(record, broker.view())
     assert record.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
@@ -627,3 +636,150 @@ def test_restart_after_protection_submits_no_further_entry(tmp_path: Path) -> No
     with pytest.raises(ReconciliationError):
         restarted.begin_entry(recovered)
     assert broker.count(OrderRole.ENTRY) - entries_before == 0
+
+
+# ---------------------------------------------------------------------------
+# Round 4 -- the send fence. Crash on EITHER side of the broker call must
+# never produce a second order.
+# ---------------------------------------------------------------------------
+
+
+def restart(storage: Path, project: Path) -> Phase2Coordinator:
+    """A brand-new coordinator over the same durable state: a restarted process."""
+    return Phase2Coordinator(
+        JsonTradeStateStore(storage / "phase2_trade_state.json"),
+        TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
+        storage_root=storage,
+        project_root=project,
+    )
+
+
+def test_entry_fenced_broker_received_then_crash_sends_no_second_entry(
+    tmp_path: Path,
+) -> None:
+    """Fence -> broker HAS the order -> crash. Recovery must adopt, never resend."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    coordinator.fence_dispatch(pending.record, identity.entry_order_id)
+    broker.submit(pending)  # IBKR has it
+    # ...and the process dies here, with nothing written after the call.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.orders[identity.entry_order_id].dispatch is DispatchState.SEND_FENCED
+
+    plan = resumed.assess_recovery(recovered, broker.view())
+    assert plan.redispatch == (), "positive broker evidence: adopt, never resend"
+    assert plan.record.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
+    assert broker.count(OrderRole.ENTRY) == 1
+
+
+def test_protective_fenced_broker_received_then_crash_sends_no_second_stop(
+    tmp_path: Path,
+) -> None:
+    """The dangerous one: a second stop on a 1-share long can end up short."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    record = dispatch(coordinator, broker, pending)
+    broker.fill(identity.entry_order_id, 1)
+    record = coordinator.on_fill(
+        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
+    )
+
+    protection = coordinator.plan_protection(record, SPY_PRICE)
+    assert protection is not None
+    coordinator.fence_dispatch(protection.record, identity.protective_order_id)
+    broker.submit(protection)  # IBKR has the stop
+    # ...crash.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    plan = resumed.assess_recovery(recovered, broker.view())
+
+    assert plan.redispatch == (), "must NOT send a second protective stop"
+    assert broker.count(OrderRole.PROTECTIVE) == 1
+    assert broker.position == 1, "still exactly one long share; no short"
+
+
+def test_exit_fenced_broker_received_then_crash_sends_no_second_sell(
+    tmp_path: Path,
+) -> None:
+    """A second SELL against a 1-share long would open a short."""
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+
+    exit_order = coordinator.begin_exit(record, broker.view())
+    coordinator.fence_dispatch(exit_order.record, identity.exit_order_id)
+    broker.submit(exit_order)  # IBKR has the SELL
+    # ...crash.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    plan = resumed.assess_recovery(recovered, broker.view())
+
+    assert plan.redispatch == (), "must NOT send a second SELL"
+    assert broker.count(OrderRole.EXIT) == 1
+    assert broker.position == 1, "no short"
+
+
+@pytest.mark.parametrize("role", ["ENTRY", "PROTECTIVE", "EXIT"])
+def test_fenced_then_crash_before_broker_call_also_halts(tmp_path: Path, role: str) -> None:
+    """Fence held, broker never called. Indistinguishable from the above, so it halts.
+
+    This conservative stop is intentional: durable state cannot tell the two
+    apart, and guessing wrong in the other direction sends a duplicate.
+    """
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    if role == "ENTRY":
+        pending = coordinator.begin_entry(record)
+    else:
+        record = dispatch(coordinator, broker, coordinator.begin_entry(record))
+        broker.fill(identity.entry_order_id, 1)
+        record = coordinator.on_fill(
+            record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
+        )
+        protection = coordinator.plan_protection(record, SPY_PRICE)
+        assert protection is not None
+        if role == "PROTECTIVE":
+            pending = protection
+        else:
+            record = dispatch(coordinator, broker, protection)
+            record = coordinator.reconcile(record, broker.view())
+            record = coordinator.confirm_protection(record, broker.view())
+            record = coordinator.request_exit(record)
+            record, _ = coordinator.begin_protection_cancel(record)
+            broker.confirm_cancel(identity.protective_order_id)
+            record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+            pending = coordinator.begin_exit(record, broker.view())
+
+    submissions_before = len(broker.submissions)
+    fence_only(coordinator, pending)  # fence durable, broker NEVER called
+    # ...crash.
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    with pytest.raises(ReconciliationError, match="Send fence held"):
+        resumed.assess_recovery(recovered, broker.view())
+    assert len(broker.submissions) == submissions_before, "nothing auto-resent"

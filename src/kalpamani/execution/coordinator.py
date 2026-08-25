@@ -8,14 +8,20 @@ call, tells the coordinator the call was attempted, and hands events back.
 The dispatch protocol `main.py` must follow, in order:
 
     pending = coordinator.begin_*(...)     # intent durably recorded
+    coordinator.fence_dispatch(...)        # SEND FENCE durable -- BEFORE the call
     broker_call(pending.request)           # the LEAN call
-    coordinator.confirm_dispatch(...)      # attempt durably recorded
 
-The window between the second and third steps is the only one that can lose
-information, and it is deliberately the narrowest possible. Crashing before the
-broker call leaves ``INTENT_RECORDED`` -- we know the order does not exist.
-Crashing after it leaves ``DISPATCH_ATTEMPTED`` -- ambiguous, so recovery
-reconciles rather than resending.
+The fence goes first on purpose. No transaction spans "call the broker" and
+"record that we called it", so whichever order those happen in, a crash can fall
+between them. Writing the fence afterwards would leave ``INTENT_RECORDED`` after
+a successful send, and recovery would then conclude "never sent" and issue a
+second order -- for a protective stop or an exit, that is a second SELL and a
+possible short.
+
+With the fence first, ``INTENT_RECORDED`` is a claim we can actually defend, and
+``SEND_FENCED`` says only "a send may have occurred". A crash on either side of
+the broker call looks the same from durable state, and both halt for a human.
+Safety over automatic liveness.
 """
 
 from __future__ import annotations
@@ -61,8 +67,8 @@ from kalpamani.execution.state_store import (
     TradeStateStore,
     apply_fill,
     confirm_cancel,
+    fence_dispatch,
     mark_acknowledged,
-    mark_dispatch_attempted,
     mark_rejected,
     record_order_intent,
     request_cancel,
@@ -158,9 +164,14 @@ class Phase2Coordinator:
 
     # -- Dispatch bookkeeping ----------------------------------------------
 
-    def confirm_dispatch(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
-        """Record that the broker call has now been attempted. Persisted at once."""
-        updated = mark_dispatch_attempted(record, client_order_id)
+    def fence_dispatch(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
+        """Acquire and persist the SEND FENCE. Call this BEFORE the broker call.
+
+        Returns only once the fence is durable, so the caller may then contact
+        the broker knowing that a crash at any later point cannot be mistaken for
+        "never sent".
+        """
+        updated = fence_dispatch(record, client_order_id)
         self._store.put(updated)
         return updated
 
@@ -173,7 +184,7 @@ class Phase2Coordinator:
         order = record.orders.get(client_order_id)
         if order is None or order.dispatch not in (
             DispatchState.INTENT_RECORDED,
-            DispatchState.DISPATCH_ATTEMPTED,
+            DispatchState.SEND_FENCED,
         ):
             return record
         updated = mark_acknowledged(record, client_order_id)
@@ -192,7 +203,7 @@ class Phase2Coordinator:
             local = updated.orders.get(order.client_order_id)
             if local is None or not order.is_open:
                 continue
-            if local.dispatch in (DispatchState.INTENT_RECORDED, DispatchState.DISPATCH_ATTEMPTED):
+            if local.dispatch in (DispatchState.INTENT_RECORDED, DispatchState.SEND_FENCED):
                 updated = mark_acknowledged(updated, order.client_order_id)
         if updated is not record:
             self._store.put(updated)
@@ -442,45 +453,55 @@ class Phase2Coordinator:
     def assess_recovery(self, record: TradeRecord, broker: BrokerView) -> RecoveryPlan:
         """Classify every order's dispatch gap and decide what is safe to do.
 
-        Case A -- intent recorded, dispatch never attempted. We *know* the broker
-        never heard about it, so re-dispatch is provably not a duplicate. For a
-        PROTECTIVE or EXIT order covering an open long this is also the only way
-        out of an unprotected position, so it is done. For an ENTRY it is not:
-        no position is at risk, and re-entering is the decision we least want a
-        machine to make unattended.
+        Case A -- **unfenced**: the intent was recorded but the send fence was
+        never acquired, so the dispatcher never committed to contacting the
+        broker. This is the one case where "the broker does not have it" is a
+        defensible claim, and re-dispatch is provably not a duplicate. For a
+        PROTECTIVE or EXIT covering an open long it is also the only way out of
+        an unprotected position, so it is done. For an ENTRY it is not: nothing
+        is at risk, and re-entering is the decision we least want a machine to
+        make unattended.
 
-        Case B -- dispatch attempted, no broker acknowledgement. Ambiguous. The
-        order may be live. Never resend; fail closed for human reconciliation.
+        Case B -- **fenced, unconfirmed**: the fence is held and the broker has
+        confirmed nothing. A send may have occurred. Absence from the open-order
+        list is *not* evidence it never arrived -- it may have filled, been
+        cancelled, or simply not be visible yet. Never resend; fail closed for
+        human reconciliation.
+
+        Positive broker evidence is adopted first, which is what resolves the
+        common case without human involvement.
 
         Raises:
-            ReconciliationError: on any ambiguous dispatch, or an undispatched
-                ENTRY.
+            ReconciliationError: on any fenced-but-unconfirmed order, or an
+                unfenced ENTRY.
         """
         adopted = self.adopt_broker_evidence(record, broker)
         notes: list[str] = []
         redispatch: list[PendingOrder] = []
 
-        ambiguous = adopted.ambiguous_orders()
-        if ambiguous:
-            ids = ", ".join(f"{o.role.value}:{o.client_order_id}" for o in ambiguous)
+        fenced = adopted.fenced_unconfirmed_orders()
+        if fenced:
+            ids = ", ".join(f"{o.role.value}:{o.client_order_id}" for o in fenced)
             raise ReconciliationError(
-                f"Dispatch outcome unknown for {ids}: the broker call was attempted but never "
-                "acknowledged, and the broker does not show the order. It may still be live. "
-                "Refusing to resend -- reconcile against the broker's order history by hand."
+                f"Send fence held with no broker confirmation for {ids}. A send MAY have "
+                "occurred -- a crash before the broker call and a crash after it are "
+                "indistinguishable from here, and absence from the open-order list is not "
+                "evidence the order never arrived. Refusing to resend: reconcile against the "
+                "broker's order history by hand."
             )
 
-        for order in adopted.undispatched_orders():
+        for order in adopted.unfenced_orders():
             if order.role is OrderRole.ENTRY:
                 raise ReconciliationError(
-                    f"ENTRY {order.client_order_id} was recorded but never dispatched. No "
-                    "position is at risk, and re-entering is not a decision to take "
-                    "unattended. Resolve manually."
+                    f"ENTRY {order.client_order_id} was recorded but never fenced, so it was "
+                    "never sent. No position is at risk, and re-entering is not a decision to "
+                    "take unattended. Resolve manually."
                 )
             if adopted.open_long_quantity <= 0:
                 notes.append(f"{order.role.value} intent is moot: no open long")
                 continue
             if order.role is OrderRole.PROTECTIVE:
-                notes.append("PROTECTIVE intent never dispatched: position is UNPROTECTED")
+                notes.append("PROTECTIVE intent never fenced (never sent): UNPROTECTED")
                 redispatch.append(
                     PendingOrder(
                         request=self._protective_request(
@@ -490,7 +511,7 @@ class Phase2Coordinator:
                     )
                 )
             elif order.role is OrderRole.EXIT:
-                notes.append("EXIT intent never dispatched: position still open")
+                notes.append("EXIT intent never fenced (never sent): position still open")
                 redispatch.append(
                     PendingOrder(
                         request=self._exit_request(order.quantity, order.symbol),

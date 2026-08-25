@@ -94,10 +94,45 @@ submission and write; the broker can lag. Requiring agreement is what makes the 
 survivable, and disagreement is a **fail-closed** condition, not something to reconcile
 optimistically.
 
-The write-ahead rule closes the remaining gap: **the intent to submit is durably recorded
-before the order leaves the process.** A crash between write and submit leaves a recorded
-intent with no broker order — recoverable by inspection. The reverse (order at broker, no
-record) is the unrecoverable case, so it must be impossible.
+### 4a. The send fence — amended 2026-08-25
+
+An earlier version of this ADR said the write-ahead rule made the reverse case (order at
+broker, no record) *impossible*. **That was wrong**, and the correction matters enough to
+state plainly.
+
+No transaction spans "call the broker" and "record that we called it". Whichever order those
+happen in, a crash can fall between them. Recording *after* the call would leave a state
+meaning "definitely not sent" **after a successful send** — and recovery acting on that claim
+would issue a second order. For a protective stop or an exit, that is a second SELL and a
+possible short position.
+
+So the durable marker is written **before** the broker call, and its meaning is deliberately
+weaker than "we sent it":
+
+```
+INTENT_RECORDED   the dispatcher has NOT committed to contacting the broker.
+                  We can defend the claim that the order does not exist.
+
+SEND_FENCED       the SEND FENCE is durable. From here a broker call MAY have
+                  happened. Automatic resend is FORBIDDEN.
+```
+
+The mandatory ordering is:
+
+1. record the order intent (durable)
+2. **acquire the send fence (durable)**
+3. only then call the broker
+4. broker events and reconciliation promote to `ACKNOWLEDGED` / `FILLED` / `CANCELLED` /
+   `REJECTED`
+
+**A crash immediately before the broker call and a crash immediately after it are
+indistinguishable from durable state.** Both leave `SEND_FENCED`, and both halt for human
+reconciliation. That conservative ambiguity is the intended trade: safety over automatic
+liveness.
+
+Crucially, **absence from the broker's open-order list is not evidence the order never
+arrived** — it may have filled, been cancelled, or simply not be visible yet. Only positive
+broker evidence may resolve a fenced order, and only into `ACKNOWLEDGED` or `FILLED`.
 
 ### 5. Durable state is required; its absence fails closed
 
@@ -239,8 +274,9 @@ averaging down, autonomous retries, or live trading. `LIVE_TRADING_HARD_DISABLED
 
 Enforced by `tests/unit/test_phase2_order_safety.py` and `scripts/phase2_preflight.py`:
 
-deterministic identity reproducibility · durable write-ahead before submit · duplicate
-submission refused · restart adopts rather than re-issues · SPY-only · long-only · quantity
+deterministic identity reproducibility · send fence durable **before** the broker call ·
+crash on either side of the broker call never resends · duplicate submission refused ·
+restart adopts rather than re-issues · SPY-only · long-only · quantity
 exactly 1 · notional ceiling USD 1,000 · single intent · single entry · zero-fill creates no
 protection · protection equals actual filled quantity · duplicate fill events create no
 second stop · exit cannot exceed long quantity · protection cancelled before close · missing

@@ -11,16 +11,31 @@ broker call is *not* evidence that the broker received anything, and treating it
 as such lets a crash leave a position that looks protected but is not. So each
 order carries an explicit :class:`DispatchState`:
 
-    INTENT_RECORDED     durable write done; the broker call has NOT been attempted
-    DISPATCH_ATTEMPTED  the broker call was made; acknowledgement is UNKNOWN
-    ACKNOWLEDGED        the broker confirms the order is working
-    FILLED              the broker filled it
-    CANCELLED           the broker CONFIRMED a cancellation
-    REJECTED            the broker rejected it (LEAN OrderStatus.INVALID)
+    INTENT_RECORDED  durable write done; the dispatcher has NOT yet committed to
+                     contacting the broker. We know the order does not exist.
+    SEND_FENCED      the SEND FENCE is durable. From this point on the broker call
+                     MAY have happened, and automatic resend is FORBIDDEN.
+    ACKNOWLEDGED     the broker confirms the order is working
+    FILLED           the broker filled it
+    CANCELLED        the broker CONFIRMED a cancellation
+    REJECTED         the broker rejected it (LEAN OrderStatus.INVALID)
+
+Why a fence and not "attempted"
+-------------------------------
+There is no atomic transaction spanning "call the broker" and "write that we
+called it". Whichever order those happen in, a crash can fall between them. So
+the fence is persisted **before** the call, and its meaning is deliberately
+weaker than "we sent it": *a send may have occurred*. That is the honest
+statement, and it is the safe one -- inferring "definitely not sent" from a
+missing post-call write is what would let recovery issue a second SELL.
+
+A crash after the fence but before the call therefore looks identical to a crash
+after the call. Both halt for a human. That conservative ambiguity is the
+intended trade: safety over automatic liveness.
 
 The distinction that matters most: ``protected_quantity`` counts a protective
-order only once the broker has **acknowledged** it. An intent that was recorded
-but never dispatched must never be mistaken for working protection.
+order only once the broker has **acknowledged** it. A fenced-but-unconfirmed
+order must never be mistaken for working protection.
 
 Three storage rules
 -------------------
@@ -50,7 +65,8 @@ from kalpamani.execution.lifecycle import TradeState
 
 #: Bumped when the persisted shape changes. Unknown versions fail closed.
 #: v2 introduced the explicit dispatch model in place of a boolean "submitted".
-STATE_SCHEMA_VERSION = 2
+#: v3 replaced DISPATCH_ATTEMPTED with the SEND_FENCED send fence.
+STATE_SCHEMA_VERSION = 3
 
 
 class StateStoreError(SafetyViolationError):
@@ -71,15 +87,19 @@ class StateCorruptError(StateStoreError):
 
 
 class DispatchState(StrEnum):
-    """How far an order has actually got toward the broker.
+    """How far an order has got toward the broker, stated honestly.
 
-    Ordered from "we only wrote it down" to a terminal broker outcome. The gap
-    between the first two values is the whole point: a recorded intent is not a
-    sent order, and a sent order is not an accepted one.
+    The gap between the first two values is the whole point. ``INTENT_RECORDED``
+    is a positive claim -- the dispatcher has not committed, so the order does
+    not exist at the broker. ``SEND_FENCED`` is deliberately weaker: it says only
+    that a send *may* have happened, because no transaction spans the broker call
+    and the record of it.
     """
 
     INTENT_RECORDED = "INTENT_RECORDED"
-    DISPATCH_ATTEMPTED = "DISPATCH_ATTEMPTED"
+    #: The SEND FENCE. Persisted BEFORE the broker call. From here, automatic
+    #: resend is forbidden regardless of what the open-order list shows.
+    SEND_FENCED = "SEND_FENCED"
     ACKNOWLEDGED = "ACKNOWLEDGED"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
@@ -115,8 +135,12 @@ class SubmittedOrder:
     stop_price: str | None = None
 
     @property
-    def dispatch_attempted(self) -> bool:
-        """Whether the broker call was ever made."""
+    def send_fenced(self) -> bool:
+        """Whether the send fence was acquired.
+
+        Once true, a broker call may have occurred and this order must never be
+        automatically resent.
+        """
         return self.dispatch is not DispatchState.INTENT_RECORDED
 
     @property
@@ -130,17 +154,19 @@ class SubmittedOrder:
 
     @property
     def dispatch_outcome_unknown(self) -> bool:
-        """Dispatch was attempted but the broker never confirmed anything.
+        """The fence is held but the broker has confirmed nothing either way.
 
-        The ambiguous case. Never resend from here -- the order may be live.
+        The ambiguous case, and it covers both a crash before the broker call and
+        a crash after it -- they are indistinguishable from durable state alone.
+        Never resend from here: the order may be live.
         """
-        return self.dispatch is DispatchState.DISPATCH_ATTEMPTED
+        return self.dispatch is DispatchState.SEND_FENCED
 
     @property
     def is_working(self) -> bool:
         """Whether the broker may still act on this order.
 
-        Requires broker acknowledgement. A merely-attempted dispatch is not
+        Requires broker acknowledgement. A fenced-but-unconfirmed order is not
         counted as working, because we do not know that it is.
         """
         return self.dispatch is DispatchState.ACKNOWLEDGED and self.filled_quantity < self.quantity
@@ -215,12 +241,12 @@ class TradeRecord:
         protective = self.order_for_role(OrderRole.PROTECTIVE)
         return bool(protective and protective.is_working)
 
-    def undispatched_orders(self) -> list[SubmittedOrder]:
-        """Orders whose intent was recorded but whose broker call never happened."""
+    def unfenced_orders(self) -> list[SubmittedOrder]:
+        """Orders recorded but never fenced -- so provably never sent."""
         return [o for o in self.orders.values() if o.dispatch is DispatchState.INTENT_RECORDED]
 
-    def ambiguous_orders(self) -> list[SubmittedOrder]:
-        """Orders dispatched to the broker with no acknowledgement either way."""
+    def fenced_unconfirmed_orders(self) -> list[SubmittedOrder]:
+        """Orders holding the send fence with no broker confirmation either way."""
         return [o for o in self.orders.values() if o.dispatch_outcome_unknown]
 
     def describe(self) -> str:
@@ -474,14 +500,14 @@ def _advance_dispatch(
     return _recompute(replace(record, orders=orders))
 
 
-def mark_dispatch_attempted(record: TradeRecord, client_order_id: str) -> TradeRecord:
-    """Record that the broker call has now been attempted.
+def fence_dispatch(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Acquire the durable SEND FENCE. Must be persisted BEFORE the broker call.
 
-    Persisted immediately after the call is made. From here the outcome is
-    unknown until the broker says otherwise, and the order must never be resent
-    on that basis alone.
+    After this returns, the only honest statement about the order is "a send may
+    have occurred". That is weaker than "we sent it", and deliberately so: it is
+    what makes automatic resend unsafe and therefore forbidden.
     """
-    return _advance_dispatch(record, client_order_id, DispatchState.DISPATCH_ATTEMPTED)
+    return _advance_dispatch(record, client_order_id, DispatchState.SEND_FENCED)
 
 
 def mark_acknowledged(
@@ -597,8 +623,8 @@ __all__ = [
     "TradeStateStore",
     "apply_fill",
     "confirm_cancel",
+    "fence_dispatch",
     "mark_acknowledged",
-    "mark_dispatch_attempted",
     "mark_rejected",
     "record_order_intent",
     "request_cancel",

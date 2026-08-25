@@ -357,8 +357,8 @@ Verify independently in the IBKR account manager, not only from logs.
 | **Accidental short** | Close it manually in IBKR immediately, then investigate how the stop outlived the long. |
 | **Duplicate entry observed** | Stop everything. This is the failure ADR-0004 exists to prevent; treat it as a design defect, not an operational hiccup. |
 | **Unknown / ambiguous account** | Abort. Never proceed on an unclassified account. |
-| **`DISPATCH_ATTEMPTED`, broker silent** | Ambiguous — the order may be live. Do **not** resend. Check the IBKR order history by hand, then reconcile deliberately. |
-| **Protective intent never dispatched** | The long is unprotected. Recovery re-dispatches it automatically; verify the stop appears at IBKR before doing anything else. |
+| **`SEND_FENCED`, broker silent** | Ambiguous — the order may be live. Do **not** resend. Check the IBKR order history by hand, then reconcile deliberately. |
+| **Protective intent never fenced** | The long is unprotected and the stop was never sent. Recovery re-dispatches it; verify the stop appears at IBKR before doing anything else. |
 | **Order rejected (`INVALID`)** | See §13.3. Never answer a rejection with another entry. |
 | **Arm refused: receipt could not be written** | Both receipt locations must be writable. Check the object-store mount and the project directory before retrying. |
 | **Corrupt durable state** | The store fails closed. Do not delete it to "start clean" — that destroys the record of what was already sent. Inspect it, reconcile against IBKR, resolve by hand. |
@@ -405,10 +405,19 @@ word to be safe:
 
 | State | Meaning | If the process dies here |
 |---|---|---|
-| `INTENT_RECORDED` | Written durably. **The broker call has not been made.** | We *know* the broker has nothing. Safe to re-dispatch. |
-| `DISPATCH_ATTEMPTED` | The call was made. **Acknowledgement unknown.** | Ambiguous — the order may be live. **Never resend.** |
+| `INTENT_RECORDED` | Written durably. **The dispatcher has not committed to calling the broker.** | We can defend "the broker has nothing". Safe to re-dispatch. |
+| `SEND_FENCED` | The **send fence** is durable. A broker call **may** have happened. | Ambiguous — **never resend**. Halts for a human. |
 | `ACKNOWLEDGED` | The broker confirms it is working. | Reconcile normally. |
 | `FILLED` / `CANCELLED` / `REJECTED` | Terminal broker outcome. | Nothing pending. |
+
+**Why the fence is written before the call.** Nothing makes "call the broker" and "record
+that we called it" atomic, so a crash can fall between them either way round. Writing the
+record afterwards would leave a state meaning *definitely not sent* after a successful send —
+and recovery would then issue a second order. For a stop or an exit that is a second SELL and
+a possible short. So the fence goes first, and it claims only that a send *may* have occurred.
+
+A crash immediately **before** the broker call and one immediately **after** it therefore look
+identical, and both halt. That is intentional.
 
 **`protected_quantity` counts a stop only at `ACKNOWLEDGED`.** A protective
 intent that was recorded but never dispatched is **not** protection, and the
@@ -416,14 +425,16 @@ system says so rather than looking healthy.
 
 On recovery you will see `[RECOVERY] dispatch assessment: …`:
 
-- **PROTECTIVE or EXIT intent never dispatched, long still open** — re-dispatched
-  automatically. The broker never received it, so this is provably not a
-  duplicate, and it is the only way out of an unprotected position.
-- **ENTRY intent never dispatched** — **fails closed.** No position is at risk,
-  and re-entering is not a decision to take unattended. Resolve manually.
-- **Any order `DISPATCH_ATTEMPTED` with no broker acknowledgement** — **fails
-  closed.** Reconcile against the broker's order history by hand before doing
-  anything. Never resend on this basis.
+- **PROTECTIVE or EXIT intent never *fenced*, long still open** — re-dispatched
+  automatically. The fence was never acquired, so the order was never sent; this
+  is provably not a duplicate, and it is the only way out of an unprotected
+  position.
+- **ENTRY intent never fenced** — **fails closed.** No position is at risk, and
+  re-entering is not a decision to take unattended. Resolve manually.
+- **Any order `SEND_FENCED` with no broker acknowledgement** — **fails closed.**
+  Reconcile against the broker's order history by hand. Never resend on this
+  basis, and never conclude the order is absent just because it is missing from
+  the open-order list — it may have filled or been cancelled.
 
 ---
 

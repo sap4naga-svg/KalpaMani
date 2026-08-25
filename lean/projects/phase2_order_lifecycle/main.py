@@ -144,15 +144,21 @@ class Phase2OrderLifecycle(QCAlgorithm):
         return BrokerView(positions=positions, open_orders=tuple(open_orders))
 
     def _dispatch(self, pending: PendingOrder):
-        """Perform the LEAN call, then durably record that it was ATTEMPTED.
+        """Acquire the durable SEND FENCE, and only then call the broker.
 
-        The window between the broker call and this confirmation write is the
-        only one that can lose information, so it is kept as narrow as possible.
-        Crashing before the call leaves INTENT_RECORDED -- we know nothing was
-        sent. Crashing after leaves DISPATCH_ATTEMPTED -- ambiguous, so recovery
-        reconciles instead of resending.
+        The fence goes first. No transaction spans the broker call and the record
+        of it, so writing the record afterwards would leave INTENT_RECORDED after
+        a successful send -- and recovery would then conclude "never sent" and
+        issue a second order. For a stop or an exit that is a second SELL and a
+        possible short.
+
+        With the fence first, everything after this point is honestly ambiguous
+        and halts for a human instead.
         """
         request = pending.request
+        record = self._coordinator.fence_dispatch(pending.record, request.client_order_id)
+        self.log(f"[{request.role.value}-FENCED] {request.client_order_id} send fence durable")
+
         self.log(f"[{request.role.value}-SUBMIT] {request.describe()}")
         if request.stop_price is None:
             self.market_order(self._symbol, request.signed_quantity, tag=request.client_order_id)
@@ -163,8 +169,6 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 float(request.stop_price),
                 tag=request.client_order_id,
             )
-        record = self._coordinator.confirm_dispatch(pending.record, request.client_order_id)
-        self.log(f"[{request.role.value}-DISPATCHED] {request.client_order_id} attempt recorded")
         return record
 
     # -- Main cycle ---------------------------------------------------------
@@ -197,9 +201,8 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 self.log(f"[RECOVERY] dispatch assessment: {plan.describe()}")
                 for pending in plan.redispatch:
                     self.error(
-                        f"[RECOVERY] {pending.request.role.value} intent was never dispatched; "
-                        "the broker never received it, so re-dispatch is provably not a "
-                        "duplicate"
+                        f"[RECOVERY] {pending.request.role.value} intent was never FENCED, so "
+                        "it was never sent; re-dispatch is provably not a duplicate"
                     )
                     record = self._dispatch(pending)
 
