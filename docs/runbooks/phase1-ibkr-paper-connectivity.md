@@ -246,6 +246,11 @@ KalpaMani allocated strategy capital: USD 80,000
 [CAPITAL-SEPARATION]   CONFIRMED DISTINCT: broker equity is 12.50x the KalpaMani allocation.
 ```
 
+> **Note:** `initialize()` runs *before* LEAN applies brokerage cash
+> (`Setup(): Initializing algorithm...` precedes `Setup(): Setting USD cash to ...`).
+> Broker equity is therefore observed on a scheduled timer, not at initialize, and not
+> only from `on_data` — so account state is provable even when the market is closed.
+
 Success criteria — **all** must hold:
 
 - [ ] LEAN starts
@@ -258,6 +263,38 @@ Success criteria — **all** must hold:
 - [ ] **Zero** orders submitted
 - [ ] **Zero** positions created
 - [ ] Clean stop
+
+---
+
+## 8.1 IMPORTANT — LEAN disables IBKR's broker-side order guards
+
+Observed on the 2026-08-24 connection. During IB Gateway setup, IBAutomater
+**automatically changes safety settings on the brokerage side**:
+
+```
+Unselect checkbox: [Read-Only API]
+Select checkbox:   [Bypass Order Precautions for API Orders]
+Select checkbox:   [Bypass Bond warning for API Orders.]
+Select checkbox:   [Bypass price-based volatility risk warning for API Orders.]
+Select checkbox:   [Bypass Redirect Order warning for Stock API Orders]
+Select checkbox:   [Bypass No Overfill Protection precaution ...]
+Set API port textbox value: [4002]
+```
+
+**Read this carefully.** Enabling *Read-Only Access* in IBKR account settings does
+**not** protect an automated deployment: LEAN unselects the Read-Only API checkbox in
+IB Gateway every time it starts, and additionally bypasses IBKR's order-precaution
+confirmations. This is required for LEAN to function, and it is not configurable from
+the CLI.
+
+**Consequence for KalpaMani:** the broker-side "read-only" safety net **does not exist**
+once LEAN is running. The zero-order guarantee in Phase 1 rests **entirely** on our own
+code containing no order-submission path — which is why that is enforced statically by
+`scripts/phase1_preflight.py` and `tests/unit/test_phase1_broker_safety.py` rather than
+trusted to a broker setting or to review.
+
+Do not rely on IBKR Read-Only Access as a control. Treat our static guards as the only
+thing standing between the system and an order.
 
 ---
 
