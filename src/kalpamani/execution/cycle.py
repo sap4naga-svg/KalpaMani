@@ -55,6 +55,7 @@ from kalpamani.execution.envelope import (
     ExecutionArmRequest,
 )
 from kalpamani.execution.halt import (
+    ExecutionRisk,
     HaltKind,
     HaltStore,
     OperationalHalt,
@@ -175,6 +176,9 @@ class Phase2Cycle:
         self._session_logged = False
         self._recovery_logged = False
         self._entries_submitted_this_session = 0
+        #: Whether broker truth was successfully read in the current cycle.
+        #: Reported on the failure path; see ExecutionRisk.
+        self._broker_state_established = True
 
     # -- Status ------------------------------------------------------------
 
@@ -209,11 +213,13 @@ class Phase2Cycle:
         """Reconcile first, always. Only then consider acting."""
         if self.halted:
             return
+        self._broker_state_established = False
         try:
             record = self._coordinator.load()
 
             if record is None:
                 broker = self._port.view()
+                self._broker_state_established = True
                 self._log_state(broker, "no-trade")
                 self._maybe_arm(broker)
                 return
@@ -229,6 +235,7 @@ class Phase2Cycle:
                 )
 
             broker = self._port.view()
+            self._broker_state_established = True
 
             if record.state is TradeState.FAILED:
                 # The durable record of this is TradeState.FAILED itself, which
@@ -611,6 +618,24 @@ class Phase2Cycle:
 
     # -- Halting ------------------------------------------------------------
 
+    def _current_risk(self) -> ExecutionRisk:
+        """What is at stake right now, read defensively.
+
+        Only ever called on a failure path, so it must not raise. If durable
+        state cannot even be read, that *is* the answer: maximum risk.
+        """
+        try:
+            record = self._coordinator.load()
+        except Exception:
+            return ExecutionRisk.unknown()
+        if record is None:
+            return ExecutionRisk.nothing_at_stake(
+                broker_state_established=self._broker_state_established
+            )
+        return ExecutionRisk.from_record(
+            record, broker_state_established=self._broker_state_established
+        )
+
     def _raise_halt(
         self,
         reason: str,
@@ -620,14 +645,17 @@ class Phase2Cycle:
     ) -> None:
         """Latch normal progression off. Broker events keep being ingested.
 
-        A halt whose cause is a safety violation is persisted and survives a
-        restart; anything else halts this deployment only. See
+        The halt is durable whenever anything is at stake, and whenever the
+        failure is one this code does not recognise. Only an enumerated benign
+        pre-trade transient halts the session alone. See
         :func:`kalpamani.execution.halt.classify_halt`.
         """
-        halt = OperationalHalt(reason=reason, kind=kind or classify_halt(error))
+        risk = self._current_risk()
+        halt = OperationalHalt(reason=reason, kind=kind or classify_halt(error, risk))
         self._halt_store.put(halt)  # a no-op for a session-scoped halt
         self._halt = halt
         self._port.error(f"[PHASE2-ABORT] {reason}")
+        self._port.error(f"[PHASE2-ABORT] execution risk: {risk.describe()}")
         self._port.error(
             "[PHASE2-ABORT] Normal progression halted: no new entry, no autonomous trading. "
             "Broker events for orders already sent are still recorded, and a position that "

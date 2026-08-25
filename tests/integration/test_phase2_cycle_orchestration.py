@@ -30,7 +30,13 @@ from kalpamani.execution.envelope import (
     PHASE2_INTENT_NATURAL_KEY,
     PHASE2_SYMBOL,
 )
-from kalpamani.execution.halt import HaltKind, JsonHaltStore, halt_state_path
+from kalpamani.execution.halt import (
+    HaltClearanceError,
+    HaltKind,
+    JsonHaltStore,
+    assert_halt_clearable,
+    halt_state_path,
+)
 from kalpamani.execution.identity import OrderRole, TradeIdentity
 from kalpamani.execution.lifecycle import TradeState
 from kalpamani.execution.reconciliation import (
@@ -546,20 +552,182 @@ def test_a_safety_halt_survives_a_restart_and_does_not_resume(tmp_path: Path) ->
     assert not cleared.halted
 
 
-def test_a_transient_halt_does_not_become_a_permanent_chore(tmp_path: Path) -> None:
+def test_an_ENUMERATED_pre_trade_transient_does_not_become_a_permanent_chore(  # noqa: N802
+    tmp_path: Path,
+) -> None:
     """Not every hiccup should need a human. An operator who has to clear a halt
-    after each blip stops reading them."""
+    after each blip stops reading them.
+
+    The allowlist is by TYPE and applies only before anything exists to lose:
+    a cold-start data-farm connection error, with no record, no arm consumed and
+    no order anywhere.
+    """
     port = FakePort()
-    cycle, _, _ = make_cycle(tmp_path, port)
-    port.fail_next_view = RuntimeError("transport blip")
+    cycle, _, store = make_cycle(tmp_path, port)
+    port.fail_next_view = ConnectionError("IB data farm not yet available")
     cycle.on_cycle()
+
     assert cycle.halted
     assert cycle.halt is not None and cycle.halt.kind is HaltKind.SESSION
+    assert store.all_records() == [], "nothing was at stake"
 
     resumed, _, _ = make_cycle(tmp_path, port)
-    assert not resumed.halted, "a restart may retry a transient fault"
+    assert not resumed.halted, "a restart may retry an enumerated transient"
     resumed.on_cycle()
     assert port.count(OrderRole.ENTRY) == 1
+
+
+def test_an_UNKNOWN_exception_halts_durably_even_before_any_trade(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    """`not a SafetyViolationError => transient` was fail-open. This is the fix.
+
+    The exception type here is the one that actually bit: .NET System.Decimal
+    shadowing Python's inside the container, raising TypeError from a line that
+    passes every test on the dev machine.
+    """
+    port = FakePort()
+    cycle, _, store = make_cycle(tmp_path, port)
+    port.fail_next_view = TypeError("No method matches given arguments for .ctor")
+    cycle.on_cycle()
+
+    assert cycle.halted
+    assert cycle.halt is not None and cycle.halt.kind is HaltKind.MANUAL_CLEARANCE_REQUIRED
+
+    resumed, _, _ = make_cycle(tmp_path, port)
+    assert resumed.halted, "an unrecognised failure does NOT clear itself on restart"
+    resumed.on_cycle()
+    resumed.on_cycle()
+    assert port.submitted == [], "no order of any kind"
+    assert store.all_records() == []
+
+
+def test_an_unexpected_exception_with_a_trade_at_risk_halts_durably(tmp_path: Path) -> None:
+    """The sequence this policy exists for.
+
+    PAPER session, trade authorised, ENTRY fenced and sent, then an unexpected
+    runtime fault. The entry may be live at the broker; a restart must not shrug
+    and carry on.
+    """
+    port = FakePort()
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+
+    cycle.on_cycle()
+    assert port.count(OrderRole.ENTRY) == 1
+    record = store.require(identity.trade_intent_id)
+    assert record.arm_consumed
+    assert record.orders[identity.entry_order_id].send_fenced
+
+    port.fail_next_view = TypeError("unexpected fault on a broker path")
+    cycle.on_cycle()
+    assert cycle.halted
+    assert cycle.halt is not None and cycle.halt.kind is HaltKind.MANUAL_CLEARANCE_REQUIRED
+    assert port.said("execution risk:")
+    assert port.said("SURVIVES restart")
+
+    # Restart. The halt is still in force and nothing progresses on its own.
+    submitted_before = len(port.submitted)
+    resumed, _, _ = make_cycle(tmp_path, port)
+    assert resumed.halted, "the halt is durable"
+    resumed.on_cycle()
+    resumed.on_cycle()
+    assert len(port.submitted) == submitted_before, "no recovery progression, no second entry"
+    assert port.count(OrderRole.ENTRY) == 1
+    assert store.require(identity.trade_intent_id).state is TradeState.ENTRY_SUBMITTED
+
+    # The gates run before any clearance, and they REFUSE here: the entry still
+    # holds an unresolved send fence, so nobody can yet say whether it is live.
+    with pytest.raises(HaltClearanceError, match="unresolved SEND FENCE"):
+        assert_halt_clearable(store.require(identity.trade_intent_id), evidence())
+
+    # The operator reconciles against IBKR by hand; the broker confirms the
+    # order exists, which resolves the ambiguity the fence stood for.
+    resumed.on_order_event(status_event(identity.entry_order_id, EventStatus.SUBMITTED))
+    assert (
+        store.require(identity.trade_intent_id).orders[identity.entry_order_id].dispatch
+        is DispatchState.ACKNOWLEDGED
+    ), "the ingestion path stays alive through a halt"
+
+    caveats = assert_halt_clearable(store.require(identity.trade_intent_id), evidence())
+    assert caveats
+    JsonHaltStore(halt_state_path(tmp_path / "storage")).clear()
+    cleared, _, _ = make_cycle(tmp_path, port)
+    assert not cleared.halted
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionError("data farm"), TimeoutError("socket")],
+    ids=["connection", "timeout"],
+)
+def test_even_an_enumerated_transient_is_durable_once_a_trade_exists(
+    tmp_path: Path, error: Exception
+) -> None:
+    """The allowlist is pre-trade ONLY. Once anything is at stake it does not apply."""
+    port = FakePort()
+    cycle, _, _ = make_cycle(tmp_path, port)
+    cycle.on_cycle()  # a trade now exists and the entry is fenced
+
+    port.fail_next_view = error
+    cycle.on_cycle()
+    assert cycle.halt is not None and cycle.halt.kind is HaltKind.MANUAL_CLEARANCE_REQUIRED
+
+    resumed, _, _ = make_cycle(tmp_path, port)
+    assert resumed.halted
+
+
+def test_clearing_a_halt_cannot_revive_a_FAILED_trade(tmp_path: Path) -> None:  # noqa: N802
+    """The phrase lifts the DEPLOYMENT latch. It does not lift a lifecycle verdict."""
+    port = FakePort()
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+    cycle.on_order_event(fill_event(identity.entry_order_id))
+    cycle.on_cycle()
+
+    coordinator.fail(store.require(identity.trade_intent_id), "a durable failure")
+    cycle.on_cycle()
+    assert cycle.halted
+
+    JsonHaltStore(halt_state_path(tmp_path / "storage")).clear()
+    submitted_before = len(port.submitted)
+
+    cleared, _, _ = make_cycle(tmp_path, port)
+    # Read into locals: narrowing the property would make the second assertion
+    # look statically impossible to mypy, when it is exactly the point.
+    latch_lifted = cleared.halted
+    assert not latch_lifted, "the deployment latch is gone"
+    cleared.on_cycle()
+    cleared.on_cycle()
+
+    halted_again = cleared.halted
+    assert halted_again, "...and the cycle halts again on the FAILED lifecycle"
+    assert len(port.submitted) == submitted_before, "no progression, no new order"
+    assert store.require(identity.trade_intent_id).state is TradeState.FAILED
+
+
+def test_clearing_is_refused_while_a_position_is_unprotected(tmp_path: Path) -> None:
+    """An unprotected position must not become autonomous by clearing a halt."""
+    port = FakePort()
+    cycle, coordinator, store = make_cycle(tmp_path, port)
+    identity = coordinator.identity
+    cycle.on_cycle()
+    port.fill(identity.entry_order_id, 1)
+
+    record = store.require(identity.trade_intent_id)
+    record, _ = coordinator.apply_entry_fill_and_prepare_protection(
+        record,
+        client_order_id=identity.entry_order_id,
+        fill_id="7-1",
+        fill_quantity=1,
+        fill_price=SPY_PRICE,
+    )
+    assert record.open_long_quantity == 1 and record.protected_quantity == 0
+
+    with pytest.raises(HaltClearanceError, match="UNPROTECTED POSITION"):
+        assert_halt_clearable(record, evidence())
 
 
 def test_an_unbound_record_cannot_be_acted_on(tmp_path: Path) -> None:

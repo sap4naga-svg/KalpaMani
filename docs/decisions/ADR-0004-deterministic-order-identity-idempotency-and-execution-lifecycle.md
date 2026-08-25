@@ -362,19 +362,65 @@ should not. They are now distinct pieces of state:
 progression REMAINS halted". It is now persisted, and `Phase2Cycle` reads it at construction,
 so a restart does not resume.
 
-**Not every halt deserves to be permanent.** An operator who must clear a halt after each
-transient hiccup stops reading them, which is its own failure mode. The classification rule is
-about what the halt *implies*:
+**Unknown failures fail toward safety — revised 2026-08-25.** The first version of this rule
+read "a `SafetyViolationError` is durable, anything else is transient until proven otherwise".
+That is **fail-open** the moment the system is order-capable, and this review cycle produced the
+counter-example: a `TypeError` from .NET's `System.Decimal` shadowing Python's, sitting on the
+armed path, invisible to a fully green test suite. Under the old rule it would have halted the
+session and then **cleared itself on the next restart** — with an entry possibly live at IBKR.
 
-> A `SafetyViolationError` means durable state or broker truth is contradictory and a human
-> has to look. Anything else is transient until proven otherwise.
+The rule is now inverted:
 
-Unprotected positions, reconciliation mismatches, account-binding failures, contradictory arm
-evidence and illegal lifecycle transitions are all `SafetyViolationError`, so they persist and
-require `scripts/phase2_arm.py --clear-halt` with an exact phrase. A transport fault halts the
-session only, and a restart may retry it. `TradeState.FAILED` raises a *session* halt, because
-the durable record of it is the trade state itself — a second durable halt would only add a
-manual chore for a condition that is already permanent.
+> Once anything is at stake, **every** halt is durable. An unrecognised failure is durable
+> whether anything is at stake or not. Only an explicitly enumerated, known-benign **pre-trade**
+> condition may be session-scoped.
+
+"At stake" is `ExecutionRisk`, and it is deliberately broad — any one of these makes the halt
+survive a restart:
+
+| Condition | |
+|---|---|
+| the execution arm has been consumed | a `TradeRecord` exists at all |
+| an order intent is recorded | a send fence is held |
+| the broker acknowledged one of our orders | a fill has been applied |
+| a position may exist | protective or exit processing is under way |
+| **durable state could not be read** | |
+
+`TRANSIENT_PRE_TRADE_ERRORS` is a short allowlist **by type** — `ConnectionError`,
+`TimeoutError` — and it applies only before anything exists to lose. Nothing joins it by
+default, and the classifier never reasons by exclusion. Making every hiccup a permanent chore
+is still a real failure mode (an operator who clears halts reflexively has stopped reading
+them), which is why the allowlist exists at all; it is simply no longer the default branch.
+
+`TradeState.FAILED` raises a *session* halt, because the durable record of it is the trade state
+itself — a second durable halt would only add a manual chore for a condition already permanent,
+and the cycle re-halts on `FAILED` every time regardless.
+
+### 19. Clearing a halt is gated, and never overrides broker or lifecycle truth — added 2026-08-25
+
+The confirmation phrase is an assertion of **intent**, not of fact. On its own it must never make
+an unsafe trade resumable, so `--clear-halt` re-establishes every invariant it can before the
+phrase is even considered (`assert_halt_clearable`):
+
+| Gate | On failure |
+|---|---|
+| deployment session classifies PAPER, never LIVE or unknown | REFUSED |
+| durable state readable and internally coherent | REFUSED |
+| the trade is bound to *this* deployment account | REFUSED |
+| no order left holding an unresolved `SEND_FENCED` | REFUSED |
+| no long recorded without confirmed protection | REFUSED |
+| no short recorded at all | REFUSED |
+
+**What it deliberately does not claim.** `--clear-halt` runs on the host, with no brokerage
+connection: local-versus-broker position agreement, unexpected working SPY orders and an
+accidental short at IBKR cannot be checked there. They are checked where they can be — inside a
+deployment, on every cycle, by `reconcile()` and `assert_eligible_to_arm()`. So clearing lifts
+the **deployment latch and nothing else**: the next run still re-proves the account, still
+reconciles, and still halts if anything disagrees. The script prints those caveats rather than
+implying a completeness it does not have.
+
+Clearing also never revives a lifecycle. `TradeState.FAILED` is terminal; a cleared halt on a
+FAILED trade buys a read-only reconciliation pass, and the cycle halts again on the next tick.
 
 ### 16. Broker facts survive a terminal lifecycle — added 2026-08-25
 

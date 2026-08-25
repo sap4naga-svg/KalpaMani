@@ -553,14 +553,22 @@ Three different things can be "stopped", and they are not interchangeable:
 | operational halt | this **deployment** may take no new normal action | **when the cause is a safety violation** |
 | broker fact ingestion | — | **never stops** |
 
-A safety halt — unprotected position, reconciliation mismatch, account-binding failure,
-contradictory arm evidence — is written to `/Storage/phase2_operational_halt.json` and read
-back at startup. **Redeploying does not clear it.** The preflight fails while one is in force,
-and `--status` shows it.
+A durable halt is written to `/Storage/phase2_operational_halt.json` and read back at startup.
+**Redeploying does not clear it.** The preflight fails while one is in force, and `--status`
+shows it.
 
-A transient fault (a transport error, an unexpected runtime fault) halts that deployment only
-and a restart may retry it. That distinction is deliberate: an operator who has to clear a
-halt after every hiccup stops reading them.
+**What is durable:** everything, once anything is at stake — an arm consumed, a trade record,
+an order intent, a send fence, a broker acknowledgement, a fill, a possible position, a close in
+progress, or durable state we could not read. **And any failure this code does not recognise**,
+at stake or not.
+
+**What is session-scoped:** only an enumerated, known-benign *pre-trade* transport condition
+(`ConnectionError`, `TimeoutError`) with nothing at stake — the IB data farm not yet up on a
+cold start. That exception exists so an operator is not trained to clear halts reflexively; it
+is not a catch-all.
+
+> An unrecognised failure is **not** assumed transient. A `TypeError` on a broker path is
+> exactly what a green test suite failed to catch this cycle.
 
 To clear one, reconcile against IBKR **by hand first**, then:
 
@@ -568,9 +576,22 @@ To clear one, reconcile against IBKR **by hand first**, then:
 .venv\Scripts\python.exe scripts\phase2_arm.py --clear-halt --confirm "CLEAR PHASE2 HALT"
 ```
 
-The phrase must be exact. Clearing a halt asserts that a human has looked at the broker and
-resolved what caused it. It does **not** change the trade lifecycle: a `FAILED` trade stays
-`FAILED`.
+The gates run **before** the phrase is considered, and any of these refuses outright:
+
+| Refused when | |
+|---|---|
+| the deployment session is not provably PAPER | the trade is bound to a different account |
+| the record carries no account binding | an order holds an unresolved `SEND_FENCED` |
+| a long is held without confirmed protection | durable state records a short |
+
+**What the script cannot check, and says so:** it runs on the host with no brokerage
+connection, so local-versus-broker position agreement, unexpected working SPY orders and an
+accidental short at IBKR are not verifiable there. They are verified inside the next deployment,
+on every cycle. Clearing lifts the **deployment latch only** — the next run still re-proves the
+account and still reconciles before doing anything.
+
+It does **not** change the trade lifecycle: a `FAILED` trade stays `FAILED`, and the cycle halts
+again on the next tick.
 
 ---
 
@@ -604,6 +625,36 @@ If broker truth is ambiguous at that moment, nothing is sent and you get instead
 ```
 
 Do exactly that, in IBKR, by hand. Do not restart hoping it resolves itself.
+
+---
+
+## 13.8 Independent review without making the repository public
+
+The repository is **private** (CLAUDE.md §3) and must stay that way — an account-derived
+binding value existed in the old public history and in PR edit history. Do not re-expose the
+repository to let someone review it.
+
+Instead build a local, sanitized bundle:
+
+```bash
+.venv\Scripts\python.exe scripts\phase2_review_bundle.py
+```
+
+It writes `.runtime/review/phase2-round9-review.zip` — git-ignored, so it cannot be committed.
+
+Two properties make it safe to hand out:
+
+1. **Only tracked content goes in**, read with `git show HEAD:<path>` rather than from the
+   working tree. `.runtime/` is untracked, so LEAN configuration, IBKR gateway logs, cached
+   brokerage settings and credentials cannot be swept in even by accident.
+2. **The staged bytes are scanned before the archive is written**, and generation aborts on any
+   hit — the deployment account id, its binding digest, any account-shaped value that does not
+   look like a placeholder, anything shaped like a credential assignment. The scan covers the
+   generated patch and validation report too, because those are the parts nobody reviewed by
+   hand. On abort, nothing is written and the offending value is not printed.
+
+**Never add an IBKR or LEAN log to a review artifact.** IBAutomater logs the full account id in
+IB Gateway window titles.
 
 ---
 

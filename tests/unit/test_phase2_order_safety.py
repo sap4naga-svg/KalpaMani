@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import replace
 from datetime import time
 from decimal import Decimal
 from pathlib import Path
@@ -55,10 +56,14 @@ from kalpamani.execution.envelope import (
     protective_stop_price,
 )
 from kalpamani.execution.halt import (
+    TRANSIENT_PRE_TRADE_ERRORS,
+    ExecutionRisk,
+    HaltClearanceError,
     HaltKind,
     HaltStoreError,
     JsonHaltStore,
     OperationalHalt,
+    assert_halt_clearable,
     classify_halt,
     halt_state_path,
 )
@@ -106,6 +111,7 @@ from kalpamani.execution.state_store import (
     StateStoreError,
     TradeRecord,
     apply_fill,
+    fence_dispatch,
     record_order_intent,
 )
 from kalpamani.execution.trading_window import (
@@ -1053,6 +1059,9 @@ def test_receipt_disagreeing_about_consumption_fails_closed(
 # --------------------------------------------------------------------------
 
 
+NOTHING_AT_STAKE = ExecutionRisk.nothing_at_stake()
+
+
 def test_a_safety_violation_requires_manual_clearance() -> None:
     """Contradictory durable state or broker truth does not improve on restart."""
     for error in (
@@ -1061,13 +1070,180 @@ def test_a_safety_violation_requires_manual_clearance() -> None:
         SessionVerificationError("wrong account"),
         StateStoreError("corrupt"),
     ):
-        assert classify_halt(error) is HaltKind.MANUAL_CLEARANCE_REQUIRED
+        assert classify_halt(error, NOTHING_AT_STAKE) is HaltKind.MANUAL_CLEARANCE_REQUIRED
 
 
-def test_an_ordinary_error_halts_only_this_session() -> None:
-    """Not every transient fault should become a permanent manual chore."""
-    for error in (TimeoutError("transport"), RuntimeError("odd"), None):
-        assert classify_halt(error) is HaltKind.SESSION
+@pytest.mark.parametrize(
+    "error", [RuntimeError("odd"), TypeError("System.Decimal ctor"), ValueError("?"), None]
+)
+def test_an_UNKNOWN_failure_is_durable_even_with_nothing_at_stake(  # noqa: N802
+    error: BaseException | None,
+) -> None:
+    """The reversal. Previously anything unrecognised halted the session only.
+
+    This round produced the counter-example: a TypeError from .NET System.Decimal
+    shadowing Python's, on the armed path, invisible to a green test suite. Under
+    the old rule it would have cleared itself on the next restart -- with an entry
+    possibly live at the broker.
+    """
+    assert classify_halt(error, NOTHING_AT_STAKE) is HaltKind.MANUAL_CLEARANCE_REQUIRED
+
+
+@pytest.mark.parametrize("error", [ConnectionError("data farm"), TimeoutError("socket")])
+def test_only_an_ENUMERATED_pre_trade_transient_halts_the_session(  # noqa: N802
+    error: BaseException,
+) -> None:
+    """An allowlist by type, never a catch-all by exclusion."""
+    assert isinstance(error, TRANSIENT_PRE_TRADE_ERRORS)
+    assert classify_halt(error, NOTHING_AT_STAKE) is HaltKind.SESSION
+
+
+@pytest.mark.parametrize(
+    "risk",
+    [
+        ExecutionRisk(arm_consumed=True),
+        ExecutionRisk(trade_record_exists=True),
+        ExecutionRisk(orders_recorded=True),
+        ExecutionRisk(send_fence_held=True),
+        ExecutionRisk(broker_acknowledged=True),
+        ExecutionRisk(fills_applied=True),
+        ExecutionRisk(position_may_exist=True),
+        ExecutionRisk(closing_in_progress=True),
+        ExecutionRisk.unknown(),
+    ],
+)
+def test_ANY_execution_risk_makes_even_a_benign_transient_durable(  # noqa: N802
+    risk: ExecutionRisk,
+) -> None:
+    """Once something is at stake, no failure is small enough to forget."""
+    assert risk.any_execution_risk
+    assert classify_halt(ConnectionError("data farm"), risk) is HaltKind.MANUAL_CLEARANCE_REQUIRED
+
+
+def test_execution_risk_reads_every_condition_off_the_record(identity: TradeIdentity) -> None:
+    risk = ExecutionRisk.from_record(filled_record(identity))
+    assert risk.arm_consumed and risk.trade_record_exists and risk.orders_recorded
+    assert risk.fills_applied and risk.position_may_exist
+    assert risk.any_execution_risk
+    assert "fills_applied" in risk.describe()
+    assert PAPER_ACCOUNT_ID not in risk.describe()
+
+
+def test_unreadable_durable_state_is_maximum_risk() -> None:
+    """If we cannot say what we are holding, we are holding something."""
+    assert ExecutionRisk.unknown().any_execution_risk
+    assert ExecutionRisk.unknown().state_unreadable
+
+
+# --------------------------------------------------------------------------
+# Round 9 -- clearing a halt cannot override broker or lifecycle truth
+# --------------------------------------------------------------------------
+
+
+def protected_record(identity: TradeIdentity) -> TradeRecord:
+    """A long that IS covered by confirmed protection."""
+    record = filled_record(identity)
+    record = record_order_intent(
+        record,
+        client_order_id=identity.protective_order_id,
+        role=OrderRole.PROTECTIVE,
+        symbol="SPY",
+        side="SELL",
+        quantity=1,
+        stop_price="689.74",
+    )
+    return replace(record, protected_quantity=1)
+
+
+def test_clearing_is_permitted_when_everything_checkable_agrees(
+    identity: TradeIdentity,
+) -> None:
+    caveats = assert_halt_clearable(protected_record(identity), evidence())
+    assert any("BROKER position cannot be checked from the host" in c for c in caveats)
+
+
+def test_clearing_with_no_trade_record_is_permitted(identity: TradeIdentity) -> None:
+    assert assert_halt_clearable(None, evidence())
+
+
+@pytest.mark.parametrize(
+    ("account_id", "trading_mode"),
+    [(LIVE_ACCOUNT_ID, "live"), ("XX999", ""), (LIVE_ACCOUNT_ID, "")],
+    ids=["live", "unknown", "live-derived"],
+)
+def test_clearing_is_refused_against_a_non_paper_session(
+    identity: TradeIdentity, account_id: str, trading_mode: str
+) -> None:
+    with pytest.raises(HaltClearanceError, match="REFUSED"):
+        assert_halt_clearable(
+            protected_record(identity), evidence(account_id, trading_mode=trading_mode)
+        )
+
+
+def test_clearing_is_refused_when_the_trade_belongs_to_another_account(
+    identity: TradeIdentity,
+) -> None:
+    record = replace(
+        protected_record(identity), account_fingerprint=account_fingerprint("DU7654321")
+    )
+    with pytest.raises(HaltClearanceError) as excinfo:
+        assert_halt_clearable(record, evidence())
+    message = str(excinfo.value)
+    assert "DIFFERENT brokerage account" in message
+    assert account_fingerprint("DU7654321") not in message, "no binding value printed"
+
+
+def test_clearing_is_refused_when_the_record_is_unbound(identity: TradeIdentity) -> None:
+    record = replace(protected_record(identity), account_fingerprint=None)
+    with pytest.raises(HaltClearanceError, match="no account binding"):
+        assert_halt_clearable(record, evidence())
+
+
+def test_clearing_is_refused_while_a_send_fence_is_unresolved(
+    identity: TradeIdentity,
+) -> None:
+    """A send MAY have occurred. Clearing would let a deployment act while it
+    still cannot say whether an order is live."""
+    record = fence_dispatch(protected_record(identity), identity.protective_order_id)
+    with pytest.raises(HaltClearanceError, match="unresolved SEND FENCE"):
+        assert_halt_clearable(record, evidence())
+
+
+def test_clearing_is_refused_while_a_position_is_unprotected(
+    identity: TradeIdentity,
+) -> None:
+    """An unprotected position must not become autonomous by clearing a halt."""
+    record = filled_record(identity)  # long 1, no protective order at all
+    assert record.open_long_quantity == 1 and record.protected_quantity == 0
+    with pytest.raises(HaltClearanceError, match="UNPROTECTED POSITION"):
+        assert_halt_clearable(record, evidence())
+
+
+def test_clearing_is_refused_on_a_recorded_short(identity: TradeIdentity) -> None:
+    record = protected_record(identity)
+    record = record_order_intent(
+        record,
+        client_order_id=identity.exit_order_id,
+        role=OrderRole.EXIT,
+        symbol="SPY",
+        side="SELL",
+        quantity=2,
+    )
+    record = apply_fill(
+        record, client_order_id=identity.exit_order_id, fill_id="9-1", fill_quantity=2
+    )
+    assert record.open_long_quantity == -1
+    with pytest.raises(HaltClearanceError, match="SHORT position"):
+        assert_halt_clearable(record, evidence())
+
+
+def test_clearing_a_FAILED_trade_is_permitted_but_says_it_stays_failed(  # noqa: N802
+    identity: TradeIdentity,
+) -> None:
+    """Clearing buys a read-only reconciliation pass, not progression."""
+    record = replace(protected_record(identity), state=TradeState.FAILED)
+    caveats = assert_halt_clearable(record, evidence())
+    assert any("STAYS FAILED" in c for c in caveats)
 
 
 def test_a_manual_halt_survives_a_restart(tmp_path: Path) -> None:

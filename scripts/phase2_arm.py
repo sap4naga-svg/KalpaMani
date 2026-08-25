@@ -37,12 +37,19 @@ from kalpamani.broker.account import redact_account_id
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
     PHASE2_FILL_NOTIONAL_TOLERANCE_USD,
+    PHASE2_INTENT_NATURAL_KEY,
     PHASE2_MAX_REFERENCE_NOTIONAL_USD,
     PHASE2_QUANTITY,
     PHASE2_SYMBOL,
     describe_envelope,
 )
-from kalpamani.execution.halt import JsonHaltStore, halt_state_path
+from kalpamani.execution.halt import (
+    HaltClearanceError,
+    JsonHaltStore,
+    assert_halt_clearable,
+    halt_state_path,
+)
+from kalpamani.execution.identity import TradeIdentity
 from kalpamani.execution.session import (
     IB_ACCOUNT_KEY,
     IB_TRADING_MODE_KEY,
@@ -50,6 +57,7 @@ from kalpamani.execution.session import (
     SessionVerificationError,
     verify_paper_session,
 )
+from kalpamani.execution.state_store import JsonTradeStateStore, StateStoreError
 
 #: Parameter that binds the arm to one specific brokerage account. Stored as a
 #: fingerprint, never as a raw account id, and REQUIRED for the arm to count.
@@ -60,6 +68,7 @@ PROJECT_NAME = "phase2_order_lifecycle"
 RUNTIME_PROJECT = REPO_ROOT / ".runtime" / "lean" / PROJECT_NAME
 RUNTIME_CONFIG = RUNTIME_PROJECT / "config.json"
 RUNTIME_STORAGE = REPO_ROOT / ".runtime" / "lean" / "storage"
+RUNTIME_STATE = RUNTIME_STORAGE / "phase2_trade_state.json"
 
 #: Clearing a durable safety halt is a deliberate human act, so it takes its own
 #: phrase. A halt is raised when durable state or broker truth is contradictory;
@@ -249,15 +258,60 @@ def clear_halt(confirmation: str) -> int:
     print(f"  reason : {halt.reason}")
     print()
 
+    # The gates run FIRST. The phrase is an assertion of intent, not of fact,
+    # and on its own it must never make an unsafe trade resumable.
+    try:
+        evidence = deployment_session_evidence()
+        record = load_trade_record()
+        caveats = assert_halt_clearable(record, evidence)
+    except (HaltClearanceError, SessionVerificationError, StateStoreError) as exc:
+        print(str(exc))
+        print()
+        print("The halt is LEFT IN FORCE. Resolve the condition above before retrying.")
+        return 1
+
+    print("Pre-clearance checks passed:")
+    print(f"  deployment session  : {evidence.describe()}")
+    print(f"  trade record        : {record.describe() if record else '(none)'}")
+    for caveat in caveats:
+        print(f"  NOTE: {caveat}")
+    print()
+
     if confirmation != CLEAR_HALT_PHRASE:
         print(f'REFUSED: clearing a halt requires --confirm "{CLEAR_HALT_PHRASE}" exactly.')
         print("Reconcile the position and the open orders against IBKR by hand FIRST.")
         return 1
 
     store.clear()
-    print("Halt cleared. The next deployment may resume normal progression.")
-    print("The trade lifecycle itself is unchanged: a FAILED trade stays FAILED.")
+    print("Halt cleared -- the DEPLOYMENT latch only.")
+    print("The trade lifecycle is unchanged: a FAILED trade stays FAILED, and the next")
+    print("deployment still re-proves the account and reconciles against the broker before")
+    print("it does anything at all.")
     return 0
+
+
+def deployment_session_evidence() -> BrokerSessionEvidence:
+    """Session evidence from LEAN's own deployment configuration."""
+    raw = json.loads(LEAN_DEPLOYMENT_CONFIG.read_text(encoding="utf-8"))
+    account_id = str(raw.get(IB_ACCOUNT_KEY, "") or "")
+    if not account_id:
+        raise SessionVerificationError(
+            f"{IB_ACCOUNT_KEY!r} is absent from the deployment configuration, so a halt "
+            "cannot be checked against the account it protects."
+        )
+    return BrokerSessionEvidence(
+        account_id=account_id,
+        trading_mode=str(raw.get(IB_TRADING_MODE_KEY, "") or ""),
+        source=str(LEAN_DEPLOYMENT_CONFIG),
+    )
+
+
+def load_trade_record():
+    """The durable trade record, or None. Unreadable state raises."""
+    if not RUNTIME_STATE.exists():
+        return None
+    identity = TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1)
+    return JsonTradeStateStore(RUNTIME_STATE).get(identity.trade_intent_id)
 
 
 def main() -> int:
