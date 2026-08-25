@@ -15,6 +15,14 @@ KalpaMani -> LEAN -> IBKR Paper -> account connection -> market data
 
 **Zero orders. Zero positions.**
 
+> ## ✅ PHASE 1 COMPLETE AND ACCEPTED — 2026-08-25
+> All 13 acceptance criteria passed: LEAN launches · IBKR Paper connection confirmed ·
+> exactly one SPY subscription · market data received · broker state observable · paper
+> equity observed as USD 1,000,000 · KalpaMani capital remained USD 80,000 · no orders ·
+> no positions · clean shutdown · 98 tests · ruff clean · mypy strict clean · preflight clean.
+>
+> This runbook remains the operating procedure for re-running the connectivity test.
+
 ---
 
 ## 1. Prerequisites
@@ -303,6 +311,11 @@ Success criteria — **all** must hold:
 ---
 
 ## 8.1 IMPORTANT — LEAN disables IBKR's broker-side order guards
+
+> **Binding decision: [ADR-0003 — Broker-Side Order Controls Are Not Safety Invariants](../decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md).**
+> IBKR Read-Only API must not be treated as an independent KalpaMani safety control. It
+> corrects an assumption in Blueprint V2.1 §25; see
+> [`BLUEPRINT_ERRATA.md`](../architecture/BLUEPRINT_ERRATA.md) E-001.
 
 Observed on the 2026-08-24 connection. During IB Gateway setup, IBAutomater
 **automatically changes safety settings on the brokerage side**:

@@ -138,7 +138,8 @@ source, not merely by review.
 When an order interface is eventually introduced (Phase 2 at the earliest), it must carry
 a deterministic, reproducible client order ID so that a retry, reconnect or restart can
 never produce a duplicate order. Duplicate-order prevention is a precondition for any
-automated order testing, per Blueprint V2.1 §16, and will be specified in **ADR-0004**.
+automated order testing, per Blueprint V2.1 §16, and will be specified in a dedicated ADR
+taking the next available number at the time it is written.
 
 ### 13. Market-data architecture stays separable from brokerage execution
 
@@ -195,7 +196,12 @@ It must expose **no** order-submission method. Adding one is an ADR-level change
 
 ## Follow-ups
 
-- **ADR-0003** — Point-in-time data provider selection (after the Phase-0 audit).
-- **ADR-0004** — Order idempotency and deterministic client/order ID scheme (before any
-  automated order testing).
-- **ADR-00xx** — Live-execution Gate 2 authorization mechanism.
+> **Numbers are assigned at write time**, by taking the next unused number in
+> `docs/decisions/`. Follow-ups are listed by topic only. Pre-assigning numbers here caused
+> two conflicts already (ADR-0002 and ADR-0003 were both claimed in advance by items that
+> had not been written yet), so this list deliberately does not do it.
+
+- **Order idempotency and deterministic client/order IDs** — required by ADR-0002 §12
+  *before* any automated order testing, i.e. before Phase 2 implementation.
+- **Point-in-time data provider selection** — after the Phase-0 data audit.
+- **Live-execution Gate 2 authorization mechanism** — before live trading is considered.
