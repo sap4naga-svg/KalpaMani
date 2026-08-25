@@ -610,6 +610,39 @@ value.
 abandoned. The ownership rule stays: tag, or exact durable broker identity, or foreign.
 Attributes only validate. A rescue path would have been the one place shape could create
 ownership, and one exception is how a rule stops being a rule.
+
+### 23. Multi-run wiring: no defaults, no coarse checks — added 2026-08-25
+
+Once more than one certification run can exist, several checks that were correct for a single
+run become fail-open. Five, found by review of the round-13 bundle:
+
+**An unbound halt still has to name a real run.** A halt written before run binding names no
+run, and returning early on those meant `--run 2` selected `record=None`, every remaining gate
+had nothing to inspect, and the halt cleared. The rule is now explicit: if any trade exists, the
+selected run must resolve to a real durable record; if none does, a genuine pre-trade halt may
+be cleared, because there is no trade to protect and no gate a wrong run could bypass.
+
+**The engine has no run default.** `int(get_parameter("phase2_run_number") or 1)` looked
+harmless and meant an unconfigured deployment ran as **run 1** — a completed certification whose
+identity is audit evidence. `require_run_number()` rejects absent, empty, non-integer and
+non-positive values, and raises out of `initialize()` so LEAN refuses to start. A structural test
+asserts no `or`-defaulting of the run selector returns.
+
+**Preflight judges the selected run's record, not "a state file exists".** The file may hold
+run 1 while run 2 is selected; a consumed run-2 receipt beside a run-1-only state file is a
+**lost** run-2 record, and the coarse check reported it green. It now loads the selected run's
+record and runs both `assert_arm_available` and `assert_arm_matches_record` against it.
+
+**Clearing a halt and arming a run are two acts, in that order.** Arming under a halt collapsed
+them: the halt is cleared later and the next deployment is already armed. `--arm` now refuses
+while any durable halt exists, and writes no parameters.
+
+**The bundle stopped claiming both preflights exit 0.** Phase-2 preflight exits non-zero
+whenever a halt is in force — a correct refusal, not a defect — so the report states the actual
+codes must be read locally rather than asserting either.
+
+The common shape: a check that was precise enough for one run becomes a wildcard for many.
+"Any record", "a state file", "some run" — each was fine until there were two of something.
 ---
 
 ## Consequences

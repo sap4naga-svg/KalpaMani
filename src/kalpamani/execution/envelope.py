@@ -148,6 +148,39 @@ def certification_natural_key(run_number: int) -> str:
     return f"{PHASE2_RUN_1_NATURAL_KEY}/run-{run_number}"
 
 
+def require_run_number(raw: object) -> int:
+    """Parse an explicitly selected certification run, or fail closed.
+
+    There is deliberately no default. ``or 1`` in the engine looked harmless and
+    meant that a deployment with a missing, empty or malformed run selector
+    would quietly run as **run 1** -- a failed certification whose identity is
+    audit evidence. A run number is a human decision; absence of one is an
+    error, not a hint.
+
+    Raises:
+        Phase2EnvelopeError: if the value is absent, empty, non-integer, or < 1.
+    """
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        raise Phase2EnvelopeError(
+            "No certification run was selected. Phase 2 never defaults to a run: run 1 is a "
+            "completed certification and its identity is evidence, not a fallback. Set "
+            "phase2_run_number explicitly."
+        )
+    try:
+        run = int(text)
+    except ValueError as exc:
+        raise Phase2EnvelopeError(
+            f"Certification run {text!r} is not an integer. Refusing to guess what was meant."
+        ) from exc
+    if run < 1:
+        raise Phase2EnvelopeError(
+            f"Certification run must be >= 1, got {run}. A run number is a deliberate human "
+            "choice, not something to default into."
+        )
+    return run
+
+
 def certification_identity(run_number: int) -> TradeIdentity:
     """Derive the full identity for a certification run."""
     return TradeIdentity.derive(certification_natural_key(run_number), attempt=1)
@@ -375,4 +408,5 @@ __all__ = [
     "check_no_prior_test_trade",
     "describe_envelope",
     "protective_stop_price",
+    "require_run_number",
 ]

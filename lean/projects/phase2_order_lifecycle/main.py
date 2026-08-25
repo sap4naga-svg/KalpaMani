@@ -20,6 +20,7 @@ from kalpamani.execution.envelope import (
     PHASE2_SYMBOL,
     certification_identity,
     describe_envelope,
+    require_run_number,
 )
 from kalpamani.execution.halt import JsonHaltStore, halt_state_path
 from kalpamani.execution.reconciliation import (
@@ -211,7 +212,14 @@ class Phase2OrderLifecycle(QCAlgorithm):
         # never auto-incremented after a failure. Each run gets a genuinely
         # different deterministic identity, so a failed run keeps its evidence
         # and the next attempt cannot inherit it.
-        run_number = int(self.get_parameter("phase2_run_number") or 1)
+        #
+        # There is NO default. `or 1` used to sit here, which meant a deployment
+        # with no run selected would quietly run as run 1 -- a completed
+        # certification whose identity is audit evidence. A missing, empty or
+        # malformed selector raises out of initialize() and LEAN refuses to
+        # start, which is the correct failure for "we do not know what this
+        # deployment is".
+        run_number = require_run_number(self.get_parameter("phase2_run_number"))
         identity = certification_identity(run_number)
         coordinator = Phase2Coordinator(
             JsonTradeStateStore(STATE_PATH),

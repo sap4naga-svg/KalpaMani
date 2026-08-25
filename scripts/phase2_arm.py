@@ -215,6 +215,18 @@ def arm(confirmation: str, run_number: int | None) -> int:
         print(f'Type exactly:  --confirm "{PHASE2_CONFIRMATION_PHRASE}"')
         return 1
 
+    # Clearing a halt and authorising a run are TWO human acts, in that order.
+    # Pre-arming under a halt collapses them: the halt gets cleared later and the
+    # next deployment is already armed, which is not the sequence anyone agreed
+    # to. Runtime would still refuse to trade -- but the arm should not exist.
+    halt = JsonHaltStore(halt_state_path(RUNTIME_STORAGE)).get()
+    if halt is not None:
+        print(f"REFUSED: a durable operational halt is in force ({halt.describe()}).")
+        print(f"  reason: {halt.reason}")
+        print("  Resolve it and clear it deliberately FIRST, then authorise a run.")
+        print("  Clearing a halt and arming a run are two separate acts, in that order.")
+        return 1
+
     evidence = deployment_evidence()
     if evidence is None:
         print(
@@ -356,7 +368,10 @@ def clear_halt(confirmation: str, run_number: int | None) -> int:
         record = load_trade_record_for_run(run_number)
         # The binding comes FIRST: the gates below inspect `record`, so they are
         # only meaningful once we know the halt is this run's halt.
-        assert_halt_belongs_to(halt, record)
+        any_records = bool(
+            JsonTradeStateStore(RUNTIME_STATE).all_records() if RUNTIME_STATE.exists() else []
+        )
+        assert_halt_belongs_to(halt, record, any_records_exist=any_records)
         caveats = assert_halt_clearable(record, evidence)
     except (HaltClearanceError, SessionVerificationError, StateStoreError) as exc:
         print(str(exc))

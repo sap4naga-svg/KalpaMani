@@ -9,6 +9,7 @@ between the two was the defect, and only a test that crosses it can see that.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -20,7 +21,9 @@ import pytest
 
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
+    Phase2EnvelopeError,
     certification_identity,
+    require_run_number,
 )
 from kalpamani.execution.halt import (
     HaltClearanceError,
@@ -51,6 +54,7 @@ from kalpamani.execution.state_store import (
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PHASE2_MAIN = REPO_ROOT / "lean" / "projects" / "phase2_order_lifecycle" / "main.py"
 PAPER_ACCOUNT_ID = "DU1234567"
 
 
@@ -205,7 +209,7 @@ def test_clear_halt_refuses_when_the_halt_belongs_to_another_run() -> None:
     )
 
     with pytest.raises(HaltClearanceError, match="belongs to run"):
-        assert_halt_belongs_to(halt, resolved_run_one)
+        assert_halt_belongs_to(halt, resolved_run_one, any_records_exist=True)
 
 
 def test_clear_halt_accepts_the_run_that_raised_it() -> None:
@@ -213,7 +217,7 @@ def test_clear_halt_accepts_the_run_that_raised_it() -> None:
     halt = OperationalHalt(
         "run 2 halted", HaltKind.MANUAL_CLEARANCE_REQUIRED, trade_intent_id=run_two.trade_intent_id
     )
-    assert_halt_belongs_to(halt, record_for(2, state=TradeState.FAILED))
+    assert_halt_belongs_to(halt, record_for(2, state=TradeState.FAILED), any_records_exist=True)
 
 
 def test_a_trade_bound_halt_refuses_a_missing_run() -> None:
@@ -221,14 +225,14 @@ def test_a_trade_bound_halt_refuses_a_missing_run() -> None:
         "bound", HaltKind.MANUAL_CLEARANCE_REQUIRED, trade_intent_id="ti-whatever"
     )
     with pytest.raises(HaltClearanceError, match="no run was selected"):
-        assert_halt_belongs_to(halt, None)
+        assert_halt_belongs_to(halt, None, any_records_exist=True)
 
 
 def test_an_unbound_legacy_halt_does_not_pretend_to_belong_to_a_run() -> None:
     """A v1 halt predates run binding. It is UNBOUND, not "yours"."""
     halt = OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED)
     assert halt.is_trade_bound is False
-    assert_halt_belongs_to(halt, record_for(1))  # permitted, but only because it is unbound
+    assert_halt_belongs_to(halt, record_for(1), any_records_exist=True)
 
 
 def test_run_2_unresolved_send_fence_cannot_be_bypassed(workspace: Path) -> None:
@@ -340,3 +344,181 @@ def test_run_1_legacy_receipt_paths_are_preserved(workspace: Path) -> None:
 def test_an_unselected_run_makes_the_preflight_arm_invalid(workspace: Path) -> None:
     select_run(workspace, None)
     assert PREFLIGHT.selected_run_number() is None
+
+
+# ---------------------------------------------------------------------------
+# Round 14 -- an UNBOUND halt still has to name a real run
+# ---------------------------------------------------------------------------
+
+
+def test_an_unbound_halt_is_not_cleared_by_an_arbitrary_run(workspace: Path) -> None:
+    """THE regression. Unbound halt, run 1 resolved, no run-2 record.
+
+    Selecting run 2 made `record` None, so every gate below had nothing to
+    inspect and the halt cleared. "No record" is not proof that the run you
+    named is the right one.
+    """
+    halt_store = ARM.JsonHaltStore(ARM.halt_state_path(workspace / "storage"))
+    halt_store.put(OperationalHalt("legacy, unbound", HaltKind.MANUAL_CLEARANCE_REQUIRED))
+    store(workspace).put(
+        replace(
+            record_for(1, state=TradeState.FAILED),
+            resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
+        )
+    )
+    assert ARM.load_trade_record_for_run(2) is None, "run 2 does not exist"
+
+    assert ARM.clear_halt("CLEAR PHASE2 HALT", 2) == 1
+    assert halt_store.get() is not None, "the halt survives"
+
+
+def test_an_unbound_halt_may_be_cleared_against_the_run_that_exists(workspace: Path) -> None:
+    """Same world, correct run: the gates get a real record to judge."""
+    halt_store = ARM.JsonHaltStore(ARM.halt_state_path(workspace / "storage"))
+    halt_store.put(OperationalHalt("legacy, unbound", HaltKind.MANUAL_CLEARANCE_REQUIRED))
+    resolved = replace(
+        record_for(1, state=TradeState.FAILED),
+        resolution=ResolutionKind.MANUAL_BROKER_CLOSE,
+    )
+    store(workspace).put(resolved)
+
+    caveats = ARM.assert_halt_clearable(resolved, evidence())
+    assert any("stays FAILED" in c for c in caveats)
+    assert_halt_belongs_to(
+        OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED),
+        resolved,
+        any_records_exist=True,
+    )
+
+
+def test_a_genuine_pre_trade_unbound_halt_may_be_cleared(workspace: Path) -> None:
+    """Stated deliberately rather than falling out of a missing check.
+
+    A cold-start fault before anything was armed leaves no trade to protect and
+    no gate a wrong run could bypass.
+    """
+    assert_halt_belongs_to(
+        OperationalHalt("data farm down", HaltKind.MANUAL_CLEARANCE_REQUIRED),
+        None,
+        any_records_exist=False,
+    )
+
+
+def test_an_unbound_halt_with_trades_present_refuses_a_missing_record() -> None:
+    with pytest.raises(HaltClearanceError, match="names no certification run"):
+        assert_halt_belongs_to(
+            OperationalHalt("legacy", HaltKind.MANUAL_CLEARANCE_REQUIRED),
+            None,
+            any_records_exist=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Round 14 -- the engine has no run-1 default
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "one", "0", "-1", "1.5"])
+def test_a_missing_or_malformed_run_fails_closed(raw: object) -> None:
+    """`or 1` looked harmless and meant an unconfigured deployment ran as run 1
+    -- a completed certification whose identity is audit evidence."""
+    with pytest.raises(Phase2EnvelopeError):
+        require_run_number(raw)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("1", 1), (" 2 ", 2), (3, 3), ("10", 10)])
+def test_an_explicit_run_is_accepted(raw: object, expected: int) -> None:
+    assert require_run_number(raw) == expected
+
+
+def test_the_adapter_has_no_implicit_run_1_fallback() -> None:
+    """Asserted structurally, because this is a one-token regression."""
+    source = PHASE2_MAIN.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    initialize = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "initialize"
+    )
+    body = ast.unparse(initialize)
+    assert "require_run_number" in body
+    assert "phase2_run_number') or" not in body.replace('"', "'")
+    assert "or 1" not in body, "an implicit run-1 fallback has returned"
+
+    # And no BoolOp defaulting around the run parameter anywhere in the adapter.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            rendered = ast.unparse(node)
+            assert "phase2_run_number" not in rendered, f"defaulted run selector: {rendered}"
+
+
+# ---------------------------------------------------------------------------
+# Round 14 -- preflight judges the SELECTED run's record
+# ---------------------------------------------------------------------------
+
+
+def test_a_consumed_run_2_receipt_with_only_a_run_1_record_fails(workspace: Path) -> None:
+    """Reproduced: preflight reported green while run 2's record was LOST.
+
+    "A state file exists" was too coarse -- the file held run 1.
+    """
+    select_run(workspace, 2)
+    write_arm_receipt(consumed_receipt(2), PREFLIGHT.runtime_arm_receipts(2))
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+
+    assert PREFLIGHT.check_arm_receipts(state_present=True) is False
+
+
+def test_run_2_receipts_with_a_matching_run_2_record_pass(workspace: Path) -> None:
+    select_run(workspace, 2)
+    write_arm_receipt(consumed_receipt(2), PREFLIGHT.runtime_arm_receipts(2))
+    store(workspace).put(record_for(2, state=TradeState.FAILED))
+
+    assert PREFLIGHT.check_arm_receipts(state_present=True) is True
+
+
+def test_a_run_2_receipt_bound_to_another_account_fails(workspace: Path) -> None:
+    select_run(workspace, 2)
+    write_arm_receipt(
+        ArmReceipt(
+            trade_intent_id=certification_identity(2).trade_intent_id,
+            account_fingerprint=account_fingerprint("DU7654321"),
+            consumed=True,
+        ),
+        PREFLIGHT.runtime_arm_receipts(2),
+    )
+    store(workspace).put(record_for(2, state=TradeState.FAILED))
+
+    assert PREFLIGHT.check_arm_receipts(state_present=True) is False
+
+
+def test_a_run_1_receipt_does_not_mask_missing_run_2_evidence(workspace: Path) -> None:
+    select_run(workspace, 2)
+    write_arm_receipt(consumed_receipt(1), PREFLIGHT.runtime_arm_receipts(1))
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+
+    # No run-2 receipt exists, so there is nothing consumed to contradict --
+    # but neither is run 1 allowed to stand in as run 2's evidence.
+    assert read_arm_receipts(PREFLIGHT.runtime_arm_receipts(2)) == []
+    assert PREFLIGHT.check_arm_receipts(state_present=True) is True
+
+
+# ---------------------------------------------------------------------------
+# Round 14 -- clearing a halt and arming a run are two separate acts
+# ---------------------------------------------------------------------------
+
+
+def test_arming_is_refused_while_a_durable_halt_exists(workspace: Path) -> None:
+    """Pre-arming under a halt collapses the intended sequence: the halt gets
+    cleared later and the next deployment is already armed."""
+    ARM.JsonHaltStore(ARM.halt_state_path(workspace / "storage")).put(
+        OperationalHalt("still halted", HaltKind.MANUAL_CLEARANCE_REQUIRED)
+    )
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+
+    assert ARM.arm(PHASE2_CONFIRMATION_PHRASE, 2) == 1
+    assert params(workspace) == {}, "no arm parameters were written"
+
+
+def test_arming_is_permitted_once_the_halt_is_gone(workspace: Path) -> None:
+    store(workspace).put(record_for(1, state=TradeState.FAILED))
+    assert ARM.arm(PHASE2_CONFIRMATION_PHRASE, 2) == 0
+    assert params(workspace)[ARM.RUN_NUMBER_KEY] == "2"

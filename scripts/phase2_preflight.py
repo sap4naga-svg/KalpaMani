@@ -50,6 +50,8 @@ from kalpamani.execution.session import (
     BrokerSessionEvidence,
     SessionVerificationError,
     arm_receipt_paths,
+    assert_arm_available,
+    assert_arm_matches_record,
     read_arm_receipts,
     verify_paper_session,
 )
@@ -479,19 +481,42 @@ def check_arm_receipts(state_present: bool) -> bool:
         print("  INFO: no usable certification run selected; receipts cannot be scoped")
         return True
     print(f"  INFO: certification run {run}")
+
+    # "A state file exists" is too coarse: the file may hold run 1 while the
+    # selected run is 2. A consumed run-2 receipt beside a run-1-only state file
+    # is a LOST run-2 record, and reporting it green here would hide the very
+    # condition the receipt check exists to catch.
+    identity = certification_identity(run)
+    selected_record = None
+    if RUNTIME_STATE.exists():
+        try:
+            selected_record = JsonTradeStateStore(RUNTIME_STATE).get(identity.trade_intent_id)
+        except StateStoreError as exc:
+            _fail(f"durable trade state is unreadable: {exc}")
+            return False
+    state_present = selected_record is not None
+    print(f"  INFO: durable record for this run: {'present' if state_present else 'absent'}")
+
     receipts = read_arm_receipts(runtime_arm_receipts(run))
     if not receipts:
         print("  OK  : no arm receipt (a genuine first run)")
         return True
-    consumed = [r for r in receipts if r.consumed]
     for receipt in receipts:
         print(f"  INFO: receipt intent={receipt.trade_intent_id} consumed={receipt.consumed}")
-    if consumed and not state_present:
-        _fail(
-            "an arm receipt records the arm as CONSUMED but no durable trade record exists. "
-            "Refusing to treat this as a first run: the trade state is missing, not absent."
-        )
+
+    try:
+        assert_arm_available(runtime_arm_receipts(run), trade_state_present=state_present)
+        if selected_record is not None:
+            assert_arm_matches_record(
+                runtime_arm_receipts(run),
+                trade_intent_id=selected_record.trade_intent_id,
+                account_fingerprint_value=selected_record.account_fingerprint,
+                arm_consumed=selected_record.arm_consumed,
+            )
+    except SafetyViolationError as exc:
+        _fail(str(exc))
         return False
+    print("  OK  : receipts agree with this run and with its durable record")
     return True
 
 

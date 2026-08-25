@@ -346,7 +346,12 @@ class JsonHaltStore:
         self._path.unlink(missing_ok=True)
 
 
-def assert_halt_belongs_to(halt: OperationalHalt, record: TradeRecord | None) -> None:
+def assert_halt_belongs_to(
+    halt: OperationalHalt,
+    record: TradeRecord | None,
+    *,
+    any_records_exist: bool,
+) -> None:
     """Assert the halt being cleared is the halt this run raised.
 
     Clearing a halt validates the selected run against the gates below. If the
@@ -355,12 +360,38 @@ def assert_halt_belongs_to(halt: OperationalHalt, record: TradeRecord | None) ->
     of a halt protecting a live one. That is fail-open, so the binding is
     checked before anything else.
 
+    Unbound halts
+    -------------
+    A halt written before run binding existed names no run. Returning early on
+    those was itself fail-open: with run 1 resolved and no run-2 record,
+    ``--run 2`` selected ``record=None``, every remaining gate had nothing to
+    inspect, and the halt cleared. "No record" is not proof that the run you
+    named is the right one.
+
+    So an unbound halt is judged by whether any trade exists at all:
+
+    * **Trades exist** -- the selected run must resolve to a real durable record,
+      which then faces every normal gate. An arbitrary or not-yet-existing run
+      cannot clear it.
+    * **No trades exist** -- a genuine pre-trade halt (a cold-start fault before
+      anything was armed). There is no trade to protect and no gate a wrong run
+      could bypass, so clearing is permitted. This is stated deliberately rather
+      than falling out of a missing check.
+
     Raises:
-        HaltClearanceError: if the halt names a different run, or names a run at
-            all while no record was selected.
+        HaltClearanceError: if the halt names a different run, if it names a run
+            at all while none was selected, or if an unbound halt is cleared
+            against a run that has no durable record while other runs do.
     """
     if not halt.is_trade_bound:
-        return  # raised before any trade existed, or a pre-binding record
+        if any_records_exist and record is None:
+            raise HaltClearanceError(
+                "REFUSED: this halt names no certification run, and the run you selected has "
+                "no durable record -- while other runs do. Clearing it would validate nothing: "
+                "every gate below inspects a trade, and there is no trade selected to inspect. "
+                "Name the run this halt actually protects."
+            )
+        return
     if record is None:
         raise HaltClearanceError(
             "REFUSED: this halt belongs to a specific certification run, but no run was "

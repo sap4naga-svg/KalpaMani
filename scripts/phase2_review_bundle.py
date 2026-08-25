@@ -38,7 +38,7 @@ from kalpamani.execution.session import IB_ACCOUNT_KEY, account_fingerprint
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_BRANCH = "main"
 OUTPUT_DIR = REPO_ROOT / ".runtime" / "review"
-OUTPUT_ZIP = OUTPUT_DIR / "phase2-round13-review.zip"
+OUTPUT_ZIP = OUTPUT_DIR / "phase2-round14-review.zip"
 
 #: The deployment configuration. Read ONLY to learn what must never appear in
 #: the bundle. Its contents never enter the bundle.
@@ -185,7 +185,9 @@ def validation_report() -> str:
     lines += [
         "Preflight scripts are NOT run here: their output names the deployment account",
         "(redacted) and local runtime paths, neither of which belongs in a review bundle.",
-        "Run them locally; both exit 0.",
+        "Run them locally and read their ACTUAL exit codes -- this report deliberately",
+        "does not assert what they will be. Phase-2 preflight exits non-zero whenever a",
+        "durable operational halt is in force, which is a correct refusal, not a defect.",
         "",
         "STATUS",
         "  Certification run 1 EXECUTED against IBKR Paper and failed restart",
