@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD
+from kalpamani.common.errors import SafetyViolationError
 from kalpamani.common.settings import LIVE_TRADING_HARD_DISABLED
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
@@ -38,6 +39,7 @@ from kalpamani.execution.envelope import (
     PHASE2_QUANTITY,
     PHASE2_SYMBOL,
 )
+from kalpamani.execution.halt import JsonHaltStore, halt_state_path
 from kalpamani.execution.lifecycle import is_terminal
 from kalpamani.execution.session import (
     IB_ACCOUNT_KEY,
@@ -59,6 +61,8 @@ PROJECT_NAME = "phase2_order_lifecycle"
 
 TRACKED_PROJECT = REPO_ROOT / "lean" / "projects" / PROJECT_NAME
 PACKAGE_SOURCE = REPO_ROOT / "src" / "kalpamani"
+#: Every decision Phase 2 makes lives here; main.py is only an adapter.
+CYCLE_SOURCE = PACKAGE_SOURCE / "execution" / "cycle.py"
 RUNTIME_WORKSPACE = REPO_ROOT / ".runtime" / "lean"
 RUNTIME_PROJECT = RUNTIME_WORKSPACE / PROJECT_NAME
 RUNTIME_PACKAGE = RUNTIME_PROJECT / "kalpamani"
@@ -67,6 +71,7 @@ RUNTIME_PACKAGE = RUNTIME_PROJECT / "kalpamani"
 #: does not exist, and would have reported the wrong host path.
 RUNTIME_STORAGE = RUNTIME_WORKSPACE / "storage"
 RUNTIME_STATE = RUNTIME_STORAGE / "phase2_trade_state.json"
+RUNTIME_HALT = halt_state_path(RUNTIME_STORAGE)
 RUNTIME_ARM_RECEIPTS = (
     RUNTIME_STORAGE / "phase2_arm_receipt.json",
     RUNTIME_PROJECT / ".phase2_arm_receipt.json",
@@ -202,76 +207,151 @@ def check_order_surface() -> bool:
     return check_algorithm_structure(source) and ok
 
 
-def check_algorithm_structure(source: str) -> bool:
+def _functions(path: Path) -> dict[str, ast.FunctionDef]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+
+def _attributes(node: ast.AST) -> set[str]:
+    return {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+
+
+def _first_call_line(node: ast.AST, method: str) -> int:
+    lines = [
+        n.lineno
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == method
+    ]
+    return min(lines) if lines else -1
+
+
+def _ends_cycle_after_recovery_dispatch(cycle_fn: ast.AST) -> bool:
+    """The recovery branch must RETURN: its broker snapshot predates the order."""
+    for node in ast.walk(cycle_fn):
+        if isinstance(node, ast.If) and any(
+            isinstance(n, ast.Attribute) and n.attr == "redispatch" for n in ast.walk(node.test)
+        ):
+            return isinstance(node.body[-1], ast.Return)
+    return False
+
+
+def check_algorithm_structure(main_source: str) -> bool:
     """Assert the structural safety properties a substring search cannot see.
 
     Substring checks catch a forbidden API. They do not catch a guard that has
     been moved, reordered or made unreachable, and each of those has been a real
-    finding in this review cycle. These are the same properties the unit tests
-    assert; checked again here so a hand-edited runtime copy cannot skip them.
+    finding in this review cycle.
+
+    The decisions live in `kalpamani/execution/cycle.py`; `main.py` is an adapter
+    that must not make any. Both are checked, because the container runs both.
     """
-    tree = ast.parse(source)
-    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    print("[3b/6] Structural safety properties")
+    cycle = _functions(CYCLE_SOURCE)
+    adapter = _functions(TRACKED_PROJECT / "main.py")
 
-    def attributes(name: str) -> set[str]:
-        return {n.attr for n in ast.walk(functions[name]) if isinstance(n, ast.Attribute)}
-
-    def first_call_line(name: str, method: str) -> int:
-        lines = [
-            n.lineno
-            for n in ast.walk(functions[name])
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == method
-        ]
-        return min(lines) if lines else -1
-
-    required = ("_on_cycle", "on_order_event", "_dispatch", "_dispatch_protection", "_maybe_arm")
-    missing = [name for name in required if name not in functions]
+    required_cycle = (
+        "on_cycle",
+        "on_order_event",
+        "_apply_event",
+        "_dispatch",
+        "_dispatch_protection",
+        "_maybe_arm",
+        "_progress",
+    )
+    missing = [n for n in required_cycle if n not in cycle]
     if missing:
-        _fail(f"algorithm is missing required methods: {', '.join(missing)}")
+        _fail(f"cycle.py is missing required methods: {', '.join(missing)}")
+        return False
+    if "_classify" not in adapter or "initialize" not in adapter:
+        _fail("main.py is missing required adapter methods")
         return False
 
-    ok = True
+    # Lifecycle calls that must never appear in the un-importable adapter.
+    adapter_tree = ast.parse(main_source)
+    adapter_calls = {
+        n.func.attr
+        for n in ast.walk(adapter_tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+    forbidden_in_adapter = {
+        "authorize",
+        "begin_entry",
+        "begin_exit",
+        "fence_dispatch",
+        "apply_entry_fill_and_prepare_protection",
+        "on_fill",
+        "on_order_cancelled",
+        "on_order_rejected",
+        "assess_recovery",
+        "reconcile",
+    }
+
     properties: list[tuple[str, bool]] = [
         (
-            "SEND FENCE is acquired before any broker order call",
+            "SEND FENCE is acquired before the broker call",
             0
-            < first_call_line("_dispatch", "fence_dispatch")
-            < min(
-                line
-                for line in (
-                    first_call_line("_dispatch", "market_order"),
-                    first_call_line("_dispatch", "stop_market_order"),
-                )
-                if line > 0
-            ),
+            < _first_call_line(cycle["_dispatch"], "fence_dispatch")
+            < _first_call_line(cycle["_dispatch"], "submit"),
         ),
         (
             "every cycle re-proves the account binding before recovery",
             0
-            < first_call_line("_on_cycle", "assert_session_binding")
-            < first_call_line("_on_cycle", "assess_recovery"),
+            < _first_call_line(cycle["on_cycle"], "assert_session_binding")
+            < _first_call_line(cycle["on_cycle"], "assess_recovery"),
+        ),
+        (
+            "event ingestion proves the account before mutating anything",
+            0
+            < _first_call_line(cycle["on_order_event"], "assert_session_binding")
+            < _first_call_line(cycle["on_order_event"], "_apply_event"),
         ),
         (
             "the reconcile cycle is gated on the halt latch",
-            "_normal_progression_halted" in attributes("_on_cycle"),
+            "halted" in _attributes(cycle["on_cycle"]),
         ),
         (
             "broker event ingestion is NOT gated on the halt latch",
-            "_normal_progression_halted" not in attributes("on_order_event"),
+            "halted" not in _attributes(cycle["on_order_event"]),
         ),
         (
             "an entry fill protects through the guarded path",
-            "_dispatch_protection" in attributes("on_order_event"),
+            "_dispatch_protection" in _attributes(cycle["_apply_event"])
+            and "_dispatch" not in _attributes(cycle["_apply_event"]),
+        ),
+        (
+            "the cycle ends after a recovery dispatch (stale-snapshot boundary)",
+            _ends_cycle_after_recovery_dispatch(cycle["on_cycle"]),
         ),
         (
             "the regular-hours window is checked before the arm is consumed",
             0
-            < first_call_line("_maybe_arm", "_window_eligible")
-            < first_call_line("_maybe_arm", "authorize"),
+            < _first_call_line(cycle["_maybe_arm"], "_window_eligible")
+            < _first_call_line(cycle["_maybe_arm"], "authorize"),
+        ),
+        (
+            "protective and exit actions are NOT gated on the window",
+            "_window_eligible" not in _attributes(cycle["_progress"]),
+        ),
+        (
+            "the LEAN adapter makes no lifecycle decisions",
+            not (forbidden_in_adapter & adapter_calls),
+        ),
+        (
+            "initialize() does not read broker state",
+            "portfolio" not in _attributes(adapter["initialize"]),
+        ),
+        (
+            "no stdlib name is exposed to star-import shadowing",
+            not [
+                alias.asname or alias.name
+                for node in ast.walk(adapter_tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.module in {"decimal", "datetime", "json", "os", "typing", "enum"}
+                for alias in node.names
+            ],
         ),
     ]
+    ok = True
     for label, holds in properties:
         if holds:
             print(f"  OK  : {label}")
@@ -334,7 +414,7 @@ def check_deployment_session() -> bool:
                     "proven to belong to this deployment. Failing closed."
                 )
                 return False
-            print(f"  OK  : {record.trade_intent_id} is bound to this deployment account")
+            print(f"  OK  : {record.trade_intent_id} binding MATCHES this deployment")
     return True
 
 
@@ -355,6 +435,25 @@ def check_arm_receipts(state_present: bool) -> bool:
         )
         return False
     return True
+
+
+def check_operational_halt() -> bool:
+    """A durable safety halt must be cleared deliberately, not by redeploying."""
+    print("[6b/6] Operational halt")
+    try:
+        halt = JsonHaltStore(RUNTIME_HALT).get()
+    except SafetyViolationError as exc:
+        _fail(str(exc))
+        return False
+    if halt is None:
+        print("  OK  : no operational halt in force")
+        return True
+    _fail(
+        f"a durable operational halt is in force ({halt.describe()}): {halt.reason} "
+        "Redeploying does NOT clear it. Reconcile against the broker by hand, then clear it "
+        "with `scripts/phase2_arm.py --clear-halt`."
+    )
+    return False
 
 
 def check_durable_state() -> bool:
@@ -427,7 +526,8 @@ def print_checklist() -> None:
             and binding
         ):
             armed = "YES -- an entry order may be placed"
-        account_line = binding or "(no account binding)"
+        # Presence only -- the binding digest is sensitive and never printed.
+        account_line = "present" if binding else "ABSENT (arm cannot be valid)"
 
     rows = [
         ("Project (tracked source)", str(TRACKED_PROJECT.relative_to(REPO_ROOT))),
@@ -466,6 +566,7 @@ def main() -> int:
     checks.append(check_deployment_session())
     checks.append(check_arm_receipts(state_present=RUNTIME_STATE.exists()))
     checks.append(check_durable_state())
+    checks.append(check_operational_halt())
     print()
     print_checklist()
     print()

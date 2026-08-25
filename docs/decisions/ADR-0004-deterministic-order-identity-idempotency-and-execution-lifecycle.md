@@ -325,14 +325,116 @@ guard stops being a realistic bound on what fills. The runbook said "market hour
 that was an instruction to a human, in a system whose subscription uses
 `extended_market_hours=True`.
 
-**Decision.** Two gates, both required, checked **before** the arm is consumed:
+**Decision.** Three gates, all required, checked **before** the arm is consumed:
 
 1. the exchange says the regular session is open (`QCAlgorithm.is_market_open`, which knows
    holidays, half days and early closes — we do not re-implement a calendar);
-2. the clock is inside **09:45–15:30 America/New_York**, excluding both auctions.
+2. the clock is at or after **09:45 America/New_York**, excluding the opening auction;
+3. the day's **actual** regular close is still at least **30 minutes** away.
+
+Gate 3 is *derived*, and that correction matters — **amended 2026-08-25**. The first version
+hardcoded a 15:30 upper bound, which is right only on a normal 16:00 close. On a 13:00 early
+close — before Thanksgiving, Christmas Eve, Independence Day — 12:59 satisfied both "the
+session is open" and "before 15:30", so the entry could have fired **one minute before the
+close**, with no time to observe the protective stop, let alone exit. The close now comes from
+the exchange calendar (`SecurityExchangeHours.get_next_market_close`), so a half day narrows
+the window by itself and 15:30 is a consequence rather than an assumption. An unknown close
+fails closed: an unknown close is not a distant one.
+
+The window gates the **entry** only. Protection and exit are never gated on it — refusing to
+reduce risk because of the time of day would turn a liquidity precaution into a risk.
 
 Outside the window the deployment stays read-only and says why; the one-time arm is **not**
 consumed, so a mistimed launch costs nothing. TEST parameter — not production strategy logic.
+
+### 15. Three separate notions of "stop" — added 2026-08-25
+
+Conflating these is how a system either resumes when it should not, or goes blind when it
+should not. They are now distinct pieces of state:
+
+| | Scope | Durable? | Cleared by |
+|---|---|---|---|
+| `TradeState.FAILED` | this **trade's lifecycle** | yes, terminal | nothing — terminal means terminal |
+| `OperationalHalt` | this **deployment's** freedom to act | when the cause is a safety violation | an explicit human action |
+| broker fact ingestion | — | — | **never stops** |
+
+**The halt was RAM-only**, so a restart cleared it — while the log had just promised "normal
+progression REMAINS halted". It is now persisted, and `Phase2Cycle` reads it at construction,
+so a restart does not resume.
+
+**Not every halt deserves to be permanent.** An operator who must clear a halt after each
+transient hiccup stops reading them, which is its own failure mode. The classification rule is
+about what the halt *implies*:
+
+> A `SafetyViolationError` means durable state or broker truth is contradictory and a human
+> has to look. Anything else is transient until proven otherwise.
+
+Unprotected positions, reconciliation mismatches, account-binding failures, contradictory arm
+evidence and illegal lifecycle transitions are all `SafetyViolationError`, so they persist and
+require `scripts/phase2_arm.py --clear-halt` with an exact phrase. A transport fault halts the
+session only, and a restart may retry it. `TradeState.FAILED` raises a *session* halt, because
+the durable record of it is the trade state itself — a second durable halt would only add a
+manual chore for a condition that is already permanent.
+
+### 16. Broker facts survive a terminal lifecycle — added 2026-08-25
+
+Round 7 kept event ingestion alive across a halt. That was necessary and not sufficient,
+because `FAILED` is terminal:
+
+```
+ENTRY already dispatched
+some failure latches the lifecycle FAILED
+a late ENTRY fill arrives
+apply_entry_fill_and_prepare_protection() attempts FAILED -> PROTECTION_SUBMITTED
+LifecycleError -- and neither the fill nor the protective intent ever becomes durable
+```
+
+A real long, invisible to the process holding the record of it.
+
+**Decision.** A terminal record still accepts **facts** and simply does not **transition**.
+Fills, acknowledgements, cancellations and rejections are recorded; the lifecycle stays
+terminal. A late ENTRY fill therefore still writes the fill and exactly one protective intent,
+still proves the account at the send fence, still requires broker truth to reconcile, and
+still dispatches exactly one protective stop as risk reduction. It never submits another
+entry and never clears the halt.
+
+### 17. Orchestration lives where it can be tested — added 2026-08-25
+
+`main.py` cannot be imported outside a LEAN container, so logic living there could only ever
+be reviewed by reading it — and a review found exactly that: an integration test performing
+transitions production never did.
+
+**Decision.** Every decision moves to `kalpamani.execution.cycle.Phase2Cycle`, and LEAN
+supplies broker I/O through a `BrokerPort`. `main.py` becomes an adapter that translates LEAN
+types and makes no decisions; the preflight asserts structurally that no lifecycle call
+appears in it. Tests now construct the same `Phase2Cycle` the container schedules, so an
+orchestration test cannot pass while production takes a different path.
+
+The same boundary fixed a live defect: `on_cycle` captured **one** broker snapshot, and
+recovery dispatched a protective stop into that same cycle. Confirmation then compared a
+just-sent order against a view taken before it existed and reported a false **UNPROTECTED
+POSITION** — a durable halt for a system that was working. The cycle now **returns** after any
+recovery dispatch, and confirmation waits for a fresh snapshot.
+
+### 18. The account-binding digest is sensitive — added 2026-08-25
+
+`account_fingerprint()` was documented as a "non-reversible fingerprint". That claim was too
+strong. It is an unsalted SHA-256 over a **structured, low-entropy** brokerage account id:
+anyone holding a candidate id can confirm a match by recomputing it. It is a **pseudonymous
+identifier**, not anonymised data.
+
+Treating it as anonymous had a consequence: a real dry-run digest was pasted out of a container
+log into the runbook and committed while the repository was public.
+
+**Decision.** The digest is handled as sensitive in its own right — compared in memory,
+persisted only under the git-ignored runtime directory, and **never** logged, printed or
+committed. Output reports `account_binding=present`, `MATCHES this deployment`, or `DIFFER`; a
+verdict, never a value. Asserted by test on both `describe()` methods and on the mismatch
+message.
+
+Arm receipts are also now cross-checked against the trade record — same intent, same account
+binding, same consumed flag. Two receipts that agree with each other but describe a different
+trade are contradictory evidence, and fail closed.
 
 ---
 

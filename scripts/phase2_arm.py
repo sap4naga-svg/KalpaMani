@@ -20,6 +20,7 @@ Usage:
     python scripts/phase2_arm.py --status
     python scripts/phase2_arm.py --arm --confirm "ARM PHASE2 PAPER BUY 1 SPY"
     python scripts/phase2_arm.py --disarm
+    python scripts/phase2_arm.py --clear-halt --confirm "CLEAR PHASE2 HALT"
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from kalpamani.execution.envelope import (
     PHASE2_SYMBOL,
     describe_envelope,
 )
+from kalpamani.execution.halt import JsonHaltStore, halt_state_path
 from kalpamani.execution.session import (
     IB_ACCOUNT_KEY,
     IB_TRADING_MODE_KEY,
@@ -57,6 +59,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "phase2_order_lifecycle"
 RUNTIME_PROJECT = REPO_ROOT / ".runtime" / "lean" / PROJECT_NAME
 RUNTIME_CONFIG = RUNTIME_PROJECT / "config.json"
+RUNTIME_STORAGE = REPO_ROOT / ".runtime" / "lean" / "storage"
+
+#: Clearing a durable safety halt is a deliberate human act, so it takes its own
+#: phrase. A halt is raised when durable state or broker truth is contradictory;
+#: clearing it asserts that a human has reconciled against the broker.
+CLEAR_HALT_PHRASE = "CLEAR PHASE2 HALT"
 #: The deployment configuration. THE single source of the account identity --
 #: the operator never types it, so the arm and the deployment cannot be two
 #: independent values that disagree.
@@ -115,7 +123,12 @@ def show_status() -> int:
     print(f"  git-ignored         : {'YES' if is_git_ignored(RUNTIME_CONFIG) else 'NO -- ABORT'}")
     print(f"  ARMED               : {'YES' if armed else 'NO (read/reconcile only)'}")
     print(f"  exit requested      : {params.get('phase2_exit_requested', 'false')}")
-    print(f"  account binding     : {fingerprint or '(absent -- arm cannot be valid)'}")
+    # Presence only. The binding digest is sensitive (see
+    # session.account_fingerprint) and is never printed, logged or committed.
+    binding = "present" if fingerprint else "ABSENT -- arm cannot be valid"
+    print(f"  account binding     : {binding}")
+    halt = JsonHaltStore(halt_state_path(RUNTIME_STORAGE)).get()
+    print(f"  operational halt    : {halt.describe() if halt else 'none'}")
     print(f"  envelope            : {describe_envelope()}")
     print("=" * 78)
     return 0
@@ -215,12 +228,49 @@ def disarm(request_exit: bool = False) -> int:
     return 0
 
 
+def clear_halt(confirmation: str) -> int:
+    """Clear a durable operational halt. Only ever a deliberate human act.
+
+    A safety halt means something contradictory happened: an unprotected
+    position, a reconciliation mismatch, an event from the wrong account.
+    Clearing it asserts that a human has looked at the broker and resolved it.
+    Redeploying does not clear it, and neither does restarting.
+    """
+    store = JsonHaltStore(halt_state_path(RUNTIME_STORAGE))
+    halt = store.get()
+    if halt is None:
+        print("No durable operational halt is in force. Nothing to clear.")
+        return 0
+
+    print("=" * 78)
+    print("Durable operational halt in force")
+    print("=" * 78)
+    print(f"  {halt.describe()}")
+    print(f"  reason : {halt.reason}")
+    print()
+
+    if confirmation != CLEAR_HALT_PHRASE:
+        print(f'REFUSED: clearing a halt requires --confirm "{CLEAR_HALT_PHRASE}" exactly.')
+        print("Reconcile the position and the open orders against IBKR by hand FIRST.")
+        return 1
+
+    store.clear()
+    print("Halt cleared. The next deployment may resume normal progression.")
+    print("The trade lifecycle itself is unchanged: a FAILED trade stays FAILED.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Arm/disarm the Phase 2 execution gate.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--status", action="store_true", help="show the current arm state")
     group.add_argument("--arm", action="store_true", help="arm the one-time execution gate")
     group.add_argument("--disarm", action="store_true", help="clear the arm")
+    group.add_argument(
+        "--clear-halt",
+        action="store_true",
+        help="clear a durable operational halt (requires the exact phrase)",
+    )
     group.add_argument(
         "--request-exit",
         action="store_true",
@@ -231,6 +281,8 @@ def main() -> int:
 
     if args.status:
         return show_status()
+    if args.clear_halt:
+        return clear_halt(args.confirm)
     if args.disarm:
         return disarm()
     if args.request_exit:

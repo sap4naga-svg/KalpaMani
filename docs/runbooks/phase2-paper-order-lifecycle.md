@@ -153,7 +153,8 @@ immediately before the broker call.
 | an unclassifiable account | abort — zero orders |
 | a record with **no** binding | abort — zero orders |
 
-A fingerprint is stored, never the account id. `[SESSION-BOUND] same PAPER account as armed:`
+A pseudonymous binding digest is stored, never the account id — and the digest is sensitive
+too, so it is never logged or printed either. `[SESSION-BOUND] same PAPER account as armed:`
 in the log is this check passing.
 
 ### Where the algorithm's evidence actually comes from
@@ -165,7 +166,7 @@ there is **no fallback** — if it cannot be read, Phase 2 aborts.
 Confirmed on the 2026-08-25 disarmed dry run:
 
 ```
-[RECONCILE] session verified PAPER: account=DU******* fingerprint=<redacted>
+[RECONCILE] session verified PAPER: account=DU******* account_binding=present
             classified=paper trading_mode='paper' (derived-from-account-id)
             source=/Lean/Launcher/bin/Debug/config.json
 ```
@@ -174,8 +175,21 @@ Confirmed on the 2026-08-25 disarmed dry run:
 identifier — verified against the QuantConnect stubs, the account lives on `LiveNodePacket`
 which the algorithm cannot reach. The deployment configuration is therefore the strongest
 in-algorithm evidence available, and the preflight verifies the same source independently
-before deployment. The fingerprint printed by the preflight and by the container must match;
-on the dry run both read `<redacted>`.
+before deployment.
+
+**Container logs are themselves sensitive — never paste one into a tracked file.** LEAN's
+IBAutomater logs IB Gateway window titles, and those titles contain the **full IBKR account
+identifier** (`[<ACCOUNT> Trader Workstation Configuration (Simulated Trading)]`). Nothing
+KalpaMani does can prevent that; it is LEAN's own logging. The logs live under `.runtime/`,
+which is git-ignored, and that is where they must stay. Quote a log line in documentation only
+after redacting it by hand.
+
+**The account-binding digest is never printed.** It is a *pseudonymous* digest of the account
+id, not anonymised data: brokerage account ids are structured and low-entropy, so anyone with
+a candidate id can confirm a match by recomputing it. Earlier revisions of this runbook
+pasted a real one out of a dry-run log; that was a leak, and it has been redacted. Output now
+reports `account_binding=present` and the preflight reports `MATCHES this deployment` — a
+verdict, not a value. If you need to compare bindings by hand, do it outside Git.
 
 `ib-trading-mode` is an *internal-input* that the LEAN CLI derives at deploy time, so it is
 often absent from the config file. When absent, the mode is derived using LEAN's own rule and
@@ -202,7 +216,8 @@ a specific phrase cannot be arrived at by accident.
 
 The arm is refused — with a non-zero exit — if the deployment has no account configured, if
 the session does not verify as paper, or if the phrase does not match. Account ids are
-**redacted** in all output and only a fingerprint is ever stored.
+**redacted** in all output, and the account-binding digest it derives is stored only under
+the git-ignored runtime directory — never logged, never printed, never committed.
 
 **Re-run the preflight** and confirm `EXECUTION ARM : YES` before deploying.
 
@@ -405,7 +420,7 @@ Confirm, then stop with `lean live stop phase2_order_lifecycle`:
 | `kalpamani` package imports in the container | ✅ zero import errors |
 | Durable state path | `/Storage/phase2_trade_state.json` |
 | `/Storage` ↔ host mount | ✅ `.runtime/lean/storage/`, verified bidirectionally |
-| Session proven PAPER from deployment config | ✅ fingerprint matched the preflight |
+| Session proven PAPER from deployment config | ✅ binding matched the preflight |
 | SPY subscribed | ✅ |
 | Reconciliation ran | ✅ `spy_position=0 owned_open_orders=0` |
 | Execution arm | ✅ `test_mode=False arm_flag=False` |
@@ -499,12 +514,17 @@ reconciliation to flat.
 Phase 2 submits a MARKET order, so it only runs in a liquid regular session.
 
 ```
-09:45 - 15:30  America/New_York   regular session only   (TEST window)
+from 09:45 America/New_York, until 30 minutes before the day's ACTUAL regular close
+    normal 16:00 close  ->  09:45 - 15:30
+    13:00 half day      ->  09:45 - 12:30
+regular session only   (TEST window)
 ```
 
-Both gates must hold: the **exchange calendar** says the regular session is open (holidays,
-half days and early closes included), and the **clock** is inside the window. The opening
-and closing auctions are deliberately excluded.
+Three gates, all required: the **exchange calendar** says the regular session is open, the
+**clock** is at or after 09:45, and the day's **actual** close is still at least 30 minutes
+away. The close is read from the calendar, not assumed — that is what makes a half day narrow
+the window by itself. If the calendar cannot answer, the entry is refused: an unknown close is
+not a distant one.
 
 Outside the window you will see, once per cycle:
 
@@ -517,9 +537,44 @@ it will arm when the window opens, or stop it and relaunch later. The preflight 
 `Window open right now` as a convenience; the algorithm's check is the one that decides, and
 it is the only one that knows the exchange calendar.
 
+**The window gates the entry only.** Protection and the controlled exit are never gated on it.
+A stop is dispatched whenever an entry fills, and `--request-exit` works outside market hours
+— refusing to reduce risk because of the clock would turn a liquidity precaution into a risk.
+
 ---
 
-## 13.6 What a halt does and does not stop
+## 13.6 The operational halt — and clearing it
+
+Three different things can be "stopped", and they are not interchangeable:
+
+| | What it means | Survives restart? |
+|---|---|---|
+| `TradeState.FAILED` | this **trade's** lifecycle is over | yes — terminal |
+| operational halt | this **deployment** may take no new normal action | **when the cause is a safety violation** |
+| broker fact ingestion | — | **never stops** |
+
+A safety halt — unprotected position, reconciliation mismatch, account-binding failure,
+contradictory arm evidence — is written to `/Storage/phase2_operational_halt.json` and read
+back at startup. **Redeploying does not clear it.** The preflight fails while one is in force,
+and `--status` shows it.
+
+A transient fault (a transport error, an unexpected runtime fault) halts that deployment only
+and a restart may retry it. That distinction is deliberate: an operator who has to clear a
+halt after every hiccup stops reading them.
+
+To clear one, reconcile against IBKR **by hand first**, then:
+
+```bash
+.venv\Scripts\python.exe scripts\phase2_arm.py --clear-halt --confirm "CLEAR PHASE2 HALT"
+```
+
+The phrase must be exact. Clearing a halt asserts that a human has looked at the broker and
+resolved what caused it. It does **not** change the trade lifecycle: a `FAILED` trade stays
+`FAILED`.
+
+---
+
+## 13.7 What a halt does and does not stop
 
 A halt (`[PHASE2-ABORT]`) stops **new normal activity**. It does **not** stop KalpaMani
 recording what the broker does with orders already sent.
@@ -531,6 +586,7 @@ recording what the broker does with orders already sent.
 | Autonomous progression | stops |
 | Acknowledgements, fills, cancellations, rejections | **still recorded durably** |
 | An already-dispatched ENTRY that then fills | fill + protective intent written, and the **stop is dispatched** |
+| The same, after the lifecycle latched `FAILED` | identical — a terminal lifecycle records facts, it just does not transition |
 
 That last row is deliberate. Declining to protect a position that has actually filled would
 leave it naked — the outcome halting exists to avoid. It is a one-off risk-reducing action:

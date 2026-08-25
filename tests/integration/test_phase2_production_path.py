@@ -214,14 +214,12 @@ def test_production_path_persists_every_lifecycle_transition(tmp_path: Path) -> 
     pending = coordinator.begin_entry(record)
     assert store.require(identity.trade_intent_id).state is TradeState.ENTRY_SUBMITTED
     record = dispatch(coordinator, broker, pending)
-    broker.fill(identity.entry_order_id, 1)
-    record = coordinator.on_fill(
-        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
-    )
-    assert store.require(identity.trade_intent_id).state is TradeState.FILLED
 
-    protection = coordinator.plan_protection(record, SPY_PRICE)
+    # ONE write. There is deliberately no durable moment where the long is
+    # filled and no protective intent exists, so FILLED is not observable here.
+    record, protection = fill_entry_atomically(coordinator, broker, record)
     assert protection is not None
+    assert record.filled_quantity == 1
     assert store.require(identity.trade_intent_id).state is TradeState.PROTECTION_SUBMITTED
     record = dispatch(coordinator, broker, protection)
     record = coordinator.reconcile(record, broker.view())
@@ -358,12 +356,7 @@ def test_protective_intent_never_dispatched_is_reported_unprotected(tmp_path: Pa
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
     record = dispatch(coordinator, broker, pending)
-    broker.fill(identity.entry_order_id, 1)
-    record = coordinator.on_fill(
-        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
-    )
-
-    protection = coordinator.plan_protection(record, SPY_PRICE)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
     assert protection is not None  # intent recorded... and then we crash.
 
     persisted = store.require(identity.trade_intent_id)
@@ -460,11 +453,7 @@ def test_rejected_protective_order_is_unprotected_position(tmp_path: Path) -> No
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
     record = dispatch(coordinator, broker, pending)
-    broker.fill(identity.entry_order_id, 1)
-    record = coordinator.on_fill(
-        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
-    )
-    protection = coordinator.plan_protection(record, SPY_PRICE)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
     assert protection is not None
     record = dispatch(coordinator, broker, protection)
 
@@ -582,12 +571,7 @@ def test_lost_trade_state_with_consumed_arm_fails_closed(tmp_path: Path) -> None
     drive_to_protected(coordinator, broker)
 
     (storage / "phase2_trade_state.json").unlink()
-    restarted = Phase2Coordinator(
-        JsonTradeStateStore(storage / "phase2_trade_state.json"),
-        TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
-        storage_root=storage,
-        project_root=project,
-    )
+    restarted = restart(storage, project)
     with pytest.raises(ArmReceiptError, match="CONSUMED"):
         restarted.load()
 
@@ -638,10 +622,15 @@ def test_duplicate_order_event_is_a_true_noop(tmp_path: Path) -> None:
     broker.fill(identity.entry_order_id, 1)
 
     for _ in range(5):
-        record = coordinator.on_fill(
-            record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
+        record, _ = coordinator.apply_entry_fill_and_prepare_protection(
+            record,
+            client_order_id=identity.entry_order_id,
+            fill_id="7-1",
+            fill_quantity=1,
+            fill_price=SPY_PRICE,
         )
     assert record.filled_quantity == 1
+    assert sum(1 for o in record.orders.values() if o.role is OrderRole.PROTECTIVE) == 1
     assert store.require(identity.trade_intent_id).filled_quantity == 1
 
 
@@ -651,12 +640,7 @@ def test_restart_after_protection_submits_no_further_entry(tmp_path: Path) -> No
     drive_to_protected(coordinator, broker)
     entries_before = broker.count(OrderRole.ENTRY)
 
-    restarted = Phase2Coordinator(
-        JsonTradeStateStore(storage / "phase2_trade_state.json"),
-        TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
-        storage_root=storage,
-        project_root=project,
-    )
+    restarted = restart(storage, project)
     recovered = restarted.load()
     assert recovered is not None
     assert recovered.state is TradeState.PROTECTED
@@ -730,12 +714,7 @@ def test_protective_fenced_broker_received_then_crash_sends_no_second_stop(
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
     record = dispatch(coordinator, broker, pending)
-    broker.fill(identity.entry_order_id, 1)
-    record = coordinator.on_fill(
-        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
-    )
-
-    protection = coordinator.plan_protection(record, SPY_PRICE)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
     assert protection is not None
     coordinator.fence_dispatch(protection.record, identity.protective_order_id)
     broker.submit(protection)  # IBKR has the stop
@@ -795,11 +774,7 @@ def test_fenced_then_crash_before_broker_call_also_halts(tmp_path: Path, role: s
         pending = coordinator.begin_entry(record)
     else:
         record = dispatch(coordinator, broker, coordinator.begin_entry(record))
-        broker.fill(identity.entry_order_id, 1)
-        record = coordinator.on_fill(
-            record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
-        )
-        protection = coordinator.plan_protection(record, SPY_PRICE)
+        record, protection = fill_entry_atomically(coordinator, broker, record)
         assert protection is not None
         if role == "PROTECTIVE":
             pending = protection

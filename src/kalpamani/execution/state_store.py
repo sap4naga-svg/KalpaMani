@@ -228,8 +228,10 @@ class TradeRecord:
     #: account B, and local state -- which knows nothing about B -- would happily
     #: authorise a protective or exit order into the wrong account.
     #:
-    #: A fingerprint, never the raw identifier, so persisting it spreads no
-    #: account id into state files, logs or Git. Optional in the dataclass only
+    #: A pseudonymous account-binding digest, never the raw identifier. The
+    #: digest is itself sensitive (see session.account_fingerprint): it lives
+    #: only under the git-ignored runtime directory and is never logged or
+    #: printed -- describe() reports presence, not the value. Optional only
     #: because dataclass defaults require it; every code path that can reach the
     #: broker treats ``None`` as a fail-closed condition.
     account_fingerprint: str | None = None
@@ -299,7 +301,7 @@ class TradeRecord:
             f"requested={self.requested_quantity} filled={self.filled_quantity} "
             f"protected={self.protected_quantity} entries={self.entry_count} "
             f"long={self.open_long_quantity} arm_consumed={self.arm_consumed} "
-            f"account={self.account_fingerprint or '(unbound)'} "
+            f"account_binding={'present' if self.account_fingerprint else 'ABSENT'} "
             f"dispatch=[{dispatches}]"
         )
 

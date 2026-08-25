@@ -25,8 +25,14 @@ installed QuantConnect stubs: the account id lives on ``LiveNodePacket``
 in-algorithm evidence available is the deployment configuration above, and the
 pre-launch preflight independently verifies the same source before deployment.
 
-Account identifiers are treated as sensitive. Only a **fingerprint** is stored or
-compared; the raw id is never persisted or logged.
+Account identifiers are treated as sensitive, and so is the digest derived from
+one. :func:`account_fingerprint` is a **pseudonymous account-binding digest**,
+not anonymised data: an unsalted SHA-256 over a structured, low-entropy
+brokerage account identifier is trivially confirmable by anyone who can guess a
+candidate id. It is therefore handled as sensitive in its own right --
+persisted only under the git-ignored runtime directory, compared in memory, and
+**never** logged, printed or committed. Output says ``present``, ``matched`` or
+``<redacted>``; it never says the value.
 """
 
 from __future__ import annotations
@@ -62,10 +68,16 @@ class ArmReceiptError(SafetyViolationError):
 
 
 def account_fingerprint(account_id: str) -> str:
-    """Stable, non-reversible fingerprint of an account id.
+    """Stable **pseudonymous account-binding digest** for an account id.
 
-    Comparisons and durable records use this, never the raw identifier, so an
-    account id is not spread across state files and logs.
+    Deterministic and unsalted, so the same account always binds to the same
+    value and two components can agree without exchanging the identifier.
+
+    It is **not** anonymised data and must not be treated as such. Brokerage
+    account ids are structured and low-entropy, so anyone holding a candidate id
+    can confirm a match by recomputing this. Treat the result as sensitive:
+    compare it in memory, persist it only under the git-ignored runtime
+    directory, and never log, print or commit it.
     """
     normalised = account_id.strip().upper()
     if not normalised:
@@ -116,11 +128,17 @@ class BrokerSessionEvidence:
         return self.mode.value
 
     def describe(self) -> str:
-        """Log-safe. Redacted id, never the full identifier."""
+        """Log-safe: redacted id, and the binding digest is NOT emitted.
+
+        The digest used to appear here, which put it into container logs and --
+        by way of a pasted log excerpt -- into tracked documentation. It says
+        only ``present`` now; a reader who needs to compare bindings compares
+        the ``matched`` verdict, not the value.
+        """
         origin = "stated" if self.trading_mode_is_explicit else "derived-from-account-id"
         return (
             f"account={redact_account_id(self.account_id)} "
-            f"fingerprint={self.fingerprint} "
+            f"account_binding=present "
             f"classified={self.mode.value} "
             f"trading_mode={self.effective_trading_mode!r} ({origin}) "
             f"source={self.source}"
@@ -194,9 +212,11 @@ def verify_paper_session(
         )
     if expected_fingerprint is not None and evidence.fingerprint != expected_fingerprint:
         raise SessionVerificationError(
-            "Armed account does not match the deployed brokerage account "
-            f"(armed={expected_fingerprint}, deployed={evidence.fingerprint}). The arm was "
-            "issued against a different session; refusing to trade it."
+            "Armed account does not match the deployed brokerage account: the armed and "
+            "deployed account bindings DIFFER. The arm was issued against a different "
+            "session; refusing to trade it. (Neither binding value is printed -- compare "
+            f"the deployed account {redact_account_id(evidence.account_id)} against the one "
+            "the arm was issued for.)"
         )
 
 
@@ -293,6 +313,51 @@ def read_arm_receipts(paths: tuple[Path, ...]) -> list[ArmReceipt]:
     return receipts
 
 
+def assert_arm_matches_record(
+    paths: tuple[Path, ...],
+    *,
+    trade_intent_id: str,
+    account_fingerprint_value: str | None,
+    arm_consumed: bool,
+) -> None:
+    """Assert the receipts and the trade record tell the SAME story.
+
+    Two receipts agreeing with each other proves only that they were written
+    together. They must also agree with the trade they claim to authorise --
+    otherwise a receipt for one intent, or for a different brokerage account,
+    sits alongside an unrelated record and every individual check passes.
+
+    Contradictory evidence fails closed. No binding value is printed: the
+    message states *that* they disagree, never what either value is.
+
+    Raises:
+        ArmReceiptError: on any disagreement.
+    """
+    receipts = read_arm_receipts(paths)
+    if not receipts:
+        return
+    for receipt in receipts:
+        if receipt.trade_intent_id != trade_intent_id:
+            raise ArmReceiptError(
+                "An arm receipt authorises a DIFFERENT trade intent from the durable trade "
+                f"record (record={trade_intent_id}). Contradictory arm evidence; failing "
+                "closed rather than choosing one."
+            )
+        if receipt.account_fingerprint != account_fingerprint_value:
+            raise ArmReceiptError(
+                f"The arm receipt for {trade_intent_id} is bound to a DIFFERENT brokerage "
+                "account from the durable trade record. Contradictory arm evidence; failing "
+                "closed. (Neither binding value is printed.)"
+            )
+        if receipt.consumed != arm_consumed:
+            raise ArmReceiptError(
+                f"The arm receipt for {trade_intent_id} says consumed={receipt.consumed} but "
+                f"the durable trade record says arm_consumed={arm_consumed}. Contradictory "
+                "arm evidence; failing closed -- this is precisely the disagreement that "
+                "could permit a replay."
+            )
+
+
 def assert_arm_available(
     paths: tuple[Path, ...],
     *,
@@ -352,6 +417,7 @@ __all__ = [
     "account_fingerprint",
     "arm_receipt_paths",
     "assert_arm_available",
+    "assert_arm_matches_record",
     "load_session_evidence",
     "read_arm_receipts",
     "verify_paper_session",

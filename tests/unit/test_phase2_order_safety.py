@@ -54,6 +54,14 @@ from kalpamani.execution.envelope import (
     authorize_trade_intent,
     protective_stop_price,
 )
+from kalpamani.execution.halt import (
+    HaltKind,
+    HaltStoreError,
+    JsonHaltStore,
+    OperationalHalt,
+    classify_halt,
+    halt_state_path,
+)
 from kalpamani.execution.identity import (
     OrderIdentityError,
     OrderRole,
@@ -81,10 +89,14 @@ from kalpamani.execution.reconciliation import (
     required_protection_quantity,
 )
 from kalpamani.execution.session import (
+    ArmReceipt,
+    ArmReceiptError,
     BrokerSessionEvidence,
     SessionVerificationError,
     account_fingerprint,
+    assert_arm_matches_record,
     verify_paper_session,
+    write_arm_receipt,
 )
 from kalpamani.execution.state_store import (
     STATE_SCHEMA_VERSION,
@@ -97,8 +109,8 @@ from kalpamani.execution.state_store import (
     record_order_intent,
 )
 from kalpamani.execution.trading_window import (
+    PHASE2_MIN_MINUTES_TO_CLOSE,
     PHASE2_TIME_ZONE,
-    PHASE2_WINDOW_CLOSE,
     PHASE2_WINDOW_OPEN,
     TradingWindowError,
     assert_within_certification_window,
@@ -108,6 +120,10 @@ pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHASE2_MAIN = PROJECT_ROOT / "lean" / "projects" / "phase2_order_lifecycle" / "main.py"
+PHASE2_CYCLE = PROJECT_ROOT / "src" / "kalpamani" / "execution" / "cycle.py"
+
+#: A normal 16:00 close, seen from midday.
+NORMAL_CLOSE_MINUTES = 240.0
 PAPER_ACCOUNT_ID = "DU1234567"
 LIVE_ACCOUNT_ID = "U7654321"
 IBKR_PAPER_SIMULATED_EQUITY_USD = Decimal("1000000")
@@ -830,46 +846,280 @@ def test_protective_stop_rejects_bad_price() -> None:
 
 
 # --------------------------------------------------------------------------
-# Round 7 -- the regular-hours certification window is CODE, not a runbook line
+# Round 8 -- the certification window derives the day's ACTUAL close
 # --------------------------------------------------------------------------
 
 
-def test_window_accepts_the_liquid_middle_of_the_session() -> None:
-    for moment in (time(9, 45), time(12, 0), time(15, 30)):
-        assert_within_certification_window(moment, regular_session_open=True)
+def test_window_accepts_the_liquid_middle_of_a_normal_session() -> None:
+    for moment, remaining in ((time(9, 45), 375.0), (time(12, 0), 240.0), (time(15, 30), 30.0)):
+        assert_within_certification_window(
+            moment, regular_session_open=True, minutes_to_close=remaining
+        )
 
 
-@pytest.mark.parametrize(
-    "moment",
-    [time(4, 0), time(9, 29), time(9, 44), time(15, 31), time(16, 1), time(19, 30)],
-)
-def test_window_rejects_the_auctions_and_extended_hours(moment: time) -> None:
-    with pytest.raises(TradingWindowError, match="outside the Phase 2 certification window"):
-        assert_within_certification_window(moment, regular_session_open=True)
+def test_window_rejects_the_opening_auction() -> None:
+    for moment in (time(4, 0), time(9, 29), time(9, 44)):
+        with pytest.raises(TradingWindowError, match="before the Phase 2 window opens"):
+            assert_within_certification_window(
+                moment, regular_session_open=True, minutes_to_close=NORMAL_CLOSE_MINUTES
+            )
 
 
-def test_a_closed_exchange_is_refused_however_good_the_clock_looks() -> None:
-    """Only the calendar knows about holidays and early closes."""
+def test_window_rejects_the_last_half_hour_of_a_normal_close() -> None:
+    """15:31 on a 16:00 day leaves 29 minutes. Refused."""
+    with pytest.raises(TradingWindowError, match="ACTUAL regular close"):
+        assert_within_certification_window(
+            time(15, 31), regular_session_open=True, minutes_to_close=29.0
+        )
+
+
+def test_window_shortens_itself_on_a_13_00_early_close() -> None:
+    """The defect this replaces: 12:59 on a half day passed a hardcoded 15:30.
+
+    The exchange still says the session is open and the clock is still before
+    15:30, so both old gates held -- one minute before the close.
+    """
+    with pytest.raises(TradingWindowError, match="ACTUAL regular close"):
+        assert_within_certification_window(
+            time(12, 59), regular_session_open=True, minutes_to_close=1.0
+        )
+    # Earlier on the same half day there is still room.
+    assert_within_certification_window(
+        time(12, 0), regular_session_open=True, minutes_to_close=60.0
+    )
+    # And the boundary itself is exactly 30 minutes before that 13:00 close.
+    assert_within_certification_window(
+        time(12, 30), regular_session_open=True, minutes_to_close=30.0
+    )
+    with pytest.raises(TradingWindowError):
+        assert_within_certification_window(
+            time(12, 31), regular_session_open=True, minutes_to_close=29.0
+        )
+
+
+def test_a_holiday_is_refused_however_good_the_clock_looks() -> None:
+    """Only the calendar knows about holidays. The clock cannot infer one."""
     with pytest.raises(TradingWindowError, match="regular session is not open"):
-        assert_within_certification_window(time(12, 0), regular_session_open=False)
+        assert_within_certification_window(
+            time(12, 0), regular_session_open=False, minutes_to_close=None
+        )
+
+
+def test_an_unknown_close_fails_closed() -> None:
+    """An unknown close is not a distant one."""
+    with pytest.raises(TradingWindowError, match="did not report today"):
+        assert_within_certification_window(
+            time(12, 0), regular_session_open=True, minutes_to_close=None
+        )
 
 
 def test_window_bounds_are_the_documented_test_window() -> None:
-    assert (PHASE2_WINDOW_OPEN, PHASE2_WINDOW_CLOSE) == (time(9, 45), time(15, 30))
+    assert PHASE2_WINDOW_OPEN == time(9, 45)
+    assert PHASE2_MIN_MINUTES_TO_CLOSE == 30.0
     assert PHASE2_TIME_ZONE == "America/New_York"
 
 
 # --------------------------------------------------------------------------
-# Round 7 -- main.py structure: a halt must not drop broker events
+# Round 8 item 0 -- the account-binding digest is never emitted
 # --------------------------------------------------------------------------
 
 
-def _phase2_function(name: str) -> ast.FunctionDef:
-    tree = ast.parse(PHASE2_MAIN.read_text(encoding="utf-8"))
+def test_session_evidence_never_prints_the_binding_digest() -> None:
+    """It leaked into a container log, and from there into tracked docs."""
+    described = evidence().describe()
+    assert account_fingerprint(PAPER_ACCOUNT_ID) not in described
+    assert "account_binding=present" in described
+    assert PAPER_ACCOUNT_ID not in described, "nor the raw account id"
+
+
+def test_trade_record_never_prints_the_binding_digest(identity: TradeIdentity) -> None:
+    described = filled_record(identity).describe()
+    assert account_fingerprint(PAPER_ACCOUNT_ID) not in described
+    assert "account_binding=present" in described
+
+
+def test_a_binding_mismatch_is_reported_without_naming_either_value() -> None:
+    with pytest.raises(SessionVerificationError) as excinfo:
+        verify_paper_session(evidence(), expected_fingerprint=account_fingerprint("DU7654321"))
+    message = str(excinfo.value)
+    assert account_fingerprint(PAPER_ACCOUNT_ID) not in message
+    assert account_fingerprint("DU7654321") not in message
+    assert "DIFFER" in message
+
+
+# --------------------------------------------------------------------------
+# Round 8 item 6 -- receipts must agree with the RECORD, not just each other
+# --------------------------------------------------------------------------
+
+
+def receipt_paths(tmp_path: Path) -> tuple[Path, ...]:
+    return (tmp_path / "a" / "receipt.json", tmp_path / "b" / "receipt.json")
+
+
+def write_receipt(tmp_path: Path, receipt: ArmReceipt) -> tuple[Path, ...]:
+    paths = receipt_paths(tmp_path)
+    write_arm_receipt(receipt, paths)
+    return paths
+
+
+def test_receipts_agreeing_with_the_record_pass(tmp_path: Path, identity: TradeIdentity) -> None:
+    record = filled_record(identity)
+    paths = write_receipt(
+        tmp_path,
+        ArmReceipt(
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+            consumed=True,
+        ),
+    )
+    assert_arm_matches_record(
+        paths,
+        trade_intent_id=record.trade_intent_id,
+        account_fingerprint_value=record.account_fingerprint,
+        arm_consumed=record.arm_consumed,
+    )
+
+
+def test_receipt_for_a_different_intent_fails_closed(
+    tmp_path: Path, identity: TradeIdentity
+) -> None:
+    record = filled_record(identity)
+    paths = write_receipt(
+        tmp_path,
+        ArmReceipt(
+            trade_intent_id="ti-somethingelse",
+            account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+            consumed=True,
+        ),
+    )
+    with pytest.raises(ArmReceiptError, match="DIFFERENT trade intent"):
+        assert_arm_matches_record(
+            paths,
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint_value=record.account_fingerprint,
+            arm_consumed=record.arm_consumed,
+        )
+
+
+def test_receipt_bound_to_a_different_account_fails_closed(
+    tmp_path: Path, identity: TradeIdentity
+) -> None:
+    record = filled_record(identity)
+    paths = write_receipt(
+        tmp_path,
+        ArmReceipt(
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint=account_fingerprint("DU7654321"),
+            consumed=True,
+        ),
+    )
+    with pytest.raises(ArmReceiptError) as excinfo:
+        assert_arm_matches_record(
+            paths,
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint_value=record.account_fingerprint,
+            arm_consumed=record.arm_consumed,
+        )
+    message = str(excinfo.value)
+    assert "DIFFERENT brokerage" in message
+    assert account_fingerprint(PAPER_ACCOUNT_ID) not in message, "no binding value in the message"
+    assert account_fingerprint("DU7654321") not in message
+
+
+def test_receipt_disagreeing_about_consumption_fails_closed(
+    tmp_path: Path, identity: TradeIdentity
+) -> None:
+    """The exact disagreement that could permit a replay."""
+    record = filled_record(identity)
+    paths = write_receipt(
+        tmp_path,
+        ArmReceipt(
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+            consumed=False,
+        ),
+    )
+    with pytest.raises(ArmReceiptError, match="consumed"):
+        assert_arm_matches_record(
+            paths,
+            trade_intent_id=record.trade_intent_id,
+            account_fingerprint_value=record.account_fingerprint,
+            arm_consumed=record.arm_consumed,
+        )
+
+
+# --------------------------------------------------------------------------
+# Round 8 item 4 -- the operational halt, and which halts survive a restart
+# --------------------------------------------------------------------------
+
+
+def test_a_safety_violation_requires_manual_clearance() -> None:
+    """Contradictory durable state or broker truth does not improve on restart."""
+    for error in (
+        ReconciliationError("mismatch"),
+        UnprotectedPositionError("bare long"),
+        SessionVerificationError("wrong account"),
+        StateStoreError("corrupt"),
+    ):
+        assert classify_halt(error) is HaltKind.MANUAL_CLEARANCE_REQUIRED
+
+
+def test_an_ordinary_error_halts_only_this_session() -> None:
+    """Not every transient fault should become a permanent manual chore."""
+    for error in (TimeoutError("transport"), RuntimeError("odd"), None):
+        assert classify_halt(error) is HaltKind.SESSION
+
+
+def test_a_manual_halt_survives_a_restart(tmp_path: Path) -> None:
+    store = JsonHaltStore(halt_state_path(tmp_path))
+    assert store.get() is None
+
+    store.put(OperationalHalt("bare long", HaltKind.MANUAL_CLEARANCE_REQUIRED))
+
+    reopened = JsonHaltStore(halt_state_path(tmp_path))  # a restarted process
+    recovered = reopened.get()
+    assert recovered is not None
+    assert recovered.manual_clear_required is True
+    assert recovered.reason == "bare long"
+
+
+def test_a_session_halt_is_not_persisted(tmp_path: Path) -> None:
+    store = JsonHaltStore(halt_state_path(tmp_path))
+    store.put(OperationalHalt("transport blip", HaltKind.SESSION))
+    assert store.get() is None, "a restart may retry a transient fault"
+
+
+def test_clearing_a_halt_is_explicit(tmp_path: Path) -> None:
+    store = JsonHaltStore(halt_state_path(tmp_path))
+    store.put(OperationalHalt("bare long", HaltKind.MANUAL_CLEARANCE_REQUIRED))
+    store.clear()
+    assert store.get() is None
+
+
+def test_an_unreadable_halt_record_is_not_read_as_not_halted(tmp_path: Path) -> None:
+    path = halt_state_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(HaltStoreError):
+        JsonHaltStore(path).get()
+
+
+def test_halt_description_carries_no_identifier() -> None:
+    halt = OperationalHalt("bare long", HaltKind.MANUAL_CLEARANCE_REQUIRED)
+    assert "MANUAL_CLEARANCE_REQUIRED" in halt.describe()
+
+
+# --------------------------------------------------------------------------
+# Round 8 -- structure: the adapter decides nothing, the cycle decides everything
+# --------------------------------------------------------------------------
+
+
+def _function(path: Path, name: str) -> ast.FunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
-    raise AssertionError(f"{name} not found in {PHASE2_MAIN}")
+    raise AssertionError(f"{name} not found in {path}")
 
 
 def _attributes(node: ast.AST) -> set[str]:
@@ -897,38 +1147,168 @@ def _first_line_calling(node: ast.AST, method: str) -> int:
 def test_broker_event_ingestion_is_not_gated_on_the_halt_latch() -> None:
     """An order already at the broker can still fill after a halt. Returning
     early would not stop that -- it would only stop us recording it."""
-    assert "_normal_progression_halted" not in _attributes(_phase2_function("on_order_event"))
+    assert "halted" not in _attributes(_function(PHASE2_CYCLE, "on_order_event"))
 
 
 def test_the_reconcile_cycle_is_gated_on_the_halt_latch() -> None:
     """The other half of the same rule: no NEW normal decisions after a halt."""
-    assert "_normal_progression_halted" in _attributes(_phase2_function("_on_cycle"))
+    assert "halted" in _attributes(_function(PHASE2_CYCLE, "on_cycle"))
+
+
+def test_event_ingestion_proves_the_account_before_mutating_anything() -> None:
+    handler = _function(PHASE2_CYCLE, "on_order_event")
+    assert _first_line_calling(handler, "assert_session_binding") < _first_line_calling(
+        handler, "_apply_event"
+    )
 
 
 def test_an_entry_fill_routes_protection_through_the_guarded_path() -> None:
-    called = _called_methods(_phase2_function("on_order_event"))
+    called = _called_methods(_function(PHASE2_CYCLE, "_apply_event"))
     assert "_dispatch_protection" in called
     assert "_dispatch" not in called, "protection must not bypass the post-halt guard"
 
 
-def test_the_fence_is_acquired_before_any_broker_order_call() -> None:
+def test_the_fence_is_acquired_before_the_broker_call() -> None:
     """Round 4, asserted structurally so it cannot be reordered by accident."""
-    dispatch_fn = _phase2_function("_dispatch")
-    fence_line = _first_line_calling(dispatch_fn, "fence_dispatch")
-    for order_api in ("market_order", "stop_market_order"):
-        assert fence_line < _first_line_calling(dispatch_fn, order_api)
+    dispatch = _function(PHASE2_CYCLE, "_dispatch")
+    assert _first_line_calling(dispatch, "fence_dispatch") < _first_line_calling(dispatch, "submit")
 
 
 def test_every_cycle_with_a_trade_re_proves_the_account_binding() -> None:
-    cycle = _phase2_function("_on_cycle")
-    called = _called_methods(cycle)
-    assert "assert_session_binding" in called
+    cycle = _function(PHASE2_CYCLE, "on_cycle")
     assert _first_line_calling(cycle, "assert_session_binding") < _first_line_calling(
         cycle, "assess_recovery"
     )
 
 
 def test_arming_checks_the_window_before_consuming_the_arm() -> None:
-    arm = _phase2_function("_maybe_arm")
-    assert "_window_eligible" in _called_methods(arm)
+    arm = _function(PHASE2_CYCLE, "_maybe_arm")
     assert _first_line_calling(arm, "_window_eligible") < _first_line_calling(arm, "authorize")
+
+
+def test_the_cycle_ends_after_a_recovery_dispatch() -> None:
+    """The snapshot predates the order, so it cannot confirm it.
+
+    Continuing would compare a stop we just sent against a broker view captured
+    before it existed, and report a false UNPROTECTED POSITION.
+    """
+    cycle = _function(PHASE2_CYCLE, "on_cycle")
+    guards = [
+        node
+        for node in ast.walk(cycle)
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(n, ast.Attribute) and n.attr == "redispatch" for n in ast.walk(node.test)
+        )
+    ]
+    assert guards, "no `if plan.redispatch:` guard found"
+    assert isinstance(guards[0].body[-1], ast.Return), "the cycle must end after re-dispatch"
+
+
+def test_protective_and_exit_actions_are_not_gated_on_the_window() -> None:
+    """Refusing to reduce risk because of the time of day is not a safety gate."""
+    progress = _function(PHASE2_CYCLE, "_progress")
+    names = _attributes(progress) | _called_methods(progress)
+    assert not {"_window_eligible", "assert_within_certification_window"} & names
+
+
+def test_the_lean_adapter_makes_no_lifecycle_decisions() -> None:
+    """main.py cannot be imported outside a container, so it must not decide."""
+    source = PHASE2_MAIN.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    called = {
+        n.func.attr
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+    forbidden = {
+        "authorize",
+        "begin_entry",
+        "begin_exit",
+        "fence_dispatch",
+        "apply_entry_fill_and_prepare_protection",
+        "on_fill",
+        "on_order_cancelled",
+        "on_order_rejected",
+        "assess_recovery",
+        "reconcile",
+    }
+    assert not forbidden & called, f"lifecycle calls leaked into the adapter: {forbidden & called}"
+
+
+def test_the_adapter_classifies_order_status_by_exact_enum_identity() -> None:
+    """LEAN defines BOTH CANCEL_PENDING and CANCELED."""
+    classify = _function(PHASE2_MAIN, "_classify")
+    compared = {
+        node.comparators[0].attr
+        for node in ast.walk(classify)
+        if isinstance(node, ast.Compare)
+        and node.comparators
+        and isinstance(node.comparators[0], ast.Attribute)
+    }
+    assert {"CANCEL_PENDING", "CANCELED", "INVALID", "SUBMITTED"} <= compared
+    source = ast.unparse(classify)
+    assert ".lower()" not in source and ".upper()" not in source, "no substring matching"
+
+
+def test_initialize_does_not_read_broker_state() -> None:
+    """LEAN applies brokerage cash AFTER initialize() returns; reading it there
+    logs a fabricated equity. That happened once and must not recur."""
+    assert "portfolio" not in _attributes(_function(PHASE2_MAIN, "initialize"))
+
+
+# --------------------------------------------------------------------------
+# Round 8 -- `from AlgorithmImports import *` shadows stdlib names
+# --------------------------------------------------------------------------
+
+#: Stdlib modules whose exported names LEAN's star import can plausibly shadow.
+_SHADOWABLE_STDLIB = {
+    "collections",
+    "dataclasses",
+    "datetime",
+    "decimal",
+    "enum",
+    "json",
+    "math",
+    "os",
+    "pathlib",
+    "re",
+    "time",
+    "typing",
+}
+
+#: Names verified IN-CONTAINER to survive the star import. Nothing joins this
+#: set on reasoning alone -- only on a run that proved it.
+_VERIFIED_UNSHADOWED = {"Path"}
+
+
+def test_stdlib_names_are_not_exposed_to_star_import_shadowing() -> None:
+    """`from decimal import Decimal` is silently overwritten inside the container.
+
+    `from AlgorithmImports import *` rebinds the bare name `Decimal` to .NET's
+    System.Decimal, whose constructor rejects a str -- so `Decimal(str(x))` works
+    in every test on this machine and raises TypeError in the container. It did:
+    a disarmed run halted on it, and the only reason it had not surfaced sooner
+    is that the affected lines are on the ARMED path, which has never run.
+
+    Import order cannot fix this (isort puts stdlib above the star import), so
+    the rule is to import the MODULE and qualify the name.
+    """
+    tree = ast.parse(PHASE2_MAIN.read_text(encoding="utf-8"))
+    assert any(
+        isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names)
+        for n in ast.walk(tree)
+    ), "expected a star import -- this rule exists because of one"
+
+    exposed = [
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module in _SHADOWABLE_STDLIB
+        for alias in node.names
+        if (alias.asname or alias.name) not in _VERIFIED_UNSHADOWED
+    ]
+    assert not exposed, (
+        f"{exposed} are imported by bare name into a module that does "
+        "`from AlgorithmImports import *`. The star import can silently rebind them to a "
+        "..NET type. Import the module and qualify the name instead."
+    )

@@ -42,7 +42,7 @@ from kalpamani.execution.envelope import (
     protective_stop_price,
 )
 from kalpamani.execution.identity import OrderRole, TradeIdentity
-from kalpamani.execution.lifecycle import TradeState, transition
+from kalpamani.execution.lifecycle import TERMINAL_STATES, TradeState, transition
 from kalpamani.execution.reconciliation import (
     BrokerView,
     ReconciliationError,
@@ -61,6 +61,7 @@ from kalpamani.execution.session import (
     SessionVerificationError,
     arm_receipt_paths,
     assert_arm_available,
+    assert_arm_matches_record,
     load_session_evidence,
     verify_paper_session,
     write_arm_receipt,
@@ -138,14 +139,38 @@ class Phase2Coordinator:
     # -- Recovery ----------------------------------------------------------
 
     def load(self) -> TradeRecord | None:
-        """Load the trade record, failing closed if a consumed arm lost its state."""
+        """Load the trade record, failing closed on any contradictory arm evidence.
+
+        Three separate checks, because each catches something the others cannot:
+
+        * receipts must agree with **each other** (a partial write, a stale mount);
+        * a consumed receipt must not exist with **no** trade record (lost state
+          that would otherwise look like a virgin first run);
+        * receipts must agree with the **record** -- same intent, same account
+          binding, same consumed flag. Two receipts that agree with each other
+          but describe a different trade are still contradictory evidence.
+        """
         record = self._store.get(self._identity.trade_intent_id)
         assert_arm_available(self._receipt_paths, trade_state_present=record is not None)
         if record is not None:
+            assert_arm_matches_record(
+                self._receipt_paths,
+                trade_intent_id=record.trade_intent_id,
+                account_fingerprint_value=record.account_fingerprint,
+                arm_consumed=record.arm_consumed,
+            )
             assert_arm_not_reusable(record)
         return record
 
     # -- Session binding ---------------------------------------------------
+
+    def current_session(self) -> BrokerSessionEvidence:
+        """Read the CURRENT brokerage session from the deployment configuration.
+
+        The single source callers use, so nothing can quietly consult a
+        different one. There is no fallback: if it cannot be read, it raises.
+        """
+        return self._session_provider()
 
     def assert_session_binding(self, record: TradeRecord) -> BrokerSessionEvidence:
         """Prove the CURRENT session is the same PAPER account this trade was armed on.
@@ -170,7 +195,7 @@ class Phase2Coordinator:
                 session is LIVE or unclassifiable, or if it is a different
                 account from the one armed.
         """
-        evidence = self._session_provider()
+        evidence = self.current_session()
         if not record.account_fingerprint:
             raise SessionVerificationError(
                 f"Trade {record.trade_intent_id} carries no account binding, so the connected "
@@ -179,6 +204,38 @@ class Phase2Coordinator:
             )
         verify_paper_session(evidence, expected_fingerprint=record.account_fingerprint)
         return evidence
+
+    def _guard_broker_input(self, record: TradeRecord) -> None:
+        """Refuse to mutate an account-bound record from a foreign session.
+
+        Every durable write driven by broker input goes through here. An order
+        event carries a tag, and a tag proves only that *some* session issued an
+        order with that identifier -- it says nothing about which account the
+        event arrived from. Without this, an event delivered while connected to a
+        second paper account (or a live one) would be applied to a trade that
+        belongs to a different account entirely, and the fills of one account
+        would silently become the lifecycle of another.
+
+        Raises:
+            SessionVerificationError: if the session is not the armed account.
+        """
+        self.assert_session_binding(record)
+
+    def _ledger_only(self, record: TradeRecord) -> bool:
+        """Whether broker facts may still be recorded but the lifecycle may not move.
+
+        ``FAILED`` and ``RECONCILED`` are terminal, and correctly so -- a failed
+        lifecycle must never resume. But broker facts keep arriving after a
+        failure: an order dispatched before the halt can still fill, and that
+        fill is true whatever the lifecycle concluded. Attempting the normal
+        transition would raise ``LifecycleError``, and the fill would never
+        become durable -- leaving a real position that this process cannot see.
+
+        So in a terminal state the record still accepts facts (fills,
+        acknowledgements, cancellations, rejections) and simply does not
+        transition. Terminal stays terminal.
+        """
+        return record.state in TERMINAL_STATES
 
     # -- Arming ------------------------------------------------------------
 
@@ -251,6 +308,7 @@ class Phase2Coordinator:
         Faster than waiting for the next reconciliation cycle to adopt it, and
         the same transition either way.
         """
+        self._guard_broker_input(record)
         order = record.orders.get(client_order_id)
         if order is None or order.dispatch not in (
             DispatchState.INTENT_RECORDED,
@@ -268,6 +326,7 @@ class Phase2Coordinator:
         becomes ACKNOWLEDGED the moment the broker shows it, and only then does
         it count as working protection.
         """
+        self._guard_broker_input(record)
         updated = record
         for order in broker.orders_owned_by(self._identity):
             local = updated.orders.get(order.client_order_id)
@@ -356,6 +415,7 @@ class Phase2Coordinator:
             (``None`` when there is nothing to protect or protection already
             exists).
         """
+        self._guard_broker_input(record)
         filled = apply_fill(
             record,
             client_order_id=client_order_id,
@@ -382,9 +442,10 @@ class Phase2Coordinator:
             quantity=quantity,
             stop_price=str(stop_price),
         )
-        prepared = replace(
-            prepared, state=transition(prepared.state, TradeState.PROTECTION_SUBMITTED)
-        )
+        if not self._ledger_only(prepared):
+            prepared = replace(
+                prepared, state=transition(prepared.state, TradeState.PROTECTION_SUBMITTED)
+            )
 
         # THE atomic write: entry fill, lifecycle, protective intent and durable
         # stop price all land together or not at all.
@@ -403,6 +464,7 @@ class Phase2Coordinator:
         fill_quantity: int,
     ) -> TradeRecord:
         """Apply a fill idempotently and advance the lifecycle to match it."""
+        self._guard_broker_input(record)
         updated = apply_fill(
             record,
             client_order_id=client_order_id,
@@ -431,6 +493,7 @@ class Phase2Coordinator:
         Raises:
             UnprotectedPositionError: if a long is exposed by the rejection.
         """
+        self._guard_broker_input(record)
         updated = mark_rejected(record, client_order_id)
         updated = self._store.put(updated)
 
@@ -451,6 +514,8 @@ class Phase2Coordinator:
         return updated
 
     def _advance_after_entry_fill(self, record: TradeRecord) -> TradeRecord:
+        if self._ledger_only(record):
+            return record  # fact recorded; a terminal lifecycle does not resume
         state = record.state
         if state is TradeState.ENTRY_SUBMITTED:
             state = transition(state, TradeState.ENTRY_ACKNOWLEDGED)
@@ -474,38 +539,13 @@ class Phase2Coordinator:
         Recognising it here is what stops the system from later trying to sell a
         position the stop already sold -- which would open a short.
         """
+        if self._ledger_only(record):
+            return record  # fact recorded; a terminal lifecycle does not resume
         if record.open_long_quantity > 0:
             return record
         return replace(record, state=transition(record.state, TradeState.CLOSED))
 
     # -- Protection --------------------------------------------------------
-
-    def plan_protection(self, record: TradeRecord, fill_price: Decimal) -> PendingOrder | None:
-        """Write-ahead-record protection for the ACTUAL filled quantity.
-
-        Returns ``None`` when nothing should be dispatched: zero filled, or
-        protection already recorded. A stop for a position that does not exist
-        would itself be capable of opening a short.
-        """
-        quantity = required_protection_quantity(record)
-        if quantity <= 0:
-            return None
-        if record.order_for_role(OrderRole.PROTECTIVE) is not None:
-            return None
-
-        stop_price = protective_stop_price(fill_price)
-        pending = record_order_intent(
-            record,
-            client_order_id=self._identity.protective_order_id,
-            role=OrderRole.PROTECTIVE,
-            symbol=PHASE2_SYMBOL,
-            side="SELL",
-            quantity=quantity,
-            stop_price=str(stop_price),
-        )
-        pending = replace(pending, state=transition(pending.state, TradeState.PROTECTION_SUBMITTED))
-        pending = self._store.put(pending)
-        return PendingOrder(request=self._protective_request(quantity, stop_price), record=pending)
 
     def _protective_request(self, quantity: int, stop_price: Decimal) -> OrderRequest:
         return OrderRequest(
@@ -572,6 +612,7 @@ class Phase2Coordinator:
             UnprotectedPositionError: whenever the cancellation leaves an open
                 long with no broker-confirmed protection.
         """
+        self._guard_broker_input(record)
         order = record.orders.get(client_order_id)
         if order is None:
             return record  # not ours
@@ -657,6 +698,7 @@ class Phase2Coordinator:
 
     def reconcile(self, record: TradeRecord, broker: BrokerView) -> TradeRecord:
         """Adopt broker evidence, then compare. Raises on disagreement."""
+        self._guard_broker_input(record)
         adopted = self.adopt_broker_evidence(record, broker)
         reconcile(adopted, self._identity, broker)
         return adopted

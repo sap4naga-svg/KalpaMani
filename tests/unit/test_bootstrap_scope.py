@@ -41,7 +41,9 @@ BROKER_ALLOWED_MODULES = ["account.py", "orders.py"]
 #: Widening the execution surface is an ADR-level change.
 EXECUTION_ALLOWED_MODULES = [
     "coordinator.py",
+    "cycle.py",
     "envelope.py",
+    "halt.py",
     "identity.py",
     "lifecycle.py",
     "reconciliation.py",
