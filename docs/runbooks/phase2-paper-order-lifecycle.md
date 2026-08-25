@@ -387,7 +387,7 @@ Verify independently in the IBKR account manager, not only from logs.
 |---|---|
 | **UNPROTECTED POSITION** | Do not re-enter. Protect or close by hand in IBKR. Investigate before any restart. |
 | **Broker/internal mismatch** | The system fails closed and halts. Do **not** force it forward. Compare the durable state file against IBKR by hand and resolve deliberately. |
-| **Accidental short** | Close it manually in IBKR immediately, then investigate how the stop outlived the long. |
+| **Accidental short** | Close it manually in IBKR immediately (§13.0), then investigate how it arose — whether a stop outlived a long, or a manual ticket oversold. Record it as an incident either way. |
 | **Duplicate entry observed** | Stop everything. This is the failure ADR-0004 exists to prevent; treat it as a design defect, not an operational hiccup. |
 | **Unknown / ambiguous account** | Abort. Never proceed on an unclassified account. |
 | **`SEND_FENCED`, broker silent** | Ambiguous — the order may be live. Do **not** resend. Check the IBKR order history by hand, then reconcile deliberately. |
@@ -399,6 +399,71 @@ Verify independently in the IBKR account manager, not only from logs.
 | **Stop triggered during the run** | The wide TEST stop makes this unlikely. If it fills, the position is flat — reconcile and record it; do not re-enter. |
 
 **Never** respond to a failure by submitting another entry.
+
+---
+
+## 13.0 Closing a position BY HAND — read this before touching a ticket
+
+Several rows above end in "close it by hand in IBKR". This is how.
+
+**A manual cleanup created a real short position on 2026-08-25**
+([INC-0001](../incidents/INC-0001-run1-manual-cleanup-transient-short.md)). The stop had been
+cancelled correctly; the flattening SELL then went out with the wrong quantity, and selling
+more than you hold is not an error a ticket reports — it is simply a short. The automated path
+refuses to sell more than the broker confirms it holds. A generic ticket has no such opinion.
+
+### Prefer Close Position
+
+Use IBKR's **Close Position** action wherever it is available. It derives the quantity from the
+position you actually hold, which removes the one field that turned a cleanup into a short.
+Reach for a generic SELL ticket only when Close Position is not offered.
+
+### Before you submit — every time, no exceptions
+
+Say the answer out loud, or write it down. All five, in order:
+
+| # | Check |
+|---|---|
+| 1 | **Symbol** is `SPY` — the one you mean, in the account you mean |
+| 2 | **Current position** equals what you expect it to be |
+| 3 | The action **closes** the position — it does not enlarge it and does not reverse it |
+| 4 | **Quantity** is the EXACT absolute current position. Not a round number, not "about right" |
+| 5 | **Projected resulting position is exactly 0** |
+
+Use **Preview** whenever the ticket offers it, and read the projected position it returns
+rather than the one you expected.
+
+> **If the projected position is not exactly zero, DO NOT SUBMIT.**
+> Cancel the ticket and work out why first. A cleanup is never urgent enough to skip this —
+> the position is already open, and thirty seconds of checking costs nothing next to a short.
+
+### Ordering, when both a position and a stop exist
+
+1. **Cancel the protective stop first**, and confirm it is cancelled.
+2. **Then** close the position.
+
+Never the other way round: a stop left working after the long is flat can fill on its own and
+open a short. This is the same ordering KalpaMani enforces internally, for the same reason.
+
+### After the fill
+
+Verify **independently**, in the broker UI — not from the ticket confirmation:
+
+- position = **0**
+- open orders on the symbol = **0**
+
+Only then is the account flat.
+
+### If a manual cleanup creates a short
+
+**That is itself an operational incident and must be recorded**, even when it is corrected in
+seconds and even on a paper account. Close the short, verify flat, then write it up under
+`docs/incidents/` — no brokerage identifiers. A near miss that leaves no trace teaches nobody,
+and this one produced five corrective actions.
+
+Once the account is genuinely flat, record the outcome against the failed run with
+`RESOLVE PHASE2 MANUAL CLOSE` (§13.6). That action re-verifies flatness itself and refuses if
+the account is not — it will not take your word for it, and it never touches a broker order.
 
 ---
 
