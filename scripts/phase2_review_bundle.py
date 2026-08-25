@@ -187,7 +187,11 @@ def validation_report() -> str:
         "(redacted) and local runtime paths, neither of which belongs in a review bundle.",
         "Run them locally; both exit 0.",
         "",
-        "SYSTEM STATE: DISARMED. No order has ever been submitted.",
+        "STATUS",
+        "  Certification run 1 EXECUTED against IBKR Paper and failed restart",
+        "  certification -- safely: it failed closed, submitted nothing further, and",
+        "  halted. It was resolved by hand and is preserved as terminal FAILED.",
+        "  The system is DISARMED. Run 2 has not been armed or submitted.",
     ]
     return "\n".join(lines)
 
@@ -199,7 +203,10 @@ def readme(files: list[str]) -> str:
 Phase 2 is an execution-plumbing certification, not a strategy: a single
 BUY 1 SPY on IBKR PAPER, protected, reconciled, restarted, exited, flat.
 
-NOTHING HAS BEEN SUBMITTED. The system is DISARMED and PR #3 is unmerged.
+Certification run 1 executed against IBKR Paper and failed restart certification
+safely -- it failed closed, submitted nothing further, and halted. Run 1 is
+preserved as terminal FAILED and was resolved by hand; see docs/incidents/.
+The system is DISARMED, run 2 has not been armed, and PR #3 is unmerged.
 
 Contents
 --------

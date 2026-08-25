@@ -931,7 +931,15 @@ class Phase2Cycle:
         :func:`kalpamani.execution.halt.classify_halt`.
         """
         risk = self._current_risk()
-        halt = OperationalHalt(reason=reason, kind=kind or classify_halt(error, risk))
+        # Bind the halt to the run that raised it, so clearing it later can be
+        # required to inspect THIS trade rather than whichever run is selected.
+        halt = OperationalHalt(
+            reason=reason,
+            kind=kind or classify_halt(error, risk),
+            trade_intent_id=(
+                self._coordinator.identity.trade_intent_id if risk.trade_record_exists else ""
+            ),
+        )
         self._halt_store.put(halt)  # a no-op for a session-scoped halt
         self._halt = halt
         self._port.error(f"[PHASE2-ABORT] {reason}")

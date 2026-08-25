@@ -68,7 +68,12 @@ from kalpamani.execution.session import BrokerSessionEvidence
 from kalpamani.execution.state_store import DispatchState, ResolutionKind, TradeRecord
 
 #: Bumped when the persisted shape changes. Unknown versions fail closed.
-HALT_SCHEMA_VERSION = 1
+#: v2 bound a halt to the certification run it belongs to.
+HALT_SCHEMA_VERSION = 2
+
+#: Halt payloads this code can read. A v1 halt predates run binding and is
+#: treated as UNBOUND, never as "belongs to whichever run you ask about".
+READABLE_HALT_VERSIONS: frozenset[int] = frozenset({1, HALT_SCHEMA_VERSION})
 
 
 class HaltStoreError(SafetyViolationError):
@@ -232,14 +237,26 @@ class OperationalHalt:
 
     reason: str
     kind: HaltKind
+    #: The certification run this halt belongs to, when one was in progress.
+    #: Empty for a halt raised before any trade existed, or read from a v1
+    #: record that predates run binding. Never treated as a wildcard: an
+    #: unbound halt matches no run automatically.
+    trade_intent_id: str = ""
 
     @property
     def manual_clear_required(self) -> bool:
         return self.kind is HaltKind.MANUAL_CLEARANCE_REQUIRED
 
+    @property
+    def is_trade_bound(self) -> bool:
+        return bool(self.trade_intent_id)
+
     def describe(self) -> str:
-        """Log-safe. Carries no account binding and no identifier."""
-        return f"kind={self.kind.value} manual_clear_required={self.manual_clear_required}"
+        """Log-safe. Carries no account binding and no brokerage identifier."""
+        bound = self.trade_intent_id or "(unbound)"
+        return (
+            f"kind={self.kind.value} manual_clear_required={self.manual_clear_required} run={bound}"
+        )
 
 
 class HaltStore(Protocol):
@@ -280,13 +297,18 @@ class JsonHaltStore:
                 "trading precisely when something is wrong."
             ) from exc
         version = raw.get("schema_version")
-        if version != HALT_SCHEMA_VERSION:
+        if version not in READABLE_HALT_VERSIONS:
             raise HaltStoreError(
-                f"Halt record schema version {version!r} is not the expected "
-                f"{HALT_SCHEMA_VERSION}. Failing closed rather than parsing hopefully."
+                f"Halt record schema version {version!r} is not one this code can read "
+                f"({sorted(READABLE_HALT_VERSIONS)}). Failing closed rather than parsing "
+                "hopefully."
             )
         try:
-            return OperationalHalt(reason=str(raw["reason"]), kind=HaltKind(raw["kind"]))
+            return OperationalHalt(
+                reason=str(raw["reason"]),
+                kind=HaltKind(raw["kind"]),
+                trade_intent_id=str(raw.get("trade_intent_id", "")),
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise HaltStoreError(f"The durable halt record is malformed: {exc}.") from exc
 
@@ -298,6 +320,7 @@ class JsonHaltStore:
             "schema_version": HALT_SCHEMA_VERSION,
             "reason": halt.reason,
             "kind": halt.kind.value,
+            "trade_intent_id": halt.trade_intent_id,
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(
@@ -321,6 +344,34 @@ class JsonHaltStore:
     def clear(self) -> None:
         """Remove the halt. An explicit human action, never automatic."""
         self._path.unlink(missing_ok=True)
+
+
+def assert_halt_belongs_to(halt: OperationalHalt, record: TradeRecord | None) -> None:
+    """Assert the halt being cleared is the halt this run raised.
+
+    Clearing a halt validates the selected run against the gates below. If the
+    halt actually belongs to a *different* run, those gates inspect the wrong
+    trade -- and a manually resolved run would happily authorise the clearance
+    of a halt protecting a live one. That is fail-open, so the binding is
+    checked before anything else.
+
+    Raises:
+        HaltClearanceError: if the halt names a different run, or names a run at
+            all while no record was selected.
+    """
+    if not halt.is_trade_bound:
+        return  # raised before any trade existed, or a pre-binding record
+    if record is None:
+        raise HaltClearanceError(
+            "REFUSED: this halt belongs to a specific certification run, but no run was "
+            "selected. Pass the run whose halt you are clearing."
+        )
+    if halt.trade_intent_id != record.trade_intent_id:
+        raise HaltClearanceError(
+            f"REFUSED: this halt belongs to run {halt.trade_intent_id}, but the selected run "
+            f"is {record.trade_intent_id}. Clearing it would validate the wrong trade -- the "
+            "gates would inspect a run that is not the one being protected."
+        )
 
 
 def assert_halt_clearable(
@@ -446,6 +497,7 @@ def halt_state_path(storage_root: Path) -> Path:
 
 __all__ = [
     "HALT_SCHEMA_VERSION",
+    "READABLE_HALT_VERSIONS",
     "TRANSIENT_PRE_TRADE_ERRORS",
     "ExecutionRisk",
     "HaltClearanceError",
@@ -454,6 +506,7 @@ __all__ = [
     "HaltStoreError",
     "JsonHaltStore",
     "OperationalHalt",
+    "assert_halt_belongs_to",
     "assert_halt_clearable",
     "classify_halt",
     "halt_state_path",

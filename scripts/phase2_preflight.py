@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import ast
+import json
 import shutil
 import subprocess
 import sys
@@ -37,7 +38,9 @@ from kalpamani.execution.envelope import (
     PHASE2_FILL_NOTIONAL_TOLERANCE_USD,
     PHASE2_MAX_REFERENCE_NOTIONAL_USD,
     PHASE2_QUANTITY,
+    PHASE2_RUN_1_NATURAL_KEY,
     PHASE2_SYMBOL,
+    certification_identity,
 )
 from kalpamani.execution.halt import JsonHaltStore, halt_state_path
 from kalpamani.execution.lifecycle import is_terminal
@@ -46,6 +49,7 @@ from kalpamani.execution.session import (
     IB_TRADING_MODE_KEY,
     BrokerSessionEvidence,
     SessionVerificationError,
+    arm_receipt_paths,
     read_arm_receipts,
     verify_paper_session,
 )
@@ -72,10 +76,39 @@ RUNTIME_PACKAGE = RUNTIME_PROJECT / "kalpamani"
 RUNTIME_STORAGE = RUNTIME_WORKSPACE / "storage"
 RUNTIME_STATE = RUNTIME_STORAGE / "phase2_trade_state.json"
 RUNTIME_HALT = halt_state_path(RUNTIME_STORAGE)
-RUNTIME_ARM_RECEIPTS = (
-    RUNTIME_STORAGE / "phase2_arm_receipt.json",
-    RUNTIME_PROJECT / ".phase2_arm_receipt.json",
-)
+
+
+#: Receipt paths are DERIVED from the selected certification run, using the same
+#: function the coordinator uses. Hard-coding run 1 filenames would let a
+#: consumed run-1 receipt stand in for a run that has not been armed at all.
+def runtime_arm_receipts(run_number: int) -> tuple[Path, ...]:
+    identity = certification_identity(run_number)
+    return arm_receipt_paths(
+        RUNTIME_STORAGE,
+        RUNTIME_PROJECT,
+        identity.trade_intent_id,
+        legacy=identity.natural_key == PHASE2_RUN_1_NATURAL_KEY,
+    )
+
+
+def selected_run_number() -> int | None:
+    """The run this deployment is configured for, or None if unusable."""
+    config = RUNTIME_PROJECT / "config.json"
+    if not config.is_file():
+        return None
+    raw = str(
+        json.loads(config.read_text(encoding="utf-8"))
+        .get("parameters", {})
+        .get("phase2_run_number", "")
+        or ""
+    ).strip()
+    try:
+        run = int(raw)
+    except ValueError:
+        return None
+    return run if run >= 1 else None
+
+
 LEAN_DEPLOYMENT_CONFIG = RUNTIME_WORKSPACE / "lean.json"
 
 SYNCED_FILES = ("main.py",)
@@ -434,9 +467,19 @@ def check_deployment_session() -> bool:
 
 
 def check_arm_receipts(state_present: bool) -> bool:
-    """A consumed arm receipt without trade state must block deployment."""
+    """A consumed arm receipt without trade state must block deployment.
+
+    Scoped to the SELECTED run. A run-1 receipt must never stand in for a run
+    that was never armed, and a missing receipt for the selected run must not be
+    masked by an older one existing.
+    """
     print("[5/6] Arm receipts")
-    receipts = read_arm_receipts(RUNTIME_ARM_RECEIPTS)
+    run = selected_run_number()
+    if run is None:
+        print("  INFO: no usable certification run selected; receipts cannot be scoped")
+        return True
+    print(f"  INFO: certification run {run}")
+    receipts = read_arm_receipts(runtime_arm_receipts(run))
     if not receipts:
         print("  OK  : no arm receipt (a genuine first run)")
         return True
@@ -539,6 +582,7 @@ def print_checklist() -> None:
             and str(params.get("explicit_execution_arm", "")).lower() == "true"
             and params.get("phase2_confirmation") == PHASE2_CONFIRMATION_PHRASE
             and binding
+            and selected_run_number() is not None
         ):
             armed = "YES -- an entry order may be placed"
         # Presence only -- the binding digest is sensitive and never printed.
@@ -559,6 +603,7 @@ def print_checklist() -> None:
             "Fill notional tolerance",
             f"USD {PHASE2_FILL_NOTIONAL_TOLERANCE_USD} (market order: not enforceable)",
         ),
+        ("Certification run", str(selected_run_number() or "NOT SELECTED -- arm invalid")),
         ("Max intents / entries", "1 / 1"),
         ("Execution window", describe_window()),
         ("Window open right now", _window_now()),

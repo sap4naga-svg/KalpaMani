@@ -1763,15 +1763,83 @@ def test_one_broker_id_matching_two_durable_orders_is_ambiguous(
 def test_a_tag_and_a_broker_id_naming_different_orders_contradict(
     identity: TradeIdentity,
 ) -> None:
-    """The tag names the PROTECTIVE order; the broker id belongs to the ENTRY."""
+    """The real case: BOTH durable orders exist and the two identities disagree.
+
+    An earlier version of this test deleted the tag-target order first, which
+    meant the tag path was never taken and the contradiction was never reached.
+    The resolver returned TAG and the broker id was ignored entirely.
+    """
     record = bound_record(identity)
-    # Drop the tag target so broker-id resolution is reached with a stale tag.
-    record = replace(
-        record,
-        orders={cid: o for cid, o in record.orders.items() if cid != identity.protective_order_id},
-    )
+    assert identity.protective_order_id in record.orders
+    assert identity.entry_order_id in record.orders
+
+    # Tag says PROTECTIVE; the broker id belongs to the ENTRY.
     view = rehydrated(tag=identity.protective_order_id, broker_order_ids=(ENTRY_BROKER_ID,))
-    with pytest.raises(OwnershipError, match="contradict"):
+    with pytest.raises(OwnershipError, match="CONTRADICTORY IDENTITY"):
+        resolve_ownership(view, record, identity)
+
+
+def test_a_tag_and_a_broker_id_naming_the_same_order_agree(identity: TradeIdentity) -> None:
+    view = rehydrated(tag=identity.protective_order_id, broker_order_ids=(OUR_BROKER_ID,))
+    resolved, basis = resolve_ownership(view, bound_record(identity), identity)
+    assert resolved == identity.protective_order_id
+    assert basis is OwnershipBasis.TAG
+
+
+def test_an_entry_tag_with_a_protective_broker_id_contradicts(identity: TradeIdentity) -> None:
+    view = rehydrated(
+        tag=identity.entry_order_id,
+        side="BUY",
+        order_type="Market",
+        stop_price=None,
+        broker_order_ids=(OUR_BROKER_ID,),
+    )
+    with pytest.raises(OwnershipError, match="CONTRADICTORY IDENTITY"):
+        resolve_ownership(view, bound_record(identity), identity)
+
+
+def test_a_valid_tag_with_an_unknown_foreign_broker_id_is_a_contradiction(
+    identity: TradeIdentity,
+) -> None:
+    """Explicit Phase-2 decision: a broker id we do not recognise, on an order
+    whose recorded identity is something else, is a contradiction -- not noise
+    to ignore. The safest reading is that this is not the order we think it is.
+    """
+    view = rehydrated(tag=identity.protective_order_id, broker_order_ids=(STRANGER_BROKER_ID,))
+    with pytest.raises(OwnershipError, match="CONTRADICTORY IDENTITY"):
+        resolve_ownership(view, bound_record(identity), identity)
+
+
+def test_a_tagged_order_with_no_recorded_identity_yet_adopts_the_broker_id(
+    identity: TradeIdentity,
+) -> None:
+    """The ordinary first-acknowledgement path.
+
+    The tagged order has no broker id recorded, so the one the broker reports is
+    the identity being ASSIGNED, not a conflicting one. Refusing here would mean
+    a broker id could never be captured at all -- which is precisely how run 1
+    became unrecoverable.
+    """
+    record = record_broker_ids(protected_record(identity), identity.entry_order_id, ("3",))
+    view = rehydrated(tag=identity.protective_order_id, broker_order_ids=(OUR_BROKER_ID,))
+    resolved, basis = resolve_ownership(view, record, identity)
+    assert resolved == identity.protective_order_id
+    assert basis is OwnershipBasis.TAG
+
+
+def test_our_tag_on_an_order_we_never_recorded_is_a_contradiction(
+    identity: TradeIdentity,
+) -> None:
+    record = replace(
+        bound_record(identity),
+        orders={
+            cid: o
+            for cid, o in bound_record(identity).orders.items()
+            if cid != identity.protective_order_id
+        },
+    )
+    view = rehydrated(tag=identity.protective_order_id, broker_order_ids=())
+    with pytest.raises(OwnershipError, match="no record of submitting"):
         resolve_ownership(view, record, identity)
 
 

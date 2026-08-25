@@ -311,31 +311,63 @@ def resolve_ownership(
 ) -> tuple[str | None, OwnershipBasis]:
     """Attribute one open order, by evidence and never by resemblance.
 
-    The hierarchy, strongest first:
+    Two independent identities can be present, and the earlier version of this
+    returned on the first one it found:
 
-    1. **TAG.** The LEAN tag carries our client order id. Only available in the
-       process that submitted the order -- the tag is not sent to IBKR.
-    2. **BROKER ID.** The broker-native id matches exactly one durable order.
-       This is what survives a restart, proven on a real IBKR Paper reconnect.
-    3. **Attributes** then VALIDATE whichever identity was established. They are
-       never allowed to establish one: a manual SELL stop for 1 SPY at the same
-       price is indistinguishable by shape, and adopting it would let KalpaMani
-       cancel a stranger's order or believe a stranger's order protects it.
-    4. Otherwise the order is FOREIGN. Never adopted, never cancelled, never
-       answered with a compensating order.
+        tag        -> PROTECTIVE
+        broker id  -> ENTRY
+
+    was accepted as PROTECTIVE, because the tag path returned before the broker
+    id was ever consulted. Two identities naming different orders is not a
+    tie-break to be won by whichever is checked first; it means our record and
+    the broker disagree about what this order *is*.
+
+    So both candidates are resolved first, and only then judged:
+
+    ==========================  ==========================================
+    Evidence                    Outcome
+    ==========================  ==========================================
+    tag and broker id agree     owned, basis TAG
+    tag and broker id disagree  **OwnershipError**
+    tag only                    owned, basis TAG
+    broker id only              owned, basis BROKER_ID
+    neither                     foreign
+    ==========================  ==========================================
+
+    Attributes then validate the agreed identity. They never establish one.
+
+    A tag we own that names an order we have no record of is also a
+    contradiction: intents are written down before they are sent, so there is no
+    legitimate way for one of our orders to exist unrecorded.
+
+    "Tag only" has one subtlety worth stating outright. If the broker reports
+    ids and the tagged order **already has a different recorded identity**, that
+    is a contradiction and raises. If the tagged order has **no** recorded
+    identity yet, the reported ids are simply the identity being assigned --
+    this is the ordinary first-acknowledgement path, and refusing it would mean
+    a broker id could never be captured at all.
 
     Raises:
-        OwnershipError: if a broker id matches more than one durable order, or
-            if attributes contradict the established identity.
+        OwnershipError: on ambiguity or on any contradiction between the two
+            identities, or between an identity and the order's attributes.
     """
     if record is None:
         return None, OwnershipBasis.NONE
 
+    # A. The tag candidate.
     tag = view.tag.strip()
-    if is_valid_client_order_id(tag) and identity.owns(tag) and tag in record.orders:
-        _assert_attributes_agree(view, record.orders[tag])
-        return tag, OwnershipBasis.TAG
+    tag_match: SubmittedOrder | None = None
+    if is_valid_client_order_id(tag) and identity.owns(tag):
+        tag_match = record.orders.get(tag)
+        if tag_match is None:
+            raise OwnershipError(
+                f"An open order carries the KalpaMani tag {tag}, which this execution has no "
+                "record of submitting. Intents are recorded before they are sent, so an "
+                "unrecorded order of ours contradicts durable state. Refusing to adopt it."
+            )
 
+    # B. The broker-id candidate.
+    id_match: SubmittedOrder | None = None
     if view.broker_order_ids:
         incoming = set(view.broker_order_ids)
         matches = [
@@ -350,16 +382,38 @@ def resolve_ownership(
                 "identity; refusing to attribute it to any of them."
             )
         if matches:
-            durable = matches[0]
-            if is_valid_client_order_id(tag) and tag != durable.client_order_id:
-                raise OwnershipError(
-                    f"An open order carries the tag {tag} but its broker id belongs to "
-                    f"{durable.client_order_id}. The two identities contradict each other; "
-                    "refusing to adopt it."
-                )
-            _assert_attributes_agree(view, durable)
-            return durable.client_order_id, OwnershipBasis.BROKER_ID
+            id_match = matches[0]
 
+    # C. Both present: they must name the same order.
+    if tag_match is not None and id_match is not None:
+        if tag_match.client_order_id != id_match.client_order_id:
+            raise OwnershipError(
+                f"CONTRADICTORY IDENTITY: the tag names {tag_match.client_order_id} "
+                f"({tag_match.role.value}) but the broker id belongs to "
+                f"{id_match.client_order_id} ({id_match.role.value}). Our record and the "
+                "broker disagree about what this order is; refusing to adopt it as either."
+            )
+        _assert_attributes_agree(view, tag_match)
+        return tag_match.client_order_id, OwnershipBasis.TAG
+
+    # E. Tag only.
+    if tag_match is not None:
+        if view.broker_order_ids and tag_match.broker_order_ids:
+            raise OwnershipError(
+                f"CONTRADICTORY IDENTITY: the tag names {tag_match.client_order_id}, but the "
+                "broker reports an order id that is not the one recorded for it. A broker id "
+                "is the identity that survives a restart; a different one means this is not "
+                "the order we think it is. Refusing to adopt it."
+            )
+        _assert_attributes_agree(view, tag_match)
+        return tag_match.client_order_id, OwnershipBasis.TAG
+
+    # F. Broker id only -- the post-restart path, where the tag is gone.
+    if id_match is not None:
+        _assert_attributes_agree(view, id_match)
+        return id_match.client_order_id, OwnershipBasis.BROKER_ID
+
+    # G. No identity. Foreign: never adopted, never cancelled.
     return None, OwnershipBasis.NONE
 
 
