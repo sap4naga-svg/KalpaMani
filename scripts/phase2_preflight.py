@@ -33,11 +33,20 @@ from kalpamani.common.capital import DEFAULT_STRATEGY_CAPITAL_USD
 from kalpamani.common.settings import LIVE_TRADING_HARD_DISABLED
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
-    PHASE2_MAX_NOTIONAL_USD,
+    PHASE2_FILL_NOTIONAL_TOLERANCE_USD,
+    PHASE2_MAX_REFERENCE_NOTIONAL_USD,
     PHASE2_QUANTITY,
     PHASE2_SYMBOL,
 )
 from kalpamani.execution.lifecycle import is_terminal
+from kalpamani.execution.session import (
+    IB_ACCOUNT_KEY,
+    IB_TRADING_MODE_KEY,
+    BrokerSessionEvidence,
+    SessionVerificationError,
+    read_arm_receipts,
+    verify_paper_session,
+)
 from kalpamani.execution.state_store import JsonTradeStateStore, StateStoreError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +57,16 @@ PACKAGE_SOURCE = REPO_ROOT / "src" / "kalpamani"
 RUNTIME_WORKSPACE = REPO_ROOT / ".runtime" / "lean"
 RUNTIME_PROJECT = RUNTIME_WORKSPACE / PROJECT_NAME
 RUNTIME_PACKAGE = RUNTIME_PROJECT / "kalpamani"
-RUNTIME_STATE = RUNTIME_WORKSPACE / "storage" / PROJECT_NAME / "phase2_trade_state.json"
+#: Verified against the LEAN CLI: `/Storage` binds to `<cli-root>/storage`.
+#: An earlier version of this script assumed a per-project subdirectory that
+#: does not exist, and would have reported the wrong host path.
+RUNTIME_STORAGE = RUNTIME_WORKSPACE / "storage"
+RUNTIME_STATE = RUNTIME_STORAGE / "phase2_trade_state.json"
+RUNTIME_ARM_RECEIPTS = (
+    RUNTIME_STORAGE / "phase2_arm_receipt.json",
+    RUNTIME_PROJECT / ".phase2_arm_receipt.json",
+)
+LEAN_DEPLOYMENT_CONFIG = RUNTIME_WORKSPACE / "lean.json"
 
 SYNCED_FILES = ("main.py",)
 
@@ -102,7 +120,7 @@ def git_sees(path: Path) -> bool:
 
 
 def check_runtime_isolation() -> bool:
-    print("[1/5] Runtime workspace isolation")
+    print("[1/6] Runtime workspace isolation")
     ok = True
     runtime_root = REPO_ROOT / ".runtime"
     if is_git_ignored(runtime_root):
@@ -125,7 +143,7 @@ def check_runtime_isolation() -> bool:
 
 
 def sync_project() -> bool:
-    print("[2/5] Sync tracked source -> untracked runtime workspace")
+    print("[2/6] Sync tracked source -> untracked runtime workspace")
     if not TRACKED_PROJECT.is_dir():
         _fail(f"tracked project missing: {TRACKED_PROJECT}")
         return False
@@ -154,7 +172,7 @@ def sync_project() -> bool:
 
 
 def check_order_surface() -> bool:
-    print("[3/5] Order-surface static check")
+    print("[3/6] Order-surface static check")
     source = (TRACKED_PROJECT / "main.py").read_text(encoding="utf-8")
     code_lines = [ln for ln in source.splitlines() if not ln.lstrip().startswith("#")]
     body = "\n".join(code_lines)
@@ -178,8 +196,62 @@ def check_order_surface() -> bool:
     return ok
 
 
+def check_deployment_session() -> bool:
+    """Verify the brokerage session from LEAN's OWN deployment configuration.
+
+    This is the same source the algorithm reads inside the container, so the
+    preflight and the runtime cannot be looking at different things.
+    """
+    print("[4/6] Brokerage session (from the deployment configuration)")
+    if not LEAN_DEPLOYMENT_CONFIG.is_file():
+        print(f"  INFO: {LEAN_DEPLOYMENT_CONFIG.relative_to(REPO_ROOT)} not present yet")
+        print("        (run `lean init` and configure the brokerage before arming)")
+        return True
+
+    import json
+
+    raw = json.loads(LEAN_DEPLOYMENT_CONFIG.read_text(encoding="utf-8"))
+    account_id = str(raw.get(IB_ACCOUNT_KEY, "") or "")
+    trading_mode = str(raw.get(IB_TRADING_MODE_KEY, "") or "")
+    if not account_id:
+        print(f"  INFO: {IB_ACCOUNT_KEY} not configured yet; nothing to verify")
+        return True
+
+    evidence = BrokerSessionEvidence(
+        account_id=account_id,
+        trading_mode=trading_mode,
+        source=str(LEAN_DEPLOYMENT_CONFIG),
+    )
+    try:
+        verify_paper_session(evidence)
+    except SessionVerificationError as exc:
+        _fail(str(exc))
+        return False
+    print(f"  OK  : {evidence.describe()}")
+    return True
+
+
+def check_arm_receipts(state_present: bool) -> bool:
+    """A consumed arm receipt without trade state must block deployment."""
+    print("[5/6] Arm receipts")
+    receipts = read_arm_receipts(RUNTIME_ARM_RECEIPTS)
+    if not receipts:
+        print("  OK  : no arm receipt (a genuine first run)")
+        return True
+    consumed = [r for r in receipts if r.consumed]
+    for receipt in receipts:
+        print(f"  INFO: receipt intent={receipt.trade_intent_id} consumed={receipt.consumed}")
+    if consumed and not state_present:
+        _fail(
+            "an arm receipt records the arm as CONSUMED but no durable trade record exists. "
+            "Refusing to treat this as a first run: the trade state is missing, not absent."
+        )
+        return False
+    return True
+
+
 def check_durable_state() -> bool:
-    print("[4/5] Durable trade state")
+    print("[6/6] Durable trade state")
     if not RUNTIME_STATE.exists():
         print(f"  OK  : no prior trade state at {RUNTIME_STATE.relative_to(REPO_ROOT)}")
         print("        (a first armed run will create it)")
@@ -208,7 +280,7 @@ def check_durable_state() -> bool:
 
 
 def print_checklist() -> None:
-    print("[5/5] Launch checklist -- review before deploying")
+    print("Launch checklist -- review before deploying")
     config = RUNTIME_PROJECT / "config.json"
     armed = "NO (read/reconcile only)"
     account_line = "(not set)"
@@ -237,7 +309,11 @@ def print_checklist() -> None:
         ("Permitted symbol", PHASE2_SYMBOL),
         ("Permitted side", "BUY (long only)"),
         ("Permitted quantity", f"{PHASE2_QUANTITY} (exact, not a ceiling)"),
-        ("Notional ceiling", f"USD {PHASE2_MAX_NOTIONAL_USD}"),
+        ("Pre-submission notional guard", f"USD {PHASE2_MAX_REFERENCE_NOTIONAL_USD}"),
+        (
+            "Fill notional tolerance",
+            f"USD {PHASE2_FILL_NOTIONAL_TOLERANCE_USD} (market order: not enforceable)",
+        ),
         ("Max intents / entries", "1 / 1"),
         ("EXECUTION ARM", armed),
         ("Strategy capital", f"USD {DEFAULT_STRATEGY_CAPITAL_USD:,}"),
@@ -255,6 +331,8 @@ def main() -> int:
 
     checks = [check_runtime_isolation(), sync_project()]
     checks.append(check_order_surface())
+    checks.append(check_deployment_session())
+    checks.append(check_arm_receipts(state_present=RUNTIME_STATE.exists()))
     checks.append(check_durable_state())
     print()
     print_checklist()

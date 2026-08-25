@@ -91,12 +91,37 @@ class BrokerSessionEvidence:
     def mode(self) -> BrokerAccountMode:
         return BrokerAccountMode.classify(self.account_id)
 
+    @property
+    def trading_mode_is_explicit(self) -> bool:
+        """Whether the deployment stated the trading mode outright.
+
+        ``ib-trading-mode`` is an *internal-input* in the LEAN CLI: it is derived
+        at deploy time from the account id and injected into the container
+        config, so it is present inside the container but legitimately absent
+        from the host-side ``lean.json``.
+        """
+        return bool(self.trading_mode.strip())
+
+    @property
+    def effective_trading_mode(self) -> str:
+        """The stated trading mode, or the one derived from the account id.
+
+        Derivation uses the same rule LEAN uses (``^df|^du|^di`` -> paper), so a
+        derived value agrees with what the engine will conclude. An account that
+        classifies as UNKNOWN derives to ``"unknown"`` and therefore fails.
+        """
+        if self.trading_mode_is_explicit:
+            return self.trading_mode.strip().lower()
+        return self.mode.value
+
     def describe(self) -> str:
         """Log-safe. Redacted id, never the full identifier."""
+        origin = "stated" if self.trading_mode_is_explicit else "derived-from-account-id"
         return (
             f"account={redact_account_id(self.account_id)} "
             f"fingerprint={self.fingerprint} "
-            f"classified={self.mode.value} trading_mode={self.trading_mode!r} "
+            f"classified={self.mode.value} "
+            f"trading_mode={self.effective_trading_mode!r} ({origin}) "
             f"source={self.source}"
         )
 
@@ -127,12 +152,9 @@ def load_session_evidence(config_path: Path = LEAN_CONTAINER_CONFIG_PATH) -> Bro
             f"{IB_ACCOUNT_KEY!r} is absent from the deployment configuration. The session "
             "cannot be tied to a known account, so Phase 2 must abort."
         )
-    if not trading_mode:
-        raise SessionVerificationError(
-            f"{IB_TRADING_MODE_KEY!r} is absent from the deployment configuration. LEAN "
-            "normally derives it from the account id; its absence is unexplained and "
-            "therefore disqualifying."
-        )
+    # `ib-trading-mode` may be absent: the LEAN CLI derives it at deploy time and
+    # injects it into the container config. When absent we derive it ourselves
+    # using LEAN's own rule, and say so in the evidence.
     return BrokerSessionEvidence(
         account_id=account_id, trading_mode=trading_mode, source=str(config_path)
     )
@@ -157,10 +179,11 @@ def verify_paper_session(
     Raises:
         SessionVerificationError: on any disagreement.
     """
-    if evidence.trading_mode.strip().lower() != REQUIRED_TRADING_MODE:
+    if evidence.effective_trading_mode != REQUIRED_TRADING_MODE:
+        origin = "stated" if evidence.trading_mode_is_explicit else "derived from the account id"
         raise SessionVerificationError(
-            f"Deployment reports {IB_TRADING_MODE_KEY}={evidence.trading_mode!r}, but Phase 2 "
-            f"requires {REQUIRED_TRADING_MODE!r}. Aborting before any order path opens."
+            f"Deployment trading mode is {evidence.effective_trading_mode!r} ({origin}), but "
+            f"Phase 2 requires {REQUIRED_TRADING_MODE!r}. Aborting before any order path opens."
         )
     if evidence.mode is not BrokerAccountMode.PAPER:
         raise SessionVerificationError(

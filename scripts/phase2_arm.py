@@ -8,13 +8,17 @@ Arming requires the operator to type the confirmation phrase exactly. A boolean
 flag can be set by a stray environment variable or a copied command line; a
 specific phrase cannot be arrived at by accident.
 
+The account is read from the LEAN deployment configuration, never typed by the
+operator, so the armed account and the deployed account cannot be two
+independent values that disagree.
+
 The arm is written into the **untracked** runtime project config. It is consumed
 the moment a trade intent is authorised, and the consumption is recorded durably
 -- so a restart finds the arm spent and reconciles instead of re-submitting.
 
 Usage:
     python scripts/phase2_arm.py --status
-    python scripts/phase2_arm.py --arm --account-id DU1234567
+    python scripts/phase2_arm.py --arm --confirm "ARM PHASE2 PAPER BUY 1 SPY"
     python scripts/phase2_arm.py --disarm
 """
 
@@ -31,16 +35,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kalpamani.broker.account import BrokerAccountMode, redact_account_id
 from kalpamani.execution.envelope import (
     PHASE2_CONFIRMATION_PHRASE,
-    PHASE2_MAX_NOTIONAL_USD,
+    PHASE2_FILL_NOTIONAL_TOLERANCE_USD,
+    PHASE2_MAX_REFERENCE_NOTIONAL_USD,
     PHASE2_QUANTITY,
     PHASE2_SYMBOL,
     describe_envelope,
+)
+from kalpamani.execution.session import (
+    IB_ACCOUNT_KEY,
+    IB_TRADING_MODE_KEY,
+    BrokerSessionEvidence,
+    SessionVerificationError,
+    verify_paper_session,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "phase2_order_lifecycle"
 RUNTIME_PROJECT = REPO_ROOT / ".runtime" / "lean" / PROJECT_NAME
 RUNTIME_CONFIG = RUNTIME_PROJECT / "config.json"
+#: The deployment configuration. THE single source of the account identity --
+#: the operator never types it, so the arm and the deployment cannot be two
+#: independent values that disagree.
+LEAN_DEPLOYMENT_CONFIG = REPO_ROOT / ".runtime" / "lean" / "lean.json"
 
 ARM_KEYS = (
     "phase2_test_mode",
@@ -101,19 +117,48 @@ def show_status() -> int:
     return 0
 
 
-def arm(account_id: str, confirmation: str) -> int:
+def deployment_evidence() -> BrokerSessionEvidence | None:
+    """Read the brokerage account from the DEPLOYMENT configuration.
+
+    The operator never supplies this. Deriving it from the same file the engine
+    uses is what makes an arm/deployment mismatch structurally impossible.
+    """
+    if not LEAN_DEPLOYMENT_CONFIG.is_file():
+        return None
+    raw = json.loads(LEAN_DEPLOYMENT_CONFIG.read_text(encoding="utf-8"))
+    account_id = str(raw.get(IB_ACCOUNT_KEY, "") or "")
+    if not account_id:
+        return None
+    return BrokerSessionEvidence(
+        account_id=account_id,
+        trading_mode=str(raw.get(IB_TRADING_MODE_KEY, "") or ""),
+        source=str(LEAN_DEPLOYMENT_CONFIG),
+    )
+
+
+def arm(confirmation: str) -> int:
     if confirmation != PHASE2_CONFIRMATION_PHRASE:
         print("REFUSED: confirmation phrase does not match.")
         print(f'Type exactly:  --confirm "{PHASE2_CONFIRMATION_PHRASE}"')
         return 1
 
-    mode = BrokerAccountMode.classify(account_id)
-    if not mode.is_paper:
+    evidence = deployment_evidence()
+    if evidence is None:
         print(
-            f"REFUSED: account {redact_account_id(account_id)} classifies as {mode.value}. "
-            "Phase 2 is PAPER only, and an ambiguous account is an abort condition."
+            "REFUSED: no brokerage account configured in the deployment "
+            f"({LEAN_DEPLOYMENT_CONFIG}). Configure and verify the IBKR PAPER deployment "
+            "before arming; the arm derives the account from it and never from you."
         )
         return 1
+
+    try:
+        verify_paper_session(evidence)
+    except SessionVerificationError as exc:
+        print(f"REFUSED: {exc}")
+        return 1
+
+    account_id = evidence.account_id
+    mode = evidence.mode
 
     config = load_config()
     params = dict(config.get("parameters", {}))  # type: ignore[arg-type]
@@ -132,9 +177,14 @@ def arm(account_id: str, confirmation: str) -> int:
     print("=" * 78)
     print("PHASE 2 ARMED -- ONE TIME")
     print("=" * 78)
+    print(f"  session            : {evidence.describe()}")
     print(f"  account (redacted) : {redact_account_id(account_id)}  mode={mode.value}")
     print(f"  permitted order    : BUY {PHASE2_QUANTITY} {PHASE2_SYMBOL}")
-    print(f"  notional ceiling   : USD {PHASE2_MAX_NOTIONAL_USD}")
+    print(f"  pre-submission cap : USD {PHASE2_MAX_REFERENCE_NOTIONAL_USD} (reference price)")
+    print(
+        f"  fill tolerance     : USD {PHASE2_FILL_NOTIONAL_TOLERANCE_USD} "
+        "(market order: not enforceable)"
+    )
     print("  intents / entries  : 1 / 1")
     print()
     print("  The arm is consumed the moment a trade intent is authorised, and the")
@@ -170,7 +220,6 @@ def main() -> int:
         action="store_true",
         help="clear the arm and request the controlled exit on the next cycle",
     )
-    parser.add_argument("--account-id", default="", help="IBKR PAPER account id (DU/DF/DI...)")
     parser.add_argument("--confirm", default="", help="the exact confirmation phrase")
     args = parser.parse_args()
 
@@ -180,10 +229,7 @@ def main() -> int:
         return disarm()
     if args.request_exit:
         return disarm(request_exit=True)
-    if not args.account_id:
-        print("REFUSED: --account-id is required to arm, so paper mode can be proven.")
-        return 1
-    return arm(args.account_id, args.confirm)
+    return arm(args.confirm)
 
 
 if __name__ == "__main__":
