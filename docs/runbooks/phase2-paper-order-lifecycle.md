@@ -39,13 +39,21 @@ See [ADR-0003](../decisions/ADR-0003-broker-side-order-controls-are-not-safety-i
 | Symbol | **SPY only** |
 | Direction | **LONG only** |
 | Entry quantity | **exactly 1 share** (an exact value, not a ceiling) |
-| Notional ceiling | **USD 1,000** — if SPY trades above this, **ABORT** |
+| Pre-submission notional guard | **USD 800** on the *reference* price — abort above |
+| Fill notional tolerance | USD 1,000 — **not enforceable** by a market order (see below) |
 | Trade intents | **1** |
 | Entry orders | **1** |
 | Strategy capital | **USD 80,000**, unaffected by the ~USD 1,000,000 paper balance |
 
 Forbidden: any second symbol · shorts · options · leverage · pyramiding · averaging down ·
 recurring entries · strategy-generated entries · autonomous retries that submit another entry.
+
+> **On the notional numbers.** Phase 2 submits a **market** order, and a market order cannot
+> mathematically guarantee its fill notional — the fill price is whatever the book gives. So
+> USD 1,000 is a *tolerance*, not a hard maximum, and calling it one would be false. What is
+> actually enforced is a **pre-submission reference guard of USD 800**, reserving a 20%
+> slippage buffer. For 1 share of SPY in liquid hours, a fill would have to slip more than a
+> fifth above the observed price to breach the tolerance.
 
 Associated protective and closing orders for the *same* trade intent are permitted.
 
@@ -66,9 +74,12 @@ A restarted process recomputes **byte-identical** ids and therefore recognises i
 orders instead of issuing new ones. `attempt` increments **only** on a new human
 authorization — never on a restart. That is what makes **restart ≠ replay intent**.
 
-Durable state lives at `.runtime/lean/storage/phase2_order_lifecycle/phase2_trade_state.json`
-(git-ignored). Submission intent is written **before** the order is sent. Missing or corrupt
-state **fails closed** — it is never read as "nothing happened".
+Durable state lives at `.runtime/lean/storage/phase2_trade_state.json` (git-ignored).
+`/Storage` in the container binds to `<cli-root>/storage`, **not** a per-project
+subdirectory — verified against the LEAN CLI and confirmed bidirectionally on the dry run.
+
+Submission intent is written **before** the order is sent. Missing or corrupt state **fails
+closed** — it is never read as "nothing happened".
 
 ---
 
@@ -127,6 +138,32 @@ Three independent confirmations, all of which must agree (Phase 1 evidence model
 script and the algorithm refuse `UNKNOWN` as well as `LIVE`. **Ambiguity is an abort
 condition, never an assumption of safety.**
 
+### Where the algorithm's evidence actually comes from
+
+Configuration you supply is **not** evidence. The algorithm reads LEAN's own merged
+deployment configuration inside the container at `/Lean/Launcher/bin/Debug/config.json`, and
+there is **no fallback** — if it cannot be read, Phase 2 aborts.
+
+Confirmed on the 2026-08-25 disarmed dry run:
+
+```
+[RECONCILE] session verified PAPER: account=DU******* fingerprint=<redacted>
+            classified=paper trading_mode='paper' (derived-from-account-id)
+            source=/Lean/Launcher/bin/Debug/config.json
+```
+
+**Known limitation, stated rather than hidden.** `QCAlgorithm` exposes no brokerage account
+identifier — verified against the QuantConnect stubs, the account lives on `LiveNodePacket`
+which the algorithm cannot reach. The deployment configuration is therefore the strongest
+in-algorithm evidence available, and the preflight verifies the same source independently
+before deployment. The fingerprint printed by the preflight and by the container must match;
+on the dry run both read `<redacted>`.
+
+`ib-trading-mode` is an *internal-input* that the LEAN CLI derives at deploy time, so it is
+often absent from the config file. When absent, the mode is derived using LEAN's own rule and
+the log says `(derived-from-account-id)` rather than `(stated)`. An `UNKNOWN` account derives
+to `unknown` and still fails.
+
 ---
 
 ## 6. Arm the execution gate — the one deliberate act
@@ -134,17 +171,20 @@ condition, never an assumption of safety.**
 ```bash
 .venv\Scripts\python.exe scripts\phase2_arm.py --status
 
-.venv\Scripts\python.exe scripts\phase2_arm.py --arm ^
-    --account-id <YOUR-PAPER-ACCOUNT-ID> ^
-    --confirm "ARM PHASE2 PAPER BUY 1 SPY"
+.venv\Scripts\python.exe scripts\phase2_arm.py --arm --confirm "ARM PHASE2 PAPER BUY 1 SPY"
 ```
+
+**You do not type an account id.** The arm reads `ib-account` from the LEAN deployment
+configuration — the same file the engine uses — so the armed account and the deployed
+account cannot be two independent values that disagree. The algorithm re-checks the
+fingerprint at runtime anyway.
 
 The phrase must be typed **exactly**. A boolean can be set by a stray environment variable;
 a specific phrase cannot be arrived at by accident.
 
-The arm is refused — with a non-zero exit — if the account classifies as live or unknown, if
-the account id is missing, or if the phrase does not match. Account ids are **redacted** in
-all output.
+The arm is refused — with a non-zero exit — if the deployment has no account configured, if
+the session does not verify as paper, or if the phrase does not match. Account ids are
+**redacted** in all output and only a fingerprint is ever stored.
 
 **Re-run the preflight** and confirm `EXECUTION ARM : YES` before deploying.
 
@@ -322,6 +362,52 @@ Verify independently in the IBKR account manager, not only from logs.
 | **Stop triggered during the run** | The wide TEST stop makes this unlikely. If it fills, the position is flat — reconcile and record it; do not re-enter. |
 
 **Never** respond to a failure by submitting another entry.
+
+---
+
+## 13.1 Disarmed dry run — do this before ever arming
+
+Proven on 2026-08-25 with a detached deployment:
+
+```bash
+.venv\Scripts\python.exe scripts\phase2_preflight.py       # EXECUTION ARM must read NO
+cd .runtime\lean
+..	ools\leanvenv\Scripts\lean.exe live deploy phase2_order_lifecycle ^
+    --brokerage "Interactive Brokers" --data-provider-live "Interactive Brokers" --detach
+```
+
+Confirm, then stop with `lean live stop phase2_order_lifecycle`:
+
+| Check | Dry-run result |
+|---|---|
+| `kalpamani` package imports in the container | ✅ zero import errors |
+| Durable state path | `/Storage/phase2_trade_state.json` |
+| `/Storage` ↔ host mount | ✅ `.runtime/lean/storage/`, verified bidirectionally |
+| Session proven PAPER from deployment config | ✅ fingerprint matched the preflight |
+| SPY subscribed | ✅ |
+| Reconciliation ran | ✅ `spy_position=0 owned_open_orders=0` |
+| Execution arm | ✅ `test_mode=False arm_flag=False` |
+| Orders / positions | ✅ **0 / 0** |
+| Clean shutdown | ✅ `RESULT: FLAT`, no container left |
+
+If any row differs, **stop and fix it** before arming.
+
+---
+
+## 13.2 Two behaviours worth knowing before you watch a live run
+
+**A cancellation request is not a cancellation.** After `--request-exit`, the log shows
+`cancel requested; awaiting broker CONFIRMATION` and then *returns*. Internal state still
+records the stop as protecting the position, deliberately, so reconciliation continues to
+agree with the broker. Only when IBKR confirms the cancellation does `protected_quantity`
+drop to zero and the closing order become eligible. **A cycle that appears to "do nothing"
+after a cancel request is correct behaviour.**
+
+**A protective stop firing is a legitimate exit.** If the stop fills, the long is closed by
+the stop. The system recognises this, moves to `CLOSED`, and will **not** send an exit SELL
+for a position that no longer exists — which would open a short. Expect
+`[EXIT-FILL] protective stop filled; the long is closed by the stop`, then final
+reconciliation to flat.
 
 ---
 
