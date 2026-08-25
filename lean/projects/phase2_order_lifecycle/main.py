@@ -124,13 +124,16 @@ class Phase2OrderLifecycle(QCAlgorithm):
             if h.invested
         )
         open_orders = []
-        for order in self.transactions.get_open_orders():
+        for index, order in enumerate(self.transactions.get_open_orders()):
             tag = str(order.tag or "")
-            if not is_valid_client_order_id(tag):
-                continue  # someone else's order: never adopted, never touched
+            # Foreign orders are RETAINED so the pre-arm gate can see them -- an
+            # unrelated working order on our symbol makes ownership ambiguous.
+            # Their identity is redacted: unrelated order details are not ours
+            # to log, and orders_owned_by() excludes them from lifecycle logic.
+            client_order_id = tag if is_valid_client_order_id(tag) else f"<foreign-{index}>"
             open_orders.append(
                 BrokerOrderView(
-                    client_order_id=tag,
+                    client_order_id=client_order_id,
                     symbol=str(order.symbol.value),
                     side="BUY" if order.quantity > 0 else "SELL",
                     quantity=abs(int(order.quantity)),
@@ -180,6 +183,13 @@ class Phase2OrderLifecycle(QCAlgorithm):
             if record is None:
                 self._log_state(broker, "no-trade")
                 self._maybe_arm(broker)
+                return
+
+            if record.state is TradeState.FAILED:
+                self._abort(
+                    f"durable lifecycle is FAILED: {record.failure_reason or '(no reason)'}. "
+                    "Refusing to resume normal progression."
+                )
                 return
 
             if not self._recovery_logged:
@@ -238,15 +248,13 @@ class Phase2OrderLifecycle(QCAlgorithm):
             self.log(f"[RECONCILE] session verified PAPER: {evidence.describe()}")
             return
 
-        if broker.position_quantity(PHASE2_SYMBOL) != 0:
-            self._abort(
-                f"Pre-order reconciliation found an existing {PHASE2_SYMBOL} position "
-                f"({broker.position_quantity(PHASE2_SYMBOL)}). Not ours to assume, and not "
-                "liquidating it. Resolve manually before arming."
-            )
-            return
-        if broker.orders_owned_by(self._coordinator.identity):
-            self._abort("Pre-order reconciliation found existing KalpaMani orders.")
+        # No position AND no working order on the symbol, from ANY source.
+        # A foreign SPY order would make ownership of the resulting position
+        # ambiguous, at which point our stop could sell what we do not hold.
+        try:
+            self._coordinator.assert_eligible_to_arm(broker)
+        except Exception as exc:
+            self._abort(f"pre-arm eligibility refused: {exc}")
             return
 
         # The armed account must BE the deployed account. The binding is
@@ -317,13 +325,19 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 return
 
             if status == OrderStatus.CANCELED:
-                if tag == self._coordinator.identity.protective_order_id:
-                    self._coordinator.confirm_protection_cancel(record, tag)
-                    self.log(f"[EXIT-REQUEST] protective cancellation CONFIRMED for {tag}")
+                # Role-aware. An unrequested protective cancellation, a cancelled
+                # ENTRY, or a cancelled EXIT over an open long each mean something
+                # different, and each is handled explicitly. The coordinator
+                # persists FAILED before raising where protection was lost.
+                before = record.orders.get(tag)
+                expected = bool(before and before.cancel_requested)
+                record = self._coordinator.on_order_cancelled(record, tag)
+                if expected:
+                    self.log(f"[EXIT-REQUEST] requested cancellation CONFIRMED for {tag}")
                 else:
-                    self.log(
-                        f"[RECONCILE] {tag} canceled; not the protective order, so protective "
-                        "state is untouched"
+                    self._abort(
+                        f"{tag} was CANCELED without KalpaMani requesting it. Lifecycle "
+                        f"latched {record.state.value}."
                     )
                 return
 

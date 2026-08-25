@@ -81,6 +81,24 @@ class BrokerView:
             if o.client_order_id == identity.protective_order_id and o.is_open
         )
 
+    def open_order_count_for_symbol(self, symbol: str) -> int:
+        """Count EVERY working order on this symbol, whoever created it.
+
+        Deliberately not filtered to KalpaMani orders. A foreign working order on
+        the same symbol makes position ownership ambiguous, and ambiguity is what
+        the pre-arm gate exists to refuse.
+        """
+        return sum(1 for o in self.open_orders if o.symbol == symbol and o.is_open)
+
+    def foreign_open_order_count_for_symbol(self, symbol: str, identity: TradeIdentity) -> int:
+        """Working orders on this symbol that KalpaMani did not create."""
+        owned = {o.client_order_id for o in self.orders_owned_by(identity)}
+        return sum(
+            1
+            for o in self.open_orders
+            if o.symbol == symbol and o.is_open and o.client_order_id not in owned
+        )
+
     def open_entry_count(self, identity: TradeIdentity) -> int:
         return sum(
             1
@@ -179,6 +197,38 @@ def assert_protected(
             "Highest-severity Phase 2 failure. Do NOT submit another entry; surface this "
             "and stop normal progression."
         )
+
+
+def assert_symbol_has_no_open_orders(
+    broker: BrokerView,
+    symbol: str,
+    identity: TradeIdentity,
+) -> None:
+    """Refuse to arm while ANY order is working on the symbol, from any source.
+
+    A manual SELL working on SPY is invisible to KalpaMani-owned filters, but it
+    is not invisible to the account: we could buy 1, the manual order could fill,
+    and ownership of the resulting position becomes ambiguous -- at which point
+    our protective stop can sell something we no longer hold and open a short.
+
+    Foreign orders are never cancelled or modified. We simply decline to trade
+    alongside them. Counts only are reported: unrelated order details are not
+    ours to log.
+
+    Raises:
+        ReconciliationError: if any order is working on ``symbol``.
+    """
+    total = broker.open_order_count_for_symbol(symbol)
+    if total == 0:
+        return
+    foreign = broker.foreign_open_order_count_for_symbol(symbol, identity)
+    owned = total - foreign
+    raise ReconciliationError(
+        f"Existing open {symbol} order(s) detected: {total} working "
+        f"({foreign} non-KalpaMani, {owned} KalpaMani). Refusing to arm -- position "
+        "ownership would be ambiguous, and a protective stop could then sell a position "
+        "KalpaMani does not hold. Foreign orders are left untouched; resolve manually."
+    )
 
 
 def required_protection_quantity(record: TradeRecord) -> int:
@@ -309,6 +359,7 @@ __all__ = [
     "assert_flat",
     "assert_protected",
     "assert_safe_to_close",
+    "assert_symbol_has_no_open_orders",
     "plan_exit",
     "reconcile",
     "required_protection_quantity",

@@ -31,7 +31,7 @@ from kalpamani.execution.envelope import (
     ExecutionArmRequest,
 )
 from kalpamani.execution.identity import OrderRole, TradeIdentity
-from kalpamani.execution.lifecycle import TradeState
+from kalpamani.execution.lifecycle import LifecycleError, TradeState
 from kalpamani.execution.reconciliation import (
     BrokerOrderView,
     BrokerPositionView,
@@ -206,7 +206,7 @@ def test_production_path_persists_every_lifecycle_transition(tmp_path: Path) -> 
     assert should_cancel is True
     broker.request_cancel(identity.protective_order_id)
     broker.confirm_cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
     assert store.require(identity.trade_intent_id).protected_quantity == 0
 
     exit_order = coordinator.begin_exit(record, broker.view())
@@ -264,7 +264,7 @@ def test_canceled_confirms_cancellation(tmp_path: Path) -> None:
     record, _ = coordinator.begin_protection_cancel(record)
 
     broker.confirm_cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
 
     persisted = store.require(identity.trade_intent_id)
     assert persisted.orders[identity.protective_order_id].dispatch is DispatchState.CANCELLED
@@ -273,23 +273,19 @@ def test_canceled_confirms_cancellation(tmp_path: Path) -> None:
     assert coordinator.begin_exit(persisted, broker.view()).request.quantity == 1
 
 
-@pytest.mark.parametrize("role", [OrderRole.ENTRY, OrderRole.EXIT])
-def test_cancelled_entry_or_exit_never_mutates_protective_state(
-    tmp_path: Path, role: OrderRole
-) -> None:
-    """A cancelled ENTRY or EXIT must leave protection completely untouched."""
+def test_cancelling_a_foreign_order_id_is_ignored(tmp_path: Path) -> None:
+    """An event for an order we do not have on record must change nothing."""
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = drive_to_protected(coordinator, broker)
 
-    foreign_id = identity.entry_order_id if role is OrderRole.ENTRY else identity.exit_order_id
-    coordinator.confirm_protection_cancel(record, foreign_id)
+    unchanged = coordinator.on_order_cancelled(record, "km-deadbeef-EXIT-0")
+    assert unchanged is record
 
     persisted = store.require(identity.trade_intent_id)
     protective = persisted.orders[identity.protective_order_id]
     assert protective.dispatch is DispatchState.ACKNOWLEDGED
-    assert protective.cancel_requested is False
     assert persisted.protected_quantity == 1
 
 
@@ -361,7 +357,7 @@ def test_exit_intent_never_dispatched_is_redispatched(tmp_path: Path) -> None:
     record = coordinator.request_exit(record)
     record, _ = coordinator.begin_protection_cancel(record)
     broker.confirm_cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
 
     coordinator.begin_exit(record, broker.view())  # recorded, then we crash
 
@@ -455,7 +451,7 @@ def test_rejected_exit_order_with_open_long_is_unprotected_position(tmp_path: Pa
     record = coordinator.request_exit(record)
     record, _ = coordinator.begin_protection_cancel(record)
     broker.confirm_cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
     exit_order = coordinator.begin_exit(record, broker.view())
     record = dispatch(coordinator, broker, exit_order)
 
@@ -726,7 +722,7 @@ def test_exit_fenced_broker_received_then_crash_sends_no_second_sell(
     record = coordinator.request_exit(record)
     record, _ = coordinator.begin_protection_cancel(record)
     broker.confirm_cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
 
     exit_order = coordinator.begin_exit(record, broker.view())
     coordinator.fence_dispatch(exit_order.record, identity.exit_order_id)
@@ -774,7 +770,7 @@ def test_fenced_then_crash_before_broker_call_also_halts(tmp_path: Path, role: s
             record = coordinator.request_exit(record)
             record, _ = coordinator.begin_protection_cancel(record)
             broker.confirm_cancel(identity.protective_order_id)
-            record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+            record = coordinator.on_order_cancelled(record, identity.protective_order_id)
             pending = coordinator.begin_exit(record, broker.view())
 
     submissions_before = len(broker.submissions)
@@ -1033,3 +1029,235 @@ def test_arm_status_requires_fingerprint_to_report_armed(tmp_path: Path) -> None
     written = _json.dumps(bound)
     assert PAPER_ACCOUNT_ID not in written
     assert "ibkr_account_id" not in written
+
+
+# ---------------------------------------------------------------------------
+# Round 6 -- expected vs UNEXPECTED protective cancellation
+# ---------------------------------------------------------------------------
+
+
+def test_expected_protective_cancellation_continues_the_exit(tmp_path: Path) -> None:
+    """cancel_requested=True + CANCELED = the controlled exit. Carry on."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
+
+    assert record.state is TradeState.EXIT_REQUESTED, "still progressing, not failed"
+    assert record.protected_quantity == 0
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.protective_order_id].dispatch is DispatchState.CANCELLED
+    assert coordinator.begin_exit(persisted, broker.view()).request.quantity == 1
+
+
+def test_unexpected_protective_cancellation_fails_closed(tmp_path: Path) -> None:
+    """Protection vanished without us asking. The long is bare: FAILED + abort."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    assert record.orders[identity.protective_order_id].cancel_requested is False
+
+    broker.confirm_cancel(identity.protective_order_id)  # cancelled by someone else
+    with pytest.raises(UnprotectedPositionError, match="without KalpaMani requesting"):
+        coordinator.on_order_cancelled(record, identity.protective_order_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.state is TradeState.FAILED, "durable FAILED, not merely raised"
+    assert persisted.protected_quantity == 0
+    assert persisted.open_long_quantity == 1
+    assert persisted.failure_reason is not None
+
+
+def test_unexpected_protective_cancellation_survives_restart(tmp_path: Path) -> None:
+    coordinator, _, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    broker.confirm_cancel(identity.protective_order_id)
+    with pytest.raises(UnprotectedPositionError):
+        coordinator.on_order_cancelled(record, identity.protective_order_id)
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.state is TradeState.FAILED, "restart must not resume normal progression"
+    with pytest.raises(LifecycleError):
+        resumed.request_exit(recovered)
+
+
+# ---------------------------------------------------------------------------
+# Round 6 -- ENTRY and EXIT cancellations are handled explicitly
+# ---------------------------------------------------------------------------
+
+
+def test_entry_cancelled_with_no_fill_is_terminal(tmp_path: Path) -> None:
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = entered(coordinator, broker)
+
+    record = coordinator.on_order_cancelled(record, identity.entry_order_id)
+
+    assert record.state is TradeState.FAILED
+    assert store.require(identity.trade_intent_id).state is TradeState.FAILED
+    with pytest.raises(ReconciliationError):
+        coordinator.begin_entry(record)
+    assert broker.count(OrderRole.ENTRY) == 1, "never retried"
+
+
+def test_exit_cancelled_while_long_is_unprotected_position(tmp_path: Path) -> None:
+    """Protection was already removed to permit the close, so the long is bare."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
+    exit_order = coordinator.begin_exit(record, broker.view())
+    record = dispatch(coordinator, broker, exit_order)
+
+    broker.confirm_cancel(identity.exit_order_id)
+    with pytest.raises(UnprotectedPositionError, match="EXIT"):
+        coordinator.on_order_cancelled(record, identity.exit_order_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.state is TradeState.FAILED
+    assert persisted.open_long_quantity == 1
+    assert broker.count(OrderRole.EXIT) == 1, "no automatic second EXIT"
+
+
+# ---------------------------------------------------------------------------
+# Round 6 -- PROTECTIVE / EXIT INVALID persist FAILED before raising
+# ---------------------------------------------------------------------------
+
+
+def test_protective_invalid_persists_failed_before_raising(tmp_path: Path) -> None:
+    coordinator, store, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = entered(coordinator, broker)
+    record, protection = fill_entry_atomically(coordinator, broker, record)
+    assert protection is not None
+    record = dispatch(coordinator, broker, protection)
+
+    with pytest.raises(UnprotectedPositionError, match="REJECTED"):
+        coordinator.on_order_rejected(record, identity.protective_order_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.state is TradeState.FAILED
+    assert persisted.open_long_quantity == 1
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.state is TradeState.FAILED, "terminal across restart"
+
+
+def test_exit_invalid_persists_failed_before_raising(tmp_path: Path) -> None:
+    coordinator, store, storage, project = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.on_order_cancelled(record, identity.protective_order_id)
+    exit_order = coordinator.begin_exit(record, broker.view())
+    record = dispatch(coordinator, broker, exit_order)
+
+    with pytest.raises(UnprotectedPositionError, match="REJECTED"):
+        coordinator.on_order_rejected(record, identity.exit_order_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.state is TradeState.FAILED
+
+    resumed = restart(storage, project)
+    recovered = resumed.load()
+    assert recovered is not None
+    assert recovered.state is TradeState.FAILED
+
+
+# ---------------------------------------------------------------------------
+# Round 6 -- ANY working order on the symbol blocks arming
+# ---------------------------------------------------------------------------
+
+
+def foreign_order(symbol: str, side: str, quantity: int = 100) -> BrokerOrderView:
+    """An order KalpaMani did not create -- identity deliberately opaque."""
+    return BrokerOrderView(
+        client_order_id="<foreign-0>",
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        is_open=True,
+    )
+
+
+def test_clean_account_is_eligible_to_arm(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    view = BrokerView(positions=(BrokerPositionView(PHASE2_SYMBOL, 0),), open_orders=())
+    coordinator.assert_eligible_to_arm(view)  # must not raise
+
+
+def test_foreign_order_on_another_symbol_does_not_block(tmp_path: Path) -> None:
+    """We only refuse ambiguity on OUR symbol; an AAPL order is irrelevant."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    view = BrokerView(
+        positions=(BrokerPositionView(PHASE2_SYMBOL, 0),),
+        open_orders=(foreign_order("AAPL", "SELL"),),
+    )
+    coordinator.assert_eligible_to_arm(view)  # must not raise
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_foreign_spy_order_blocks_arming(tmp_path: Path, side: str) -> None:
+    """A manual SPY order makes ownership ambiguous. Refuse; never cancel it."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    view = BrokerView(
+        positions=(BrokerPositionView(PHASE2_SYMBOL, 0),),
+        open_orders=(foreign_order(PHASE2_SYMBOL, side),),
+    )
+    with pytest.raises(ReconciliationError, match="ownership would be ambiguous"):
+        coordinator.assert_eligible_to_arm(view)
+
+
+def test_existing_kalpamani_spy_order_blocks_arming(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    identity = coordinator.identity
+    view = BrokerView(
+        positions=(BrokerPositionView(PHASE2_SYMBOL, 0),),
+        open_orders=(
+            BrokerOrderView(identity.entry_order_id, PHASE2_SYMBOL, "BUY", 1, is_open=True),
+        ),
+    )
+    with pytest.raises(ReconciliationError):
+        coordinator.assert_eligible_to_arm(view)
+
+
+def test_existing_spy_position_blocks_arming(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    view = BrokerView(positions=(BrokerPositionView(PHASE2_SYMBOL, 5),))
+    with pytest.raises(ReconciliationError, match="Existing SPY position"):
+        coordinator.assert_eligible_to_arm(view)
+
+
+def test_foreign_order_details_are_not_exposed(tmp_path: Path) -> None:
+    """The refusal reports counts, not somebody else's order details."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    view = BrokerView(
+        positions=(BrokerPositionView(PHASE2_SYMBOL, 0),),
+        open_orders=(foreign_order(PHASE2_SYMBOL, "SELL", quantity=12345),),
+    )
+    with pytest.raises(ReconciliationError) as excinfo:
+        coordinator.assert_eligible_to_arm(view)
+    message = str(excinfo.value)
+    assert "12345" not in message, "foreign order size must not be logged"
+    assert "1 non-KalpaMani" in message

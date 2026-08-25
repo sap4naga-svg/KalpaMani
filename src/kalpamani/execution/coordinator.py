@@ -49,6 +49,7 @@ from kalpamani.execution.reconciliation import (
     assert_flat,
     assert_protected,
     assert_safe_to_close,
+    assert_symbol_has_no_open_orders,
     plan_exit,
     reconcile,
     required_protection_quantity,
@@ -211,6 +212,21 @@ class Phase2Coordinator:
 
     # -- Entry -------------------------------------------------------------
 
+    def assert_eligible_to_arm(self, broker: BrokerView) -> None:
+        """Refuse to arm while anything is working on the Phase 2 symbol.
+
+        Raises:
+            ReconciliationError: if the symbol has a position, or ANY open order
+                from any source.
+        """
+        held = broker.position_quantity(PHASE2_SYMBOL)
+        if held != 0:
+            raise ReconciliationError(
+                f"Existing {PHASE2_SYMBOL} position ({held}) found before arming. Not ours to "
+                "assume, and not liquidating it. Resolve manually."
+            )
+        assert_symbol_has_no_open_orders(broker, PHASE2_SYMBOL, self._identity)
+
     def begin_entry(self, record: TradeRecord) -> PendingOrder:
         """Write-ahead-record the single entry order, then hand it back to dispatch."""
         if record.entry_count >= 1:
@@ -358,11 +374,10 @@ class Phase2Coordinator:
                 "Phase 2 never answers a rejection with a second entry.",
             )
         if updated.open_long_quantity > 0:
-            raise UnprotectedPositionError(
-                f"UNPROTECTED POSITION: {order.role.value} order {client_order_id} was REJECTED "
-                f"by the broker while {updated.open_long_quantity} {updated.symbol} is held. "
-                "Highest-severity Phase 2 failure. Do NOT submit another entry; protect or "
-                "close the position manually."
+            return self._fail_unprotected(
+                updated,
+                f"{order.role.value} order {client_order_id} was REJECTED by the broker "
+                "(OrderStatus.INVALID).",
             )
         return updated
 
@@ -469,21 +484,76 @@ class Phase2Coordinator:
         updated = self._store.put(updated)
         return updated, True
 
-    def confirm_protection_cancel(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
-        """Record a broker-CONFIRMED cancellation of the PROTECTIVE order.
+    def on_order_cancelled(self, record: TradeRecord, client_order_id: str) -> TradeRecord:
+        """Handle a broker-CONFIRMED cancellation, with role-aware consequences.
 
-        The caller must pass the client order id from the event, and it must be
-        the protective order: a cancelled ENTRY or EXIT must never mutate
-        protective state.
+        Not all cancellations mean the same thing, and treating them alike is how
+        a position quietly loses its protection.
+
+        PROTECTIVE
+            Expected **only** when we asked for it. An unrequested cancellation
+            means protection vanished underneath an open position.
+        ENTRY
+            Never retried. The execution is finished.
+        EXIT
+            Cancelled while a long remains means the position is bare, because
+            protection was already removed to permit the close.
+
+        Raises:
+            UnprotectedPositionError: whenever the cancellation leaves an open
+                long with no broker-confirmed protection.
         """
-        if client_order_id != self._identity.protective_order_id:
-            return record
-        protective = record.order_for_role(OrderRole.PROTECTIVE)
-        if protective is None or protective.dispatch is DispatchState.CANCELLED:
-            return record
-        updated = confirm_cancel(record, protective.client_order_id)
-        updated = self._store.put(updated)
+        order = record.orders.get(client_order_id)
+        if order is None:
+            return record  # not ours
+        if order.dispatch is DispatchState.CANCELLED:
+            return record  # already applied
+
+        was_requested = order.cancel_requested
+        updated = self._store.put(confirm_cancel(record, client_order_id))
+
+        if order.role is OrderRole.PROTECTIVE:
+            if was_requested:
+                return updated  # the controlled exit sequence; carry on
+            return self._fail_unprotected(
+                updated,
+                f"PROTECTIVE order {client_order_id} was CANCELED by the broker without "
+                "KalpaMani requesting it; protection disappeared underneath the position.",
+            )
+
+        if order.role is OrderRole.ENTRY:
+            if updated.open_long_quantity > 0:
+                return self._fail_unprotected(
+                    updated, f"ENTRY {client_order_id} was CANCELED while a long is held."
+                )
+            return self.fail(
+                updated,
+                f"ENTRY {client_order_id} was CANCELED by the broker. Phase 2 never retries an "
+                "entry, so this execution is finished.",
+            )
+
+        # EXIT: protection was already removed to permit the close.
+        if updated.open_long_quantity > 0:
+            return self._fail_unprotected(
+                updated,
+                f"EXIT {client_order_id} was CANCELED while {updated.open_long_quantity} "
+                f"{updated.symbol} is still held, and protection was already removed.",
+            )
         return updated
+
+    def _fail_unprotected(self, record: TradeRecord, reason: str) -> TradeRecord:
+        """Persist FAILED *first*, then surface the unprotected position.
+
+        Ordering matters. Raising before persisting would leave durable state
+        that still looks healthy, and a restart would resume normal progression
+        on a position with no protection.
+        """
+        failed = self.fail(record, reason)
+        raise UnprotectedPositionError(
+            f"UNPROTECTED POSITION: {reason} Long={failed.open_long_quantity} "
+            f"{failed.symbol}, broker-confirmed protection=0. Lifecycle latched FAILED. "
+            "Do NOT submit another entry; protect or close the position manually."
+        )
 
     def begin_exit(self, record: TradeRecord, broker: BrokerView) -> PendingOrder:
         """Write-ahead-record the closing SELL, once protection is provably gone."""
