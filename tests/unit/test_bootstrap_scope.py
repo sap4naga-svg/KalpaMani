@@ -23,7 +23,6 @@ PACKAGE_ROOT = PROJECT_ROOT / "src" / "kalpamani"
 #: Packages that must contain no implementation modules during bootstrap.
 EMPTY_BY_DESIGN = (
     "data",
-    "execution",
     "risk",
     "portfolio",
     "research",
@@ -33,9 +32,20 @@ EMPTY_BY_DESIGN = (
     "strategies/pead",
 )
 
-#: Phase 1 permits exactly one module under broker/, per ADR-0002: a read-only
-#: account boundary. Anything else there needs a new ADR.
-BROKER_ALLOWED_MODULES = ["account.py"]
+#: Phase 2 permits exactly two modules under broker/: the Phase 1 read-only
+#: account boundary (ADR-0002) and the minimum order-capable boundary
+#: (ADR-0004). Anything else there needs a new ADR.
+BROKER_ALLOWED_MODULES = ["account.py", "orders.py"]
+
+#: Phase 2 permits exactly these modules under execution/, per ADR-0004.
+#: Widening the execution surface is an ADR-level change.
+EXECUTION_ALLOWED_MODULES = [
+    "envelope.py",
+    "identity.py",
+    "lifecycle.py",
+    "reconciliation.py",
+    "state_store.py",
+]
 
 #: Import names of brokerage/engine clients that must not be reachable yet.
 FORBIDDEN_IMPORTS = ("ib_insync", "ibapi", "ib_async", "QuantConnect", "AlgorithmImports")
@@ -55,12 +65,22 @@ def test_package_contains_no_implementation_yet(relative_package: str) -> None:
 
 
 def test_broker_package_contains_only_the_readonly_boundary() -> None:
-    """ADR-0002 permits a read-only account boundary and nothing more."""
+    """ADR-0002 permits the read-only boundary; ADR-0004 adds the order boundary."""
     package_dir = PACKAGE_ROOT / "broker"
     modules = sorted(p.name for p in package_dir.glob("*.py") if p.name != "__init__.py")
     assert modules == BROKER_ALLOWED_MODULES, (
-        f"kalpamani/broker must contain only {BROKER_ALLOWED_MODULES} during Phase 1, "
+        f"kalpamani/broker must contain only {BROKER_ALLOWED_MODULES} during Phase 2, "
         f"found: {modules}. Extending the brokerage surface requires a new ADR."
+    )
+
+
+def test_execution_package_contains_only_the_phase2_boundary() -> None:
+    """ADR-0004 authorises this execution surface and no more."""
+    package_dir = PACKAGE_ROOT / "execution"
+    modules = sorted(p.name for p in package_dir.glob("*.py") if p.name != "__init__.py")
+    assert modules == EXECUTION_ALLOWED_MODULES, (
+        f"kalpamani/execution must contain only {EXECUTION_ALLOWED_MODULES} during Phase 2, "
+        f"found: {modules}. Widening the execution surface requires a new ADR."
     )
 
 

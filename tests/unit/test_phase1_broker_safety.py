@@ -282,13 +282,36 @@ def test_broker_module_source_contains_no_order_submission_api() -> None:
     assert findings == [], "\n".join(f.describe() for f in findings)
 
 
-def test_no_order_capable_adapter_class_exists() -> None:
-    """No class anywhere in the broker package may advertise order submission."""
-    broker_dir = PROJECT_ROOT / "src" / "kalpamani" / "broker"
-    for source in broker_dir.rglob("*.py"):
-        text = source.read_text(encoding="utf-8")
-        for banned in ("def submit_order", "def place_order", "def cancel_order", "def liquidate"):
-            assert banned not in text, f"{source} defines {banned!r} during a read-only phase."
+def test_readonly_account_boundary_stays_order_free() -> None:
+    """`account.py` is the Phase 1 read-only boundary and must never gain orders.
+
+    ADR-0004 added an order-capable boundary in `orders.py`. That widening is
+    deliberate and ADR-gated. It must not leak back into the read-only module,
+    which the rest of the system still relies on being incapable of trading.
+    """
+    account_source = PROJECT_ROOT / "src" / "kalpamani" / "broker" / "account.py"
+    text = account_source.read_text(encoding="utf-8")
+    for banned in ("def submit_order", "def place_order", "def cancel_order", "def liquidate"):
+        assert banned not in text, (
+            f"{account_source} defines {banned!r}. The read-only boundary must stay read-only; "
+            "order capability belongs in orders.py under ADR-0004."
+        )
+
+
+def test_order_boundary_exposes_no_account_wide_actions() -> None:
+    """The ADR-0004 order boundary must not offer broad, account-wide actions.
+
+    `liquidate` / `close_all` act on the whole account rather than on one trade
+    intent, so they can touch positions KalpaMani does not own. ADR-0004 §9
+    forbids them.
+    """
+    orders_source = PROJECT_ROOT / "src" / "kalpamani" / "broker" / "orders.py"
+    text = orders_source.read_text(encoding="utf-8")
+    for banned in ("def liquidate", "def close_all", "def flatten_all", "def cancel_all"):
+        assert banned not in text, (
+            f"{orders_source} defines {banned!r}. Account-wide actions are forbidden: they "
+            "act beyond the trade intent KalpaMani owns."
+        )
 
 
 # ---------------------------------------------------------------------------
