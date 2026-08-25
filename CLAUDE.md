@@ -200,7 +200,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 
 ## 9. Current phase
 
-**PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND VALIDATED (2026-08-25).**
+**PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
 
 Bootstrap complete. Phase 1 read-only connectivity **proven against the live IBKR Paper
 account**: LEAN -> IBKR Paper connected, account confirmed PAPER three ways, SPY subscribed
@@ -212,12 +212,20 @@ Market data confirmed: a SPY bar was received at **05:15 ET pre-market** (close 
 volume 360) within a minute of connecting, on delayed IBKR data. All thirteen Phase 1
 acceptance criteria are satisfied.
 
-**Operational finding — read this.** LEAN's IBAutomater unselects IB Gateway's
-**[Read-Only API]** checkbox and selects every **[Bypass ... for API Orders]** precaution on
-every start. Enabling IBKR Read-Only Access does **not** protect an automated deployment.
-The zero-order guarantee rests entirely on our own code having no order path, which is why
-that is enforced statically by `scripts/phase1_preflight.py` and
-`tests/unit/test_phase1_broker_safety.py` rather than trusted to a broker setting.
+**Acceptance evidence (all 13 criteria):** LEAN launches · IBKR Paper connection confirmed ·
+exactly one SPY subscription · market data received · broker state observable · paper equity
+observed as USD 1,000,000 · KalpaMani capital remained USD 80,000 · no orders · no positions ·
+clean shutdown · 98 tests passing · ruff clean · mypy strict clean · preflight clean.
+
+**Operational finding — binding, see [ADR-0003](docs/decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md).**
+LEAN's IBAutomater unselects IB Gateway's **[Read-Only API]** checkbox and selects every
+**[Bypass ... for API Orders]** precaution on every start. **IBKR Read-Only API MUST NOT be
+treated as an independent KalpaMani safety control**, and neither may any broker UI
+precaution. Broker-side controls are defense-in-depth only and must never be a required
+safety invariant. Order safety is enforced internally and deterministically, provable from
+this repository alone — `scripts/phase1_preflight.py` and
+`tests/unit/test_phase1_broker_safety.py`. This corrects an assumption in Blueprint V2.1 §25;
+the PDF is not edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 
 **Still not implemented and not authorized:** order submission of any kind (paper or live);
 Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger

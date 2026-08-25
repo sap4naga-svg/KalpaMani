@@ -119,15 +119,20 @@ strategy packages are empty by design, and a test enforces that.
 
 ## Follow-ups
 
-> **Numbering corrected 2026-08-24.** This list originally assigned ADR-0002 to
-> point-in-time data provider selection. The `BrokerAdapter` boundary was needed first,
-> for Phase 1, so it takes ADR-0002 and the remaining items shift down. Corrected in a
-> new commit rather than by rewriting the pushed bootstrap history.
+> **Numbering corrected twice.** This list originally pre-assigned ADR-0002 to point-in-time
+> data provider selection; the `BrokerAdapter` boundary needed it first. It then pre-assigned
+> ADR-0003 to the same item; the Read-Only-API errata needed that. Pre-assignment is the
+> problem, so it has been dropped.
 
-- **ADR-0002** — `BrokerAdapter` and the brokerage boundary (before Phase 1
-  implementation). **Created.**
-- **ADR-0003** — Point-in-time data provider selection (after the Phase-0 audit).
-- **ADR-0004** — Order idempotency and deterministic client/order ID scheme (before any
-  automated order testing).
-- **ADR-00xx** — Live-execution Gate 2 authorization mechanism (before live trading is
-  even considered).
+**Written:** ADR-0002 (BrokerAdapter and the brokerage boundary) ·
+ADR-0003 (Broker-side order controls are not safety invariants).
+
+> **Numbers are assigned at write time**, by taking the next unused number in
+> `docs/decisions/`. Follow-ups are listed by topic only. Pre-assigning numbers here caused
+> two conflicts already (ADR-0002 and ADR-0003 were both claimed in advance by items that
+> had not been written yet), so this list deliberately does not do it.
+
+- **Order idempotency and deterministic client/order IDs** — required by ADR-0002 §12
+  *before* any automated order testing, i.e. before Phase 2 implementation.
+- **Point-in-time data provider selection** — after the Phase-0 data audit.
+- **Live-execution Gate 2 authorization mechanism** — before live trading is considered.

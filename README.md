@@ -3,7 +3,7 @@
 An autonomous long/short **U.S. equity swing & momentum trading system** with deterministic
 risk and selective, bounded AI research.
 
-> **Status: PHASE 1 COMPLETE — IBKR PAPER CONNECTIVITY VALIDATED (2026-08-25).** Read-only
+> **Status: PHASE 1 COMPLETE AND ACCEPTED (2026-08-25).** Read-only
 > connectivity to the live IBKR Paper account is proven end to end: connected, account
 > confirmed PAPER, SPY subscribed, market data received, broker account state observed,
 > clean shutdown. **Zero orders, zero positions** — no order path exists. Live trading
@@ -81,6 +81,7 @@ JOURNAL + ATTRIBUTION + HEALTH
 | Social / X signals | Not V1 |
 | Averaging down | Disabled by design |
 | Secrets in repo | None; `.env` is git-ignored, only `.env.example` is committed |
+| Broker-side order guards | **Not a control** — LEAN disables them at startup ([ADR-0003](docs/decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md)) |
 
 Live execution is deliberately **not** reachable by setting a single value. Selecting
 `KALPAMANI_ENV=live` is accepted, reported honestly, and still authorizes nothing.
@@ -145,7 +146,8 @@ KalpaMani/
 ├── .env.example              Variable names + placeholders ONLY
 ├── pyproject.toml
 ├── docs/
-│   ├── architecture/         KalpaMani_Blueprint_V2_1.pdf  (authoritative)
+│   ├── architecture/         KalpaMani_Blueprint_V2_1.pdf  (authoritative, never edited)
+│   │                         BLUEPRINT_ERRATA.md  (empirical corrections index)
 │   ├── decisions/            Architecture Decision Records
 │   └── runbooks/             Operational procedures
 ├── src/kalpamani/
@@ -244,8 +246,11 @@ one tiny PAPER order -> fill handling -> immediate protection -> reconciliation 
 Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme (**ADR-0004**) must
 be defined **before** any automated order testing.
 
-Phase 1 is complete: all thirteen acceptance criteria satisfied, including a SPY bar
-received at 05:15 ET pre-market on delayed IBKR data.
+Phase 1 is complete and accepted. Acceptance evidence: LEAN launches · IBKR Paper connection
+confirmed · exactly one SPY subscription · market data received (05:15 ET pre-market, delayed
+IBKR data) · broker state observable · paper equity observed as USD 1,000,000 · KalpaMani
+capital remained USD 80,000 · no orders · no positions · clean shutdown · 98 tests passing ·
+ruff clean · mypy strict clean · preflight clean.
 
 ---
 
