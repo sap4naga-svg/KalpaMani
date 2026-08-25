@@ -357,6 +357,10 @@ Verify independently in the IBKR account manager, not only from logs.
 | **Accidental short** | Close it manually in IBKR immediately, then investigate how the stop outlived the long. |
 | **Duplicate entry observed** | Stop everything. This is the failure ADR-0004 exists to prevent; treat it as a design defect, not an operational hiccup. |
 | **Unknown / ambiguous account** | Abort. Never proceed on an unclassified account. |
+| **`DISPATCH_ATTEMPTED`, broker silent** | Ambiguous — the order may be live. Do **not** resend. Check the IBKR order history by hand, then reconcile deliberately. |
+| **Protective intent never dispatched** | The long is unprotected. Recovery re-dispatches it automatically; verify the stop appears at IBKR before doing anything else. |
+| **Order rejected (`INVALID`)** | See §13.3. Never answer a rejection with another entry. |
+| **Arm refused: receipt could not be written** | Both receipt locations must be writable. Check the object-store mount and the project directory before retrying. |
 | **Corrupt durable state** | The store fails closed. Do not delete it to "start clean" — that destroys the record of what was already sent. Inspect it, reconcile against IBKR, resolve by hand. |
 | **2FA / weekly restart mid-trade** | Expected. On recovery the system reconciles; confirm `entry_orders_after_restart = 0`. |
 | **Stop triggered during the run** | The wide TEST stop makes this unlikely. If it fills, the position is flat — reconcile and record it; do not re-enter. |
@@ -394,14 +398,64 @@ If any row differs, **stop and fix it** before arming.
 
 ---
 
-## 13.2 Two behaviours worth knowing before you watch a live run
+## 13.2 Order dispatch states — what the log is telling you
+
+Every order carries a **dispatch state**, because "submitted" is too coarse a
+word to be safe:
+
+| State | Meaning | If the process dies here |
+|---|---|---|
+| `INTENT_RECORDED` | Written durably. **The broker call has not been made.** | We *know* the broker has nothing. Safe to re-dispatch. |
+| `DISPATCH_ATTEMPTED` | The call was made. **Acknowledgement unknown.** | Ambiguous — the order may be live. **Never resend.** |
+| `ACKNOWLEDGED` | The broker confirms it is working. | Reconcile normally. |
+| `FILLED` / `CANCELLED` / `REJECTED` | Terminal broker outcome. | Nothing pending. |
+
+**`protected_quantity` counts a stop only at `ACKNOWLEDGED`.** A protective
+intent that was recorded but never dispatched is **not** protection, and the
+system says so rather than looking healthy.
+
+On recovery you will see `[RECOVERY] dispatch assessment: …`:
+
+- **PROTECTIVE or EXIT intent never dispatched, long still open** — re-dispatched
+  automatically. The broker never received it, so this is provably not a
+  duplicate, and it is the only way out of an unprotected position.
+- **ENTRY intent never dispatched** — **fails closed.** No position is at risk,
+  and re-entering is not a decision to take unattended. Resolve manually.
+- **Any order `DISPATCH_ATTEMPTED` with no broker acknowledgement** — **fails
+  closed.** Reconcile against the broker's order history by hand before doing
+  anything. Never resend on this basis.
+
+---
+
+## 13.3 Rejected orders (`OrderStatus.INVALID`)
+
+| Rejected order | Response |
+|---|---|
+| **PROTECTIVE, long open** | **UNPROTECTED POSITION — highest severity.** Session aborts. Protect or close the position by hand in IBKR. **Never** submit another entry. |
+| **EXIT, long open** | **UNPROTECTED POSITION — highest severity.** Protection has already been cancelled, so the long is bare. Close it by hand. |
+| **ENTRY** | Recorded as rejected. No fill, no position, no exposure. **No automatic second entry, ever.** Investigate the rejection reason before re-arming. |
+
+These are never treated as ordinary zero-fill events that quietly return.
+
+---
+
+## 13.4 Two behaviours worth knowing before you watch a live run
 
 **A cancellation request is not a cancellation.** After `--request-exit`, the log shows
-`cancel requested; awaiting broker CONFIRMATION` and then *returns*. Internal state still
-records the stop as protecting the position, deliberately, so reconciliation continues to
-agree with the broker. Only when IBKR confirms the cancellation does `protected_quantity`
-drop to zero and the closing order become eligible. **A cycle that appears to "do nothing"
-after a cancel request is correct behaviour.**
+`cancel requested ONCE; awaiting CANCELED event` and then *returns*. Subsequent cycles log
+`awaiting broker cancellation confirmation` and send **nothing** — the broker is asked
+exactly once. Internal state still records the stop as protecting the position, so
+reconciliation continues to agree with the broker.
+
+LEAN emits **`CANCEL_PENDING` before `CANCELED`**, and only the latter confirms:
+
+```
+[EXIT-REQUEST] km-…-PROTECTIVE-0 CANCEL_PENDING -- NOT confirmation; still working
+[EXIT-REQUEST] protective cancellation CONFIRMED for km-…-PROTECTIVE-0
+```
+
+Only the second line drops `protected_quantity` to zero and makes the close eligible.
+**A cycle that appears to "do nothing" after a cancel request is correct behaviour.**
 
 **A protective stop firing is a legitimate exit.** If the stop fills, the long is closed by
 the stop. The system recognises this, moves to `CLOSED`, and will **not** send an exit SELL
