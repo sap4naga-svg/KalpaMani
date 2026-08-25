@@ -1,12 +1,15 @@
 """Production-path orchestration tests: drive the real coordinator, not a re-creation.
 
-The first Phase 2 review found that the earlier integration test performed state
-transitions `main.py` never did. The tests passed while production silently
-omitted steps. These tests exist so that cannot recur: they call the *same*
-:class:`Phase2Coordinator` methods `main.py` calls, and every durable write is
-the production one.
+These call the *same* :class:`Phase2Coordinator` methods `main.py` calls, and
+every durable write is the production one. Each test corresponds to a defect a
+review identified.
 
-Each test below corresponds to a defect that review identified.
+The dispatch protocol under test:
+
+    pending = coordinator.begin_*(...)      # intent durably recorded
+    broker.submit(pending)                  # the broker call
+    coordinator.confirm_dispatch(...)       # attempt durably recorded
+    coordinator.reconcile(...)              # broker evidence adopted -> ACKNOWLEDGED
 """
 
 from __future__ import annotations
@@ -33,11 +36,19 @@ from kalpamani.execution.reconciliation import (
     BrokerPositionView,
     BrokerView,
     ReconciliationError,
+    UnprotectedPositionError,
 )
-from kalpamani.execution.session import ArmReceiptError, BrokerSessionEvidence
+from kalpamani.execution.session import (
+    ArmReceipt,
+    ArmReceiptError,
+    BrokerSessionEvidence,
+    account_fingerprint,
+    assert_arm_available,
+    write_arm_receipt,
+)
 from kalpamani.execution.state_store import (
+    DispatchState,
     JsonTradeStateStore,
-    StateStoreError,
     TradeRecord,
 )
 
@@ -67,12 +78,13 @@ def arm_request() -> ExecutionArmRequest:
 
 
 class Broker:
-    """In-memory broker double. Counts every submission by role."""
+    """In-memory broker double. Counts submissions and cancel requests by role."""
 
     def __init__(self) -> None:
         self.position = 0
         self.working: dict[str, BrokerOrderView] = {}
         self.submissions: list[tuple[OrderRole, str]] = []
+        self.cancel_requests: list[str] = []
 
     def submit(self, pending: PendingOrder) -> None:
         request = pending.request
@@ -89,7 +101,11 @@ class Broker:
         order = self.working.pop(client_order_id)
         self.position += quantity if order.side == "BUY" else -quantity
 
-    def cancel(self, client_order_id: str) -> None:
+    def request_cancel(self, client_order_id: str) -> None:
+        """Record the request. The order keeps working until `confirm_cancel`."""
+        self.cancel_requests.append(client_order_id)
+
+    def confirm_cancel(self, client_order_id: str) -> None:
         self.working.pop(client_order_id, None)
 
     def count(self, role: OrderRole) -> int:
@@ -113,15 +129,21 @@ def make_coordinator(tmp_path: Path) -> tuple[Phase2Coordinator, JsonTradeStateS
     return coordinator, store, storage, project
 
 
+def dispatch(coordinator: Phase2Coordinator, broker: Broker, pending: PendingOrder) -> TradeRecord:
+    """The full production dispatch protocol, as main.py performs it."""
+    broker.submit(pending)
+    return coordinator.confirm_dispatch(pending.record, pending.request.client_order_id)
+
+
 def drive_to_protected(coordinator: Phase2Coordinator, broker: Broker) -> TradeRecord:
-    """Run the real production path up to a confirmed PROTECTED position."""
+    """Run the real production path up to a broker-confirmed PROTECTED position."""
     record = coordinator.authorize(arm_request(), evidence())
 
     pending = coordinator.begin_entry(record)
-    broker.submit(pending)
+    record = dispatch(coordinator, broker, pending)
     broker.fill(pending.request.client_order_id, PHASE2_QUANTITY)
     record = coordinator.on_fill(
-        pending.record,
+        record,
         client_order_id=pending.request.client_order_id,
         fill_id="7-1",
         fill_quantity=PHASE2_QUANTITY,
@@ -129,18 +151,17 @@ def drive_to_protected(coordinator: Phase2Coordinator, broker: Broker) -> TradeR
 
     protection = coordinator.plan_protection(record, SPY_PRICE)
     assert protection is not None
-    broker.submit(protection)
-    record = coordinator.confirm_protection(protection.record, broker.view())
-    return record
+    record = dispatch(coordinator, broker, protection)
+    record = coordinator.reconcile(record, broker.view())  # adopts -> ACKNOWLEDGED
+    return coordinator.confirm_protection(record, broker.view())
 
 
 # ---------------------------------------------------------------------------
-# Review item 4 -- production lifecycle transitions are actually PERSISTED
+# Lifecycle transitions are actually PERSISTED
 # ---------------------------------------------------------------------------
 
 
 def test_production_path_persists_every_lifecycle_transition(tmp_path: Path) -> None:
-    """The durable record must reflect each state, not merely log it."""
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
@@ -150,275 +171,434 @@ def test_production_path_persists_every_lifecycle_transition(tmp_path: Path) -> 
 
     pending = coordinator.begin_entry(record)
     assert store.require(identity.trade_intent_id).state is TradeState.ENTRY_SUBMITTED
-    broker.submit(pending)
-    broker.fill(pending.request.client_order_id, 1)
-
+    record = dispatch(coordinator, broker, pending)
+    broker.fill(identity.entry_order_id, 1)
     record = coordinator.on_fill(
-        pending.record,
-        client_order_id=pending.request.client_order_id,
-        fill_id="7-1",
-        fill_quantity=1,
+        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
     )
     assert store.require(identity.trade_intent_id).state is TradeState.FILLED
 
     protection = coordinator.plan_protection(record, SPY_PRICE)
     assert protection is not None
     assert store.require(identity.trade_intent_id).state is TradeState.PROTECTION_SUBMITTED
-    broker.submit(protection)
-
-    record = coordinator.confirm_protection(protection.record, broker.view())
+    record = dispatch(coordinator, broker, protection)
+    record = coordinator.reconcile(record, broker.view())
+    record = coordinator.confirm_protection(record, broker.view())
     assert store.require(identity.trade_intent_id).state is TradeState.PROTECTED
 
     record = coordinator.request_exit(record)
     assert store.require(identity.trade_intent_id).state is TradeState.EXIT_REQUESTED
 
-    record = coordinator.request_protection_cancel(record)
-    broker.cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record)
+    record, should_cancel = coordinator.begin_protection_cancel(record)
+    assert should_cancel is True
+    broker.request_cancel(identity.protective_order_id)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
     assert store.require(identity.trade_intent_id).protected_quantity == 0
 
     exit_order = coordinator.begin_exit(record, broker.view())
     assert store.require(identity.trade_intent_id).state is TradeState.EXIT_SUBMITTED
-    broker.submit(exit_order)
-    broker.fill(exit_order.request.client_order_id, 1)
-
+    record = dispatch(coordinator, broker, exit_order)
+    broker.fill(identity.exit_order_id, 1)
     record = coordinator.on_fill(
-        exit_order.record,
-        client_order_id=exit_order.request.client_order_id,
-        fill_id="9-1",
-        fill_quantity=1,
+        record, client_order_id=identity.exit_order_id, fill_id="9-1", fill_quantity=1
     )
     assert store.require(identity.trade_intent_id).state is TradeState.CLOSED
 
     record = coordinator.finalize(record, broker.view())
-    final = store.require(identity.trade_intent_id)
-    assert final.state is TradeState.RECONCILED
+    assert store.require(identity.trade_intent_id).state is TradeState.RECONCILED
     assert broker.position == 0
     assert broker.count(OrderRole.ENTRY) == 1
 
 
 # ---------------------------------------------------------------------------
-# Review item 2 -- cancellation REQUEST is not cancellation CONFIRMATION
+# Round 3 item 1 -- CANCEL_PENDING is NOT CANCELED
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_request_does_not_mark_protection_cancelled(tmp_path: Path) -> None:
-    """Requested-but-still-working must reconcile cleanly and must not allow a close."""
+def test_cancel_pending_does_not_confirm_cancellation(tmp_path: Path) -> None:
+    """LEAN emits CANCEL_PENDING before CANCELED. Only the latter may confirm.
+
+    `main.py` calls confirm only on an exact CANCELED status, so a pending
+    cancellation must leave durable state completely unchanged.
+    """
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = drive_to_protected(coordinator, broker)
 
     record = coordinator.request_exit(record)
-    record = coordinator.request_protection_cancel(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.request_cancel(identity.protective_order_id)  # CANCEL_PENDING: still working
 
-    # Broker still working the stop. Internal must still say protected, so that
-    # reconciliation AGREES rather than manufacturing a mismatch.
     persisted = store.require(identity.trade_intent_id)
+    protective = persisted.orders[identity.protective_order_id]
+    assert protective.cancel_requested is True
+    assert protective.dispatch is DispatchState.ACKNOWLEDGED, "still working, NOT cancelled"
     assert persisted.protected_quantity == 1
-    assert persisted.orders[identity.protective_order_id].cancel_requested is True
-    assert persisted.orders[identity.protective_order_id].cancelled is False
-    coordinator.reconcile(persisted, broker.view())  # must not raise
+    coordinator.reconcile(persisted, broker.view())  # must still agree
 
-    # And the close must be refused while the stop can still fire.
     with pytest.raises(ReconciliationError):
         coordinator.begin_exit(persisted, broker.view())
-    assert broker.count(OrderRole.EXIT) == 0
 
 
-def test_cancel_confirmation_updates_state_and_enables_close(tmp_path: Path) -> None:
+def test_canceled_confirms_cancellation(tmp_path: Path) -> None:
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = drive_to_protected(coordinator, broker)
-
     record = coordinator.request_exit(record)
-    record = coordinator.request_protection_cancel(record)
-    broker.cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
 
     persisted = store.require(identity.trade_intent_id)
-    assert persisted.orders[identity.protective_order_id].cancelled is True
+    assert persisted.orders[identity.protective_order_id].dispatch is DispatchState.CANCELLED
     assert persisted.protected_quantity == 0
-    coordinator.reconcile(persisted, broker.view())  # must not raise
+    coordinator.reconcile(persisted, broker.view())
+    assert coordinator.begin_exit(persisted, broker.view()).request.quantity == 1
 
-    exit_order = coordinator.begin_exit(persisted, broker.view())
-    assert exit_order.request.quantity == 1
+
+@pytest.mark.parametrize("role", [OrderRole.ENTRY, OrderRole.EXIT])
+def test_cancelled_entry_or_exit_never_mutates_protective_state(
+    tmp_path: Path, role: OrderRole
+) -> None:
+    """A cancelled ENTRY or EXIT must leave protection completely untouched."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+
+    foreign_id = identity.entry_order_id if role is OrderRole.ENTRY else identity.exit_order_id
+    coordinator.confirm_protection_cancel(record, foreign_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    protective = persisted.orders[identity.protective_order_id]
+    assert protective.dispatch is DispatchState.ACKNOWLEDGED
+    assert protective.cancel_requested is False
+    assert persisted.protected_quantity == 1
 
 
 # ---------------------------------------------------------------------------
-# Review item 3 -- the exit order is write-ahead-logged
+# Round 3 item 2 -- the broker cancel is requested exactly once
 # ---------------------------------------------------------------------------
 
 
-def test_exit_order_is_recorded_before_submission(tmp_path: Path) -> None:
-    """The durable EXIT record must exist before the broker call, so its fill applies."""
+def test_cancel_requested_exactly_once_across_many_cycles(tmp_path: Path) -> None:
+    """Repeated cycles while cancellation is pending must not re-ask the broker."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+
+    for _ in range(10):  # ten reconciliation cycles, cancellation still pending
+        record, should_cancel = coordinator.begin_protection_cancel(record)
+        if should_cancel:
+            broker.request_cancel(identity.protective_order_id)
+
+    assert broker.cancel_requests == [identity.protective_order_id]
+    assert len(broker.cancel_requests) == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 3 item 3 -- dispatch-gap recovery at all three boundaries
+# ---------------------------------------------------------------------------
+
+
+def test_protective_intent_never_dispatched_is_reported_unprotected(tmp_path: Path) -> None:
+    """Crash between the protective write-ahead and the broker call.
+
+    The old model called this "submitted" and looked healthy. It must instead be
+    recognised as an UNPROTECTED long, with a safe deterministic re-dispatch.
+    """
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    record = dispatch(coordinator, broker, pending)
+    broker.fill(identity.entry_order_id, 1)
+    record = coordinator.on_fill(
+        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
+    )
+
+    protection = coordinator.plan_protection(record, SPY_PRICE)
+    assert protection is not None  # intent recorded... and then we crash.
+
+    persisted = store.require(identity.trade_intent_id)
+    protective = persisted.orders[identity.protective_order_id]
+    assert protective.dispatch is DispatchState.INTENT_RECORDED
+    assert persisted.protected_quantity == 0, "an undispatched intent is NOT protection"
+
+    plan = coordinator.assess_recovery(persisted, broker.view())
+    assert any("UNPROTECTED" in note for note in plan.notes)
+    assert [p.request.role for p in plan.redispatch] == [OrderRole.PROTECTIVE]
+    assert plan.redispatch[0].request.stop_price is not None
+
+
+def test_exit_intent_never_dispatched_is_redispatched(tmp_path: Path) -> None:
+    """The gap the previous round left: an unprotected long with no exit sent."""
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = drive_to_protected(coordinator, broker)
     record = coordinator.request_exit(record)
-    record = coordinator.request_protection_cancel(record)
-    broker.cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
 
-    exit_order = coordinator.begin_exit(record, broker.view())
+    coordinator.begin_exit(record, broker.view())  # recorded, then we crash
 
     persisted = store.require(identity.trade_intent_id)
-    assert identity.exit_order_id in persisted.orders
-    assert persisted.orders[identity.exit_order_id].role is OrderRole.EXIT
-    assert persisted.orders[identity.exit_order_id].submitted is True
+    assert persisted.orders[identity.exit_order_id].dispatch is DispatchState.INTENT_RECORDED
 
-    # The fill therefore applies against a known order rather than being rejected.
-    broker.submit(exit_order)
-    broker.fill(identity.exit_order_id, 1)
-    closed = coordinator.on_fill(
-        exit_order.record,
-        client_order_id=identity.exit_order_id,
-        fill_id="9-1",
-        fill_quantity=1,
+    plan = coordinator.assess_recovery(persisted, broker.view())
+    assert [p.request.role for p in plan.redispatch] == [OrderRole.EXIT]
+    assert any("EXIT intent never dispatched" in n for n in plan.notes)
+    assert broker.count(OrderRole.EXIT) == 0, "still not sent twice"
+
+
+def test_entry_intent_never_dispatched_fails_closed(tmp_path: Path) -> None:
+    """No position is at risk, so re-entering is a human decision, not an automatic one."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    coordinator.begin_entry(record)  # recorded, then we crash
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.entry_order_id].dispatch is DispatchState.INTENT_RECORDED
+    with pytest.raises(ReconciliationError, match="never dispatched"):
+        coordinator.assess_recovery(persisted, broker.view())
+
+
+def test_ambiguous_dispatch_never_resends(tmp_path: Path) -> None:
+    """Dispatch attempted, broker silent. The order may be live: never resend."""
+    coordinator, store, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    # Broker call attempted, but the broker shows nothing and never acknowledged.
+    coordinator.confirm_dispatch(pending.record, identity.entry_order_id)
+
+    persisted = store.require(identity.trade_intent_id)
+    assert persisted.orders[identity.entry_order_id].dispatch_outcome_unknown is True
+    with pytest.raises(ReconciliationError, match="Dispatch outcome unknown"):
+        coordinator.assess_recovery(persisted, broker.view())
+    assert broker.count(OrderRole.ENTRY) == 0
+
+
+def test_broker_evidence_promotes_dispatched_order_to_acknowledged(tmp_path: Path) -> None:
+    """Reconciliation is what resolves the ambiguous window."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    record = dispatch(coordinator, broker, pending)
+    assert record.orders[identity.entry_order_id].dispatch is DispatchState.DISPATCH_ATTEMPTED
+
+    record = coordinator.adopt_broker_evidence(record, broker.view())
+    assert record.orders[identity.entry_order_id].dispatch is DispatchState.ACKNOWLEDGED
+
+
+# ---------------------------------------------------------------------------
+# Round 3 item 5 -- INVALID / rejected orders
+# ---------------------------------------------------------------------------
+
+
+def test_rejected_protective_order_is_unprotected_position(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    record = dispatch(coordinator, broker, pending)
+    broker.fill(identity.entry_order_id, 1)
+    record = coordinator.on_fill(
+        record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
     )
-    assert closed.state is TradeState.CLOSED
-    assert closed.open_long_quantity == 0
+    protection = coordinator.plan_protection(record, SPY_PRICE)
+    assert protection is not None
+    record = dispatch(coordinator, broker, protection)
+
+    with pytest.raises(UnprotectedPositionError, match="REJECTED"):
+        coordinator.on_order_rejected(record, identity.protective_order_id)
 
 
-def test_reconnect_between_write_ahead_and_submission_creates_no_second_sell(
-    tmp_path: Path,
+def test_rejected_exit_order_with_open_long_is_unprotected_position(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+    record = drive_to_protected(coordinator, broker)
+    record = coordinator.request_exit(record)
+    record, _ = coordinator.begin_protection_cancel(record)
+    broker.confirm_cancel(identity.protective_order_id)
+    record = coordinator.confirm_protection_cancel(record, identity.protective_order_id)
+    exit_order = coordinator.begin_exit(record, broker.view())
+    record = dispatch(coordinator, broker, exit_order)
+
+    with pytest.raises(UnprotectedPositionError, match="REJECTED"):
+        coordinator.on_order_rejected(record, identity.exit_order_id)
+
+
+def test_rejected_entry_is_not_an_unprotected_position(tmp_path: Path) -> None:
+    """No fill, no position, no exposure -- and never an automatic second entry."""
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    broker = Broker()
+    identity = coordinator.identity
+
+    record = coordinator.authorize(arm_request(), evidence())
+    pending = coordinator.begin_entry(record)
+    record = dispatch(coordinator, broker, pending)
+
+    record = coordinator.on_order_rejected(record, identity.entry_order_id)
+    assert record.orders[identity.entry_order_id].dispatch is DispatchState.REJECTED
+    assert record.open_long_quantity == 0
+    # A rejected entry still counts as an entry: no automatic second one, ever.
+    with pytest.raises(ReconciliationError, match="second entry"):
+        coordinator.begin_entry(record)
+
+
+# ---------------------------------------------------------------------------
+# Round 3 item 4 -- the arm receipt is genuinely redundant
+# ---------------------------------------------------------------------------
+
+
+def sample_receipt() -> ArmReceipt:
+    return ArmReceipt(
+        trade_intent_id="ti-test",
+        account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+        consumed=True,
+    )
+
+
+def test_both_receipt_locations_written_and_verified(tmp_path: Path) -> None:
+    paths = (tmp_path / "a" / "r.json", tmp_path / "b" / "r.json")
+    write_arm_receipt(sample_receipt(), paths)
+    for path in paths:
+        assert path.is_file()
+        assert ArmReceipt.from_json(path.read_text(encoding="utf-8")) == sample_receipt()
+
+
+@pytest.mark.parametrize("blocked_index", [0, 1])
+def test_arm_refused_if_either_location_cannot_be_written(
+    tmp_path: Path, blocked_index: int
 ) -> None:
-    """Crash after the durable write, before the broker call. Recovery must not re-sell."""
+    """A partial write is not redundancy, so it must refuse rather than proceed."""
+    good = tmp_path / "good" / "r.json"
+    blocker = tmp_path / "blocker"
+    blocker.write_text("I am a file, not a directory", encoding="utf-8")
+    blocked = blocker / "r.json"
+
+    paths = (blocked, good) if blocked_index == 0 else (good, blocked)
+    with pytest.raises(ArmReceiptError):
+        write_arm_receipt(sample_receipt(), paths)
+
+
+def test_receipts_disagreeing_on_consumed_fail_closed(tmp_path: Path) -> None:
+    """One says consumed, one says not. That ambiguity could permit a replay."""
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    a.write_text(sample_receipt().to_json(), encoding="utf-8")
+    b.write_text(
+        ArmReceipt(
+            trade_intent_id="ti-test",
+            account_fingerprint=account_fingerprint(PAPER_ACCOUNT_ID),
+            consumed=False,
+        ).to_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(ArmReceiptError, match="disagree"):
+        assert_arm_available((a, b), trade_state_present=True)
+
+
+def test_matching_receipts_with_state_present_pass(tmp_path: Path) -> None:
+    paths = (tmp_path / "a.json", tmp_path / "b.json")
+    write_arm_receipt(sample_receipt(), paths)
+    assert_arm_available(paths, trade_state_present=True)
+
+
+@pytest.mark.parametrize("lost_index", [0, 1])
+def test_losing_either_receipt_still_catches_lost_trade_state(
+    tmp_path: Path, lost_index: int
+) -> None:
+    paths = (tmp_path / "a.json", tmp_path / "b.json")
+    write_arm_receipt(sample_receipt(), paths)
+    paths[lost_index].unlink()
+    with pytest.raises(ArmReceiptError, match="CONSUMED"):
+        assert_arm_available(paths, trade_state_present=False)
+
+
+def test_lost_trade_state_with_consumed_arm_fails_closed(tmp_path: Path) -> None:
     coordinator, _store, storage, project = make_coordinator(tmp_path)
     broker = Broker()
-    identity = coordinator.identity
-    record = drive_to_protected(coordinator, broker)
-    record = coordinator.request_exit(record)
-    record = coordinator.request_protection_cancel(record)
-    broker.cancel(identity.protective_order_id)
-    record = coordinator.confirm_protection_cancel(record)
+    drive_to_protected(coordinator, broker)
 
-    coordinator.begin_exit(record, broker.view())  # written, deliberately NOT submitted
-    assert broker.count(OrderRole.EXIT) == 0
-
-    # Restart.
+    (storage / "phase2_trade_state.json").unlink()
     restarted = Phase2Coordinator(
         JsonTradeStateStore(storage / "phase2_trade_state.json"),
         TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
         storage_root=storage,
         project_root=project,
     )
-    recovered = restarted.load()
-    assert recovered is not None
-    assert recovered.state is TradeState.EXIT_SUBMITTED
+    with pytest.raises(ArmReceiptError, match="CONSUMED"):
+        restarted.load()
 
-    # A second write-ahead for the same exit is refused, so no second SELL.
-    with pytest.raises(StateStoreError):
-        restarted.begin_exit(recovered, broker.view())
-    assert broker.count(OrderRole.EXIT) == 0
+
+def test_clean_first_run_is_permitted(tmp_path: Path) -> None:
+    coordinator, _, _, _ = make_coordinator(tmp_path)
+    assert coordinator.load() is None
 
 
 # ---------------------------------------------------------------------------
-# Review item 5 -- a protective stop fill is a valid exit route
+# Protective stop fill, duplicates, restart
 # ---------------------------------------------------------------------------
 
 
 def test_protective_stop_fill_closes_the_long_without_an_exit_order(tmp_path: Path) -> None:
-    """entry 1 -> protection 1 -> stop fills -> flat, no extra SELL, no short."""
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = drive_to_protected(coordinator, broker)
     assert broker.position == 1
 
-    # The stop fires.
     broker.fill(identity.protective_order_id, 1)
     record = coordinator.on_fill(
-        record,
-        client_order_id=identity.protective_order_id,
-        fill_id="8-1",
-        fill_quantity=1,
+        record, client_order_id=identity.protective_order_id, fill_id="8-1", fill_quantity=1
     )
 
     assert broker.position == 0
-    assert record.open_long_quantity == 0, "a filled stop closes the long"
+    assert record.open_long_quantity == 0
     assert record.protective_fill_quantity == 1
-    assert record.state is TradeState.CLOSED
     assert store.require(identity.trade_intent_id).state is TradeState.CLOSED
 
-    # No exit order may be planned for a position that no longer exists.
     with pytest.raises(ReconciliationError):
         coordinator.begin_exit(record, broker.view())
     assert broker.count(OrderRole.EXIT) == 0
 
     record = coordinator.finalize(record, broker.view())
     assert record.state is TradeState.RECONCILED
-    assert broker.position == 0, "no accidental short"
-
-
-# ---------------------------------------------------------------------------
-# Review item 8 -- a consumed arm plus lost trade state must fail closed
-# ---------------------------------------------------------------------------
-
-
-def test_lost_trade_state_with_consumed_arm_fails_closed(tmp_path: Path) -> None:
-    """The exact failure mode: armed config, wiped state, would-be virgin run."""
-    coordinator, _store, storage, project = make_coordinator(tmp_path)
-    broker = Broker()
-    drive_to_protected(coordinator, broker)
-
-    state_file = storage / "phase2_trade_state.json"
-    assert state_file.exists()
-    state_file.unlink()  # mis-mounted object store / wiped runtime directory
-
-    restarted = Phase2Coordinator(
-        JsonTradeStateStore(state_file),
-        TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
-        storage_root=storage,
-        project_root=project,
-    )
-    with pytest.raises(ArmReceiptError, match="already CONSUMED"):
-        restarted.load()
-
-
-def test_receipt_survives_loss_of_either_single_location(tmp_path: Path) -> None:
-    """Receipts live on two mounts; losing one must still fail closed."""
-    coordinator, _, storage, project = make_coordinator(tmp_path)
-    broker = Broker()
-    drive_to_protected(coordinator, broker)
-
-    (storage / "phase2_trade_state.json").unlink()
-    (storage / "phase2_arm_receipt.json").unlink()  # object store wiped entirely
-
-    restarted = Phase2Coordinator(
-        JsonTradeStateStore(storage / "phase2_trade_state.json"),
-        TradeIdentity.derive(PHASE2_INTENT_NATURAL_KEY, attempt=1),
-        storage_root=storage,
-        project_root=project,
-    )
-    with pytest.raises(ArmReceiptError):
-        restarted.load()  # the project-side receipt still catches it
-
-
-def test_clean_first_run_is_permitted(tmp_path: Path) -> None:
-    """No receipt, no state: a genuine first run must not be blocked."""
-    coordinator, _, _, _ = make_coordinator(tmp_path)
-    assert coordinator.load() is None
-
-
-# ---------------------------------------------------------------------------
-# Review items 6 & 9 -- duplicate events and restart remain no-ops
-# ---------------------------------------------------------------------------
+    assert broker.position == 0
 
 
 def test_duplicate_order_event_is_a_true_noop(tmp_path: Path) -> None:
-    """The same (order_id, event_id) delivered repeatedly changes nothing."""
     coordinator, store, _, _ = make_coordinator(tmp_path)
     broker = Broker()
     identity = coordinator.identity
     record = coordinator.authorize(arm_request(), evidence())
     pending = coordinator.begin_entry(record)
-    broker.submit(pending)
+    record = dispatch(coordinator, broker, pending)
     broker.fill(identity.entry_order_id, 1)
 
-    record = pending.record
     for _ in range(5):
         record = coordinator.on_fill(
             record, client_order_id=identity.entry_order_id, fill_id="7-1", fill_quantity=1
@@ -442,8 +622,8 @@ def test_restart_after_protection_submits_no_further_entry(tmp_path: Path) -> No
     recovered = restarted.load()
     assert recovered is not None
     assert recovered.state is TradeState.PROTECTED
+    restarted.reconcile(recovered, broker.view())
 
     with pytest.raises(ReconciliationError):
         restarted.begin_entry(recovered)
-
     assert broker.count(OrderRole.ENTRY) - entries_before == 0

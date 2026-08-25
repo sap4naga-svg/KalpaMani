@@ -1,17 +1,31 @@
-"""Durable trade state (ADR-0004 §5).
+"""Durable trade state and the order dispatch model (ADR-0004 §5).
 
 Idempotency that lives only in process memory is erased by exactly the event it
-exists to survive. So the record of "we already submitted this" is written to
-disk **before** the order leaves the process, and read back on recovery.
+exists to survive. So the record of "we intend to send this" is written to disk
+**before** the order leaves the process, and read back on recovery.
 
-Phase 2 uses a local JSON file. It is deliberately minimal and deliberately
-behind :class:`TradeStateStore`, so PostgreSQL can replace it without lifecycle
-logic changing.
+The dispatch model
+------------------
+"Submitted" is too coarse a word to be safe. A durable record written before a
+broker call is *not* evidence that the broker received anything, and treating it
+as such lets a crash leave a position that looks protected but is not. So each
+order carries an explicit :class:`DispatchState`:
 
-Three rules make this trustworthy:
+    INTENT_RECORDED     durable write done; the broker call has NOT been attempted
+    DISPATCH_ATTEMPTED  the broker call was made; acknowledgement is UNKNOWN
+    ACKNOWLEDGED        the broker confirms the order is working
+    FILLED              the broker filled it
+    CANCELLED           the broker CONFIRMED a cancellation
+    REJECTED            the broker rejected it (LEAN OrderStatus.INVALID)
 
-* Writes are **atomic** (temp file + ``os.replace``). A crash mid-write leaves
-  the previous good state, never a half-written one.
+The distinction that matters most: ``protected_quantity`` counts a protective
+order only once the broker has **acknowledged** it. An intent that was recorded
+but never dispatched must never be mistaken for working protection.
+
+Three storage rules
+-------------------
+* Writes are **atomic** (temp file + fsync + ``os.replace``). A crash mid-write
+  leaves the previous good state, never a half-written one.
 * A **schema version** is recorded. An unrecognised version fails closed rather
   than being parsed optimistically.
 * Missing, unreadable or corrupt state **fails closed** when a trade is expected.
@@ -26,6 +40,7 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -34,7 +49,8 @@ from kalpamani.execution.identity import OrderRole
 from kalpamani.execution.lifecycle import TradeState
 
 #: Bumped when the persisted shape changes. Unknown versions fail closed.
-STATE_SCHEMA_VERSION = 1
+#: v2 introduced the explicit dispatch model in place of a boolean "submitted".
+STATE_SCHEMA_VERSION = 2
 
 
 class StateStoreError(SafetyViolationError):
@@ -54,38 +70,85 @@ class StateCorruptError(StateStoreError):
     """Durable state exists but cannot be parsed or is internally inconsistent."""
 
 
+class DispatchState(StrEnum):
+    """How far an order has actually got toward the broker.
+
+    Ordered from "we only wrote it down" to a terminal broker outcome. The gap
+    between the first two values is the whole point: a recorded intent is not a
+    sent order, and a sent order is not an accepted one.
+    """
+
+    INTENT_RECORDED = "INTENT_RECORDED"
+    DISPATCH_ATTEMPTED = "DISPATCH_ATTEMPTED"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+
+
+#: Dispatch states from which no further broker action is expected.
+TERMINAL_DISPATCH: frozenset[DispatchState] = frozenset(
+    {DispatchState.FILLED, DispatchState.CANCELLED, DispatchState.REJECTED}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class SubmittedOrder:
-    """A durable record that an order was intended and/or submitted.
-
-    ``submitted`` is written **before** the broker call (write-ahead). A record
-    with ``submitted=True`` and no broker acknowledgement is recoverable by
-    inspection; the reverse -- a live broker order with no local record -- is not,
-    which is why the write happens first.
-    """
+    """A durable record of one order and how far it has actually got."""
 
     client_order_id: str
     role: OrderRole
     symbol: str
     side: str
     quantity: int
-    submitted: bool = False
-    acknowledged: bool = False
+    dispatch: DispatchState = DispatchState.INTENT_RECORDED
     #: A cancellation was ASKED FOR. The broker may still be working the order.
     cancel_requested: bool = False
-    #: The broker CONFIRMED the cancellation. Only this makes the order inert.
-    cancelled: bool = False
     filled_quantity: int = 0
     #: Broker-assigned handle. Recorded for audit; never derived from, never
     #: branched on (ADR-0002 §4).
     broker_order_id: str | None = None
     #: Fill identities already applied, so a repeated fill event is a no-op.
     applied_fill_ids: tuple[str, ...] = ()
+    #: Stop price as a decimal string, for STOP orders only. Durable so that an
+    #: undispatched protective intent can be rebuilt exactly on recovery.
+    stop_price: str | None = None
+
+    @property
+    def dispatch_attempted(self) -> bool:
+        """Whether the broker call was ever made."""
+        return self.dispatch is not DispatchState.INTENT_RECORDED
+
+    @property
+    def broker_confirmed(self) -> bool:
+        """Whether the broker has positively evidenced this order's existence."""
+        return self.dispatch in (
+            DispatchState.ACKNOWLEDGED,
+            DispatchState.FILLED,
+            DispatchState.CANCELLED,
+        )
+
+    @property
+    def dispatch_outcome_unknown(self) -> bool:
+        """Dispatch was attempted but the broker never confirmed anything.
+
+        The ambiguous case. Never resend from here -- the order may be live.
+        """
+        return self.dispatch is DispatchState.DISPATCH_ATTEMPTED
+
+    @property
+    def is_working(self) -> bool:
+        """Whether the broker may still act on this order.
+
+        Requires broker acknowledgement. A merely-attempted dispatch is not
+        counted as working, because we do not know that it is.
+        """
+        return self.dispatch is DispatchState.ACKNOWLEDGED and self.filled_quantity < self.quantity
 
     @property
     def is_open(self) -> bool:
-        """Whether the broker may still act on this order."""
-        return self.submitted and not self.cancelled and self.filled_quantity < self.quantity
+        """Alias kept for reconciliation readability."""
+        return self.is_working
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,8 +178,12 @@ class TradeRecord:
 
     @property
     def entry_count(self) -> int:
-        """How many entry orders have been submitted. Must never exceed 1."""
-        return sum(1 for o in self.orders.values() if o.role is OrderRole.ENTRY and o.submitted)
+        """How many entry orders exist at all. Must never exceed 1.
+
+        Counts an order from the moment its intent is recorded, not from
+        dispatch: a recorded intent already forbids creating another.
+        """
+        return sum(1 for o in self.orders.values() if o.role is OrderRole.ENTRY)
 
     @property
     def open_long_quantity(self) -> int:
@@ -144,18 +211,28 @@ class TradeRecord:
 
     @property
     def has_working_protection(self) -> bool:
-        """Whether protection is believed live: submitted, unfilled, not confirmed cancelled."""
+        """Whether protection is broker-confirmed working."""
         protective = self.order_for_role(OrderRole.PROTECTIVE)
-        return bool(protective and protective.is_open)
+        return bool(protective and protective.is_working)
+
+    def undispatched_orders(self) -> list[SubmittedOrder]:
+        """Orders whose intent was recorded but whose broker call never happened."""
+        return [o for o in self.orders.values() if o.dispatch is DispatchState.INTENT_RECORDED]
+
+    def ambiguous_orders(self) -> list[SubmittedOrder]:
+        """Orders dispatched to the broker with no acknowledgement either way."""
+        return [o for o in self.orders.values() if o.dispatch_outcome_unknown]
 
     def describe(self) -> str:
         """Log-safe summary. No account identifier, no secret."""
+        dispatches = ",".join(f"{o.role.value}:{o.dispatch.value}" for o in self.orders.values())
         return (
             f"intent={self.trade_intent_id} execution={self.execution_id} "
             f"state={self.state.value} symbol={self.symbol} "
             f"requested={self.requested_quantity} filled={self.filled_quantity} "
             f"protected={self.protected_quantity} entries={self.entry_count} "
-            f"long={self.open_long_quantity} arm_consumed={self.arm_consumed}"
+            f"long={self.open_long_quantity} arm_consumed={self.arm_consumed} "
+            f"dispatch=[{dispatches}]"
         )
 
 
@@ -189,6 +266,7 @@ def _serialise(record: TradeRecord) -> dict[str, Any]:
         cid: {
             **asdict(order),
             "role": order.role.value,
+            "dispatch": order.dispatch.value,
             "applied_fill_ids": list(order.applied_fill_ids),
         }
         for cid, order in record.orders.items()
@@ -205,13 +283,12 @@ def _deserialise(payload: dict[str, Any]) -> TradeRecord:
                 symbol=raw["symbol"],
                 side=raw["side"],
                 quantity=int(raw["quantity"]),
-                submitted=bool(raw["submitted"]),
-                acknowledged=bool(raw["acknowledged"]),
+                dispatch=DispatchState(raw["dispatch"]),
                 cancel_requested=bool(raw.get("cancel_requested", False)),
-                cancelled=bool(raw["cancelled"]),
                 filled_quantity=int(raw["filled_quantity"]),
                 broker_order_id=raw.get("broker_order_id"),
                 applied_fill_ids=tuple(raw.get("applied_fill_ids", ())),
+                stop_price=raw.get("stop_price"),
             )
             for cid, raw in payload["orders"].items()
         }
@@ -284,7 +361,7 @@ class JsonTradeStateStore:
         return record
 
     def put(self, record: TradeRecord) -> None:
-        """Persist atomically: write a temp file, then replace.
+        """Persist atomically: write a temp file, fsync, then replace.
 
         A crash part-way through leaves the previous good file untouched.
         """
@@ -317,6 +394,24 @@ class JsonTradeStateStore:
         return list(self._load().values())
 
 
+def _recompute(record: TradeRecord) -> TradeRecord:
+    """Recompute derived totals from the orders that actually exist.
+
+    ``protected_quantity`` counts a protective order only when the broker has
+    acknowledged it and it is still working. An intent that was recorded but
+    never dispatched, or dispatched with no acknowledgement, is **not** counted
+    -- claiming protection we cannot evidence is how an unprotected position
+    comes to look healthy.
+    """
+    entry = record.order_for_role(OrderRole.ENTRY)
+    protective = record.order_for_role(OrderRole.PROTECTIVE)
+    return replace(
+        record,
+        filled_quantity=entry.filled_quantity if entry else 0,
+        protected_quantity=protective.quantity if protective and protective.is_working else 0,
+    )
+
+
 def record_order_intent(
     record: TradeRecord,
     *,
@@ -325,13 +420,17 @@ def record_order_intent(
     symbol: str,
     side: str,
     quantity: int,
+    stop_price: str | None = None,
 ) -> TradeRecord:
-    """Return ``record`` with a write-ahead entry for an order about to be sent.
+    """Write-ahead-record an order that is about to be sent.
+
+    The order starts at :attr:`DispatchState.INTENT_RECORDED`: durable, but not
+    yet handed to the broker.
 
     Raises:
         StateStoreError: if this ``client_order_id`` is already recorded, or if a
             second ENTRY is attempted. Both mean the caller is about to duplicate
-            an order it has already sent.
+            an order it has already recorded.
     """
     if client_order_id in record.orders:
         raise StateStoreError(
@@ -340,7 +439,7 @@ def record_order_intent(
         )
     if role is OrderRole.ENTRY and record.entry_count >= 1:
         raise StateStoreError(
-            f"Execution {record.execution_id} already has {record.entry_count} submitted entry "
+            f"Execution {record.execution_id} already has {record.entry_count} entry "
             "order(s). A second entry is a duplicate, not an addition."
         )
     orders = dict(record.orders)
@@ -350,9 +449,88 @@ def record_order_intent(
         symbol=symbol,
         side=side,
         quantity=quantity,
-        submitted=True,
+        dispatch=DispatchState.INTENT_RECORDED,
+        stop_price=stop_price,
     )
-    return replace(record, orders=orders)
+    return _recompute(replace(record, orders=orders))
+
+
+def _advance_dispatch(
+    record: TradeRecord,
+    client_order_id: str,
+    target: DispatchState,
+    *,
+    broker_order_id: str | None = None,
+) -> TradeRecord:
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot move unknown order {client_order_id} to {target.value}.")
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(
+        order,
+        dispatch=target,
+        broker_order_id=broker_order_id or order.broker_order_id,
+    )
+    return _recompute(replace(record, orders=orders))
+
+
+def mark_dispatch_attempted(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that the broker call has now been attempted.
+
+    Persisted immediately after the call is made. From here the outcome is
+    unknown until the broker says otherwise, and the order must never be resent
+    on that basis alone.
+    """
+    return _advance_dispatch(record, client_order_id, DispatchState.DISPATCH_ATTEMPTED)
+
+
+def mark_acknowledged(
+    record: TradeRecord,
+    client_order_id: str,
+    *,
+    broker_order_id: str | None = None,
+) -> TradeRecord:
+    """Record positive broker evidence that the order is working."""
+    return _advance_dispatch(
+        record, client_order_id, DispatchState.ACKNOWLEDGED, broker_order_id=broker_order_id
+    )
+
+
+def mark_rejected(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that the broker rejected the order (LEAN ``OrderStatus.INVALID``)."""
+    return _advance_dispatch(record, client_order_id, DispatchState.REJECTED)
+
+
+def request_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that a cancellation was REQUESTED. The order is still working.
+
+    Deliberately does NOT mark the order cancelled. LEAN reports ``CANCEL_PENDING``
+    before ``CANCELED``; treating the request as the outcome would let the exit
+    proceed while a live stop could still fire -- the exact path to an accidental
+    short.
+    """
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot request cancellation of unknown order {client_order_id}.")
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(order, cancel_requested=True)
+    return _recompute(replace(record, orders=orders))
+
+
+def confirm_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
+    """Record that the broker CONFIRMED a cancellation (``OrderStatus.CANCELED``).
+
+    Only this makes the order inert, drops ``protected_quantity`` to zero, and
+    makes the closing order eligible.
+    """
+    order = record.orders.get(client_order_id)
+    if order is None:
+        raise StateStoreError(f"Cannot confirm cancellation of unknown order {client_order_id}.")
+    orders = dict(record.orders)
+    orders[client_order_id] = replace(
+        order, dispatch=DispatchState.CANCELLED, cancel_requested=True
+    )
+    return _recompute(replace(record, orders=orders))
 
 
 def apply_fill(
@@ -393,50 +571,11 @@ def apply_fill(
         order,
         filled_quantity=new_filled,
         applied_fill_ids=(*order.applied_fill_ids, fill_id),
-        acknowledged=True,
+        # A fill is itself broker evidence that the order existed and was working.
+        dispatch=(
+            DispatchState.FILLED if new_filled >= order.quantity else DispatchState.ACKNOWLEDGED
+        ),
     )
-    return _recompute(replace(record, orders=orders))
-
-
-def _recompute(record: TradeRecord) -> TradeRecord:
-    """Recompute derived totals from the orders that actually exist."""
-    entry = record.order_for_role(OrderRole.ENTRY)
-    protective = record.order_for_role(OrderRole.PROTECTIVE)
-    return replace(
-        record,
-        filled_quantity=entry.filled_quantity if entry else 0,
-        # Protection counts only while the broker could still act on it: not
-        # confirmed cancelled, and not already filled.
-        protected_quantity=protective.quantity if protective and protective.is_open else 0,
-    )
-
-
-def request_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
-    """Record that a cancellation was REQUESTED. The order is still working.
-
-    Deliberately does NOT mark the order cancelled. A request is not a
-    confirmation, and treating it as one would let the exit proceed while a live
-    stop could still fire -- the exact path to an accidental short.
-    """
-    order = record.orders.get(client_order_id)
-    if order is None:
-        raise StateStoreError(f"Cannot request cancellation of unknown order {client_order_id}.")
-    orders = dict(record.orders)
-    orders[client_order_id] = replace(order, cancel_requested=True)
-    return _recompute(replace(record, orders=orders))
-
-
-def confirm_cancel(record: TradeRecord, client_order_id: str) -> TradeRecord:
-    """Record that the broker CONFIRMED a cancellation.
-
-    Only this makes the order inert, drops ``protected_quantity`` to zero, and
-    makes the closing order eligible.
-    """
-    order = record.orders.get(client_order_id)
-    if order is None:
-        raise StateStoreError(f"Cannot confirm cancellation of unknown order {client_order_id}.")
-    orders = dict(record.orders)
-    orders[client_order_id] = replace(order, cancelled=True, cancel_requested=True)
     return _recompute(replace(record, orders=orders))
 
 
@@ -447,6 +586,8 @@ def usd(amount: Decimal | int | str) -> Decimal:
 
 __all__ = [
     "STATE_SCHEMA_VERSION",
+    "TERMINAL_DISPATCH",
+    "DispatchState",
     "JsonTradeStateStore",
     "StateCorruptError",
     "StateMissingError",
@@ -456,6 +597,9 @@ __all__ = [
     "TradeStateStore",
     "apply_fill",
     "confirm_cancel",
+    "mark_acknowledged",
+    "mark_dispatch_attempted",
+    "mark_rejected",
     "record_order_intent",
     "request_cancel",
     "usd",

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -238,25 +239,49 @@ class ArmReceipt:
 
 
 def write_arm_receipt(receipt: ArmReceipt, paths: tuple[Path, ...]) -> None:
-    """Persist the receipt to every location, failing if none can be written.
+    """Persist the receipt to EVERY location, fsync it, and read all of them back.
+
+    Redundancy that tolerates a partial write is not redundancy. So all
+    configured locations must be written, flushed to disk, and read back
+    identical before the arm counts as consumed. If any one of them fails, the
+    arm is refused -- an arm whose consumption cannot be proven everywhere could
+    be replayed after a restart.
 
     Raises:
-        ArmReceiptError: if no location could be written. An arm we cannot record
-            is an arm we cannot prove was consumed, so it must not proceed.
+        ArmReceiptError: if any location cannot be written, or if any readback
+            disagrees with what was written.
     """
-    written = 0
+    if not paths:
+        raise ArmReceiptError("No arm receipt locations configured; refusing to arm.")
+
+    payload = receipt.to_json()
     for path in paths:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(receipt.to_json(), encoding="utf-8")
-            written += 1
-        except OSError:
-            continue
-    if written == 0:
-        raise ArmReceiptError(
-            "Could not write the arm receipt to any location. Refusing to arm: an arm whose "
-            "consumption cannot be recorded could be replayed after a restart."
-        )
+            with path.open("w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            raise ArmReceiptError(
+                f"Could not write the arm receipt to {path}: {exc}. Refusing to arm: the "
+                "two-location receipt is only redundant if BOTH locations are written."
+            ) from exc
+
+    # Read every location back and require exact agreement.
+    for path in paths:
+        try:
+            readback = ArmReceipt.from_json(path.read_text(encoding="utf-8"))
+        except (OSError, ArmReceiptError) as exc:
+            raise ArmReceiptError(
+                f"Arm receipt at {path} could not be read back after writing: {exc}. "
+                "Refusing to arm."
+            ) from exc
+        if readback != receipt:
+            raise ArmReceiptError(
+                f"Arm receipt at {path} does not match what was written. Refusing to arm on "
+                "receipts that disagree with themselves."
+            )
 
 
 def read_arm_receipts(paths: tuple[Path, ...]) -> list[ArmReceipt]:
@@ -289,10 +314,13 @@ def assert_arm_available(
 
     fingerprints = {r.account_fingerprint for r in receipts}
     intents = {r.trade_intent_id for r in receipts}
-    if len(fingerprints) > 1 or len(intents) > 1:
+    consumed_flags = {r.consumed for r in receipts}
+    if len(fingerprints) > 1 or len(intents) > 1 or len(consumed_flags) > 1:
         raise ArmReceiptError(
-            "Arm receipts disagree with each other. Contradictory arm evidence; failing "
-            "closed rather than choosing one."
+            "Arm receipts disagree with each other (fingerprint, intent or consumed flag). "
+            "Contradictory arm evidence; failing closed rather than choosing one. In "
+            "particular, one receipt saying the arm was consumed and another saying it was "
+            "not is exactly the ambiguity that could permit a replay."
         )
 
     if any(r.consumed for r in receipts) and not trade_state_present:

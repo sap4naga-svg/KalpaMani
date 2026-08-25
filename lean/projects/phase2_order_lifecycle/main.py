@@ -143,8 +143,15 @@ class Phase2OrderLifecycle(QCAlgorithm):
             )
         return BrokerView(positions=positions, open_orders=tuple(open_orders))
 
-    def _submit(self, pending: PendingOrder) -> None:
-        """Perform the LEAN call for an order the coordinator already recorded."""
+    def _dispatch(self, pending: PendingOrder):
+        """Perform the LEAN call, then durably record that it was ATTEMPTED.
+
+        The window between the broker call and this confirmation write is the
+        only one that can lose information, so it is kept as narrow as possible.
+        Crashing before the call leaves INTENT_RECORDED -- we know nothing was
+        sent. Crashing after leaves DISPATCH_ATTEMPTED -- ambiguous, so recovery
+        reconciles instead of resending.
+        """
         request = pending.request
         self.log(f"[{request.role.value}-SUBMIT] {request.describe()}")
         if request.stop_price is None:
@@ -156,6 +163,9 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 float(request.stop_price),
                 tag=request.client_order_id,
             )
+        record = self._coordinator.confirm_dispatch(pending.record, request.client_order_id)
+        self.log(f"[{request.role.value}-DISPATCHED] {request.client_order_id} attempt recorded")
+        return record
 
     # -- Main cycle ---------------------------------------------------------
 
@@ -181,6 +191,17 @@ class Phase2OrderLifecycle(QCAlgorithm):
                     f"{self._entries_submitted_this_session}"
                 )
                 self.log("[IDEMPOTENCY-PASS] recovery adopts existing state; no entry replay")
+
+                plan = self._coordinator.assess_recovery(record, broker)
+                record = plan.record
+                self.log(f"[RECOVERY] dispatch assessment: {plan.describe()}")
+                for pending in plan.redispatch:
+                    self.error(
+                        f"[RECOVERY] {pending.request.role.value} intent was never dispatched; "
+                        "the broker never received it, so re-dispatch is provably not a "
+                        "duplicate"
+                    )
+                    record = self._dispatch(pending)
 
             self._log_state(broker, record.state.value)
             self._coordinator.reconcile(record, broker)
@@ -256,7 +277,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
         self.log("=" * 78)
 
         pending = self._coordinator.begin_entry(record)
-        self._submit(pending)
+        self._dispatch(pending)
         self._entries_submitted_this_session += 1
 
     # -- Order events -------------------------------------------------------
@@ -271,7 +292,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
             if not is_valid_client_order_id(tag) or not self._coordinator.identity.owns(tag):
                 return  # not ours
 
-            status = str(order_event.status)
+            status = order_event.status
             self.log(f"[ENTRY-ACK] order={tag} status={status} qty={order_event.fill_quantity}")
 
             record = self._coordinator.load()
@@ -279,9 +300,33 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 self._abort(f"Order event for {tag} with no durable trade record.")
                 return
 
-            if "cancel" in status.lower():
-                self._coordinator.confirm_protection_cancel(record)
-                self.log(f"[EXIT-REQUEST] cancellation CONFIRMED by broker for {tag}")
+            # EXACT enum comparison. LEAN defines BOTH CANCEL_PENDING and
+            # CANCELED, so substring matching on the status name would treat a
+            # pending cancellation as a confirmed one -- and let the close
+            # proceed while the stop was still live.
+            if status == OrderStatus.CANCEL_PENDING:
+                self.log(f"[EXIT-REQUEST] {tag} CANCEL_PENDING -- NOT confirmation; still working")
+                return
+
+            if status == OrderStatus.CANCELED:
+                if tag == self._coordinator.identity.protective_order_id:
+                    self._coordinator.confirm_protection_cancel(record, tag)
+                    self.log(f"[EXIT-REQUEST] protective cancellation CONFIRMED for {tag}")
+                else:
+                    self.log(
+                        f"[RECONCILE] {tag} canceled; not the protective order, so protective "
+                        "state is untouched"
+                    )
+                return
+
+            if status == OrderStatus.INVALID:
+                # Raises UnprotectedPositionError when a long is exposed.
+                self._coordinator.on_order_rejected(record, tag)
+                self.error(f"[PHASE2-ABORT] broker REJECTED {tag} (OrderStatus.INVALID)")
+                return
+
+            if status == OrderStatus.SUBMITTED:
+                self._coordinator.acknowledge(record, tag)
                 return
 
             if int(order_event.fill_quantity) == 0:
@@ -309,7 +354,7 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 if protection is None:
                     self.log("[PROTECTION-SUBMIT] skipped: nothing filled, nothing to protect")
                 else:
-                    self._submit(protection)
+                    self._dispatch(protection)
             elif tag == self._coordinator.identity.protective_order_id:
                 self.log("[EXIT-FILL] protective stop filled; the long is closed by the stop")
         except Exception as exc:
@@ -331,14 +376,17 @@ class Phase2OrderLifecycle(QCAlgorithm):
                 self.log("[EXIT-REQUEST] exit requested")
 
             if broker.open_protective_quantity(identity) > 0:
-                record = self._coordinator.request_protection_cancel(record)
-                self._cancel(identity.protective_order_id)
-                self.log("[EXIT-REQUEST] cancel requested; awaiting broker CONFIRMATION")
+                record, should_cancel = self._coordinator.begin_protection_cancel(record)
+                if should_cancel:
+                    self._cancel(identity.protective_order_id)
+                    self.log("[EXIT-REQUEST] cancel requested ONCE; awaiting CANCELED event")
+                else:
+                    self.log("[EXIT-REQUEST] awaiting broker cancellation confirmation")
                 return
 
             if record.state is TradeState.EXIT_REQUESTED:
                 pending = self._coordinator.begin_exit(record, broker)
-                self._submit(pending)
+                self._dispatch(pending)
                 return
 
         if record.state is TradeState.CLOSED:
