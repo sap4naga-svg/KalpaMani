@@ -12,7 +12,8 @@ running.
 
 It reads `docs/phase3/` and `docs/decisions/ADR-0005-*.md`. It touches no runtime code, opens no
 network connection, and asserts nothing about data. Exit code 0 means the documents are
-mutually consistent on the properties below; non-zero lists what disagrees.
+consistent on the named properties below; non-zero lists what disagrees. It is a guard over
+those properties, not a proof that the design is correct.
 
 Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 """
@@ -109,7 +110,11 @@ RETIREMENT_MARKERS = (
     "never declare",
     "never the ambiguous",
     "no longer exists",
+    "no longer exist",
     "no longer carries",
+    "replaced",
+    "the scalar",
+    "withdrawn",
     "revision 1",
     "revision 2",
     "revision 3",
@@ -194,7 +199,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/6] Closed vocabularies are defined where they are used")
+    print("[1/8] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -218,7 +223,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/6] Source and derived envelopes stay disjoint")
+    print("\n[2/8] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -253,7 +258,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/6] Every declared temporal semantics has its required anchor")
+    print("\n[3/8] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -270,7 +275,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/6] Exact and bound derivations name the correct fields")
+    print("\n[4/8] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -296,8 +301,164 @@ def main() -> int:
         absent = sorted(v for v in vocab if v not in schema_tokens)
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
+    # ---------------------------------------------------------------- 4a. stale rules
+    print("\n[5/8] Normative rules use the current resolved model")
+
+    scalar_offenders: list[str] = []
+    for path, text in everything.items():
+        doc_lines = text.splitlines()
+        for lineno, line in lines_with(text, "profile_resolution"):
+            if "global_profile_resolution" in line:
+                continue
+            lo = max(0, lineno - 1 - MARKER_WINDOW)
+            hi = min(len(doc_lines), lineno + MARKER_WINDOW)
+            window = " ".join(doc_lines[lo:hi]).lower()
+            if any(m in window for m in RETIREMENT_MARKERS):
+                continue
+            scalar_offenders.append(f"{path.name}:{lineno}")
+    f.check(
+        "no normative text keeps the scalar profile_resolution fields",
+        not scalar_offenders,
+        ", ".join(scalar_offenders[:6]),
+    )
+
+    failclosed = contract[contract.find("## 10. Fail-closed") : contract.find("## 11.")]
+    f.check(
+        "contract fail-closed rules use the resolved times",
+        "resolved_provider_time" in failclosed and "resolved_public_time" in failclosed,
+        "resolved_* absent from section 10",
+    )
+    f.check(
+        "contract fail-closed rules allow a legitimate max() equality",
+        "not** refused" in failclosed or "is **not** refused" in failclosed,
+        "no carve-out for the equality case",
+    )
+    f.check(
+        "contract fail-closed rules make gap policy per dataset",
+        "per dataset" in failclosed,
+        "section 10 still reads as run-scoped",
+    )
+
+    for label, text in (("contract", contract), ("ADR-0005", everything[ADR])):
+        block = text[text.find("source_anchor(record)") :][:700]
+        f.check(
+            f"{label} source_anchor uses the resolved profile",
+            "RESOLVED profile" in block or "resolved profile" in block,
+            "still names the requested profile",
+        )
+
+    # ---------------------------------------------------------------- 4b. entity shapes
+    print("\n[6/8] Entities keep source and derived rows apart")
+
+    mixed: list[str] = []
+    for entity, head in entity_headings(schema):
+        body = entity_body(schema, entity)
+        head_is_source = any(o in head for o in SOURCE_ORIGINS) or "origin per row" in head
+        if head_is_source and "DERIVED_ARTIFACT" in body and "not a source fact" not in body:
+            # A source entity may reference the derived model in prose; a mapping table row
+            # assigning DERIVED_ARTIFACT as a row origin is the defect.
+            for _, line in lines_with(body, "DERIVED_ARTIFACT"):
+                if line.strip().startswith("|") and "`information_origin`" not in line:
+                    mixed.append(f"{entity}: {line.strip()[:60]}")
+                    break
+    f.check("no source entity maps a row to DERIVED_ARTIFACT", not mixed, "; ".join(mixed))
+
+    adj = entity_body(schema, "adjusted_bar_artifact")
+    required_derived = (
+        "information_origin",
+        "output_validity",
+        "valid_time_start",
+        "valid_time_end",
+        "lineage",
+        "artifact_first_built_time",
+        "derivation_spec_version",
+        "artifact_content_hash",
+    )
+    absent = [fld for fld in required_derived if f"`{fld}`" not in adj]
+    f.check(
+        "adjusted_bar_artifact carries a complete derived envelope",
+        not absent,
+        ", ".join(absent),
+    )
+    dupes = [n for n in ("built_at", "content_hash") if f"| `{n}` |" in adj]
+    f.check(
+        "adjusted_bar_artifact has one normative name per field",
+        not dupes,
+        f"duplicate name(s): {', '.join(dupes)}",
+    )
+
+    m_schema = re.search(r"## 7a\. `adjusted_bar_artifact` — `([A-Z_]+)`", schema)
+    m_manifest = re.search(
+        r"entity: adjusted_bar_artifact\s*\n\s*output_validity: ([A-Z_]+)", manifest
+    )
+    f.check(
+        "adjusted artifact output_validity agrees between schema and manifest",
+        bool(m_schema and m_manifest and m_schema.group(1) == m_manifest.group(1)),
+        f"schema={m_schema.group(1) if m_schema else '?'} "
+        f"manifest={m_manifest.group(1) if m_manifest else '?'}",
+    )
+
+    unusable: list[str] = []
+    for entity, head in entity_headings(schema):
+        body = entity_body(schema, entity)
+        if "ANNOUNCED_FORWARD" not in head and "ANNOUNCED_FORWARD" not in body:
+            continue
+        if "`announcement_time` | instant |" in body:
+            continue  # non-nullable exact anchor
+        if "`announcement_time` | instant? |" in body:
+            has_bound = "announcement_time_upper_bound" in body
+            # markdown emphasis means the phrase may read "**required** for"
+            has_required = "required" in body and " for `" in body
+            if not (has_bound or has_required):
+                unusable.append(entity)
+    f.check(
+        "every announced-forward anchor is usable, not merely nullable",
+        not unusable,
+        ", ".join(unusable),
+    )
+
+    # ---------------------------------------------------------------- 4c. manifest shape
+    print("\n[7/8] Manifest records per-axis timing and coverage evidence")
+    per_axis = (
+        "public_exact_rows",
+        "public_bounded_rows",
+        "provider_exact_rows",
+        "provider_bounded_rows",
+    )
+    absent_axis = [k for k in per_axis if k not in manifest]
+    f.check(
+        "manifest counts exact and bounded rows per timing axis",
+        not absent_axis,
+        ", ".join(absent_axis),
+    )
+    coverage_fields = (
+        "coverage_scope",
+        "min_coverage_fraction",
+        "observed_coverage",
+        "failing_partitions",
+    )
+    absent_cov = [k for k in coverage_fields if k not in manifest]
+    f.check(
+        "manifest records required-input coverage evidence",
+        not absent_cov,
+        ", ".join(absent_cov),
+    )
+    runid_block = manifest[manifest.find("`run_id` is **derived") :][:2400]
+    runid_inputs = ("artifact_id", "artifact_content_hash", "derivation_spec_version", "lineage")
+    absent_runid = [k for k in runid_inputs if k not in runid_block]
+    f.check(
+        "run_id derivation names the derived-artifact inputs",
+        not absent_runid,
+        ", ".join(absent_runid),
+    )
+    f.check(
+        "run_id includes artifact_first_built_time under FORWARD_SYSTEM",
+        "artifact_first_built_time" in runid_block and "FORWARD_SYSTEM" in runid_block,
+        "first-built history absent from run_id inputs",
+    )
+
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[5/6] No document refers to a retired field name")
+    print("\n[8/8] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -316,7 +477,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 6. manifest
-    print("\n[6/6] Manifest rules match the current field names")
+    print("\nManifest field-name conformance")
     required_manifest_keys = (
         "requested_profile",
         "resolved_profile",
@@ -353,8 +514,9 @@ def main() -> int:
         for name in f.failures:
             print(f"  - {name}")
         return 1
-    print("AUDIT PASSED. The Phase-3 planning documents are mutually consistent.")
-    print("This says nothing about the data, because there is no data.")
+    print("AUDIT PASSED. All audited consistency properties passed.")
+    print("This is a guard over the named properties above, not a proof of the design,")
+    print("and it says nothing about the data, because there is no data.")
     return 0
 
 
