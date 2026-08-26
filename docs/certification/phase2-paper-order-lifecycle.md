@@ -99,8 +99,16 @@ claims and stops when it cannot.
 
 **[INC-0002](../incidents/INC-0002-account-binding-digest-exposure.md) — OPEN.**
 Orphaned pre-sanitization Git objects still carry an account-binding digest and
-remain retrievable by SHA. The repository stays **PRIVATE** (CLAUDE.md §3) until
-GitHub confirms the purge and `scripts/verify_purge.py` reports every object
-gone.
+remain retrievable by SHA.
+
+**The repository was PRIVATE at the time of this certification.** Current
+development visibility is governed by [CLAUDE.md §3](../../CLAUDE.md) and is not
+restated here, so that policy and this record cannot drift apart again.
+
+The residual historical exposure is **accepted, not remediated**: the purge has
+not been performed, and INC-0002 stays **OPEN** until every object is gone and
+`scripts/verify_purge.py` exits 0. The repository **must return to PRIVATE**
+before micro-live operation, real-money trading, or production broker
+credentials or configuration existing anywhere in the workflow.
 
 Live trading remains **hard-disabled**. Phase 3 is not authorized.
