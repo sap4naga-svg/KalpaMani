@@ -1,7 +1,7 @@
 # ADR-0005 — Point-in-Time Data Architecture and the Anti-Lookahead Contract
 
 - **Status:** **Proposed** — planning under review. Not accepted, not implemented.
-- **Date:** 2026-08-26 (revision 6)
+- **Date:** 2026-08-26 (revision 7)
 - **Deciders:** Project owner (human governance) — *pending*
 - **Relates to:** ADR-0001 (System Foundation), ADR-0002 (BrokerAdapter and the Brokerage Boundary), ADR-0004 (Deterministic Order Identity, Idempotency, and Execution Lifecycle)
 - **Authority:** Blueprint V2.1 §18 (Phase-0 point-in-time data feasibility), §17, §19, §26
@@ -18,6 +18,7 @@
 | **3** | **2026-08-26** | Review of revision 2. Three contract inconsistencies fixed: availability is now **origin-aware**, so a proprietary observation with no public release instant is usable where it legitimately can be (§1a, §2a); the `DECLARE` resolution for unknown provider timing is **withdrawn** as self-contradictory and replaced by EXCLUDE / BOUND / DOWNGRADE (§4); and the revision-view table's "default" is reworded to **normative historical view**, since the accessor has no default (§6). |
 | **4** | **2026-08-26** | Review of revision 3. The **atomic-fact rule** is added (§0); a **derived-artifact model** replaces the unrepresentable "inherited" origin (§1b); a single origin-aware **`source_anchor`** replaces the public-time-only class invariants (§7); exact provider/public times are separated from **conservative upper bounds** (§4a); the manifest records **requested versus resolved profile** (§18a); and **required-input completeness** is enforced rather than merely reported (§19a). Four schemas that mixed facts are split. |
 | **5** | **2026-08-26** | Normalization round. The two envelopes are made **mutually exclusive** (§1c); **`resolved_public_time` / `resolved_provider_time`** let an approved bound satisfy a profile requirement without being mistaken for an exact time (§4b); **approximations move out of exact fields** into named bound fields (§4c); every computation after resolution uses **`resolved_profile`** (§18a); gap resolution becomes **per dataset** (§4); derived artifacts declare **`output_validity`** (§1d); required inputs gain a **coverage contract** (§19a); six schemas corrected. |
+| **7** | **2026-08-26** | Blocking-semantics fixes. `UNKNOWN` exact timing no longer disqualifies a row with an approved bound — unusability is `resolved_* IS NULL` (§4b). A **resolved fact-time anchor** joins the availability anchor, so a date-only announcement is checked rather than skipped (§7). Coverage evidence becomes partition-minimum based (§19a). The context's data-gap summary is corrected: the two blocking domains are blocked for **different reasons**. |
 | **6** | **2026-08-26** | Stale-rule cleanup. The **normative** decisions themselves still carried pre-revision-5 wording: the atomic rule demanded a `temporal_fact_class` of every row including derived ones (§0); the profile formulas were exact-only (§2); the anchor read the requested profile (§7); the manifest decision named the withdrawn scalar `profile_resolution` fields (§18a); and the lag decision said a lag applies to `public_available_time` (§5). Corrected. `price_bar` splits so no derived row sits inside a `RETROSPECTIVE` entity, and derived-artifact identity enters `run_id` (§18). |
 
 ---
@@ -36,9 +37,17 @@ been built on.
 
 Blueprint §18 names the two hardest cases in advance — *"point-in-time analyst revisions and
 realistic historical short borrow conditions — not ordinary OHLCV"* — and instructs: **"Do not
-skip."** Provider research (2026-08-26) confirms both, and finds neither obtainable at
-individual cost. That finding, not the storage design, is what this ADR principally exists to
-record.
+skip."** Provider research (2026-08-26) confirms both are blocking, **and that they are blocked
+for different reasons**:
+
+| Domain | Status |
+|---|---|
+| point-in-time **analyst-revision history** | **No credible individual-cost source identified.** The genuine sources are institutional and quoted by sales; retail endpoints return current consensus. |
+| historical **borrow** | **Not yet QUALIFIED** — which is not the same as unavailable. Low-cost and free candidates exist, including a programmatic path through the broker interface this system already reaches. Depth, bulk access, revision behaviour, delisted coverage and licensing are all **unresolved**. Short backtests remain **forbidden until qualification passes**. |
+
+Conflating those two would misstate the work: one needs money or a gap declared, the other needs
+a qualification exercise that costs nothing to start. That distinction, not the storage design,
+is what this ADR principally exists to record.
 
 Two constraints from earlier ADRs carry directly into this one:
 
@@ -317,6 +326,12 @@ without blurring anything — the helper returns a value, the fields keep their 
 "Approved" is governed: a bound qualifies only when its derivation is in the dataset's approved
 list, so an arbitrary approximation cannot silently satisfy a profile.
 
+**An `UNKNOWN` exact derivation does not disqualify a row that has an approved bound.**
+Unusability is `resolved_public_time IS NULL` — no exact time *and* no approved bound — not
+`public_time_derivation = UNKNOWN`. Revision 6 blocked on the derivation, which made `BOUND`
+unusable for exactly the rows it exists to serve. The same holds on the provider axis. The exact
+field and the bound field remain distinct throughout.
+
 **Requirements per origin**, using resolved values:
 
 | Origin | `PUBLIC_PIT` | `PROVIDER_REALISTIC_PIT` | `FORWARD_SYSTEM` |
@@ -425,8 +440,24 @@ source_anchor(record) =
 | `SAMPLED_STATE` | `source_anchor >= sample_time` | borrow, classification, shares outstanding |
 
 **`source_anchor` is used consistently** for these class invariants, revision ordering, latency,
-backfill detection and every impossibility check. There is one anchor and every temporal rule
-reads it.
+backfill detection and every impossibility check. There is one availability anchor and every
+temporal rule reads it.
+
+**A second, resolved anchor supplies the other half of each invariant.** `source_anchor` says
+when a fact could be known; the class invariants also need when it *happened*, and revision 6
+read raw fields for that — so a date-only announcement had a null `announcement_time` and its
+invariant silently did not run.
+
+```
+announced_forward_fact_anchor = announcement_time
+                                else announcement_time_upper_bound, if APPROVED
+                                else NULL   -> BLOCKING
+```
+
+Exact accepted and checked · date-only with an approved bound accepted and checked · neither
+**BLOCKING** · unapproved bound **BLOCKING**. Domain aliases — `publication_time`,
+`revision_time`, `bar_end_time`, `snapshot_time` — are declared in a table
+([contract §7.4](../phase3/pit-data-contract.md)), not implied by prose.
 
 Every entity declares a class; there is no default. Knowing a split is coming and applying its
 adjustment are two different operations, and **only the second is look-ahead**.
@@ -673,9 +704,12 @@ provider-time resolution empties a domain a factor **requires**, the honest outc
 smaller factor — it is no factor.
 
 Every query, factor and artifact declares each input **REQUIRED** or **OPTIONAL**, and each
-required input declares a **coverage contract**: a `coverage_scope` of `WHOLE_DOMAIN`,
-`PER_SESSION`, `PER_SECURITY` or `PER_SECURITY_SESSION`, and a `min_coverage_fraction` within
-it. **"Not completely empty" is not "sufficient"** — a required domain retaining 10% of its rows
+required input declares a **coverage contract**. `PER_SESSION`, `PER_SECURITY` and
+`PER_SECURITY_SESSION` take a `min_coverage_fraction` and are satisfied only when
+**`failing_partitions == 0`** and the *partition minimum* clears the threshold — never an
+aggregate, because averaging is how a failing partition disappears. `WHOLE_DOMAIN` takes a
+row-count contract (`min_rows` / `observed_rows`), since the whole domain has no natural
+denominator. **"Not completely empty" is not "sufficient"** — a required domain retaining 10% of its rows
 fails its contract even though it is not empty, and a `PER_SECURITY` input is unsatisfied when
 any single universe member lacks coverage. Scope and threshold are part of
 `factor_definition_version`; changing either changes the factor.

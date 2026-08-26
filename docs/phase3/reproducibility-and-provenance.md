@@ -2,6 +2,10 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 7 (2026-08-26).** The required-input example was **not a passing manifest** — it
+> reported 34 failing partitions against a contract that refuses on one. Coverage evidence is now
+> per-scope, partition-minimum based, and the example genuinely passes.
+>
 > **Revision 6 (2026-08-26).** `manifest_version: 4`. Exact/bounded counts become **per timing
 > axis**, since a dataset can have bounded public timing and exact provider timing at once;
 > every REQUIRED input records the **coverage evidence** that proves its contract passed; and
@@ -122,27 +126,30 @@ information_set:                        # mandatory
       rows: 0
 
 inputs:                                 # required vs optional -- see section 3a
-  required:                             # coverage EVIDENCE, not just a name list
+  required:                             # coverage EVIDENCE, not just a name list.
+                                        # PER_* scopes report the PARTITION MINIMUM, never a mean.
     - domain: price_bar
       coverage_scope: PER_SESSION
       min_coverage_fraction: 0.99
-      observed_coverage: 0.9997
+      minimum_observed_partition_coverage: 0.9948
+      total_partitions: 2_891           # sessions in range
       failing_partitions: 0
     - domain: universe_membership
       coverage_scope: PER_SESSION
       min_coverage_fraction: 1.00
-      observed_coverage: 1.00
+      minimum_observed_partition_coverage: 1.00
+      total_partitions: 2_891
       failing_partitions: 0
     - domain: fundamental_fact
       coverage_scope: PER_SECURITY
       min_coverage_fraction: 0.95
-      observed_coverage: 0.9712
-      failing_partitions: 34        # securities below threshold, of 1,183
-    - domain: filing
-      coverage_scope: WHOLE_DOMAIN
-      min_coverage_fraction: 1.00
-      observed_coverage: 1.00
+      minimum_observed_partition_coverage: 0.9583
+      total_partitions: 1_183           # securities in the universe
       failing_partitions: 0
+    - domain: filing
+      coverage_scope: WHOLE_DOMAIN      # row-count contract, not a fraction
+      min_rows: 40_000
+      observed_rows: 48_112
   optional: [classification_history]
   optional_excluded:
     - domain: classification_history
@@ -307,15 +314,22 @@ Every factor, query and artifact definition declares each input domain **REQUIRE
 **OPTIONAL**. For every REQUIRED input the manifest records **the evidence that its contract
 passed**, not merely its name:
 
-| Field | |
-|---|---|
-| `coverage_scope` | `WHOLE_DOMAIN` · `PER_SESSION` · `PER_SECURITY` · `PER_SECURITY_SESSION` |
-| `min_coverage_fraction` | the contract threshold, part of `factor_definition_version` |
-| `observed_coverage` | what the run actually achieved |
-| `failing_partitions` | count of sessions / securities / cells below threshold |
+| Scope | Fields recorded | Passes when |
+|---|---|---|
+| `PER_SESSION` · `PER_SECURITY` · `PER_SECURITY_SESSION` | `min_coverage_fraction`, `minimum_observed_partition_coverage`, `total_partitions`, `failing_partitions` | **`failing_partitions == 0`** and `minimum_observed_partition_coverage >= min_coverage_fraction` |
+| `WHOLE_DOMAIN` | `min_rows`, `observed_rows` | `observed_rows >= min_rows` |
 
-A reader must be able to see **why** the contract passed. `required: [names]` alone says a
-domain was declared required and nothing about whether it was adequately populated, which is the
+> **An emitted successful manifest has `failing_partitions == 0`.** Revision 6's example reported
+> 34 failing securities alongside a 0.95 `PER_SECURITY` contract and presented it as a pass —
+> under the contract as written, that run refuses. The example now genuinely passes, and it
+> reports the **partition minimum** rather than an aggregate, because a mean is precisely how a
+> failing partition disappears.
+
+`WHOLE_DOMAIN` takes a row-count contract rather than a fraction: there is no natural denominator
+for "the whole domain", and inventing one makes the threshold uninterpretable.
+
+A reader must be able to see **why** the contract passed. `required: [names]` alone says a domain
+was declared required and nothing about whether it was adequately populated, which is the
 question the coverage contract exists to answer.
 
 | | On a domain being emptied by origin filtering or provider-time resolution |
@@ -360,8 +374,13 @@ A manifest is refused — and the result is therefore inadmissible — when:
    **per-axis** counts fail to reconcile: for each applicable axis,
    `exact_rows + bounded_rows + excluded_rows == rows_considered`. The axes reconcile
    **independently** — a dataset may be bounded on one and exact on the other.
-8h. A REQUIRED input recorded without `coverage_scope`, `min_coverage_fraction`,
-   `observed_coverage` and `failing_partitions`.
+8h. A REQUIRED input recorded without the evidence its scope requires: a `PER_*` input without
+   `min_coverage_fraction`, `minimum_observed_partition_coverage`, `total_partitions` and
+   `failing_partitions`; a `WHOLE_DOMAIN` input without `min_rows` and `observed_rows`.
+8j. A `PER_*` REQUIRED input with `failing_partitions > 0`, or with
+   `minimum_observed_partition_coverage < min_coverage_fraction`; or a `WHOLE_DOMAIN` REQUIRED
+   input with `observed_rows < min_rows`. **The run refuses; it does not emit a manifest saying
+   the contract passed.**
 8i. A consumed derived artifact absent from `derived_artifacts`, or absent from the `run_id`
    inputs.
 8g. A bound was relied upon whose derivation is not approved for its dataset, or an exact time
