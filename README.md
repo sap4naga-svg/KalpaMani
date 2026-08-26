@@ -74,8 +74,10 @@ JOURNAL + ATTRIBUTION + HEALTH
 | Control | State |
 |---|---|
 | Live trading | **HARD-DISABLED** (two independent gates; Gate 2 not implemented) |
-| Brokerage connectivity | IBKR **Paper** only, **read-only** — validated 2026-08-24 |
-| Order submission | **Impossible** — no order path exists |
+| Brokerage connectivity | IBKR **Paper** only — read-only connectivity validated 2026-08-24; bounded order lifecycle certified 2026-08-26 |
+| Order path | **Exists, and is bounded and certified** — IBKR Paper, SPY, long, exactly 1 share ([certification](docs/certification/phase2-paper-order-lifecycle.md)) |
+| Order submission | Requires an **explicit run-scoped human arm** that is consumed on use. **No arm is currently active**, so the system can reconcile but cannot order |
+| Strategy-generated orders | **None authorized.** No scanner, no signals, no strategy can reach the order path |
 | Default environment | `RESEARCH` (cannot reach a broker even in principle) |
 | Leverage | None |
 | Options | Not V1 |
@@ -153,9 +155,9 @@ KalpaMani/
 │   └── runbooks/             Operational procedures
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
-│   ├── broker/               BrokerAdapter abstraction                        [empty by design]
-│   ├── data/                 Market data + fundamentals ingestion             [empty by design]
-│   ├── execution/            Orders, fill protection, reconciliation          [empty by design]
+│   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
+│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3, planning in review]
+│   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
 │   ├── research/             AI Research + Challenger agents                  [empty by design]
