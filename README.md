@@ -3,11 +3,12 @@
 An autonomous long/short **U.S. equity swing & momentum trading system** with deterministic
 risk and selective, bounded AI research.
 
-> **Status: PHASE 1 COMPLETE AND ACCEPTED (2026-08-25).** Read-only
-> connectivity to the live IBKR Paper account is proven end to end: connected, account
-> confirmed PAPER, SPY subscribed, market data received, broker account state observed,
-> clean shutdown. **Zero orders, zero positions** — no order path exists. Live trading
-> remains hard-disabled. No strategy logic yet.
+> **Status: PHASE 2 COMPLETE AND ACCEPTED (2026-08-26).** The controlled IBKR **Paper**
+> order lifecycle is certified end to end: one `BUY 1 SPY`, actual fill, protective stop,
+> a genuine LEAN/Gateway restart, recovery by durable broker-native identity, controlled
+> exit, flat. **Execution plumbing, not a strategy** — no scanner, no signals, no alpha.
+> Live trading remains hard-disabled. Certified scope is narrow and stated in
+> [the certification record](docs/certification/phase2-paper-order-lifecycle.md).
 
 ---
 
@@ -224,7 +225,7 @@ never printed, logged, committed or pasted into an AI chat session.
 
 Nothing below exists yet, and none of it is authorized:
 
-- Order submission — paper or live
+- Live order submission (paper order submission is certified; see the narrow scope below)
 - Breakout, Pullback and PEAD strategy logic
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
@@ -235,24 +236,32 @@ Nothing below exists yet, and none of it is authorized:
 
 ---
 
+## Phase 2 — certified, and what that does and does not mean
+
+```
+IBKR PAPER only · SPY only · long only · exactly 1 share · FULL-FILL lifecycle
+```
+
+Certified: one ENTRY, actual `+1` fill, one protective stop sized from the actual fill,
+durable broker-native identity captured **before** a restart, a genuine LEAN and IB Gateway
+restart, ownership recovered by `BROKER_ID` with the LEAN tag absent, exactly one cancellation
+of the owned protective order, one `EXIT SELL 1`, a signed `-1` fill, and a flat final
+reconciliation. Zero duplicate orders at any point; no accidental short.
+
+Two runs are retained. **Run 1 FAILED** and is kept as negative evidence: it could not prove
+ownership of its own stop across a restart, so it halted and left the order alone —
+fail-closed, by design. **Run 2 RECONCILED.**
+
+**Not certified** — future requirements, not defects in a deliberately narrow certification:
+partial fills, multiple fill accumulation, a stop actually triggering, short lifecycle,
+multiple simultaneous positions, pyramiding, strategy generation, alpha or profitability,
+live brokerage execution, real-money operation.
+
 ## Next planned phase
 
-**PHASE 2 — ONE TINY PAPER ORDER** *(not started, requires explicit written approval)*
+**PHASE 3 — POINT-IN-TIME DATA FOUNDATION** *(not started, not authorized)*
 
-```
-one tiny PAPER order -> fill handling -> immediate protection -> reconciliation -> clean exit
-```
-
-Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme had to be defined
-**before** any automated order testing. That is now
-[ADR-0004 — Deterministic Order Identity, Idempotency, and Execution Lifecycle](docs/decisions/ADR-0004-deterministic-order-identity-idempotency-and-execution-lifecycle.md),
-accepted 2026-08-25.
-
-Phase 1 is complete and accepted. Acceptance evidence: LEAN launches · IBKR Paper connection
-confirmed · exactly one SPY subscription · market data received (05:15 ET pre-market, delayed
-IBKR data) · broker state observable · paper equity observed as USD 1,000,000 · KalpaMani
-capital remained USD 80,000 · no orders · no positions · clean shutdown · 98 tests passing ·
-ruff clean · mypy strict clean · preflight clean.
+Naming it does not approve it. Beginning any phase requires explicit written authorization.
 
 ---
 
