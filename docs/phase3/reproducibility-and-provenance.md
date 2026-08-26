@@ -2,6 +2,12 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 6 (2026-08-26).** `manifest_version: 4`. Exact/bounded counts become **per timing
+> axis**, since a dataset can have bounded public timing and exact provider timing at once;
+> every REQUIRED input records the **coverage evidence** that proves its contract passed; and
+> **derived-artifact identity enters `run_id`**, because dataset versions alone cannot reproduce
+> a `FORWARD_SYSTEM` result.
+>
 > **Revision 5 (2026-08-26).** `manifest_version: 3`. Provider-gap resolution becomes a
 > **canonical per-dataset map** rather than one scalar for the whole run; exact-versus-bound
 > bases and counts are reported per dataset; the whole map plus `resolution_policy_version`
@@ -47,7 +53,7 @@ Emitted for every backtest, factor study, scanner run and dataset build. Stored 
 result and immutable once written.
 
 ```yaml
-manifest_version: 3
+manifest_version: 4
 run_id: rs-3f9a2c81b04e7d16          # deterministic from the fields below
 
 code:
@@ -72,28 +78,41 @@ information_set:                        # mandatory
   dataset_provider_gap_resolutions:
     - dataset: fundamental_fact
       policy: BOUND                           # NONE | EXCLUDE | BOUND
+      rows_considered: 812_446
       public_basis: EXACT                     # EXACT | BOUND | MIXED | N/A
+      public_exact_rows: 812_446
+      public_bounded_rows: 0
       provider_basis: BOUND
-      exact_rows: 0
-      bounded_rows: 812_446
+      provider_exact_rows: 0
+      provider_bounded_rows: 812_446
       excluded_rows: 0
       reason: >
-        vendor lastupdated means last-changed, not first-appeared (provider test P1);
-        provider_available_upper_bound derived from system_first_seen_time
+        filing acceptance datetimes are exact, so public timing is EXACT;
+        vendor lastupdated means last-changed, not first-appeared (provider test P1),
+        so provider timing is bounded from system_first_seen_time
     - dataset: price_bar
       policy: NONE
+      rows_considered: 14_902_331
       public_basis: BOUND                     # session close + lag; see lag_policy_version
+      public_exact_rows: 0
+      public_bounded_rows: 14_902_331
       provider_basis: EXACT
-      exact_rows: 14_902_331
-      bounded_rows: 0
+      provider_exact_rows: 14_902_331
+      provider_bounded_rows: 0
       excluded_rows: 0
-      reason: officially disseminated bars; provider file-drop timestamps available
+      reason: >
+        officially disseminated bars carry no per-bar publication instant, so public
+        timing is bounded at session close plus lag; the provider stamps file drops,
+        so provider timing is exact
     - dataset: analyst_estimate_snapshot
       policy: EXCLUDE
+      rows_considered: 0
       public_basis: N/A                       # PROVIDER_DERIVED: no public time exists
+      public_exact_rows: 0
+      public_bounded_rows: 0
       provider_basis: N/A
-      exact_rows: 0
-      bounded_rows: 0
+      provider_exact_rows: 0
+      provider_bounded_rows: 0
       excluded_rows: 0
       reason: domain unpopulated while the estimates gap is open
 
@@ -103,7 +122,27 @@ information_set:                        # mandatory
       rows: 0
 
 inputs:                                 # required vs optional -- see section 3a
-  required: [price_bar, universe_membership, fundamental_fact, filing]
+  required:                             # coverage EVIDENCE, not just a name list
+    - domain: price_bar
+      coverage_scope: PER_SESSION
+      min_coverage_fraction: 0.99
+      observed_coverage: 0.9997
+      failing_partitions: 0
+    - domain: universe_membership
+      coverage_scope: PER_SESSION
+      min_coverage_fraction: 1.00
+      observed_coverage: 1.00
+      failing_partitions: 0
+    - domain: fundamental_fact
+      coverage_scope: PER_SECURITY
+      min_coverage_fraction: 0.95
+      observed_coverage: 0.9712
+      failing_partitions: 34        # securities below threshold, of 1,183
+    - domain: filing
+      coverage_scope: WHOLE_DOMAIN
+      min_coverage_fraction: 1.00
+      observed_coverage: 1.00
+      failing_partitions: 0
   optional: [classification_history]
   optional_excluded:
     - domain: classification_history
@@ -113,7 +152,7 @@ inputs:                                 # required vs optional -- see section 3a
 derived_artifacts:                      # lineage of every artifact consumed
   - artifact_id: adj-7f21...
     entity: adjusted_bar_artifact
-    output_validity: SESSION_SCOPED
+    output_validity: INTERVAL
     derivation_spec_version: adj/v2
     artifact_first_built_time: 2026-08-20T11:04:00Z
     artifact_content_hash: sha256:4c1a...
@@ -179,7 +218,21 @@ result:
 `run_id` is **derived, not generated** — a hash over code commit, config version, dataset
 versions, definitions, **`requested_profile`, `resolved_profile`, `global_profile_resolution`,
 the canonical dataset-ordered `dataset_provider_gap_resolutions` map, and
-`resolution_policy_version`**, revision view, lag policy, `as_of` and seed.
+`resolution_policy_version`**, revision view, lag policy, `as_of` and seed — **plus, for every
+consumed derived artifact**:
+
+| Input | Always | Under `FORWARD_SYSTEM` |
+|---|---|---|
+| `artifact_id` | yes | yes |
+| `artifact_content_hash` | yes | yes |
+| `derivation_spec_version` | yes | yes |
+| canonical lineage selector set (or its hash) | yes | yes |
+| **`artifact_first_built_time`** | — | **yes** |
+
+**Dataset versions alone are not sufficient.** Under `FORWARD_SYSTEM` a derived artifact's
+availability depends on when it was *first built*, so two runs over identical dataset versions
+can legitimately differ — and a `run_id` blind to first-built history would call them the same
+run and make an irreproducible result look reproducible.
 
 **The whole map, not a summary of it.** Two runs that `BOUND` one dataset and `EXCLUDE` another
 in opposite arrangements admit different rows and must not collide. Revision 4 hashed a single
@@ -251,7 +304,19 @@ Three enforcement rules:
 computed is not the thing you named*. That is what this section adds.
 
 Every factor, query and artifact definition declares each input domain **REQUIRED** or
-**OPTIONAL**, and the manifest records both lists plus what was excluded.
+**OPTIONAL**. For every REQUIRED input the manifest records **the evidence that its contract
+passed**, not merely its name:
+
+| Field | |
+|---|---|
+| `coverage_scope` | `WHOLE_DOMAIN` · `PER_SESSION` · `PER_SECURITY` · `PER_SECURITY_SESSION` |
+| `min_coverage_fraction` | the contract threshold, part of `factor_definition_version` |
+| `observed_coverage` | what the run actually achieved |
+| `failing_partitions` | count of sessions / securities / cells below threshold |
+
+A reader must be able to see **why** the contract passed. `required: [names]` alone says a
+domain was declared required and nothing about whether it was adequately populated, which is the
+question the coverage contract exists to answer.
 
 | | On a domain being emptied by origin filtering or provider-time resolution |
 |---|---|
@@ -292,7 +357,13 @@ A manifest is refused — and the result is therefore inadmissible — when:
    `max(resolved_public_time, resolved_provider_time) == resolved_public_time`, with both
    present, is correct and is **not** refused.
 8f. A dataset the run touched is absent from `dataset_provider_gap_resolutions`, or its
-   exact/bounded/excluded counts do not sum to the rows considered.
+   **per-axis** counts fail to reconcile: for each applicable axis,
+   `exact_rows + bounded_rows + excluded_rows == rows_considered`. The axes reconcile
+   **independently** — a dataset may be bounded on one and exact on the other.
+8h. A REQUIRED input recorded without `coverage_scope`, `min_coverage_fraction`,
+   `observed_coverage` and `failing_partitions`.
+8i. A consumed derived artifact absent from `derived_artifacts`, or absent from the `run_id`
+   inputs.
 8g. A bound was relied upon whose derivation is not approved for its dataset, or an exact time
    exceeds its own upper bound.
 9. An adjusted artifact was consumed whose content hash does not reproduce from its key.

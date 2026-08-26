@@ -10,6 +10,11 @@ Types are conceptual: `instant` is a timezone-aware UTC timestamp; `date` is a c
 with no time component and is never silently promoted to an instant
 ([pit-data-contract.md](pit-data-contract.md) §12.6).
 
+> **Revision 6 (2026-08-26).** `price_bar` splits so no derived row sits inside a
+> `RETROSPECTIVE` source entity (§6, §6a); `adjusted_bar_artifact` carries a complete derived
+> envelope with one normative name per field (§7a); and the remaining source entities get
+> explicit, non-nullable temporal anchors (§2, §5, §7, §15).
+>
 > **Revision 5 (2026-08-26).** The two envelopes become **mutually exclusive** (§0.1c);
 > derived artifacts declare **`output_validity`** instead of borrowing a source temporal class;
 > exact and bound derivations get **separate enums** (§0.2); `security` splits into canonical
@@ -251,7 +256,7 @@ schedule, from their own sources, with their own availability.
 
 `figi` is openly licensed; `cusip` and `isin` are **licence-gated** and never a join key.
 
-## 2. `listing` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
+## 2. `listing` — **class per row** · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -261,14 +266,19 @@ schedule, from their own sources, with their own availability.
 | `listing_start` / `listing_end` | date / date? | |
 | `delisting_reason` | enum? | `MERGER` · `ACQUISITION` · `BANKRUPTCY` · `DEFICIENCY` · `VOLUNTARY` · `UNKNOWN` |
 | `successor_security_id` | FK? | M&A continuity |
-| `observation_time` | instant | the `RETROSPECTIVE` anchor — when the listing or delisting took place |
-| `«envelope»` | | |
+| `listing_fact_kind` | enum, **PK part** | `STATE` · `CHANGE_ANNOUNCEMENT` |
+| `observation_time` | instant? | **required** for `STATE` — when the listing or delisting took place |
+| `announcement_time` | instant? | **required** for `CHANGE_ANNOUNCEMENT` — when the venue announced it |
+| `temporal_fact_class` | enum | **per row**: `STATE` → `RETROSPECTIVE`; `CHANGE_ANNOUNCEMENT` → `ANNOUNCED_FORWARD` |
+| `«envelope»` | | source envelope |
 
-**Class note.** A delisting is usually `ANNOUNCED_FORWARD` at the row level — exchanges
-announce them ahead of the effective date. Where an announcement is captured, the row carries
-`temporal_fact_class = ANNOUNCED_FORWARD` and an `announcement_time`; where only the effective
-date is known, it is `RETROSPECTIVE` with the §9 lag. This is the one entity whose class is
-per-row.
+**Exactly one anchor applies per row**, selected by `listing_fact_kind` — which is a primary-key
+part so the two facts cannot collapse into one row. Revision 5 declared this entity
+`RETROSPECTIVE` while its prose said some rows are announced ahead of the effective date; a
+delisting announced on Monday and effective Friday is two different facts, and the anchor a
+check reads depends on which one the row is.
+
+
 
 ## 3. `ticker_history` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
@@ -328,10 +338,23 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 | `regular_open` / `regular_close` | instant | UTC; **derived from the calendar**, never assumed |
 | `extended_open` / `extended_close` | instant | |
 | `is_half_day` / `is_holiday` | bool | ADR-0004 §14 exists because this was once assumed away |
-| `announcement_time` | instant? | When the calendar revision publishing this session was released |
+| `announcement_time` | instant? | **exact** — when the calendar revision publishing this session was released |
+| `announcement_time_upper_bound` | instant? | **conservative** — for a date-only calendar publication |
+| `announcement_bound_derivation` | enum? | `DATE_PLUS_LAG` · `NONE` |
 | `«envelope»` | | |
 
-## 6. `price_bar` — `RETROSPECTIVE` · **origin per row**
+**An `ANNOUNCED_FORWARD` row must have a usable anchor, not merely a nullable one.** Exactly one
+of `announcement_time` (exact) or `announcement_time_upper_bound` (conservative, for a date-only
+announcement) is **required** — never neither. The bound is derived like any other
+([contract §5.1](pit-data-contract.md)): end of the announcement date in the venue timezone plus
+the declared lag, recorded as `announcement_bound_derivation = DATE_PLUS_LAG`.
+
+Revision 5 claimed every declared class has its anchor while leaving this field nullable with no
+alternative, so a date-only announcement satisfied the letter of the rule and had nothing for the
+class invariant to read.
+
+
+## 6. `price_bar` — `RETROSPECTIVE` · **source facts only, origin per row**
 
 | Field | Type | Notes |
 |---|---|---|
@@ -343,28 +366,58 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 | `trade_count` | integer? | |
 | `vwap` | decimal? | Where licensed |
 | `is_stale` / `had_halt` | bool | A non-trading day is not a zero |
-| `bar_construction` | enum | `OFFICIAL_DISSEMINATED` · `PROVIDER_AGGREGATED` · `SYSTEM_AGGREGATED` — selects the row origin, see below |
-| `«envelope»` | | |
+| `observation_time` | instant | the `RETROSPECTIVE` anchor — the session close the bar summarises |
+| `bar_construction` | enum | `OFFICIAL_DISSEMINATED` · `PROVIDER_AGGREGATED` — **source constructions only** |
+| `information_origin` | enum | **per row**, per the table below |
+| `«envelope»` | | source envelope |
 
-**Only raw bars are facts.** Adjusted series are computed ([contract §8](pit-data-contract.md))
-and, if materialised, live in `adjusted_bar_artifact` below — never here, and never as an extra
-column.
-
-**Not every bar is an authoritative public fact, and revision 3 declared them all so.** A
-consolidated-tape daily bar disseminated by the SIP is; a bar the vendor aggregated from its
-own trade collection is the vendor's construction; a bar we resampled ourselves is ours.
+**Not every bar is an authoritative public fact.** A consolidated-tape daily bar disseminated by
+the SIP is; a bar the vendor aggregated from its own trade collection is the vendor's
+construction.
 
 | `bar_construction` | `information_origin` | Meaning |
 |---|---|---|
 | `OFFICIAL_DISSEMINATED` | `AUTHORITATIVE_PUBLIC` | the venue or SIP published this bar |
 | `PROVIDER_AGGREGATED` | `PROVIDER_DERIVED` | the provider built it from trades it collected |
-| `SYSTEM_AGGREGATED` | `DERIVED_ARTIFACT` | we resampled it from finer data we hold |
 
-**Which applies is established during provider qualification, not assumed**
-([implementation-plan.md](implementation-plan.md) §2, test P9). It matters: if the daily bars
-turn out to be `PROVIDER_AGGREGATED`, then **price data itself is ineligible under
+**`SYSTEM_AGGREGATED` is gone from this entity**, and that is the revision-6 correction.
+Revision 5 listed it here mapping to `DERIVED_ARTIFACT`, which put a derived row inside an
+entity declared `RETROSPECTIVE` and carrying the source envelope — a row that could satisfy
+neither. A bar *we* resampled is not a source fact at all; it is §6a.
+
+**Which construction applies to purchased bars is established during provider qualification,
+not assumed** ([implementation-plan.md](implementation-plan.md) §2, test P9). It matters: if the
+daily bars turn out to be `PROVIDER_AGGREGATED`, then **price data itself is ineligible under
 `PUBLIC_PIT`**, and so is every artifact built on it — a far larger consequence than the
-estimates gap, and one revision 3 would never have surfaced.
+estimates gap.
+
+**Only raw bars are facts.** Adjusted series are computed
+([contract §8](pit-data-contract.md)) and, if materialised, live in §7a — never here, and never
+as an extra column.
+
+## 6a. `aggregated_price_bar_artifact` — `INTERVAL` · **`DERIVED_ARTIFACT`**
+
+Bars **we** built by resampling finer-grained rows we hold — a daily bar rolled up from minute
+data, for instance.
+
+| Field | Type | Notes |
+|---|---|---|
+| `artifact_id` | string, **PK** | derived hash of the key below — not generated |
+| `security_id_scope` | string, **key** | universe version or explicit id set |
+| `target_resolution` | enum, **key** | `DAILY` · `HOUR` |
+| `source_resolution` | enum, **key** | the finer resolution consumed |
+| `resolved_profile` | enum, **key** | |
+| `valid_time_start` / `valid_time_end` | date / date | the `INTERVAL` validity fields |
+| `information_origin` | enum | `DERIVED_ARTIFACT` |
+| `output_validity` | enum | `INTERVAL` |
+| `lineage` | list | **complete** — the §6 `price_bar` rows consumed, by `dataset_version` and selector |
+| `artifact_first_built_time` | instant | when first built; a rebuild from identical lineage does not move it |
+| `derivation_spec_version` | string | the resampling rule |
+| `artifact_content_hash` | string | SHA-256 of the produced series |
+
+Its availability is the max over the bars it consumed, plus `artifact_first_built_time` under
+`FORWARD_SYSTEM`, and **its eligibility is the intersection of theirs** — resampling
+provider-aggregated minute bars cannot produce a publicly-available daily bar.
 
 ## 7. `corporate_action` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
@@ -374,10 +427,18 @@ estimates gap, and one revision 3 would never have surfaced.
 | `security_id` | FK | |
 | `action_type` | enum | `SPLIT` · `REVERSE_SPLIT` · `DIVIDEND` · `SPECIAL_DIVIDEND` · `SPINOFF` · `MERGER` · `RIGHTS` · `SYMBOL_CHANGE` · `DELISTING` |
 | `announcement_date` | date? | Nullable; its absence is itself information |
-| `announcement_time` | instant? | The timing invariant anchor for this class |
+| `announcement_time` | instant? | **exact** anchor for this class |
+| `announcement_time_upper_bound` | instant? | **conservative** anchor — end of `announcement_date` in the venue timezone plus the declared lag |
+| `announcement_bound_derivation` | enum? | `DATE_PLUS_LAG` · `NONE` |
 | `ex_date` / `record_date` / `pay_date` / `effective_date` | date? | **May be far later than availability. That is correct, not a violation.** |
 | `ratio` / `cash_amount` | decimal? | |
 | `«envelope»` | | |
+
+**An `ANNOUNCED_FORWARD` row must have a usable anchor, not merely a nullable one.** Exactly one
+of `announcement_time` (exact) or `announcement_time_upper_bound` (conservative, for a date-only
+announcement) is **required** — never neither. Revision 5 claimed every declared class has its
+anchor while leaving this field nullable with no alternative, so a date-only corporate action
+satisfied the letter of the rule and had nothing for the class invariant to read.
 
 **Availability rule.** `public_available_time` derives from `announcement_time`/
 `announcement_date` where present (plus the [contract §9](pit-data-contract.md) lag), **not**
@@ -404,9 +465,17 @@ implementation plan.
 | `corporate_action_dataset_version` | string, **key** | |
 | `raw_bar_dataset_version` | string, **key** | |
 | `security_id_scope` | string, **key** | Universe version or explicit id set |
+| `information_origin` | enum | `DERIVED_ARTIFACT` |
+| `output_validity` | enum | `INTERVAL` |
 | `valid_time_start` / `valid_time_end` | date / date | the `INTERVAL` validity fields — the span of sessions this series covers. An adjusted *series* spans sessions, so `INTERVAL` fits it where `SESSION_SCOPED` would have forced one artifact per session |
-| `content_hash` | string | SHA-256 of the produced series |
-| `built_at` | instant | |
+| `lineage` | list | **complete** — the §6 `price_bar` and §7 `corporate_action` rows consumed, by `dataset_version` and selector |
+| `artifact_first_built_time` | instant | **the normative name.** Revision 5 called this `built_at` here and `artifact_first_built_time` everywhere else |
+| `derivation_spec_version` | string | the adjustment implementation version |
+| `artifact_content_hash` | string | **the normative name.** SHA-256 of the produced series; revision 5 called it `content_hash` here |
+
+**One normative name per field.** `built_at` and `content_hash` are retired from this entity:
+they read as substitutes for the required derived-envelope fields while being spelled
+differently, which is precisely the drift the documentation audit exists to catch.
 
 **It is a cache, and it must behave like one.** Recomputing from the key must reproduce
 `content_hash` bit-identically; a mismatch is a **BLOCKING** quality issue, not a cache miss.
@@ -718,7 +787,7 @@ Provenance for the later AI layer (CLAUDE.md §7). Schema now, population later.
 | `security_id` | FK? | |
 | `document_type` | enum | `FILING` · `EARNINGS_RELEASE` · `TRANSCRIPT` · `GUIDANCE` · `NEWS` |
 | `source_url` | string | |
-| `publication_time` | instant | |
+| `publication_time` | instant | **is the `RETROSPECTIVE` `observation_time` anchor** — the instant the document was published. Named for the domain, referenced by the class invariant, and **not nullable**: a document with no publication instant is not a source document, it is an unresolved acquisition |
 | `retrieval_time` | instant | |
 | `document_version` | int | Documents get amended |
 | `content_hash` | string | SHA-256; detects silent amendment |
@@ -858,9 +927,13 @@ Stated once, enforced by test:
     enum may name a bound field, and no member of a bound enum may name an exact field.
 8a. **A derived artifact declares `output_validity` and its required field(s)**, never a source
     `temporal_fact_class`.
-8b. **A declared `temporal_fact_class` always has its anchor present** —
+8b. **A declared `temporal_fact_class` always has a usable anchor present** —
     `RETROSPECTIVE`/`observation_time`, `ANNOUNCED_FORWARD`/`announcement_time`,
-    `SAMPLED_STATE`/`sample_time`.
+    `SAMPLED_STATE`/`sample_time`. Where the exact instant is unavailable, an explicitly named
+    upper-bound field stands in (`announcement_time_upper_bound`); **exactly one of the pair is
+    required, never neither.** A nullable anchor with no alternative is not an anchor.
+8c. **A source entity never contains a `DERIVED_ARTIFACT` row.** Where a domain has both — raw
+    bars and bars we resampled — they are separate entities (§6, §6a).
 7b. **`NOT_APPLICABLE` and `UNKNOWN` are never conflated.** The first means the time does not
     exist; the second means it exists and we failed to establish it. One is usable, the other
     is not.
