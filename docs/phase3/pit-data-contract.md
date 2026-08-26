@@ -11,6 +11,16 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > `source_available_time` from revision 1 **no longer exists**; it is split into four
 > (§2) and resolved by an explicit information-set profile (§3). Revision views are now
 > explicit (§6).
+>
+> **Revision 3 (2026-08-26).** Review of revision 2 found that it effectively required a
+> `public_available_time` on *every* record under *every* profile — which is wrong for
+> proprietary observations such as an analyst consensus snapshot or a broker-specific borrow
+> quote, where no authoritative public release instant exists. Records now declare an
+> **`information_origin`**, and profile eligibility is defined per origin (§3.1). Revision 2's
+> `DECLARE` resolution for unknown provider timing is **withdrawn** — it contradicted the
+> no-profile-mixing rule — and replaced by EXCLUDE / BOUND / DOWNGRADE (§3.3). "Default
+> revision view" is reworded to **normative historical view**, since the accessor has no
+> default (§6).
 
 ---
 
@@ -47,8 +57,8 @@ one the ingestion code happened to have.
 
 | Field | Meaning | Nullable |
 |---|---|---|
-| `public_available_time` | The instant the fact first became **publicly obtainable from the authoritative source** — an SEC acceptance datetime, an exchange dissemination, a press release. A property of the world, not of any vendor. | yes |
-| `provider_available_time` | The instant **the selected provider first offered this record** in its feed or API. A property of the vendor. Frequently unknown, and its absence is itself information. | yes |
+| `public_available_time` | The instant the fact first became **publicly obtainable from the authoritative source** — an SEC acceptance datetime, an exchange dissemination, a press release. A property of the world, not of any vendor. | yes — **and for a proprietary observation it is legitimately null** (§2.3) |
+| `provider_available_time` | The instant **the selected provider first offered this record** in its feed or API. A property of the vendor. | yes |
 | `system_first_seen_time` | The instant **KalpaMani first held this record**. Always known, because we were there. | **no** |
 | `ingestion_time` | The instant **this particular row was written**. Distinct from `system_first_seen_time`, which is the earliest receipt across the logical record's acquisition history; a rebuild writes a new row without changing when we first saw the data. | **no** |
 
@@ -84,72 +94,209 @@ Vendor identifiers are *carried* for reconciliation and audit, never *branched o
 above the boundary — [ADR-0002](../decisions/ADR-0002-broker-adapter-and-brokerage-boundary.md)
 §4.
 
+### 2.3 `information_origin` — where the fact comes from
+
+**New in revision 3.** Revision 2 treated `public_available_time` as the universal anchor.
+That is right for a filing and wrong for a consensus estimate: nobody "publishes" a
+proprietary consensus at an authoritative instant — the provider computes it, and the earliest
+anyone outside the provider could act on it is when the provider served it.
+
+Every record declares its origin, and the vocabulary is closed:
+
+| `information_origin` | Meaning | `public` | `provider` | `system_first_seen` |
+|---|---|---|---|---|
+| **`AUTHORITATIVE_PUBLIC`** | The fact has an authoritative public release instant, independent of any vendor. A filing acceptance, an exchange dissemination, an issuer press release. | **required** | optional | required |
+| **`PROVIDER_DERIVED`** | The fact **is** the provider's own computed or proprietary observation. No authoritative public release instant exists for it. | **must be null** | **required** | required |
+| **`SYSTEM_OBSERVED`** | KalpaMani observed it directly — a poll of a live endpoint that carries no vendor timestamp, or a value we derived ourselves. | null | null | **required** |
+
+Two rules keep the vocabulary honest:
+
+- **Origin is a property of the fact, not of the delivery path.** A 10-Q *delivered by a
+  vendor* is still `AUTHORITATIVE_PUBLIC`, because the filing has its own public instant that
+  the vendor did not create. A vendor's *standardised restatement* of that filing's numbers is
+  still `AUTHORITATIVE_PUBLIC` too, anchored to the filing it came from.
+- **If an authoritative public instant exists for this exact fact, the origin is
+  `AUTHORITATIVE_PUBLIC` and `public_available_time` is required.** `PROVIDER_DERIVED` is not
+  an escape hatch for a public fact whose timing we failed to establish — that case is
+  `AUTHORITATIVE_PUBLIC` with `availability_derivation = UNKNOWN`, and it is ineligible
+  everywhere (§10 rule 6).
+
 ---
 
 ## 3. Information-set profiles
 
 A profile answers one question: **whose information set are we simulating?**
 
-| Profile | Simulates | `decision_available_time` = |
-|---|---|---|
-| **`PUBLIC_PIT`** | What the market could have known. | `public_available_time` |
-| **`PROVIDER_REALISTIC_PIT`** | What a subscriber to our chosen provider could have known. | `max(public_available_time, provider_available_time)` |
-| **`FORWARD_SYSTEM`** | What KalpaMani actually held. | `max(public_available_time, provider_available_time, system_first_seen_time)` |
+| Profile | Simulates | `decision_available_time` = | Requires |
+|---|---|---|---|
+| **`PUBLIC_PIT`** | What the market could have known. | `public_available_time` | `public_available_time` |
+| **`PROVIDER_REALISTIC_PIT`** | What a subscriber to our chosen provider could have known. | `max(public_available_time, provider_available_time)` over the times that are **present** | `provider_available_time` |
+| **`FORWARD_SYSTEM`** | What KalpaMani actually held. | `max(public_available_time, provider_available_time, system_first_seen_time)` over the times that are **present** | `system_first_seen_time` |
 
-The profiles are **strictly ordered in conservatism**: for any record,
+The `max` is taken over the non-null times only. That is not a loosening: which times may be
+null is fixed by `information_origin` (§2.3), and each profile independently *requires* the
+one time it is built on. A record missing its required time is **ineligible** under that
+profile — not admitted with a substitute.
+
+### 3.1 Profile eligibility by information origin
+
+**This is the revision-3 correction.** Revision 2 made `public_available_time` a de facto
+prerequisite everywhere, which would have made an analyst consensus snapshot or a broker
+borrow quote permanently unusable — including under `FORWARD_SYSTEM`, the profile that
+describes data we demonstrably held.
+
+| `information_origin` | `PUBLIC_PIT` | `PROVIDER_REALISTIC_PIT` | `FORWARD_SYSTEM` |
+|---|---|---|---|
+| **`AUTHORITATIVE_PUBLIC`** | **eligible** — governed by `public` | **eligible** — governed by `max(public, provider)` | **eligible** — governed by `max(public, provider, seen)` |
+| **`PROVIDER_DERIVED`** | **INELIGIBLE** — there is no public instant to simulate | **eligible** — governed by `provider` | **eligible** — governed by `max(provider, seen)` |
+| **`SYSTEM_OBSERVED`** | **INELIGIBLE** | **INELIGIBLE** — no provider instant exists | **eligible** — governed by `seen` |
+
+Read down the columns and the rule is simple: **a profile can only serve a fact whose
+originating information set it can actually describe.**
+
+- `PUBLIC_PIT` asks *"what could the market have known?"*. A proprietary consensus was never
+  public, so the question has no answer for it. Excluding it is correct, not a limitation to
+  declare.
+- `PROVIDER_REALISTIC_PIT` asks *"what could a subscriber have known?"*. For a proprietary
+  fact that is exactly `provider_available_time`, and **no public time is required**. Where a
+  public time also exists and applies to the same fact, the **later** of the two governs, per
+  §12.5.
+- `FORWARD_SYSTEM` asks *"what did we hold?"*. `system_first_seen_time` answers it for every
+  origin. Public and provider times remain **provenance and quality inputs** — they still
+  police the contradiction checks in §3.4 — but they are **not prerequisites** for a fact
+  KalpaMani actually observed.
+
+**Ineligibility is recorded, not silent.** A query whose datasets contain rows ineligible
+under the requested profile reports the excluded row counts by dataset and origin, and the
+manifest carries `ORIGIN_INELIGIBLE_ROWS_EXCLUDED`. A factor that quietly lost its estimate
+inputs is worse than one that refused to compute.
+
+### 3.2 Worked examples
+
+**A — SEC filing. `AUTHORITATIVE_PUBLIC`; all three times applicable.**
+
+```
+public    2025-02-14T21:31:07Z   8-K acceptance datetime
+provider  2025-02-15T04:00:00Z   vendor file drop the following morning
+seen      2026-03-02T02:14:00Z   we backfilled this in March 2026
+
+PUBLIC_PIT              -> 2025-02-14T21:31:07Z   eligible
+PROVIDER_REALISTIC_PIT  -> 2025-02-15T04:00:00Z   eligible
+FORWARD_SYSTEM          -> 2026-03-02T02:14:00Z   eligible
+```
+
+All three profiles answer, and the ordering invariant holds because the record is eligible
+under all three.
+
+**B — proprietary analyst consensus snapshot. `PROVIDER_DERIVED`; no public instant exists.**
+
+```
+public    NULL                   nobody published this consensus
+provider  2025-02-13T23:00:00Z   the provider's end-of-day snapshot
+seen      2026-03-02T02:14:00Z
+
+PUBLIC_PIT              -> INELIGIBLE   the question has no answer for this fact
+PROVIDER_REALISTIC_PIT  -> 2025-02-13T23:00:00Z   eligible
+FORWARD_SYSTEM          -> 2026-03-02T02:14:00Z   eligible
+```
+
+Under revision 2 this row was effectively unusable. It is now usable in the two profiles that
+can describe it, and honestly absent from the one that cannot.
+
+**C — IBKR borrow snapshot. `PROVIDER_DERIVED`; broker-specific, no public instant.**
+
+```
+public    NULL                   IBKR's book is not a public dissemination
+provider  2025-02-13T12:30:00Z   stamped by the source, once qualified
+seen      2025-02-13T12:31:44Z   our poll
+
+PUBLIC_PIT              -> INELIGIBLE
+PROVIDER_REALISTIC_PIT  -> 2025-02-13T12:30:00Z   eligible
+FORWARD_SYSTEM          -> 2025-02-13T12:31:44Z   eligible
+```
+
+If the source carries **no** timestamp of its own and we merely polled it, the origin is
+`SYSTEM_OBSERVED` instead, and only `FORWARD_SYSTEM` is eligible. Which of the two applies to
+IBKR is part of the Phase-3C qualification checklist
+([implementation-plan.md](implementation-plan.md) §4.1), not an assumption.
+
+### 3.3 Unknown provider availability — EXCLUDE, BOUND or DOWNGRADE
+
+**Revision 2's `DECLARE` resolution is withdrawn.** It served a row using
+`public_available_time` while labelling the result `PROVIDER_REALISTIC_PIT`, which is exactly
+the profile mixing §3.4 forbids. A rule cannot both permit and prohibit the same act.
+
+`provider_available_time` will often be null, because most vendors do not say when a row
+entered their feed. Under `PROVIDER_REALISTIC_PIT` that is resolved in exactly one of three
+ways, chosen **per dataset**, recorded in configuration, and reported in the manifest:
+
+| Resolution | Effect | Limitation token |
+|---|---|---|
+| **`EXCLUDE`** | The record does not participate in the query. | `PROVIDER_AVAILABILITY_UNKNOWN` |
+| **`BOUND`** | `provider_available_time` is set to a **conservative upper bound derived from `system_first_seen_time`**, with `provider_availability_derivation = FIRST_SEEN_UPPER_BOUND`. The row participates at that bounded time. | `PROVIDER_AVAILABILITY_UNKNOWN` |
+| **`DOWNGRADE`** | **The entire result** runs under `PUBLIC_PIT` instead. Not the row — the run. | `PROFILE_DOWNGRADED_TO_PUBLIC` |
+
+> **Never serve a row using `PUBLIC_PIT` timing while labelling the result
+> `PROVIDER_REALISTIC_PIT`.** That is the rule revision 2 broke.
+
+`BOUND` is the useful middle option and it is genuinely conservative: we cannot have been
+served a row before we first saw it, so `system_first_seen_time` is a sound upper bound on
+provider availability. It can only ever *delay* a record, never advance it. `DOWNGRADE` is
+honest in a different way — it relabels the whole result rather than pretending a mixed run
+is a provider-realistic one.
+
+`BOUND` is unavailable for a `SYSTEM_OBSERVED` record for the obvious reason: there is no
+provider, so bounding a provider time would invent one.
+
+### 3.4 Backfill semantics, per profile
+
+A vendor supplies, today, records describing events from 2015.
+
+| Profile | Admissible in a 2015 query? |
+|---|---|
+| `PUBLIC_PIT` | **Yes** — *if and only if* the origin is `AUTHORITATIVE_PUBLIC` and public timing is proven (§5.1 rule 1 or 2). Otherwise no. |
+| `PROVIDER_REALISTIC_PIT` | **No.** A backfill may not become available before the provider supplied it. If `provider_available_time` is today, the record is inadmissible in 2015. If it is unknown, §3.3 applies — and note that **`BOUND` sets it to today**, so a backfilled row stays inadmissible. |
+| `FORWARD_SYSTEM` | **No.** A backfill may never precede `system_first_seen_time`. |
+
+> **A backfilled record must not become historically available under
+> `PROVIDER_REALISTIC_PIT` merely because the public fact underneath it is old.** The age of
+> the underlying event says nothing about when a subscriber could have obtained the vendor's
+> row describing it. `BOUND` is designed so that this holds by construction rather than by
+> vigilance.
+
+**Mixing is forbidden.** A run that admits rows under one profile's reasoning while labelling
+itself another is refused at manifest emission, not annotated.
+
+### 3.5 What each profile is for
+
+| Profile | Legitimate use | Never valid for |
+|---|---|---|
+| `PUBLIC_PIT` | Exploratory factor research; academic-style questions about whether an effect exists in the market at all. | Any claim about what *this system* could have captured. Any factor built on proprietary observations, which are ineligible. |
+| `PROVIDER_REALISTIC_PIT` | Backtests intended to inform capital deployment, where the provider is the one we would actually run on. | Any claim about latency or operational reality we have not measured. |
+| `FORWARD_SYSTEM` | **Mandatory** for any forward, paper or micro-live validation claim. The only profile whose inputs we actually observed. | Long histories, since it cannot reach back before we existed. |
+
+**Which profile governs production research is a decision gate, not settled here**
+(ADR-0005, gate G2). The proposal is `PROVIDER_REALISTIC_PIT` for anything that informs
+capital, `PUBLIC_PIT` permitted for exploration with its exclusions declared, `FORWARD_SYSTEM`
+required for forward validation. That proposal awaits the provider decision, because
+`provider_available_time` is only obtainable for a provider we have chosen.
+
+### 3.6 The ordering invariant, and its precondition
+
+For a record eligible under all three profiles:
 
 ```
 PUBLIC_PIT  <=  PROVIDER_REALISTIC_PIT  <=  FORWARD_SYSTEM
 ```
 
-so a result under a more conservative profile can never see more than a result under a less
-conservative one. That ordering is asserted as an invariant, not assumed.
+so a result under a more conservative profile can never see more than one under a less
+conservative profile.
 
-### 3.1 What each profile is for
-
-| Profile | Legitimate use | Never valid for |
-|---|---|---|
-| `PUBLIC_PIT` | Exploratory factor research; academic-style questions about whether an effect exists in the market at all. | Any claim about what *this system* could have captured. |
-| `PROVIDER_REALISTIC_PIT` | Backtests intended to inform capital deployment, where the provider is the one we would actually run on. | Any claim about latency or operational reality we have not measured. |
-| `FORWARD_SYSTEM` | **Mandatory** for any forward, paper or micro-live validation claim. It is the only profile whose inputs we actually observed. | Long histories, since it cannot reach back before we existed. |
-
-**Which profile governs production research is a decision gate, not settled here**
-(ADR-0005 §17). The proposal is `PROVIDER_REALISTIC_PIT` for anything that informs capital,
-`PUBLIC_PIT` permitted for exploration with the limitation declared, `FORWARD_SYSTEM`
-required for forward validation. That proposal awaits the provider decision, because
-`provider_available_time` is only obtainable for a provider we have chosen.
-
-### 3.2 Unknown provider availability
-
-`provider_available_time` will often be null — most vendors do not tell you when a row
-entered their feed.
-
-Under `PROVIDER_REALISTIC_PIT`, a null `provider_available_time` is resolved in exactly one
-of two ways, chosen per dataset and recorded in configuration:
-
-| Resolution | Effect |
-|---|---|
-| **EXCLUDE** | the record does not participate in the query |
-| **DECLARE** | the record participates using `public_available_time`, and the run carries the limitation `PROVIDER_AVAILABILITY_UNKNOWN` naming the affected datasets and row counts |
-
-There is no third option, and in particular there is no silent fallback. `DECLARE` is
-honest about the fact that such a run is a `PUBLIC_PIT` result wearing a
-`PROVIDER_REALISTIC_PIT` label for the rows in question, which is precisely what the
-limitation token says.
-
-### 3.3 Backfill semantics, per profile
-
-The case that motivated the split. A vendor supplies, today, records describing events from
-2015.
-
-| Profile | Admissible in a 2015 query? |
-|---|---|
-| `PUBLIC_PIT` | **Yes** — *if and only if* authoritative public timing is proven for those records (§5 rule 1 or 2). Otherwise no. |
-| `PROVIDER_REALISTIC_PIT` | **No** — a backfill may not become available before the provider supplied it. If `provider_available_time` is today, the record is inadmissible in 2015. If it is unknown, §3.2 applies. |
-| `FORWARD_SYSTEM` | **No** — a backfill may never precede `system_first_seen_time`. |
-
-**Mixing is forbidden.** A run that admits backfilled rows under `PUBLIC_PIT` reasoning while
-labelling itself `PROVIDER_REALISTIC_PIT` is refused at manifest emission, not annotated.
+**The precondition is not decoration.** The ordering may be asserted **only across profiles
+under which the record is eligible** (§3.1). Comparing a `PROVIDER_DERIVED` record's
+`PROVIDER_REALISTIC_PIT` time against a `PUBLIC_PIT` time it does not have is not a violated
+invariant — it is a malformed comparison, and revision 2's unconditional assertion would have
+raised on correct data.
 
 ---
 
@@ -196,9 +343,16 @@ In priority order; the first rule that applies, wins.
 | 2 | The source supplies a publication timestamp **with** an unambiguous timezone | that timestamp, in UTC |
 | 3 | Publication **date** only | end of that date in the venue timezone **plus the conservative lag** (§9) |
 | 4 | Neither, but the record is tied to a session (e.g. a daily bar) | the session official close, plus the source's stated publication lag |
-| 5 | None of the above | **null.** `availability_derivation = UNKNOWN`. Not point-in-time under any profile |
+| 5 | None of the above, **and the origin is `AUTHORITATIVE_PUBLIC`** | **null** with `availability_derivation = UNKNOWN`. **Not point-in-time under any profile** |
+| 6 | The origin is `PROVIDER_DERIVED` or `SYSTEM_OBSERVED` | **null**, legitimately, with `availability_derivation = NOT_APPLICABLE`. The record remains eligible under the profiles §3.1 allows |
 
-Rule 5 is the one that matters. "The vendor gave us history, so it must be historical" is the
+**Rules 5 and 6 look alike and are opposites**, which is why they are separate rows. Both
+produce a null. In rule 5 the null means *we failed to establish a time that exists*, and the
+record is unusable everywhere. In rule 6 it means *no such time exists to establish*, and the
+record is perfectly usable under `PROVIDER_REALISTIC_PIT` and `FORWARD_SYSTEM`. Revision 2 had
+only rule 5, which is why it wrongly condemned every proprietary observation.
+
+Rule 5 is the one that matters for public facts. "The vendor gave us history, so it must be historical" is the
 reasoning that produces look-ahead, and it is the same shape of reasoning
 [BLUEPRINT_ERRATA](../architecture/BLUEPRINT_ERRATA.md) E-001 already caught once in a
 different domain: an assumption about an external system that nobody had tested.
@@ -209,13 +363,17 @@ different domain: an assumption about an external system that nobody had tested.
 |---|---|---|
 | 1 | The provider stamps rows with a feed-publication or `lastupdated` time whose semantics are **documented and verified** | that timestamp, in UTC |
 | 2 | The provider publishes dated file drops and we ingest from the drop | the drop timestamp |
-| 3 | We have observed the record continuously since a known ingestion | `system_first_seen_time` is an upper bound; record it as such and mark the field derived |
-| 4 | Otherwise | **null** → §3.2 |
+| 3 | We have observed the record continuously since a known ingestion | `system_first_seen_time` is a conservative **upper bound**; record it with `provider_availability_derivation = FIRST_SEEN_UPPER_BOUND`. This is the `BOUND` resolution of §3.3 |
+| 4 | Otherwise | **null** → §3.3 (`EXCLUDE`, `BOUND` or `DOWNGRADE`) |
 
 Rule 1 carries a trap worth naming: a vendor `lastupdated` column usually means "when this
 row last changed", not "when this row first appeared". The two coincide only for rows that
 never changed. **Verifying which one a vendor means is a Phase-3A provider test**, not an
-assumption ([implementation-plan.md](implementation-plan.md) §2).
+assumption ([implementation-plan.md](implementation-plan.md) §2, test P1).
+
+**A `SYSTEM_OBSERVED` record has no `provider_available_time` and none may be invented for
+it** — including by `BOUND`, which bounds a provider time that exists but is unstated, not one
+that does not exist at all.
 
 ### 5.3 `system_first_seen_time`
 
@@ -230,22 +388,27 @@ The first draft said both "research defaults to as-originally-reported" and "the
 `revision_sequence` admissible at `as_of`". Those are different rules and the draft applied
 each in a different document. Corrected here.
 
-**They are different questions**, and the fix is to stop having a default that answers only
-one of them:
+**They are different questions**, and the fix is to stop having *any* implicit answer:
 
-| View | Returns | Default for historical research |
+| View | Returns | Status |
 |---|---|---|
-| **`AS_KNOWN_AT_AS_OF`** | The **latest** revision whose `decision_available_time <= as_of`. If a restatement had already been published by `as_of`, it is returned; otherwise the original is. | **yes** |
-| **`ORIGINAL_FILING_ONLY`** | `revision_sequence = 0` only, and only if admissible at `as_of`. Later restatements are invisible whatever the cutoff. | no |
-| **`LATEST_RESTATED`** | The newest revision, **ignoring `as_of` entirely**. | **forbidden in research** |
+| **`AS_KNOWN_AT_AS_OF`** | The **latest** revision whose `decision_available_time <= as_of`. If a restatement had already been published by `as_of`, it is returned; otherwise the original is. | **normative historical view** |
+| **`ORIGINAL_FILING_ONLY`** | `revision_sequence = 0` only, and only if admissible at `as_of`. Later restatements are invisible whatever the cutoff. | permitted, explicit |
+| **`LATEST_RESTATED`** | The newest revision, **ignoring `as_of` entirely**. | **forbidden in historical research** |
 
-`AS_KNOWN_AT_AS_OF` is the correct default because it is what a decision-maker at that moment
-would actually have had in front of them — including any restatement already published. It is
-*not* the same as "as originally reported", and the first draft conflated them.
+> **"Normative historical view" is a statement about correctness, not a code default.**
+> `AS_KNOWN_AT_AS_OF` is what a historical query *should* ask for unless it has a stated reason
+> not to — and the caller still has to say so, every time (§6.2). Revision 2 called it "the
+> default" in this table while §6.2 forbade defaults; the rule was right and the word was
+> wrong.
 
-`ORIGINAL_FILING_ONLY` remains available and is the right choice for questions specifically
-about first-reported figures (a surprise measured against what was first announced, for
-instance). It is a deliberate research choice, never a default.
+`AS_KNOWN_AT_AS_OF` is normative because it is what a decision-maker at that moment would
+actually have had in front of them — including any restatement already published. It is *not*
+the same as "as originally reported", and revision 1 conflated them.
+
+`ORIGINAL_FILING_ONLY` is the right choice for questions specifically about first-reported
+figures — a surprise measured against what was first announced, for instance. It is a
+deliberate research choice, and it is no harder to ask for than the normative one.
 
 ### 6.1 `LATEST_RESTATED` is not point-in-time and is fenced off
 
@@ -372,7 +535,9 @@ can correct a timing error; it cannot manufacture a missing observation. That is
 a Phase 3C qualification gate and not a lag-policy row.
 
 Lags apply to `public_available_time` only. **A lag may never be used to invent a
-`provider_available_time`** — that field is either known, or null and handled by §3.2.
+`provider_available_time`** — that field is either known, or null and handled by §3.3
+(`EXCLUDE`, `BOUND` or `DOWNGRADE`). `BOUND` is not a lag: it derives an upper bound from a
+time we actually observed, rather than assuming a delay.
 
 ---
 
@@ -388,15 +553,26 @@ These are errors, not warnings, and abort the query rather than returning a degr
 4. `revision_view = LATEST_RESTATED` reached from research or backtest code.
 5. `as_of_time` later than the dataset build time.
 6. A record with `availability_derivation = UNKNOWN` participating in a point-in-time query.
+   (`NOT_APPLICABLE` is **not** `UNKNOWN` — see §5.1 rules 5 and 6.)
 7. A requested `as_of` earlier than the dataset declared coverage start.
 8. Any `BLOCKING` data-quality issue open against a dataset the query touches.
 9. A universe query for a date with no `universe_membership` snapshot.
 10. Records resolved under **more than one profile** within a single result.
-11. `PROVIDER_REALISTIC_PIT` requested where `provider_available_time` is null and the
-    dataset resolution is neither `EXCLUDE` nor `DECLARE`.
-12. A schema version unrecognised by the reading code.
-13. A checksum mismatch between a curated table and the artifacts it declares.
-14. An adjusted-cache artifact that does not reproduce from its key.
+11. A record **served under a profile it is ineligible for** by origin (§3.1) — for example a
+    `PROVIDER_DERIVED` row appearing in a `PUBLIC_PIT` result.
+12. `PROVIDER_REALISTIC_PIT` requested where `provider_available_time` is null and the dataset
+    resolution is not one of `EXCLUDE`, `BOUND`, `DOWNGRADE`.
+13. A record served under `PROVIDER_REALISTIC_PIT` whose governing time was taken from
+    `public_available_time` — the withdrawn `DECLARE` behaviour (§3.3).
+14. A record missing the time its profile **requires**: no `public` under `PUBLIC_PIT`, no
+    `provider` under `PROVIDER_REALISTIC_PIT`, no `system_first_seen` under `FORWARD_SYSTEM`.
+15. An `information_origin` absent, or outside the closed vocabulary of §2.3.
+16. `PROVIDER_DERIVED` with a non-null `public_available_time`, or `SYSTEM_OBSERVED` with a
+    non-null `public` or `provider` time — the origin and the times disagree about what the
+    record is.
+17. A schema version unrecognised by the reading code.
+18. A checksum mismatch between a curated table and the artifacts it declares.
+19. An adjusted-cache artifact that does not reproduce from its key.
 
 Rule 7 deserves emphasis. **An empty result and a refusal are different answers**, and a data
 layer that returns the first when it means the second produces a backtest that looks merely
@@ -509,7 +685,11 @@ Enforced structurally, by test, in the manner ADR-0004 §10 already uses for the
 boundary — *"Enforced by test, not convention"*:
 
 - **`as_of`, `profile` and `revision_view` are required and have no defaults.** A static test
-  asserts no accessor declares any of them with a default value.
+  asserts no accessor declares any of them with a default value. `AS_KNOWN_AT_AS_OF` being the
+  **normative** historical view (§6) does not make it a code default — the caller names it.
+- **Ineligible rows are excluded and counted, never substituted.** A result whose datasets
+  contain rows ineligible under the requested profile (§3.1) reports the excluded counts by
+  dataset and origin, and the manifest carries `ORIGIN_INELIGIBLE_ROWS_EXCLUDED`.
 - **No `latest` path exists in research code.** A static scan forbids the identifiers
   `latest`, `current`, `most_recent` and `today` in research and backtest packages, and
   forbids `LATEST_RESTATED` there entirely.

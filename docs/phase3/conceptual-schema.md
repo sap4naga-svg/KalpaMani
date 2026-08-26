@@ -10,6 +10,11 @@ Types are conceptual: `instant` is a timezone-aware UTC timestamp; `date` is a c
 with no time component and is never silently promoted to an instant
 ([pit-data-contract.md](pit-data-contract.md) §12.6).
 
+> **Revision 3 (2026-08-26).** The envelope gains **`information_origin`** (§0.1a), which
+> decides which profiles a record is eligible for and which of its times may legitimately be
+> null. `provider_availability_derivation` gains `NOT_APPLICABLE`, and
+> `availability_derivation` distinguishes *failed to establish* from *does not exist*.
+>
 > **Revision 2 (2026-08-26).** The envelope no longer carries a single
 > `source_available_time`. It carries the four distinct information times from
 > [contract §2.1](pit-data-contract.md), and the governing `decision_available_time` is
@@ -26,8 +31,8 @@ Written once here, referenced as **`«envelope»`** rather than repeated twenty 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `public_available_time` | instant? | When the fact first became publicly obtainable from the authoritative source. Derived per [contract §5.1](pit-data-contract.md). **Nullable** — and null means "not point-in-time under any profile". |
-| `provider_available_time` | instant? | When the selected provider first offered this record. Derived per [contract §5.2](pit-data-contract.md). **Nullable, and its absence is information** ([contract §3.2](pit-data-contract.md)). |
+| `public_available_time` | instant? | When the fact first became publicly obtainable from the authoritative source. Derived per [contract §5.1](pit-data-contract.md). **Nullable — and what a null means depends on `information_origin`**: for `AUTHORITATIVE_PUBLIC` it means we failed to establish a time that exists, and the row is unusable everywhere; for the other origins it means no such time exists, and the row stays usable where §0.1a allows. |
+| `provider_available_time` | instant? | When the selected provider first offered this record. Derived per [contract §5.2](pit-data-contract.md). **Nullable**; under `PROVIDER_REALISTIC_PIT` a null is resolved by `EXCLUDE`, `BOUND` or `DOWNGRADE` ([contract §3.3](pit-data-contract.md)). |
 | `system_first_seen_time` | instant | When KalpaMani first held this record. Never null, never estimated. |
 | `ingestion_time` | instant | When *this row* was written. A rebuild writes a new row without changing `system_first_seen_time`. |
 
@@ -35,13 +40,32 @@ Written once here, referenced as **`«envelope»`** rather than repeated twenty 
 `information_set_profile` ([contract §3](pit-data-contract.md)). Storing it would bake one
 profile into the data and is precisely the conflation revision 1 committed.
 
+### 0.1a Information origin
+
+**New in revision 3.** Decides which profiles a record can be served under, and which of its
+times may legitimately be null ([contract §2.3, §3.1](pit-data-contract.md)).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `information_origin` | enum | `AUTHORITATIVE_PUBLIC` · `PROVIDER_DERIVED` · `SYSTEM_OBSERVED`. **Required on every row; there is no default.** |
+
+| `information_origin` | `public` | `provider` | `seen` | eligible profiles |
+|---|---|---|---|---|
+| `AUTHORITATIVE_PUBLIC` | **required** | optional | required | all three |
+| `PROVIDER_DERIVED` | **must be null** | **required** | required | `PROVIDER_REALISTIC_PIT`, `FORWARD_SYSTEM` |
+| `SYSTEM_OBSERVED` | null | null | **required** | `FORWARD_SYSTEM` only |
+
+Origin is declared **per entity** below, except where an entity can carry facts of more than
+one origin — `borrow_snapshot` and `classification_history` are the two, and both carry it per
+row.
+
 ### 0.2 Temporal classification
 
 | Field | Type | Meaning |
 |---|---|---|
 | `temporal_fact_class` | enum | `RETROSPECTIVE` · `ANNOUNCED_FORWARD` · `SAMPLED_STATE` — selects which timing invariant applies ([contract §7](pit-data-contract.md)). Declared per entity, not per row, except where noted. |
-| `availability_derivation` | enum | Which [contract §5.1](pit-data-contract.md) rule produced `public_available_time`: `EXACT` · `VENDOR_TZ` · `DATE_PLUS_LAG` · `SESSION_DERIVED` · `UNKNOWN` |
-| `provider_availability_derivation` | enum | `VENDOR_STAMPED` · `FILE_DROP` · `FIRST_SEEN_UPPER_BOUND` · `UNKNOWN` |
+| `availability_derivation` | enum | Which [contract §5.1](pit-data-contract.md) rule produced `public_available_time`: `EXACT` · `VENDOR_TZ` · `DATE_PLUS_LAG` · `SESSION_DERIVED` · `UNKNOWN` · **`NOT_APPLICABLE`**. `UNKNOWN` = a public time exists and we failed to establish it (**unusable**); `NOT_APPLICABLE` = no public time exists for this origin (**usable where §0.1a allows**). |
+| `provider_availability_derivation` | enum | `VENDOR_STAMPED` · `FILE_DROP` · **`FIRST_SEEN_UPPER_BOUND`** (the `BOUND` resolution) · `UNKNOWN` · **`NOT_APPLICABLE`** (`SYSTEM_OBSERVED`, where no provider exists to bound) |
 | `applied_lag` | duration? | Non-null only when `DATE_PLUS_LAG`. Surfaced in the research manifest. |
 
 ### 0.3 Version and provenance
@@ -59,18 +83,23 @@ profile into the data and is precisely the conflation revision 1 committed.
 ### 0.4 Load-bearing envelope rules
 
 - **`availability_derivation = UNKNOWN` may never participate in a point-in-time query**
-  ([contract §10](pit-data-contract.md) rule 6). The field exists so the refusal is mechanical
-  rather than a matter of judgement.
+  ([contract §10](pit-data-contract.md) rule 6). `NOT_APPLICABLE` is not `UNKNOWN`, and the two
+  are separate enum members precisely so the refusal is mechanical rather than a judgement.
 - **`provider_availability_derivation = UNKNOWN` under `PROVIDER_REALISTIC_PIT`** triggers the
-  dataset's declared `EXCLUDE` or `DECLARE` resolution — never a silent fallback.
+  dataset's declared `EXCLUDE`, `BOUND` or `DOWNGRADE` resolution — never a silent fallback,
+  and never the withdrawn `DECLARE`.
+- **A row is served only under a profile its origin is eligible for** (§0.1a). Ineligible rows
+  are excluded and counted, never substituted.
 - **`quality_status = QUARANTINED` rows are excluded from every research query.** Retained,
   not deleted — deleting the evidence of a data problem is how the same problem recurs.
-- **The ordering `public <= provider <= system_first_seen` is an asserted invariant**, not an
-  assumption. Violations are graded in [data-quality-plan.md](data-quality-plan.md) §4.
+- **The ordering `public <= provider <= system_first_seen` is asserted only over the times a
+  record actually has**, per its origin. Violations are graded in
+  [data-quality-plan.md](data-quality-plan.md) §4. Asserting it across a time the record
+  legitimately lacks is a malformed comparison, not a violation.
 
 ---
 
-## 1. `security` — `RETROSPECTIVE`
+## 1. `security` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -83,7 +112,7 @@ profile into the data and is precisely the conflation revision 1 committed.
 | `first_listing_date` / `last_listing_date` | date / date? | |
 | `«envelope»` | | |
 
-## 2. `listing` — `RETROSPECTIVE`
+## 2. `listing` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -101,7 +130,7 @@ announce them ahead of the effective date. Where an announcement is captured, th
 date is known, it is `RETROSPECTIVE` with the §9 lag. This is the one entity whose class is
 per-row.
 
-## 3. `ticker_history` — `RETROSPECTIVE`
+## 3. `ticker_history` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -114,7 +143,7 @@ per-row.
 **Invariant.** For any (`ticker`, `date`) there is at most one `security_id`. Overlap is
 `BLOCKING` — an overlap means every join on that ticker is ambiguous.
 
-## 4. `universe_membership` — `RETROSPECTIVE`
+## 4. `universe_membership` — `RETROSPECTIVE` · origin **inherited** (see below)
 
 The survivorship control. **Stored per session, never recomputed at query time.**
 
@@ -134,7 +163,13 @@ The stored evaluation inputs are not redundant. They make a membership decision 
 years later, and let a quality check confirm the rule was applied to admissible data rather
 than to current data.
 
-## 5. `market_session` — `ANNOUNCED_FORWARD`
+**Origin is inherited, not declared.** A universe snapshot is a derived artifact, so it is
+eligible under a profile **only if every input row that produced it was eligible under that
+profile**. In practice its inputs are all `AUTHORITATIVE_PUBLIC` (prices, shares outstanding,
+listings), so snapshots are normally eligible everywhere — but the rule is stated because a
+future eligibility criterion sourced from a proprietary feed would silently narrow it.
+
+## 5. `market_session` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
 Exchange calendars are published in advance. A 2027 holiday schedule known in 2026 is a
 correct, non-leaking fact — which is exactly why the blanket rule from revision 1 was wrong.
@@ -149,7 +184,7 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 | `announcement_time` | instant? | When the calendar revision publishing this session was released |
 | `«envelope»` | | |
 
-## 6. `price_bar` — `RETROSPECTIVE`
+## 6. `price_bar` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -167,7 +202,7 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 and, if materialised, live in `adjusted_bar_artifact` below — never here, and never as an
 extra column.
 
-## 7. `corporate_action` — `ANNOUNCED_FORWARD`
+## 7. `corporate_action` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -211,7 +246,7 @@ implementation plan.
 `content_hash` bit-identically; a mismatch is a **BLOCKING** quality issue, not a cache miss.
 No adjusted series exists anywhere in the system that is not keyed this way.
 
-## 8. `filing` — `RETROSPECTIVE`
+## 8. `filing` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 The provenance anchor for everything fundamental.
 
@@ -227,7 +262,7 @@ The provenance anchor for everything fundamental.
 | `document_url` | string | |
 | `«envelope»` | | |
 
-## 9. `fundamental_fact` — `RETROSPECTIVE`
+## 9. `fundamental_fact` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 One fact, one period, one revision. Narrow by design: a wide statement table cannot express
 per-line-item restatement.
@@ -261,7 +296,7 @@ reported" yields `FIRST_AND_LATEST_ONLY`, and any run touching such rows carries
 `REVISION_CHRONOLOGY_INCOMPLETE`. Which value a provider actually supports is a **BLOCKING
 provider test**, not an assumption ([implementation-plan.md](implementation-plan.md) §2–§3).
 
-## 10. `earnings_event` — `ANNOUNCED_FORWARD`
+## 10. `earnings_event` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
 A scheduled earnings date is announced weeks ahead of the event. Under revision 1's blanket
 rule this correct row would have been blocked.
@@ -291,7 +326,7 @@ why both anchors exist. The scheduled date is `ANNOUNCED_FORWARD`; the realised 
 claim about the world; a null says we do not know. Conflating them lets the estimates gap
 enter the factor pipeline silently.
 
-## 11. `analyst_estimate_snapshot` — `SAMPLED_STATE`
+## 11. `analyst_estimate_snapshot` — `SAMPLED_STATE` · **`PROVIDER_DERIVED`**
 
 **Schema defined now; not populated while the blocking gap is open.** Defining it costs
 nothing and prevents a later retrofit from being the moment PIT discipline gets negotiated.
@@ -306,7 +341,15 @@ nothing and prevents a later retrofit from being the moment PIT discipline gets 
 | `analyst_count` | int | |
 | `«envelope»` | | |
 
-## 12. `analyst_revision` — `RETROSPECTIVE`
+**This is the entity revision 2 would have made unusable.** A proprietary consensus has no
+authoritative public release instant — `public_available_time` is null with
+`availability_derivation = NOT_APPLICABLE`, and `snapshot_time` is the provider's own. Under
+revision 2's universal public-time requirement the row was ineligible everywhere; under
+revision 3 it is ineligible under `PUBLIC_PIT` (correctly — the market never saw it) and
+eligible under `PROVIDER_REALISTIC_PIT` and `FORWARD_SYSTEM`
+([contract §3.2 example B](pit-data-contract.md)).
+
+## 12. `analyst_revision` — `RETROSPECTIVE` · **`PROVIDER_DERIVED`**
 
 | Field | Type | Notes |
 |---|---|---|
@@ -319,7 +362,7 @@ nothing and prevents a later retrofit from being the moment PIT discipline gets 
 | `revision_type` | enum | `ESTIMATE` · `RATING` · `PRICE_TARGET` |
 | `«envelope»` | | |
 
-## 13. `borrow_snapshot` — `SAMPLED_STATE`
+## 13. `borrow_snapshot` — `SAMPLED_STATE` · **origin per row**
 
 **Schema defined now; not populated until Phase 3C qualifies a source.**
 
@@ -335,13 +378,19 @@ nothing and prevents a later retrofit from being the moment PIT discipline gets 
 | `is_ssr_active` | bool? | Blueprint §12 requires SSR state pre-execution |
 | `locate_required` | bool? | |
 | `coverage_scope` | enum | `SINGLE_SYMBOL` · `BULK_UNIVERSE` — a per-symbol history cannot support a broad-universe backtest |
+| `information_origin` | enum | **per row.** `PROVIDER_DERIVED` where the source stamps the observation with its own time; `SYSTEM_OBSERVED` where we polled a live endpoint that carries no timestamp |
 | `«envelope»` | | |
+
+**Which of the two applies to IBKR is a Phase-3C qualification outcome, not an assumption**
+([implementation-plan.md](implementation-plan.md) §4.1). It matters: a `SYSTEM_OBSERVED`
+borrow series is eligible **only** under `FORWARD_SYSTEM`, which means it cannot support a
+historical short backtest at all — only forward validation.
 
 **`source` is part of the primary key deliberately.** IBKR borrow availability and a
 market-wide securities-finance aggregate measure different things; merging them would
 manufacture a history no venue ever offered.
 
-## 14. `classification_history` — `ANNOUNCED_FORWARD`
+## 14. `classification_history` — `ANNOUNCED_FORWARD` · **origin per row**
 
 Index and classification changes are announced before they take effect.
 
@@ -353,9 +402,10 @@ Index and classification changes are announced before they take effect.
 | `valid_to` | date? | |
 | `announcement_time` | instant? | |
 | `sector` / `industry` / `sub_industry` | string | |
+| `information_origin` | enum | **per row.** `AUTHORITATIVE_PUBLIC` for SIC, which comes from filings; `PROVIDER_DERIVED` for a vendor or licensed taxonomy, which is the provider's own classification |
 | `«envelope»` | | |
 
-## 15. `source_document` — `RETROSPECTIVE`
+## 15. `source_document` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
 Provenance for the later AI layer (CLAUDE.md §7). Schema now, population later.
 
@@ -443,6 +493,11 @@ Stated once, enforced by test:
    [contract §5.1](pit-data-contract.md) ladder, even when the two coincide.
 6. **`provider_available_time` is never invented by a lag.** Known, or null.
 7. **Every entity declares a `temporal_fact_class`.** There is no default class.
+7a. **Every row declares an `information_origin`.** There is no default origin, and a row is
+    served only under a profile its origin is eligible for (§0.1a).
+7b. **`NOT_APPLICABLE` and `UNKNOWN` are never conflated.** The first means the time does not
+    exist; the second means it exists and we failed to establish it. One is usable, the other
+    is not.
 8. **No adjusted series exists outside a keyed `adjusted_bar_artifact`.**
 9. **Broker-native identifiers appear nowhere in this schema.** The data platform and the
    brokerage boundary do not meet (ADR-0002 §13, Blueprint §17).
