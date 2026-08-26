@@ -2,6 +2,10 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 3 (2026-08-26).** `provider_gap_resolution` takes the revised vocabulary
+> `EXCLUDE` / `BOUND` / `DOWNGRADE`; the withdrawn `DECLARE` is gone. Two limitation tokens are
+> added for profile downgrade and origin-based exclusion.
+>
 > **Revision 2 (2026-08-26).** The manifest now names the **information-set profile** and the
 > **revision view** a result was produced under ([contract §3, §6](pit-data-contract.md)).
 > Without them a manifest cannot describe what it did: "as of 2015-06-30" is not a single
@@ -48,8 +52,13 @@ temporal:
 
 information_set:                     # NEW in manifest_version 2 -- mandatory
   profile: PROVIDER_REALISTIC_PIT    # PUBLIC_PIT | PROVIDER_REALISTIC_PIT | FORWARD_SYSTEM
-  provider_gap_resolution: DECLARE   # EXCLUDE | DECLARE | N/A
+  provider_gap_resolution: BOUND     # EXCLUDE | BOUND | DOWNGRADE | N/A
   revision_view: AS_KNOWN_AT_AS_OF   # AS_KNOWN_AT_AS_OF | ORIGINAL_FILING_ONLY
+                                     # normative view, but always stated explicitly
+  origin_exclusions:                 # rows dropped as ineligible for this profile
+    - dataset: analyst_estimate_snapshot
+      origin: PROVIDER_DERIVED
+      rows: 0
 
 datasets:
   - dataset_version: gold/2026.08.26.1
@@ -82,6 +91,7 @@ limitations:                         # see section 3 -- mandatory block
   - PROVIDER_AVAILABILITY_UNKNOWN
   - REVISION_CHRONOLOGY_INCOMPLETE
   - SINGLE_SOURCE_UNVERIFIED
+  - ORIGIN_INELIGIBLE_ROWS_EXCLUDED
 
 quality:
   blocking_issues_open: 0            # non-zero => manifest is not emitted at all
@@ -120,7 +130,9 @@ approximated — not a default.
 | `EARNINGS_TIME_APPROXIMATED` | Announcement timing derived by lag, not verified |
 | `BORROW_HISTORY_UNAVAILABLE` | **Any short exposure in this run is unqualified** |
 | `BORROW_COVERAGE_PARTIAL` | Borrow history exists but is per-symbol or shallower than the backtest window |
-| `PROVIDER_AVAILABILITY_UNKNOWN` | `provider_available_time` null for some rows under `PROVIDER_REALISTIC_PIT`, resolved by `DECLARE` ([contract §3.2](pit-data-contract.md)) |
+| `PROVIDER_AVAILABILITY_UNKNOWN` | `provider_available_time` null for some rows under `PROVIDER_REALISTIC_PIT`, resolved by `EXCLUDE` or `BOUND` ([contract §3.3](pit-data-contract.md)) |
+| `PROFILE_DOWNGRADED_TO_PUBLIC` | The run requested `PROVIDER_REALISTIC_PIT` and was run **in its entirety** under `PUBLIC_PIT` instead, because provider timing was unavailable |
+| `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | Rows were excluded because their `information_origin` is not eligible under the requested profile ([contract §3.1](pit-data-contract.md)). The counts are in `information_set.origin_exclusions` |
 | `REVISION_CHRONOLOGY_INCOMPLETE` | Provider supplies first-and-latest revisions only, so `AS_KNOWN_AT_AS_OF` is a two-point approximation ([contract §6.3](pit-data-contract.md)) |
 | `NON_PIT_RESTATED_VIEW` | `LATEST_RESTATED` was used. **The result may not be called a backtest** |
 | `SINGLE_SOURCE_UNVERIFIED` | Only one provider licensed for a domain, so cross-provider checks did not run |
@@ -151,8 +163,12 @@ A manifest is refused — and the result is therefore inadmissible — when:
    run ([data-quality-plan.md](data-quality-plan.md) §4.3.1).
 7. **`information_set.revision_view` is absent**, or is `LATEST_RESTATED` on a run that calls
    itself a backtest.
-8. A `DECLARE` provider-gap resolution was used without `PROVIDER_AVAILABILITY_UNKNOWN` in
-   `limitations`.
+8. A `BOUND` provider-gap resolution was used without `PROVIDER_AVAILABILITY_UNKNOWN`, or a
+   `DOWNGRADE` without `PROFILE_DOWNGRADED_TO_PUBLIC`, in `limitations`.
+8a. Any row was served under a profile its `information_origin` is ineligible for, or rows were
+   excluded for ineligibility without `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` in `limitations`.
+8b. A row was served under `PROVIDER_REALISTIC_PIT` using `public_available_time` as its
+   governing time — the withdrawn `DECLARE` behaviour.
 9. An adjusted artifact was consumed whose content hash does not reproduce from its key.
 10. A short position appears in a run limited by `BORROW_HISTORY_UNAVAILABLE`.
 

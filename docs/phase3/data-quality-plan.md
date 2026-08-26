@@ -2,6 +2,11 @@
 
 **Status: PROPOSED — planning only. No check is implemented.**
 
+> **Revision 3 (2026-08-26).** Impossibility checks are now **origin-aware** as well as
+> class-aware (§4.1): a null `public_available_time` is a defect for an `AUTHORITATIVE_PUBLIC`
+> record and correct for a proprietary one. Profile checks are rebuilt around eligibility and
+> the withdrawn `DECLARE` resolution (§4.3).
+>
 > **Revision 2 (2026-08-26).** Review found the blanket rule *"availability before observation
 > → BLOCKING"* invalid for facts announced ahead of their effective date — a scheduled
 > earnings date or an announced split would have been blocked while being entirely correct.
@@ -49,7 +54,13 @@ Two rules keep severity honest:
 `pub` = `public_available_time` · `prov` = `provider_available_time` ·
 `seen` = `system_first_seen_time` · `ing` = `ingestion_time` · `obs` = `observation_time` ·
 `ann` = `announcement_time` · `smp` = `sample_time` ·
-`dat(P)` = `decision_available_time` under profile `P` · `build` = dataset build time.
+`dat(P)` = `decision_available_time` under profile `P` · `build` = dataset build time ·
+`origin` = `information_origin` · `elig(P)` = the record is eligible under profile `P` per
+[contract §3.1](pit-data-contract.md).
+
+**Every inequality below is evaluated only over times the record actually has.** A comparison
+against a time a record legitimately lacks is skipped, not failed — that was revision 2's
+error, and §4.0 makes the skip explicit rather than implicit.
 
 ---
 
@@ -70,25 +81,45 @@ Two rules keep severity honest:
 
 ## 4. Temporal checks
 
-### 4.1 Impossibility and leakage — class-aware
+### 4.0 Origin conformance — checked first
+
+These decide which of the later checks even apply. A record failing §4.0 is malformed, and
+running §4.1 against it would produce a misleading verdict.
+
+| # | Check | Exact condition | Severity |
+|---|---|---|---|
+| 4.0.1 | Origin absent or outside the closed vocabulary | `origin ∉ {AUTHORITATIVE_PUBLIC, PROVIDER_DERIVED, SYSTEM_OBSERVED}` | **BLOCKING** |
+| 4.0.2 | Public fact with no public time established | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NULL` | **BLOCKING** — this is `UNKNOWN`, not `NOT_APPLICABLE` |
+| 4.0.3 | Proprietary fact carrying a public time | `origin = PROVIDER_DERIVED` ∧ `pub IS NOT NULL` | **BLOCKING** — if a public instant exists, the origin is wrong |
+| 4.0.4 | Proprietary fact with no provider time | `origin = PROVIDER_DERIVED` ∧ `prov IS NULL` | **BLOCKING** unless the dataset resolution is `BOUND` (§4.3.2) |
+| 4.0.5 | System-observed fact carrying vendor timing | `origin = SYSTEM_OBSERVED` ∧ (`pub IS NOT NULL` ∨ `prov IS NOT NULL`) | **BLOCKING** |
+| 4.0.6 | Derivation disagrees with origin | `availability_derivation = NOT_APPLICABLE` ∧ `origin = AUTHORITATIVE_PUBLIC`, or `= UNKNOWN` ∧ `origin ≠ AUTHORITATIVE_PUBLIC` | **BLOCKING** |
+| 4.0.7 | Missing `seen` | `seen IS NULL`, any origin | **BLOCKING** |
+
+### 4.1 Impossibility and leakage — class-aware and origin-aware
 
 These say *this could not have happened*, so a violation means a timestamp is wrong, and
 serving the row would hand a backtest information nobody had.
 
 | # | Check | Exact condition | Applies to | Severity |
 |---|---|---|---|---|
-| 4.1.1 | Held before public | `seen < pub` | all classes | **BLOCKING** |
-| 4.1.2 | Held before provider supplied | `seen < prov` | all classes | **BLOCKING** |
+| 4.1.1 | Held before public | `pub IS NOT NULL` ∧ `seen < pub` | all classes | **BLOCKING** |
+| 4.1.2 | Held before provider supplied | `prov IS NOT NULL` ∧ `prov` not `FIRST_SEEN_UPPER_BOUND` ∧ `seen < prov` | all classes | **BLOCKING** |
 | 4.1.3 | Row written before first seen | `ing < seen` | all classes | **BLOCKING** |
-| 4.1.4 | Provider ahead of public | `prov < pub` | all classes | **WARNING**, escalating |
-| 4.1.5 | **Retrospective** fact available before it occurred | `pub < obs` | `RETROSPECTIVE` **only** | **BLOCKING** |
-| 4.1.6 | **Announced-forward** fact available before it was announced | `pub < ann` | `ANNOUNCED_FORWARD` **only** | **BLOCKING** |
-| 4.1.7 | **Sampled state** available before it was sampled | `pub < smp` | `SAMPLED_STATE` **only** | **BLOCKING** |
-| 4.1.8 | Revision predates the revision it supersedes | `pub(rev n) < pub(rev n−1)` | all | **BLOCKING** |
+| 4.1.4 | Provider ahead of public | `pub IS NOT NULL` ∧ `prov IS NOT NULL` ∧ `prov < pub` | `AUTHORITATIVE_PUBLIC` **only** | **WARNING**, escalating |
+| 4.1.5 | **Retrospective** fact available before it occurred | `earliest(pub, prov) < obs` | `RETROSPECTIVE` **only** | **BLOCKING** |
+| 4.1.6 | **Announced-forward** fact available before it was announced | `earliest(pub, prov) < ann` | `ANNOUNCED_FORWARD` **only** | **BLOCKING** |
+| 4.1.7 | **Sampled state** available before it was sampled | `earliest(pub, prov, seen) < smp` | `SAMPLED_STATE` **only** | **BLOCKING** |
+| 4.1.8 | Revision predates the revision it supersedes | `anchor(rev n) < anchor(rev n−1)`, where `anchor` is `pub` for `AUTHORITATIVE_PUBLIC` and `prov` otherwise | all | **BLOCKING** |
 | 4.1.9 | Future-dated availability | `dat(P) > build` | all | **BLOCKING** |
-| 4.1.10 | Estimate snapshot series moving backward | `snapshot_time` order disagrees with `pub` order | `SAMPLED_STATE` | **BLOCKING** |
+| 4.1.10 | Estimate snapshot series moving backward | `snapshot_time` order disagrees with `anchor` order (see 4.1.8) | `SAMPLED_STATE` | **BLOCKING** |
 | 4.1.11 | DST-ambiguous instant stored unresolved | no offset recorded for a fall-back-hour local time | all | **BLOCKING** |
 | 4.1.12 | Session date derived by UTC truncation | `session_date ≠ calendar.session_of(instant)` | bars | **BLOCKING** |
+
+`earliest(...)` is the earliest **non-null** of the named times — the record's own earliest
+availability, whatever kind of record it is. Revision 2 wrote these against `pub` alone, which
+silently skipped the check entirely for proprietary rows: a consensus snapshot stamped before
+the moment it was sampled would have passed.
 
 > **There is deliberately NO check of the form `effective_date < pub`.** For
 > `ANNOUNCED_FORWARD` facts an effective date later than availability is the normal, correct
@@ -111,10 +142,15 @@ Leakage is impossible. Lateness is merely inconvenient — unless something live
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
 | 4.3.1 | Mixed profiles in one result | >1 distinct `information_set_profile` resolved within a result set | **BLOCKING** |
-| 4.3.2 | Unresolved provider availability | profile = `PROVIDER_REALISTIC_PIT` ∧ `prov IS NULL` ∧ dataset resolution ∉ {`EXCLUDE`,`DECLARE`} | **BLOCKING** |
-| 4.3.3 | Undeclared provider gap | profile = `PROVIDER_REALISTIC_PIT` ∧ `prov IS NULL` ∧ resolution = `DECLARE` ∧ manifest lacks `PROVIDER_AVAILABILITY_UNKNOWN` | **BLOCKING** |
-| 4.3.4 | Profile ordering violated | `dat(PUBLIC_PIT) > dat(PROVIDER_REALISTIC_PIT)` ∨ `dat(PROVIDER_REALISTIC_PIT) > dat(FORWARD_SYSTEM)` | **BLOCKING** |
-| 4.3.5 | Backfill admitted too early | row admitted at `as_of` while `dat(P) > as_of` under the declared profile | **BLOCKING** |
+| 4.3.2 | Unresolved provider availability | profile = `PROVIDER_REALISTIC_PIT` ∧ `prov IS NULL` ∧ dataset resolution ∉ {`EXCLUDE`,`BOUND`,`DOWNGRADE`} | **BLOCKING** |
+| 4.3.3 | **Public timing used under a provider-realistic label** | profile = `PROVIDER_REALISTIC_PIT` ∧ a served row's governing time was taken from `pub` — the withdrawn `DECLARE` behaviour | **BLOCKING** |
+| 4.3.4 | Undeclared provider gap | resolution = `BOUND` ∧ manifest lacks `PROVIDER_AVAILABILITY_UNKNOWN`; or resolution = `DOWNGRADE` ∧ manifest lacks `PROFILE_DOWNGRADED_TO_PUBLIC` | **BLOCKING** |
+| 4.3.5 | Ineligible row served | a row served under a profile its `origin` is ineligible for (§4.0, [contract §3.1](pit-data-contract.md)) | **BLOCKING** |
+| 4.3.6 | Undeclared exclusions | rows were excluded for ineligibility ∧ manifest lacks `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | **BLOCKING** |
+| 4.3.7 | Profile ordering violated | for a record **eligible under both compared profiles**: `dat(PUBLIC_PIT) > dat(PROVIDER_REALISTIC_PIT)` ∨ `dat(PROVIDER_REALISTIC_PIT) > dat(FORWARD_SYSTEM)` | **BLOCKING** |
+| 4.3.8 | Ordering asserted across an ineligible profile | the ordering check ran on a record not eligible under both sides | **BLOCKING** — a malformed comparison, not a data defect |
+| 4.3.9 | Backfill admitted too early | row admitted at `as_of` while `dat(P) > as_of` under the declared profile | **BLOCKING** |
+| 4.3.10 | `BOUND` applied to a system-observed row | resolution = `BOUND` ∧ `origin = SYSTEM_OBSERVED` | **BLOCKING** — bounding a provider time that does not exist invents one |
 
 ### 4.4 Revision view
 
