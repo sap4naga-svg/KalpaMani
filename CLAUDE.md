@@ -201,39 +201,97 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 ## 9. Current phase
 
 **PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
+**PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 
-Bootstrap complete. Phase 1 read-only connectivity **proven against the live IBKR Paper
-account**: LEAN -> IBKR Paper connected, account confirmed PAPER three ways, SPY subscribed
-(exactly one symbol, delayed data), broker account state observed, and — the point of the
-exercise — the broker reported **USD 1,000,000** while KalpaMani strategy capital stayed at
-**USD 80,000** (12.50x divergence, logged explicitly). **Zero orders, zero positions.**
+### Phase 1 — accepted
 
-Market data confirmed: a SPY bar was received at **05:15 ET pre-market** (close 766.38,
-volume 360) within a minute of connecting, on delayed IBKR data. All thirteen Phase 1
-acceptance criteria are satisfied.
+Read-only connectivity proven against the live IBKR Paper account: LEAN → IBKR Paper
+connected, account confirmed PAPER three ways, SPY subscribed (exactly one symbol, delayed
+data), broker account state observed, and — the point of the exercise — the broker reported
+**USD 1,000,000** while KalpaMani strategy capital stayed at **USD 80,000** (12.50x
+divergence, logged explicitly). **Zero orders, zero positions.** All thirteen acceptance
+criteria satisfied.
 
-**Acceptance evidence (all 13 criteria):** LEAN launches · IBKR Paper connection confirmed ·
-exactly one SPY subscription · market data received · broker state observable · paper equity
-observed as USD 1,000,000 · KalpaMani capital remained USD 80,000 · no orders · no positions ·
-clean shutdown · 98 tests passing · ruff clean · mypy strict clean · preflight clean.
+### Phase 2 — accepted
 
-**Operational finding — binding, see [ADR-0003](docs/decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md).**
+**Execution plumbing, certified. Not a strategy.** See
+[docs/certification/phase2-paper-order-lifecycle.md](docs/certification/phase2-paper-order-lifecycle.md).
+
+Certified scope, and nothing wider:
+
+```
+IBKR PAPER only · SPY only · long only · exactly 1 share · FULL-FILL lifecycle
+entry -> actual fill -> protective stop -> durable broker-native identity
+     -> genuine LEAN / IB Gateway restart -> tagless recovery by BrokerId
+     -> controlled protective cancellation -> signed SELL exit fill
+     -> final flat reconciliation
+```
+
+**Certification runs.** Both are retained; neither may be modified.
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| final state | `FAILED` | **`RECONCILED`** |
+| resolution | `MANUAL_BROKER_CLOSE` | `AUTOMATED` |
+| role | **negative certification evidence** | **accepted certification run** |
+
+Run 1 failed at restart ownership recovery — `Order.Tag` is not sent to IBKR, so a
+re-hydrated protective order returns anonymous. It **failed closed**: halted, submitted
+nothing, left the working stop alone. The position was closed by hand and the run recorded
+terminal `FAILED`, never `RECONCILED`. Run 2 proved recovery by durable broker-native
+identity across a real restart. See ADR-0004 §21–22.
+
+**Phase 2 does NOT certify** — these are future requirements, not defects in a deliberately
+narrow certification:
+
+> partial fills · multiple fill accumulation · a protective stop actually triggering ·
+> short lifecycle · multiple simultaneous positions · pyramiding · strategy generation ·
+> alpha or profitability · live brokerage execution · real-money operation
+
+### Current operational state
+
+| | |
+|---|---|
+| broker | **flat** — SPY position 0, open SPY orders 0 |
+| arm | none |
+| operational halt | none |
+| `LIVE_TRADING_HARD_DISABLED` | **True** |
+
+### Security status
+
+Repository visibility is **PRIVATE** (§3) and must stay private.
+[INC-0002](docs/incidents/INC-0002-account-binding-digest-exposure.md) is **OPEN**: orphaned
+pre-sanitization Git objects still carry an account-binding digest and remain retrievable by
+SHA, and the GitHub purge is **pending**. The repository must not become public until **all**
+of the following hold:
+
+1. GitHub confirms the purge;
+2. `scripts/verify_purge.py` exits 0;
+3. every affected object is no longer retrievable.
+
+If public visibility is later approved, §3 and the actual visibility change together, in one
+controlled change, so policy and reality never disagree.
+
+### Operational finding — binding, see [ADR-0003](docs/decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md)
+
 LEAN's IBAutomater unselects IB Gateway's **[Read-Only API]** checkbox and selects every
 **[Bypass ... for API Orders]** precaution on every start. **IBKR Read-Only API MUST NOT be
 treated as an independent KalpaMani safety control**, and neither may any broker UI
 precaution. Broker-side controls are defense-in-depth only and must never be a required
 safety invariant. Order safety is enforced internally and deterministically, provable from
-this repository alone — `scripts/phase1_preflight.py` and
-`tests/unit/test_phase1_broker_safety.py`. This corrects an assumption in Blueprint V2.1 §25;
-the PDF is not edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
+this repository alone. This corrects an assumption in Blueprint V2.1 §25; the PDF is not
+edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 
-**Still not implemented and not authorized:** order submission of any kind (paper or live);
+### Still not implemented, and not authorized
+
 Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger
-agents; the portfolio/risk engine; data purchases; production cloud infrastructure; options;
-leverage; X/social signals.
+agents; the portfolio/risk engine; the scanner and factor pipeline; the point-in-time data
+platform; database schema, dashboard, alerting, kill switch; data purchases; production cloud
+infrastructure; options; leverage; X/social signals. Live trading remains **hard-disabled**.
 
-**Next phase (requires explicit approval): PHASE 1 — IBKR PAPER CONNECTIVITY.**
-Objective: LEAN → IBKR Paper → subscribe to one liquid U.S. equity → receive market data
-→ read brokerage/account state → **NO ORDER SUBMISSION** → clean shutdown and
-reconciliation. Phase 1 must also prove that KalpaMani strategy capital remains **$80,000**
-even when IBKR Paper reports a NetLiquidation of **$1,000,000**.
+### Next phase
+
+**PHASE 3 — POINT-IN-TIME DATA FOUNDATION.**
+
+**Phase 3 is NOT STARTED and is NOT AUTHORIZED.** Recording it here names what comes next; it
+does not approve it. Beginning it requires explicit written authorization, per §8.
