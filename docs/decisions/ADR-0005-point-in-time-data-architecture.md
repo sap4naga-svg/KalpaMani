@@ -1,7 +1,7 @@
 # ADR-0005 — Point-in-Time Data Architecture and the Anti-Lookahead Contract
 
 - **Status:** **Proposed** — planning under review. Not accepted, not implemented.
-- **Date:** 2026-08-26 (revision 7)
+- **Date:** 2026-08-26 (revision 8)
 - **Deciders:** Project owner (human governance) — *pending*
 - **Relates to:** ADR-0001 (System Foundation), ADR-0002 (BrokerAdapter and the Brokerage Boundary), ADR-0004 (Deterministic Order Identity, Idempotency, and Execution Lifecycle)
 - **Authority:** Blueprint V2.1 §18 (Phase-0 point-in-time data feasibility), §17, §19, §26
@@ -18,8 +18,9 @@
 | **3** | **2026-08-26** | Review of revision 2. Three contract inconsistencies fixed: availability is now **origin-aware**, so a proprietary observation with no public release instant is usable where it legitimately can be (§1a, §2a); the `DECLARE` resolution for unknown provider timing is **withdrawn** as self-contradictory and replaced by EXCLUDE / BOUND / DOWNGRADE (§4); and the revision-view table's "default" is reworded to **normative historical view**, since the accessor has no default (§6). |
 | **4** | **2026-08-26** | Review of revision 3. The **atomic-fact rule** is added (§0); a **derived-artifact model** replaces the unrepresentable "inherited" origin (§1b); a single origin-aware **`source_anchor`** replaces the public-time-only class invariants (§7); exact provider/public times are separated from **conservative upper bounds** (§4a); the manifest records **requested versus resolved profile** (§18a); and **required-input completeness** is enforced rather than merely reported (§19a). Four schemas that mixed facts are split. |
 | **5** | **2026-08-26** | Normalization round. The two envelopes are made **mutually exclusive** (§1c); **`resolved_public_time` / `resolved_provider_time`** let an approved bound satisfy a profile requirement without being mistaken for an exact time (§4b); **approximations move out of exact fields** into named bound fields (§4c); every computation after resolution uses **`resolved_profile`** (§18a); gap resolution becomes **per dataset** (§4); derived artifacts declare **`output_validity`** (§1d); required inputs gain a **coverage contract** (§19a); six schemas corrected. |
-| **7** | **2026-08-26** | Blocking-semantics fixes. `UNKNOWN` exact timing no longer disqualifies a row with an approved bound — unusability is `resolved_* IS NULL` (§4b). A **resolved fact-time anchor** joins the availability anchor, so a date-only announcement is checked rather than skipped (§7). Coverage evidence becomes partition-minimum based (§19a). The context's data-gap summary is corrected: the two blocking domains are blocked for **different reasons**. |
 | **6** | **2026-08-26** | Stale-rule cleanup. The **normative** decisions themselves still carried pre-revision-5 wording: the atomic rule demanded a `temporal_fact_class` of every row including derived ones (§0); the profile formulas were exact-only (§2); the anchor read the requested profile (§7); the manifest decision named the withdrawn scalar `profile_resolution` fields (§18a); and the lag decision said a lag applies to `public_available_time` (§5). Corrected. `price_bar` splits so no derived row sits inside a `RETROSPECTIVE` entity, and derived-artifact identity enters `run_id` (§18). |
+| **7** | **2026-08-26** | Blocking-semantics fixes. `UNKNOWN` exact timing no longer disqualifies a row with an approved bound — unusability is `resolved_* IS NULL` (§4b). A **resolved fact-time anchor** joins the availability anchor, so a date-only announcement is checked rather than skipped (§7). Coverage evidence becomes partition-minimum based (§19a). The context's data-gap summary is corrected: the two blocking domains are blocked for **different reasons**. |
+| **8** | **2026-08-26** | Final consistency cleanup before merge. §1a and §3 still described **exact** timing where the accepted rule is **resolved** timing, and §3 said `BOUND` sets provider availability rather than an upper bound. Revision history reordered. No architecture changed. |
 
 ---
 
@@ -122,10 +123,16 @@ Every record declares an `information_origin` from a closed vocabulary:
 | `PROVIDER_DERIVED` | the provider own computed or proprietary observation | **null** | **required** | required |
 | `SYSTEM_OBSERVED` | observed directly by KalpaMani, with no vendor timestamp | null | null | **required** |
 
-**A null `public_available_time` means two opposite things**, and they are distinguished by
-`public_time_derivation`: `UNKNOWN` means a public time exists and we failed to establish it —
-the record is unusable everywhere; `NOT_APPLICABLE` means no such time exists — the record
-stays usable where its origin allows. Conflating them is what revision 2 did.
+**A null `public_available_time` means two different things**, distinguished by
+`public_time_derivation`. `UNKNOWN` means the **exact instant was not established** — an
+approved `public_available_upper_bound` may still resolve the axis, and **the record is unusable
+only when `resolved_public_time` is null**. `NOT_APPLICABLE` means no such time exists, and the
+record stays usable where its origin allows. Conflating them is what revision 2 did; treating
+`UNKNOWN` as automatically fatal is what revision 6 did.
+
+**The provider axis is symmetrical**: `provider_time_derivation = UNKNOWN` with an approved
+`provider_available_upper_bound` resolves, and the record is unusable only when
+`resolved_provider_time` is null.
 
 Origin is a property of the fact, not of the delivery path: a filing delivered by a vendor is
 still `AUTHORITATIVE_PUBLIC`, and `PROVIDER_DERIVED` is not an escape hatch for a public fact
@@ -255,9 +262,15 @@ by the same field and the code would have picked whichever the ingestion path ha
 
 **A backfilled record must not become historically available under `PROVIDER_REALISTIC_PIT`
 merely because the public fact underneath it is old.** The age of the underlying event says
-nothing about when a subscriber could have obtained the vendor row describing it. `BOUND`
-(§4) enforces this by construction: it sets provider availability to the day we first saw the
-row, so a backfill stays inadmissible in the past rather than relying on vigilance.
+nothing about when a subscriber could have obtained the vendor row describing it. `BOUND` (§4)
+enforces this by construction: it sets **`provider_available_upper_bound` to
+`system_first_seen_time`** — a conservative upper bound — while `provider_available_time`
+remains null. It never writes or claims an exact provider time. A backfill therefore stays
+inadmissible in the past rather than relying on vigilance.
+
+Under `PUBLIC_PIT` a backfilled `AUTHORITATIVE_PUBLIC` fact **is** admissible historically,
+from its exact public time **or from an approved public upper bound** — the bound is as valid a
+resolution here as anywhere else.
 
 ### 4. Unknown provider availability: EXCLUDE, BOUND or DOWNGRADE — never DECLARE
 

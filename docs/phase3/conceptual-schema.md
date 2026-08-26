@@ -10,6 +10,10 @@ Types are conceptual: `instant` is a timezone-aware UTC timestamp; `date` is a c
 with no time component and is never silently promoted to an instant
 ([pit-data-contract.md](pit-data-contract.md) §12.6).
 
+> **Revision 8 (2026-08-26).** Final cleanup: §0.1 and §0.1a describe the **resolved** timing
+> axes rather than the exact fields, so "required" no longer reads as "the exact field must be
+> populated".
+>
 > **Revision 7 (2026-08-26).** `UNKNOWN` exact timing no longer disqualifies a row that has an
 > approved bound (§0.1, §0.4); `price_bar` gains a **bar-time key** so minute bars cannot
 > collide and is declared the **canonical curated record** (§6); the adjusted artifact's hash is
@@ -81,7 +85,7 @@ Written once here, referenced as **`«envelope»`** rather than repeated twenty 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `public_available_time` | instant? | When the fact first became publicly obtainable from the authoritative source. Derived per [contract §5.1](pit-data-contract.md). **Nullable — and what a null means depends on `information_origin`**: for `AUTHORITATIVE_PUBLIC` it means we failed to establish a time that exists, and the row is unusable everywhere; for the other origins it means no such time exists, and the row stays usable where §0.1a allows. |
+| `public_available_time` | instant? | When the fact first became publicly obtainable from the authoritative source. Derived per [contract §5.1](pit-data-contract.md). **Nullable.** For `AUTHORITATIVE_PUBLIC` a null means only that the exact instant was **not established** — the row remains usable if an approved `public_available_upper_bound` resolves the axis, and is unusable only when `resolved_public_time` is also null. For the other origins a null means no such time exists. |
 | `provider_available_time` | instant? | When the selected provider first offered this record. Derived per [contract §5.2](pit-data-contract.md). **Nullable**; under `PROVIDER_REALISTIC_PIT` a null is resolved by `EXCLUDE`, `BOUND` or `DOWNGRADE` ([contract §3.3](pit-data-contract.md)). |
 | `public_available_upper_bound` | instant? | A time the fact was certainly public **by**, when the exact instant is unknown but bounded — a correction, for example ([contract §12.2](pit-data-contract.md)). **Never written into the exact field.** |
 | `provider_available_upper_bound` | instant? | A time the provider certainly offered the record **by**. Set by the `BOUND` resolution from `system_first_seen_time`. **`provider_available_time` stays null.** |
@@ -107,9 +111,11 @@ times may legitimately be null ([contract §2.3, §3.1](pit-data-contract.md)).
 |---|---|---|
 | `information_origin` | enum | `AUTHORITATIVE_PUBLIC` · `PROVIDER_DERIVED` · `SYSTEM_OBSERVED` · **`DERIVED_ARTIFACT`**. **Required on every row; there is no default.** The first three select the source envelope (§0.1); the fourth selects the derived envelope (§0.1b). |
 
-| `information_origin` | `public` | `provider` | `seen` | eligible profiles |
+**The `public` and `provider` columns name the *resolved* axes** ([contract §5.0](pit-data-contract.md)) — exact time **or** approved upper bound — never the exact field alone.
+
+| `information_origin` | resolved public | resolved provider | `seen` | eligible profiles |
 |---|---|---|---|---|
-| `AUTHORITATIVE_PUBLIC` | **required** | optional | required | all three |
+| `AUTHORITATIVE_PUBLIC` | **required** | required under `PROVIDER_REALISTIC_PIT` | required | all three |
 | `PROVIDER_DERIVED` | **must be null** | **required** | required | `PROVIDER_REALISTIC_PIT`, `FORWARD_SYSTEM` |
 | `SYSTEM_OBSERVED` | null | null | **required** | `FORWARD_SYSTEM` only |
 | `DERIVED_ARTIFACT` | **null** | **null** | **null** | intersection of its inputs; always `FORWARD_SYSTEM` |

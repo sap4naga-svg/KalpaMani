@@ -199,7 +199,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/9] Closed vocabularies are defined where they are used")
+    print("[1/10] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -223,7 +223,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/9] Source and derived envelopes stay disjoint")
+    print("\n[2/10] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -258,7 +258,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/9] Every declared temporal semantics has its required anchor")
+    print("\n[3/10] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -275,7 +275,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/9] Exact and bound derivations name the correct fields")
+    print("\n[4/10] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -302,7 +302,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/9] Normative rules use the current resolved model")
+    print("\n[5/10] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -348,7 +348,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/9] Entities keep source and derived rows apart")
+    print("\n[6/10] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -418,7 +418,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/9] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/10] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -480,7 +480,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/9] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/10] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -584,8 +584,113 @@ def main() -> int:
         "context still implies both are unavailable at individual cost",
     )
 
+    # ---------------------------------------------------------------- 4e. merge closeout
+    print("\n[9/10] Resolved-timing wording, closure rules and current status")
+
+    f.check(
+        "contract origin table names resolved timing axes",
+        "`resolved_public_time` | `resolved_provider_time`" in contract
+        or "resolved timing axes, not exact fields" in contract,
+        "origin table still requires the exact field",
+    )
+    f.check(
+        "schema origin table names resolved timing axes",
+        "resolved public | resolved provider" in schema or "name the *resolved* axes" in schema,
+        "schema origin table still requires the exact field",
+    )
+    unusable_everywhere = [
+        f"{p.name}:{n}"
+        for p, t in everything.items()
+        for n, line in lines_with(t, "unusable everywhere")
+        if "only when" not in line and "only if" not in line
+    ]
+    f.check(
+        "no normative text says an unestablished exact time is unusable everywhere",
+        not unusable_everywhere,
+        ", ".join(unusable_everywhere),
+    )
+    f.check(
+        "backfill admits an approved public bound",
+        "approved `public_available_upper_bound`" in contract
+        and "not restricted to exactly-timed records" in contract,
+        "PUBLIC_PIT backfill still limited to exact timing rules",
+    )
+    bound_claims = [
+        f"{p.name}:{n}"
+        for p, t in everything.items()
+        for n, line in lines_with(t, "BOUND sets")
+        if "upper_bound" not in line and "upper bound" not in line
+    ]
+    f.check(
+        "BOUND is always described as setting an upper bound",
+        not bound_claims,
+        ", ".join(bound_claims),
+    )
+
+    adr_revs = [
+        int(m) for m in re.findall(r"^\| (?:\*\*)?([0-9]+)(?:\*\*)? \| ", everything[ADR], re.M)
+    ]
+    f.check(
+        "ADR revision history is numerically ordered",
+        adr_revs == sorted(adr_revs) and len(set(adr_revs)) == len(adr_revs),
+        f"order: {adr_revs}",
+    )
+
+    f.check(
+        "manifest states the evidence closure rule",
+        "What the evidence must close over" in manifest,
+        "no closure rule for direct versus lineage-reached datasets",
+    )
+    example = manifest[manifest.find("manifest_version:") : manifest.find("### 2a.")]
+    resolution_map = re.findall(r"- dataset: ([a-z_]+)", example)
+    required_domains = re.findall(r"- domain: ([a-z_]+)", example)
+    derived_entities = re.findall(r"entity: ([a-z_]+)", example)
+    # Every direct source input must appear in the resolution map, unless it is a derived
+    # artifact (pinned by lineage) or a domain the run declared unavailable.
+    unavailable = re.search(r"^  unavailable:.*?$(.*?)(?=^  [a-z_]+:)", example, re.S | re.M)
+    declared_absent = (
+        set(re.findall(r"- domain: ([a-z_]+)", unavailable.group(1))) if unavailable else set()
+    )
+    unclosed = [
+        d
+        for d in required_domains
+        if d not in resolution_map and d not in derived_entities and d not in declared_absent
+    ]
+    f.check(
+        "example closes over its direct source inputs",
+        not unclosed,
+        f"absent from the resolution map: {', '.join(unclosed)}",
+    )
+    f.check(
+        "example lists universe_membership as a derived artifact",
+        "entity: universe_membership" in example,
+        "a DERIVED_ARTIFACT input is missing from derived_artifacts",
+    )
+    f.check(
+        "zero exclusions do not create an exclusion claim",
+        not ("ORIGIN_INELIGIBLE_ROWS_EXCLUDED" in example and "origin_exclusions: []" in example),
+        "exclusion token emitted against an empty exclusion list",
+    )
+    f.check(
+        "manifest requires positive evidence for every limitation token",
+        "Every limitation token needs positive evidence" in manifest,
+        "no evidence requirement for tokens",
+    )
+
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        text = read(path)
+        ok = (
+            "PHASE 3 PLANNING" in text.upper()
+            and "ACCEPTED" in text.upper()
+            and "NOT AUTHORIZED" in text.upper()
+        )
+        f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
+
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[9/9] No document refers to a retired field name")
+    print("\n[10/10] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():

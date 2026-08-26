@@ -2,6 +2,14 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 8 (2026-08-26).** The **closure rule** for the resolution evidence is stated
+> exactly (§2b), and the example is corrected to obey it: `filing` and `classification_history`
+> gain resolution entries, `universe_membership` appears as the derived artifact it is,
+> `corporate_action` is pinned through the adjusted artifact's lineage rather than duplicated,
+> and the analyst-estimate gap is recorded as a **declared unavailable domain** instead of a
+> zero-row exclusion. `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` is emitted only against a positive,
+> evidenced exclusion.
+>
 > **Revision 7 (2026-08-26).** The required-input example was **not a passing manifest** — it
 > reported 34 failing partitions against a contract that refuses on one. Coverage evidence is now
 > per-scope, partition-minimum based, and the example genuinely passes.
@@ -108,22 +116,45 @@ information_set:                        # mandatory
         officially disseminated bars carry no per-bar publication instant, so public
         timing is bounded at session close plus lag; the provider stamps file drops,
         so provider timing is exact
-    - dataset: analyst_estimate_snapshot
-      policy: EXCLUDE
-      rows_considered: 0
-      public_basis: N/A                       # PROVIDER_DERIVED: no public time exists
-      public_exact_rows: 0
+    - dataset: filing
+      policy: NONE
+      rows_considered: 48_112
+      public_basis: EXACT                     # SEC acceptance datetimes
+      public_exact_rows: 48_112
       public_bounded_rows: 0
-      provider_basis: N/A
-      provider_exact_rows: 0
+      provider_basis: EXACT
+      provider_exact_rows: 48_112
       provider_bounded_rows: 0
       excluded_rows: 0
-      reason: domain unpopulated while the estimates gap is open
+      reason: retrieved directly from EDGAR; acceptance datetime and retrieval both exact
+    - dataset: earnings_release
+      policy: NONE
+      rows_considered: 41_827
+      public_basis: BOUND                     # no verified announcement instant; next-session-open lag
+      public_exact_rows: 0
+      public_bounded_rows: 41_827
+      provider_basis: EXACT
+      provider_exact_rows: 41_827
+      provider_bounded_rows: 0
+      excluded_rows: 0
+      reason: >
+        8-K acceptance gives a public bound, not the release instant; the provider
+        stamps its file drops, so provider timing is exact
+    - dataset: classification_history
+      policy: BOUND
+      rows_considered: 9_884
+      public_basis: N/A                       # PROVIDER_SNAPSHOT rows: no public instant
+      public_exact_rows: 0
+      public_bounded_rows: 0
+      provider_basis: BOUND
+      provider_exact_rows: 0
+      provider_bounded_rows: 9_884
+      excluded_rows: 0
+      reason: vendor supplies no feed-publication instant; bounded from system_first_seen_time
 
-  origin_exclusions:                          # rows dropped as ineligible for this profile
-    - dataset: analyst_estimate_snapshot
-      origin: PROVIDER_DERIVED
-      rows: 0
+  origin_exclusions: []                       # empty: no rows were dropped as ineligible.
+                                              # A zero-row entry would claim an exclusion that
+                                              # did not happen -- see section 3b.
 
 inputs:                                 # required vs optional -- see section 3a
   required:                             # coverage EVIDENCE, not just a name list.
@@ -134,7 +165,7 @@ inputs:                                 # required vs optional -- see section 3a
       minimum_observed_partition_coverage: 0.9948
       total_partitions: 2_891           # sessions in range
       failing_partitions: 0
-    - domain: universe_membership
+    - domain: universe_membership          # a DERIVED_ARTIFACT; see derived_artifacts
       coverage_scope: PER_SESSION
       min_coverage_fraction: 1.00
       minimum_observed_partition_coverage: 1.00
@@ -150,11 +181,20 @@ inputs:                                 # required vs optional -- see section 3a
       coverage_scope: WHOLE_DOMAIN      # row-count contract, not a fraction
       min_rows: 40_000
       observed_rows: 48_112
-  optional: [classification_history]
-  optional_excluded:
+  optional:
     - domain: classification_history
-      rows: 1204
-      reason: ORIGIN_INELIGIBLE
+      coverage_scope: PER_SECURITY
+      min_coverage_fraction: 0.80
+      minimum_observed_partition_coverage: 0.8931
+      total_partitions: 1_183
+      failing_partitions: 0
+
+  unavailable:                          # declared absent domains -- no rows to exclude
+    - domain: analyst_estimate_snapshot
+      reason: NO_QUALIFIED_SOURCE
+      limitation: ANALYST_REVISIONS_UNAVAILABLE
+
+  optional_excluded: []                 # empty: no positive exclusion occurred this run
 
 derived_artifacts:                      # lineage of every artifact consumed
   - artifact_id: adj-7f21...
@@ -170,6 +210,24 @@ derived_artifacts:                      # lineage of every artifact consumed
       - entity: corporate_action
         dataset_version: ca/2026.08.26
         selector: {securities: universe/v3, announced_through: 2026-06-30}
+        # corporate_action is reached ONLY through this artifact, so it is pinned here
+        # and deliberately NOT duplicated in dataset_provider_gap_resolutions (section 2b)
+  - artifact_id: uni-3b70...
+    entity: universe_membership
+    output_validity: SESSION_SCOPED
+    derivation_spec_version: universe/v3
+    artifact_first_built_time: 2026-08-19T06:12:00Z
+    artifact_content_hash: sha256:9f22...
+    lineage:
+      - entity: price_bar
+        dataset_version: gold/2026.08.26.1
+        selector: {sessions: [2015-01-02, 2026-06-30]}
+      - entity: security_attribute
+        dataset_version: gold/2026.08.26.1
+        selector: {attributes: [security_type], as_of_range: [2015-01-02, 2026-06-30]}
+      - entity: fundamental_derived_fact
+        dataset_version: gold/2026.08.26.1
+        selector: {metric: shares_outstanding_ttm}
 
 datasets:
   - dataset_version: gold/2026.08.26.1
@@ -192,19 +250,20 @@ lags_applied:                        # every approximation, named
   - domain: earnings_release
     rule: NEXT_SESSION_OPEN
     affected_rows: 41827
-  - domain: corporate_action
-    rule: ANNOUNCEMENT_PLUS_ONE_SESSION
+  - domain: corporate_action              # applied during the adjusted-artifact build;
+    rule: ANNOUNCEMENT_PLUS_ONE_SESSION    # surfaced here because it affected this result
     affected_rows: 9310
 
 limitations:                         # see section 3 -- mandatory block
   - ANALYST_REVISIONS_UNAVAILABLE
   - EARNINGS_TIME_APPROXIMATED
-  - PROVIDER_AVAILABILITY_UNKNOWN
-  - PROVIDER_TIME_BOUNDED
-  - PUBLIC_TIME_BOUNDED
-  - REVISION_CHRONOLOGY_INCOMPLETE
-  - SINGLE_SOURCE_UNVERIFIED
-  - ORIGIN_INELIGIBLE_ROWS_EXCLUDED
+  - PROVIDER_AVAILABILITY_UNKNOWN       # evidenced: fundamental_fact, classification_history
+  - PROVIDER_TIME_BOUNDED               # evidenced: provider_bounded_rows > 0
+  - PUBLIC_TIME_BOUNDED                 # evidenced: price_bar public_bounded_rows > 0
+  - REVISION_CHRONOLOGY_INCOMPLETE      # evidenced: fundamental_fact chronology field
+  - SINGLE_SOURCE_UNVERIFIED            # evidenced: quality.checks_not_run
+  # The origin-exclusion token is deliberately ABSENT: no rows were excluded this run.
+  # The estimates gap is a declared unavailable domain, not an exclusion (inputs.unavailable).
 
 quality:
   blocking_issues_open: 0            # non-zero => manifest is not emitted at all
@@ -271,6 +330,25 @@ the ordinary case.
 
 **A downgraded run is never labelled `PROVIDER_REALISTIC_PIT`** — not in the manifest, not on an
 artifact, not in a report. It carries `PROFILE_DOWNGRADED_TO_PUBLIC` and reads as what it is.
+
+### 2b. What the evidence must close over
+
+"Every dataset the run touched" is ambiguous once artifacts consume artifacts. The rule is:
+
+| Consumed how | Recorded where |
+|---|---|
+| a **SOURCE** dataset read **directly** by this run, where provider timing is applicable | `dataset_provider_gap_resolutions` |
+| a **`DERIVED_ARTIFACT`** consumed by this run | `derived_artifacts` |
+| a source dataset reached **only through** a published derived artifact | **not duplicated here** — it is pinned by that artifact's canonical lineage and its own build manifest |
+
+The third row is what keeps the manifest finite. An adjusted-bar artifact already names the
+`corporate_action` rows it consumed, with dataset version and selector; repeating them in every
+consuming run would add no pinning and invite the two copies to disagree. **Unless this run also
+reads that dataset directly** — in which case it appears in the map on its own account.
+
+A dataset with no applicable provider-timing axis still appears, with `policy: NONE` and
+`provider_basis: N/A`, so the map is a complete inventory of direct source reads rather than a
+list of the problematic ones.
 
 ## 3. The `limitations` block is mandatory and load-bearing
 
@@ -342,6 +420,28 @@ row is `PROVIDER_DERIVED` and ineligible, so the domain empties. **The run refus
 the factor without its estimates term would publish a different quantity under the same
 `factor_definition_version`, and no reader could tell.
 
+### 3b. Every limitation token needs positive evidence in the same manifest
+
+A token is a claim about this run, and a reader must be able to find what it refers to without
+leaving the file.
+
+| Token | Evidence required in this manifest |
+|---|---|
+| `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | at least one `origin_exclusions` entry with `rows > 0` |
+| `PROVIDER_AVAILABILITY_UNKNOWN` | at least one dataset with `policy: EXCLUDE` or `BOUND` |
+| `PROVIDER_TIME_BOUNDED` | `provider_bounded_rows > 0` somewhere |
+| `PUBLIC_TIME_BOUNDED` | `public_bounded_rows > 0` somewhere |
+| `PROFILE_DOWNGRADED_TO_PUBLIC` | `global_profile_resolution: DOWNGRADE` |
+| `ANALYST_REVISIONS_UNAVAILABLE` | an `inputs.unavailable` entry naming the domain |
+| `BORROW_HISTORY_UNAVAILABLE` | an `inputs.unavailable` entry, and **no short positions** |
+| `NON_PIT_RESTATED_VIEW` | `revision_view: LATEST_RESTATED` |
+
+**A domain that was never populated is not a domain whose rows were excluded.** Revision 7's
+example emitted `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` beside an exclusion of **zero rows** — a claim
+with nothing behind it. The estimates gap is now recorded where it belongs, as an
+`inputs.unavailable` entry carrying `ANALYST_REVISIONS_UNAVAILABLE`, and the exclusion token is
+absent because no exclusion occurred.
+
 ## 4. Preconditions for emitting a manifest
 
 A manifest is refused — and the result is therefore inadmissible — when:
@@ -383,6 +483,11 @@ A manifest is refused — and the result is therefore inadmissible — when:
    the contract passed.**
 8i. A consumed derived artifact absent from `derived_artifacts`, or absent from the `run_id`
    inputs.
+8k. A **directly read** source dataset absent from `dataset_provider_gap_resolutions` (§2b). A
+   dataset reached only through a published derived artifact is exempt, being pinned by that
+   artifact's lineage.
+8l. A limitation token without the evidence its definition requires (§3b) — in particular
+   `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` with no `origin_exclusions` entry of `rows > 0`.
 8g. A bound was relied upon whose derivation is not approved for its dataset, or an exact time
    exceeds its own upper bound.
 9. An adjusted artifact was consumed whose content hash does not reproduce from its key.

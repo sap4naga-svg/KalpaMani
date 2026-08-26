@@ -111,4 +111,4 @@ not been performed, and INC-0002 stays **OPEN** until every object is gone and
 before micro-live operation, real-money trading, or production broker
 credentials or configuration existing anywhere in the workflow.
 
-Live trading remains **hard-disabled**. Phase 3 is not authorized.
+Live trading remains **hard-disabled**. Phase 3 implementation is not authorized.

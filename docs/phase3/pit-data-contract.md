@@ -12,6 +12,10 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > (§2) and resolved by an explicit information-set profile (§3). Revision views are now
 > explicit (§6).
 >
+> **Revision 8 (2026-08-26).** Final consistency cleanup before merge. The §2.3 origin table
+> and the §3.4 backfill rules still spoke of **exact** fields where the accepted rule is
+> **resolved** timing; both now say what §5.0 decided. No architecture changed.
+>
 > **Revision 7 (2026-08-26).** Blocking-semantics fixes. An **`UNKNOWN` exact time no longer
 > blocks a row that has an approved bound** — unusability is `resolved_* IS NULL`, not
 > `derivation = UNKNOWN` (§5.1, §10). A **resolved fact-time anchor** joins the resolved
@@ -149,12 +153,22 @@ anyone outside the provider could act on it is when the provider served it.
 
 Every record declares its origin, and the vocabulary is closed:
 
-| `information_origin` | Meaning | `public` | `provider` | `system_first_seen` |
+**The columns below name *resolved* timing axes, not exact fields.** A requirement is
+satisfied by an exact time **or** by an approved upper bound (§5.0); the exact field itself is
+always allowed to be null.
+
+| `information_origin` | Meaning | `resolved_public_time` | `resolved_provider_time` | `system_first_seen` |
 |---|---|---|---|---|
-| **`AUTHORITATIVE_PUBLIC`** | The fact has an authoritative public release instant, independent of any vendor. A filing acceptance, an exchange dissemination, an issuer press release. | **required** | optional | required |
-| **`PROVIDER_DERIVED`** | The fact **is** the provider's own computed or proprietary observation. No authoritative public release instant exists for it. | **must be null** | **required** | required |
+| **`AUTHORITATIVE_PUBLIC`** | The fact has an authoritative public release instant, independent of any vendor. A filing acceptance, an exchange dissemination, an issuer press release. | **required** | required under `PROVIDER_REALISTIC_PIT` | required |
+| **`PROVIDER_DERIVED`** | The fact **is** the provider's own computed or proprietary observation. No authoritative public release instant exists for it. | **must be null** — no public instant exists | **required** where that profile applies | required |
 | **`SYSTEM_OBSERVED`** | KalpaMani observed an external state directly — a poll of a live endpoint that carries no vendor timestamp. | null | null | **required** |
 | **`DERIVED_ARTIFACT`** | **Not an observation at all.** A value KalpaMani computed from other rows. Carries the **derived envelope** (§2.5) instead of the three source times. | **null** | **null** | **null** |
+
+> **"Required" never means "the exact field must be populated."** It means the *resolved* value
+> for that axis must be non-null — `public_available_time` **or** an approved
+> `public_available_upper_bound`, and symmetrically on the provider axis. An
+> `AUTHORITATIVE_PUBLIC` row with a null exact public time and an approved bound satisfies this
+> table.
 
 The first three are **source origins** — a fact arrived from outside and the question is when.
 The fourth is a discriminator: it says *this row does not describe an external observation, so
@@ -452,8 +466,8 @@ A vendor supplies, today, records describing events from 2015.
 
 | Profile | Admissible in a 2015 query? |
 |---|---|
-| `PUBLIC_PIT` | **Yes** — *if and only if* the origin is `AUTHORITATIVE_PUBLIC` and public timing is proven (§5.1 rule 1 or 2). Otherwise no. |
-| `PROVIDER_REALISTIC_PIT` | **No.** A backfill may not become available before the provider supplied it. If `provider_available_time` is today, the record is inadmissible in 2015. If it is unknown, §3.3 applies — and note that **`BOUND` sets it to today**, so a backfilled row stays inadmissible. |
+| `PUBLIC_PIT` | **Yes** — *if and only if* the origin is `AUTHORITATIVE_PUBLIC` and `resolved_public_time` is non-null: an exact time (§5.1 rules 1–2) **or an approved `public_available_upper_bound`** (§5.1 rules 3–5). A backfill is not restricted to exactly-timed records. Otherwise no. |
+| `PROVIDER_REALISTIC_PIT` | **No.** A backfill may not become available before the provider supplied it. If `resolved_provider_time` is today, the record is inadmissible in 2015. If provider timing is unknown, §3.3 applies — and **`BOUND` sets `provider_available_upper_bound` to the conservative first-seen bound while `provider_available_time` remains null**, so a backfilled row stays inadmissible. |
 | `FORWARD_SYSTEM` | **No.** A backfill may never precede `system_first_seen_time`. |
 
 > **A backfilled record must not become historically available under

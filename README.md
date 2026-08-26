@@ -156,7 +156,7 @@ KalpaMani/
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
 │   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
-│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3, planning in review]
+│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3 planning accepted, implementation not authorized]
 │   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
@@ -261,15 +261,25 @@ live brokerage execution, real-money operation.
 
 ## Next planned phase
 
-**PHASE 3 — POINT-IN-TIME DATA FOUNDATION** — *planning in review; implementation not
-started, not authorized; provider purchase not authorized.*
+**PHASE 3 — POINT-IN-TIME DATA FOUNDATION**
+
+| | |
+|---|---|
+| Planning | **ACCEPTED / MERGED** |
+| Implementation | **NOT STARTED / NOT AUTHORIZED** |
+| ADR-0005 | **PROPOSED** |
+| Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
 
 The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
-[ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md) **Proposed** (not
-accepted). No data provider has been purchased, trialled or credentialed, and no ingestion
-code exists.
+[ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
 
-Naming it does not approve it. Beginning any phase requires explicit written authorization.
+**The planning package is accepted; Phase 3 is not complete.** Its proposed architecture and
+provider decisions remain subject to ADR-0005's five open gates — provider selection, the
+production information-set profile, vendor licensing, the analyst-estimate gap, and
+borrow-history qualification. **No implementation authority follows from merging the plan.** No
+data provider has been purchased, trialled or credentialed, and no ingestion code exists.
+
+Beginning implementation requires explicit written authorization.
 
 ---
 
