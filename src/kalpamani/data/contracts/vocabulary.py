@@ -26,6 +26,7 @@ forbids.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
@@ -362,6 +363,33 @@ class AdjustmentPolicy(StrEnum):
     TOTAL_RETURN = "TOTAL_RETURN"
 
 
+@dataclass(frozen=True, slots=True)
+class AdjustmentMode:
+    """What a price query asks for. There is no implicit adjustment.
+
+    ``RAW`` returns traded prices. ``adjusted(policy)`` returns a series computed
+    from raw bars plus the actions admissible at ``as_of`` under the resolved
+    profile -- which is why the policy has to be named: "the adjusted close on a
+    date" is not a number, it is a number *per information set*.
+    """
+
+    policy: AdjustmentPolicy | None
+
+    @classmethod
+    def adjusted(cls, policy: AdjustmentPolicy) -> AdjustmentMode:
+        """An explicitly policied adjusted series."""
+        return cls(policy=policy)
+
+    @property
+    def is_raw(self) -> bool:
+        """Whether this mode asks for traded prices."""
+        return self.policy is None
+
+
+#: Traded prices, unadjusted. Named so a caller states it rather than omits it.
+RAW: Final[AdjustmentMode] = AdjustmentMode(policy=None)
+
+
 class ListingFactKind(StrEnum):
     """Which fact a listing row carries. A key part, so the two cannot collapse."""
 
@@ -420,7 +448,9 @@ __all__ = [
     "BAR_CONSTRUCTION_ORIGIN",
     "EXACT_PROVIDER_DERIVATIONS",
     "EXACT_PUBLIC_DERIVATIONS",
+    "RAW",
     "SOURCE_ORIGINS",
+    "AdjustmentMode",
     "AdjustmentPolicy",
     "AnnouncementBoundDerivation",
     "BarConstruction",
