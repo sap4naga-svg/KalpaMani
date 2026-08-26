@@ -103,6 +103,66 @@ class UniverseBuildInputs:
     bar_dataset_version: str
 
 
+def _admissible_bars(
+    bars: Sequence[PriceBar],
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    cutoff: datetime,
+) -> tuple[PriceBar, ...]:
+    return tuple(
+        bar
+        for bar in bars
+        if bar.resolution is BarResolution.DAILY
+        and _admissible(bar, resolved_profile, approvals, cutoff)
+    )
+
+
+def _admissible_listings(
+    listings: Sequence[Listing],
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    cutoff: datetime,
+) -> tuple[Listing, ...]:
+    return tuple(
+        listing for listing in listings if _admissible(listing, resolved_profile, approvals, cutoff)
+    )
+
+
+def _admissible_attributes(
+    attributes: Sequence[SecurityAttribute],
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    cutoff: datetime,
+) -> tuple[SecurityAttribute, ...]:
+    return tuple(
+        attribute
+        for attribute in attributes
+        if _admissible(attribute, resolved_profile, approvals, cutoff)
+    )
+
+
+def admissible_inputs(
+    *,
+    listings: Sequence[Listing],
+    attributes: Sequence[SecurityAttribute],
+    bars: Sequence[PriceBar],
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    evaluation_cutoff: datetime,
+) -> tuple[PitRecord, ...]:
+    """The exact input set a universe build at ``evaluation_cutoff`` consumes.
+
+    Shared by the builder and by lineage replay on read, so the two cannot
+    diverge. A rebuild reads what the build read because it runs the same
+    function, not because two implementations agree today.
+    """
+    return (
+        *_admissible_listings(listings, resolved_profile, approvals, evaluation_cutoff),
+        *_admissible_attributes(attributes, resolved_profile, approvals, evaluation_cutoff),
+        *_admissible_bars(bars, resolved_profile, approvals, evaluation_cutoff),
+    )
+
+
 def build_universe_snapshot(
     inputs: UniverseBuildInputs,
     *,
@@ -135,27 +195,21 @@ def build_universe_snapshot(
             "universe_definition_version, and nothing downstream would say so."
         )
 
-    admissible_bars = tuple(
-        bar
-        for bar in inputs.bars
-        if bar.resolution is BarResolution.DAILY
-        and _admissible(bar, resolved_profile, approvals, evaluation_cutoff)
+    admissible_bars = _admissible_bars(inputs.bars, resolved_profile, approvals, evaluation_cutoff)
+    admissible_listings = _admissible_listings(
+        inputs.listings, resolved_profile, approvals, evaluation_cutoff
     )
-    admissible_listings = tuple(
-        listing
-        for listing in inputs.listings
-        if _admissible(listing, resolved_profile, approvals, evaluation_cutoff)
-    )
-    admissible_attributes = tuple(
-        attribute
-        for attribute in inputs.attributes
-        if _admissible(attribute, resolved_profile, approvals, evaluation_cutoff)
+    admissible_attributes = _admissible_attributes(
+        inputs.attributes, resolved_profile, approvals, evaluation_cutoff
     )
 
-    consumed: tuple[PitRecord, ...] = (
-        *admissible_listings,
-        *admissible_attributes,
-        *admissible_bars,
+    consumed: tuple[PitRecord, ...] = admissible_inputs(
+        listings=inputs.listings,
+        attributes=inputs.attributes,
+        bars=inputs.bars,
+        resolved_profile=resolved_profile,
+        approvals=approvals,
+        evaluation_cutoff=evaluation_cutoff,
     )
     lineage = (
         LineageRef.of(
@@ -325,6 +379,7 @@ __all__ = [
     "UNIVERSE_SPEC_VERSION",
     "UniverseBuildInputs",
     "UniverseDefinition",
+    "admissible_inputs",
     "build_universe_snapshot",
     "snapshot_content_hash",
 ]

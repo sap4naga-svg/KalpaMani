@@ -1,0 +1,450 @@
+"""The research manifest, and the deterministic ``run_id`` derived from it.
+
+> **No result is reproducible merely because the Python code is
+> version-controlled.**
+
+A commit SHA pins the *transformation*. It says nothing about the *inputs*, and
+in a point-in-time system the inputs are the part that moves: vendors backfill,
+restatements arrive, universes get rebuilt, lag policies get tuned. A backtest
+rerun six months later against "the same code" will read a different world and
+produce a different number, and without a manifest there is no way to tell that
+from a genuine regression.
+
+``run_id`` is **derived, not generated** -- a hash over the load-bearing inputs.
+No ``uuid4()``, no timestamps in an identity. A derived id means two runs claiming
+to be the same run can be checked against each other rather than merely asserted
+to match, and it means any change to what the run actually read produces a
+different id.
+
+**Refusal, not annotation.** Emission fails on a dirty tree, a missing profile, an
+open BLOCKING issue, an unreconciled dataset, an unapproved bound, a coverage
+breach, a hash mismatch or a token without evidence. That is the same trade
+ADR-0004 made throughout: an unreproducible result that *looks* reproducible is
+the unrecoverable one, because it gets cited later by someone who was not in the
+room.
+
+**Every limitation token needs positive evidence in the same manifest.** A token
+is a claim about this run, and a reader must be able to find what it refers to
+without leaving the file. A domain that was never populated is not a domain whose
+rows were excluded.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.errors import ManifestRefusedError
+from kalpamani.data.contracts.profiles import (
+    DatasetResolutionEvidence,
+    ProfileResolutionConfig,
+)
+from kalpamani.data.contracts.vocabulary import (
+    CoverageScope,
+    DatasetGapPolicy,
+    InformationSetProfile,
+    LimitationToken,
+    RevisionView,
+)
+
+#: The manifest schema this module writes and reads.
+MANIFEST_VERSION = 4
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CodeProvenance:
+    """What produced the result, and whether anyone else could reproduce it."""
+
+    commit_sha: str
+    working_tree_clean: bool
+    config_version: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CoverageEvidence:
+    """Proof that a required input's coverage contract passed.
+
+    **The partition minimum decides, not an aggregate.** A ``PER_SECURITY`` input
+    at 97% overall with securities below threshold has failed; averaging them away
+    is precisely the move the scope exists to prevent. ``WHOLE_DOMAIN`` takes a
+    row-count contract instead, because there is no natural denominator for "the
+    whole domain" and inventing one makes the threshold uninterpretable.
+    """
+
+    domain: str
+    coverage_scope: CoverageScope
+    min_coverage_fraction: Decimal | None = None
+    minimum_observed_partition_coverage: Decimal | None = None
+    total_partitions: int | None = None
+    failing_partitions: int | None = None
+    min_rows: int | None = None
+    observed_rows: int | None = None
+
+    def evidence_is_complete(self) -> bool:
+        """Whether the fields this scope requires are all present."""
+        if self.coverage_scope is CoverageScope.WHOLE_DOMAIN:
+            return self.min_rows is not None and self.observed_rows is not None
+        return (
+            self.min_coverage_fraction is not None
+            and self.minimum_observed_partition_coverage is not None
+            and self.total_partitions is not None
+            and self.failing_partitions is not None
+        )
+
+    def uses_the_wrong_evidence(self) -> bool:
+        """Whether a scope was evidenced with the other scope's fields."""
+        if self.coverage_scope is CoverageScope.WHOLE_DOMAIN:
+            return self.min_coverage_fraction is not None
+        return self.min_rows is not None
+
+    def passes(self) -> bool:
+        """Whether the contract is met. Incomplete evidence never passes."""
+        if not self.evidence_is_complete() or self.uses_the_wrong_evidence():
+            return False
+        if self.coverage_scope is CoverageScope.WHOLE_DOMAIN:
+            assert self.observed_rows is not None and self.min_rows is not None
+            return self.observed_rows >= self.min_rows
+        assert self.failing_partitions is not None
+        assert self.minimum_observed_partition_coverage is not None
+        assert self.min_coverage_fraction is not None
+        return (
+            self.failing_partitions == 0
+            and self.minimum_observed_partition_coverage >= self.min_coverage_fraction
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UnavailableDomain:
+    """A domain that was never populated -- which is not a domain whose rows were excluded."""
+
+    domain: str
+    reason: str
+    limitation: LimitationToken
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OriginExclusion:
+    """Rows dropped because their origin is ineligible under the resolved profile."""
+
+    dataset: str
+    information_origin: str
+    rows: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConsumedArtifact:
+    """A derived artifact this run read, pinned well enough to reproduce.
+
+    Dataset versions alone are not sufficient. Under ``FORWARD_SYSTEM`` an
+    artifact's availability depends on when it was *first* built, so two runs over
+    identical dataset versions can legitimately differ -- and a ``run_id`` blind to
+    first-built history would call them the same run and make an irreproducible
+    result look reproducible.
+    """
+
+    artifact_id: str
+    entity: str
+    output_validity: str
+    derivation_spec_version: str
+    artifact_content_hash: str
+    artifact_first_built_time: datetime
+    lineage_selectors: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DatasetReference:
+    """A dataset version the run read, with the hash that pins its contents."""
+
+    dataset_version: str
+    layer: str
+    content_hash: str
+    resolved_profile: InformationSetProfile | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QualitySummary:
+    """What the checks found, and what they did not run.
+
+    ``checks_not_run`` is not optional politeness. A check that cannot run is
+    declared, never quietly skipped: a check that silently covered less than it
+    claims is worse than no check, because it converts an unknown into a false
+    assurance.
+    """
+
+    blocking_issues_open: int
+    warnings_open: int
+    checks_not_run: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResearchManifest:
+    """Everything needed to regenerate a result, or to fail loudly trying."""
+
+    manifest_version: int = MANIFEST_VERSION
+    code: CodeProvenance
+    as_of_cutoff: datetime
+    backtest_start: date | None = None
+    backtest_end: date | None = None
+    profile_resolution: ProfileResolutionConfig
+    revision_view: RevisionView | None
+    dataset_resolution_evidence: tuple[DatasetResolutionEvidence, ...] = ()
+    origin_exclusions: tuple[OriginExclusion, ...] = ()
+    required_inputs: tuple[CoverageEvidence, ...] = ()
+    optional_inputs: tuple[CoverageEvidence, ...] = ()
+    unavailable_domains: tuple[UnavailableDomain, ...] = ()
+    consumed_artifacts: tuple[ConsumedArtifact, ...] = ()
+    datasets: tuple[DatasetReference, ...] = ()
+    definitions: Mapping[str, str] = field(default_factory=dict)
+    limitations: tuple[LimitationToken, ...] = ()
+    quality: QualitySummary
+    random_seed: int | None = None
+    result_artifact_hash: str = ""
+
+    @property
+    def requested_profile(self) -> InformationSetProfile:
+        """What the caller asked for. Audit evidence only."""
+        return self.profile_resolution.requested_profile
+
+    @property
+    def resolved_profile(self) -> InformationSetProfile:
+        """What the run actually executed under. Everything downstream follows this."""
+        return self.profile_resolution.resolved_profile
+
+    def run_id_inputs(self) -> dict[str, object]:
+        """The load-bearing inputs ``run_id`` hashes.
+
+        Deliberately excludes wall-clock execution timestamps. Hashing when a run
+        happened into its logical identity would make every re-run a different
+        run, which is the opposite of what an identity is for.
+        """
+        return {
+            "manifest_version": self.manifest_version,
+            "code_commit_sha": self.code.commit_sha,
+            "config_version": self.code.config_version,
+            "as_of_cutoff": self.as_of_cutoff,
+            "backtest_start": self.backtest_start,
+            "backtest_end": self.backtest_end,
+            "requested_profile": self.requested_profile.value,
+            "resolved_profile": self.resolved_profile.value,
+            "global_profile_resolution": (self.profile_resolution.global_profile_resolution.value),
+            "resolution_policy_version": self.profile_resolution.resolution_policy_version,
+            "dataset_provider_gap_resolutions": list(self.profile_resolution.canonical_map()),
+            "revision_view": None if self.revision_view is None else self.revision_view.value,
+            "datasets": sorted([d.dataset_version, d.content_hash] for d in self.datasets),
+            "consumed_artifacts": sorted(
+                _artifact_identity(artifact, self.resolved_profile)
+                for artifact in self.consumed_artifacts
+            ),
+            "definitions": dict(sorted(self.definitions.items())),
+            "random_seed": self.random_seed,
+        }
+
+    @property
+    def run_id(self) -> str:
+        """Derived, not generated. Same inputs, same id."""
+        return "rs-" + sha256_hex(canonical_bytes(self.run_id_inputs()))[:16]
+
+
+def _artifact_identity(
+    artifact: ConsumedArtifact,
+    resolved_profile: InformationSetProfile,
+) -> list[object]:
+    identity: list[object] = [
+        artifact.artifact_id,
+        artifact.artifact_content_hash,
+        artifact.derivation_spec_version,
+        [list(selector) for selector in artifact.lineage_selectors],
+    ]
+    if resolved_profile is InformationSetProfile.FORWARD_SYSTEM:
+        identity.append(artifact.artifact_first_built_time.isoformat())
+    return identity
+
+
+#: Which evidence each limitation token requires in the same manifest.
+_TOKEN_EVIDENCE: dict[LimitationToken, str] = {
+    LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: "an origin_exclusions entry with rows > 0",
+    LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: "a dataset with policy EXCLUDE or BOUND",
+    LimitationToken.PROVIDER_TIME_BOUNDED: "provider_bounded_rows > 0 somewhere",
+    LimitationToken.PUBLIC_TIME_BOUNDED: "public_bounded_rows > 0 somewhere",
+    LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: "global_profile_resolution DOWNGRADE",
+    LimitationToken.NON_PIT_RESTATED_VIEW: "revision_view LATEST_RESTATED",
+}
+
+
+def emit_manifest(
+    manifest: ResearchManifest,
+    *,
+    directly_read_datasets: Sequence[str],
+    unapproved_bounds_relied_upon: Sequence[str] = (),
+    hash_mismatches: Sequence[str] = (),
+) -> ResearchManifest:
+    """Validate every precondition and return the manifest, or refuse.
+
+    Returning the manifest rather than a bare ``None`` keeps the call site honest:
+    a caller either has a validated manifest or has an exception, never a
+    half-checked object it might publish anyway.
+
+    Raises:
+        ManifestRefusedError: naming every precondition that failed. All of them,
+            not the first -- a reader fixing one failure should not have to
+            rediscover the next four one run at a time.
+    """
+    problems: list[str] = []
+
+    if not manifest.code.working_tree_clean:
+        problems.append(
+            "the working tree is dirty; an uncommitted change is not reproducible by anyone else"
+        )
+    if not manifest.code.commit_sha:
+        problems.append("no code commit is recorded")
+    if manifest.quality.blocking_issues_open:
+        problems.append(
+            f"{manifest.quality.blocking_issues_open} BLOCKING quality issue(s) are open "
+            "against inputs this run touched; every dependent result is refused, not "
+            "annotated"
+        )
+    if manifest.revision_view is RevisionView.LATEST_RESTATED:
+        problems.append(
+            "revision_view is LATEST_RESTATED, which ignores as_of entirely; the result may "
+            "not be described as a backtest"
+        )
+
+    problems.extend(_check_resolution_evidence(manifest, directly_read_datasets))
+    problems.extend(_check_coverage(manifest))
+    problems.extend(_check_tokens(manifest))
+
+    for bound in unapproved_bounds_relied_upon:
+        problems.append(f"an unapproved bound was relied upon: {bound}")
+    for mismatch in hash_mismatches:
+        problems.append(f"a content hash failed to verify: {mismatch}")
+
+    if problems:
+        raise ManifestRefusedError(
+            "Refusing to emit a research manifest, so the result is inadmissible:\n  - "
+            + "\n  - ".join(problems)
+        )
+    return manifest
+
+
+def _check_resolution_evidence(
+    manifest: ResearchManifest,
+    directly_read_datasets: Sequence[str],
+) -> list[str]:
+    problems: list[str] = []
+    evidenced = {entry.dataset for entry in manifest.dataset_resolution_evidence}
+    for dataset in sorted(set(directly_read_datasets)):
+        if dataset not in evidenced:
+            problems.append(
+                f"dataset {dataset!r} was read directly but is absent from the per-dataset "
+                "resolution evidence; the map is a complete inventory of direct source "
+                "reads, not a list of the problematic ones"
+            )
+        if not manifest.profile_resolution.has_entry_for(dataset):
+            problems.append(f"dataset {dataset!r} has no entry in dataset_provider_gap_resolutions")
+    for entry in manifest.dataset_resolution_evidence:
+        if not entry.public_axis_reconciles():
+            problems.append(
+                f"dataset {entry.dataset!r} public-axis counts do not reconcile: "
+                f"{entry.public_exact_rows} exact + {entry.public_bounded_rows} bounded + "
+                f"{entry.excluded_rows} excluded != {entry.rows_considered} considered"
+            )
+        if not entry.provider_axis_reconciles():
+            problems.append(
+                f"dataset {entry.dataset!r} provider-axis counts do not reconcile: "
+                f"{entry.provider_exact_rows} exact + {entry.provider_bounded_rows} bounded + "
+                f"{entry.excluded_rows} excluded != {entry.rows_considered} considered"
+            )
+    return problems
+
+
+def _check_coverage(manifest: ResearchManifest) -> list[str]:
+    problems: list[str] = []
+    for evidence in manifest.required_inputs:
+        if not evidence.evidence_is_complete():
+            problems.append(
+                f"required input {evidence.domain!r} ({evidence.coverage_scope.value}) is "
+                "recorded without the evidence its scope requires"
+            )
+            continue
+        if evidence.uses_the_wrong_evidence():
+            problems.append(
+                f"required input {evidence.domain!r} is evidenced with the wrong scope's "
+                "fields; a PER_* input needs a partition minimum, a WHOLE_DOMAIN input needs "
+                "a row count"
+            )
+            continue
+        if not evidence.passes():
+            problems.append(
+                f"REQUIRED_INPUT_UNAVAILABLE: {evidence.domain!r} failed its "
+                f"{evidence.coverage_scope.value} coverage contract "
+                f"(minimum observed {evidence.minimum_observed_partition_coverage}, "
+                f"threshold {evidence.min_coverage_fraction}, "
+                f"failing partitions {evidence.failing_partitions}, "
+                f"observed rows {evidence.observed_rows}, min rows {evidence.min_rows})"
+            )
+    return problems
+
+
+def _check_tokens(manifest: ResearchManifest) -> list[str]:
+    problems: list[str] = []
+    tokens = set(manifest.limitations)
+    evidence = manifest.dataset_resolution_evidence
+    policies = {entry.policy for entry in evidence}
+
+    have: dict[LimitationToken, bool] = {
+        LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: any(
+            item.rows > 0 for item in manifest.origin_exclusions
+        ),
+        LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: bool(
+            policies & {DatasetGapPolicy.EXCLUDE, DatasetGapPolicy.BOUND}
+        ),
+        LimitationToken.PROVIDER_TIME_BOUNDED: any(
+            entry.provider_bounded_rows > 0 for entry in evidence
+        ),
+        LimitationToken.PUBLIC_TIME_BOUNDED: any(
+            entry.public_bounded_rows > 0 for entry in evidence
+        ),
+        LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: (
+            manifest.resolved_profile is not manifest.requested_profile
+        ),
+        LimitationToken.NON_PIT_RESTATED_VIEW: (
+            manifest.revision_view is RevisionView.LATEST_RESTATED
+        ),
+    }
+
+    for token, requirement in _TOKEN_EVIDENCE.items():
+        if token in tokens and not have[token]:
+            problems.append(
+                f"limitation {token.value} is claimed with no evidence behind it; it "
+                f"requires {requirement}"
+            )
+        if token not in tokens and have[token]:
+            problems.append(
+                f"limitation {token.value} is required by this run's evidence but is absent "
+                "from the limitations block"
+            )
+
+    for domain in manifest.unavailable_domains:
+        if domain.limitation not in tokens:
+            problems.append(
+                f"domain {domain.domain!r} is declared unavailable but its limitation "
+                f"{domain.limitation.value} is absent from the limitations block"
+            )
+    return problems
+
+
+__all__ = [
+    "MANIFEST_VERSION",
+    "CodeProvenance",
+    "ConsumedArtifact",
+    "CoverageEvidence",
+    "DatasetReference",
+    "OriginExclusion",
+    "QualitySummary",
+    "ResearchManifest",
+    "UnavailableDomain",
+    "emit_manifest",
+]

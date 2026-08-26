@@ -26,8 +26,11 @@ from typing import Any
 
 from kalpamani.data.contracts.entities import (
     CorporateAction,
+    Listing,
     MarketSession,
     PriceBar,
+    SecurityAttribute,
+    TickerHistory,
     UniverseMembership,
 )
 from kalpamani.data.contracts.envelope import (
@@ -43,9 +46,11 @@ from kalpamani.data.contracts.vocabulary import (
     BarConstruction,
     BarResolution,
     CorporateActionType,
+    DelistingReason,
     Exchange,
     InformationOrigin,
     InformationSetProfile,
+    ListingFactKind,
     OutputValidity,
     ProviderBoundDerivation,
     ProviderTimeDerivation,
@@ -53,6 +58,7 @@ from kalpamani.data.contracts.vocabulary import (
     PublicTimeDerivation,
     QualityStatus,
     TemporalFactClass,
+    TickerChangeReason,
     UniverseExclusionReason,
 )
 
@@ -444,6 +450,89 @@ def decode_market_session(row: Mapping[str, Any]) -> MarketSession:
     )
 
 
+def encode_listing(listing: Listing) -> Row:
+    """Encode a listing state or a change announcement."""
+    return {
+        "listing_id": listing.listing_id,
+        "security_id": listing.security_id,
+        "exchange": listing.exchange.value,
+        "listing_start": _enc_date(listing.listing_start),
+        "listing_end": _enc_date(listing.listing_end),
+        "delisting_reason": (
+            None if listing.delisting_reason is None else listing.delisting_reason.value
+        ),
+        "successor_security_id": listing.successor_security_id,
+        "listing_fact_kind": listing.listing_fact_kind.value,
+        "envelope": encode_source_envelope(listing.envelope),
+    }
+
+
+def decode_listing(row: Mapping[str, Any]) -> Listing:
+    """Decode a listing row."""
+    reason = row["delisting_reason"]
+    successor = row["successor_security_id"]
+    return Listing(
+        listing_id=_str(row["listing_id"]),
+        security_id=_str(row["security_id"]),
+        exchange=Exchange(_str(row["exchange"])),
+        listing_start=_req_date(row["listing_start"]),
+        listing_end=_dec_date(row["listing_end"]),
+        delisting_reason=None if reason is None else DelistingReason(_str(reason)),
+        successor_security_id=None if successor is None else _str(successor),
+        listing_fact_kind=ListingFactKind(_str(row["listing_fact_kind"])),
+        envelope=decode_source_envelope(row["envelope"]),
+    )
+
+
+def encode_security_attribute(attribute: SecurityAttribute) -> Row:
+    """Encode one time-varying, externally sourced attribute."""
+    return {
+        "security_id": attribute.security_id,
+        "attribute": attribute.attribute,
+        "valid_from": _enc_date(attribute.valid_from),
+        "valid_to": _enc_date(attribute.valid_to),
+        "value": attribute.value,
+        "envelope": encode_source_envelope(attribute.envelope),
+    }
+
+
+def decode_security_attribute(row: Mapping[str, Any]) -> SecurityAttribute:
+    """Decode one time-varying attribute."""
+    return SecurityAttribute(
+        security_id=_str(row["security_id"]),
+        attribute=_str(row["attribute"]),
+        valid_from=_req_date(row["valid_from"]),
+        valid_to=_dec_date(row["valid_to"]),
+        value=_str(row["value"]),
+        envelope=decode_source_envelope(row["envelope"]),
+    )
+
+
+def encode_ticker_history(row: TickerHistory) -> Row:
+    """Encode one ticker-to-security mapping interval."""
+    return {
+        "security_id": row.security_id,
+        "ticker": row.ticker,
+        "valid_from": _enc_date(row.valid_from),
+        "valid_to": _enc_date(row.valid_to),
+        "change_reason": None if row.change_reason is None else row.change_reason.value,
+        "envelope": encode_source_envelope(row.envelope),
+    }
+
+
+def decode_ticker_history(row: Mapping[str, Any]) -> TickerHistory:
+    """Decode one ticker-to-security mapping interval."""
+    reason = row["change_reason"]
+    return TickerHistory(
+        security_id=_str(row["security_id"]),
+        ticker=_str(row["ticker"]),
+        valid_from=_req_date(row["valid_from"]),
+        valid_to=_dec_date(row["valid_to"]),
+        change_reason=None if reason is None else TickerChangeReason(_str(reason)),
+        envelope=decode_source_envelope(row["envelope"]),
+    )
+
+
 def encode_universe_membership(row: UniverseMembership) -> Row:
     """Encode one stored membership decision, with the values that produced it."""
     return {
@@ -498,19 +587,25 @@ __all__ = [
     "decode_derived_envelope",
     "decode_fact_anchor",
     "decode_lineage",
+    "decode_listing",
     "decode_market_session",
     "decode_output_validity",
     "decode_price_bar",
+    "decode_security_attribute",
     "decode_source_envelope",
+    "decode_ticker_history",
     "decode_universe_membership",
     "encode_corporate_action",
     "encode_derived_envelope",
     "encode_envelope",
     "encode_fact_anchor",
     "encode_lineage",
+    "encode_listing",
     "encode_market_session",
     "encode_output_validity",
     "encode_price_bar",
+    "encode_security_attribute",
     "encode_source_envelope",
+    "encode_ticker_history",
     "encode_universe_membership",
 ]
