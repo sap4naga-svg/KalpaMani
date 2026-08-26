@@ -5,6 +5,11 @@
 This is a plan to be executed later, if approved. **No stage below has begun.** No
 infrastructure has been created, no provider contacted, no credential requested.
 
+> **Revision 5 (2026-08-26).** Deliverables follow the further schema splits; eight adversarial
+> fixtures and four negative controls cover envelope exclusivity, resolved bounds, per-dataset
+> policies and coverage contracts; and a **documentation-consistency audit**
+> (`scripts/phase3_docs_audit.py`) checks the plan against itself.
+>
 > **Revision 4 (2026-08-26).** Provider test **P9** establishes whether daily bars are
 > officially disseminated, provider-aggregated or system-aggregated — which decides whether
 > price data is eligible under `PUBLIC_PIT` at all. Deliverables follow the earnings and
@@ -59,7 +64,7 @@ makes a vendor backfill visible instead of silent, and what lets the profile mod
 (§[contract 3.3](pit-data-contract.md)) decide what to do about it.
 
 **Silver** is where vendor semantics stop. Tickers become `security_id`. Local timestamps
-become UTC instants with an `availability_derivation`. Vendor revision conventions become
+become UTC instants with exact-or-bound derivations named. Vendor revision conventions become
 `revision_sequence` rows. Nothing above silver knows which vendor supplied anything, except
 through the provenance envelope carried for audit.
 
@@ -162,7 +167,7 @@ gate G3 (authorization A2, licensing) comes first.
 **Inputs:** vendor access under A3; LEAN toolchain already present.
 
 **Deliverables**
-1. `contracts/` — schemas 1–7, 7a, 16, 17, 18 from [conceptual-schema.md](conceptual-schema.md).
+1. `contracts/` — schemas 1, 1a, 2–7, 7a, 16, 17, 18 from [conceptual-schema.md](conceptual-schema.md).
 2. Bronze ingestion with content-addressed immutable writes, `ingestion_run` records, and
    backfill detection.
 3. Silver normalisation: identity resolution, ticker history, UTC/session normalisation, and
@@ -221,7 +226,7 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 environment ([provider-source-register.md](provider-source-register.md)).
 
 **Deliverables**
-1. Schemas 8–12, 15.
+1. Schemas 8, 9, 9a, 10, 10a–10e, 11, 12, 15, 15a.
 2. EDGAR ingestion: `filing` records with **acceptance timestamps**, honouring SEC fair-access
    requirements (declared User-Agent, rate limiting).
 3. `fundamental_fact` (**reported values only**) with all three revision views and
@@ -374,6 +379,12 @@ that and proposes no ADR to. It refuses to simulate the short half on data that 
 5. A data-quality report per ingestion run, including **checks not run and why**.
 6. `scripts/phase3_preflight.py`, in the shape of the Phase-1 and Phase-2 preflights: static
    checks, non-zero exit, run before anything else.
+7. `scripts/phase3_docs_audit.py` **already exists** and runs today — it is the only Phase-3
+   artefact that does. It reads `docs/phase3/` and checks the plan against itself: enum values
+   referenced by quality checks exist in the schema, source-only fields are not demanded of
+   derived artifacts, exact and bound derivations map to the correct fields, every declared
+   temporal semantics has its anchor, and no manifest rule names a retired field. It touches no
+   runtime code and asserts nothing about data, because there is no data.
 
 **Tests**
 - A LEAN backtest reads from the PIT layer, never from a broker feed.
@@ -413,7 +424,11 @@ that and proposes no ADR to. It refuses to simulate the short half on data that 
 | 20 | **Derived-artifact lineage test** | An artifact's availability equals the max over its lineage under each profile, plus `artifact_first_built_time` under `FORWARD_SYSTEM`; its eligibility is the input intersection; a rebuild from identical lineage is a no-op. |
 | 21 | **Atomic-fact test** | No entity carries two origins, two classes or two envelopes on one row. The five earnings entities resolve independently and share only `event_id`. |
 | 22 | **Profile-resolution test** | A downgraded run is labelled `PUBLIC_PIT` in its manifest, artifacts and `run_id`, carries `PROFILE_DOWNGRADED_TO_PUBLIC`, and is a different `run_id` from the same query resolved by `BOUND`. |
-| 23 | **Required-input test** | A factor whose required domain empties refuses with `REQUIRED_INPUT_UNAVAILABLE`; an optional domain emptying proceeds with counts and a token. |
+| 23 | **Required-input test** | A factor whose required domain fails its coverage contract refuses with `REQUIRED_INPUT_UNAVAILABLE`, naming scope, threshold and observed coverage; an optional domain proceeds with counts and a token. |
+| 24 | **Envelope-exclusivity test** | A well-formed derived artifact passes every check without carrying a single source-envelope field; a well-formed source fact passes without lineage. Neither is graded by the other's rules. |
+| 25 | **Exact-versus-bound test** | An approved bound satisfies a profile requirement and is reported as bounded; an approximation in an exact field is refused; `exact <= bound` holds. |
+| 26 | **Per-dataset resolution test** | One run resolves two datasets by different policies; the canonical map is complete, its counts reconcile, and it changes `run_id`. |
+| 27 | **Documentation-consistency audit** | `scripts/phase3_docs_audit.py` exits 0: every enum a check references exists in the schema, no source-only field is required of a derived artifact, exact and bound derivations name the correct fields, every declared temporal semantics has its anchor, and no manifest rule names a retired field. |
 
 ### 6.1 Adversarial fixtures — must FAIL the pipeline
 
@@ -452,7 +467,15 @@ fixture defaulted to a direction the broker never sends.
 | F27 | `system_first_seen_time` written into `provider_available_time` under `BOUND` | 4.0.10 |
 | F28 | A downgraded run whose artifacts and `run_id` still name `PROVIDER_REALISTIC_PIT` | 4.3.11 |
 | F29 | A factor computed under `PUBLIC_PIT` with its **required** estimates domain emptied by origin filtering | 4.7.1 — refuse `REQUIRED_INPUT_UNAVAILABLE` |
-| F30 | A single row carrying both a scheduled date and a realised release timestamp | 4.0.11 — the atomic-fact rule |
+| F30 | A single row carrying both a scheduled date and a realised release timestamp | 4.0A.12 — the atomic-fact rule |
+| F31 | A derived artifact rejected by a source-shaped origin check | must **not** happen — 4.0.0 admits `DERIVED_ARTIFACT`; see N14 |
+| F32 | A `SYSTEM_OBSERVED` row carrying a `provider_available_upper_bound` | 4.0A.4 |
+| F33 | A `DATE_PLUS_LAG` value written into `public_available_time` | 4.0A.7 |
+| F34 | An exact public time later than its own `public_available_upper_bound` | 4.0A.8 |
+| F35 | A bound relied upon whose derivation is not approved for its dataset | 4.0A.9 |
+| F36 | A derived artifact declaring `temporal_fact_class = RETROSPECTIVE` | 4.0B.4 |
+| F37 | A `SESSION_SCOPED` artifact with no `effective_session` | 4.0B.5 |
+| F38 | A run whose `run_id` omits one dataset's gap policy from the hash | 4.3.13 |
 
 ### 6.2 Negative-control fixtures — must PASS
 
@@ -475,6 +498,10 @@ loosened under deadline pressure by someone who no longer remembers why it was t
 | **N11** | A derived artifact whose inputs are all `AUTHORITATIVE_PUBLIC`, queried under `PUBLIC_PIT` | **admissible**, governed by the lineage max — deriving a value does not make it private |
 | **N12** | A `PROVIDER_REALISTIC_PIT` row where `max(public, provider)` legitimately equals `public` because the provider offered it the instant it went public | **admissible** — 4.3.3 forbids *substitution*, not a genuine equality |
 | **N13** | An **optional** enrichment domain emptied by origin filtering, declared optional, counted, token emitted | **admissible** — only *required* domains refuse |
+| **N14** | A well-formed `DERIVED_ARTIFACT` with no `system_first_seen_time` and no source times | **admissible** — §4.0B applies, not §4.0A. Revision 4 would have raised three false BLOCKINGs here |
+| **N15** | `AUTHORITATIVE_PUBLIC` with exact public null and an **approved** `DATE_PLUS_LAG` bound | **admissible** under `PUBLIC_PIT` — `resolved_public_time` resolves from the bound |
+| **N16** | One run applying `BOUND` to one dataset and `EXCLUDE` to another | **admissible** — policies are per dataset |
+| **N17** | A required domain at 97% coverage against a 95% `PER_SESSION` contract | **admissible** — the contract is met; only a breach refuses |
 
 ---
 
