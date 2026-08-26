@@ -323,9 +323,11 @@ edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 ### Still not implemented, and not authorized
 
 Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger
-agents; the portfolio/risk engine; the scanner and factor pipeline; the point-in-time data
-platform; database schema, dashboard, alerting, kill switch; data purchases; production cloud
-infrastructure; options; leverage; X/social signals. Live trading remains **hard-disabled**.
+agents; the portfolio/risk engine; the scanner and factor pipeline; **any point-in-time data
+platform beyond the vendor-neutral A1 kernel** — no ingestion from a real provider, no filings,
+fundamentals, earnings, estimates or borrow; database schema, dashboard, alerting, kill switch;
+data purchases; production cloud infrastructure; options; leverage; X/social signals. Live
+trading remains **hard-disabled**.
 
 ### Next phase
 
@@ -334,7 +336,8 @@ infrastructure; options; leverage; X/social signals. Live trading remains **hard
 | | |
 |---|---|
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
-| **PHASE 3 IMPLEMENTATION** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3A — A1 FOUNDATION KERNEL** | **IN REVIEW — NOT ACCEPTED** |
+| **PHASE 3 IMPLEMENTATION, ALL ELSE** | **NOT STARTED / NOT AUTHORIZED** |
 | **ADR-0005** | **PROPOSED** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
 
@@ -342,12 +345,28 @@ The planning package is accepted and lives in
 [`docs/phase3/`](docs/phase3/phase3-pit-data-foundation-charter.md), with
 [ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
 
-**Phase 3 itself is not complete, and merging the plan grants no implementation authority.**
-What was accepted is a *plan*: its proposed architecture and provider selections remain subject
-to ADR-0005's five open decision gates —
+### A1 — the one authorized implementation slice
+
+[`docs/phase3/phase3a-a1-foundation-kernel.md`](docs/phase3/phase3a-a1-foundation-kernel.md)
+records what it built and what it deliberately did not. It is **vendor-neutral**: the merged
+point-in-time contract as executable, type-checked Python, proven against repository-owned
+**synthetic** fixtures. It adds **no runtime dependency**, makes **no network call**, and has
+**no brokerage boundary**.
+
+```
+no provider connected   ·   no production data   ·   no short research
+no Phase 3B / 3C / 3D authority   ·   no G1-G5 resolved   ·   ADR-0005 still PROPOSED
+```
+
+**No synthetic result in that slice is vendor qualification or production evidence.** Provider
+tests P1–P9 remain unrun, and cannot be run without a provider that has not been selected.
+
+**Phase 3 itself is not complete, A1 is not accepted, and merging the plan granted no
+implementation authority.** The proposed architecture and provider selections remain subject to
+ADR-0005's five open decision gates —
 
 > G1 provider selection · G2 production information-set profile · G3 vendor licensing ·
 > G4 the analyst-estimate gap · G5 borrow-history qualification
 
-No provider has been purchased, trialled or credentialed. No ingestion code, schema or database
-exists. Beginning implementation requires explicit written authorization, per §8.
+No provider has been purchased, trialled or credentialed. No external data has been acquired.
+Beginning any further implementation requires explicit written authorization, per §8.

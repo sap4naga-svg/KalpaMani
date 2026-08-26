@@ -156,7 +156,7 @@ KalpaMani/
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
 │   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
-│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3 planning accepted, implementation not authorized]
+│   ├── data/                 Point-in-time data platform                      [Phase 3 planning accepted; A1 kernel IN REVIEW on synthetic fixtures only]
 │   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
@@ -266,20 +266,33 @@ live brokerage execution, real-money operation.
 | | |
 |---|---|
 | Planning | **ACCEPTED / MERGED** |
-| Implementation | **NOT STARTED / NOT AUTHORIZED** |
+| Stage 3A A1 — point-in-time foundation kernel | **IN REVIEW — not accepted** |
+| Everything else in Phase 3 | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
 
 The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
 [ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
 
-**The planning package is accepted; Phase 3 is not complete.** Its proposed architecture and
-provider decisions remain subject to ADR-0005's five open gates — provider selection, the
-production information-set profile, vendor licensing, the analyst-estimate gap, and
-borrow-history qualification. **No implementation authority follows from merging the plan.** No
-data provider has been purchased, trialled or credentialed, and no ingestion code exists.
+**One implementation slice is authorized and in review: the vendor-neutral A1 foundation
+kernel** — [docs/phase3/phase3a-a1-foundation-kernel.md](docs/phase3/phase3a-a1-foundation-kernel.md).
+It implements the merged point-in-time contract as executable, type-checked Python and proves it
+against **repository-owned synthetic fixtures**. That is a proof the contract can be *mechanised*,
+which is a different claim from proving that anyone's data satisfies it.
 
-Beginning implementation requires explicit written authorization.
+> **No provider is connected. No production data exists. No short research is authorized.**
+> The A1 slice adds no runtime dependency, makes no network call, and touches no brokerage.
+> Nothing in it is vendor qualification or production evidence.
+
+**Phase 3 planning is accepted; implementation beyond the A1 kernel is NOT AUTHORIZED.**
+
+**Phase 3 is not complete, and A1 is not accepted.** The proposed architecture and provider
+decisions remain subject to ADR-0005's five open gates — provider selection, the production
+information-set profile, vendor licensing, the analyst-estimate gap, and borrow-history
+qualification. None is resolved by this slice.
+
+Phase 3B, 3C and 3D carry no authority from it, and beginning any of them requires explicit
+written authorization.
 
 ---
 
