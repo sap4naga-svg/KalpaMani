@@ -1,7 +1,7 @@
 # ADR-0005 — Point-in-Time Data Architecture and the Anti-Lookahead Contract
 
 - **Status:** **Proposed** — planning under review. Not accepted, not implemented.
-- **Date:** 2026-08-26 (revision 2)
+- **Date:** 2026-08-26 (revision 3)
 - **Deciders:** Project owner (human governance) — *pending*
 - **Relates to:** ADR-0001 (System Foundation), ADR-0002 (BrokerAdapter and the Brokerage Boundary), ADR-0004 (Deterministic Order Identity, Idempotency, and Execution Lifecycle)
 - **Authority:** Blueprint V2.1 §18 (Phase-0 point-in-time data feasibility), §17, §19, §26
@@ -15,6 +15,7 @@
 |---|---|---|
 | 1 | 2026-08-26 | First draft. |
 | **2** | **2026-08-26** | Independent review of PR #6. Six substantive corrections: the single availability field is **split into four with explicit information-set profiles** (§2–§4); **revision views are made explicit** and the contradictory default resolved (§6); **adjusted prices resolved to one design** (§8); **temporal checks made class-aware** (§7); **cross-validation no longer assumed free** (§12); a **vendor-licensing gate** added before any purchase (§13). IBKR borrow history reclassified from *absent* to *unresolved* (§15). |
+| **3** | **2026-08-26** | Review of revision 2. Three contract inconsistencies fixed: availability is now **origin-aware**, so a proprietary observation with no public release instant is usable where it legitimately can be (§1a, §2a); the `DECLARE` resolution for unknown provider timing is **withdrawn** as self-contradictory and replaced by EXCLUDE / BOUND / DOWNGRADE (§4); and the revision-view table's "default" is reworded to **normative historical view**, since the accessor has no default (§6). |
 
 ---
 
@@ -67,17 +68,62 @@ answered three different questions with one number. Every record carries:
 priority ladder ([contract §5.1](../phase3/pit-data-contract.md)). A vendor's asserted
 publication time is an *input* to that derivation, never the answer.
 
+### 1a. Records declare an information origin, and it decides what they need
+
+**New in revision 3.** Decision 1 as written made `public_available_time` a de facto
+prerequisite everywhere. That is right for a filing and wrong for a proprietary observation —
+an analyst consensus snapshot or a broker-specific borrow quote has no authoritative public
+release instant, and revision 2 would have made both permanently unusable, including under
+`FORWARD_SYSTEM`, the profile that describes data we demonstrably held.
+
+Every record declares an `information_origin` from a closed vocabulary:
+
+| Origin | The fact is | `public` | `provider` | `seen` |
+|---|---|---|---|---|
+| `AUTHORITATIVE_PUBLIC` | publicly released at an instant independent of any vendor | **required** | optional | required |
+| `PROVIDER_DERIVED` | the provider own computed or proprietary observation | **null** | **required** | required |
+| `SYSTEM_OBSERVED` | observed directly by KalpaMani, with no vendor timestamp | null | null | **required** |
+
+**A null `public_available_time` means two opposite things**, and they are distinguished by
+`availability_derivation`: `UNKNOWN` means a public time exists and we failed to establish it —
+the record is unusable everywhere; `NOT_APPLICABLE` means no such time exists — the record
+stays usable where its origin allows. Conflating them is what revision 2 did.
+
+Origin is a property of the fact, not of the delivery path: a filing delivered by a vendor is
+still `AUTHORITATIVE_PUBLIC`, and `PROVIDER_DERIVED` is not an escape hatch for a public fact
+whose timing we could not pin down.
+
 ### 2. The governing time is computed per information-set profile, not stored
 
 ```
-PUBLIC_PIT              = public_available_time
-PROVIDER_REALISTIC_PIT  = max(public, provider)
-FORWARD_SYSTEM          = max(public, provider, system_first_seen)
+PUBLIC_PIT              = public_available_time                      requires public
+PROVIDER_REALISTIC_PIT  = max(public, provider) over non-null times  requires provider
+FORWARD_SYSTEM          = max(public, provider, seen) over non-null  requires seen
 ```
 
 `decision_available_time` is **not a column**. Storing it would bake one profile into the data.
-The three profiles are strictly ordered in conservatism, and that ordering is asserted as an
-invariant rather than assumed.
+
+### 2a. Profile eligibility is defined per origin
+
+| Origin | `PUBLIC_PIT` | `PROVIDER_REALISTIC_PIT` | `FORWARD_SYSTEM` |
+|---|---|---|---|
+| `AUTHORITATIVE_PUBLIC` | eligible | eligible | eligible |
+| `PROVIDER_DERIVED` | **ineligible** | eligible | eligible |
+| `SYSTEM_OBSERVED` | **ineligible** | **ineligible** | eligible |
+
+A profile serves only facts whose originating information set it can describe. `PUBLIC_PIT`
+asks what the market could have known, and a proprietary consensus was never public — so
+excluding it is correct, not a limitation to apologise for. `FORWARD_SYSTEM` asks what we
+held, and `system_first_seen_time` answers that for every origin; public and provider times
+remain **provenance and quality inputs**, not prerequisites.
+
+**Ineligible rows are excluded and counted**, with `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` in the
+manifest. A factor that quietly lost its estimate inputs is worse than one that refused.
+
+**The ordering invariant now carries its precondition.** `PUBLIC_PIT <=
+PROVIDER_REALISTIC_PIT <= FORWARD_SYSTEM` may be asserted **only for a record eligible under
+the profiles being compared**. Revision 2 asserted it unconditionally, which would have raised
+on correct proprietary data — a malformed comparison reported as a data defect.
 
 **Every historical query names a profile. Every manifest records it. A single result may never
 mix profiles** — mixing is refused at manifest emission, not annotated.
@@ -93,12 +139,34 @@ mix profiles** — mixing is refused at manifest emission, not annotated.
 This is the case the split exists for. Under revision 1 all three readings were representable
 by the same field and the code would have picked whichever the ingestion path happened to have.
 
-### 4. Unknown provider availability is declared or excluded, never assumed
+**A backfilled record must not become historically available under `PROVIDER_REALISTIC_PIT`
+merely because the public fact underneath it is old.** The age of the underlying event says
+nothing about when a subscriber could have obtained the vendor row describing it. `BOUND`
+(§4) enforces this by construction: it sets provider availability to the day we first saw the
+row, so a backfill stays inadmissible in the past rather than relying on vigilance.
+
+### 4. Unknown provider availability: EXCLUDE, BOUND or DOWNGRADE — never DECLARE
+
+**Revision 2 `DECLARE` is withdrawn.** It served a row on `public_available_time` while
+labelling the result `PROVIDER_REALISTIC_PIT` — exactly the profile mixing decision 3 forbids.
+A rule cannot both permit and prohibit the same act, and revision 2 did.
 
 Under `PROVIDER_REALISTIC_PIT`, a null `provider_available_time` is resolved per dataset as
-either **EXCLUDE** (the record does not participate) or **DECLARE** (it participates on
-`public_available_time`, and the run carries `PROVIDER_AVAILABILITY_UNKNOWN`). There is no
-third option and no silent fallback.
+exactly one of:
+
+| Resolution | Effect | Token |
+|---|---|---|
+| **`EXCLUDE`** | the record does not participate | `PROVIDER_AVAILABILITY_UNKNOWN` |
+| **`BOUND`** | `provider_available_time` is set to a conservative upper bound derived from `system_first_seen_time` (`FIRST_SEEN_UPPER_BOUND`) | `PROVIDER_AVAILABILITY_UNKNOWN` |
+| **`DOWNGRADE`** | **the entire result** runs under `PUBLIC_PIT` | `PROFILE_DOWNGRADED_TO_PUBLIC` |
+
+> **Never serve a row using `PUBLIC_PIT` timing while labelling the result
+> `PROVIDER_REALISTIC_PIT`.**
+
+`BOUND` is sound because we cannot have been served a row before we first saw it, so
+`system_first_seen_time` is a genuine upper bound — it can only delay a record, never advance
+one. It is unavailable for `SYSTEM_OBSERVED` rows, where bounding a provider time would invent
+one.
 
 ### 5. Unknown public availability is not point-in-time under any profile
 
@@ -114,13 +182,19 @@ resolved conservatively and visibly, never optimistically and silently.
 **Superseded from revision 1**, which stated two contradictory defaults — "as originally
 reported" in one document and "highest admissible revision" in another.
 
-| View | Returns | Available to research |
+| View | Returns | Status |
 |---|---|---|
-| `AS_KNOWN_AT_AS_OF` | latest revision whose `decision_available_time <= as_of` | **default** |
-| `ORIGINAL_FILING_ONLY` | `revision_sequence = 0` only, if admissible | yes, explicitly |
-| `LATEST_RESTATED` | newest revision, ignoring `as_of` | **forbidden** |
+| `AS_KNOWN_AT_AS_OF` | latest revision whose `decision_available_time <= as_of` | **normative historical view** |
+| `ORIGINAL_FILING_ONLY` | `revision_sequence = 0` only, if admissible | permitted, explicit |
+| `LATEST_RESTATED` | newest revision, ignoring `as_of` | **forbidden in historical research** |
 
-`AS_KNOWN_AT_AS_OF` is correct as the default because it is what a decision-maker at that
+**"Normative" is a statement about correctness, not a code default.** Revision 2 called
+`AS_KNOWN_AT_AS_OF` "the default" in this table while simultaneously requiring that
+`revision_view` have no default — the structural rule was right and the word was wrong. The
+caller names the view on every query, and `AS_KNOWN_AT_AS_OF` is what a historical query
+should name unless it has a stated reason not to.
+
+`AS_KNOWN_AT_AS_OF` is normative because it is what a decision-maker at that
 moment actually had — including any restatement already published. `LATEST_RESTATED` is not
 point-in-time, is unreachable from research and backtest code by static test, and any result
 using it carries `NON_PIT_RESTATED_VIEW` and **may not be called a backtest**.
@@ -440,9 +514,15 @@ To be enforced by `tests/unit/test_phase3_pit_contract.py` and `scripts/phase3_p
 **when implementation is authorised** — none of this exists yet:
 
 `as_of`, `information_set_profile` and `revision_view` mandatory with no defaults on every
-historical accessor · no `latest`/`current` path in research code · `LATEST_RESTATED`
-unreachable from research · `data.pit` and `data.live` mutually exclusive by import · research
-modules cannot import `execution` or `broker` · profile ordering invariant holds · mixed
+historical accessor · `AS_KNOWN_AT_AS_OF` normative but never a code default · no
+`latest`/`current` path in research code · `LATEST_RESTATED` unreachable from research ·
+`data.pit` and `data.live` mutually exclusive by import · research modules cannot import
+`execution` or `broker` · **every row carries an `information_origin` from the closed
+vocabulary** · **`PROVIDER_DERIVED` rows refused under `PUBLIC_PIT` and served under the other
+two** · **`SYSTEM_OBSERVED` rows served only under `FORWARD_SYSTEM`** · **`NOT_APPLICABLE` and
+`UNKNOWN` never conflated** · **profile ordering asserted only where the record is eligible
+under both sides** · **`BOUND` never applied to a `SYSTEM_OBSERVED` row** · **no row served
+under `PROVIDER_REALISTIC_PIT` using public timing** · excluded-row counts declared · mixed
 profiles refused · backfill inadmissible under the profiles that forbid it · restatement
 invisible before its filing acceptance time · `AS_KNOWN_AT_AS_OF` returns a published
 restatement and `ORIGINAL_FILING_ONLY` does not · incomplete revision chronology forces its

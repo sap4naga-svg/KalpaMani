@@ -562,7 +562,9 @@ end-of-day and avoids this; it re-enters at micro-live.
    B/C figure.
 3. **P1** — whether Sharadar `lastupdated` means "first appeared" or "last changed"
    (`PSR-SHD-022` says the latter, so `provider_available_time` is likely unobtainable and
-   `PROVIDER_REALISTIC_PIT` degrades to EXCLUDE or DECLARE).
+   the dataset resolution becomes `EXCLUDE`, `BOUND` or `DOWNGRADE`). **`BOUND` is the likely
+   outcome**, and it is the safe one: it pins provider availability to the day we first saw
+   the row, so a vendor backfill cannot become historically admissible.
 4. **P6** — the known-restatement test, against real data, notwithstanding that `PSR-SHD-018`
    and `PSR-SHD-019` already tell us the answer.
 5. **P3** — whether Sharadar `ACTIONS` carries an announcement timestamp.

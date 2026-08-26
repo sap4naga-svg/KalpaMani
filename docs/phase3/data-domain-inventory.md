@@ -163,10 +163,11 @@ not just returns.
 **PIT requirement.** The distinction between as-reported and restated is the whole domain. A
 restatement is new information at its own filing time and must not be visible before it.
 
-The default view is **`AS_KNOWN_AT_AS_OF`** ([contract §6](pit-data-contract.md)) — the latest
+The **normative historical view** is `AS_KNOWN_AT_AS_OF` ([contract §6](pit-data-contract.md)) — the latest
 revision actually published by the cutoff, which is what a decision-maker would have had in
 front of them. That is **not** the same as "as originally reported", and revision 1 of this
-plan conflated the two.
+plan conflated the two. "Normative" describes what a historical query *should* ask for; the
+caller still names it explicitly on every call, because the accessor has no default.
 
 **Failure mode.** Restated financials backfilled to the original period produce a fundamental
 factor built on numbers nobody had. This is the classic silent look-ahead and it is extremely
@@ -250,6 +251,13 @@ outcome.
 > ACCEPTABLE for point-in-time backtesting.** It is not a degraded version of the right data;
 > it is the answer sheet.
 
+**Origin note.** A proprietary consensus is `PROVIDER_DERIVED`
+([contract §2.3](pit-data-contract.md)): it has no authoritative public release instant, and a
+null `public_available_time` here is correct rather than a defect. It is therefore ineligible
+under `PUBLIC_PIT` — the market never saw it — and eligible under `PROVIDER_REALISTIC_PIT` and
+`FORWARD_SYSTEM`. That distinction only exists from revision 3; revision 2 would have made the
+whole domain unusable even once licensed.
+
 **Classification: BLOCKING for the revision sub-factor. NOT ACCEPTABLE to substitute current
 consensus.**
 
@@ -301,6 +309,13 @@ Two limitations survive whatever the depth turns out to be: IBKR's SLB figures r
 client holdings**, not the market's lending pool, and the live shortable tick is **bucketed**
 rather than exact. The first is the right quantity for our own pre-submission check and an
 idiosyncratic one for market-wide research.
+
+**Origin decides more than depth does.** If the source stamps each observation with its own
+time, the rows are `PROVIDER_DERIVED` and eligible under `PROVIDER_REALISTIC_PIT` — usable for
+a historical short backtest. If we merely poll a live endpoint that carries no timestamp, they
+are `SYSTEM_OBSERVED` and eligible **only** under `FORWARD_SYSTEM` — usable for forward
+validation and not for history, however many years we accumulate. Checklist item 8a exists to
+settle this.
 
 A per-symbol, shallow, UI-only history is real data and still cannot support a broad-universe
 historical short backtest. Those are different findings and the qualification checklist has to

@@ -5,6 +5,11 @@
 This is a plan to be executed later, if approved. **No stage below has begun.** No
 infrastructure has been created, no provider contacted, no credential requested.
 
+> **Revision 3 (2026-08-26).** Provider test P1 now records an `information_origin` per
+> dataset and drives the `EXCLUDE` / `BOUND` / `DOWNGRADE` choice; four adversarial fixtures and
+> two negative controls are added for origin eligibility; acceptance criteria 15 and 18 cover
+> profile eligibility.
+>
 > **Revision 2 (2026-08-26).** Storage now reflects the adjusted-price decision
 > ([contract §8](pit-data-contract.md)); provider tests now include the **revision-chronology
 > qualification** and **provider-availability-semantics** tests that revision 1 assumed away;
@@ -170,7 +175,7 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 
 | # | Test | If it fails |
 |---|---|---|
-| P1 | **Provider-availability semantics.** Does the vendor's update/`lastupdated` column mean "first appeared" or "last changed"? Verify against a row known to have changed. | `provider_available_time` is unobtainable → `PROVIDER_REALISTIC_PIT` degrades to EXCLUDE or DECLARE for that dataset |
+| P1 | **Provider-availability semantics and origin.** Does the vendor update/`lastupdated` column mean "first appeared" or "last changed"? Verify against a row known to have changed. Record the dataset `information_origin` at the same time. | `provider_available_time` is unobtainable → the dataset resolution becomes `EXCLUDE`, `BOUND` or `DOWNGRADE` ([contract §3.3](pit-data-contract.md)), declared in configuration and reported in every manifest. Documentation already indicates the leading candidate means *last changed*, so `BOUND` is the likely outcome — which by construction keeps backfills inadmissible in the past. |
 | P2 | **Delisted coverage is real.** Sample securities delisted 5, 10 and 15 years ago and confirm full history is present. | survivorship control fails; the domain reverts to another source |
 | P3 | **Corporate-action announcement timing.** Does the dataset carry an announcement date/time distinct from ex-date? | `CORPORATE_ACTION_ANNOUNCE_APPROXIMATED` lag applies and is declared |
 | P4 | **Classification history.** Are sector/industry changes historised, or is only the current value supplied? | `CLASSIFICATION_STATIC` limitation applies |
@@ -192,7 +197,7 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 | Risk | Mitigation |
 |---|---|
 | Vendor PIT semantics differ from the datasheet | P1–P5 run **first**; the whole low-cost recommendation rests on them |
-| Provider availability unobtainable | EXCLUDE or DECLARE, both declared — never assumed |
+| Provider availability unobtainable | `EXCLUDE`, `BOUND` or `DOWNGRADE`, all declared — never assumed, and never the withdrawn `DECLARE` |
 | Single-source blind spots | `SINGLE_SOURCE_UNVERIFIED` on every affected result |
 | Personal-use licence does not cover intended use | gate G3 / authorization A2 precedes purchase |
 | Universe construction quietly uses current data | check 6.6 exists precisely for this |
@@ -291,6 +296,7 @@ The checklist, each item answered explicitly and recorded:
 | 6 | **Revisions** — is the indicative rate ever restated after the day settles? (`PSR-IBK-033`) | decides whether `revision_sequence` is needed here |
 | 7 | **Licensing** — what does IBKR permit this data to be used for? **No public page states it** (`PSR-IBK-044`) | absence of a stated restriction is not a grant |
 | 8 | **Bucketing** — is the historical series exact, or bucketed like the live tick? (`PSR-IBK-011`) | a bucketed availability series cannot size a position |
+| 8a | **Origin** — does the source stamp each observation with its own time (`PROVIDER_DERIVED`), or do we merely poll it (`SYSTEM_OBSERVED`)? | decisive: a `SYSTEM_OBSERVED` series is eligible **only** under `FORWARD_SYSTEM`, so it can support forward validation but **not** a historical short backtest, whatever its depth |
 | 9 | Can it support **broad-universe historical short research**? | the actual question |
 
 A **yes** to 1–8 and a **no** to 9 is a perfectly possible outcome, and it is not a failure of
@@ -390,9 +396,11 @@ that and proposes no ADR to. It refuses to simulate the short half on data that 
 | 12 | **LEAN reads the PIT layer** | Universe, prices and fundamentals come from gold exports; no broker data path is reachable from research. |
 | 13 | **No current data in an earlier as-of query** | See fixtures below. |
 | 14 | **Reproducibility test** | A manifest reruns to an identical result hash, or fails loudly naming the missing input. |
-| 15 | **Profile separation test** | The same query under three profiles yields three results ordered by admissibility, with three distinct `run_id`s. |
+| 15 | **Profile separation test** | The same query under three profiles yields three results ordered by admissibility, with three distinct `run_id`s — evaluated over records eligible under all three. |
 | 16 | **Revision-view separation test** | `AS_KNOWN_AT_AS_OF` and `ORIGINAL_FILING_ONLY` differ on a known restatement; `LATEST_RESTATED` is unreachable from research. |
 | 17 | **Adjustment-key test** | An adjusted artifact reproduces from its key; a tampered artifact is refused. |
+| 18 | **Origin-eligibility test** | A `PROVIDER_DERIVED` record is refused under `PUBLIC_PIT`, served under the other two, and its exclusion is counted in the manifest. A `SYSTEM_OBSERVED` record is served only under `FORWARD_SYSTEM`. **Neither is rejected outright** — N7, N8 and N10 must pass. |
+| 19 | **Provider-gap resolution test** | `EXCLUDE`, `BOUND` and `DOWNGRADE` each produce the documented behaviour and the documented token; no path serves a row under `PROVIDER_REALISTIC_PIT` on public timing. |
 
 ### 6.1 Adversarial fixtures — must FAIL the pipeline
 
@@ -417,9 +425,14 @@ fixture defaulted to a direction the broker never sends.
 | F13 | A backfilled row admitted at a date before `provider_available_time` under `PROVIDER_REALISTIC_PIT` | 4.3.5 |
 | F14 | Two datasets resolved under different profiles in one result | 4.3.1 |
 | F15 | `LATEST_RESTATED` reached from a backtest path | 4.4.1 + static test |
-| F16 | A `DECLARE` provider gap with no `PROVIDER_AVAILABILITY_UNKNOWN` in the manifest | 4.3.3 |
+| F16 | A `BOUND` provider gap with no `PROVIDER_AVAILABILITY_UNKNOWN`, or a `DOWNGRADE` with no `PROFILE_DOWNGRADED_TO_PUBLIC` | 4.3.4 |
 | F17 | An adjusted artifact whose bytes were altered after materialisation | 4.5.1 |
 | F18 | A row we recorded as first seen before it was public | 4.1.1 |
+| F19 | A `PROVIDER_DERIVED` consensus snapshot served in a `PUBLIC_PIT` result | 4.3.5 |
+| F20 | A `SYSTEM_OBSERVED` borrow row served in a `PROVIDER_REALISTIC_PIT` result | 4.3.5 |
+| F21 | `BOUND` applied to a `SYSTEM_OBSERVED` row, inventing a provider time | 4.3.10 |
+| F22 | A row served under `PROVIDER_REALISTIC_PIT` whose governing time came from `public_available_time` — the withdrawn `DECLARE` | 4.3.3 |
+| F23 | An `AUTHORITATIVE_PUBLIC` row with a null public time relabelled `PROVIDER_DERIVED` to get past the check | 4.0.3 |
 
 ### 6.2 Negative-control fixtures — must PASS
 
@@ -435,6 +448,10 @@ loosened under deadline pressure by someone who no longer remembers why it was t
 | N4 | A classification change announced ahead of its effective date | `ANNOUNCED_FORWARD` |
 | N5 | A legitimate vendor backfill queried under `PUBLIC_PIT` with proven public timing | admissible historically |
 | N6 | A record arriving 3 days late, within its latency budget | `INFO`/`WARNING` at most — never `BLOCKING` in research |
+| **N7** | A `PROVIDER_DERIVED` consensus snapshot with a **null** `public_available_time`, queried under `PROVIDER_REALISTIC_PIT` | **admissible** — this is the exact row revision 2 would have rejected, and rejecting it is the bug |
+| **N8** | The same row under `FORWARD_SYSTEM` | **admissible**, governed by `system_first_seen_time` |
+| **N9** | The ordering invariant evaluated for a record eligible under only two of three profiles | **not asserted across the ineligible profile**, and not reported as a violation |
+| **N10** | A `SYSTEM_OBSERVED` borrow row under `FORWARD_SYSTEM` | **admissible** — it is the only profile that can describe it, and forward validation is exactly what it is for |
 
 ---
 
