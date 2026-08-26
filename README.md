@@ -259,7 +259,13 @@ live brokerage execution, real-money operation.
 
 ## Next planned phase
 
-**PHASE 3 — POINT-IN-TIME DATA FOUNDATION** *(not started, not authorized)*
+**PHASE 3 — POINT-IN-TIME DATA FOUNDATION** — *planning in review; implementation not
+started, not authorized; provider purchase not authorized.*
+
+The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
+[ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md) **Proposed** (not
+accepted). No data provider has been purchased, trialled or credentialed, and no ingestion
+code exists.
 
 Naming it does not approve it. Beginning any phase requires explicit written authorization.
 

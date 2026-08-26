@@ -331,5 +331,14 @@ infrastructure; options; leverage; X/social signals. Live trading remains **hard
 
 **PHASE 3 — POINT-IN-TIME DATA FOUNDATION.**
 
-**Phase 3 is NOT STARTED and is NOT AUTHORIZED.** Recording it here names what comes next; it
-does not approve it. Beginning it requires explicit written authorization, per §8.
+**Phase 3 planning is IN REVIEW. Phase 3 implementation is NOT STARTED and is NOT
+AUTHORIZED. Data-provider purchase is NOT AUTHORIZED.**
+
+Planning and architecture only, under review on `docs/phase3-pit-data-foundation-plan`:
+[`docs/phase3/`](docs/phase3/phase3-pit-data-foundation-charter.md) and
+[ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md) (**Proposed**, not
+accepted). No provider has been purchased, trialled or credentialed; no ingestion code
+exists.
+
+Recording the plan names what comes next; it does not approve it. Beginning implementation
+requires explicit written authorization, per §8.
