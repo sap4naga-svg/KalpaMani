@@ -2,6 +2,13 @@
 
 **Status: PROPOSED — planning only. No check is implemented.**
 
+> **Revision 5 (2026-08-26).** §4.0 now **branches on envelope** before anything else, so a
+> derived artifact is never validated as a malformed source row (§4.0A / §4.0B). Checks read the
+> §5.0 **resolved** times, so an approved bound satisfies a requirement; exact-versus-bound
+> conformance and the `exact <= bound` pairing are enforced; per-dataset gap policies are
+> checked independently; and §4.8 is a **conformance table** proving the thirteen cases the
+> review named.
+>
 > **Revision 4 (2026-08-26).** Every temporal check now reads one origin-aware
 > **`source_anchor`** (§2.1) instead of `public_available_time`, so a `SYSTEM_OBSERVED` or
 > `PROVIDER_DERIVED` row can no longer evade a class invariant by having a null public time.
@@ -66,14 +73,20 @@ Two rules keep severity honest:
 [contract §3.1](pit-data-contract.md) · `pub_ub` / `prov_ub` = the public and provider
 **upper-bound** fields ([contract §2.6](pit-data-contract.md)).
 
+`rpub` = `resolved_public_time` · `rprov` = `resolved_provider_time`
+([contract §5.0](pit-data-contract.md)) — the exact field, else an **approved** bound, else null.
+
 **`anchor` = `source_anchor(record)`** ([contract §7.1](pit-data-contract.md)):
 
 ```
-AUTHORITATIVE_PUBLIC -> pub   (else pub_ub)
-PROVIDER_DERIVED     -> prov  (else prov_ub)
+AUTHORITATIVE_PUBLIC -> rpub
+PROVIDER_DERIVED     -> rprov
 SYSTEM_OBSERVED      -> seen
-DERIVED_ARTIFACT     -> computed from lineage under the requested profile
+DERIVED_ARTIFACT     -> computed from lineage under the RESOLVED profile
 ```
+
+**Every check below uses `resolved_profile`, never `requested_profile`.** A `DOWNGRADE` changes
+the run before any filtering or checking happens.
 
 Revision 3 wrote the class invariants against `pub` alone. For a proprietary or
 system-observed row `pub` is legitimately null, so **the check silently passed** — a consensus
@@ -94,8 +107,8 @@ error, and §4.0 makes the skip explicit rather than implicit.
 | 3.2 | Schema drift | vendor payload columns/types differ from the recorded contract | **BLOCKING** |
 | 3.3 | Checksum change | a bronze artifact hash differs from the one an `ingestion_run` recorded | **BLOCKING** |
 | 3.4 | Unrecognised schema version | in any curated table | **BLOCKING** |
-| 3.5 | Missing envelope | `availability_derivation = UNKNOWN` in a PIT query | **BLOCKING** |
-| 3.6 | Missing temporal class | any entity with no `temporal_fact_class` | **BLOCKING** |
+| 3.5 | Unresolvable source availability | `origin = AUTHORITATIVE_PUBLIC` ∧ `public_time_derivation = UNKNOWN` in a PIT query | **BLOCKING** |
+| 3.6 | Missing temporal declaration | a source row with no `temporal_fact_class`, or a derived row with no `output_validity` | **BLOCKING** |
 | 3.7 | Orphan reference | a foreign key with no target | **BLOCKING** |
 | 3.8 | Stale ingestion | newest row of a live-facing dataset older than its freshness bound | **BLOCKING** live / **WARNING** research |
 
@@ -103,36 +116,64 @@ error, and §4.0 makes the skip explicit rather than implicit.
 
 ## 4. Temporal checks
 
-### 4.0 Origin conformance — checked first
+### 4.0 Envelope conformance — branched, and checked first
 
-These decide which of the later checks even apply. A record failing §4.0 is malformed, and
-running §4.1 against it would produce a misleading verdict.
+**The first question is which envelope the row carries**, and revision 4 asked it too late:
+its §4.0 ran source-shaped checks over every row, so a derived artifact failed the origin
+vocabulary check (4.0.1), failed "missing `seen`" (4.0.7) and was graded against a derivation
+enum it does not have (4.0.6). Three false BLOCKINGs on a correctly-formed row.
+
+```
+4.0.0  origin ∈ {AUTHORITATIVE_PUBLIC, PROVIDER_DERIVED, SYSTEM_OBSERVED}  -> run §4.0A
+       origin = DERIVED_ARTIFACT                                           -> run §4.0B
+       anything else                                                       -> BLOCKING
+```
 
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
-| 4.0.1 | Origin absent or outside the closed vocabulary | `origin ∉ {AUTHORITATIVE_PUBLIC, PROVIDER_DERIVED, SYSTEM_OBSERVED}` | **BLOCKING** |
-| 4.0.2 | Public fact with no public time established | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NULL` | **BLOCKING** — this is `UNKNOWN`, not `NOT_APPLICABLE` |
-| 4.0.3 | Proprietary fact carrying a public time | `origin = PROVIDER_DERIVED` ∧ `pub IS NOT NULL` | **BLOCKING** — if a public instant exists, the origin is wrong |
-| 4.0.4 | Proprietary fact with no provider time **and no configured resolution** | `origin = PROVIDER_DERIVED` ∧ `prov IS NULL` ∧ `prov_ub IS NULL` ∧ dataset resolution ∉ {`EXCLUDE`,`BOUND`,`DOWNGRADE`} | **BLOCKING**. A missing provider time is **not** malformed when a resolution is configured — revision 3 made it so, which would have blocked every legitimately-bounded dataset |
-| 4.0.5 | System-observed fact carrying vendor timing | `origin = SYSTEM_OBSERVED` ∧ (`pub IS NOT NULL` ∨ `prov IS NOT NULL`) | **BLOCKING** |
-| 4.0.8 | Derived row carrying source times | `origin = DERIVED_ARTIFACT` ∧ (`pub` ∨ `prov` ∨ `seen`) `IS NOT NULL` | **BLOCKING** |
-| 4.0.9 | Derived row with incomplete lineage | `origin = DERIVED_ARTIFACT` ∧ (`lineage` empty ∨ any input unresolvable to a published `dataset_version`) | **BLOCKING** |
-| 4.0.10 | Bound written into an exact field | `provider_availability_derivation = FIRST_SEEN_UPPER_BOUND` ∧ `prov IS NOT NULL`; or the same for `pub` | **BLOCKING** ([contract §2.6](pit-data-contract.md)) |
-| 4.0.11 | Row mixes facts | more than one `temporal_fact_class` or `information_origin` implied by a single row's fields | **BLOCKING** — the atomic-fact rule ([contract §1 R5](pit-data-contract.md)) |
-| 4.0.6 | Derivation disagrees with origin | `availability_derivation = NOT_APPLICABLE` ∧ `origin = AUTHORITATIVE_PUBLIC`, or `= UNKNOWN` ∧ `origin ≠ AUTHORITATIVE_PUBLIC` | **BLOCKING** |
-| 4.0.7 | Missing `seen` | `seen IS NULL`, any origin | **BLOCKING** |
+| 4.0.0 | Origin outside the closed vocabulary | `origin ∉ {AUTHORITATIVE_PUBLIC, PROVIDER_DERIVED, SYSTEM_OBSERVED, DERIVED_ARTIFACT}` | **BLOCKING** |
+
+#### §4.0A — source facts only
+
+| # | Check | Exact condition | Severity |
+|---|---|---|---|
+| 4.0A.1 | Public fact with no resolvable public time | `origin = AUTHORITATIVE_PUBLIC` ∧ `rpub IS NULL` | **BLOCKING** — `UNKNOWN`, not `NOT_APPLICABLE` |
+| 4.0A.2 | Proprietary fact carrying public timing | `origin = PROVIDER_DERIVED` ∧ (`pub` ∨ `pub_ub`) `IS NOT NULL` | **BLOCKING** — if a public instant exists, the origin is wrong |
+| 4.0A.3 | Proprietary fact unresolvable and unresolved | `origin = PROVIDER_DERIVED` ∧ `rprov IS NULL` ∧ dataset policy ∉ {`EXCLUDE`,`BOUND`} ∧ no global `DOWNGRADE` | **BLOCKING** |
+| 4.0A.4 | System-observed fact carrying vendor timing | `origin = SYSTEM_OBSERVED` ∧ (`pub` ∨ `pub_ub` ∨ `prov` ∨ `prov_ub`) `IS NOT NULL` | **BLOCKING** |
+| 4.0A.5 | Missing `seen` | `seen IS NULL` | **BLOCKING** — source facts only |
+| 4.0A.6 | Exact derivation naming a bound field | `public_time_derivation ∈ {AUTHORITATIVE_TIMESTAMP, VENDOR_TZ_TIMESTAMP}` ∧ `pub IS NULL`; or the provider analogue | **BLOCKING** |
+| 4.0A.7 | **Approximation written into an exact field** | `pub IS NOT NULL` ∧ `public_time_derivation ∉ {AUTHORITATIVE_TIMESTAMP, VENDOR_TZ_TIMESTAMP}`; or `prov IS NOT NULL` ∧ `provider_time_derivation ∉ {VENDOR_STAMPED, FILE_DROP}` | **BLOCKING** ([contract §5.1](pit-data-contract.md)) |
+| 4.0A.8 | **Bound precedes the exact time it bounds** | (`pub IS NOT NULL` ∧ `pub_ub IS NOT NULL` ∧ `pub > pub_ub`) ∨ the provider analogue | **BLOCKING** ([contract §2.6](pit-data-contract.md)) |
+| 4.0A.9 | Unapproved bound relied upon | `rpub` or `rprov` resolved from a bound whose derivation is not in the dataset's approved list | **BLOCKING** |
+| 4.0A.10 | Derivation disagrees with origin | `public_time_derivation = NOT_APPLICABLE` ∧ `origin = AUTHORITATIVE_PUBLIC`; or `= UNKNOWN` ∧ `origin ≠ AUTHORITATIVE_PUBLIC` | **BLOCKING** |
+| 4.0A.11 | Class without its anchor | `RETROSPECTIVE` ∧ `obs IS NULL`; `ANNOUNCED_FORWARD` ∧ `ann IS NULL`; `SAMPLED_STATE` ∧ `smp IS NULL` | **BLOCKING** |
+| 4.0A.12 | Row mixes facts | more than one `temporal_fact_class` or `information_origin` implied by one row's fields | **BLOCKING** — the atomic-fact rule |
+
+#### §4.0B — derived artifacts only
+
+| # | Check | Exact condition | Severity |
+|---|---|---|---|
+| 4.0B.1 | Carries source-envelope fields | any of `pub`, `pub_ub`, `prov`, `prov_ub`, `seen` `IS NOT NULL` | **BLOCKING** |
+| 4.0B.2 | Incomplete lineage | `lineage` empty, or any input unresolvable to a published `dataset_version` and row selector | **BLOCKING** |
+| 4.0B.3 | Missing derived-envelope fields | any of `artifact_first_built_time`, `derivation_spec_version`, `artifact_content_hash` absent | **BLOCKING** |
+| 4.0B.4 | Declares a source temporal class | `temporal_fact_class IS NOT NULL` | **BLOCKING** — derived artifacts declare `output_validity` |
+| 4.0B.5 | `output_validity` without its field | `SESSION_SCOPED` ∧ no `effective_session`; `INTERVAL` ∧ no `valid_time_start`/`_end`; `PERIOD_END` ∧ no `period_end`; `EVENT_REFERENCED` ∧ no `observation_reference` | **BLOCKING** |
 
 ### 4.1 Impossibility and leakage — class-aware and origin-aware
+
+**§4.1 applies to source facts only.** Derived artifacts have no observation, announcement or
+sample instant to violate; their equivalents are §4.6.
 
 These say *this could not have happened*, so a violation means a timestamp is wrong, and
 serving the row would hand a backtest information nobody had.
 
 | # | Check | Exact condition | Applies to | Severity |
 |---|---|---|---|---|
-| 4.1.1 | Held before public | `pub IS NOT NULL` ∧ `seen < pub` | all classes | **BLOCKING** |
-| 4.1.2 | Held before provider supplied | `prov IS NOT NULL` ∧ `prov` not `FIRST_SEEN_UPPER_BOUND` ∧ `seen < prov` | all classes | **BLOCKING** |
+| 4.1.1 | Held before public | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NOT NULL` ∧ `seen < pub` | all classes | **BLOCKING** |
+| 4.1.2 | Held before provider supplied | `prov IS NOT NULL` ∧ `seen < prov` | all classes | **BLOCKING**. Not applied to a `FIRST_SEEN_UPPER_BOUND` bound, which is *derived from* `seen` |
 | 4.1.3 | Row written before first seen | `ing < seen` | all classes | **BLOCKING** |
-| 4.1.4 | Provider ahead of public **for the same fact** | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NOT NULL` ∧ `prov IS NOT NULL` ∧ `prov < pub` | `AUTHORITATIVE_PUBLIC` **only** | **BLOCKING** — a provider cannot have offered a public fact before it was public; one of the two timestamps is wrong. Revision 3 graded this `WARNING`, which let a contradiction through |
+| 4.1.4 | Provider ahead of public **for the same fact** | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NOT NULL` ∧ `prov IS NOT NULL` ∧ `prov < pub`. Bounds excluded — a bound is not a claim about ordering | `AUTHORITATIVE_PUBLIC` **only** | **BLOCKING** — a provider cannot have offered a public fact before it was public; one of the two timestamps is wrong. Revision 3 graded this `WARNING`, which let a contradiction through |
 | 4.1.5 | **Retrospective** fact available before it occurred | `anchor < obs` | `RETROSPECTIVE` **only** | **BLOCKING** |
 | 4.1.6 | **Announced-forward** fact available before it was announced | `anchor < ann` | `ANNOUNCED_FORWARD` **only** | **BLOCKING** |
 | 4.1.7 | **Sampled state** available before it was sampled | `anchor < smp` | `SAMPLED_STATE` **only** | **BLOCKING** |
@@ -174,9 +215,9 @@ whatever kind of row arrived.
 
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
-| 4.3.1 | Mixed profiles in one result | >1 distinct `information_set_profile` resolved within a result set | **BLOCKING** |
-| 4.3.2 | Unresolved provider availability | profile = `PROVIDER_REALISTIC_PIT` ∧ `prov IS NULL` ∧ dataset resolution ∉ {`EXCLUDE`,`BOUND`,`DOWNGRADE`} | **BLOCKING** |
-| 4.3.3 | **Public timing substituted for absent provider timing** | profile = `PROVIDER_REALISTIC_PIT` ∧ `prov IS NULL` ∧ `prov_ub IS NULL` ∧ the row was nevertheless served, governed by `pub` — the withdrawn `DECLARE` behaviour | **BLOCKING** |
+| 4.3.1 | Mixed profiles in one result | >1 distinct `resolved_profile` within a result set | **BLOCKING** |
+| 4.3.2 | Unresolved provider availability | `resolved_profile = PROVIDER_REALISTIC_PIT` ∧ `rprov IS NULL` ∧ that **dataset's** policy ∉ {`EXCLUDE`,`BOUND`} | **BLOCKING**. Policies are per dataset: one run may `BOUND` one dataset and `EXCLUDE` another, and each is checked against its own policy |
+| 4.3.3 | **Public timing substituted for absent provider timing** | `resolved_profile = PROVIDER_REALISTIC_PIT` ∧ `rprov IS NULL` ∧ the row was nevertheless served, governed by `rpub` — the withdrawn `DECLARE` behaviour | **BLOCKING** |
 | 4.3.4 | Undeclared provider gap | resolution = `BOUND` ∧ manifest lacks `PROVIDER_AVAILABILITY_UNKNOWN`; or resolution = `DOWNGRADE` ∧ manifest lacks `PROFILE_DOWNGRADED_TO_PUBLIC` | **BLOCKING** |
 | 4.3.5 | Ineligible row served | a row served under a profile its `origin` is ineligible for (§4.0, [contract §3.1](pit-data-contract.md)) | **BLOCKING** |
 | 4.3.6 | Undeclared exclusions | rows were excluded for ineligibility ∧ manifest lacks `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | **BLOCKING** |
@@ -185,6 +226,8 @@ whatever kind of row arrived.
 | 4.3.9 | Backfill admitted too early | row admitted at `as_of` while `dat(P) > as_of` under the declared profile | **BLOCKING** |
 | 4.3.10 | `BOUND` applied to a system-observed row | resolution = `BOUND` ∧ `origin = SYSTEM_OBSERVED` | **BLOCKING** — bounding a provider time that does not exist invents one |
 | 4.3.11 | Downgrade not carried through | `resolved_profile ≠ requested_profile` ∧ any artifact key, dataset version or `run_id` still names `requested_profile` | **BLOCKING** ([contract §13.2](pit-data-contract.md)) |
+| 4.3.12 | Per-dataset resolution map incomplete | a dataset the run touched is absent from `dataset_provider_gap_resolutions`, or its exact/bounded/excluded counts do not sum to the rows considered | **BLOCKING** |
+| 4.3.13 | Resolution map not in `run_id` | the canonical ordered map or `resolution_policy_version` is absent from the `run_id` inputs | **BLOCKING** |
 
 **4.3.3 is deliberately narrow.** When `max(pub, prov)` legitimately equals `pub` — because the
 provider offered the row at the same instant it became public, or earlier-but-invalid per
@@ -234,7 +277,7 @@ Excluding rows and declaring the exclusion is evidence, not sufficiency
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
 | 4.7.1 | Required domain emptied | a domain declared **REQUIRED** by the factor/query/artifact definition has zero admissible rows after origin filtering and provider-time resolution | **BLOCKING** — refuse with `REQUIRED_INPUT_UNAVAILABLE` |
-| 4.7.2 | Required domain partially emptied beyond tolerance | admissible rows < the definition's declared minimum coverage | **BLOCKING** |
+| 4.7.2 | Required domain fails its **coverage contract** | admissible coverage < the definition's `min_coverage_fraction` at its declared `coverage_scope` — `WHOLE_DOMAIN` · `PER_SESSION` · `PER_SECURITY` · `PER_SECURITY_SESSION` ([contract §13.3](pit-data-contract.md)) | **BLOCKING** |
 | 4.7.3 | Optional exclusion undeclared | an **OPTIONAL** domain lost rows ∧ counts absent from the manifest ∧ its limitation token absent | **BLOCKING** |
 | 4.7.4 | Silent substitution | a factor computed with a required input missing, under the same `factor_definition_version` | **BLOCKING** — it is a different factor wearing the same name |
 
@@ -242,6 +285,33 @@ The worked case: a factor requiring analyst estimates, run under `PUBLIC_PIT`. E
 row is `PROVIDER_DERIVED` and therefore ineligible, so the domain empties entirely. **4.7.1
 refuses.** Computing the factor anyway would publish a different quantity under the original
 name and version, and nothing downstream would say so.
+
+**"Not completely empty" is not "sufficient".** A required domain retaining 10% of its rows
+satisfies 4.7.1 and fails 4.7.2. The scope matters as much as the fraction: a fundamentals input
+declared `PER_SECURITY` is unsatisfied when *any* universe member lacks coverage, even if the
+domain as a whole looks well populated. Scope and threshold are part of
+`factor_definition_version` — changing either changes the factor.
+
+### 4.8 Conformance — the cases this plan must handle correctly
+
+Deliberately included because most are cases where an earlier revision produced a **false**
+BLOCKING. A check that over-blocks gets disabled, and a disabled check protects nothing.
+
+| # | Case | Outcome | By |
+|---|---|---|---|
+| 1 | `DERIVED_ARTIFACT` meets the origin vocabulary check | **passes** | 4.0.0 includes it |
+| 2 | `DERIVED_ARTIFACT` has no `system_first_seen_time` | **passes** | 4.0A.5 is source-only; 4.0B.1 requires its absence |
+| 3 | `AUTHORITATIVE_PUBLIC`, exact public null, valid approved public bound | **admissible** | `rpub` resolves from the bound (§5.0); 4.0A.1 satisfied |
+| 4 | `PROVIDER_DERIVED`, exact provider null, valid approved provider bound | **admissible** | `rprov` resolves from the bound; 4.0A.3 satisfied |
+| 5 | `SYSTEM_OBSERVED` carrying exact or bounded public/provider timing | **BLOCKING** | 4.0A.4 |
+| 6 | Exact time later than its own upper bound | **BLOCKING** | 4.0A.8 |
+| 7 | Date-plus-lag written into an exact field | **BLOCKING** | 4.0A.7 |
+| 8 | `source_anchor` computed under `resolved_profile` | **required** | §2.1 notation; 4.3.11 |
+| 9 | Derived availability computed under `resolved_profile` | **required** | 4.6.1, 4.6.2 |
+| 10 | One run: `BOUND` for dataset A, `EXCLUDE` for dataset B | **permitted** | 4.3.2 is per dataset |
+| 11 | The complete per-dataset map changes `run_id` | **required** | 4.3.13 |
+| 12 | Legitimate `max(rpub, rprov) == rpub`, both present | **passes** | 4.3.3 fires only when `rprov IS NULL` |
+| 13 | A required input partially removed | **follows its coverage contract** | §4.7, [contract §13.3](pit-data-contract.md) |
 
 ## 5. Market-data checks
 
@@ -270,7 +340,7 @@ factors, because an unadjusted split looks exactly like a −50% return.
 | 6.5 | Universe rebuild drift | rebuild from same inputs + rule version + profile yields different membership | **BLOCKING** |
 | 6.6 | Eligibility from inadmissible data | any evaluation input with `dat(P) > session_date` | **BLOCKING** |
 | 6.7 | Security-type leakage | non-common-stock in a common-stock universe | **BLOCKING** |
-| 6.8 | Profile-free universe | a `universe_membership` row with no `information_set_profile` | **BLOCKING** |
+| 6.8 | Profile-free universe | a `universe_membership` row with no `resolved_profile` | **BLOCKING** |
 
 Checks 6.3 and 6.4 are deliberately crude, and that is the point: they are the smoke alarm for
 the defect that is otherwise invisible. If a 2012 snapshot contains no company that has since

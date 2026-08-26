@@ -2,6 +2,11 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 5 (2026-08-26).** `manifest_version: 3`. Provider-gap resolution becomes a
+> **canonical per-dataset map** rather than one scalar for the whole run; exact-versus-bound
+> bases and counts are reported per dataset; the whole map plus `resolution_policy_version`
+> enters `run_id`; and the refusal rules are narrowed to match the corrected quality checks.
+>
 > **Revision 4 (2026-08-26).** The manifest now separates **`requested_profile`** from
 > **`resolved_profile`** and records the resolution and its reason, so a downgraded run is never
 > labelled as the profile it asked for. Required-versus-optional inputs are declared and
@@ -42,7 +47,7 @@ Emitted for every backtest, factor study, scanner run and dataset build. Stored 
 result and immutable once written.
 
 ```yaml
-manifest_version: 2
+manifest_version: 3
 run_id: rs-3f9a2c81b04e7d16          # deterministic from the fields below
 
 code:
@@ -58,15 +63,40 @@ temporal:
 information_set:                        # mandatory
   requested_profile: PROVIDER_REALISTIC_PIT
   resolved_profile:  PROVIDER_REALISTIC_PIT   # differs from requested iff DOWNGRADE fired
-  profile_resolution: BOUND                   # NONE | EXCLUDE | BOUND | DOWNGRADE
-  profile_resolution_reason: >
-    sharadar_sf1 provides lastupdated (last-changed), not first-appeared;
-    provider_available_upper_bound derived from system_first_seen_time
-  resolution_policy_version: profres/v1
+  global_profile_resolution: NONE             # NONE | DOWNGRADE   (global only)
+  resolution_policy_version: profres/v2
   revision_view: AS_KNOWN_AT_AS_OF            # normative view, always stated explicitly
-  provider_time_basis:                        # exact vs bound, per dataset
-    - dataset: sharadar_sf1
-      basis: UPPER_BOUND                      # EXACT | UPPER_BOUND
+
+  # Canonical, dataset-name-ordered. EXCLUDE and BOUND are PER DATASET.
+  # This entire map enters run_id.
+  dataset_provider_gap_resolutions:
+    - dataset: fundamental_fact
+      policy: BOUND                           # NONE | EXCLUDE | BOUND
+      public_basis: EXACT                     # EXACT | BOUND | MIXED | N/A
+      provider_basis: BOUND
+      exact_rows: 0
+      bounded_rows: 812_446
+      excluded_rows: 0
+      reason: >
+        vendor lastupdated means last-changed, not first-appeared (provider test P1);
+        provider_available_upper_bound derived from system_first_seen_time
+    - dataset: price_bar
+      policy: NONE
+      public_basis: BOUND                     # session close + lag; see lag_policy_version
+      provider_basis: EXACT
+      exact_rows: 14_902_331
+      bounded_rows: 0
+      excluded_rows: 0
+      reason: officially disseminated bars; provider file-drop timestamps available
+    - dataset: analyst_estimate_snapshot
+      policy: EXCLUDE
+      public_basis: N/A                       # PROVIDER_DERIVED: no public time exists
+      provider_basis: N/A
+      exact_rows: 0
+      bounded_rows: 0
+      excluded_rows: 0
+      reason: domain unpopulated while the estimates gap is open
+
   origin_exclusions:                          # rows dropped as ineligible for this profile
     - dataset: analyst_estimate_snapshot
       origin: PROVIDER_DERIVED
@@ -83,14 +113,22 @@ inputs:                                 # required vs optional -- see section 3a
 derived_artifacts:                      # lineage of every artifact consumed
   - artifact_id: adj-7f21...
     entity: adjusted_bar_artifact
+    output_validity: SESSION_SCOPED
     derivation_spec_version: adj/v2
-    first_built: 2026-08-20T11:04:00Z
-    lineage: [gold/2026.08.26.1#price_bar, ca/2026.08.26#corporate_action]
+    artifact_first_built_time: 2026-08-20T11:04:00Z
+    artifact_content_hash: sha256:4c1a...
+    lineage:                              # reproducible selectors, not a summary
+      - entity: price_bar
+        dataset_version: gold/2026.08.26.1
+        selector: {universe: universe/v3, sessions: [2015-01-02, 2026-06-30]}
+      - entity: corporate_action
+        dataset_version: ca/2026.08.26
+        selector: {securities: universe/v3, announced_through: 2026-06-30}
 
 datasets:
   - dataset_version: gold/2026.08.26.1
     layer: GOLD
-    information_set_profile: PROVIDER_REALISTIC_PIT
+    resolved_profile: PROVIDER_REALISTIC_PIT
     content_hash: sha256:2b1f...
     built_from_run_ids: [ing-9c14..., ing-77ab...]
   - dataset_version: silver/2026.08.25.3
@@ -116,6 +154,8 @@ limitations:                         # see section 3 -- mandatory block
   - ANALYST_REVISIONS_UNAVAILABLE
   - EARNINGS_TIME_APPROXIMATED
   - PROVIDER_AVAILABILITY_UNKNOWN
+  - PROVIDER_TIME_BOUNDED
+  - PUBLIC_TIME_BOUNDED
   - REVISION_CHRONOLOGY_INCOMPLETE
   - SINGLE_SOURCE_UNVERIFIED
   - ORIGIN_INELIGIBLE_ROWS_EXCLUDED
@@ -137,8 +177,13 @@ result:
 ```
 
 `run_id` is **derived, not generated** — a hash over code commit, config version, dataset
-versions, definitions, **requested profile, resolved profile, profile resolution and resolution
-policy version**, revision view, lag policy, `as_of` and seed. Same inputs, same
+versions, definitions, **`requested_profile`, `resolved_profile`, `global_profile_resolution`,
+the canonical dataset-ordered `dataset_provider_gap_resolutions` map, and
+`resolution_policy_version`**, revision view, lag policy, `as_of` and seed.
+
+**The whole map, not a summary of it.** Two runs that `BOUND` one dataset and `EXCLUDE` another
+in opposite arrangements admit different rows and must not collide. Revision 4 hashed a single
+scalar resolution, which made those two runs the same run. Same inputs, same
 id. This is ADR-0004 §2's principle applied to research: *"No `uuid4()`. No timestamps."* A
 derived id means two runs claiming to be the same run can be checked against each other rather
 than merely asserted to match.
@@ -154,10 +199,15 @@ downgrade in exactly the field a reader checks to learn what a result means.
 
 ### 2a. Requested versus resolved
 
-| `requested_profile` | `resolved_profile` | `profile_resolution` |
-|---|---|---|
-| `PROVIDER_REALISTIC_PIT` | `PROVIDER_REALISTIC_PIT` | `NONE`, `EXCLUDE` or `BOUND` |
-| `PROVIDER_REALISTIC_PIT` | **`PUBLIC_PIT`** | **`DOWNGRADE`** |
+| `requested_profile` | `resolved_profile` | `global_profile_resolution` | per-dataset policies |
+|---|---|---|---|
+| `PROVIDER_REALISTIC_PIT` | `PROVIDER_REALISTIC_PIT` | `NONE` | any mix of `NONE` / `EXCLUDE` / `BOUND` |
+| `PROVIDER_REALISTIC_PIT` | **`PUBLIC_PIT`** | **`DOWNGRADE`** | not applicable — the run is public-PIT |
+
+**Scope is the point.** `DOWNGRADE` is global and changes what the run *is*; `EXCLUDE` and
+`BOUND` are per-dataset and change which rows a dataset contributes. Revision 4 recorded one
+scalar for all three, which could not express a run that bounded one feed and excluded another —
+the ordinary case.
 
 **A downgraded run is never labelled `PROVIDER_REALISTIC_PIT`** — not in the manifest, not on an
 artifact, not in a report. It carries `PROFILE_DOWNGRADED_TO_PUBLIC` and reads as what it is.
@@ -176,7 +226,8 @@ approximated — not a default.
 | `PROVIDER_AVAILABILITY_UNKNOWN` | `provider_available_time` null for some rows under `PROVIDER_REALISTIC_PIT`, resolved by `EXCLUDE` or `BOUND` ([contract §3.3](pit-data-contract.md)) |
 | `PROFILE_DOWNGRADED_TO_PUBLIC` | The run requested `PROVIDER_REALISTIC_PIT` and was run **in its entirety** under `PUBLIC_PIT` instead, because provider timing was unavailable |
 | `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | Rows were excluded because their `information_origin` is not eligible under the resolved profile ([contract §3.1](pit-data-contract.md)). Counts are in `information_set.origin_exclusions`. **Evidence, not sufficiency — see §3a** |
-| `PROVIDER_TIME_BOUNDED` | One or more datasets were governed by `provider_available_upper_bound` rather than an exact provider time ([contract §2.6](pit-data-contract.md)) |
+| `PROVIDER_TIME_BOUNDED` | One or more datasets were governed by `provider_available_upper_bound` rather than an exact provider time ([contract §2.6](pit-data-contract.md)). Per-dataset counts are in `dataset_provider_gap_resolutions` |
+| `PUBLIC_TIME_BOUNDED` | One or more datasets were governed by `public_available_upper_bound` — a date-plus-lag, session-plus-lag or first-seen bound ([contract §5.1](pit-data-contract.md)) — rather than an exact public time |
 | `DERIVED_INPUT_CHRONOLOGY_MIXED` | A derived artifact consumed inputs at differing `revision_sequence`s |
 | `REVISION_CHRONOLOGY_INCOMPLETE` | Provider supplies first-and-latest revisions only, so `AS_KNOWN_AT_AS_OF` is a two-point approximation ([contract §6.3](pit-data-contract.md)) |
 | `NON_PIT_RESTATED_VIEW` | `LATEST_RESTATED` was used. **The result may not be called a backtest** |
@@ -222,7 +273,8 @@ A manifest is refused — and the result is therefore inadmissible — when:
 3. Any dataset version named is unpublished or superseded.
 4. Any content hash fails to verify against the artifact it names.
 5. `as_of_cutoff` is absent, or later than the build time of any dataset used.
-6. **`information_set.profile` is absent**, or more than one profile was resolved within the
+6. **`information_set.requested_profile` or `.resolved_profile` is absent**, or more than one
+   resolved profile appeared within the
    run ([data-quality-plan.md](data-quality-plan.md) §4.3.1).
 7. **`information_set.revision_view` is absent**, or is `LATEST_RESTATED` on a run that calls
    itself a backtest.
@@ -235,8 +287,14 @@ A manifest is refused — and the result is therefore inadmissible — when:
    `run_id` still names the requested one.
 8e. A derived artifact was consumed whose recorded availability does not equal the max over its
    lineage under the resolved profile.
-8b. A row was served under `PROVIDER_REALISTIC_PIT` using `public_available_time` as its
-   governing time — the withdrawn `DECLARE` behaviour.
+8b. A row was served under `PROVIDER_REALISTIC_PIT` governed by `resolved_public_time`
+   **while `resolved_provider_time` was null** — the withdrawn `DECLARE` behaviour. A genuine
+   `max(resolved_public_time, resolved_provider_time) == resolved_public_time`, with both
+   present, is correct and is **not** refused.
+8f. A dataset the run touched is absent from `dataset_provider_gap_resolutions`, or its
+   exact/bounded/excluded counts do not sum to the rows considered.
+8g. A bound was relied upon whose derivation is not approved for its dataset, or an exact time
+   exceeds its own upper bound.
 9. An adjusted artifact was consumed whose content hash does not reproduce from its key.
 10. A short position appears in a run limited by `BORROW_HISTORY_UNAVAILABLE`.
 
@@ -249,12 +307,16 @@ the room.
 
 Blueprint §16 requires *"Strategy version + code commit recorded with every trade."* Phase 3
 implements no trading, but establishes the vocabulary later phases will record:
-`code.commit_sha`, `definitions.factor_definition_version`, `information_set.profile`, and the
+`code.commit_sha`, `definitions.factor_definition_version`, `information_set.resolved_profile`,
+and the
 `dataset_version` set behind the signal.
 
 **Proposed and deferred:** when Phase 4 generates signals, each carries the `run_id` of the
 manifest that produced it, so a live trade is traceable to the exact dataset build and
-information set behind its signal. Recording the intention now means the schema is not
+information set behind its signal. **`FORWARD_SYSTEM` reproducibility additionally requires the
+derived-artifact block**: an artifact's availability under that profile depends on
+`artifact_first_built_time`, so a forward-validation result cannot be reproduced from dataset
+versions alone. Recording the intention now means the schema is not
 retrofitted under time pressure later — the same reasoning that puts `model_version` and
 `prompt_version` in `source_document` before any agent exists.
 
