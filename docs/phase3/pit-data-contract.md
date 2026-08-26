@@ -12,6 +12,14 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > (§2) and resolved by an explicit information-set profile (§3). Revision views are now
 > explicit (§6).
 >
+> **Revision 4 (2026-08-26).** Review of revision 3 found that the closed source-origin
+> vocabulary could not represent a **derived artifact** — a universe snapshot, an adjusted-bar
+> cache, a TTM aggregate, an earnings surprise — and that several schemas packed facts of
+> different origins and classes into one availability envelope. Revision 4 adds the
+> **atomic-fact rule** (§1 R5), a **derived-artifact envelope** (§2.4), a single origin-aware
+> **`source_anchor`** replacing the public-time-only class invariants (§7), and separates
+> **exact provider time from a conservative upper bound** (§2.5).
+>
 > **Revision 3 (2026-08-26).** Review of revision 2 found that it effectively required a
 > `public_available_time` on *every* record under *every* profile — which is wrong for
 > proprietary observations such as an analyst consensus snapshot or a broker-specific borrow
@@ -41,6 +49,20 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > **R4.** A single result may not mix profiles, and may not mix revision views. Both are
 > named in the manifest, and a run that cannot satisfy the requested combination is refused
 > rather than silently degraded.
+
+> **R5 — the atomic-fact rule.** **One fact row has exactly one `information_origin`, exactly
+> one `temporal_fact_class`, and exactly one availability envelope.** A row may not combine
+> independently changing facts merely because they share an event or a security identity.
+
+R5 is the rule revision 3 was missing, and its absence produced concrete defects. A single
+`earnings_event` row carried a scheduled date (announced weeks ahead), a realised release
+(retrospective), a provider consensus (proprietary) and a computed surprise (derived) — four
+facts with four different availability stories sharing one set of timestamps. Whichever
+timestamp that row carried, three of the four were wrong.
+
+The test for R5 is simple: **if two values on a row can change at different times, for
+different reasons, from different sources, they are two facts.** They may share an identifier;
+they may not share an envelope.
 
 ---
 
@@ -107,7 +129,13 @@ Every record declares its origin, and the vocabulary is closed:
 |---|---|---|---|---|
 | **`AUTHORITATIVE_PUBLIC`** | The fact has an authoritative public release instant, independent of any vendor. A filing acceptance, an exchange dissemination, an issuer press release. | **required** | optional | required |
 | **`PROVIDER_DERIVED`** | The fact **is** the provider's own computed or proprietary observation. No authoritative public release instant exists for it. | **must be null** | **required** | required |
-| **`SYSTEM_OBSERVED`** | KalpaMani observed it directly — a poll of a live endpoint that carries no vendor timestamp, or a value we derived ourselves. | null | null | **required** |
+| **`SYSTEM_OBSERVED`** | KalpaMani observed an external state directly — a poll of a live endpoint that carries no vendor timestamp. | null | null | **required** |
+| **`DERIVED_ARTIFACT`** | **Not an observation at all.** A value KalpaMani computed from other rows. Carries the **derived envelope** (§2.5) instead of the three source times. | **null** | **null** | **null** |
+
+The first three are **source origins** — a fact arrived from outside and the question is when.
+The fourth is a discriminator: it says *this row does not describe an external observation, so
+do not look for one*. Revision 3 had only the three, and had to fudge derived rows by declaring
+their origin "inherited", which the closed enum could not express.
 
 Two rules keep the vocabulary honest:
 
@@ -120,6 +148,91 @@ Two rules keep the vocabulary honest:
   an escape hatch for a public fact whose timing we failed to establish — that case is
   `AUTHORITATIVE_PUBLIC` with `availability_derivation = UNKNOWN`, and it is ineligible
   everywhere (§10 rule 6).
+- **`DERIVED_ARTIFACT` is not an escape hatch either.** A row is derived only if *we* computed
+  it. A value the provider computed and we merely received is `PROVIDER_DERIVED`, however
+  derived it looks.
+
+### 2.4 Choosing between the two envelopes
+
+**Design decision, stated once.** The review offered two shapes: extend the origin enum with
+different rules for derived rows, or keep three source origins and give derived rows their own
+envelope. **This contract takes the second**, and puts the discriminator in the same field so
+there is exactly one place to look — which is what R5 requires.
+
+```
+information_origin ∈ {AUTHORITATIVE_PUBLIC, PROVIDER_DERIVED, SYSTEM_OBSERVED}
+        -> SOURCE envelope   (§2.1: public / provider / system_first_seen)
+
+information_origin = DERIVED_ARTIFACT
+        -> DERIVED envelope  (§2.5: lineage + artifact_first_built_time)
+```
+
+A row carries one envelope or the other, never both, never neither. **A derived artifact never
+invents public or provider availability** — it has none, and pretending otherwise is exactly
+the conflation this contract exists to prevent.
+
+### 2.5 The derived envelope
+
+A `DERIVED_ARTIFACT` row carries these instead of the three source times:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `lineage` | list | **Complete** input lineage: for each input, its entity, `dataset_version`, and the row selector or upstream `artifact_id` that identifies exactly what was consumed. Not a summary — the set a rebuild would read. |
+| `artifact_first_built_time` | instant | When this artifact was **first** built. Not the latest build. |
+| `derivation_spec_version` | string | The version of the computation that produced it. |
+| `artifact_content_hash` | string | SHA-256 of the produced value or series. |
+
+**Availability is computed from lineage, never stored:**
+
+```
+PUBLIC_PIT             dat = max over inputs of dat(input, PUBLIC_PIT)
+PROVIDER_REALISTIC_PIT dat = max over inputs of dat(input, PROVIDER_REALISTIC_PIT)
+FORWARD_SYSTEM         dat = max( max over inputs of dat(input, FORWARD_SYSTEM),
+                                  artifact_first_built_time )
+```
+
+**Eligibility is the intersection of its inputs' eligibility.** An artifact computed from a
+`PROVIDER_DERIVED` consensus is ineligible under `PUBLIC_PIT`, because one of its inputs is —
+and no amount of arithmetic makes a proprietary input public.
+
+`artifact_first_built_time` enters only under `FORWARD_SYSTEM`, and only there, because it is
+the one profile that asks what *we* held: we did not hold a computed value before we computed
+it. Under the other two profiles the artifact is exactly as available as its slowest input,
+which is the honest answer to "when could this have been calculated?".
+
+**Rebuilding does not rewrite history.** A rebuild from the *same* lineage keeps
+`artifact_first_built_time` — recomputing a value we already had does not move when we had it.
+A rebuild from *different* lineage is a different artifact with its own key, its own hash and
+its own first-built time; it supersedes rather than mutates (§8, and `dataset_version`
+supersession).
+
+### 2.6 Exact times and conservative upper bounds are different fields
+
+**Revision 3 wrote `system_first_seen_time` into `provider_available_time` under `BOUND`.**
+That field is defined as *the instant the provider first offered this record*, and the day we
+first saw it is not that instant — it is an upper bound on it. Overwriting one with the other
+destroys the provenance the field exists to carry, and makes a bounded row indistinguishable
+from a precisely-stamped one.
+
+Exact and bound are therefore **separate fields**, and both may be present:
+
+| Field | Meaning |
+|---|---|
+| `provider_available_time` | **Exact.** The provider said so, or a dated file drop established it. Null when unknown — and it stays null. |
+| `provider_available_upper_bound` | **Conservative.** A time the provider certainly offered the record *by*. Derived, and its derivation is named. |
+| `public_available_time` | **Exact**, per §5.1 rules 1–4. |
+| `public_available_upper_bound` | **Conservative.** Used for corrections and other records whose public timing is unknown but bounded — see §12.2. |
+
+Rules:
+
+- **A bound is never written into an exact field**, and an exact field is never inferred from a
+  bound.
+- The governing computation reads **exact first, then bound**; which one was used is recorded
+  per dataset in the manifest.
+- **`BOUND` never claims the provider published at `system_first_seen_time`.** It claims only
+  that the provider offered the row no later than then — which is true, and weaker.
+- A backfilled row bounded this way stays **inadmissible before its upper bound**, which is the
+  property `BOUND` exists for.
 
 ---
 
@@ -150,6 +263,7 @@ describes data we demonstrably held.
 | **`AUTHORITATIVE_PUBLIC`** | **eligible** — governed by `public` | **eligible** — governed by `max(public, provider)` | **eligible** — governed by `max(public, provider, seen)` |
 | **`PROVIDER_DERIVED`** | **INELIGIBLE** — there is no public instant to simulate | **eligible** — governed by `provider` | **eligible** — governed by `max(provider, seen)` |
 | **`SYSTEM_OBSERVED`** | **INELIGIBLE** | **INELIGIBLE** — no provider instant exists | **eligible** — governed by `seen` |
+| **`DERIVED_ARTIFACT`** | eligible **iff every input is** | eligible **iff every input is** | **always eligible**, governed by `max(inputs, artifact_first_built_time)` |
 
 Read down the columns and the rule is simple: **a profile can only serve a fact whose
 originating information set it can actually describe.**
@@ -233,7 +347,7 @@ ways, chosen **per dataset**, recorded in configuration, and reported in the man
 | Resolution | Effect | Limitation token |
 |---|---|---|
 | **`EXCLUDE`** | The record does not participate in the query. | `PROVIDER_AVAILABILITY_UNKNOWN` |
-| **`BOUND`** | `provider_available_time` is set to a **conservative upper bound derived from `system_first_seen_time`**, with `provider_availability_derivation = FIRST_SEEN_UPPER_BOUND`. The row participates at that bounded time. | `PROVIDER_AVAILABILITY_UNKNOWN` |
+| **`BOUND`** | `provider_available_upper_bound` is set from `system_first_seen_time`, with `provider_availability_derivation = FIRST_SEEN_UPPER_BOUND`. **`provider_available_time` stays null** (§2.6). The row participates at the bounded time. | `PROVIDER_AVAILABILITY_UNKNOWN` |
 | **`DOWNGRADE`** | **The entire result** runs under `PUBLIC_PIT` instead. Not the row — the run. | `PROFILE_DOWNGRADED_TO_PUBLIC` |
 
 > **Never serve a row using `PUBLIC_PIT` timing while labelling the result
@@ -241,9 +355,13 @@ ways, chosen **per dataset**, recorded in configuration, and reported in the man
 
 `BOUND` is the useful middle option and it is genuinely conservative: we cannot have been
 served a row before we first saw it, so `system_first_seen_time` is a sound upper bound on
-provider availability. It can only ever *delay* a record, never advance it. `DOWNGRADE` is
-honest in a different way — it relabels the whole result rather than pretending a mixed run
-is a provider-realistic one.
+provider availability. It can only ever *delay* a record, never advance it — and per §2.6 it
+is recorded as a **bound**, leaving `provider_available_time` null so that a bounded row is
+never mistaken for a precisely-stamped one.
+
+`DOWNGRADE` is honest in a different way — it relabels the whole result rather than pretending
+a mixed run is a provider-realistic one. **A downgraded run is labelled `PUBLIC_PIT` end to
+end**, in the manifest and in the `run_id` (§13.2).
 
 `BOUND` is unavailable for a `SYSTEM_OBSERVED` record for the obvious reason: there is no
 provider, so bounding a provider time would invent one.
@@ -452,13 +570,32 @@ Not every fact is observed after it happens. A blanket "availability must not pr
 observation" rule is wrong for anything announced in advance, and the first draft's check
 would have blocked a perfectly correct scheduled-earnings row.
 
+### 7.1 `source_anchor` — one origin-aware availability anchor
+
+**Revision 3 anchored every class to `public_available_time`.** That silently disabled all
+three invariants for `PROVIDER_DERIVED` and `SYSTEM_OBSERVED` rows, where the public time is
+legitimately null — a consensus snapshot stamped *before* the moment it was sampled would have
+passed every check. The anchor is now origin-aware:
+
+```
+source_anchor(record) =
+    AUTHORITATIVE_PUBLIC -> public_available_time      (else public_available_upper_bound)
+    PROVIDER_DERIVED     -> provider_available_time    (else provider_available_upper_bound)
+    SYSTEM_OBSERVED      -> system_first_seen_time
+    DERIVED_ARTIFACT     -> computed from lineage under the requested profile (§2.5)
+```
+
+`source_anchor` is used **consistently** for the class invariants below, revision ordering,
+latency, backfill detection and every impossibility check. There is one anchor, and every
+temporal rule reads it.
+
 Every entity declares a `temporal_fact_class`:
 
 | Class | Meaning | Timing invariant | Examples |
 |---|---|---|---|
-| **`RETROSPECTIVE`** | The fact is observed at or after it occurs. | `observation_time <= public_available_time` | price bars, executed trades, reported financials, an actual earnings release |
-| **`ANNOUNCED_FORWARD`** | The fact is announced before it takes effect. **`effective_date` may legitimately be far later than availability.** | `announcement_time <= public_available_time`; **no constraint between `effective_date` and availability** | scheduled earnings dates, announced splits and dividends before ex-date, announced index or classification changes, future exchange sessions and holidays |
-| **`SAMPLED_STATE`** | A state holding over an interval, observed by sampling. | `sample_time <= public_available_time` | borrow availability and fee, classification membership, shares outstanding |
+| **`RETROSPECTIVE`** | The fact is observed at or after it occurs. | `observation_time <= source_anchor` | price bars, executed trades, reported financials, an actual earnings release |
+| **`ANNOUNCED_FORWARD`** | The fact is announced before it takes effect. **`effective_date` may legitimately be far later than availability.** | `announcement_time <= source_anchor`; **no constraint between `effective_date` and availability** | scheduled earnings dates, announced splits and dividends before ex-date, announced index or classification changes, future exchange sessions and holidays |
+| **`SAMPLED_STATE`** | A state holding over an interval, observed by sampling. | `sample_time <= source_anchor` | borrow availability and fee, classification membership, shares outstanding |
 
 The consequence: for `ANNOUNCED_FORWARD` facts, a query at `as_of` may correctly return a
 fact about the future. A split announced on 1 May with a 10 June ex-date **is known on 2
@@ -570,9 +707,18 @@ These are errors, not warnings, and abort the query rather than returning a degr
 16. `PROVIDER_DERIVED` with a non-null `public_available_time`, or `SYSTEM_OBSERVED` with a
     non-null `public` or `provider` time — the origin and the times disagree about what the
     record is.
-17. A schema version unrecognised by the reading code.
-18. A checksum mismatch between a curated table and the artifacts it declares.
-19. An adjusted-cache artifact that does not reproduce from its key.
+17. A **required** input domain removed by origin filtering or provider-time resolution
+    (§13.3) — refused as `REQUIRED_INPUT_UNAVAILABLE`, never silently recomputed without it.
+18. A `DERIVED_ARTIFACT` row with incomplete `lineage`, or carrying any of
+    `public_available_time`, `provider_available_time`, `system_first_seen_time`.
+19. A `DERIVED_ARTIFACT` served under a profile **any** of its inputs is ineligible for.
+20. A conservative bound written into an exact field, or an exact time inferred from a bound
+    (§2.6).
+21. A run whose `resolved_profile` differs from `requested_profile` while any artifact,
+    dataset key or `run_id` still names the requested one (§13.2).
+22. A schema version unrecognised by the reading code.
+23. A checksum mismatch between a curated table and the artifacts it declares.
+24. An adjusted-cache artifact that does not reproduce from its key.
 
 Rule 7 deserves emphasis. **An empty result and a refusal are different answers**, and a data
 layer that returns the first when it means the second produces a backtest that looks merely
@@ -609,9 +755,17 @@ severity escalates to `BLOCKING` — stale data driving a live scan is a differe
 stale data in a backtest.
 
 ### 12.2 Corrections
-A new revision row. The original is never overwritten. A correction carrying no availability
-timestamp of its own inherits `system_first_seen_time` for `public_available_time` — the
-conservative choice, since we demonstrably did not have it earlier.
+A new revision row. The original is never overwritten.
+
+A correction carrying no availability timestamp of its own does **not** get
+`system_first_seen_time` written into `public_available_time` — revision 3 said it did, and
+that is the same exact/bound conflation §2.6 corrects. Instead
+`public_available_upper_bound` is set from `system_first_seen_time` with
+`availability_derivation = FIRST_SEEN_UPPER_BOUND`, and `public_available_time` stays null.
+
+The record is then admissible from its bound onward, which is conservative and honest: we
+know the correction was public *by* the time we held it, and we do not claim to know when it
+actually became public.
 
 ### 12.3 Restatements
 New revision row keyed to the same fiscal period, carrying the restating filing's acceptance
@@ -673,10 +827,16 @@ get_price_history(security_id, start, end,
                   adjustment_mode, as_of, profile)             -> BarSeries
 get_fundamental_snapshot(security_id, period,
                          as_of, profile, revision_view)        -> FundamentalFact
+get_fundamental_derived(security_id, period, metric,
+                        as_of, profile, revision_view)         -> DerivedFact
 get_estimate_snapshot(security_id, estimate_period,
                       as_of, profile, revision_view)           -> EstimateSnapshot
 get_revision_history(security_id, start, end, as_of, profile)  -> RevisionSeries
-get_earnings_event(security_id, event_id, as_of, profile)      -> EarningsEvent
+get_earnings_schedule(security_id, period, as_of, profile)     -> EarningsSchedule
+get_earnings_release(security_id, event_id, as_of, profile)   -> EarningsRelease
+get_earnings_consensus(security_id, event_id, as_of, profile) -> ConsensusSnapshot
+get_earnings_surprise(security_id, event_id, as_of, profile)  -> SurpriseArtifact
+get_guidance_events(security_id, start, end, as_of, profile)  -> GuidanceSeries
 get_borrow_snapshot(security_id, as_of, profile)               -> BorrowSnapshot
 get_classification(security_id, as_of, profile)                -> Classification
 ```
@@ -694,8 +854,14 @@ boundary — *"Enforced by test, not convention"*:
   `latest`, `current`, `most_recent` and `today` in research and backtest packages, and
   forbids `LATEST_RESTATED` there entirely.
 - **`adjustment_mode` is required and explicit** (§8).
-- **Results carry their provenance** — `dataset_version`, `as_of`, `profile`, `revision_view`
-  and every lag applied. A result that cannot say where it came from is not a result.
+- **Results carry their provenance** — `dataset_version`, `as_of`, `requested_profile`,
+  `resolved_profile`, `revision_view` and every lag applied. A result that cannot say where it
+  came from is not a result.
+- **One accessor per fact, not per event.** The five earnings accessors above replace revision
+  3's single `get_earnings_event`, because a scheduled date, a release, a consensus and a
+  surprise have four different availability stories and three different origins. Returning them
+  together would have forced one envelope onto four facts — the atomic-fact rule (§1 R5) in its
+  original violated form.
 
 ### 13.1 Live versus historical
 
@@ -708,6 +874,56 @@ Two packages, not one package with a flag. A flag is a thing that can be set wro
 missing import is a thing that fails in CI. Research code importing `data.live` is a
 static-test failure, the same shape as ADR-0004 §10's rule that strategy modules cannot import
 execution.
+
+### 13.2 Requested versus resolved profile
+
+A run names the profile it **asked for** and the profile it **got**. When `DOWNGRADE` fires,
+those differ, and every downstream artefact follows the **resolved** one:
+
+| Field | Meaning |
+|---|---|
+| `requested_profile` | what the caller asked for |
+| `resolved_profile` | what the run actually executed under |
+| `profile_resolution` | `NONE` · `EXCLUDE` · `BOUND` · `DOWNGRADE` |
+| `profile_resolution_reason` | why, naming the datasets that forced it |
+
+Rules:
+
+- **Dataset artifacts and the `run_id` are keyed by `resolved_profile`.** A downgraded run
+  produces `PUBLIC_PIT` artifacts, because that is what it computed.
+- **All four fields enter the `run_id` derivation** — requested, resolved, resolution and the
+  resolution policy version. Two runs that differ only in how a gap was resolved are different
+  runs and must not collide.
+- **A downgraded run is never labelled `PROVIDER_REALISTIC_PIT`** anywhere: not in the
+  manifest, not on an artifact, not in a report. It carries
+  `PROFILE_DOWNGRADED_TO_PUBLIC` and reads as what it is.
+
+Recording only the requested profile would make a downgrade invisible in exactly the place a
+reader looks to find out what a result means.
+
+### 13.3 Required and optional inputs
+
+**Excluding a row and declaring the exclusion is not always enough.** If origin filtering
+(§3.1) or provider-time resolution (§3.3) removes *every* row of a domain a factor depends on,
+the honest outcome is not a smaller factor — it is no factor.
+
+Every query, factor and artifact definition declares each input domain as **REQUIRED** or
+**OPTIONAL**:
+
+| | Effect when the domain is emptied |
+|---|---|
+| **REQUIRED** | **The query, factor or artifact is REFUSED**, with `REQUIRED_INPUT_UNAVAILABLE` naming the domain and the reason it emptied. |
+| **OPTIONAL** | Excluded rows are counted and the corresponding limitation token is emitted. Permitted **only** where the definition declares the input optional. |
+
+The worked case the review names: a factor requiring analyst estimates, run under
+`PUBLIC_PIT`. Every estimate row is `PROVIDER_DERIVED` and therefore ineligible, so the domain
+empties completely. **The factor must refuse.** Computing it anyway would silently produce a
+*different factor* — one without an estimates term — under the original factor's name and
+version, and nothing downstream would say so.
+
+`ORIGIN_INELIGIBLE_ROWS_EXCLUDED` remains useful evidence, and it is not a substitute for this
+rule. It says *some rows went missing*; it cannot say *the thing you computed is not the thing
+you named*.
 
 ---
 

@@ -10,6 +10,13 @@ Types are conceptual: `instant` is a timezone-aware UTC timestamp; `date` is a c
 with no time component and is never silently promoted to an instant
 ([pit-data-contract.md](pit-data-contract.md) §12.6).
 
+> **Revision 4 (2026-08-26).** The **atomic-fact rule** (§0.0) is added, and the schemas that
+> broke it are split: `earnings_event` becomes five entities (§10), reported and derived
+> fundamentals separate (§9, §9a), `universe_membership` becomes an explicit derived artifact
+> (§4), and `source_document` and `price_bar` carry origin **per row** (§15, §6). A
+> **derived envelope** (§0.1b) replaces revision 3's unrepresentable "inherited" origin, and
+> exact provider/public times are separated from conservative upper bounds (§0.1).
+>
 > **Revision 3 (2026-08-26).** The envelope gains **`information_origin`** (§0.1a), which
 > decides which profiles a record is eligible for and which of its times may legitimately be
 > null. `provider_availability_derivation` gains `NOT_APPLICABLE`, and
@@ -23,9 +30,29 @@ with no time component and is never silently promoted to an instant
 
 ---
 
+## 0.0 The atomic-fact rule
+
+> **One row has exactly one `information_origin`, exactly one `temporal_fact_class`, and
+> exactly one availability envelope.** A row may not combine independently changing facts
+> merely because they share an event or a security identity.
+
+The test: **if two values can change at different times, for different reasons, from different
+sources, they are two facts.** They may share an identifier; they may not share an envelope.
+
+Revision 3 broke this in four places, and each is fixed below: `earnings_event` (§10) packed a
+scheduled date, a realised release, a provider consensus and a computed surprise into one row;
+`fundamental_fact` (§9) labelled derived TTM values as authoritative public facts;
+`universe_membership` (§4) claimed an "inherited" origin the closed enum could not express; and
+`source_document` and `price_bar` declared a single origin for rows whose origins genuinely
+differ.
+
+---
+
 ## 0. The common envelope
 
-Written once here, referenced as **`«envelope»`** rather than repeated twenty times.
+Written once here, referenced as **`«envelope»`** rather than repeated twenty times. There are
+**two** envelopes — a source envelope (§0.1) and a derived envelope (§0.1b) — and
+`information_origin` selects between them.
 
 ### 0.1 Information times
 
@@ -33,8 +60,16 @@ Written once here, referenced as **`«envelope»`** rather than repeated twenty 
 |---|---|---|
 | `public_available_time` | instant? | When the fact first became publicly obtainable from the authoritative source. Derived per [contract §5.1](pit-data-contract.md). **Nullable — and what a null means depends on `information_origin`**: for `AUTHORITATIVE_PUBLIC` it means we failed to establish a time that exists, and the row is unusable everywhere; for the other origins it means no such time exists, and the row stays usable where §0.1a allows. |
 | `provider_available_time` | instant? | When the selected provider first offered this record. Derived per [contract §5.2](pit-data-contract.md). **Nullable**; under `PROVIDER_REALISTIC_PIT` a null is resolved by `EXCLUDE`, `BOUND` or `DOWNGRADE` ([contract §3.3](pit-data-contract.md)). |
+| `public_available_upper_bound` | instant? | A time the fact was certainly public **by**, when the exact instant is unknown but bounded — a correction, for example ([contract §12.2](pit-data-contract.md)). **Never written into the exact field.** |
+| `provider_available_upper_bound` | instant? | A time the provider certainly offered the record **by**. Set by the `BOUND` resolution from `system_first_seen_time`. **`provider_available_time` stays null.** |
 | `system_first_seen_time` | instant | When KalpaMani first held this record. Never null, never estimated. |
 | `ingestion_time` | instant | When *this row* was written. A rebuild writes a new row without changing `system_first_seen_time`. |
+
+**Exact and bound are different fields and never overwrite one another**
+([contract §2.6](pit-data-contract.md)). Revision 3 wrote `system_first_seen_time` into
+`provider_available_time` under `BOUND`, which destroyed the provenance that field exists to
+carry and made a bounded row indistinguishable from a precisely-stamped one. The governing
+computation reads exact first, then bound, and the manifest records which was used.
 
 **`decision_available_time` is not a column.** It is computed at query time from the active
 `information_set_profile` ([contract §3](pit-data-contract.md)). Storing it would bake one
@@ -47,17 +82,41 @@ times may legitimately be null ([contract §2.3, §3.1](pit-data-contract.md)).
 
 | Field | Type | Meaning |
 |---|---|---|
-| `information_origin` | enum | `AUTHORITATIVE_PUBLIC` · `PROVIDER_DERIVED` · `SYSTEM_OBSERVED`. **Required on every row; there is no default.** |
+| `information_origin` | enum | `AUTHORITATIVE_PUBLIC` · `PROVIDER_DERIVED` · `SYSTEM_OBSERVED` · **`DERIVED_ARTIFACT`**. **Required on every row; there is no default.** The first three select the source envelope (§0.1); the fourth selects the derived envelope (§0.1b). |
 
 | `information_origin` | `public` | `provider` | `seen` | eligible profiles |
 |---|---|---|---|---|
 | `AUTHORITATIVE_PUBLIC` | **required** | optional | required | all three |
 | `PROVIDER_DERIVED` | **must be null** | **required** | required | `PROVIDER_REALISTIC_PIT`, `FORWARD_SYSTEM` |
 | `SYSTEM_OBSERVED` | null | null | **required** | `FORWARD_SYSTEM` only |
+| `DERIVED_ARTIFACT` | **null** | **null** | **null** | intersection of its inputs; always `FORWARD_SYSTEM` |
 
-Origin is declared **per entity** below, except where an entity can carry facts of more than
-one origin — `borrow_snapshot` and `classification_history` are the two, and both carry it per
-row.
+Origin is declared **per entity** below where every row of that entity shares one, and **per
+row** where they genuinely differ: `borrow_snapshot` (§13), `classification_history` (§14),
+`source_document` (§15) and `price_bar` (§6).
+
+### 0.1b The derived envelope — `DERIVED_ARTIFACT`
+
+A derived row carries **none** of the source times. It carries lineage instead
+([contract §2.5](pit-data-contract.md)):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `lineage` | list | **Complete** input lineage: entity, `dataset_version`, and row selector or upstream `artifact_id` per input. The set a rebuild would read, not a summary. |
+| `artifact_first_built_time` | instant | When the artifact was **first** built. A rebuild from the same lineage does not move it. |
+| `derivation_spec_version` | string | Version of the computation that produced it. |
+| `artifact_content_hash` | string | SHA-256 of the produced value or series. |
+
+```
+PUBLIC_PIT             dat = max over inputs of dat(input, PUBLIC_PIT)
+PROVIDER_REALISTIC_PIT dat = max over inputs of dat(input, PROVIDER_REALISTIC_PIT)
+FORWARD_SYSTEM         dat = max( max over inputs of dat(input, FORWARD_SYSTEM),
+                                  artifact_first_built_time )
+```
+
+**Eligibility is the intersection of its inputs' eligibility.** A derived value never invents
+public or provider availability, and never becomes eligible under a profile one of its inputs
+is barred from.
 
 ### 0.2 Temporal classification
 
@@ -143,7 +202,7 @@ per-row.
 **Invariant.** For any (`ticker`, `date`) there is at most one `security_id`. Overlap is
 `BLOCKING` — an overlap means every join on that ticker is ambiguous.
 
-## 4. `universe_membership` — `RETROSPECTIVE` · origin **inherited** (see below)
+## 4. `universe_membership` — `RETROSPECTIVE` · **`DERIVED_ARTIFACT`**
 
 The survivorship control. **Stored per session, never recomputed at query time.**
 
@@ -163,11 +222,16 @@ The stored evaluation inputs are not redundant. They make a membership decision 
 years later, and let a quality check confirm the rule was applied to admissible data rather
 than to current data.
 
-**Origin is inherited, not declared.** A universe snapshot is a derived artifact, so it is
-eligible under a profile **only if every input row that produced it was eligible under that
-profile**. In practice its inputs are all `AUTHORITATIVE_PUBLIC` (prices, shares outstanding,
-listings), so snapshots are normally eligible everywhere — but the rule is stated because a
-future eligibility criterion sourced from a proprietary feed would silently narrow it.
+**A universe snapshot is a derived artifact, and revision 3 could not say so.** It claimed the
+origin was "inherited", which the closed enum had no value for. It now carries
+`information_origin = DERIVED_ARTIFACT` and the derived envelope (§0.1b): complete `lineage`
+over the price, shares-outstanding and listing rows that produced each decision, plus
+`artifact_first_built_time`.
+
+Eligibility is the **intersection** of its inputs'. In practice those inputs are all
+`AUTHORITATIVE_PUBLIC`, so snapshots are normally eligible everywhere — but the rule is stated
+because a future eligibility criterion sourced from a proprietary feed would narrow the whole
+universe to `PROVIDER_REALISTIC_PIT` and below, silently, and this is where that would show up.
 
 ## 5. `market_session` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
@@ -184,7 +248,7 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 | `announcement_time` | instant? | When the calendar revision publishing this session was released |
 | `«envelope»` | | |
 
-## 6. `price_bar` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
+## 6. `price_bar` — `RETROSPECTIVE` · **origin per row**
 
 | Field | Type | Notes |
 |---|---|---|
@@ -196,11 +260,28 @@ correct, non-leaking fact — which is exactly why the blanket rule from revisio
 | `trade_count` | integer? | |
 | `vwap` | decimal? | Where licensed |
 | `is_stale` / `had_halt` | bool | A non-trading day is not a zero |
+| `bar_construction` | enum | `OFFICIAL_DISSEMINATED` · `PROVIDER_AGGREGATED` · `SYSTEM_AGGREGATED` — selects the row origin, see below |
 | `«envelope»` | | |
 
 **Only raw bars are facts.** Adjusted series are computed ([contract §8](pit-data-contract.md))
-and, if materialised, live in `adjusted_bar_artifact` below — never here, and never as an
-extra column.
+and, if materialised, live in `adjusted_bar_artifact` below — never here, and never as an extra
+column.
+
+**Not every bar is an authoritative public fact, and revision 3 declared them all so.** A
+consolidated-tape daily bar disseminated by the SIP is; a bar the vendor aggregated from its
+own trade collection is the vendor's construction; a bar we resampled ourselves is ours.
+
+| `bar_construction` | `information_origin` | Meaning |
+|---|---|---|
+| `OFFICIAL_DISSEMINATED` | `AUTHORITATIVE_PUBLIC` | the venue or SIP published this bar |
+| `PROVIDER_AGGREGATED` | `PROVIDER_DERIVED` | the provider built it from trades it collected |
+| `SYSTEM_AGGREGATED` | `DERIVED_ARTIFACT` | we resampled it from finer data we hold |
+
+**Which applies is established during provider qualification, not assumed**
+([implementation-plan.md](implementation-plan.md) §2, test P9). It matters: if the daily bars
+turn out to be `PROVIDER_AGGREGATED`, then **price data itself is ineligible under
+`PUBLIC_PIT`**, and so is every artifact built on it — a far larger consequence than the
+estimates gap, and one revision 3 would never have surfaced.
 
 ## 7. `corporate_action` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
 
@@ -225,7 +306,7 @@ announcement and *effective* at its ex-date. An adjustment factor may only be ap
 on or after the ex-date, and only if the action was admissible at `as_of`. Knowing about a
 future split and applying it are two different operations, and only the second is look-ahead.
 
-## 7a. `adjusted_bar_artifact` — derived cache, not a fact
+## 7a. `adjusted_bar_artifact` — **`DERIVED_ARTIFACT`**, not a fact
 
 **New in revision 2**, resolving the contradiction between revision 1's schema and its
 implementation plan.
@@ -264,24 +345,28 @@ The provenance anchor for everything fundamental.
 
 ## 9. `fundamental_fact` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
 
-One fact, one period, one revision. Narrow by design: a wide statement table cannot express
-per-line-item restatement.
+**Reported values only.** One fact, one period, one revision. Narrow by design: a wide statement
+table cannot express per-line-item restatement.
 
 | Field | Type | Notes |
 |---|---|---|
 | `security_id` | FK, **PK part** | |
 | `fiscal_period` | string, **PK part** | e.g. `2025Q3` |
-| `period_type` | enum, **PK part** | `QUARTERLY` · `ANNUAL` · `TTM` |
+| `period_type` | enum, **PK part** | `QUARTERLY` · `ANNUAL` |
 | `metric` | string, **PK part** | `revenue`, `eps_diluted`, `shares_outstanding`, … |
 | `revision_sequence` | int, **PK part** | 0 = as originally reported |
 | `value` | decimal | |
 | `unit` / `currency` | string | Normalised at ingestion |
 | `filing_id` | FK → `filing` | The document that carried this value |
-| `derivation` | enum | `REPORTED` · `DERIVED_TTM` · `DERIVED_RATIO` |
-| `revision_chronology_completeness` | enum | `COMPLETE` · `FIRST_AND_LATEST_ONLY` · `UNKNOWN` — **see below** |
-| `«envelope»` | | |
+| `revision_chronology_completeness` | enum | `COMPLETE` · `FIRST_AND_LATEST_ONLY` · `UNKNOWN` |
+| `«envelope»` | | source envelope |
 
-**Revision views, not a default.** Selection is governed by the query's `revision_view`
+**`derivation` is gone from this table**, and its absence is the point. Revision 3 carried
+`derivation ∈ {REPORTED, DERIVED_TTM, DERIVED_RATIO}` on a table declared
+`AUTHORITATIVE_PUBLIC`, so a trailing-twelve-month figure **we computed** inherited the
+authority of a filing. Nobody filed a TTM. Derived values move to §9a.
+
+**Revision views** are governed by the query's `revision_view`
 ([contract §6](pit-data-contract.md)):
 
 | `revision_view` | Selects |
@@ -291,40 +376,128 @@ per-line-item restatement.
 | `LATEST_RESTATED` | highest `revision_sequence`, ignoring `as_of` — **forbidden in research** |
 
 **`revision_chronology_completeness` is the honesty field.** `AS_KNOWN_AT_AS_OF` needs every
-intermediate revision to be correct. A provider supplying only "as reported" and "most recent
-reported" yields `FIRST_AND_LATEST_ONLY`, and any run touching such rows carries
-`REVISION_CHRONOLOGY_INCOMPLETE`. Which value a provider actually supports is a **BLOCKING
-provider test**, not an assumption ([implementation-plan.md](implementation-plan.md) §2–§3).
+intermediate revision. A provider supplying only "as reported" and "most recent reported"
+yields `FIRST_AND_LATEST_ONLY`, and any run touching such rows carries
+`REVISION_CHRONOLOGY_INCOMPLETE`. Which value a provider supports is a **BLOCKING provider
+test** ([implementation-plan.md](implementation-plan.md) §2–§3).
 
-## 10. `earnings_event` — `ANNOUNCED_FORWARD` · `AUTHORITATIVE_PUBLIC`
+## 9a. `fundamental_derived_fact` — `RETROSPECTIVE` · **`DERIVED_ARTIFACT`**
 
-A scheduled earnings date is announced weeks ahead of the event. Under revision 1's blanket
-rule this correct row would have been blocked.
+Trailing-twelve-month aggregates, ratios, margins, growth rates — everything computed from §9
+rather than reported.
+
+| Field | Type | Notes |
+|---|---|---|
+| `security_id` | FK, **PK part** | |
+| `fiscal_period` | string, **PK part** | |
+| `period_type` | enum, **PK part** | `TTM` · `DERIVED` |
+| `metric` | string, **PK part** | `revenue_ttm`, `gross_margin`, `revenue_growth_yoy`, … |
+| `value` | decimal | |
+| `unit` / `currency` | string | |
+| `derivation` | enum | `DERIVED_TTM` · `DERIVED_RATIO` · `DERIVED_GROWTH` |
+| `«derived envelope»` | | `lineage` names **every** §9 row consumed, each with its `revision_sequence` |
+
+Two consequences that make the split worth its cost:
+
+- **A TTM is only as available as its slowest constituent quarter.** Under any profile its
+  `decision_available_time` is the max over the four quarters it consumed — which is the right
+  answer, and one a `REPORTED`-flagged row on the §9 table could not express.
+- **`lineage` records the `revision_sequence` of each input.** A TTM built from as-reported
+  quarters and one built from restated quarters are different artifacts with different hashes,
+  and the manifest can tell them apart.
+
+## 10. `earnings_schedule` — `ANNOUNCED_FORWARD` · **origin per row**
+
+**Revision 3's `earnings_event` violated the atomic-fact rule (§0.0)** by packing four facts
+with four different availability stories into one row: a date announced weeks ahead, a release
+that happened, a consensus the provider computed, and a surprise we calculated. Whichever
+timestamps that row carried, three of the four were wrong. It is now five entities sharing an
+`event_id` and nothing else.
+
+| Field | Type | Notes |
+|---|---|---|
+| `event_id` | string, **PK part** | shared across §10–§10d |
+| `schedule_revision` | int, **PK part** | scheduled dates change; each change is a row |
+| `security_id` | FK | |
+| `fiscal_period` | string | |
+| `scheduled_date` | date | |
+| `expected_session_slot` | enum? | `BEFORE_MARKET` · `AFTER_MARKET` · `UNSPECIFIED` — **as announced**, not derived |
+| `announcement_time` | instant | when *this schedule* was announced — the class anchor |
+| `is_confirmed` | bool | issuer-confirmed vs vendor-estimated |
+| `information_origin` | enum | `AUTHORITATIVE_PUBLIC` when the issuer announced it; `PROVIDER_DERIVED` when a vendor estimated it |
+| `«envelope»` | | |
+
+The origin split is real and consequential: a **vendor-estimated** earnings date is the
+vendor's forecast, ineligible under `PUBLIC_PIT`, while an **issuer-confirmed** one is public.
+Blueprint §10.2 needs the forward flag either way; only one of them is a public fact.
+
+## 10a. `earnings_release` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
+
+The event that actually happened.
 
 | Field | Type | Notes |
 |---|---|---|
 | `event_id` | string, **PK** | |
 | `security_id` | FK | |
 | `fiscal_period` | string | |
-| `scheduled_date` | date? | Announced ahead; supports Blueprint §10.2 event-risk flags |
-| `schedule_announcement_time` | instant? | Availability anchor for the *scheduled* fact |
-| `announcement_time` | instant? | Of the actual release. **Null when unverified — never guessed** |
+| `observation_time` | instant | when the release occurred — the class anchor |
 | `announcement_time_confidence` | enum | `VERIFIED` · `FILING_DERIVED` · `DATE_ONLY` · `UNKNOWN` |
-| `session_classification` | enum? | `BEFORE_MARKET` · `AFTER_MARKET` · `INTRADAY` — **derived**, never asserted |
-| `reported_eps` / `reported_revenue` | decimal? | |
-| `consensus_eps_at_announcement` | decimal? | **Requires §11; null while that gap is open** |
-| `surprise_pct` | decimal? | Null when consensus is null. **Never imputed** |
-| `guidance_change` | enum? | `RAISED` · `LOWERED` · `MAINTAINED` · `INITIATED` · `WITHDRAWN` · `NONE` |
+| `session_classification` | enum? | `BEFORE_MARKET` · `AFTER_MARKET` · `INTRADAY` — **derived from the timestamp**, never asserted |
+| `reported_eps` / `reported_revenue` | decimal? | as released |
+| `filing_id` | FK? | the 8-K, where one exists |
+| `«envelope»` | | |
+
+## 10b. `earnings_consensus_snapshot` — `SAMPLED_STATE` · **`PROVIDER_DERIVED`**
+
+What consensus stood immediately before the release. A **provider** fact, not a public one.
+
+| Field | Type | Notes |
+|---|---|---|
+| `event_id` | FK, **PK part** | |
+| `metric` | string, **PK part** | `eps`, `revenue` |
+| `snapshot_time` | instant, **PK part** | the class anchor |
+| `consensus_value` | decimal | |
+| `analyst_count` | int | |
+| `«envelope»` | | `public_available_time` **null**, `availability_derivation = NOT_APPLICABLE` |
+
+Unpopulated while the estimates gap is open ([provider-evaluation.md](provider-evaluation.md)
+§2.8). It exists now so that the §10c artifact has a lineage target to refuse against.
+
+## 10c. `earnings_surprise_artifact` — `RETROSPECTIVE` · **`DERIVED_ARTIFACT`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `event_id` | FK, **PK part** | |
+| `metric` | string, **PK part** | |
+| `surprise_absolute` / `surprise_pct` | decimal | |
+| `«derived envelope»` | | `lineage` = the §10a release row **and** the §10b consensus row |
+
+**This is the clearest case for the whole derived model.** A surprise is a function of a public
+release and a proprietary consensus. Its eligibility is the intersection, so it is
+**ineligible under `PUBLIC_PIT`** — the market could not compute this number from public
+information alone, because one input was never public.
+
+And it simply does not exist while §10b is unpopulated. Revision 3 handled that with a nullable
+`surprise_pct` on a shared row and a rule saying *null, never zero*; the rule was right and the
+shape was wrong. **A missing artifact is a stronger statement than a null column**, and it
+reaches the required-input check ([contract §13.3](pit-data-contract.md)) instead of quietly
+propagating a null into a factor.
+
+## 10d. `guidance_event` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
+
+| Field | Type | Notes |
+|---|---|---|
+| `guidance_id` | string, **PK** | |
+| `event_id` | FK? | where guidance accompanied a release |
+| `security_id` | FK | |
+| `guidance_change` | enum | `RAISED` · `LOWERED` · `MAINTAINED` · `INITIATED` · `WITHDRAWN` |
+| `metric` / `period` / `low` / `high` | — | the guided range, where given |
+| `observation_time` | instant | when guidance was issued — the class anchor |
 | `filing_id` | FK? | |
 | `«envelope»` | | |
 
-**A scheduled date and an actual release are two facts with two availability times**, which is
-why both anchors exist. The scheduled date is `ANNOUNCED_FORWARD`; the realised release is
-`RETROSPECTIVE` and is carried on the same row because they share an identity.
-
-**`surprise_pct` is null, not zero, when consensus is unavailable.** A zero surprise is a
-claim about the world; a null says we do not know. Conflating them lets the estimates gap
-enter the factor pipeline silently.
+Guidance is its own fact with its own timing: it is frequently issued on a call **after** the
+release it accompanies, and it is sometimes issued with no release at all.
 
 ## 11. `analyst_estimate_snapshot` — `SAMPLED_STATE` · **`PROVIDER_DERIVED`**
 
@@ -405,7 +578,7 @@ Index and classification changes are announced before they take effect.
 | `information_origin` | enum | **per row.** `AUTHORITATIVE_PUBLIC` for SIC, which comes from filings; `PROVIDER_DERIVED` for a vendor or licensed taxonomy, which is the provider's own classification |
 | `«envelope»` | | |
 
-## 15. `source_document` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`
+## 15. `source_document` — `RETROSPECTIVE` · **origin per row**
 
 Provenance for the later AI layer (CLAUDE.md §7). Schema now, population later.
 
@@ -420,7 +593,22 @@ Provenance for the later AI layer (CLAUDE.md §7). Schema now, population later.
 | `document_version` | int | Documents get amended |
 | `content_hash` | string | SHA-256; detects silent amendment |
 | `model_version` / `prompt_version` | string? | **Reserved.** Populated only when agents exist |
+| `information_origin` | enum | **per row**, see below |
 | `«envelope»` | | |
+
+**Documents do not share one origin, and revision 3 assumed they did.**
+
+| Document | `information_origin` |
+|---|---|
+| SEC filing, issuer press release | `AUTHORITATIVE_PUBLIC` |
+| licensed transcript | `PROVIDER_DERIVED` |
+| licensed vendor news | `PROVIDER_DERIVED` |
+| internally generated summary | `DERIVED_ARTIFACT` |
+
+This matters more than it looks. When the AI layer arrives, a Research Agent citing a licensed
+transcript produces evidence that is **ineligible under `PUBLIC_PIT`** — the market never saw
+that transcript in that form. Recording the origin now means the constraint is inherited rather
+than rediscovered.
 
 ## 16. `ingestion_run`
 
@@ -495,6 +683,13 @@ Stated once, enforced by test:
 7. **Every entity declares a `temporal_fact_class`.** There is no default class.
 7a. **Every row declares an `information_origin`.** There is no default origin, and a row is
     served only under a profile its origin is eligible for (§0.1a).
+7c. **One row, one origin, one class, one envelope** (§0.0). Independently changing facts are
+    separate rows even when they share an identifier.
+7d. **A `DERIVED_ARTIFACT` row carries complete lineage and no source times.** Its availability
+    and eligibility are computed from its inputs; it never invents public or provider
+    availability.
+7e. **An exact time and a conservative bound are never the same field.** A bound is never
+    written into `public_available_time` or `provider_available_time`.
 7b. **`NOT_APPLICABLE` and `UNKNOWN` are never conflated.** The first means the time does not
     exist; the second means it exists and we failed to establish it. One is usable, the other
     is not.
