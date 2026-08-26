@@ -74,8 +74,10 @@ JOURNAL + ATTRIBUTION + HEALTH
 | Control | State |
 |---|---|
 | Live trading | **HARD-DISABLED** (two independent gates; Gate 2 not implemented) |
-| Brokerage connectivity | IBKR **Paper** only, **read-only** — validated 2026-08-24 |
-| Order submission | **Impossible** — no order path exists |
+| Brokerage connectivity | IBKR **Paper** only — read-only connectivity validated 2026-08-24; bounded order lifecycle certified 2026-08-26 |
+| Order path | **Exists, and is bounded and certified** — IBKR Paper, SPY, long, exactly 1 share ([certification](docs/certification/phase2-paper-order-lifecycle.md)) |
+| Order submission | Requires an **explicit run-scoped human arm** that is consumed on use. **No arm is currently active**, so the system can reconcile but cannot order |
+| Strategy-generated orders | **None authorized.** No scanner, no signals, no strategy can reach the order path |
 | Default environment | `RESEARCH` (cannot reach a broker even in principle) |
 | Leverage | None |
 | Options | Not V1 |
@@ -153,9 +155,9 @@ KalpaMani/
 │   └── runbooks/             Operational procedures
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
-│   ├── broker/               BrokerAdapter abstraction                        [empty by design]
-│   ├── data/                 Market data + fundamentals ingestion             [empty by design]
-│   ├── execution/            Orders, fill protection, reconciliation          [empty by design]
+│   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
+│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3 planning accepted, implementation not authorized]
+│   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
 │   ├── research/             AI Research + Challenger agents                  [empty by design]
@@ -259,9 +261,25 @@ live brokerage execution, real-money operation.
 
 ## Next planned phase
 
-**PHASE 3 — POINT-IN-TIME DATA FOUNDATION** *(not started, not authorized)*
+**PHASE 3 — POINT-IN-TIME DATA FOUNDATION**
 
-Naming it does not approve it. Beginning any phase requires explicit written authorization.
+| | |
+|---|---|
+| Planning | **ACCEPTED / MERGED** |
+| Implementation | **NOT STARTED / NOT AUTHORIZED** |
+| ADR-0005 | **PROPOSED** |
+| Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
+
+The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
+[ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
+
+**The planning package is accepted; Phase 3 is not complete.** Its proposed architecture and
+provider decisions remain subject to ADR-0005's five open gates — provider selection, the
+production information-set profile, vendor licensing, the analyst-estimate gap, and
+borrow-history qualification. **No implementation authority follows from merging the plan.** No
+data provider has been purchased, trialled or credentialed, and no ingestion code exists.
+
+Beginning implementation requires explicit written authorization.
 
 ---
 
