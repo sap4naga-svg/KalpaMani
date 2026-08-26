@@ -1,0 +1,5 @@
+{
+    "algorithm-language": "Python",
+    "parameters": {},
+    "description": "KalpaMani Phase 2 controlled IBKR Paper order lifecycle certification. Read/reconcile only unless explicitly armed. SPY only, long only, exactly 1 share, one intent, one entry."
+}

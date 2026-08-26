@@ -243,8 +243,10 @@ Nothing below exists yet, and none of it is authorized:
 one tiny PAPER order -> fill handling -> immediate protection -> reconciliation -> clean exit
 ```
 
-Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme (**ADR-0004**) must
-be defined **before** any automated order testing.
+Per ADR-0002 §12, a deterministic client/order-ID and idempotency scheme had to be defined
+**before** any automated order testing. That is now
+[ADR-0004 — Deterministic Order Identity, Idempotency, and Execution Lifecycle](docs/decisions/ADR-0004-deterministic-order-identity-idempotency-and-execution-lifecycle.md),
+accepted 2026-08-25.
 
 Phase 1 is complete and accepted. Acceptance evidence: LEAN launches · IBKR Paper connection
 confirmed · exactly one SPY subscription · market data received (05:15 ET pre-market, delayed
