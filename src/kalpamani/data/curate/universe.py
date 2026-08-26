@@ -163,6 +163,25 @@ def admissible_inputs(
     )
 
 
+def current_listings(listings: Sequence[Listing]) -> tuple[Listing, ...]:
+    """The listing revision that stood at the cutoff, one per listing and fact kind.
+
+    A delisting is not a correction to the row that said the security was listed:
+    it is a later revision of the same fact, available only once it happened. Both
+    rows are admissible after the delisting, and taking the highest admissible
+    revision is what stops the open-ended earlier row from claiming the security
+    is still listed years later. This is ``AS_KNOWN_AT_AS_OF`` applied to
+    listings -- the normative historical view, stated rather than assumed.
+    """
+    latest: dict[tuple[str, str], Listing] = {}
+    for listing in listings:
+        key = (listing.listing_id, listing.listing_fact_kind.value)
+        held = latest.get(key)
+        if held is None or listing.envelope.revision_sequence > held.envelope.revision_sequence:
+            latest[key] = listing
+    return tuple(sorted(latest.values(), key=lambda item: (item.security_id, item.listing_id)))
+
+
 def build_universe_snapshot(
     inputs: UniverseBuildInputs,
     *,
@@ -233,7 +252,7 @@ def build_universe_snapshot(
     )
 
     rows: list[UniverseMembership] = []
-    for listing in sorted(admissible_listings, key=lambda listing: listing.security_id):
+    for listing in current_listings(admissible_listings):
         if not listing.is_listed_on(session_date):
             continue
         decision = _evaluate(
@@ -381,5 +400,6 @@ __all__ = [
     "UniverseDefinition",
     "admissible_inputs",
     "build_universe_snapshot",
+    "current_listings",
     "snapshot_content_hash",
 ]
