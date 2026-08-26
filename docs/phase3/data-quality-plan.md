@@ -2,6 +2,11 @@
 
 **Status: PROPOSED — planning only. No check is implemented.**
 
+> **Revision 7 (2026-08-26).** Structural check 3.5 and the class checks now read **resolved**
+> values, so an `UNKNOWN` exact time with an approved bound is admissible and a date-only
+> announcement is actually checked rather than skipped (§3, §4.0A.11, §4.1). Coverage checks use
+> the **partition minimum**, not an aggregate (§4.7). 4.5.1 names `artifact_content_hash`.
+>
 > **Revision 5 (2026-08-26).** §4.0 now **branches on envelope** before anything else, so a
 > derived artifact is never validated as a malformed source row (§4.0A / §4.0B). Checks read the
 > §5.0 **resolved** times, so an approved bound satisfies a requirement; exact-versus-bound
@@ -107,7 +112,7 @@ error, and §4.0 makes the skip explicit rather than implicit.
 | 3.2 | Schema drift | vendor payload columns/types differ from the recorded contract | **BLOCKING** |
 | 3.3 | Checksum change | a bronze artifact hash differs from the one an `ingestion_run` recorded | **BLOCKING** |
 | 3.4 | Unrecognised schema version | in any curated table | **BLOCKING** |
-| 3.5 | Unresolvable source availability | `origin = AUTHORITATIVE_PUBLIC` ∧ `public_time_derivation = UNKNOWN` in a PIT query | **BLOCKING** |
+| 3.5 | Unresolvable source availability | `origin = AUTHORITATIVE_PUBLIC` ∧ **`rpub IS NULL`** in a PIT query — no exact time **and** no approved bound. `public_time_derivation = UNKNOWN` with an approved bound is **admissible** | **BLOCKING** |
 | 3.6 | Missing temporal declaration | a source row with no `temporal_fact_class`, or a derived row with no `output_validity` | **BLOCKING** |
 | 3.7 | Orphan reference | a foreign key with no target | **BLOCKING** |
 | 3.8 | Stale ingestion | newest row of a live-facing dataset older than its freshness bound | **BLOCKING** live / **WARNING** research |
@@ -147,7 +152,8 @@ enum it does not have (4.0.6). Three false BLOCKINGs on a correctly-formed row.
 | 4.0A.8 | **Bound precedes the exact time it bounds** | (`pub IS NOT NULL` ∧ `pub_ub IS NOT NULL` ∧ `pub > pub_ub`) ∨ the provider analogue | **BLOCKING** ([contract §2.6](pit-data-contract.md)) |
 | 4.0A.9 | Unapproved bound relied upon | `rpub` or `rprov` resolved from a bound whose derivation is not in the dataset's approved list | **BLOCKING** |
 | 4.0A.10 | Derivation disagrees with origin | `public_time_derivation = NOT_APPLICABLE` ∧ `origin = AUTHORITATIVE_PUBLIC`; or `= UNKNOWN` ∧ `origin ≠ AUTHORITATIVE_PUBLIC` | **BLOCKING** |
-| 4.0A.11 | Class without its anchor | `RETROSPECTIVE` ∧ `obs IS NULL`; `ANNOUNCED_FORWARD` ∧ `ann IS NULL`; `SAMPLED_STATE` ∧ `smp IS NULL` | **BLOCKING** |
+| 4.0A.11 | Class without a **resolved** fact anchor | `RETROSPECTIVE` ∧ `retrospective_fact_anchor IS NULL`; `ANNOUNCED_FORWARD` ∧ `announced_forward_fact_anchor IS NULL` (neither exact nor **approved** bound); `SAMPLED_STATE` ∧ `sampled_state_fact_anchor IS NULL`. Domain aliases per [contract §7.4](pit-data-contract.md) | **BLOCKING** |
+| 4.0A.11a | Unapproved fact-anchor bound | `announcement_time IS NULL` ∧ `announcement_time_upper_bound` present ∧ its `announcement_bound_derivation` not approved for the dataset | **BLOCKING** — approval is what makes a bound usable, here as in §5.0 |
 | 4.0A.12 | Row mixes facts | more than one `temporal_fact_class` or `information_origin` implied by one row's fields | **BLOCKING** — the atomic-fact rule |
 
 #### §4.0B — derived artifacts only
@@ -174,9 +180,9 @@ serving the row would hand a backtest information nobody had.
 | 4.1.2 | Held before provider supplied | `prov IS NOT NULL` ∧ `seen < prov` | all classes | **BLOCKING**. Not applied to a `FIRST_SEEN_UPPER_BOUND` bound, which is *derived from* `seen` |
 | 4.1.3 | Row written before first seen | `ing < seen` | all classes | **BLOCKING** |
 | 4.1.4 | Provider ahead of public **for the same fact** | `origin = AUTHORITATIVE_PUBLIC` ∧ `pub IS NOT NULL` ∧ `prov IS NOT NULL` ∧ `prov < pub`. Bounds excluded — a bound is not a claim about ordering | `AUTHORITATIVE_PUBLIC` **only** | **BLOCKING** — a provider cannot have offered a public fact before it was public; one of the two timestamps is wrong. Revision 3 graded this `WARNING`, which let a contradiction through |
-| 4.1.5 | **Retrospective** fact available before it occurred | `anchor < obs` | `RETROSPECTIVE` **only** | **BLOCKING** |
-| 4.1.6 | **Announced-forward** fact available before it was announced | `anchor < ann` | `ANNOUNCED_FORWARD` **only** | **BLOCKING** |
-| 4.1.7 | **Sampled state** available before it was sampled | `anchor < smp` | `SAMPLED_STATE` **only** | **BLOCKING** |
+| 4.1.5 | **Retrospective** fact available before it occurred | `anchor < retrospective_fact_anchor` | `RETROSPECTIVE` **only** | **BLOCKING** |
+| 4.1.6 | **Announced-forward** fact available before it was announced | `anchor < announced_forward_fact_anchor` — **the resolved anchor**, so a date-only announcement with an approved bound is checked rather than skipped | `ANNOUNCED_FORWARD` **only** | **BLOCKING** |
+| 4.1.7 | **Sampled state** available before it was sampled | `anchor < sampled_state_fact_anchor` | `SAMPLED_STATE` **only** | **BLOCKING** |
 | 4.1.8 | Revision predates the revision it supersedes | `anchor(rev n) < anchor(rev n−1)` | all | **BLOCKING** |
 | 4.1.9 | Future-dated availability | `dat(P) > build` | all | **BLOCKING** |
 | 4.1.10 | Estimate snapshot series moving backward | `snapshot_time` order disagrees with `anchor` order (see 4.1.8) | `SAMPLED_STATE` | **BLOCKING** |
@@ -248,7 +254,7 @@ serving a row on public timing **because provider timing is absent**.
 
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
-| 4.5.1 | Cache does not reproduce | recomputed series hash ≠ `adjusted_bar_artifact.content_hash` | **BLOCKING** |
+| 4.5.1 | Cache does not reproduce | recomputed series hash ≠ `adjusted_bar_artifact.artifact_content_hash` | **BLOCKING** |
 | 4.5.2 | Action applied before ex-date | adjustment applied to a bar with `session_date < action.ex_date` | **BLOCKING** |
 | 4.5.3 | Inadmissible action applied | adjustment used an action with `dat(P) > as_of_epoch` | **BLOCKING** |
 | 4.5.4 | Unkeyed adjusted series | an adjusted series exists outside `adjusted_bar_artifact` | **BLOCKING** |
@@ -277,7 +283,9 @@ Excluding rows and declaring the exclusion is evidence, not sufficiency
 | # | Check | Exact condition | Severity |
 |---|---|---|---|
 | 4.7.1 | Required domain emptied | a domain declared **REQUIRED** by the factor/query/artifact definition has zero admissible rows after origin filtering and provider-time resolution | **BLOCKING** — refuse with `REQUIRED_INPUT_UNAVAILABLE` |
-| 4.7.2 | Required domain fails its **coverage contract** | admissible coverage < the definition's `min_coverage_fraction` at its declared `coverage_scope` — `WHOLE_DOMAIN` · `PER_SESSION` · `PER_SECURITY` · `PER_SECURITY_SESSION` ([contract §13.3](pit-data-contract.md)) | **BLOCKING** |
+| 4.7.2 | Required domain fails its **coverage contract** | for `PER_SESSION` / `PER_SECURITY` / `PER_SECURITY_SESSION`: `failing_partitions > 0` ∨ `minimum_observed_partition_coverage < min_coverage_fraction`. For `WHOLE_DOMAIN`: `observed_rows < min_rows` ([contract §13.3](pit-data-contract.md)) | **BLOCKING** |
+| 4.7.2a | Aggregate substituted for the partition minimum | a `PER_*` input evidenced by a mean or overall fraction instead of `minimum_observed_partition_coverage` | **BLOCKING** — averaging a failing partition away is the move the scope exists to prevent |
+| 4.7.2b | `WHOLE_DOMAIN` evidenced by a fraction | a `WHOLE_DOMAIN` input recording `min_coverage_fraction` rather than `min_rows` / `observed_rows` | **BLOCKING** — there is no natural denominator for the whole domain |
 | 4.7.3 | Optional exclusion undeclared | an **OPTIONAL** domain lost rows ∧ counts absent from the manifest ∧ its limitation token absent | **BLOCKING** |
 | 4.7.4 | Silent substitution | a factor computed with a required input missing, under the same `factor_definition_version` | **BLOCKING** — it is a different factor wearing the same name |
 

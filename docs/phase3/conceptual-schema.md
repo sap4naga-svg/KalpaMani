@@ -10,6 +10,11 @@ Types are conceptual: `instant` is a timezone-aware UTC timestamp; `date` is a c
 with no time component and is never silently promoted to an instant
 ([pit-data-contract.md](pit-data-contract.md) §12.6).
 
+> **Revision 7 (2026-08-26).** `UNKNOWN` exact timing no longer disqualifies a row that has an
+> approved bound (§0.1, §0.4); `price_bar` gains a **bar-time key** so minute bars cannot
+> collide and is declared the **canonical curated record** (§6); the adjusted artifact's hash is
+> `artifact_content_hash` throughout (§7a).
+>
 > **Revision 6 (2026-08-26).** `price_bar` splits so no derived row sits inside a
 > `RETROSPECTIVE` source entity (§6, §6a); `adjusted_bar_artifact` carries a complete derived
 > envelope with one normative name per field (§7a); and the remaining source entities get
@@ -177,7 +182,7 @@ envelope exists.
 | Field | Type | Meaning |
 |---|---|---|
 | `temporal_fact_class` | enum | `RETROSPECTIVE` · `ANNOUNCED_FORWARD` · `SAMPLED_STATE` — selects which timing invariant applies ([contract §7](pit-data-contract.md)). Declared per entity, not per row, except where noted. |
-| `public_time_derivation` | enum | How the **exact** `public_available_time` was established: `AUTHORITATIVE_TIMESTAMP` · `VENDOR_TZ_TIMESTAMP` · `UNKNOWN` · `NOT_APPLICABLE`. `UNKNOWN` = a public time exists and we failed to establish it (**unusable**); `NOT_APPLICABLE` = no public time exists for this origin (**usable where §0.1a allows**). |
+| `public_time_derivation` | enum | How the **exact** `public_available_time` was established: `AUTHORITATIVE_TIMESTAMP` · `VENDOR_TZ_TIMESTAMP` · `UNKNOWN` · `NOT_APPLICABLE`. `UNKNOWN` = a public time exists and we failed to establish it — **not disqualifying on its own**, since an approved bound may still stand in; `NOT_APPLICABLE` = no public time exists for this origin. **Usability is decided by `resolved_public_time`, not by this field.** |
 | `public_bound_derivation` | enum | How `public_available_upper_bound` was derived: `DATE_PLUS_LAG` · `SESSION_CLOSE_PLUS_LAG` · `FIRST_SEEN_UPPER_BOUND` · `NONE` |
 | `provider_time_derivation` | enum | How the **exact** `provider_available_time` was established: `VENDOR_STAMPED` · `FILE_DROP` · `UNKNOWN` · `NOT_APPLICABLE` |
 | `provider_bound_derivation` | enum | How `provider_available_upper_bound` was derived: `FIRST_SEEN_UPPER_BOUND` · `DELIVERY_WINDOW` · `NONE` |
@@ -202,9 +207,15 @@ bound fields; nothing in one vocabulary can write the other's field.
 
 ### 0.4 Load-bearing envelope rules
 
-- **`public_time_derivation = UNKNOWN` may never participate in a point-in-time query**
-  ([contract §10](pit-data-contract.md) rule 6). `NOT_APPLICABLE` is not `UNKNOWN`, and the two
-  are separate enum members precisely so the refusal is mechanical rather than a judgement.
+- **A record whose `resolved_public_time` is null may never participate in a point-in-time
+  query** ([contract §10](pit-data-contract.md) rule 6) — no exact time *and* no approved bound.
+  **`public_time_derivation = UNKNOWN` alone does not trigger this**: an approved
+  `public_available_upper_bound` resolves, and the row is admissible from that bound onward.
+  Revision 6 blocked on the derivation rather than the resolution, which made `BOUND` unusable
+  for exactly the rows it was designed for. `NOT_APPLICABLE` is not `UNKNOWN`, and the two are
+  separate enum members so the distinction is mechanical rather than a judgement.
+- **The same holds on the provider axis**: `provider_time_derivation = UNKNOWN` with an approved
+  `provider_available_upper_bound` resolves.
 - **`provider_time_derivation = UNKNOWN` under `PROVIDER_REALISTIC_PIT`** triggers the
   dataset's declared `EXCLUDE`, `BOUND` or `DOWNGRADE` resolution — never a silent fallback,
   and never the withdrawn `DECLARE`.
@@ -359,17 +370,41 @@ class invariant to read.
 | Field | Type | Notes |
 |---|---|---|
 | `security_id` | FK, **PK part** | |
-| `session_date` | date, **PK part** | |
 | `resolution` | enum, **PK part** | `DAILY` · `MINUTE` |
+| `bar_end_time` | instant, **PK part** | the bar's closing endpoint — **and the `RETROSPECTIVE` fact anchor** ([contract §7.4](pit-data-contract.md)) |
+| `bar_start_time` | instant | the bar's opening endpoint |
+| `session_date` | date | the exchange-calendar join key. **Sourced from `market_session`, never derived by truncating a UTC timestamp** |
 | `open` / `high` / `low` / `close` | decimal | **RAW / unadjusted.** The traded prices. |
 | `volume` | integer | |
 | `trade_count` | integer? | |
 | `vwap` | decimal? | Where licensed |
 | `is_stale` / `had_halt` | bool | A non-trading day is not a zero |
-| `observation_time` | instant | the `RETROSPECTIVE` anchor — the session close the bar summarises |
+| `curation_source` | string | which Bronze/Silver source claim this curated row was selected from |
 | `bar_construction` | enum | `OFFICIAL_DISSEMINATED` · `PROVIDER_AGGREGATED` — **source constructions only** |
 | `information_origin` | enum | **per row**, per the table below |
 | `«envelope»` | | source envelope |
+
+**`bar_end_time` is in the key, and `session_date` is not.** Revision 6 keyed on
+(`security_id`, `session_date`, `resolution`), which **cannot represent minute bars at all** —
+every minute of a session collided on one row. Identity is now the bar's own endpoint;
+`session_date` remains as the calendar join key, and the two are deliberately different things
+([contract §12.7](pit-data-contract.md)): a 20:00 ET bar belongs to that session and to the next
+UTC day.
+
+`observation_time = bar_end_time`. A daily bar's endpoint is the session bar endpoint; each
+minute bar has its own. The class invariant then reads "a bar cannot be available before it
+closed", which is a real check at either resolution.
+
+**Decision: `price_bar` is the canonical curated Gold record — option A.** One row per
+(`security_id`, `resolution`, `bar_end_time`); provider-specific bar *claims* stay in the
+Bronze and Silver layers where they arrived, and `curation_source` records which claim this row
+was selected from. Provider identity is **not** part of the key.
+
+The alternative — multiple source claims sharing the entity, keyed by provider — was rejected
+because it pushes source selection downstream into every query, and the layered architecture
+already has a place for competing claims. Cross-provider disagreement is a **quality finding**
+([data-quality-plan.md](data-quality-plan.md) §7), resolved once at curation with the decision
+recorded, rather than a collision every consumer must break for itself.
 
 **Not every bar is an authoritative public fact.** A consolidated-tape daily bar disseminated by
 the SIP is; a bar the vendor aggregated from its own trade collection is the vendor's
@@ -478,7 +513,8 @@ they read as substitutes for the required derived-envelope fields while being sp
 differently, which is precisely the drift the documentation audit exists to catch.
 
 **It is a cache, and it must behave like one.** Recomputing from the key must reproduce
-`content_hash` bit-identically; a mismatch is a **BLOCKING** quality issue, not a cache miss.
+`artifact_content_hash` bit-identically; a mismatch is a **BLOCKING** quality issue, not a cache
+miss.
 No adjusted series exists anywhere in the system that is not keyed this way.
 
 ## 8. `filing` — `RETROSPECTIVE` · `AUTHORITATIVE_PUBLIC`

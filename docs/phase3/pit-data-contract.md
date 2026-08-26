@@ -12,6 +12,13 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > (§2) and resolved by an explicit information-set profile (§3). Revision views are now
 > explicit (§6).
 >
+> **Revision 7 (2026-08-26).** Blocking-semantics fixes. An **`UNKNOWN` exact time no longer
+> blocks a row that has an approved bound** — unusability is `resolved_* IS NULL`, not
+> `derivation = UNKNOWN` (§5.1, §10). A **resolved fact-time anchor** joins the resolved
+> availability anchor, so a date-only announcement is checked rather than waved through (§7.3).
+> Coverage evidence becomes **per-scope and partition-minimum based** (§13.3). `price_bar` gains
+> a bar-time key so minute bars cannot collide (schema §6).
+>
 > **Revision 6 (2026-08-26).** Stale-rule cleanup. §10, §12.1 and §13.2 still carried
 > pre-revision-5 wording that demanded **exact** times where an approved bound now suffices, and
 > §13.2 still named the scalar `profile_resolution` fields the per-dataset map replaced. No
@@ -163,8 +170,8 @@ Two rules keep the vocabulary honest:
 - **If an authoritative public instant exists for this exact fact, the origin is
   `AUTHORITATIVE_PUBLIC` and `public_available_time` is required.** `PROVIDER_DERIVED` is not
   an escape hatch for a public fact whose timing we failed to establish — that case is
-  `AUTHORITATIVE_PUBLIC` with `public_time_derivation = UNKNOWN`, and it is ineligible
-  everywhere (§10 rule 6).
+  `AUTHORITATIVE_PUBLIC` with `public_time_derivation = UNKNOWN` — which makes it ineligible
+  **only if no approved bound stands in** (§5.0, §10 rule 6).
 - **`DERIVED_ARTIFACT` is not an escape hatch either.** A row is derived only if *we* computed
   it. A value the provider computed and we merely received is `PROVIDER_DERIVED`, however
   derived it looks.
@@ -574,13 +581,29 @@ session-plus-lag values into it. Approximations now go where approximations belo
 
 | # | Situation | Effect |
 |---|---|---|
-| 6 | None of the above, **and the origin is `AUTHORITATIVE_PUBLIC`** | both null, `public_time_derivation = UNKNOWN`. **Not point-in-time under any profile** |
+| 6 | No exact rule applies, **and the origin is `AUTHORITATIVE_PUBLIC`** | `public_available_time` null, `public_time_derivation = UNKNOWN`. **A bound from rules 3–5 may still stand in**; the row is unusable only if `resolved_public_time` is also null |
 | 7 | The origin is `PROVIDER_DERIVED` or `SYSTEM_OBSERVED` | both null, `public_time_derivation = NOT_APPLICABLE`. Eligible exactly where §3.1 allows |
 
-**Rules 6 and 7 look alike and are opposites**, which is why they are separate rows. Both
-produce a null. In rule 6 the null means *we failed to establish a time that exists*, and the
-record is unusable everywhere. In rule 7 it means *no such time exists to establish*, and the
-record is perfectly usable under `PROVIDER_REALISTIC_PIT` and `FORWARD_SYSTEM`.
+**Rules 6 and 7 look alike and are opposites**, which is why they are separate rows. Both null
+the exact field. In rule 6 it means *we failed to establish a time that exists*; in rule 7 it
+means *no such time exists to establish*, and the record is usable under
+`PROVIDER_REALISTIC_PIT` and `FORWARD_SYSTEM`.
+
+> **`UNKNOWN` is not by itself disqualifying — and revision 6 treated it as though it were.**
+> The exact instant being unestablished says nothing about whether an approved bound covers the
+> record. The one condition that makes an `AUTHORITATIVE_PUBLIC` row unusable is
+> **`resolved_public_time IS NULL`** (§5.0): no exact time *and* no approved bound. A row with
+>
+> ```
+> public_available_time       = null
+> public_time_derivation      = UNKNOWN
+> public_available_upper_bound = approved bound
+> ```
+>
+> **is admissible from that bound onward.** The same holds on the provider axis:
+> `provider_time_derivation = UNKNOWN` with an approved `provider_available_upper_bound`
+> resolves. The exact field and the bound field stay distinct throughout — the bound satisfies
+> the requirement without ever being written into, or mistaken for, the exact value.
 
 Rule 6 is the one that matters for public facts. "The vendor gave us history, so it must be
 historical" is the reasoning that produces look-ahead, and it is the same shape of reasoning
@@ -719,14 +742,6 @@ only as audit evidence of what was asked for.
 latency, backfill detection and every impossibility check. There is one anchor, and every
 temporal rule reads it.
 
-Every entity declares a `temporal_fact_class`:
-
-| Class | Meaning | Timing invariant | Examples |
-|---|---|---|---|
-| **`RETROSPECTIVE`** | The fact is observed at or after it occurs. | `observation_time <= source_anchor` | price bars, executed trades, reported financials, an actual earnings release |
-| **`ANNOUNCED_FORWARD`** | The fact is announced before it takes effect. **`effective_date` may legitimately be far later than availability.** | `announcement_time <= source_anchor`; **no constraint between `effective_date` and availability** | scheduled earnings dates, announced splits and dividends before ex-date, announced index or classification changes, future exchange sessions and holidays |
-| **`SAMPLED_STATE`** | A state holding over an interval, observed by sampling. | `sample_time <= source_anchor` | borrow availability and fee, classification membership, shares outstanding |
-
 ### 7.2 Derived artifacts declare output validity, not a source class
 
 A derived artifact was not observed, so it has no observation, announcement or sample instant
@@ -758,6 +773,52 @@ split is coming, because Blueprint §10.2 requires event-risk flags on every can
 What must never happen is the *adjustment* being applied before the announcement. That is a
 separate rule and it lives in §8.
 
+### 7.3 The resolved fact-time anchor
+
+`source_anchor` answers *when could this have been known*. The class invariants also need the
+other half — *when did the fact happen* — and revision 6 read raw fields for it, so a date-only
+announcement with a perfectly good upper bound had a null `announcement_time` and its invariant
+silently did not run.
+
+```
+retrospective_fact_anchor(r)     = observation_time            (or the §7.4 alias)
+announced_forward_fact_anchor(r) = announcement_time
+                                   else announcement_time_upper_bound, if APPROVED
+                                   else NULL
+sampled_state_fact_anchor(r)     = sample_time                 (or the §7.4 alias)
+```
+
+| Case | Outcome |
+|---|---|
+| exact announcement time | accepted, and the invariant **is checked** against it |
+| date-only announcement with an **approved** upper bound | accepted, and the invariant **is checked** against the bound |
+| neither exact nor approved bound | **BLOCKING** — there is nothing to check against |
+| an **unapproved** bound | **BLOCKING** — approval is what makes a bound usable, here as in §5.0 |
+
+Applies to `market_session`, `corporate_action` and every other `ANNOUNCED_FORWARD` fact.
+
+### 7.4 Domain aliases are declared, not implied
+
+Several entities name their anchor for the domain rather than for the class. **The mapping is
+part of the contract, not prose to be inferred** — an implementation reads this table:
+
+| Entity | Field | Serves as |
+|---|---|---|
+| `source_document` | `publication_time` | retrospective fact anchor |
+| `analyst_revision` | `revision_time` | retrospective fact anchor |
+| `price_bar` | `bar_end_time` | retrospective fact anchor (`observation_time = bar_end_time`) |
+| `analyst_estimate_snapshot` | `snapshot_time` | sampled-state fact anchor |
+| `earnings_consensus_snapshot` | `snapshot_time` | sampled-state fact anchor |
+| `earnings_schedule_estimate` | `snapshot_time` | sampled-state fact anchor |
+
+Every entity declares a `temporal_fact_class`:
+
+| Class | Meaning | Timing invariant | Examples |
+|---|---|---|---|
+| **`RETROSPECTIVE`** | The fact is observed at or after it occurs. | `observation_time <= source_anchor` | price bars, executed trades, reported financials, an actual earnings release |
+| **`ANNOUNCED_FORWARD`** | The fact is announced before it takes effect. **`effective_date` may legitimately be far later than availability.** | `announcement_time <= source_anchor`; **no constraint between `effective_date` and availability** | scheduled earnings dates, announced splits and dividends before ex-date, announced index or classification changes, future exchange sessions and holidays |
+| **`SAMPLED_STATE`** | A state holding over an interval, observed by sampling. | `sample_time <= source_anchor` | borrow availability and fee, classification membership, shares outstanding |
+
 ---
 
 ## 8. Adjusted prices — one design, stated once
@@ -785,7 +846,7 @@ implementation plan listed "adjusted bars" as gold contents. Resolved.
 > | `as_of_epoch` — the cutoff that fixed which actions are admissible |
 > | `corporate_action_dataset_version` |
 > | `raw_bar_dataset_version` |
-> | `content_hash` of the produced series |
+> | `artifact_content_hash` of the produced series |
 >
 > Any cache artifact must reproduce bit-identically on recomputation from its key. A
 > mismatch is a **BLOCKING** quality issue, not a cache miss.
@@ -870,8 +931,13 @@ These are errors, not warnings, and abort the query rather than returning a degr
 3. `revision_view` absent from a query over revisable facts.
 4. `revision_view = LATEST_RESTATED` reached from research or backtest code.
 5. `as_of_time` later than the dataset build time.
-6. A record with `public_time_derivation = UNKNOWN` participating in a point-in-time query.
-   (`NOT_APPLICABLE` is **not** `UNKNOWN` — see §5.1 rules 6 and 7.)
+6. An `AUTHORITATIVE_PUBLIC` record whose **`resolved_public_time` is null** — no exact time
+   *and* no approved bound — participating in a point-in-time query. `public_time_derivation =
+   UNKNOWN` **alone is not this rule**: a row with an approved bound resolves and is admissible
+   (§5.0). And `NOT_APPLICABLE` is not `UNKNOWN` — see §5.1 rules 6 and 7.
+6a. A `PROVIDER_DERIVED` record whose `resolved_provider_time` is null, where the dataset policy
+   is not `EXCLUDE`. Again, `provider_time_derivation = UNKNOWN` with an approved bound
+   resolves.
 7. A requested `as_of` earlier than the dataset declared coverage start.
 8. Any `BLOCKING` data-quality issue open against a dataset the query touches.
 9. A universe query for a date with no `universe_membership` snapshot.
@@ -1148,16 +1214,26 @@ A required domain that loses 90% of its rows is not satisfied merely by retainin
 required input declares the **scope** at which it must be satisfied and the **minimum coverage**
 within that scope:
 
-| `coverage_scope` | Satisfied when | Typical use |
-|---|---|---|
-| `WHOLE_DOMAIN` | the domain has at least `min_rows` admissible rows overall | reference data |
-| `PER_SESSION` | every session in the query range meets `min_coverage_fraction` | price bars, universe |
-| `PER_SECURITY` | every security in the universe meets `min_coverage_fraction` | fundamentals, estimates |
-| `PER_SECURITY_SESSION` | every (security, session) cell required by the factor is present | borrow at signal time |
+| `coverage_scope` | Satisfied when | Evidence recorded | Typical use |
+|---|---|---|---|
+| `WHOLE_DOMAIN` | `observed_rows >= min_rows` | `min_rows`, `observed_rows` | reference data |
+| `PER_SESSION` | **`failing_partitions == 0`** and `minimum_observed_partition_coverage >= min_coverage_fraction` | `min_coverage_fraction`, `minimum_observed_partition_coverage`, `failing_partitions`, `total_partitions` | price bars, universe |
+| `PER_SECURITY` | same, partitioned by security | same | fundamentals, estimates |
+| `PER_SECURITY_SESSION` | same, partitioned by (security, session) | same | borrow at signal time |
+
+> **The partition minimum decides, not an aggregate.** A `PER_SECURITY` input at 97% *overall*
+> with 34 securities below threshold has **failed** — 34 securities are inadequately covered, and
+> averaging them away is exactly the move the scope exists to prevent. An emitted successful
+> manifest therefore has `failing_partitions == 0`, and reports
+> `minimum_observed_partition_coverage` rather than a mean.
+
+`WHOLE_DOMAIN` uses a **row-count** contract (`min_rows` / `observed_rows`), not a fraction —
+there is no natural denominator for "the whole domain", and inventing one would make the
+threshold uninterpretable.
 
 A required input failing its contract → **refuse** with `REQUIRED_INPUT_UNAVAILABLE`, naming the
-scope, the threshold and the observed coverage. An optional input failing its contract →
-permitted, counted, token emitted.
+scope, the threshold, the partition minimum and the failing-partition count. An optional input
+failing its contract → permitted, counted, token emitted.
 
 The threshold is part of the factor definition and therefore part of
 `factor_definition_version`. Changing it changes the factor.
