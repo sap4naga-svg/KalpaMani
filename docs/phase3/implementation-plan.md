@@ -5,6 +5,12 @@
 This is a plan to be executed later, if approved. **No stage below has begun.** No
 infrastructure has been created, no provider contacted, no credential requested.
 
+> **Revision 4 (2026-08-26).** Provider test **P9** establishes whether daily bars are
+> officially disseminated, provider-aggregated or system-aggregated — which decides whether
+> price data is eligible under `PUBLIC_PIT` at all. Deliverables follow the earnings and
+> fundamentals splits, and six adversarial fixtures plus three negative controls cover derived
+> artifacts, bounds, profile resolution and required inputs.
+>
 > **Revision 3 (2026-08-26).** Provider test P1 now records an `information_origin` per
 > dataset and drives the `EXCLUDE` / `BOUND` / `DOWNGRADE` choice; four adversarial fixtures and
 > two negative controls are added for origin eligibility; acceptance criteria 15 and 18 cover
@@ -180,6 +186,7 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 | P3 | **Corporate-action announcement timing.** Does the dataset carry an announcement date/time distinct from ex-date? | `CORPORATE_ACTION_ANNOUNCE_APPROXIMATED` lag applies and is declared |
 | P4 | **Classification history.** Are sector/industry changes historised, or is only the current value supplied? | `CLASSIFICATION_STATIC` limitation applies |
 | P5 | **Adjusted/raw reconciliation.** Recomputing adjusted from raw + actions reproduces the vendor's adjusted series. | check 5.6 blocks the dataset |
+| **P9** | **Bar construction and origin.** Are the daily bars officially disseminated (consolidated tape), aggregated by the provider from its own trade collection, or resampled by us? | decides `price_bar.information_origin`. If `PROVIDER_AGGREGATED`, **price data and everything derived from it — including the universe — are ineligible under `PUBLIC_PIT`**. Larger in consequence than the estimates gap, and revision 3 would never have surfaced it |
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
@@ -217,11 +224,13 @@ environment ([provider-source-register.md](provider-source-register.md)).
 1. Schemas 8–12, 15.
 2. EDGAR ingestion: `filing` records with **acceptance timestamps**, honouring SEC fair-access
    requirements (declared User-Agent, rate limiting).
-3. `fundamental_fact` with all three revision views implemented and
-   `revision_chronology_completeness` populated from the P6 test below.
-4. `earnings_event` with both availability anchors, `announcement_time_confidence`, and the
-   derived session classification.
-5. `get_fundamental_snapshot`, `get_earnings_event`.
+3. `fundamental_fact` (**reported values only**) with all three revision views and
+   `revision_chronology_completeness` populated from P6; `fundamental_derived_fact` as a
+   `DERIVED_ARTIFACT` carrying lineage over the quarters it consumed.
+4. The five earnings entities — `earnings_schedule`, `earnings_release`,
+   `earnings_consensus_snapshot`, `earnings_surprise_artifact`, `guidance_event` — each with its
+   own envelope, class and origin.
+5. `get_fundamental_snapshot`, `get_fundamental_derived`, and the five earnings accessors.
 6. `analyst_estimate_snapshot` and `analyst_revision` **schemas, unpopulated**, with
    `ANALYST_REVISIONS_UNAVAILABLE` wired into manifest emission.
 7. Temporal quality checks §4.4 in full.
@@ -400,7 +409,11 @@ that and proposes no ADR to. It refuses to simulate the short half on data that 
 | 16 | **Revision-view separation test** | `AS_KNOWN_AT_AS_OF` and `ORIGINAL_FILING_ONLY` differ on a known restatement; `LATEST_RESTATED` is unreachable from research. |
 | 17 | **Adjustment-key test** | An adjusted artifact reproduces from its key; a tampered artifact is refused. |
 | 18 | **Origin-eligibility test** | A `PROVIDER_DERIVED` record is refused under `PUBLIC_PIT`, served under the other two, and its exclusion is counted in the manifest. A `SYSTEM_OBSERVED` record is served only under `FORWARD_SYSTEM`. **Neither is rejected outright** — N7, N8 and N10 must pass. |
-| 19 | **Provider-gap resolution test** | `EXCLUDE`, `BOUND` and `DOWNGRADE` each produce the documented behaviour and the documented token; no path serves a row under `PROVIDER_REALISTIC_PIT` on public timing. |
+| 19 | **Provider-gap resolution test** | `EXCLUDE`, `BOUND` and `DOWNGRADE` each produce the documented behaviour and the documented token; no path serves a row under `PROVIDER_REALISTIC_PIT` on public timing; `BOUND` leaves the exact field null. |
+| 20 | **Derived-artifact lineage test** | An artifact's availability equals the max over its lineage under each profile, plus `artifact_first_built_time` under `FORWARD_SYSTEM`; its eligibility is the input intersection; a rebuild from identical lineage is a no-op. |
+| 21 | **Atomic-fact test** | No entity carries two origins, two classes or two envelopes on one row. The five earnings entities resolve independently and share only `event_id`. |
+| 22 | **Profile-resolution test** | A downgraded run is labelled `PUBLIC_PIT` in its manifest, artifacts and `run_id`, carries `PROFILE_DOWNGRADED_TO_PUBLIC`, and is a different `run_id` from the same query resolved by `BOUND`. |
+| 23 | **Required-input test** | A factor whose required domain empties refuses with `REQUIRED_INPUT_UNAVAILABLE`; an optional domain emptying proceeds with counts and a token. |
 
 ### 6.1 Adversarial fixtures — must FAIL the pipeline
 
@@ -433,6 +446,13 @@ fixture defaulted to a direction the broker never sends.
 | F21 | `BOUND` applied to a `SYSTEM_OBSERVED` row, inventing a provider time | 4.3.10 |
 | F22 | A row served under `PROVIDER_REALISTIC_PIT` whose governing time came from `public_available_time` — the withdrawn `DECLARE` | 4.3.3 |
 | F23 | An `AUTHORITATIVE_PUBLIC` row with a null public time relabelled `PROVIDER_DERIVED` to get past the check | 4.0.3 |
+| F24 | A derived artifact served under a profile one of its inputs is ineligible for | 4.6.3 |
+| F25 | A derived artifact whose recorded availability is earlier than its slowest input | 4.6.1 |
+| F26 | A rebuild from identical lineage that moves `artifact_first_built_time` earlier | 4.6.4 |
+| F27 | `system_first_seen_time` written into `provider_available_time` under `BOUND` | 4.0.10 |
+| F28 | A downgraded run whose artifacts and `run_id` still name `PROVIDER_REALISTIC_PIT` | 4.3.11 |
+| F29 | A factor computed under `PUBLIC_PIT` with its **required** estimates domain emptied by origin filtering | 4.7.1 — refuse `REQUIRED_INPUT_UNAVAILABLE` |
+| F30 | A single row carrying both a scheduled date and a realised release timestamp | 4.0.11 — the atomic-fact rule |
 
 ### 6.2 Negative-control fixtures — must PASS
 
@@ -452,6 +472,9 @@ loosened under deadline pressure by someone who no longer remembers why it was t
 | **N8** | The same row under `FORWARD_SYSTEM` | **admissible**, governed by `system_first_seen_time` |
 | **N9** | The ordering invariant evaluated for a record eligible under only two of three profiles | **not asserted across the ineligible profile**, and not reported as a violation |
 | **N10** | A `SYSTEM_OBSERVED` borrow row under `FORWARD_SYSTEM` | **admissible** — it is the only profile that can describe it, and forward validation is exactly what it is for |
+| **N11** | A derived artifact whose inputs are all `AUTHORITATIVE_PUBLIC`, queried under `PUBLIC_PIT` | **admissible**, governed by the lineage max — deriving a value does not make it private |
+| **N12** | A `PROVIDER_REALISTIC_PIT` row where `max(public, provider)` legitimately equals `public` because the provider offered it the instant it went public | **admissible** — 4.3.3 forbids *substitution*, not a genuine equality |
+| **N13** | An **optional** enrichment domain emptied by origin filtering, declared optional, counted, token emitted | **admissible** — only *required* domains refuse |
 
 ---
 

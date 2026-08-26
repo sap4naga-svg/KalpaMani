@@ -112,6 +112,13 @@ and it flatters momentum factors.
 factors embeds knowledge of every split since. For a momentum system this is not academic:
 it changes ranks.
 
+**Origin requirement — and it may be the largest open question in the plan.** A bar is not
+automatically a public fact. A consolidated-tape bar disseminated by the SIP is; a bar the
+vendor aggregated from trades it collected is the vendor's construction. If the daily bars we
+buy turn out to be `PROVIDER_AGGREGATED`, then **price data itself is ineligible under
+`PUBLIC_PIT`** — and so is every artifact built on it, including the universe. Provider test P9
+establishes which ([implementation-plan.md](implementation-plan.md) §2).
+
 **Failure mode.** Backtesting on fully-adjusted prices makes past prices look smooth through
 splits that had not happened. Combined with a price-threshold universe filter, it also
 changes *membership*.
@@ -219,6 +226,13 @@ the [PIT contract](pit-data-contract.md) §9 lag applies: **next session open**.
 **Class note.** A *scheduled* earnings date is `ANNOUNCED_FORWARD` and a *realised* release is
 `RETROSPECTIVE` ([contract §7](pit-data-contract.md)). They are two facts with two availability
 times, and revision 1's blanket temporal check would have blocked the first one.
+
+**Atomic-fact note.** This domain is **five** entities, not one
+([conceptual-schema.md](conceptual-schema.md) §10–§10d): `earnings_schedule`,
+`earnings_release`, `earnings_consensus_snapshot`, `earnings_surprise_artifact` and
+`guidance_event`. They share an `event_id` and nothing else. A surprise is a derived artifact
+whose inputs are a public release and a proprietary consensus, so it is **ineligible under
+`PUBLIC_PIT`** — the market could not have computed it from public information alone.
 
 **Classification: ACCEPTABLE FOR LONG-ONLY V1 under the conservative lag** — with the
 recorded limitation that PEAD event-window precision is degraded, and that no PEAD
