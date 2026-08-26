@@ -127,6 +127,7 @@ that is ADR-0005.
 | [pit-data-contract.md](pit-data-contract.md) | what "point-in-time" means here, exactly; the query contract |
 | [data-domain-inventory.md](data-domain-inventory.md) | which data domains, which fields, which are blocking |
 | [provider-evaluation.md](provider-evaluation.md) | who sells it, what it costs, what is verified |
+| [provider-source-register.md](provider-source-register.md) | **the evidence** — every provider claim, with a retrievable source |
 | [conceptual-schema.md](conceptual-schema.md) | the data contracts, vendor-neutral |
 | [data-quality-plan.md](data-quality-plan.md) | the deterministic checks and their severities |
 | [reproducibility-and-provenance.md](reproducibility-and-provenance.md) | the research manifest |
@@ -186,17 +187,21 @@ mark the revision sub-factor **NOT AVAILABLE**, and forbid any performance claim
 depends on it.
 
 **2. Historical borrow availability and fees are UNRESOLVED — which is not the same as
-absent.** Revision 1 claimed flatly that IBKR does not archive borrow history. That was too
-strong, and review corrected it. IBKR exposes **limited historical stock-loan information in
-its user tools**; what is unknown is whether that history is reachable programmatically, how
-deep it goes, whether it covers a broad universe or one symbol at a time, and whether it is
-fit for point-in-time research at all.
+absent, and revision 1 got this wrong.** It claimed flatly that IBKR does not archive borrow
+history, generalising one secondary report about an FTP feed to everything IBKR offers. Review
+caught it, and re-verification found the opposite: IBKR documents four historical borrow
+surfaces, including **`reqHistoricalData` with `whatToShow=FEE_RATE`** — a historical stock
+borrow fee series available through the TWS API this system already connects to.
 
-Consequence: **the short strategy family cannot be backtested honestly until that is
-established.** Phase 3C is therefore a qualification gate whose *first* task is to characterise
-IBKR's own history against an explicit checklist, and only then to look at paid sources —
-where ORTEX is a candidate, not an assumed answer. Short research stays forbidden throughout,
-rather than proceeding on assumed borrow.
+Its depth is documented nowhere, and that one unknown decides whether the short family is
+blocked by data or merely by effort. **Establishing it means calling the broker, which this
+plan is not authorized to do.**
+
+Consequence: **the short strategy family still cannot be backtested honestly until the
+question is settled** — but the cheapest route to settling it is now an interface we already
+have, not a purchase. Phase 3C's first task is that qualification; a free third-party lead is
+second; paid sources are last. Short research stays forbidden throughout, rather than
+proceeding on assumed borrow.
 
 Blueprint §12 already anticipated this: *"Historical short backtests are discounted unless
 borrow cost and availability are modeled conservatively."* Phase 3 makes that a gate

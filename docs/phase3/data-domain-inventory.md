@@ -172,12 +172,21 @@ plan conflated the two.
 factor built on numbers nobody had. This is the classic silent look-ahead and it is extremely
 flattering to quality and accrual factors.
 
-**Second failure mode, subtler.** A provider that supplies only *first* and *latest* values
-cannot answer `AS_KNOWN_AT_AS_OF` correctly for any date between two restatements. It will
-silently return the original when a correction had already been published. **Whether a
-provider retains the full revision chronology with distinct timestamps is a BLOCKING provider
-test in Phase 3A/3B** — vendor dimension labels such as "as reported" versus "most recent
-reported" establish that the two endpoints differ, not that the intermediate steps survive.
+**Second failure mode, subtler — and it is not hypothetical.** A provider that supplies only
+*first* and *latest* values cannot answer `AS_KNOWN_AT_AS_OF` correctly for any date between two
+restatements: it silently returns the original when a correction had already been published.
+
+Vendor documentation reviewed on 2026-08-26 shows the leading low-cost candidate is exactly
+that two-view model — as-reported dimensions that *exclude* restatements and keyed to the filing
+date, and most-recent-reported dimensions that *include* restatements but are keyed to the
+**report period**, carrying no timestamp for when a restatement became knowable
+([provider-evaluation.md](provider-evaluation.md) §2.6).
+
+**Consequence: `AS_KNOWN_AT_AS_OF` must be built from SEC filings**, where each amendment has
+its own acceptance timestamp. That makes EDGAR not a cross-check for this view but its only
+source. The provider test stays BLOCKING anyway — vendor dimension labels establish that two
+endpoints differ, not that the intermediate steps survive, and ADR-0003 §4 is explicit that a
+correctness claim may not rest on an untested vendor assertion.
 
 **Classification: BLOCKING.**
 
@@ -275,12 +284,23 @@ random; it is adversarial.
 > **Current IBKR availability MUST NOT be represented as historical borrow availability.**
 > It is a different quantity, not a proxy.
 
-**What IBKR actually offers is unresolved, and revision 1 overstated it.** The claim that IBKR
-"does not archive" borrow data was too categorical: IBKR exposes limited historical stock-loan
-information through its user tools. Phase 3C must establish, before considering any paid
-source, whether that history is programmatically reachable, how deep it is, whether it is
-per-symbol or bulk, at what granularity, how it treats corrections and delisted names, and what
-its licence permits ([implementation-plan.md](implementation-plan.md) §4).
+**What IBKR actually offers is unresolved, and revision 1 was wrong about it.** The claim that
+IBKR "does not archive" borrow data generalised one secondary report about the FTP feed to the
+whole vendor. Re-verification found IBKR documents four historical borrow surfaces, including a
+programmatic one — `reqHistoricalData` with `whatToShow=FEE_RATE`, returning OHLC bars of the
+borrow fee rate through the TWS API this system already connects to
+([provider-evaluation.md](provider-evaluation.md) §2.9).
+
+**Its depth is documented nowhere**, so Phase 3C must establish it, along with granularity,
+delisted-name survival, revision behaviour, bucketing, bulk feasibility and — a real gap — what
+IBKR's licence actually permits, since no public page says
+([implementation-plan.md](implementation-plan.md) §4.1). Establishing any of it requires calling
+the broker, which is a separate authorization.
+
+Two limitations survive whatever the depth turns out to be: IBKR's SLB figures reflect **IBKR
+client holdings**, not the market's lending pool, and the live shortable tick is **bucketed**
+rather than exact. The first is the right quantity for our own pre-submission check and an
+idiosyncratic one for market-wide research.
 
 A per-symbol, shallow, UI-only history is real data and still cannot support a broad-universe
 historical short backtest. Those are different findings and the qualification checklist has to

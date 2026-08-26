@@ -263,17 +263,27 @@ preflight check rather than reliance on an inherited one.
 ### 15. Historical borrow: unresolved, not absent — and the short family is gated either way
 
 **Superseded from revision 1**, which claimed categorically that "IBKR does not archive
-historical borrow data". That is too strong. IBKR exposes **limited historical stock-loan
-information in its user tools**; what is unresolved is whether that history is reachable
-programmatically, at what depth, at what breadth, and whether it is fit for point-in-time
-research.
+historical borrow data". That was wrong, and wrong in a way that mattered: it generalised one
+secondary report about the FTP feed to everything IBKR offers.
 
-**Phase 3C must first qualify IBKR's own history** against an explicit checklist — fields,
-maximum depth, per-symbol versus bulk, granularity, export/API availability, survivorship and
-correction behaviour, licensing, and whether it can support broad-universe historical short
-research ([implementation-plan.md](../phase3/implementation-plan.md) §4). Only if IBKR fails
-that checklist does the question move to paid sources, where **ORTEX is a candidate, not the
-assumed cheapest valid solution.**
+IBKR documents **four** historical borrow surfaces, and one of them is programmatic through
+the TWS API this system already connects to: `reqHistoricalData` with `whatToShow=FEE_RATE`
+returns OHLC bars of the stock borrow fee rate, *"available in various units of duration up to
+the present moment"* (`PSR-IBK-010`, `PSR-IBK-034`). **Its historical depth is documented
+nowhere** (`PSR-IBK-043`), and that single unknown decides whether the short family is blocked
+by data or merely by effort.
+
+**Phase 3C must first qualify what IBKR already provides** against an explicit nine-item
+checklist — `FEE_RATE` depth, fields, per-symbol versus bulk, granularity, delisted-name
+survival, revision behaviour, licensing (**no public IBKR page states a permitted use**,
+`PSR-IBK-044`), bucketing, and whether it can support broad-universe historical short research
+([implementation-plan.md](../phase3/implementation-plan.md) §4.1). Only then does the question
+move outward — first to a **free** lead (an S3 Partners AWS Data Exchange listing stating
+*"available free of charge"* with coverage since 2015, `PSR-BRW-023`), then to paid sources,
+where **ORTEX is a candidate, not the assumed cheapest valid solution.**
+
+Establishing `FEE_RATE` depth requires calling the broker. **That is broker interaction and it
+is authorization A6, not planning.** This ADR records the question; it does not answer it.
 
 The gate itself is unchanged and unconditional:
 
