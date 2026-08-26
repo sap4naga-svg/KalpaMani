@@ -199,7 +199,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/8] Closed vocabularies are defined where they are used")
+    print("[1/9] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -223,7 +223,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/8] Source and derived envelopes stay disjoint")
+    print("\n[2/9] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -258,7 +258,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/8] Every declared temporal semantics has its required anchor")
+    print("\n[3/9] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -275,7 +275,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/8] Exact and bound derivations name the correct fields")
+    print("\n[4/9] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -302,7 +302,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/8] Normative rules use the current resolved model")
+    print("\n[5/9] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -348,7 +348,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/8] Entities keep source and derived rows apart")
+    print("\n[6/9] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -417,8 +417,70 @@ def main() -> int:
         ", ".join(unusable),
     )
 
+    # ---------------------------------------------------------------- 4d. resolved semantics
+    print("\n[7/9] Unusability is decided by resolved values, not by a derivation")
+
+    rule6 = ""
+    for _, line in lines_with(contract, "resolved_public_time` is null"):
+        rule6 = line
+        break
+    f.check(
+        "contract fail-closed keys unusability on resolved_public_time",
+        bool(rule6),
+        "section 10 still blocks on public_time_derivation = UNKNOWN",
+    )
+    f.check(
+        "contract states UNKNOWN alone is not disqualifying",
+        "alone is not this rule" in contract or "not by itself disqualifying" in contract,
+        "no carve-out for UNKNOWN plus an approved bound",
+    )
+    f.check(
+        "schema envelope rule keys on resolved_public_time",
+        "resolved_public_time` is null may never participate" in schema,
+        "schema still blocks on the derivation",
+    )
+    f.check(
+        "quality 3.5 keys on the resolved value",
+        "`rpub IS NULL`" in quality,
+        "structural check still names public_time_derivation = UNKNOWN",
+    )
+    f.check(
+        "ADR states UNKNOWN with an approved bound resolves",
+        "does not disqualify a row that has an approved bound" in everything[ADR],
+        "ADR still treats UNKNOWN as automatically unusable",
+    )
+
+    for label, text in (("contract", contract), ("ADR-0005", everything[ADR])):
+        f.check(
+            f"{label} defines a resolved announced-forward fact anchor",
+            "announced_forward_fact_anchor" in text,
+            "fact-time anchor absent",
+        )
+    f.check(
+        "quality class checks read the resolved fact anchors",
+        all(
+            n in quality
+            for n in (
+                "retrospective_fact_anchor",
+                "announced_forward_fact_anchor",
+                "sampled_state_fact_anchor",
+            )
+        ),
+        "4.1.5-4.1.7 still read raw fields",
+    )
+    f.check(
+        "an unapproved fact-anchor bound is BLOCKING",
+        "Unapproved fact-anchor bound" in quality,
+        "no check for an unapproved announcement bound",
+    )
+    f.check(
+        "domain anchor aliases are declared in a table",
+        "Domain aliases are declared, not implied" in contract,
+        "aliases only implied by prose",
+    )
+
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[7/8] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/9] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -434,8 +496,11 @@ def main() -> int:
     coverage_fields = (
         "coverage_scope",
         "min_coverage_fraction",
-        "observed_coverage",
+        "minimum_observed_partition_coverage",
+        "total_partitions",
         "failing_partitions",
+        "min_rows",
+        "observed_rows",
     )
     absent_cov = [k for k in coverage_fields if k not in manifest]
     f.check(
@@ -457,8 +522,70 @@ def main() -> int:
         "first-built history absent from run_id inputs",
     )
 
+    # coverage evidence must be partition-minimum based, and the example must actually pass
+    f.check(
+        "coverage evidence uses the partition minimum",
+        "minimum_observed_partition_coverage" in manifest and "total_partitions" in manifest,
+        "still evidenced by an aggregate fraction",
+    )
+    failing = re.findall(r"failing_partitions:\s*(\d[\d_]*)", manifest)
+    nonzero = [v for v in failing if int(v.replace("_", "")) != 0]
+    f.check(
+        "the example manifest is genuinely a passing one",
+        not nonzero,
+        f"failing_partitions {', '.join(nonzero)} in an emitted manifest",
+    )
+    f.check(
+        "WHOLE_DOMAIN records a row-count contract",
+        "min_rows" in manifest and "observed_rows" in manifest,
+        "WHOLE_DOMAIN still evidenced by a fraction",
+    )
+    f.check(
+        "a PER_* input with a failing partition refuses",
+        "failing_partitions > 0" in manifest or "failing_partitions > 0" in quality,
+        "no refusal condition for a failing partition",
+    )
+    f.check(
+        "WHOLE_DOMAIN below min_rows refuses",
+        "observed_rows < min_rows" in manifest or "observed_rows < min_rows" in quality,
+        "no refusal condition for a short whole-domain input",
+    )
+
+    # price_bar identity and the adjusted-artifact hash name
+    bar = entity_body(schema, "price_bar")
+    f.check(
+        "price_bar keys on a bar endpoint so minute bars cannot collide",
+        "`bar_end_time` | instant, **PK part**" in bar,
+        "bar_end_time is not part of row identity",
+    )
+    f.check(
+        "price_bar keeps session_date as a calendar join key, not a key part",
+        "`session_date` | date |" in bar and "never derived by truncating" in bar,
+        "session_date still keyed or derived by truncation",
+    )
+    f.check(
+        "price_bar declares a canonical-versus-source decision",
+        "canonical curated Gold record" in bar,
+        "multi-provider collision behaviour undefined",
+    )
+    adj_body = entity_body(schema, "adjusted_bar_artifact")
+    f.check(
+        "adjusted artifact prose and checks name artifact_content_hash",
+        "artifact_content_hash" in adj_body
+        and "adjusted_bar_artifact.artifact_content_hash" in quality,
+        "old content_hash name survives for the derived artifact",
+    )
+
+    # ADR must distinguish the two blocking domains
+    f.check(
+        "ADR distinguishes unavailable analyst history from unqualified borrow",
+        "Not yet QUALIFIED" in everything[ADR]
+        and "No credible individual-cost source identified" in everything[ADR],
+        "context still implies both are unavailable at individual cost",
+    )
+
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[8/8] No document refers to a retired field name")
+    print("\n[9/9] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
