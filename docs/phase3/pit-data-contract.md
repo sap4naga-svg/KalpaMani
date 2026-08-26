@@ -12,6 +12,11 @@ Governed by [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md)
 > (§2) and resolved by an explicit information-set profile (§3). Revision views are now
 > explicit (§6).
 >
+> **Revision 6 (2026-08-26).** Stale-rule cleanup. §10, §12.1 and §13.2 still carried
+> pre-revision-5 wording that demanded **exact** times where an approved bound now suffices, and
+> §13.2 still named the scalar `profile_resolution` fields the per-dataset map replaced. No
+> architecture changed; the rules now say what revision 5 decided.
+>
 > **Revision 5 (2026-08-26).** Normalization round. The two envelopes are made **mutually
 > exclusive** rather than one being a superset (§2.4); **`resolved_public_time` /
 > `resolved_provider_time`** are defined so an approved upper bound satisfies a profile
@@ -873,12 +878,20 @@ These are errors, not warnings, and abort the query rather than returning a degr
 10. Records resolved under **more than one profile** within a single result.
 11. A record **served under a profile it is ineligible for** by origin (§3.1) — for example a
     `PROVIDER_DERIVED` row appearing in a `PUBLIC_PIT` result.
-12. `PROVIDER_REALISTIC_PIT` requested where `provider_available_time` is null and the dataset
-    resolution is not one of `EXCLUDE`, `BOUND`, `DOWNGRADE`.
-13. A record served under `PROVIDER_REALISTIC_PIT` whose governing time was taken from
-    `public_available_time` — the withdrawn `DECLARE` behaviour (§3.3).
-14. A record missing the time its profile **requires**: no `public` under `PUBLIC_PIT`, no
-    `provider` under `PROVIDER_REALISTIC_PIT`, no `system_first_seen` under `FORWARD_SYSTEM`.
+12. `PROVIDER_REALISTIC_PIT` where `resolved_provider_time` is null for a dataset whose
+    **per-dataset** policy is not `EXCLUDE` or `BOUND`, and no `global_profile_resolution =
+    DOWNGRADE` is in force. Every provider-gap decision is per dataset; only `DOWNGRADE` is
+    global.
+13. A record served under `PROVIDER_REALISTIC_PIT` governed by `resolved_public_time`
+    **while `resolved_provider_time` is null** — the withdrawn `DECLARE` behaviour (§3.3).
+    A legitimate `max(resolved_public_time, resolved_provider_time) == resolved_public_time`,
+    with **both resolved values present**, is correct and is **not** refused.
+14. A record missing the **resolved** time its profile requires: no `resolved_public_time`
+    under `PUBLIC_PIT`; no `resolved_public_time` **or** no `resolved_provider_time` for an
+    `AUTHORITATIVE_PUBLIC` row under `PROVIDER_REALISTIC_PIT`; no `resolved_provider_time` for
+    a `PROVIDER_DERIVED` row under it; no `system_first_seen_time` under `FORWARD_SYSTEM`.
+    **An approved upper bound satisfies the requirement** (§5.0) — an exact field is not
+    demanded where a bound exists.
 15. An `information_origin` absent, or outside the closed vocabulary of §2.3.
 16. `PROVIDER_DERIVED` with a non-null `public_available_time`, or `SYSTEM_OBSERVED` with a
     non-null `public` or `provider` time — the origin and the times disagree about what the
@@ -892,6 +905,10 @@ These are errors, not warnings, and abort the query rather than returning a degr
     (§2.6).
 21. A run whose `resolved_profile` differs from `requested_profile` while any artifact,
     dataset key or `run_id` still names the requested one (§13.2).
+21a. A dataset the run touched that is absent from `dataset_provider_gap_resolutions`, or whose
+    per-axis exact/bounded/excluded counts do not reconcile (§13.2).
+21b. A bound relied upon whose derivation is not **approved** for its dataset (§5.0), or an
+    exact time exceeding its own upper bound (§2.6).
 22. A schema version unrecognised by the reading code.
 23. A checksum mismatch between a curated table and the artifacts it declares.
 24. An adjusted-cache artifact that does not reproduce from its key.
@@ -924,8 +941,23 @@ versioned definition rather than constants in code.
 ## 12. Hard cases
 
 ### 12.1 Late-arriving data
-`system_first_seen_time` exceeds `public_available_time` by more than the dataset's declared
-latency budget. **Accepted and flagged.** Stored with true times so history stays correct;
+
+**Latency is measured per origin, and only against an exact time.** Revision 5 corrected this in
+[data-quality-plan.md](data-quality-plan.md) §4.2 and left §12.1 describing the public-only rule
+it had replaced.
+
+| Origin | Delivery latency |
+|---|---|
+| `AUTHORITATIVE_PUBLIC` | `system_first_seen_time − public_available_time`, **when the exact time exists** |
+| `PROVIDER_DERIVED` | `system_first_seen_time − provider_available_time`, **when the exact time exists** |
+| `SYSTEM_OBSERVED` | **not applicable** — there is no external delivery to be late. `ingestion_time − system_first_seen_time` is *pipeline* latency and is checked separately |
+
+**A bound is not a latency measurement.** `public_available_upper_bound` and
+`provider_available_upper_bound` are provenance and admissibility cutoffs: they say a record was
+available *by* some instant, which is exactly the wrong shape for subtracting. Where only a bound
+exists, delivery latency is **not computed** rather than computed wrongly.
+
+Late arrival is **accepted and flagged**: stored with its true times so history stays correct,
 `WARNING` raised. If it breaches the freshness bound of a dataset used for **live** decisions,
 severity escalates to `BLOCKING` — stale data driving a live scan is a different failure from
 stale data in a backtest.
@@ -1057,20 +1089,28 @@ execution.
 A run names the profile it **asked for** and the profile it **got**. When `DOWNGRADE` fires,
 those differ, and every downstream artefact follows the **resolved** one:
 
-| Field | Meaning |
-|---|---|
-| `requested_profile` | what the caller asked for |
-| `resolved_profile` | what the run actually executed under |
-| `profile_resolution` | `NONE` · `EXCLUDE` · `BOUND` · `DOWNGRADE` |
-| `profile_resolution_reason` | why, naming the datasets that forced it |
+| Field | Scope | Meaning |
+|---|---|---|
+| `requested_profile` | run | what the caller asked for |
+| `resolved_profile` | run | what the run actually executed under |
+| `global_profile_resolution` | run | `NONE` · `DOWNGRADE` — **the only global resolution** |
+| `dataset_provider_gap_resolutions` | **per dataset** | canonical, dataset-name-ordered map: policy (`NONE`/`EXCLUDE`/`BOUND`), per-axis bases and counts, and a reason |
+| `resolution_policy_version` | run | version of the policy that chose them |
+
+**The scalar `profile_resolution` and `profile_resolution_reason` no longer exist.** They could
+not express the ordinary case — a run that bounds one feed and excludes another — and collapsed
+two materially different runs into one identity.
 
 Rules:
 
 - **Dataset artifacts and the `run_id` are keyed by `resolved_profile`.** A downgraded run
   produces `PUBLIC_PIT` artifacts, because that is what it computed.
-- **All four fields enter the `run_id` derivation** — requested, resolved, resolution and the
-  resolution policy version. Two runs that differ only in how a gap was resolved are different
-  runs and must not collide.
+- **The canonically ordered per-dataset map enters the `run_id` derivation in full**, together
+  with `requested_profile`, `resolved_profile`, `global_profile_resolution` and
+  `resolution_policy_version`. Not a summary of the map — the map. Two runs that differ only in
+  how a gap was resolved admit different rows and must not collide.
+- **`DOWNGRADE` is global; `EXCLUDE` and `BOUND` are per dataset.** A run has at most one
+  downgrade and as many per-dataset policies as it has datasets.
 - **A downgraded run is never labelled `PROVIDER_REALISTIC_PIT`** anywhere: not in the
   manifest, not on an artifact, not in a report. It carries
   `PROFILE_DOWNGRADED_TO_PUBLIC` and reads as what it is.

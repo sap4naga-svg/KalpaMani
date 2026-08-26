@@ -1,7 +1,7 @@
 # ADR-0005 — Point-in-Time Data Architecture and the Anti-Lookahead Contract
 
 - **Status:** **Proposed** — planning under review. Not accepted, not implemented.
-- **Date:** 2026-08-26 (revision 5)
+- **Date:** 2026-08-26 (revision 6)
 - **Deciders:** Project owner (human governance) — *pending*
 - **Relates to:** ADR-0001 (System Foundation), ADR-0002 (BrokerAdapter and the Brokerage Boundary), ADR-0004 (Deterministic Order Identity, Idempotency, and Execution Lifecycle)
 - **Authority:** Blueprint V2.1 §18 (Phase-0 point-in-time data feasibility), §17, §19, §26
@@ -18,6 +18,7 @@
 | **3** | **2026-08-26** | Review of revision 2. Three contract inconsistencies fixed: availability is now **origin-aware**, so a proprietary observation with no public release instant is usable where it legitimately can be (§1a, §2a); the `DECLARE` resolution for unknown provider timing is **withdrawn** as self-contradictory and replaced by EXCLUDE / BOUND / DOWNGRADE (§4); and the revision-view table's "default" is reworded to **normative historical view**, since the accessor has no default (§6). |
 | **4** | **2026-08-26** | Review of revision 3. The **atomic-fact rule** is added (§0); a **derived-artifact model** replaces the unrepresentable "inherited" origin (§1b); a single origin-aware **`source_anchor`** replaces the public-time-only class invariants (§7); exact provider/public times are separated from **conservative upper bounds** (§4a); the manifest records **requested versus resolved profile** (§18a); and **required-input completeness** is enforced rather than merely reported (§19a). Four schemas that mixed facts are split. |
 | **5** | **2026-08-26** | Normalization round. The two envelopes are made **mutually exclusive** (§1c); **`resolved_public_time` / `resolved_provider_time`** let an approved bound satisfy a profile requirement without being mistaken for an exact time (§4b); **approximations move out of exact fields** into named bound fields (§4c); every computation after resolution uses **`resolved_profile`** (§18a); gap resolution becomes **per dataset** (§4); derived artifacts declare **`output_validity`** (§1d); required inputs gain a **coverage contract** (§19a); six schemas corrected. |
+| **6** | **2026-08-26** | Stale-rule cleanup. The **normative** decisions themselves still carried pre-revision-5 wording: the atomic rule demanded a `temporal_fact_class` of every row including derived ones (§0); the profile formulas were exact-only (§2); the anchor read the requested profile (§7); the manifest decision named the withdrawn scalar `profile_resolution` fields (§18a); and the lag decision said a lag applies to `public_available_time` (§5). Corrected. `price_bar` splits so no derived row sits inside a `RETROSPECTIVE` entity, and derived-artifact identity enters `run_id` (§18). |
 
 ---
 
@@ -56,9 +57,20 @@ Two constraints from earlier ADRs carry directly into this one:
 
 ### 0. The atomic-fact rule
 
-> **One fact row has exactly one `information_origin`, exactly one `temporal_fact_class`, and
-> exactly one availability envelope.** A row may not combine independently changing facts
-> merely because they share an event or a security identity.
+> **One fact row has exactly one `information_origin`, exactly one availability envelope, and
+> exactly one temporal declaration:**
+>
+> | | declares | and carries |
+> |---|---|---|
+> | **source fact** | one `temporal_fact_class` | its anchor — `observation_time`, `announcement_time` or `sample_time` |
+> | **`DERIVED_ARTIFACT`** | one `output_validity` | its validity field — `effective_session`, `valid_time_start`/`_end`, `period_end` or `observation_reference` |
+>
+> A row may not combine independently changing facts merely because they share an event or a
+> security identity.
+
+**A derived artifact has no `temporal_fact_class`.** Revision 5 introduced `output_validity` in
+its explanatory sections but left this decision demanding a class of every row, which would have
+required derived artifacts to declare a class whose anchor they do not have.
 
 The test: **if two values can change at different times, for different reasons, from different
 sources, they are two facts.** They may share an identifier; they may not share an envelope.
@@ -184,10 +196,15 @@ output is about; availability comes from lineage plus `artifact_first_built_time
 ### 2. The governing time is computed per information-set profile, not stored
 
 ```
-PUBLIC_PIT              = public_available_time                      requires public
-PROVIDER_REALISTIC_PIT  = max(public, provider) over non-null times  requires provider
-FORWARD_SYSTEM          = max(public, provider, seen) over non-null  requires seen
+PUBLIC_PIT              = resolved_public_time
+PROVIDER_REALISTIC_PIT  = max(resolved_public_time, resolved_provider_time)   over present values
+FORWARD_SYSTEM          = max(resolved_public_time, resolved_provider_time,
+                              system_first_seen_time)                          over present values
 ```
+
+**These are the normative formulas**, and they read the §4b resolved helpers — the exact field,
+else an *approved* upper bound, else null. Revision 5 defined the helpers in §4b but left this
+decision stating exact-only formulas, so the normative text and the correction disagreed.
 
 `decision_available_time` is **not a column**. Storing it would bake one profile into the data.
 
@@ -335,8 +352,17 @@ row's actual `bar_construction` / `classification_fact_kind`.
 ### 5. Unknown public availability is not point-in-time under any profile
 
 Excluded, or admitted only under an **explicitly documented, version-controlled conservative
-lag** recorded in every result that depended on it. A lag applies to `public_available_time`
-only; **it may never invent a `provider_available_time`.**
+lag** recorded in every result that depended on it.
+
+Three rules govern where a lag may write, and revision 5 corrected the tables while leaving this
+decision saying a lag applies to `public_available_time`:
+
+- **Approximations write upper-bound fields.** A lag produces
+  `public_available_upper_bound` or `provider_available_upper_bound`, never an exact field.
+- **Bounds are origin-specific.** A lag on an `AUTHORITATIVE_PUBLIC` row bounds public timing; a
+  lag on a `PROVIDER_DERIVED` row bounds provider timing. A `SYSTEM_OBSERVED` row takes neither.
+- **No lag ever writes `public_available_time` or `provider_available_time`.** Those are written
+  only by the exact derivations in §4c.
 
 This is ADR-0004 §4a's reasoning applied to data instead of orders: an ambiguous state is
 resolved conservatively and visibly, never optimistically and silently.
@@ -389,7 +415,7 @@ source_anchor(record) =
     AUTHORITATIVE_PUBLIC -> public_available_time     (else public_available_upper_bound)
     PROVIDER_DERIVED     -> provider_available_time   (else provider_available_upper_bound)
     SYSTEM_OBSERVED      -> system_first_seen_time
-    DERIVED_ARTIFACT     -> computed from lineage under the requested profile (§1b)
+    DERIVED_ARTIFACT     -> computed from lineage under the RESOLVED profile (§1b)
 ```
 
 | Class | Invariant | Examples |
@@ -591,10 +617,20 @@ suppression, no automatic ageing-out.
 > No result is reproducible merely because the Python code is version-controlled.
 
 Every result carries a manifest naming the code commit, config version, dataset versions and
-hashes, ingestion-run ids, `as_of` cutoff, **information-set profile**, **revision view**,
-adjustment policy and artifacts, universe/corporate-action/factor/lag-policy versions, and
-random seed. `run_id` is **derived** from those inputs — ADR-0004 §2 applied to research: *"No
-`uuid4()`. No timestamps."*
+hashes, ingestion-run ids, `as_of` cutoff, `requested_profile`, `resolved_profile`,
+`global_profile_resolution`, the canonical per-dataset gap-resolution map,
+`resolution_policy_version`, **revision view**, adjustment policy,
+universe/corporate-action/factor/lag-policy versions, and random seed.
+
+**Every consumed derived artifact enters the `run_id` too** — its `artifact_id`,
+`artifact_content_hash`, `derivation_spec_version` and canonical lineage selector set, plus its
+`artifact_first_built_time` under `FORWARD_SYSTEM`. Dataset versions alone are not sufficient:
+under that profile a derived artifact's availability depends on when it was **first built**, so
+two runs over identical dataset versions can legitimately differ, and a `run_id` blind to that
+would call them the same run.
+
+`run_id` is **derived** from those inputs — ADR-0004 §2 applied to research: *"No `uuid4()`. No
+timestamps."*
 
 A manifest is **refused** on a dirty working tree, an open `BLOCKING` issue, a missing profile
 or revision view, mixed profiles, an unverifiable content hash, or an undeclared provider gap.
@@ -602,8 +638,18 @@ or revision view, mixed profiles, an unverifiable content hash, or an undeclared
 ### 18a. A run records the profile it asked for and the profile it got
 
 `DOWNGRADE` changes what a run actually computed, and revision 3 had nowhere to say so. The
-manifest now carries `requested_profile`, `resolved_profile`, `profile_resolution` and
-`profile_resolution_reason`.
+manifest carries:
+
+| Field | Scope |
+|---|---|
+| `requested_profile` · `resolved_profile` | run |
+| `global_profile_resolution` — `NONE` or `DOWNGRADE` | run; **the only global resolution** |
+| `dataset_provider_gap_resolutions` — canonical, dataset-ordered, per-axis counts | **per dataset** |
+| `resolution_policy_version` | run |
+
+**The scalar `profile_resolution` and `profile_resolution_reason` are withdrawn.** They could not
+express a run that bounds one feed and excludes another — the ordinary case — and revision 5
+replaced them everywhere except here.
 
 **Everything after resolution uses `resolved_profile`** — all filtering, all `source_anchor`
 computation, all derived availability, all artifact construction, all quality checks, all dataset
@@ -760,7 +806,11 @@ are disjoint and checks branch on origin first** · **an approved bound satisfie
 requirement while staying visibly a bound** · **no approximation in an exact field** ·
 **`exact <= bound` where both exist** · **derived artifacts declare `output_validity`, source
 facts declare a class with its anchor present** · **per-dataset gap policies resolved
-independently and the whole map in `run_id`** · backfill inadmissible under the profiles that forbid it · restatement
+independently and the whole map in `run_id`** · **derived-artifact identity, hash, spec version
+and lineage in `run_id`, plus first-built under `FORWARD_SYSTEM`** · **no source and derived rows
+share an entity** · **every source-class row has an explicit anchor, nullable only where an
+explicit bound representation is defined** · **per-axis exact/bound counts reconcile** ·
+**required-input coverage evidence recorded** · backfill inadmissible under the profiles that forbid it · restatement
 invisible before its filing acceptance time · `AS_KNOWN_AT_AS_OF` returns a published
 restatement and `ORIGINAL_FILING_ONLY` does not · incomplete revision chronology forces its
 limitation token · **`ANNOUNCED_FORWARD` facts with far-future effective dates are NOT
