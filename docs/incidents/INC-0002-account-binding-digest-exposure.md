@@ -3,7 +3,7 @@
 - **Date opened:** 2026-08-25
 - **Classification:** information exposure — sensitive pseudonymous identifier
 - **Severity:** medium (paper account; the value is a digest, not a credential)
-- **Status:** **OPEN** — remediation pending a GitHub purge
+- **Status:** **OPEN** — purge not performed; residual risk accepted for development
 - **Related:** [ADR-0004](../decisions/ADR-0004-deterministic-order-identity-idempotency-and-execution-lifecycle.md)
   §18; [INC-0001](INC-0001-run1-manual-cleanup-transient-short.md)
 
@@ -59,8 +59,27 @@ public would knowingly re-expose the value to anyone who knows or guesses a SHA.
 6. If approved, change visibility **and** CLAUDE.md §3 in the same controlled
    change, so policy and reality never disagree.
 
-Until step 4 passes, this incident stays open and no visibility change is
-proposed.
+### Owner decision — 2026-08-26: development visibility
+
+The purge is **optional for now and has not been performed.** The owner has reviewed the
+residual exposure and accepted it so the repository can be **PUBLIC during development**, for
+direct code review and collaboration.
+
+Recorded precisely, because the distinction matters:
+
+- the purge is **not** complete;
+- the pre-rewrite objects remain retrievable **by exact SHA**, and pull-request description
+  edit history retains an earlier revision carrying the same value;
+- public visibility is **not** a claim that the exposure was remediated — it is an accepted
+  risk, knowingly taken, for a bounded purpose;
+- the prepared Support request stays **untracked** under `.runtime/` and has not been
+  submitted;
+- the purge **may be resumed at any time**, and steps 1–4 above still apply when it is;
+- the repository **must return to PRIVATE** before micro-live or real-money operation
+  (CLAUDE.md §3).
+
+This incident therefore stays **OPEN**. It closes when the objects are gone and
+`scripts/verify_purge.py` exits 0 — not when the risk is tolerated.
 
 ## Lesson
 

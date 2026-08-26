@@ -40,9 +40,49 @@ Architectural deviations require an approved ADR before implementation.
 ```
 AUTHORIZED GITHUB OWNER:  sap4naga-svg
 EXPECTED REMOTE:          sap4naga-svg/KalpaMani
-VISIBILITY:               PRIVATE
+VISIBILITY:               PUBLIC  (development only -- see below)
 DEFAULT BRANCH:           main
 ```
+
+### Visibility — PUBLIC during development
+
+**Current visibility: PUBLIC.** Purpose: direct code review and collaboration while the
+system is being built. This is a deliberate, owner-authorised state, not a default.
+
+**Owner-accepted residual risk.** An account-binding digest was committed while the
+repository was public and later removed by rewriting branch history. A rewrite does not
+delete anything from GitHub: the pre-rewrite objects remain retrievable **by exact SHA**, and
+pull-request description edit history retains an earlier revision containing the same value.
+The GitHub Support purge has **not** been performed and is optional for now. The owner has
+reviewed this and accepted the residual privacy exposure for the development period.
+
+Public visibility is **not** a claim that the exposure was remediated. See
+[INC-0002](docs/incidents/INC-0002-account-binding-digest-exposure.md), which stays **OPEN**.
+
+### Never commit — public or private
+
+The list below is unchanged by visibility, and public visibility makes it unforgiving: a
+mistake is immediately world-readable and cannot be recalled.
+
+> brokerage account identifiers · account-binding digests · broker-native order ids
+> (BrokerIds) · IBKR or LEAN vendor logs containing identifiers · credentials · API tokens ·
+> passwords · 2FA or passkey material · `.env` files · anything under `.runtime/` ·
+> brokerage configuration
+
+`.runtime/` is git-ignored and holds every sensitive operational artifact. It stays that way.
+
+### MANDATORY return to PRIVATE
+
+The repository **must** be private again before any of:
+
+- micro-live operation of any size;
+- real-money trading;
+- production broker credentials or configuration existing anywhere in the workflow;
+- earlier, if proprietary strategy logic warrants it.
+
+Returning to private is a governed change: flip the visibility **and** this section together,
+so policy and reality never disagree. Resuming the Support purge remains available and is
+recommended before any real-money phase.
 
 KalpaMani is **exclusively** owned by the GitHub account `sap4naga-svg`. It must never be
 created, pushed, forked or configured under any other account or organization — in
@@ -259,18 +299,16 @@ narrow certification:
 
 ### Security status
 
-Repository visibility is **PRIVATE** (§3) and must stay private.
-[INC-0002](docs/incidents/INC-0002-account-binding-digest-exposure.md) is **OPEN**: orphaned
-pre-sanitization Git objects still carry an account-binding digest and remain retrievable by
-SHA, and the GitHub purge is **pending**. The repository must not become public until **all**
-of the following hold:
+Repository visibility is **PUBLIC for development** (§3), by explicit owner decision.
+[INC-0002](docs/incidents/INC-0002-account-binding-digest-exposure.md) remains **OPEN**:
+pre-sanitization objects still carry an account-binding digest and stay retrievable by exact
+SHA, and pull-request description edit history retains an earlier revision. The GitHub purge
+has not been performed; the owner has accepted that residual exposure for the development
+period.
 
-1. GitHub confirms the purge;
-2. `scripts/verify_purge.py` exits 0;
-3. every affected object is no longer retrievable.
-
-If public visibility is later approved, §3 and the actual visibility change together, in one
-controlled change, so policy and reality never disagree.
+The repository **must return to PRIVATE** before micro-live, real-money trading, or any
+production broker credentials or configuration — see §3. Resuming the purge, and running
+`scripts/verify_purge.py` until it exits 0, remains the path to closing INC-0002.
 
 ### Operational finding — binding, see [ADR-0003](docs/decisions/ADR-0003-broker-side-order-controls-are-not-safety-invariants.md)
 
