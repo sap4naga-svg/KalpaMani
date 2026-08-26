@@ -151,8 +151,9 @@ not just returns.
 | **filing date** | when the document was filed |
 | **acceptance timestamp** | when it became publicly retrievable — the PIT field |
 | form type | 10-K, 10-Q, 8-K, 20-F, 40-F |
-| **as-originally-reported values** | the research default |
-| restated values, as separate revisions | available explicitly, never default |
+| **as-originally-reported values** | `revision_sequence = 0`; reachable via `ORIGINAL_FILING_ONLY` |
+| restated values, as separate revisions | each with its own availability time |
+| **every intermediate revision, individually timestamped** | required by `AS_KNOWN_AT_AS_OF`; **a BLOCKING provider test**, not an assumption |
 | trailing-twelve-month and quarterly derivations | derived from admissible rows only |
 | **shares outstanding, point-in-time** | feeds market cap, feeds universe membership |
 | market capitalization | derived; never a vendor current value |
@@ -162,9 +163,21 @@ not just returns.
 **PIT requirement.** The distinction between as-reported and restated is the whole domain. A
 restatement is new information at its own filing time and must not be visible before it.
 
+The default view is **`AS_KNOWN_AT_AS_OF`** ([contract §6](pit-data-contract.md)) — the latest
+revision actually published by the cutoff, which is what a decision-maker would have had in
+front of them. That is **not** the same as "as originally reported", and revision 1 of this
+plan conflated the two.
+
 **Failure mode.** Restated financials backfilled to the original period produce a fundamental
-factor built on numbers nobody had. This is the classic silent look-ahead and it is
-extremely flattering to quality and accrual factors.
+factor built on numbers nobody had. This is the classic silent look-ahead and it is extremely
+flattering to quality and accrual factors.
+
+**Second failure mode, subtler.** A provider that supplies only *first* and *latest* values
+cannot answer `AS_KNOWN_AT_AS_OF` correctly for any date between two restatements. It will
+silently return the original when a correction had already been published. **Whether a
+provider retains the full revision chronology with distinct timestamps is a BLOCKING provider
+test in Phase 3A/3B** — vendor dimension labels such as "as reported" versus "most recent
+reported" establish that the two endpoints differ, not that the intermediate steps survive.
 
 **Classification: BLOCKING.**
 
@@ -191,7 +204,11 @@ a full session of hindsight.
 **Reality.** Filing *acceptance* timestamps are exact and free. Press-release timestamps —
 which usually precede the 8-K filing — are the accurate source of announcement time, and
 accurate before/after-market classification is a specialist commercial product. Without one,
-the [PIT contract](pit-data-contract.md) §6 lag applies: **next session open**.
+the [PIT contract](pit-data-contract.md) §9 lag applies: **next session open**.
+
+**Class note.** A *scheduled* earnings date is `ANNOUNCED_FORWARD` and a *realised* release is
+`RETROSPECTIVE` ([contract §7](pit-data-contract.md)). They are two facts with two availability
+times, and revision 1's blanket temporal check would have blocked the first one.
 
 **Classification: ACCEPTABLE FOR LONG-ONLY V1 under the conservative lag** — with the
 recorded limitation that PEAD event-window precision is degraded, and that no PEAD
@@ -258,9 +275,20 @@ random; it is adversarial.
 > **Current IBKR availability MUST NOT be represented as historical borrow availability.**
 > It is a different quantity, not a proxy.
 
+**What IBKR actually offers is unresolved, and revision 1 overstated it.** The claim that IBKR
+"does not archive" borrow data was too categorical: IBKR exposes limited historical stock-loan
+information through its user tools. Phase 3C must establish, before considering any paid
+source, whether that history is programmatically reachable, how deep it is, whether it is
+per-symbol or bulk, at what granularity, how it treats corrections and delisted names, and what
+its licence permits ([implementation-plan.md](implementation-plan.md) §4).
+
+A per-symbol, shallow, UI-only history is real data and still cannot support a broad-universe
+historical short backtest. Those are different findings and the qualification checklist has to
+be able to distinguish them — hence `coverage_scope` on `borrow_snapshot`
+([conceptual-schema.md](conceptual-schema.md) §13).
+
 **Classification: BLOCKING for the short family. NOT ACCEPTABLE to fabricate or proxy.**
-Phase 3C exists to qualify this domain, and short research stays unauthorized until it
-passes.
+Phase 3C exists to qualify this domain, and short research stays unauthorized until it passes.
 
 ## J. Classification and benchmark data
 

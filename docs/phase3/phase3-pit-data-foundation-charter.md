@@ -54,13 +54,19 @@ these hard to commit, not on whether it advises against them.
 
 | # | Defect | How it enters | Where the plan addresses it |
 |---|---|---|---|
-| 1 | **look-ahead bias** | any query returning data published after `as_of` | [PIT contract](pit-data-contract.md) §1, mandatory `as_of` |
-| 2 | **survivorship bias** | today's universe used to simulate an earlier date | [contract](pit-data-contract.md) §8, `universe_membership` |
-| 3 | **revision leakage** | restated financials shown at the original filing date | bitemporal store, `revision_sequence` |
-| 4 | **corporate-action leakage** | split/dividend factors applied before announcement | `corporate_action` announce vs effective time |
+| 1 | **look-ahead bias** | any query returning data unavailable at `as_of` | [PIT contract](pit-data-contract.md) §1, mandatory `as_of` |
+| 2 | **survivorship bias** | today's universe used to simulate an earlier date | [contract](pit-data-contract.md) §11, `universe_membership` |
+| 3 | **revision leakage** | restated financials shown before they were published | explicit revision views, [contract](pit-data-contract.md) §6 |
+| 4 | **corporate-action leakage** | split/dividend factors applied before announcement | keyed adjusted artifacts, [contract](pit-data-contract.md) §8 |
 | 5 | **stale-universe simulation** | current-membership snapshot reused across history | historical universe reconstruction test |
-| 6 | **pre-publication use** | data used before `source_available_time` | conservative-lag policy, fail-closed |
+| 6 | **pre-publication use** | data used before it could have been known | conservative-lag policy, fail-closed |
 | 7 | **silent history rewriting** | vendor backfill overwriting an earlier observation | immutable bronze layer, append-only revisions |
+| 8 | **information-set confusion** | a backfill treated as though we held it all along | explicit profiles, [contract](pit-data-contract.md) §3 |
+
+**Defect class 8 was added in revision 2**, after review found that the first draft's single
+"available time" silently answered three different questions. It is the subtlest of the eight:
+nothing about a backfilled row looks wrong, and whether it belongs in a 2015 query depends
+entirely on whose information set is being simulated.
 
 ## 4. Non-goals — explicitly out of scope for Phase 3
 
@@ -141,17 +147,26 @@ parts that are not.
 3D  LEAN integration · research manifests · data-quality blocking gates
 ```
 
-Each of these is a separate written authorization:
+Each of these is a separate written authorization. **Revision 2 adds A2 and A4**, after
+review found the first draft had no licensing gate and no decision point for the
+information-set profile.
 
 | # | Authorization | Required before |
 |---|---|---|
 | A1 | begin Phase 3A implementation | writing any ingestion code |
-| A2 | subscribe to a paid individual data plan (est. **$29–$60/month**) | any credentialed vendor access |
-| A3 | accept the analyst-estimate gap, or fund a professional/institutional estimates licence | building the earnings/revision composite |
-| A4 | fund borrow-history data, **or** formally defer the short family | any short-side research |
-| A5 | accept Phase 3 as complete | Phase 4 |
+| **A2** | **obtain written vendor-licence clarification** ([provider-evaluation.md](provider-evaluation.md) §5) | **any purchase or credential** |
+| A3 | subscribe to a paid data plan | any credentialed vendor access |
+| **A4** | **select the production information-set profile** ([contract §3](pit-data-contract.md)) | any backtest that informs capital |
+| A5 | accept the analyst-estimate gap, or fund an estimates licence | building the earnings/revision composite |
+| A6 | fund borrow-history data, **or** formally defer the short family | any short-side research |
+| A7 | accept Phase 3 as complete | Phase 4 |
 
-**No credential is requested, entered, stored or logged under this plan.** When A2 is
+**A2 comes before A3 deliberately.** The low-cost individual licences examined are
+personal-use-only and restrict publishing analysis derived from the data. Buying first and
+reading the terms afterwards is how a public repository acquires a licence breach it cannot
+recall — which is the same mechanism, in a different domain, that left INC-0002 open.
+
+**No credential is requested, entered, stored or logged under this plan.** When A3 is
 granted, vendor keys follow the existing rule — environment variables or a secrets manager,
 never source, never a committed file, never an AI chat session (CLAUDE.md §4).
 
@@ -170,12 +185,18 @@ The plan's answer is not to approximate it. It is to build the part of the compo
 mark the revision sub-factor **NOT AVAILABLE**, and forbid any performance claim that
 depends on it.
 
-**2. Historical borrow availability and fees are not available at individual cost either,
-and IBKR does not archive them.** IBKR's shortable-stock feed publishes *current* values;
-it is not a history. Consequence: **the short strategy family cannot be backtested
-honestly today.** The plan's answer is Phase 3C as an explicit qualification gate —
-short research stays forbidden until real historical borrow data exists, rather than
-proceeding on assumed borrow.
+**2. Historical borrow availability and fees are UNRESOLVED — which is not the same as
+absent.** Revision 1 claimed flatly that IBKR does not archive borrow history. That was too
+strong, and review corrected it. IBKR exposes **limited historical stock-loan information in
+its user tools**; what is unknown is whether that history is reachable programmatically, how
+deep it goes, whether it covers a broad universe or one symbol at a time, and whether it is
+fit for point-in-time research at all.
+
+Consequence: **the short strategy family cannot be backtested honestly until that is
+established.** Phase 3C is therefore a qualification gate whose *first* task is to characterise
+IBKR's own history against an explicit checklist, and only then to look at paid sources —
+where ORTEX is a candidate, not an assumed answer. Short research stays forbidden throughout,
+rather than proceeding on assumed borrow.
 
 Blueprint §12 already anticipated this: *"Historical short backtests are discounted unless
 borrow cost and availability are modeled conservatively."* Phase 3 makes that a gate
