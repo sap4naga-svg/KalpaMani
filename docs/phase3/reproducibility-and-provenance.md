@@ -2,6 +2,11 @@
 
 **Status: PROPOSED — planning only. Nothing is implemented.**
 
+> **Revision 4 (2026-08-26).** The manifest now separates **`requested_profile`** from
+> **`resolved_profile`** and records the resolution and its reason, so a downgraded run is never
+> labelled as the profile it asked for. Required-versus-optional inputs are declared and
+> enforced, and derived-artifact lineage is recorded.
+>
 > **Revision 3 (2026-08-26).** `provider_gap_resolution` takes the revised vocabulary
 > `EXCLUDE` / `BOUND` / `DOWNGRADE`; the withdrawn `DECLARE` is gone. Two limitation tokens are
 > added for profile downgrade and origin-based exclusion.
@@ -50,15 +55,37 @@ temporal:
   backtest_start: 2015-01-02
   backtest_end: 2026-06-30
 
-information_set:                     # NEW in manifest_version 2 -- mandatory
-  profile: PROVIDER_REALISTIC_PIT    # PUBLIC_PIT | PROVIDER_REALISTIC_PIT | FORWARD_SYSTEM
-  provider_gap_resolution: BOUND     # EXCLUDE | BOUND | DOWNGRADE | N/A
-  revision_view: AS_KNOWN_AT_AS_OF   # AS_KNOWN_AT_AS_OF | ORIGINAL_FILING_ONLY
-                                     # normative view, but always stated explicitly
-  origin_exclusions:                 # rows dropped as ineligible for this profile
+information_set:                        # mandatory
+  requested_profile: PROVIDER_REALISTIC_PIT
+  resolved_profile:  PROVIDER_REALISTIC_PIT   # differs from requested iff DOWNGRADE fired
+  profile_resolution: BOUND                   # NONE | EXCLUDE | BOUND | DOWNGRADE
+  profile_resolution_reason: >
+    sharadar_sf1 provides lastupdated (last-changed), not first-appeared;
+    provider_available_upper_bound derived from system_first_seen_time
+  resolution_policy_version: profres/v1
+  revision_view: AS_KNOWN_AT_AS_OF            # normative view, always stated explicitly
+  provider_time_basis:                        # exact vs bound, per dataset
+    - dataset: sharadar_sf1
+      basis: UPPER_BOUND                      # EXACT | UPPER_BOUND
+  origin_exclusions:                          # rows dropped as ineligible for this profile
     - dataset: analyst_estimate_snapshot
       origin: PROVIDER_DERIVED
       rows: 0
+
+inputs:                                 # required vs optional -- see section 3a
+  required: [price_bar, universe_membership, fundamental_fact, filing]
+  optional: [classification_history]
+  optional_excluded:
+    - domain: classification_history
+      rows: 1204
+      reason: ORIGIN_INELIGIBLE
+
+derived_artifacts:                      # lineage of every artifact consumed
+  - artifact_id: adj-7f21...
+    entity: adjusted_bar_artifact
+    derivation_spec_version: adj/v2
+    first_built: 2026-08-20T11:04:00Z
+    lineage: [gold/2026.08.26.1#price_bar, ca/2026.08.26#corporate_action]
 
 datasets:
   - dataset_version: gold/2026.08.26.1
@@ -78,7 +105,7 @@ definitions:
   lag_policy_version: lag/v2
 
 lags_applied:                        # every approximation, named
-  - domain: earnings_event
+  - domain: earnings_release
     rule: NEXT_SESSION_OPEN
     affected_rows: 41827
   - domain: corporate_action
@@ -110,14 +137,30 @@ result:
 ```
 
 `run_id` is **derived, not generated** — a hash over code commit, config version, dataset
-versions, definitions, profile, revision view, lag policy, `as_of` and seed. Same inputs, same
+versions, definitions, **requested profile, resolved profile, profile resolution and resolution
+policy version**, revision view, lag policy, `as_of` and seed. Same inputs, same
 id. This is ADR-0004 §2's principle applied to research: *"No `uuid4()`. No timestamps."* A
 derived id means two runs claiming to be the same run can be checked against each other rather
 than merely asserted to match.
 
-**`information_set.profile` and `information_set.revision_view` are part of the `run_id`
-hash.** The same code, the same data and the same cutoff under two different profiles are two
-different runs with two different ids — which is the point.
+**Both profiles and the resolution are part of the `run_id` hash.** The same code, data and
+cutoff under two different profiles are two different runs. So are two runs that differ only in
+how a provider gap was resolved — `EXCLUDE` and `BOUND` produce different admissible sets, and
+collapsing them into one id would make an irreproducible result look reproducible.
+
+**Artifacts and dataset keys use `resolved_profile`.** A downgraded run produces `PUBLIC_PIT`
+artifacts, because that is what it computed. Recording only the requested profile would hide a
+downgrade in exactly the field a reader checks to learn what a result means.
+
+### 2a. Requested versus resolved
+
+| `requested_profile` | `resolved_profile` | `profile_resolution` |
+|---|---|---|
+| `PROVIDER_REALISTIC_PIT` | `PROVIDER_REALISTIC_PIT` | `NONE`, `EXCLUDE` or `BOUND` |
+| `PROVIDER_REALISTIC_PIT` | **`PUBLIC_PIT`** | **`DOWNGRADE`** |
+
+**A downgraded run is never labelled `PROVIDER_REALISTIC_PIT`** — not in the manifest, not on an
+artifact, not in a report. It carries `PROFILE_DOWNGRADED_TO_PUBLIC` and reads as what it is.
 
 ## 3. The `limitations` block is mandatory and load-bearing
 
@@ -132,7 +175,9 @@ approximated — not a default.
 | `BORROW_COVERAGE_PARTIAL` | Borrow history exists but is per-symbol or shallower than the backtest window |
 | `PROVIDER_AVAILABILITY_UNKNOWN` | `provider_available_time` null for some rows under `PROVIDER_REALISTIC_PIT`, resolved by `EXCLUDE` or `BOUND` ([contract §3.3](pit-data-contract.md)) |
 | `PROFILE_DOWNGRADED_TO_PUBLIC` | The run requested `PROVIDER_REALISTIC_PIT` and was run **in its entirety** under `PUBLIC_PIT` instead, because provider timing was unavailable |
-| `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | Rows were excluded because their `information_origin` is not eligible under the requested profile ([contract §3.1](pit-data-contract.md)). The counts are in `information_set.origin_exclusions` |
+| `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` | Rows were excluded because their `information_origin` is not eligible under the resolved profile ([contract §3.1](pit-data-contract.md)). Counts are in `information_set.origin_exclusions`. **Evidence, not sufficiency — see §3a** |
+| `PROVIDER_TIME_BOUNDED` | One or more datasets were governed by `provider_available_upper_bound` rather than an exact provider time ([contract §2.6](pit-data-contract.md)) |
+| `DERIVED_INPUT_CHRONOLOGY_MIXED` | A derived artifact consumed inputs at differing `revision_sequence`s |
 | `REVISION_CHRONOLOGY_INCOMPLETE` | Provider supplies first-and-latest revisions only, so `AS_KNOWN_AT_AS_OF` is a two-point approximation ([contract §6.3](pit-data-contract.md)) |
 | `NON_PIT_RESTATED_VIEW` | `LATEST_RESTATED` was used. **The result may not be called a backtest** |
 | `SINGLE_SOURCE_UNVERIFIED` | Only one provider licensed for a domain, so cross-provider checks did not run |
@@ -148,6 +193,24 @@ Three enforcement rules:
   document, report or commit message.
 - **Any report, summary or claim derived from a manifest reproduces its `limitations`
   block.** A performance figure quoted without its limitations is quoted wrongly.
+
+### 3a. Required inputs are enforced, not merely reported
+
+`ORIGIN_INELIGIBLE_ROWS_EXCLUDED` says *some rows went missing*. It cannot say *the thing you
+computed is not the thing you named*. That is what this section adds.
+
+Every factor, query and artifact definition declares each input domain **REQUIRED** or
+**OPTIONAL**, and the manifest records both lists plus what was excluded.
+
+| | On a domain being emptied by origin filtering or provider-time resolution |
+|---|---|
+| **REQUIRED** | **the run is REFUSED** with `REQUIRED_INPUT_UNAVAILABLE`, naming the domain and why |
+| **OPTIONAL** | permitted; counts recorded in `inputs.optional_excluded`, and the domain's limitation token emitted |
+
+The worked case: a factor requiring analyst estimates, run under `PUBLIC_PIT`. Every estimate
+row is `PROVIDER_DERIVED` and ineligible, so the domain empties. **The run refuses.** Computing
+the factor without its estimates term would publish a different quantity under the same
+`factor_definition_version`, and no reader could tell.
 
 ## 4. Preconditions for emitting a manifest
 
@@ -167,6 +230,11 @@ A manifest is refused — and the result is therefore inadmissible — when:
    `DOWNGRADE` without `PROFILE_DOWNGRADED_TO_PUBLIC`, in `limitations`.
 8a. Any row was served under a profile its `information_origin` is ineligible for, or rows were
    excluded for ineligibility without `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` in `limitations`.
+8c. A **REQUIRED** input domain was emptied (§3a) — the run is refused, not annotated.
+8d. `resolved_profile` differs from `requested_profile` while any artifact, dataset key or the
+   `run_id` still names the requested one.
+8e. A derived artifact was consumed whose recorded availability does not equal the max over its
+   lineage under the resolved profile.
 8b. A row was served under `PROVIDER_REALISTIC_PIT` using `public_available_time` as its
    governing time — the withdrawn `DECLARE` behaviour.
 9. An adjusted artifact was consumed whose content hash does not reproduce from its key.
