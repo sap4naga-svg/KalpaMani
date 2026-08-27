@@ -60,6 +60,7 @@ from kalpamani.data.contracts.envelope import (
     OutputValidityDeclaration,
 )
 from kalpamani.data.contracts.errors import RequiredInputUnavailableError
+from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.resolution import (
     BoundApprovals,
     PitRecord,
@@ -281,6 +282,16 @@ def build_universe_snapshot(
         },
     )
 
+    # The window the rule actually looks at for prior history: everything ending
+    # before the session's own evaluation cutoff. A bar for this session ends at
+    # the close, which is after the open, so it falls outside -- which is exactly
+    # the boundary `_evaluate` draws with `bar.session_date < session_date`.
+    #
+    # Bounded below by the earliest admissible bar rather than left open, because
+    # an unbounded window would claim more than the build looked at.
+    history_window = _history_window(inputs.bars, evaluation_cutoff)
+    bar_publications = sorted({bar.envelope.dataset_version for bar in inputs.bars})
+
     rows: list[UniverseMembership] = []
     considered: list[Listing] = []
     for listing in current_listings(admissible_listings):
@@ -300,7 +311,13 @@ def build_universe_snapshot(
             bars=admissible_bars,
             attributes=admissible_attributes,
         )
-        lineage = _lineage_for(decision, listing=listing)
+        lineage = _lineage_for(
+            decision,
+            listing=listing,
+            history_window=history_window,
+            bar_publications=bar_publications,
+            resolved_profile=resolved_profile,
+        )
         attribute_rows = () if decision.attribute is None else (decision.attribute,)
         consumed: tuple[PitRecord, ...] = (listing, *attribute_rows, *decision.history)
         rows.append(
@@ -403,6 +420,24 @@ class _Decision:
     history: tuple[PriceBar, ...]
 
 
+def _history_window(
+    bars: Sequence[PriceBar],
+    evaluation_cutoff: datetime,
+) -> tuple[datetime, datetime]:
+    """The instant window a no-history claim is made about.
+
+    Upper bound is the session's own evaluation cutoff -- a universe is known
+    before the session it governs opens, so a bar ending after that was not
+    available to the decision. Lower bound is the earliest bar the build holds,
+    because a claim reaching further back than the build looked would assert more
+    than it checked.
+    """
+    upper = normalize_instant(evaluation_cutoff)
+    endpoints = [normalize_instant(bar.bar_end_time) for bar in bars]
+    lower = min(endpoints) if endpoints else upper
+    return (min(lower, upper), upper)
+
+
 def _evaluate(
     *,
     security_id: str,
@@ -457,13 +492,26 @@ def _evaluate(
     )
 
 
-def _lineage_for(decision: _Decision, *, listing: Listing) -> tuple[LineageRef, ...]:
+def _lineage_for(
+    decision: _Decision,
+    *,
+    listing: Listing,
+    history_window: tuple[datetime, datetime],
+    bar_publications: Sequence[str],
+    resolved_profile: InformationSetProfile,
+) -> tuple[LineageRef, ...]:
     """Exactly the rows that decided this security, in the versions they came from.
 
     A price history spanning two immutable source versions produces two
     references, not one that quietly averages them: replaying a single reference
     would look for every bar in one version and either miss them or find the
     wrong ones.
+
+    A security with **no** prior bars produces a negative-coverage reference
+    instead. ``history_window`` is the window the rule actually looked at, and
+    ``bar_publications`` are the builds it looked in, so replay can search for a
+    bar that would contradict the decision rather than accepting a sentinel that
+    resolved to nothing whatever the store held.
     """
     refs = [
         LineageRef.of(
@@ -480,7 +528,16 @@ def _lineage_for(decision: _Decision, *, listing: Listing) -> tuple[LineageRef, 
                 selector=attribute_selector(decision.attribute),
             )
         )
-    refs.extend(bar_lineage_refs(decision.security_id, BarResolution.DAILY, decision.history))
+    refs.extend(
+        bar_lineage_refs(
+            decision.security_id,
+            BarResolution.DAILY,
+            decision.history,
+            absence_window=history_window,
+            absence_versions=bar_publications,
+            absence_profile=resolved_profile,
+        )
+    )
     return tuple(refs)
 
 

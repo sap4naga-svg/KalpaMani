@@ -23,7 +23,27 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConsumedArtifactRecord:
+    """A derived artifact a query actually read, pinned well enough to reproduce.
+
+    Mirrors :class:`~kalpamani.data.contracts.manifest.ConsumedArtifact` field for
+    field, so the manifest is built from what the run recorded rather than from a
+    parallel description of it. Two descriptions of one artifact would eventually
+    disagree, and the disagreement would be invisible.
+    """
+
+    artifact_id: str
+    entity: str
+    output_validity: str
+    derivation_spec_version: str
+    artifact_content_hash: str
+    artifact_first_built_time: datetime
+    lineage_selectors: tuple[tuple[str, str, str], ...]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -43,6 +63,8 @@ class ExecutionEvidence:
     dataset_manifest_hashes: Mapping[str, str]
     revisable_datasets_consumed: tuple[str, ...]
     consumed_artifact_ids: tuple[str, ...]
+    #: The full identity of each of those artifacts, in the same order.
+    consumed_artifacts: tuple[ConsumedArtifactRecord, ...]
     bounds_relied_upon: tuple[str, ...]
     #: Bounds relied upon whose derivation was not approved for their dataset.
     #: Recorded by the run rather than declared by the caller.
@@ -74,7 +96,7 @@ class ExecutionRecorder:
         self._quality_hash = quality_hash
         self._datasets: set[str] = set()
         self._revisable: set[str] = set()
-        self._artifacts: set[str] = set()
+        self._artifacts: dict[str, ConsumedArtifactRecord] = {}
         self._bounds: set[str] = set()
         self._unapproved_bounds: set[str] = set()
         self._hash_mismatches: set[str] = set()
@@ -92,9 +114,15 @@ class ExecutionRecorder:
         self._revisable.update(revisable)
         self._excluded_rows += excluded_rows
 
-    def record_artifact(self, artifact_id: str) -> None:
-        """Record a derived artifact a query consumed."""
-        self._artifacts.add(artifact_id)
+    def record_artifact(self, artifact: ConsumedArtifactRecord) -> None:
+        """Record a derived artifact a query consumed, with its full identity.
+
+        An id alone is not enough for the manifest, which has to pin the content
+        hash, the spec version, the lineage and -- under ``FORWARD_SYSTEM`` -- when
+        the artifact was first built. Recording the id and describing the rest
+        elsewhere would let the two drift.
+        """
+        self._artifacts[artifact.artifact_id] = artifact
 
     def record_bound(self, dataset: str, *, approved: bool) -> None:
         """Record that an answer leant on a bounded availability time."""
@@ -117,6 +145,7 @@ class ExecutionRecorder:
             dataset_manifest_hashes={self._dataset_version: self._manifest_hash},
             revisable_datasets_consumed=tuple(sorted(self._revisable)),
             consumed_artifact_ids=tuple(sorted(self._artifacts)),
+            consumed_artifacts=tuple(self._artifacts[key] for key in sorted(self._artifacts)),
             bounds_relied_upon=tuple(sorted(self._bounds)),
             unapproved_bounds_relied_upon=tuple(sorted(self._unapproved_bounds)),
             hash_mismatches=tuple(sorted(self._hash_mismatches)),
@@ -124,4 +153,4 @@ class ExecutionRecorder:
         )
 
 
-__all__ = ["ExecutionEvidence", "ExecutionRecorder"]
+__all__ = ["ConsumedArtifactRecord", "ExecutionEvidence", "ExecutionRecorder"]

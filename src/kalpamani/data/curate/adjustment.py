@@ -603,6 +603,8 @@ def _resolved_lineage(
     artifact: AdjustedBarArtifact,
     bars: Sequence[PriceBar],
     actions: Sequence[CorporateAction],
+    *,
+    approvals: BoundApprovals,
 ) -> tuple[tuple[PriceBar, ...], tuple[CorporateAction, ...]]:
     """Resolve the artifact's own lineage to exactly the rows it names.
 
@@ -644,7 +646,7 @@ def _resolved_lineage(
                 )
             resolved_actions.append(action)
         elif ref.entity == "price_bar":
-            resolved_bars.extend(_resolve_bar_ref(artifact, ref, bars))
+            resolved_bars.extend(_resolve_bar_ref(artifact, ref, bars, approvals=approvals))
         else:
             raise ArtifactIntegrityError(
                 f"Artifact {artifact.artifact_id} carries a lineage reference to "
@@ -661,6 +663,8 @@ def _resolve_bar_ref(
     artifact: AdjustedBarArtifact,
     ref: LineageRef,
     bars: Sequence[PriceBar],
+    *,
+    approvals: BoundApprovals,
 ) -> tuple[PriceBar, ...]:
     """The exact bars one price_bar reference names, or a refusal."""
     selector = dict(ref.selector)
@@ -671,7 +675,14 @@ def _resolve_bar_ref(
             f"{missing_keys}. A reference that names a range rather than endpoints is a "
             "predicate: replaying it would re-evaluate whatever matches now."
         )
-    resolved = resolve_lineage((ref,), listings=(), attributes=(), bars=bars)
+    resolved = resolve_lineage(
+        (ref,),
+        listings=(),
+        attributes=(),
+        bars=bars,
+        resolved_profile=artifact.resolved_profile,
+        approvals=approvals,
+    )
     return tuple(row for row in resolved if isinstance(row, PriceBar))
 
 
@@ -750,7 +761,7 @@ def verify_adjusted_bar_artifact(
             f"{ADJUSTMENT_CONVENTION.value}. Recomputing it under a different convention "
             "would compare two different series and call the difference corruption."
         )
-    lineage_bars, lineage_actions = _resolved_lineage(artifact, bars, actions)
+    lineage_bars, lineage_actions = _resolved_lineage(artifact, bars, actions, approvals=approvals)
     if not lineage_bars:
         raise ArtifactIntegrityError(
             f"Artifact {artifact.artifact_id} resolves to no price bars. An artifact whose "

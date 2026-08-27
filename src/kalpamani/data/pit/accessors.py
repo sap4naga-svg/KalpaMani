@@ -21,8 +21,26 @@ to be a clean reader, which meant a caller obtained a clean result by omitting
 evidence rather than by producing it. The report travels with the publication,
 and its blocking findings are enforced automatically.
 
-**A partial answer is refused, not truncated.** These are the situations a price
-query can be in, and they are deliberately different answers:
+**A partial answer is refused, not truncated -- after point-in-time filtering,
+not only before it.** Physical coverage is necessary and was never sufficient.
+The dataset holding five bars said nothing about how many of them a query at a
+given ``as_of`` was entitled to see, so a series whose middle bar had not yet been
+published came back four bars long with no indication that anything was missing.
+A caller averaging it got a number.
+
+Completeness is therefore checked **twice**, against the same expected endpoint
+grid: once against what the dataset physically holds, and again against what
+survived origin eligibility, availability resolution and the ``as_of`` cutoff. A
+``REQUIRED`` series that loses an endpoint to either is refused, and the refusal
+names why that endpoint went -- missing, ineligible, unresolvable, or not yet
+published -- because those are four different problems with four different fixes.
+
+A caller who genuinely wants whatever was knowable says so with
+``SeriesRequirement.OPTIONAL`` and gets a labelled short series. Neither is a
+default: like ``as_of`` and ``profile``, it is named at the call site.
+
+These are the situations a price query can be in, and they are deliberately
+different answers:
 
 ======================================  ====================================
 situation                               outcome
@@ -30,6 +48,8 @@ situation                               outcome
 valid session, security did not trade   **served** -- a zero-volume or stale
                                         bar is an answer
 a required bar is missing               ``IncompleteCoverageError``
+a required bar is not yet available     ``IncompleteCoverageError`` -- shorten
+                                        ``end``, or move ``as_of``
 the security is unknown here            ``SecurityNotInDatasetError``
 the range is outside declared coverage  ``DatasetCoverageError``
 every admissible row is ineligible      ``RequiredInputUnavailableError``
@@ -49,12 +69,20 @@ session was observed.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from enum import Enum
 
 from kalpamani.data.contracts.dataset import UniverseSnapshotHeader
-from kalpamani.data.contracts.entities import Listing, MarketSession, PriceBar, PriceBarValues
+from kalpamani.data.contracts.entities import (
+    CorporateAction,
+    Listing,
+    MarketSession,
+    PriceBar,
+    PriceBarValues,
+    UniverseMembership,
+)
 from kalpamani.data.contracts.envelope import SourceEnvelope
 from kalpamani.data.contracts.errors import (
     BlockingQualityIssueError,
@@ -86,20 +114,61 @@ from kalpamani.data.contracts.vocabulary import (
     RevisionView,
 )
 from kalpamani.data.curate.adjustment import SUPPORTED_CONVENTIONS, adjusted_series, raw_series
+from kalpamani.data.curate.lineage import lineage_fingerprint
 from kalpamani.data.curate.publication import DatasetManifest, VerifiedPublication
 from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
 from kalpamani.data.curate.universe import current_listings
-from kalpamani.data.pit.execution import ExecutionEvidence, ExecutionRecorder
+from kalpamani.data.pit.execution import (
+    ConsumedArtifactRecord,
+    ExecutionEvidence,
+    ExecutionRecorder,
+)
 from kalpamani.data.quality.report import QualityReport
 
-#: Datasets a price query reads directly, in canonical order.
+#: Datasets an **adjusted** price query reads directly, in canonical order.
 PRICE_HISTORY_DATASETS = ("corporate_action", "price_bar")
+
+#: Datasets a **raw** price query reads. Deliberately narrower: a raw series does
+#: not consult corporate actions, so recording one as read would put a dataset in
+#: the run's inventory that the run never opened -- and would then demand
+#: resolution evidence for it.
+RAW_PRICE_DATASETS = ("price_bar",)
 
 #: Datasets a universe query reads directly.
 UNIVERSE_DATASETS = ("universe_membership",)
 
 #: One minute. The grid a dense minute series is expected to cover.
 _MINUTE = timedelta(minutes=1)
+
+
+class SeriesRequirement(Enum):
+    """Whether a caller will accept a series shorter than the range it asked for.
+
+    Named explicitly at every call site, like every other decision a historical
+    query makes. A truncated series is indistinguishable from a complete one once
+    it is a list of numbers, so whether one is acceptable is the caller's
+    question to answer out loud.
+    """
+
+    #: Every expected endpoint must survive point-in-time filtering, or refuse.
+    REQUIRED = "REQUIRED"
+    #: A short series is an acceptable answer. It is labelled as one.
+    OPTIONAL = "OPTIONAL"
+
+
+#: A position on the expected grid: a session date for DAILY, a bar endpoint for
+#: MINUTE. Both render with ``isoformat``, and ``datetime`` is a subclass of
+#: ``date`` -- so anything that needs to tell them apart must test ``datetime``
+#: first, or every minute endpoint will answer to ``isinstance(x, date)``.
+Endpoint = date | datetime
+
+
+class _Withheld(Enum):
+    """Why an endpoint the dataset holds did not reach the result."""
+
+    INELIGIBLE_ORIGIN = "its origin is not eligible under this profile"
+    UNRESOLVED_AVAILABILITY = "its availability does not resolve under this profile"
+    NOT_YET_AVAILABLE = "it was not yet available at this as_of"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -142,6 +211,11 @@ class UniverseSnapshotResult:
     non_members: tuple[str, ...]
     provenance: ResultProvenance
     origin_exclusions: tuple[OriginExclusionCount, ...] = ()
+    #: The membership content hash the snapshot was published with. A caller
+    #: citing this result can name exactly which snapshot it was.
+    snapshot_content_hash: str = ""
+    #: The derived artifact this result came from, by its derived identity.
+    snapshot_artifact_id: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -154,6 +228,12 @@ class BarSeriesResult:
     bars: tuple[PriceBarValues, ...]
     provenance: ResultProvenance
     origin_exclusions: tuple[OriginExclusionCount, ...] = ()
+    #: What the caller asked for. An ``OPTIONAL`` result may be shorter than the
+    #: range, and says so here rather than leaving the reader to notice.
+    requirement: SeriesRequirement = SeriesRequirement.REQUIRED
+    #: Endpoints the dataset holds that this query was not entitled to see. Always
+    #: empty for a ``REQUIRED`` result, because that case refuses instead.
+    withheld_endpoints: int = 0
 
 
 class PointInTimeReader:
@@ -251,124 +331,169 @@ class PointInTimeReader:
         as_of: datetime,
         profile: InformationSetProfile,
     ) -> UniverseSnapshotResult:
-        """Membership as recorded for the latest built session at or before ``as_of``.
+        """The latest stored snapshot this query was entitled to, served **whole**.
 
         Returns the **stored** snapshot. It is never recomputed from current data
         and never derived by filtering today's listed securities: a security
         delisted before ``as_of`` is absent, one delisted after it but active then
         is present.
 
+        **A snapshot is one derived artifact, and it is served or it is not.** The
+        earlier implementation picked a session by UTC date and then filtered
+        membership rows individually, which meant a row whose decision became
+        available a moment later than its siblings simply vanished -- and the
+        result was a membership set that had never existed at any instant. Nothing
+        in it said so.
+
+        Selection now works the other way round. A session is a candidate when its
+        own ``evaluation_cutoff`` -- an absolute instant, so no UTC date
+        truncation is involved -- is at or before ``as_of``. Candidates are tried
+        latest-first, and the first whose snapshot is available **in its entirety**
+        is served. If the latest is not yet complete at ``as_of``, the query falls
+        back to the latest earlier one that is; if none is, it refuses.
+
         A snapshot whose rule genuinely selected nobody is a **valid** result --
         every row a non-member with its reason, or zero rows against a header
         saying the session was built. That is different from a session never
-        built, and different again from one no row of which is admissible yet.
+        built, and different again from one not yet complete at ``as_of``.
 
         Raises:
-            MissingHistoricalSnapshotError: if no snapshot was **built** at or
-                before that date, or none of its rows is admissible at ``as_of``.
+            MissingHistoricalSnapshotError: if no snapshot's evaluation cutoff had
+                passed at ``as_of``, or none of those that had was completely
+                available then. The refusal names why each candidate was rejected.
         """
         cutoff = normalize_instant(as_of)
         self._guard(profile, cutoff, UNIVERSE_DATASETS)
         resolved = self.resolved_profile
 
-        candidates = [
-            session
-            for session in self._dataset.built_snapshot_sessions()
-            if session <= cutoff.date()
+        governed = [
+            (session, header)
+            for session, header in sorted(self._dataset.universe_headers.items())
+            if header.evaluation_cutoff <= cutoff
         ]
-        if not candidates:
+        if not governed:
             raise MissingHistoricalSnapshotError(
-                f"No universe snapshot was built at or before {cutoff.isoformat()} in dataset "
-                f"{self._dataset.dataset_version}. A universe query for a date with no "
-                "recorded membership is a refusal, not an empty result."
-            )
-        session_date = candidates[-1]
-        header = self._dataset.universe_headers[session_date]
-        rows = self._dataset.universe.get(session_date, ())
-        self._require_snapshot_available(header, cutoff, resolved)
-
-        admitted = []
-        excluded: dict[tuple[str, str], int] = {}
-        for row in rows:
-            if not is_eligible(row, resolved):
-                key = ("universe_membership", row.envelope.information_origin.value)
-                excluded[key] = excluded.get(key, 0) + 1
-                continue
-            available = decision_available_time(row, resolved, self._approvals)
-            if available is None or available > cutoff:
-                continue
-            admitted.append(row)
-
-        if rows and not admitted:
-            raise MissingHistoricalSnapshotError(
-                f"The universe snapshot for {session_date.isoformat()} exists but no row in it "
-                f"is admissible at {cutoff.isoformat()} under {resolved.value}. Serving an "
-                "empty universe here would be indistinguishable from a rule that selected "
-                "nobody, and the two mean opposite things."
+                f"No universe snapshot's evaluation cutoff had passed at {cutoff.isoformat()} "
+                f"in dataset {self._dataset.dataset_version}. Candidacy is decided by the "
+                "session's own cutoff rather than by truncating the instant to a UTC date, so "
+                "a session that has not opened in its own venue's terms is not a candidate. A "
+                "universe query for a date with no recorded membership is a refusal, not an "
+                "empty result."
             )
 
-        definition_versions = {row.universe_definition_version for row in admitted}
-        if len(definition_versions) > 1:
-            raise ProfileResolutionError(
-                f"The snapshot for {session_date.isoformat()} mixes universe definition "
-                f"versions {sorted(definition_versions)}. Changing the rule creates a new "
-                "version; it does not retroactively change history."
-            )
+        rejected: list[str] = []
+        for session, header in reversed(governed):
+            rows = self._dataset.universe.get(session, ())
+            problems = self._snapshot_unavailable(header, rows, cutoff, resolved)
+            if not problems:
+                return self._serve_snapshot(session, header, rows, cutoff, profile)
+            rejected.append(f"{session.isoformat()}: {'; '.join(problems)}")
 
-        self._recorder.record_read(
-            UNIVERSE_DATASETS,
-            excluded_rows=sum(excluded.values()),
-        )
-        self._record_bounds(UNIVERSE_DATASETS)
-
-        return UniverseSnapshotResult(
-            session_date=session_date,
-            universe_definition_version=(
-                definition_versions.pop()
-                if definition_versions
-                else header.universe_definition_version
-            ),
-            members=tuple(sorted(row.security_id for row in admitted if row.is_member)),
-            non_members=tuple(sorted(row.security_id for row in admitted if not row.is_member)),
-            provenance=self._provenance(cutoff, profile, None, bool(excluded), None, None),
-            origin_exclusions=_counts(excluded),
+        raise MissingHistoricalSnapshotError(
+            f"No universe snapshot was completely available at {cutoff.isoformat()} under "
+            f"{resolved.value} in dataset {self._dataset.dataset_version}. Candidates, latest "
+            "first:\n  - "
+            + "\n  - ".join(rejected)
+            + "\nA snapshot is one derived artifact: serving the rows that happened to be "
+            "available would produce a membership set that existed at no instant, and nothing "
+            "in it would say so."
         )
 
-    def _require_snapshot_available(
+    def _snapshot_unavailable(
         self,
         header: UniverseSnapshotHeader,
+        rows: Sequence[UniverseMembership],
         cutoff: datetime,
         resolved: InformationSetProfile,
-    ) -> None:
-        """Refuse a snapshot the run could not yet have held.
+    ) -> list[str]:
+        """Every reason this snapshot cannot be served whole at ``cutoff``.
 
-        The header is a derived artifact and therefore has an availability of its
-        own. It matters most in the case that has no rows to carry the constraint
-        instead: a snapshot whose rule selected nobody. Under ``FORWARD_SYSTEM``
-        -- the profile that asks what *we* held -- we did not know the rule
-        selected nobody before we ran it. We knew nothing.
+        The header carries the fact of the build; the rows carry the decisions.
+        Both have to have been available, because the snapshot is the conjunction
+        of them -- which is exactly what makes serving a subset wrong rather than
+        merely incomplete.
 
-        Raises:
-            MissingHistoricalSnapshotError: if the snapshot was not yet built at
-                ``cutoff``, or does not assert a complete build.
+        Under ``FORWARD_SYSTEM`` the header's own first-built time binds even when
+        there are no rows: before we ran the rule we did not know it selected
+        nobody, we knew nothing.
         """
+        problems: list[str] = []
         if not header.is_complete:
-            raise MissingHistoricalSnapshotError(
-                f"The universe snapshot for {header.session_date.isoformat()} declares status "
-                f"{header.status!r}. A partial snapshot answers the membership question with a "
-                "subset, and nothing in the answer would say so."
+            problems.append(f"the header declares status {header.status!r}, not COMPLETE")
+        if header.resolved_profile is not resolved:
+            problems.append(
+                f"the header is keyed to {header.resolved_profile.value}, not {resolved.value}"
             )
         if (
             resolved is InformationSetProfile.FORWARD_SYSTEM
             and header.envelope.artifact_first_built_time > cutoff
         ):
-            raise MissingHistoricalSnapshotError(
-                f"The universe snapshot for {header.session_date.isoformat()} was first built "
-                f"at {header.envelope.artifact_first_built_time.isoformat()}, after "
-                f"{cutoff.isoformat()}. Under FORWARD_SYSTEM the question is what this system "
-                "held at that moment, and it held no snapshot -- serving one now would answer "
-                "a different question, and a zero-row snapshot would answer it invisibly."
+            problems.append(
+                "it was first built at "
+                f"{header.envelope.artifact_first_built_time.isoformat()}, after the cutoff"
             )
+
+        ineligible = 0
+        unresolved = 0
+        pending: datetime | None = None
+        for row in rows:
+            if not is_eligible(row, resolved):
+                ineligible += 1
+                continue
+            available = decision_available_time(row, resolved, self._approvals)
+            if available is None:
+                unresolved += 1
+            elif available > cutoff:
+                pending = available if pending is None else max(pending, available)
+        if ineligible:
+            problems.append(f"{ineligible} membership row(s) are ineligible under this profile")
+        if unresolved:
+            problems.append(f"{unresolved} membership row(s) have unresolvable availability")
+        if pending is not None:
+            problems.append(f"membership decisions were still arriving until {pending.isoformat()}")
+
+        definitions = {row.universe_definition_version for row in rows}
+        if len(definitions) > 1:
+            problems.append(
+                f"it mixes universe definition versions {sorted(definitions)}; changing the "
+                "rule creates a new version rather than retroactively changing history"
+            )
+        elif definitions and header.universe_definition_version not in definitions:
+            problems.append(
+                f"its rows are keyed to {sorted(definitions)} and the header declares "
+                f"{header.universe_definition_version!r}"
+            )
+        return problems
+
+    def _serve_snapshot(
+        self,
+        session: date,
+        header: UniverseSnapshotHeader,
+        rows: Sequence[UniverseMembership],
+        cutoff: datetime,
+        requested: InformationSetProfile,
+    ) -> UniverseSnapshotResult:
+        """Return the whole snapshot, and record the derived artifact it came from.
+
+        No source dataset is recorded. A universe query reads a **stored derived
+        artifact**; it does not open the listing, attribute or bar tables, and
+        recording ``universe_membership`` as a directly-read source dataset made
+        the manifest demand provider-resolution evidence for a table no resolution
+        ever produces evidence about.
+        """
+        self._recorder.record_read((), excluded_rows=0)
+        self._recorder.record_artifact(_snapshot_artifact(header))
+
+        return UniverseSnapshotResult(
+            session_date=session,
+            universe_definition_version=header.universe_definition_version,
+            members=tuple(sorted(row.security_id for row in rows if row.is_member)),
+            non_members=tuple(sorted(row.security_id for row in rows if not row.is_member)),
+            provenance=self._provenance(cutoff, requested, None, False, None, None),
+            origin_exclusions=(),
+            snapshot_content_hash=header.snapshot_content_hash,
+            snapshot_artifact_id=header.artifact_id,
+        )
 
     def get_price_history(
         self,
@@ -380,6 +505,8 @@ class PointInTimeReader:
         adjustment_mode: AdjustmentMode,
         as_of: datetime,
         profile: InformationSetProfile,
+        requirement: SeriesRequirement,
+        revision_view: RevisionView | None,
     ) -> BarSeriesResult:
         """Raw or explicitly-policied adjusted bars for one security, at one resolution.
 
@@ -388,20 +515,42 @@ class PointInTimeReader:
         it is a number *per information set and per convention* -- so all of it
         has to be named before the question has an answer.
 
+        ``revision_view`` follows the same rule, and only an **adjusted** query
+        takes one. A raw series reads no corporate actions, so there are no
+        revisions to choose between and supplying a view would suggest it did
+        something. An adjusted series does read them, and a corporate action can
+        be restated -- a ratio corrected, an ex-date moved -- so which revision was
+        used is part of what the answer means.
+
+        Completeness is enforced **after** point-in-time filtering as well as
+        before it. Under ``SeriesRequirement.REQUIRED`` an endpoint lost to
+        ineligibility, unresolvable availability or an ``as_of`` that precedes its
+        publication refuses the whole series rather than shortening it.
+
+        ``requirement`` has no default, for the reason nothing else here does: a
+        default would answer on the caller's behalf whether a short series is an
+        acceptable answer, and a short series is indistinguishable from a
+        complete one once it is a list of numbers.
+
         Raises:
-            QueryRangeError: if ``start`` is after ``end``, or an adjusted mode
-                names no convention.
+            QueryRangeError: if ``start`` is after ``end``, an adjusted mode names
+                no convention, or ``revision_view`` disagrees with the mode.
             DatasetCoverageError: if the range falls outside declared coverage.
             SecurityNotInDatasetError: if the dataset has no evidence of this
                 security at all.
-            IncompleteCoverageError: if a bar the range requires is missing.
+            IncompleteCoverageError: if a bar the range requires is missing from
+                the dataset, or was not servable at ``as_of``.
             RequiredInputUnavailableError: if every bar in range is ineligible or
                 unresolvable under the resolved profile.
+            NonPointInTimeViewError: if ``revision_view`` is ``LATEST_RESTATED``.
         """
         cutoff = normalize_instant(as_of)
-        self._guard(profile, cutoff, PRICE_HISTORY_DATASETS)
-        self._validate_range(start, end)
         convention = _validate_adjustment_mode(adjustment_mode)
+        view = _validate_revision_view(adjustment_mode, revision_view)
+        datasets = RAW_PRICE_DATASETS if adjustment_mode.is_raw else PRICE_HISTORY_DATASETS
+
+        self._guard(profile, cutoff, datasets)
+        self._validate_range(start, end)
 
         if not self._dataset.knows_security(security_id):
             raise SecurityNotInDatasetError(
@@ -412,28 +561,38 @@ class PointInTimeReader:
 
         held = self._dataset.bars_for(security_id, resolution.value)
         in_range = tuple(bar for bar in held if start <= bar.session_date <= end)
-        self._require_complete_series(
+        expected = self._expected_endpoints(security_id, resolution, start, end)
+        self._require_physical_coverage(
             security_id=security_id,
             resolution=resolution,
             start=start,
             end=end,
+            expected=expected,
             held=in_range,
         )
 
         resolved = self.resolved_profile
         excluded: dict[tuple[str, str], int] = {}
+        withheld: dict[Endpoint, tuple[_Withheld, str]] = {}
         unresolvable = 0
         bars: list[PriceBar] = []
         for bar in in_range:
+            key = _endpoint_key(bar, resolution)
             if not is_eligible(bar, resolved):
-                key = ("price_bar", bar.envelope.information_origin.value)
-                excluded[key] = excluded.get(key, 0) + 1
+                origin = ("price_bar", bar.envelope.information_origin.value)
+                excluded[origin] = excluded.get(origin, 0) + 1
+                withheld[key] = (
+                    _Withheld.INELIGIBLE_ORIGIN,
+                    bar.envelope.information_origin.value,
+                )
                 continue
             available = decision_available_time(bar, resolved, self._approvals)
             if available is None:
                 unresolvable += 1
+                withheld[key] = (_Withheld.UNRESOLVED_AVAILABILITY, "")
                 continue
             if available > cutoff:
+                withheld[key] = (_Withheld.NOT_YET_AVAILABLE, available.isoformat())
                 continue
             bars.append(bar)
 
@@ -448,11 +607,23 @@ class PointInTimeReader:
                 "number."
             )
 
-        actions = [
-            action
-            for action in self._dataset.actions_for(security_id)
-            if is_eligible(action, resolved)
-        ]
+        if requirement is SeriesRequirement.REQUIRED:
+            self._require_servable_coverage(
+                security_id=security_id,
+                resolution=resolution,
+                start=start,
+                end=end,
+                as_of=cutoff,
+                expected=expected,
+                served=bars,
+                withheld=withheld,
+            )
+
+        actions: list[CorporateAction] = []
+        if not adjustment_mode.is_raw:
+            actions = self._admissible_action_revisions(
+                security_id, view=view, as_of=cutoff, resolved=resolved
+            )
 
         if adjustment_mode.is_raw:
             series = raw_series(bars)
@@ -470,11 +641,11 @@ class PointInTimeReader:
             )
 
         self._recorder.record_read(
-            PRICE_HISTORY_DATASETS,
-            revisable=("corporate_action",),
+            datasets,
+            revisable=() if adjustment_mode.is_raw else ("corporate_action",),
             excluded_rows=sum(excluded.values()),
         )
-        self._record_bounds(PRICE_HISTORY_DATASETS)
+        self._record_bounds(datasets)
 
         return BarSeriesResult(
             security_id=security_id,
@@ -482,10 +653,55 @@ class PointInTimeReader:
             adjustment_mode=adjustment_mode,
             bars=series,
             provenance=self._provenance(
-                cutoff, profile, None, bool(excluded), resolution, convention
+                cutoff, profile, view, bool(excluded), resolution, convention
             ),
             origin_exclusions=_counts(excluded),
+            requirement=requirement,
+            withheld_endpoints=len(withheld),
         )
+
+    def _admissible_action_revisions(
+        self,
+        security_id: str,
+        *,
+        view: RevisionView,
+        as_of: datetime,
+        resolved: InformationSetProfile,
+    ) -> list[CorporateAction]:
+        """One revision per corporate action, chosen under an explicitly named view.
+
+        A corporate action is revisable -- a ratio gets corrected, an ex-date
+        moves -- so the adjusted series depends on which revision was in force.
+        The earlier code took every eligible action row, which meant a corrected
+        and an uncorrected revision of the same action could both reach the
+        arithmetic and multiply into the factor twice.
+
+        Actions with no admissible revision at ``as_of`` are simply absent: the
+        query was not entitled to know about them, which is the correct answer
+        rather than a missing input.
+        """
+        by_action: dict[str, list[CorporateAction]] = {}
+        for action in self._dataset.actions_for(security_id):
+            by_action.setdefault(action.action_id, []).append(action)
+
+        chosen: list[CorporateAction] = []
+        for action_id, revisions in sorted(by_action.items()):
+            selected = select_revision(
+                revisions,
+                revision_view=view,
+                as_of=as_of,
+                resolved_profile=resolved,
+                approvals=self._approvals,
+            )
+            if selected is None:
+                continue
+            if not isinstance(selected, CorporateAction):  # pragma: no cover - defensive
+                raise ProfileResolutionError(
+                    f"Revision selection for corporate action {action_id!r} returned a "
+                    f"{type(selected).__name__}, which is not a corporate action."
+                )
+            chosen.append(selected)
+        return chosen
 
     def get_classification(
         self,
@@ -583,57 +799,151 @@ class PointInTimeReader:
         ]
         return tuple(sorted(required, key=lambda item: item.session_date))
 
-    def _require_complete_series(
+    def _expected_endpoints(
+        self,
+        security_id: str,
+        resolution: BarResolution,
+        start: date,
+        end: date,
+    ) -> tuple[Endpoint, ...]:
+        """Every endpoint a complete series must carry, from the venue's calendar.
+
+        Computed **once** and used by both coverage checks, so the physical and
+        the point-in-time question are asked about exactly the same grid. Two
+        separately derived grids would eventually disagree, and the disagreement
+        would look like a data defect.
+
+        Per exchange, deliberately: a NASDAQ security is not required to have bars
+        on an NYSE-only session, and pooling calendars would fault it for absences
+        that are not absences. Daily expects one bar per listed trading session;
+        minute follows the dense contract and expects the session's whole endpoint
+        grid, so one arbitrary bar cannot pass for an observed session.
+        """
+        sessions = self._required_sessions(security_id, start, end)
+        if resolution is BarResolution.DAILY:
+            return tuple(session.session_date for session in sessions)
+        points: list[Endpoint] = []
+        for session in sessions:
+            points.extend(_minute_endpoints(session))
+        return tuple(points)
+
+    def _require_physical_coverage(
         self,
         *,
         security_id: str,
         resolution: BarResolution,
         start: date,
         end: date,
+        expected: Sequence[Endpoint],
         held: Sequence[PriceBar],
     ) -> None:
-        """Coverage is defined per resolution, and checked against the venue's calendar.
+        """The dataset holds a bar for every expected endpoint, or refuses.
 
-        Deliberately independent of ``as_of``: dataset completeness and
-        point-in-time availability are different questions. A bar that exists but
-        was not yet knowable is filtered afterwards, correctly. A bar that does
-        not exist at all is a gap, and a gap is a refusal.
+        Deliberately independent of ``as_of``: a bar that does not exist at all is
+        a gap in the data, which is a different problem from a bar that exists and
+        was not yet knowable. Both refuse a REQUIRED series, and the two refusals
+        say different things because they have different fixes.
         """
-        sessions = self._required_sessions(security_id, start, end)
-        if not sessions:
+        if not expected:
             return
-        if resolution is BarResolution.DAILY:
-            covered = {bar.session_date for bar in held}
-            missing = [s.session_date for s in sessions if s.session_date not in covered]
-            if missing:
-                raise IncompleteCoverageError(
-                    f"Dataset {self._dataset.dataset_version} has no DAILY bar for "
-                    f"{security_id} on {len(missing)} listed trading session(s) in "
-                    f"{start.isoformat()}..{end.isoformat()}: "
-                    f"{[d.isoformat() for d in missing[:5]]}"
-                    f"{' ...' if len(missing) > 5 else ''}. Refused rather than truncated: a "
-                    "short series and a gap-ridden one look identical downstream. A session "
-                    "the security did not trade is still covered by an explicit no-trade bar."
-                )
+        covered = {_endpoint_key(bar, resolution) for bar in held}
+        missing = [point for point in expected if point not in covered]
+        if not missing:
+            return
+        raise IncompleteCoverageError(
+            f"Dataset {self._dataset.dataset_version} has no {resolution.value} bar for "
+            f"{security_id} at {len(missing)} of {len(expected)} expected endpoint(s) in "
+            f"{start.isoformat()}..{end.isoformat()} "
+            f"({_render_endpoints(missing)}). Refused rather than truncated: a short series "
+            "and a gap-ridden one look identical downstream. A session the security did not "
+            "trade is still covered by an explicit no-trade bar."
+        )
+
+    def _require_servable_coverage(
+        self,
+        *,
+        security_id: str,
+        resolution: BarResolution,
+        start: date,
+        end: date,
+        as_of: datetime,
+        expected: Sequence[Endpoint],
+        served: Sequence[PriceBar],
+        withheld: Mapping[Endpoint, tuple[_Withheld, str]],
+    ) -> None:
+        """Every expected endpoint survived point-in-time filtering, or refuses.
+
+        This is the check whose absence let a five-bar request come back four bars
+        long. Physical coverage proved the dataset held the bar; nothing then
+        asked whether *this* query was entitled to it, so an unpublished middle
+        bar simply vanished from the result.
+
+        The refusal names why each endpoint went, because the four reasons have
+        four different fixes: a missing bar is a data problem, an ineligible
+        origin is a profile problem, an unresolvable availability is a resolution
+        problem, and a not-yet-published bar means the caller asked for a range
+        their ``as_of`` does not reach -- which they fix by shortening ``end``.
+
+        Raises:
+            IncompleteCoverageError: naming the missing endpoints and their
+                reasons, and -- where the only problem is that the series runs
+                past what ``as_of`` could see -- the ``end`` that would work.
+        """
+        if not expected:
+            return
+        covered = {_endpoint_key(bar, resolution) for bar in served}
+        missing = [point for point in expected if point not in covered]
+        if not missing:
             return
 
-        # MINUTE follows contract A -- dense bars. The expected endpoint grid comes
-        # from the session itself, so "at least one minute bar that day" cannot
-        # pass for a session that was actually observed.
-        endpoints = {bar.bar_end_time for bar in held}
-        for session in sessions:
-            expected = _minute_endpoints(session)
-            missing_points = sorted(point for point in expected if point not in endpoints)
-            if missing_points:
-                raise IncompleteCoverageError(
-                    f"Dataset {self._dataset.dataset_version} covers "
-                    f"{len(expected) - len(missing_points)} of {len(expected)} expected MINUTE "
-                    f"endpoints for {security_id} on session "
-                    f"{session.session_date.isoformat()} (first missing "
-                    f"{missing_points[0].isoformat()}). One minute bar in a session is not "
-                    "evidence that the session was observed, so a dense minute series must "
-                    "cover the whole regular grid."
-                )
+        reasons: dict[str, list[Endpoint]] = {}
+        for point in missing:
+            entry = withheld.get(point)
+            label = "it is absent from the dataset" if entry is None else entry[0].value
+            reasons.setdefault(label, []).append(point)
+
+        detail = "; ".join(
+            f"{len(points)} because {label} ({_render_endpoints(points)})"
+            for label, points in sorted(reasons.items())
+        )
+        raise IncompleteCoverageError(
+            f"A REQUIRED {resolution.value} series for {security_id} over "
+            f"{start.isoformat()}..{end.isoformat()} is missing {len(missing)} of "
+            f"{len(expected)} expected endpoint(s) as of {as_of.isoformat()}: {detail}."
+            f"{self._shorten_hint(resolution, expected, covered)} Refused rather than "
+            "returned short: a series that silently drops the endpoints this query was not "
+            "entitled to see is indistinguishable from a complete one, and a caller "
+            "averaging it gets a number. Pass SeriesRequirement.OPTIONAL to accept whatever "
+            "was knowable."
+        )
+
+    def _shorten_hint(
+        self,
+        resolution: BarResolution,
+        expected: Sequence[Endpoint],
+        covered: set[Endpoint],
+    ) -> str:
+        """Name the ``end`` that would have worked, when a prefix is intact.
+
+        Only offered when the served endpoints are a genuine prefix of the
+        expected grid. Suggesting an end that still has holes behind it would send
+        the caller round the loop a second time.
+        """
+        prefix: list[Endpoint] = []
+        for point in expected:
+            if point not in covered:
+                break
+            prefix.append(point)
+        if not prefix or len(prefix) == len(expected):
+            return ""
+        last = prefix[-1]
+        # datetime first: it is a subclass of date, so testing date first would
+        # match every minute endpoint and render a full timestamp as an "end".
+        boundary = last.date() if isinstance(last, datetime) else last
+        return (
+            f" Everything up to {boundary.isoformat()} was servable, so an end of "
+            f"{boundary.isoformat()} would answer."
+        )
 
     def _guard(
         self,
@@ -712,6 +1022,75 @@ def _bounds_are_approved(approvals: BoundApprovals, entry: DatasetResolutionEvid
     if entry.provider_bounded_rows and not policy.provider:
         return False
     return not (entry.public_bounded_rows and not policy.public)
+
+
+def _snapshot_artifact(header: UniverseSnapshotHeader) -> ConsumedArtifactRecord:
+    """The universe snapshot, described as the derived artifact it is.
+
+    Every field the manifest needs comes from the header itself, so a run cannot
+    cite a snapshot it did not read or describe one it did read inaccurately.
+    """
+    return ConsumedArtifactRecord(
+        artifact_id=header.artifact_id,
+        entity="universe_snapshot_header",
+        output_validity=header.envelope.output_validity.value,
+        derivation_spec_version=header.derivation_spec_version,
+        artifact_content_hash=header.snapshot_content_hash,
+        artifact_first_built_time=header.envelope.artifact_first_built_time,
+        lineage_selectors=lineage_fingerprint(header.envelope.lineage),
+    )
+
+
+def _endpoint_key(bar: PriceBar, resolution: BarResolution) -> Endpoint:
+    """The grid position a bar occupies, at the resolution being served.
+
+    Daily coverage is per session; minute coverage is per endpoint. One function
+    so both completeness checks index the same way, because a physical check and
+    a servability check that disagreed about what an endpoint *is* would report
+    phantom gaps.
+    """
+    if resolution is BarResolution.DAILY:
+        return bar.session_date
+    return bar.bar_end_time
+
+
+def _render_endpoints(points: Sequence[Endpoint]) -> str:
+    """A short, ordered rendering of endpoints for a refusal message."""
+    shown = [point.isoformat() for point in points[:5]]
+    return ", ".join(shown) + (" ..." if len(points) > 5 else "")
+
+
+def _validate_revision_view(
+    mode: AdjustmentMode, revision_view: RevisionView | None
+) -> RevisionView:
+    """Require a view exactly where revisions can change the answer.
+
+    A raw series reads no corporate actions, so there is nothing to choose a
+    revision of; accepting a view there would let a caller believe the query
+    honoured something it never consulted. An adjusted series does read them, and
+    a restated ratio changes every adjusted number after its ex-date, so the view
+    is part of the question rather than a preference.
+
+    Raises:
+        QueryRangeError: if an adjusted query names no view, or a raw query names
+            one.
+    """
+    if mode.is_raw:
+        if revision_view is not None:
+            raise QueryRangeError(
+                f"A RAW series names revision_view={revision_view.value}, but a raw series "
+                "reads no corporate actions and therefore chooses no revision. Accepting it "
+                "would report that the query honoured a view it never consulted."
+            )
+        return RevisionView.AS_KNOWN_AT_AS_OF
+    if revision_view is None:
+        raise QueryRangeError(
+            "An adjusted series must name its revision_view. A corporate action can be "
+            "restated -- a corrected ratio, a moved ex-date -- and which revision was in "
+            "force changes every adjusted number after it. There is no default, because a "
+            "default would answer that on the caller's behalf without telling them."
+        )
+    return revision_view
 
 
 def _minute_endpoints(session: MarketSession) -> tuple[datetime, ...]:
@@ -814,11 +1193,14 @@ def _counts(excluded: dict[tuple[str, str], int]) -> tuple[OriginExclusionCount,
 
 __all__ = [
     "PRICE_HISTORY_DATASETS",
+    "RAW_PRICE_DATASETS",
     "UNIVERSE_DATASETS",
     "BarSeriesResult",
+    "Endpoint",
     "OriginExclusionCount",
     "PointInTimeReader",
     "ResultProvenance",
+    "SeriesRequirement",
     "UniverseSnapshotResult",
     "select_revision",
 ]

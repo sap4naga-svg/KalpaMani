@@ -62,6 +62,7 @@ from kalpamani.data.contracts.vocabulary import (
     LimitationToken,
     ListingFactKind,
     QualitySeverity,
+    RevisionView,
     StorageLayer,
 )
 from kalpamani.data.curate.adjustment import (
@@ -97,7 +98,11 @@ from kalpamani.data.curate.universe import (
 )
 from kalpamani.data.ingest.bronze import BronzeStore, RetrievalMetadata
 from kalpamani.data.normalize.silver import BarLagPolicy, SessionCalendar, normalize_price_bars
-from kalpamani.data.pit.accessors import PointInTimeReader, _minute_endpoints
+from kalpamani.data.pit.accessors import (
+    PointInTimeReader,
+    SeriesRequirement,
+    _minute_endpoints,
+)
 from kalpamani.data.quality.checks import QualityFinding, check_price_bars
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.storage import LocalTableStore
@@ -1174,6 +1179,8 @@ def test_raw_and_adjusted_are_different_answers_to_different_questions(
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
     adjusted = reader.get_price_history(
         security_id=SCOPE,
@@ -1183,6 +1190,8 @@ def test_raw_and_adjusted_are_different_answers_to_different_questions(
         adjustment_mode=AdjustmentMode.adjusted(AdjustmentPolicy.SPLIT_ONLY, ADJUSTMENT_CONVENTION),
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
     )
     assert _closes(raw.bars)[-1] == Decimal("52.00")
     assert _closes(adjusted.bars)[-1] == Decimal("104.000000")
@@ -1201,6 +1210,8 @@ def test_a_price_series_is_one_resolution(tmp_path: Path) -> None:
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
     assert len(daily.bars) == 1
     assert daily.resolution is BarResolution.DAILY
@@ -1216,7 +1227,7 @@ def test_minute_coverage_cannot_pass_with_one_arbitrary_bar(tmp_path: Path) -> N
     trading day is a gap -- and a gap is a refusal, not a short series.
     """
     reader = _reader(tmp_path, requested=PROVIDER_REALISTIC)
-    with pytest.raises(IncompleteCoverageError, match="expected MINUTE endpoints"):
+    with pytest.raises(IncompleteCoverageError, match="expected endpoint"):
         reader.get_price_history(
             security_id=phase3a.SEC_RENAMED,
             start=date(2019, 6, 26),
@@ -1225,6 +1236,8 @@ def test_minute_coverage_cannot_pass_with_one_arbitrary_bar(tmp_path: Path) -> N
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PROVIDER_REALISTIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1256,6 +1269,8 @@ def test_an_inverted_range_is_refused(tmp_path: Path) -> None:
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1270,6 +1285,8 @@ def test_a_range_past_declared_coverage_is_refused_not_truncated(tmp_path: Path)
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1285,6 +1302,8 @@ def test_a_security_the_dataset_never_heard_of_is_refused(tmp_path: Path) -> Non
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1300,6 +1319,8 @@ def test_a_missing_required_bar_refuses_rather_than_truncating(tmp_path: Path) -
             adjustment_mode=RAW,
             as_of=phase3a.utc(2019, 7, 4, 12, 0),
             profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1314,6 +1335,8 @@ def test_a_minute_request_over_sessions_with_no_minute_bars_refuses(tmp_path: Pa
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PROVIDER_REALISTIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 
@@ -1328,12 +1351,43 @@ def test_a_fully_covered_listed_range_is_served(tmp_path: Path) -> None:
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
     assert len(result.bars) == 5
 
 
 def test_a_bar_is_not_served_before_its_own_availability(tmp_path: Path) -> None:
-    """R1, at the level a backtest actually experiences it."""
+    """R1, at the level a backtest actually experiences it.
+
+    The 25 June bar is bounded at 20:30 UTC, half an hour after the cutoff, so a
+    query at 20:00 is not entitled to it. This test previously asserted that the
+    two-session request came back one bar long -- which is the defect: a caller
+    averaging that result gets a number, and nothing in it says a session is
+    missing. A REQUIRED series now refuses and names the end that would answer.
+    """
+    reader = _reader(tmp_path)
+    with pytest.raises(IncompleteCoverageError) as refusal:
+        reader.get_price_history(
+            security_id=SCOPE,
+            start=VALID_START,
+            end=date(2019, 6, 25),
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=phase3a.utc(2019, 6, 25, 20, 0),
+            profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
+        )
+    message = str(refusal.value)
+    assert "not yet available at this as_of" in message
+    assert "an end of 2019-06-24 would answer" in message
+
+
+def test_the_same_query_serves_a_short_series_when_asked_optionally(
+    tmp_path: Path,
+) -> None:
+    """A caller who wants whatever was knowable says so, and the result says so back."""
     reader = _reader(tmp_path)
     result = reader.get_price_history(
         security_id=SCOPE,
@@ -1343,10 +1397,13 @@ def test_a_bar_is_not_served_before_its_own_availability(tmp_path: Path) -> None
         adjustment_mode=RAW,
         as_of=phase3a.utc(2019, 6, 25, 20, 0),
         profile=PUBLIC,
+        requirement=SeriesRequirement.OPTIONAL,
+        revision_view=None,
     )
-    assert [value.session_date for value in result.bars] == [date(2019, 6, 24)], (
-        "The 25 June bar is bounded at 20:30 UTC, half an hour after the cutoff. Dataset "
-        "completeness and point-in-time availability are different questions."
+    assert [value.session_date for value in result.bars] == [date(2019, 6, 24)]
+    assert result.requirement is SeriesRequirement.OPTIONAL
+    assert result.withheld_endpoints == 1, (
+        "The result carries the count rather than leaving the caller to notice."
     )
 
 
@@ -1366,6 +1423,8 @@ def test_a_series_emptied_by_origin_ineligibility_is_refused(tmp_path: Path) -> 
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PROVIDER_REALISTIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
     assert result.bars, "Daily bars are eligible under PROVIDER_REALISTIC_PIT."
 
@@ -1381,6 +1440,8 @@ def test_a_series_emptied_by_origin_ineligibility_is_refused(tmp_path: Path) -> 
             adjustment_mode=RAW,
             as_of=phase3a.utc(2021, 1, 6, 12, 0),
             profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
         )
 
 

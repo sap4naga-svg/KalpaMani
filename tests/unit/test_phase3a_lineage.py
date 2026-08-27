@@ -15,7 +15,11 @@ from fixtures import phase3a
 from kalpamani.data.contracts.entities import Listing, PriceBar, SecurityAttribute
 from kalpamani.data.contracts.envelope import LineageRef
 from kalpamani.data.contracts.errors import ArtifactIntegrityError
-from kalpamani.data.contracts.vocabulary import BarResolution, ListingFactKind
+from kalpamani.data.contracts.vocabulary import (
+    BarResolution,
+    InformationSetProfile,
+    ListingFactKind,
+)
 from kalpamani.data.curate.lineage import (
     attribute_selector,
     bar_selector,
@@ -36,9 +40,23 @@ def _dataset_rows() -> tuple[
     return phase3a.listings(), phase3a.attributes(), phase3a.bars()
 
 
-def _replay(refs: tuple[LineageRef, ...]) -> tuple[object, ...]:
+def _replay(refs: tuple[LineageRef, ...], **overrides: object) -> tuple[object, ...]:
+    """Replay against the fixture, under the profile the fixture builds for.
+
+    ``resolved_profile`` and ``approvals`` are required rather than defaulted in
+    the module itself: a negative-coverage claim is about the *admissible* set, so
+    replaying without them would test a different claim than the one recorded.
+    """
     listings, attributes, bars = _dataset_rows()
-    return resolve_lineage(refs, listings=listings, attributes=attributes, bars=bars)
+    kwargs: dict[str, object] = {
+        "listings": listings,
+        "attributes": attributes,
+        "bars": bars,
+        "resolved_profile": InformationSetProfile.PUBLIC_PIT,
+        "approvals": phase3a.approvals(),
+    }
+    kwargs.update(overrides)
+    return resolve_lineage(refs, **kwargs)  # type: ignore[arg-type]
 
 
 def test_a_membership_row_replays_to_exactly_what_it_consumed() -> None:
@@ -94,7 +112,7 @@ def test_a_bar_selector_naming_an_absent_endpoint_is_refused() -> None:
 
 def test_a_selector_matching_more_rows_than_it_names_is_refused() -> None:
     """BROADER lineage: a key that is not unique cannot identify what was read."""
-    listings, attributes, bars = _dataset_rows()
+    _listings, _attributes, bars = _dataset_rows()
     duplicated = (*bars, bars[0])
     ref = LineageRef.of(
         entity="price_bar",
@@ -102,7 +120,7 @@ def test_a_selector_matching_more_rows_than_it_names_is_refused() -> None:
         selector=bar_selector(bars[0].security_id, bars[0].resolution, (bars[0],)),
     )
     with pytest.raises(ArtifactIntegrityError, match="share the key"):
-        resolve_lineage((ref,), listings=listings, attributes=attributes, bars=duplicated)
+        _replay((ref,), bars=duplicated)
 
 
 def test_a_selector_contradicting_its_own_key_is_refused() -> None:

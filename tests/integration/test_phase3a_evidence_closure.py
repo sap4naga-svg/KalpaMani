@@ -33,6 +33,7 @@ from kalpamani.data.contracts.errors import (
     IncompleteCoverageError,
     MissingHistoricalSnapshotError,
     QualityGateError,
+    QueryRangeError,
     UnsafePathComponentError,
 )
 from kalpamani.data.contracts.manifest import InputInventory, emit_manifest
@@ -49,6 +50,7 @@ from kalpamani.data.contracts.profiles import (
 from kalpamani.data.contracts.row_identity import row_fingerprint, source_row_identity
 from kalpamani.data.contracts.vocabulary import (
     RAW,
+    AdjustmentMode,
     AdjustmentPolicy,
     BarResolution,
     DatasetGapPolicy,
@@ -56,6 +58,7 @@ from kalpamani.data.contracts.vocabulary import (
     InformationSetProfile,
     ListingFactKind,
     OutputValidity,
+    RevisionView,
     StorageLayer,
 )
 from kalpamani.data.curate.adjustment import (
@@ -68,7 +71,14 @@ from kalpamani.data.curate.adjustment import (
     verify_adjusted_bar_artifact,
 )
 from kalpamani.data.curate.build import build_gold_dataset
-from kalpamani.data.curate.lineage import EMPTY_HISTORY_VERSION, bar_lineage_refs
+from kalpamani.data.curate.lineage import (
+    NEGATIVE_COVERAGE_ENTITY,
+    attribute_selector,
+    bar_lineage_refs,
+    bar_selector,
+    listing_selector,
+    resolve_lineage,
+)
 from kalpamani.data.curate.publication import (
     GOLD_ENTITIES,
     MANIFEST_NAME,
@@ -86,7 +96,7 @@ from kalpamani.data.ingest.bronze import (
     BronzeStore,
     RetrievalMetadata,
 )
-from kalpamani.data.pit.accessors import PointInTimeReader
+from kalpamani.data.pit.accessors import PointInTimeReader, SeriesRequirement
 from kalpamani.data.quality.checks import check_universe_snapshots, subsequently_delisted
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement, plan_for
 from kalpamani.data.quality.report import CheckNotRun, report_from_findings
@@ -312,11 +322,235 @@ def test_a_history_spanning_four_source_versions_produces_four_references() -> N
     assert {ref.dataset_version for ref in refs} == {f"gold/source.{i}" for i in range(4)}
 
 
-def test_an_empty_history_is_recorded_rather_than_dropped() -> None:
-    """ "No prior bars" is a fact; an unrecorded history is the absence of one."""
-    refs = bar_lineage_refs("SEC-NOBODY", BarResolution.DAILY, ())
+# ---------------------------------------------------------------------------
+# 6 -- dataset_version selects the candidate; it is not checked afterwards
+# ---------------------------------------------------------------------------
+
+_OTHER_VERSION = "gold/synthetic.a1.2"
+
+
+def _in_other_version(rows: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The same rows as they would appear in a second immutable build."""
+    return tuple(
+        dataclasses.replace(
+            row, envelope=dataclasses.replace(row.envelope, dataset_version=_OTHER_VERSION)
+        )
+        for row in rows
+    )
+
+
+def _replay(
+    ref: LineageRef,
+    *,
+    listings: tuple[Any, ...] = (),
+    attributes: tuple[Any, ...] = (),
+    bars: tuple[Any, ...] = (),
+) -> tuple[Any, ...]:
+    return resolve_lineage(
+        (ref,),
+        listings=listings,
+        attributes=attributes,
+        bars=bars,
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+    )
+
+
+def test_the_same_listing_key_in_two_versions_resolves_the_named_one() -> None:
+    """Matching on the key alone found both and refused as ambiguous."""
+    listing = phase3a.listings()[0]
+    both = (*phase3a.listings(), *_in_other_version(phase3a.listings()))
+    ref = LineageRef.of(
+        entity="listing",
+        dataset_version=phase3a.LISTING_DATASET_VERSION,
+        selector=listing_selector(listing),
+    )
+    resolved = _replay(ref, listings=both)
+    assert len(resolved) == 1
+    assert resolved[0].envelope.dataset_version == phase3a.LISTING_DATASET_VERSION
+
+    later = LineageRef.of(
+        entity="listing", dataset_version=_OTHER_VERSION, selector=listing_selector(listing)
+    )
+    assert _replay(later, listings=both)[0].envelope.dataset_version == _OTHER_VERSION
+
+
+def test_the_same_attribute_key_in_two_versions_resolves_the_named_one() -> None:
+    attribute = phase3a.attributes()[0]
+    both = (*phase3a.attributes(), *_in_other_version(phase3a.attributes()))
+    ref = LineageRef.of(
+        entity="security_attribute",
+        dataset_version=_OTHER_VERSION,
+        selector=attribute_selector(attribute),
+    )
+    resolved = _replay(ref, attributes=both)
+    assert len(resolved) == 1
+    assert resolved[0].envelope.dataset_version == _OTHER_VERSION
+
+
+def test_the_same_bar_endpoint_in_two_versions_resolves_the_named_one() -> None:
+    """A corrected price in a later build is not the bar the artifact read."""
+    bars = tuple(bar for bar in phase3a.daily_bars() if bar.security_id == phase3a.SEC_CONTINUOUS)
+    corrected = tuple(
+        dataclasses.replace(bar, close=bar.close + Decimal("5.00"))
+        for bar in _in_other_version(bars)
+    )
+    both = (*bars, *corrected)
+    ref = LineageRef.of(
+        entity="price_bar",
+        dataset_version=phase3a.BAR_DATASET_VERSION,
+        selector=bar_selector(phase3a.SEC_CONTINUOUS, BarResolution.DAILY, bars),
+    )
+    resolved = _replay(ref, bars=both)
+    assert len(resolved) == len(bars)
+    assert {row.envelope.dataset_version for row in resolved} == {phase3a.BAR_DATASET_VERSION}
+    assert [row.close for row in resolved] == [bar.close for bar in bars]
+
+
+def test_a_duplicate_within_the_named_version_is_still_refused() -> None:
+    """Version scoping narrows the search; it does not excuse an ambiguous key."""
+    bars = tuple(bar for bar in phase3a.daily_bars() if bar.security_id == phase3a.SEC_CONTINUOUS)[
+        :1
+    ]
+    ref = LineageRef.of(
+        entity="price_bar",
+        dataset_version=phase3a.BAR_DATASET_VERSION,
+        selector=bar_selector(phase3a.SEC_CONTINUOUS, BarResolution.DAILY, bars),
+    )
+    with pytest.raises(ArtifactIntegrityError, match="within dataset version"):
+        _replay(ref, bars=(*bars, *bars))
+
+
+def test_a_key_present_only_in_another_version_is_refused() -> None:
+    """ "Absent from the named build" is a different finding from "absent"."""
+    listing = phase3a.listings()[0]
+    ref = LineageRef.of(
+        entity="listing",
+        dataset_version=phase3a.LISTING_DATASET_VERSION,
+        selector=listing_selector(listing),
+    )
+    with pytest.raises(ArtifactIntegrityError, match="in dataset version"):
+        _replay(ref, listings=_in_other_version(phase3a.listings()))
+
+
+# ---------------------------------------------------------------------------
+# 7 -- an absence is proved, not asserted
+# ---------------------------------------------------------------------------
+
+#: A window that contains SEC-0001's 2019-06-24 bar, for the absence tests below.
+_ABSENCE_WINDOW = (phase3a.utc(2019, 6, 20), phase3a.utc(2019, 6, 25, 13, 30))
+
+
+def _absence_ref(
+    security_id: str,
+    *,
+    window: tuple[datetime, datetime] = _ABSENCE_WINDOW,
+    versions: tuple[str, ...] = (phase3a.BAR_DATASET_VERSION,),
+    profile: InformationSetProfile = PUBLIC,
+) -> LineageRef:
+    refs = bar_lineage_refs(
+        security_id,
+        BarResolution.DAILY,
+        (),
+        absence_window=window,
+        absence_versions=versions,
+        absence_profile=profile,
+    )
     assert len(refs) == 1
-    assert refs[0].dataset_version == EMPTY_HISTORY_VERSION
+    return refs[0]
+
+
+def _replay_absence(
+    ref: LineageRef,
+    *,
+    bars: tuple[Any, ...] | None = None,
+    profile: InformationSetProfile = PUBLIC,
+) -> None:
+    resolve_lineage(
+        (ref,),
+        listings=(),
+        attributes=(),
+        bars=phase3a.bars() if bars is None else bars,
+        resolved_profile=profile,
+        approvals=phase3a.approvals(),
+    )
+
+
+def test_an_empty_history_is_recorded_as_a_governed_absence() -> None:
+    """ "No prior bars" is a claim about a window, a build and a profile."""
+    ref = _absence_ref("SEC-NOBODY")
+    assert ref.entity == NEGATIVE_COVERAGE_ENTITY
+    assert ref.dataset_version == phase3a.BAR_DATASET_VERSION
+    selector = dict(ref.selector)
+    assert selector["window_start"] == _ABSENCE_WINDOW[0].isoformat()
+    assert selector["window_end"] == _ABSENCE_WINDOW[1].isoformat()
+    assert selector["resolved_profile"] == PUBLIC.value
+
+
+def test_a_no_history_claim_with_no_window_is_refused() -> None:
+    """The sentinel it replaces resolved to nothing whatever the store held."""
+    with pytest.raises(ArtifactIntegrityError, match="unfalsifiable in both directions"):
+        bar_lineage_refs("SEC-NOBODY", BarResolution.DAILY, ())
+
+
+def test_a_genuine_absence_replays() -> None:
+    """NEGATIVE CONTROL. A security the fixture has no bars for."""
+    _replay_absence(_absence_ref("SEC-NOBODY"))
+
+
+def test_a_bar_inside_the_governed_window_refuses_the_absence() -> None:
+    """The decision was made on the belief that this security had no usable history."""
+    ref = _absence_ref(phase3a.SEC_CONTINUOUS)
+    with pytest.raises(ArtifactIntegrityError, match="says no DAILY bar was admissible"):
+        _replay_absence(ref)
+
+
+def test_a_bar_outside_the_governed_window_does_not_invalidate_the_absence() -> None:
+    """The window is what the decision looked at; a later bar says nothing about it."""
+    _replay_absence(
+        _absence_ref(
+            phase3a.SEC_CONTINUOUS,
+            window=(phase3a.utc(2019, 6, 1), phase3a.utc(2019, 6, 20)),
+        )
+    )
+
+
+def test_the_same_absence_against_another_publication_refuses() -> None:
+    """An absence is a fact about particular builds, not about the world."""
+    ref = _absence_ref("SEC-NOBODY", versions=("gold/some-other-build.1",))
+    other = tuple(
+        dataclasses.replace(
+            bar,
+            security_id="SEC-NOBODY",
+            envelope=dataclasses.replace(bar.envelope, dataset_version="gold/some-other-build.1"),
+        )
+        for bar in phase3a.daily_bars()
+        if bar.security_id == phase3a.SEC_CONTINUOUS
+    )
+    with pytest.raises(ArtifactIntegrityError, match="says no DAILY bar was admissible"):
+        _replay_absence(ref, bars=other)
+
+
+def test_a_bar_the_profile_could_not_use_does_not_invalidate_the_absence() -> None:
+    """A PROVIDER_DERIVED bar was never history a PUBLIC_PIT decision could use.
+
+    This is the case that made the first version of the check wrong: it searched
+    every stored row, so a correct build was refused for a bar the rule could not
+    have seen.
+    """
+    reuser_bars = tuple(
+        bar for bar in phase3a.daily_bars() if bar.security_id == phase3a.SEC_TICKER_REUSER
+    )
+    assert reuser_bars, "The fixture's provider-aggregated security has bars."
+    window = (phase3a.utc(2021, 1, 1), phase3a.utc(2021, 1, 5, 14, 30))
+    _replay_absence(_absence_ref(phase3a.SEC_TICKER_REUSER, window=window))
+
+
+def test_an_absence_replayed_under_another_profile_is_refused() -> None:
+    """It would test a different claim than the one that was made."""
+    ref = _absence_ref("SEC-NOBODY", profile=PUBLIC)
+    with pytest.raises(ArtifactIntegrityError, match="is being replayed under"):
+        _replay_absence(ref, profile=FORWARD)
 
 
 def test_membership_lineage_never_names_the_gold_version_it_was_written_into() -> None:
@@ -358,7 +592,7 @@ def test_membership_lineage_never_names_the_gold_version_it_was_written_into() -
         for ref in row.envelope.lineage
     }
     assert "gold/final.7" not in versions, "The Gold version is not a source of anything."
-    assert versions <= set(renamed.values()) | {EMPTY_HISTORY_VERSION}
+    assert versions <= set(renamed.values())
     assert len(versions & set(renamed.values())) == 3, "All three source versions are named."
 
 
@@ -982,18 +1216,106 @@ def test_the_input_inventory_is_produced_by_the_query_path(tmp_path: Path) -> No
         adjustment_mode=RAW,
         as_of=phase3a.utc(2019, 7, 1, 12, 0),
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
     reader.get_security_universe(as_of=phase3a.utc(2019, 6, 28, 12, 0), profile=PUBLIC)
 
     evidence = reader.execution_evidence()
     assert "price_bar" in evidence.direct_source_datasets
-    assert "corporate_action" in evidence.direct_source_datasets
-    assert "universe_membership" in evidence.direct_source_datasets
+    assert "universe_membership" not in evidence.direct_source_datasets, (
+        "universe_membership is a derived artifact, not a source dataset. Recording it as one "
+        "made the manifest demand provider-resolution evidence for a table nobody publishes "
+        "resolution evidence about."
+    )
+    assert evidence.consumed_artifact_ids, "The snapshot it read is a consumed artifact."
     assert evidence.quality_report_hash == reader.quality_report.report_hash
 
     inventory = InputInventory.from_execution(evidence, result_bytes=b'{"n": 1}')
     assert inventory.direct_source_datasets == evidence.direct_source_datasets
     assert inventory.unapproved_bounds_relied_upon == ()
+
+
+def test_a_raw_series_does_not_record_corporate_actions(tmp_path: Path) -> None:
+    """A raw series does not consult them, so recording one would be a false read.
+
+    It would also be self-defeating: every directly-read dataset must carry
+    provider-resolution evidence, so a dataset the run never opened would have to
+    be evidenced anyway.
+    """
+    reader = phase3a.reader(LocalTableStore(tmp_path))
+    reader.get_price_history(
+        security_id=phase3a.SEC_CONTINUOUS,
+        start=date(2019, 6, 24),
+        end=date(2019, 6, 28),
+        resolution=BarResolution.DAILY,
+        adjustment_mode=RAW,
+        as_of=phase3a.utc(2019, 7, 1, 12, 0),
+        profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
+    )
+    evidence = reader.execution_evidence()
+    assert evidence.direct_source_datasets == ("price_bar",)
+    assert evidence.revisable_datasets_consumed == ()
+
+
+def test_an_adjusted_series_records_corporate_actions_and_a_revision_view(
+    tmp_path: Path,
+) -> None:
+    """It does read them, and which revision it used is part of the answer."""
+    reader = phase3a.reader(LocalTableStore(tmp_path))
+    result = reader.get_price_history(
+        security_id=phase3a.SEC_CONTINUOUS,
+        start=date(2019, 6, 24),
+        end=date(2019, 6, 28),
+        resolution=BarResolution.DAILY,
+        adjustment_mode=AdjustmentMode.adjusted(AdjustmentPolicy.SPLIT_ONLY, ADJUSTMENT_CONVENTION),
+        as_of=phase3a.utc(2019, 7, 1, 12, 0),
+        profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
+    )
+    evidence = reader.execution_evidence()
+    assert set(evidence.direct_source_datasets) == {"price_bar", "corporate_action"}
+    assert evidence.revisable_datasets_consumed == ("corporate_action",)
+    assert result.provenance.revision_view is RevisionView.AS_KNOWN_AT_AS_OF
+
+
+def test_an_adjusted_series_without_a_revision_view_is_refused(tmp_path: Path) -> None:
+    """A restated ratio changes every adjusted number after its ex-date."""
+    reader = phase3a.reader(LocalTableStore(tmp_path))
+    with pytest.raises(QueryRangeError, match="must name its revision_view"):
+        reader.get_price_history(
+            security_id=phase3a.SEC_CONTINUOUS,
+            start=date(2019, 6, 24),
+            end=date(2019, 6, 28),
+            resolution=BarResolution.DAILY,
+            adjustment_mode=AdjustmentMode.adjusted(
+                AdjustmentPolicy.SPLIT_ONLY, ADJUSTMENT_CONVENTION
+            ),
+            as_of=phase3a.utc(2019, 7, 1, 12, 0),
+            profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=None,
+        )
+
+
+def test_a_raw_series_naming_a_revision_view_is_refused(tmp_path: Path) -> None:
+    """It would report that the query honoured a view it never consulted."""
+    reader = phase3a.reader(LocalTableStore(tmp_path))
+    with pytest.raises(QueryRangeError, match="reads no corporate actions"):
+        reader.get_price_history(
+            security_id=phase3a.SEC_CONTINUOUS,
+            start=date(2019, 6, 24),
+            end=date(2019, 6, 28),
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=phase3a.utc(2019, 7, 1, 12, 0),
+            profile=PUBLIC,
+            requirement=SeriesRequirement.REQUIRED,
+            revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
+        )
 
 
 def test_the_result_hash_covers_the_exact_bytes(tmp_path: Path) -> None:
@@ -1134,6 +1456,8 @@ def _minute_series(reader: Any, *, start: date, end: date) -> Any:
         adjustment_mode=RAW,
         as_of=phase3a.utc(2021, 6, 1, 12, 0),
         profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
     )
 
 
@@ -1160,7 +1484,7 @@ def test_one_missing_minute_endpoint_refuses_the_whole_series(tmp_path: Path) ->
     """One minute bar in a session is not evidence that the session was observed."""
     dropped = phase3a.utc(2019, 6, 28, 17, 0)
     reader = phase3a.dense_minute_reader(LocalTableStore(tmp_path), omit=dropped)
-    with pytest.raises(IncompleteCoverageError, match="expected MINUTE endpoints"):
+    with pytest.raises(IncompleteCoverageError, match="expected endpoint"):
         _minute_series(reader, start=date(2019, 6, 28), end=date(2019, 7, 3))
 
 
@@ -1169,7 +1493,7 @@ def test_the_grid_comes_from_the_calendar_not_from_the_bars(tmp_path: Path) -> N
     reader = phase3a.dense_minute_reader(
         LocalTableStore(tmp_path), calendar=phase3a.sessions_with_a_full_length_half_day()
     )
-    with pytest.raises(IncompleteCoverageError, match="expected MINUTE endpoints"):
+    with pytest.raises(IncompleteCoverageError, match="expected endpoint"):
         _minute_series(reader, start=date(2019, 7, 3), end=date(2019, 7, 3))
 
 

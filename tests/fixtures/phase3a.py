@@ -33,10 +33,12 @@ fixture that reads one cannot prove determinism.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import (
@@ -1189,6 +1191,240 @@ def sessions_with_a_full_length_half_day() -> tuple[MarketSession, ...]:
             )
         )
     return tuple(out)
+
+
+def publication_from(
+    store: LocalTableStore,
+    datasets: dict[str, tuple[SourceFact, ...]],
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    universe_sessions: Sequence[date] = SNAPSHOT_SESSIONS,
+    build_time: datetime = BUILD_TIME,
+    dataset_version: str = DATASET_VERSION,
+) -> VerifiedPublication:
+    """Publish and verify a build over caller-supplied source rows.
+
+    The whole sanctioned path -- resolve, build, publish, verified read -- with
+    the source rows as the only variable. An adversarial case perturbs one row and
+    gets a real publication rather than a hand-assembled object, so what it proves
+    is a property of the system and not of the test.
+    """
+    resolved = resolve_run_inputs(
+        datasets,
+        config=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
+    )
+    dataset = build_gold_dataset(
+        resolved,
+        dataset_version=dataset_version,
+        build_time=build_time,
+        coverage_start=COVERAGE_START,
+        coverage_end=COVERAGE_END,
+        universe_definition=universe_definition(),
+        universe_sessions=tuple(universe_sessions),
+        evaluation_cutoffs={session: session_open(session) for session in universe_sessions},
+        approvals=approvals(),
+        artifact_first_built_time=ARTIFACT_FIRST_BUILT,
+        ingestion_time=INGESTION_TIME,
+    )
+    publish_gold_dataset(
+        store,
+        dataset,
+        quality_report=quality_report(),
+        quality_plan=PHASE3A_QUALITY_PLAN,
+        code_commit_sha=CODE_COMMIT_SHA,
+        lag_policy_version=LAG_POLICY_VERSION,
+        universe_definition_version=UNIVERSE_DEFINITION_VERSION,
+        source_ingestion_run_ids=(INGESTION_RUN_ID,),
+    )
+    return read_published_dataset(
+        store,
+        dataset_version=dataset_version,
+        config=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
+    )
+
+
+def reader_from(
+    store: LocalTableStore,
+    datasets: dict[str, tuple[SourceFact, ...]],
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    **kwargs: Any,
+) -> PointInTimeReader:
+    """A reader over a publication built from caller-supplied source rows."""
+    return PointInTimeReader(
+        publication_from(store, datasets, requested=requested, **kwargs),
+        resolution=resolution(requested=requested),
+        approvals=approvals(),
+    )
+
+
+def with_bar_available_at(
+    datasets: dict[str, tuple[SourceFact, ...]],
+    *,
+    security_id: str,
+    session_date: date,
+    provider_available: datetime,
+) -> dict[str, tuple[SourceFact, ...]]:
+    """Push one daily bar's exact provider availability to a later instant.
+
+    The bar still exists and the dataset is still physically complete. Only the
+    moment a query becomes entitled to it moves, which is precisely the case a
+    physical-coverage check cannot see.
+    """
+    out = dict(datasets)
+    out["price_bar"] = tuple(
+        dataclasses.replace(
+            bar,
+            envelope=dataclasses.replace(
+                bar.envelope,
+                provider_available_time=provider_available,
+                public_available_upper_bound=provider_available,
+            ),
+        )
+        if (
+            isinstance(bar, PriceBar)
+            and bar.security_id == security_id
+            and bar.session_date == session_date
+            and bar.resolution is BarResolution.DAILY
+        )
+        else bar
+        for bar in datasets["price_bar"]
+    )
+    return out
+
+
+def without_bar(
+    datasets: dict[str, tuple[SourceFact, ...]],
+    *,
+    security_id: str,
+    session_date: date,
+) -> dict[str, tuple[SourceFact, ...]]:
+    """Remove one daily bar outright, leaving a genuine hole in the dataset."""
+    out = dict(datasets)
+    out["price_bar"] = tuple(
+        bar
+        for bar in datasets["price_bar"]
+        if not (
+            isinstance(bar, PriceBar)
+            and bar.security_id == security_id
+            and bar.session_date == session_date
+            and bar.resolution is BarResolution.DAILY
+        )
+    )
+    return out
+
+
+def incremental_publication(
+    store: LocalTableStore,
+    *,
+    early_built: datetime,
+    late_built: datetime,
+    requested: InformationSetProfile = InformationSetProfile.FORWARD_SYSTEM,
+    stale_row_security: str | None = None,
+) -> VerifiedPublication:
+    """A dataset whose two snapshots were **first built at different times**.
+
+    A single build stamps one ``artifact_first_built_time`` on everything, so
+    every snapshot in it becomes available at the same instant and the selection
+    fallback can never be exercised. That is an artefact of how the fixture builds,
+    not of how datasets are built: an incremental pipeline computes a session's
+    snapshot when that session closes, so an older snapshot has been held for
+    longer than a newer one. This models that.
+
+    ``stale_row_security`` additionally takes one membership row of the *early*
+    snapshot from the later build, so that one decision arrives after its
+    siblings -- a snapshot recomputed in part, which is the case where serving
+    only the available rows produces a membership set that existed at no instant.
+
+    Every source row is identical between the two builds, so the resolution
+    receipt still accounts for the published rows exactly.
+    """
+    datasets = source_datasets()
+    if requested is InformationSetProfile.FORWARD_SYSTEM:
+        seen = utc(2018, 1, 1)
+        datasets = {
+            name: tuple(
+                dataclasses.replace(
+                    row, envelope=dataclasses.replace(row.envelope, system_first_seen_time=seen)
+                )
+                for row in rows
+            )
+            for name, rows in datasets.items()
+        }
+
+    def _build(built_at: datetime) -> GoldDataset:
+        resolved = resolve_run_inputs(
+            datasets, config=resolution(requested=requested), approvals=approvals()
+        )
+        return build_gold_dataset(
+            resolved,
+            dataset_version=DATASET_VERSION,
+            build_time=BUILD_TIME,
+            coverage_start=COVERAGE_START,
+            coverage_end=COVERAGE_END,
+            universe_definition=universe_definition(),
+            universe_sessions=SNAPSHOT_SESSIONS,
+            evaluation_cutoffs=evaluation_cutoffs(),
+            approvals=approvals(),
+            artifact_first_built_time=built_at,
+            ingestion_time=INGESTION_TIME,
+        )
+
+    early_build = _build(early_built)
+    late_build = _build(late_built)
+    early_session, late_session = SNAPSHOT_SESSIONS
+
+    early_rows = list(early_build.universe[early_session])
+    if stale_row_security is not None:
+        later = {row.security_id: row for row in late_build.universe[early_session]}
+        early_rows = [
+            later[row.security_id] if row.security_id == stale_row_security else row
+            for row in early_rows
+        ]
+
+    combined = GoldDataset(
+        dataset_version=early_build.dataset_version,
+        build_time=early_build.build_time,
+        coverage_start=early_build.coverage_start,
+        coverage_end=early_build.coverage_end,
+        resolved_profile=early_build.resolved_profile,
+        resolution_policy_version=early_build.resolution_policy_version,
+        resolution_receipt=early_build.resolution_receipt,
+        resolution_evidence=early_build.resolution_evidence,
+        sessions=early_build.sessions,
+        listings=early_build.listings,
+        attributes=early_build.attributes,
+        tickers=early_build.tickers,
+        bars=early_build.bars,
+        actions=early_build.actions,
+        universe={
+            early_session: tuple(early_rows),
+            late_session: late_build.universe[late_session],
+        },
+        universe_headers={
+            early_session: early_build.universe_headers[early_session],
+            late_session: late_build.universe_headers[late_session],
+        },
+    )
+    publish_gold_dataset(
+        store,
+        combined,
+        quality_report=quality_report(),
+        quality_plan=PHASE3A_QUALITY_PLAN,
+        code_commit_sha=CODE_COMMIT_SHA,
+        lag_policy_version=LAG_POLICY_VERSION,
+        universe_definition_version=UNIVERSE_DEFINITION_VERSION,
+        source_ingestion_run_ids=(INGESTION_RUN_ID,),
+    )
+    return read_published_dataset(
+        store,
+        dataset_version=DATASET_VERSION,
+        config=resolution(requested=requested),
+        approvals=approvals(),
+    )
 
 
 def dense_minute_publication(

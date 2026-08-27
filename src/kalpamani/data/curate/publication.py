@@ -791,6 +791,8 @@ def read_published_dataset(
             listings=listings,
             attributes=attributes,
             bars=bars,
+            resolved_profile=manifest.resolved_profile,
+            approvals=approvals,
         )
         member = decode_universe_membership(row, replayed)
         recomputed = membership_hash_of(member)

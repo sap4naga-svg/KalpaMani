@@ -142,6 +142,18 @@ class UniverseSnapshotHeader:
         )
 
     @property
+    def artifact_id(self) -> str:
+        """Derived, not generated. The same snapshot always has the same id.
+
+        A universe query consumes this artifact, so a research manifest has to be
+        able to name it. Deriving the id from the identity hash means two runs
+        citing "the snapshot for that session" can be checked against each other
+        rather than merely asserted to match.
+        """
+        digest = self.header_identity_hash.removeprefix("sha256:")
+        return f"usnap-{digest[:16]}"
+
+    @property
     def is_complete(self) -> bool:
         """Whether this header asserts a finished snapshot. Nothing else is served."""
         return self.status == "COMPLETE"
