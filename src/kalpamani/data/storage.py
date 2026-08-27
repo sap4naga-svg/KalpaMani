@@ -43,7 +43,11 @@ from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_json, sha256_hex
 from kalpamani.data.contracts.errors import ArtifactIntegrityError, DatasetPublicationError
-from kalpamani.data.contracts.paths import safe_component, safe_relative_path
+from kalpamani.data.contracts.paths import (
+    internal_filename,
+    safe_component,
+    safe_relative_path,
+)
 from kalpamani.data.contracts.vocabulary import StorageLayer
 
 #: Where a deployment's data lives by default. A path value, not a directory:
@@ -148,11 +152,16 @@ class LocalTableStore:
         name: str,
         payload: bytes,
     ) -> Path:
-        """Write an arbitrary file -- the dataset manifest -- into staging."""
-        # Publication's own reserved files begin with "_" and are named by this
-        # package, not by anything external; everything else is held to the rule.
-        if not name.startswith("_"):
-            safe_component(name, kind="staged file")
+        """Write one of this package's own internal files into staging.
+
+        ``name`` is checked against an exact allowlist rather than a prefix rule.
+        An earlier version waved anything beginning with ``_`` straight through
+        on the grounds that publication names its own files -- but
+        ``_dataset_manifest.json/../../escape`` also begins with an underscore,
+        and a rule with that hole in it is not a rule. There is no caller that
+        needs to stage a file this package did not name.
+        """
+        internal_filename(name, kind="staged file")
         destination = self.staging_root(layer=layer, dataset_version=dataset_version) / name
         _atomic_write(destination, payload)
         return destination

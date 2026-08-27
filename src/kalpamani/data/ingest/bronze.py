@@ -24,12 +24,28 @@ records a second acquisition without touching the content object, which is the
 honest account: we did fetch it twice, and there is still only one payload. A
 second legitimate acquisition is **not** a repair.
 
-**Crash safety.** Content is written first, acquisition second, each atomically,
-and both fsync their containing directory. That order makes the only reachable
-inconsistency a payload with a missing acquisition record, which is *repairable*:
-a retry of that same acquisition identity completes it and reports
-``repaired=True``. The reverse order would leave an acquisition naming a payload
-that does not exist, which nothing on disk could repair.
+**Crash safety, and what "repaired" is allowed to mean.** An acquisition has a
+durable state. A ``PENDING`` record is written first, then the content object,
+then the record is replaced with ``COMPLETE``. Every step is atomic and fsyncs
+its containing directory.
+
+That order makes an interrupted acquisition *visible* rather than merely
+inferable. A crash leaves a ``PENDING`` record on disk, which the audit reports
+and :meth:`BronzeStore.require_complete` refuses; re-running **that same
+acquisition identity** finishes it and reports ``repaired=True``.
+
+The earlier version inferred repair from circumstance -- payload present,
+acquisition record absent -- and that inference was wrong in the ordinary case:
+a *new* ingestion run fetching bytes the store already held matched it exactly,
+so every second acquisition of unchanged data was logged as a recovery event.
+Repair now requires a pending record to complete, which is a fact rather than a
+guess.
+
+**An acquisition identity is globally unique.** ``(digest, ingestion_run_id)``
+names one retrieval, not one retrieval per partition. Recording the same identity
+under a second provider, dataset or date is refused: a run fetched a payload
+once, and two partitions claiming it would each be evidence for a different
+story.
 
 **An acquisition identity means one thing.** Re-writing the same
 ``(digest, ingestion_run_id)`` with identical metadata is idempotent. Re-writing
@@ -72,6 +88,14 @@ _DETERMINISTIC_MTIME = 0
 #: Fixed compression level, so the stored bytes do not depend on a zlib default.
 _COMPRESSION_LEVEL = 9
 
+#: An acquisition record was written but its content object had not landed yet.
+#: Durable, so an interrupted acquisition is a state on disk rather than an
+#: inference from what happens to be missing.
+ACQUISITION_PENDING = "PENDING"
+
+#: The content object landed and this retrieval is fully recorded.
+ACQUISITION_COMPLETE = "COMPLETE"
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetrievalMetadata:
@@ -104,11 +128,15 @@ class BronzeArtifact:
 
     ``content_written`` is ``False`` when the identical payload was already
     stored. ``acquisition_written`` is ``True`` when this retrieval's record was
-    created. ``repaired`` is ``True`` only when this call **completed an
-    interrupted acquisition** -- the payload was present and this same acquisition
-    identity had no record. A second, legitimately different acquisition of the
-    same bytes is not a repair, and reporting it as one would turn an ordinary
-    re-fetch into a recovery event in the audit trail.
+    created or completed by this call. ``repaired`` is ``True`` only when this
+    call **completed a PENDING record left by an interrupted run of this same
+    acquisition identity**.
+
+    A new ingestion run fetching bytes the store already holds is
+    ``content_written=False, acquisition_written=True, repaired=False``. It is an
+    ordinary second acquisition -- we did fetch it twice, and there is still only
+    one payload -- and logging it as a recovery event would put a crash in the
+    audit trail that never happened.
     """
 
     content_sha256: str
@@ -171,8 +199,9 @@ class BronzeStore:
     ) -> BronzeArtifact:
         """Store ``payload`` immutably and record this acquisition.
 
-        Content first, acquisition second, each atomic and each fsync-ed. A crash
-        between them leaves a repairable state; the reverse order would not.
+        PENDING record, then content, then COMPLETE record. Each write is atomic
+        and fsyncs its directory, so an interrupted run leaves a pending record
+        that names exactly what to finish.
 
         Raises:
             BronzeIntegrityError: if an object already exists at this identity
@@ -180,7 +209,8 @@ class BronzeStore:
                 one identity, and overwriting would destroy the earlier
                 acquisition.
             AcquisitionIncompleteError: if this acquisition identity already
-                exists with contradictory metadata. One retrieval happened once.
+                exists with contradictory metadata, or exists in another
+                partition. One retrieval happened once, in one place.
         """
         digest = sha256_hex(payload)
         destination = self.object_path(digest)
@@ -191,8 +221,25 @@ class BronzeStore:
             digest=digest,
             ingestion_run_id=retrieval.ingestion_run_id,
         )
-        body = _acquisition_body(retrieval, digest, len(payload), ingest_date)
+        self._require_identity_unclaimed(acquisition, digest, retrieval.ingestion_run_id)
 
+        pending = _acquisition_body(
+            retrieval, digest, len(payload), ingest_date, status=ACQUISITION_PENDING
+        )
+        complete = _acquisition_body(
+            retrieval, digest, len(payload), ingest_date, status=ACQUISITION_COMPLETE
+        )
+
+        existing = _read_record(acquisition)
+        was_pending = existing is not None and existing.get("status") == ACQUISITION_PENDING
+        if existing is None:
+            _atomic_write(acquisition, canonical_bytes(pending))
+        else:
+            _require_same_retrieval(existing, complete, retrieval, digest)
+
+        # The content object is checked on every call, including the idempotent
+        # one. Returning early on a COMPLETE record would let a corrupted or
+        # replaced payload pass unexamined for the rest of the store's life.
         content_written = False
         if destination.exists():
             stored = self.read(destination)
@@ -214,25 +261,19 @@ class BronzeStore:
             )
             content_written = True
 
-        # A repair completes THIS acquisition identity after its payload landed.
-        # A different run id fetching the same bytes is an ordinary second
-        # acquisition, and calling that a repair would turn a re-fetch into a
-        # recovery event in the audit trail.
-        repaired = not content_written and not acquisition.exists() and destination.exists()
+        if existing is not None and existing.get("status") == ACQUISITION_COMPLETE:
+            # This exact retrieval is already fully recorded. Idempotent.
+            return BronzeArtifact(
+                content_sha256=digest,
+                path=destination,
+                acquisition_path=acquisition,
+                byte_count=len(payload),
+                content_written=content_written,
+                acquisition_written=False,
+                repaired=False,
+            )
 
-        acquisition_written = False
-        if acquisition.exists():
-            existing = json.loads(acquisition.read_text(encoding="utf-8"))
-            if existing != json.loads(canonical_bytes(body).decode("utf-8")):
-                raise AcquisitionIncompleteError(
-                    f"Acquisition {retrieval.ingestion_run_id!r} of {digest} already exists "
-                    "with different metadata. One retrieval happened once; restating it "
-                    "later would make the record describe an event that did not occur. Use a "
-                    "new ingestion_run_id for a new retrieval."
-                )
-        else:
-            _atomic_write(acquisition, canonical_bytes(body))
-            acquisition_written = True
+        _atomic_write(acquisition, canonical_bytes(complete))
 
         return BronzeArtifact(
             content_sha256=digest,
@@ -240,9 +281,33 @@ class BronzeStore:
             acquisition_path=acquisition,
             byte_count=len(payload),
             content_written=content_written,
-            acquisition_written=acquisition_written,
-            repaired=repaired,
+            acquisition_written=True,
+            repaired=was_pending,
         )
+
+    def _require_identity_unclaimed(
+        self, acquisition: Path, digest: str, ingestion_run_id: str
+    ) -> None:
+        """Refuse an acquisition identity already filed somewhere else.
+
+        Raises:
+            AcquisitionIncompleteError: if ``(digest, ingestion_run_id)`` exists
+                under a different partition.
+        """
+        root = self._root / "bronze" / "acquisitions"
+        if not root.is_dir():
+            return
+        name = f"{digest}.{ingestion_run_id}.json"
+        elsewhere = sorted(
+            path for path in root.rglob(name) if path.resolve() != acquisition.resolve()
+        )
+        if elsewhere:
+            raise AcquisitionIncompleteError(
+                f"Acquisition {ingestion_run_id!r} of {digest} is already recorded at "
+                f"{[str(path) for path in elsewhere]}. An acquisition identity names one "
+                "retrieval globally, not one per partition: two partitions claiming it would "
+                "each be evidence for a different story about when the bytes arrived."
+            )
 
     def read(self, path: Path) -> bytes:
         """Return the exact uncompressed payload bytes stored at ``path``."""
@@ -277,10 +342,11 @@ class BronzeStore:
     ) -> tuple[str, ...]:
         """Acquisition records that do not check out, as human-readable reasons.
 
-        Verifies JSON validity, digest linkage, byte count, the provider, dataset,
-        date and run identity the record claims, and that the content object it
-        names exists and hashes correctly. A record nothing can corroborate is not
-        provenance.
+        Verifies JSON validity, acquisition status, digest linkage, byte count,
+        the provider, dataset, date and run identity the record claims, and that
+        the content object it names exists and hashes correctly. A record nothing
+        can corroborate is not provenance, and a record still PENDING is a
+        retrieval that never finished.
         """
         partition = self._acquisition_partition(provider, dataset, ingest_date)
         if not partition.is_dir():
@@ -310,6 +376,17 @@ class BronzeStore:
                         f"{expected!r} -- the record is filed under a partition it does not "
                         "claim"
                     )
+            status = str(record.get("status", ""))
+            if status not in (ACQUISITION_PENDING, ACQUISITION_COMPLETE):
+                problems.append(
+                    f"{path.name}: declares status {status!r}, which is neither "
+                    f"{ACQUISITION_PENDING} nor {ACQUISITION_COMPLETE}"
+                )
+            elif status == ACQUISITION_PENDING:
+                problems.append(
+                    f"{path.name}: is still {ACQUISITION_PENDING}. An interrupted acquisition "
+                    "is finished by re-running that same identity, not by ignoring it."
+                )
             content = self.object_path(digest) if digest else None
             if content is None or not content.exists():
                 problems.append(f"{path.name}: names content {digest!r}, which does not exist")
@@ -373,10 +450,65 @@ class BronzeStore:
         )
 
 
+def _read_record(path: Path) -> dict[str, Any] | None:
+    """The acquisition record at ``path``, or ``None`` if there is none.
+
+    Raises:
+        AcquisitionIncompleteError: if the file exists but is not a JSON object.
+            A record nothing can parse is not evidence of a retrieval.
+    """
+    if not path.exists():
+        return None
+    try:
+        decoded: Any = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise AcquisitionIncompleteError(
+            f"The acquisition record at {path} is not valid JSON ({exc.msg}). A record nothing "
+            "can read cannot be completed or contradicted, so it is repaired by hand or the "
+            "partition is refused."
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise AcquisitionIncompleteError(f"The acquisition record at {path} is not a JSON object.")
+    return decoded
+
+
+def _require_same_retrieval(
+    existing: Mapping[str, Any],
+    complete: Mapping[str, object],
+    retrieval: RetrievalMetadata,
+    digest: str,
+) -> None:
+    """Refuse a second call that restates an acquisition differently.
+
+    Status is excluded from the comparison, because advancing PENDING to COMPLETE
+    is exactly what a repair does. Everything else about the retrieval must be
+    identical.
+
+    Raises:
+        AcquisitionIncompleteError: naming the fields that disagree.
+    """
+    differing = sorted(
+        key for key in complete if key != "status" and existing.get(key) != complete[key]
+    )
+    if differing:
+        raise AcquisitionIncompleteError(
+            f"Acquisition {retrieval.ingestion_run_id!r} of {digest} already exists with "
+            f"different metadata ({differing}). One retrieval happened once; restating it "
+            "later would make the record describe an event that did not occur. Use a new "
+            "ingestion_run_id for a new retrieval."
+        )
+
+
 def _acquisition_body(
-    retrieval: RetrievalMetadata, digest: str, byte_count: int, ingest_date: date
+    retrieval: RetrievalMetadata,
+    digest: str,
+    byte_count: int,
+    ingest_date: date,
+    *,
+    status: str,
 ) -> dict[str, object]:
     return {
+        "status": status,
         "content_sha256": digest,
         "byte_count": byte_count,
         "provider": retrieval.provider,
@@ -474,6 +606,8 @@ def build_ingestion_run(
 
 
 __all__ = [
+    "ACQUISITION_COMPLETE",
+    "ACQUISITION_PENDING",
     "BronzeArtifact",
     "BronzeStore",
     "RetrievalMetadata",
