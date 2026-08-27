@@ -928,6 +928,26 @@ def test_the_inventory_a_sealed_run_produces_is_the_one_emitted() -> None:
             {"result_artifact_hash": "sha256:" + "0" * 64},
             "records result hash",
         ),
+        (
+            "a dropped unapproved bound",
+            {"unapproved_bounds_relied_upon": ("price_bar",)},
+            "names unapproved bounds",
+        ),
+        (
+            "a dropped hash mismatch",
+            {"hash_mismatches": ("gold/synthetic.a1.1",)},
+            "names hash mismatches",
+        ),
+        (
+            "a changed revisable-source set",
+            {"revisable_datasets_consumed": ("corporate_action",)},
+            "names revisable sources",
+        ),
+        (
+            "a repinned publication",
+            {"dataset_manifest_hashes": {phase3a.DATASET_VERSION: "sha256:elsewhere"}},
+            "pins publications",
+        ),
     ],
 )
 def test_a_substituted_inventory_field_is_refused(

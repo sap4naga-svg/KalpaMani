@@ -741,6 +741,33 @@ def _check_against_execution(
             f"the inventory names bounds {list(inventory.bounds_relied_upon)} and the run "
             f"leant on {list(executed.bounds_relied_upon)}"
         )
+    # These two are the side channel this round closed, and dropping them from the
+    # inventory would reopen it from the other end: the refusal below only fires on
+    # what the inventory carries, so a caller who trimmed them would emit a
+    # manifest for a run that relied on an unapproved bound or failed a hash.
+    if inventory.unapproved_bounds_relied_upon != executed.evidence.unapproved_bounds_relied_upon:
+        problems.append(
+            f"the inventory names unapproved bounds "
+            f"{list(inventory.unapproved_bounds_relied_upon)} and the run recorded "
+            f"{list(executed.evidence.unapproved_bounds_relied_upon)}"
+        )
+    if inventory.hash_mismatches != executed.evidence.hash_mismatches:
+        problems.append(
+            f"the inventory names hash mismatches {list(inventory.hash_mismatches)} and the "
+            f"run recorded {list(executed.evidence.hash_mismatches)}"
+        )
+    if inventory.revisable_datasets_consumed != executed.evidence.revisable_datasets_consumed:
+        problems.append(
+            f"the inventory names revisable sources "
+            f"{list(inventory.revisable_datasets_consumed)} and the run consumed "
+            f"{list(executed.evidence.revisable_datasets_consumed)}; which revision a query "
+            "wanted is never an implicit answer"
+        )
+    if dict(inventory.dataset_manifest_hashes) != dict(executed.evidence.dataset_manifest_hashes):
+        problems.append(
+            f"the inventory pins publications {dict(inventory.dataset_manifest_hashes)} and "
+            f"the run read {dict(executed.evidence.dataset_manifest_hashes)}"
+        )
 
     itemised = tuple(
         sorted(
