@@ -497,6 +497,22 @@ def _verify_absence(
         )
 
     pinned = set(ref.dataset_version.split(_JOIN))
+    present = {bar.envelope.dataset_version for bar in bars}
+    absent = sorted(pinned - present)
+    if absent and pinned - set(absent):
+        raise _refuse(
+            f"a {NEGATIVE_COVERAGE_ENTITY} claim names publication(s) {absent} that hold no "
+            "bars in the data it is being replayed against, alongside ones that do. A claim "
+            "pinned partly to builds nobody supplied is satisfied by their absence rather than "
+            "by evidence"
+        )
+    if absent:
+        raise _refuse(
+            f"a {NEGATIVE_COVERAGE_ENTITY} claim is pinned to publication(s) {absent}, none of "
+            "which is present in the data it is being replayed against. An absence verified "
+            "against a build nobody supplied is satisfied by the supplying, not by the facts"
+        )
+
     contradicting: list[PriceBar] = []
     for bar in bars:
         if bar.envelope.dataset_version not in pinned:

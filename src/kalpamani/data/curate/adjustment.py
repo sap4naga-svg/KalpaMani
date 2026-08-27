@@ -165,6 +165,13 @@ def relevant_actions(
     availability later and its eligibility narrower for a row that changed
     nothing. The artifact would then be less available than the numbers it holds.
     """
+    if policy not in _POLICY_ACTION_TYPES:
+        raise PendingContractError(
+            f"Adjustment policy {policy.value} is defined in the contract vocabulary but its "
+            "action set is not settled by the merged Phase-3 plan. Refusing to invent one -- "
+            "and refusing in the documented way, rather than with a bare KeyError that reads "
+            "like a bug in this module."
+        )
     wanted_types = _POLICY_ACTION_TYPES[policy]
     scoped = set(securities)
     kept: list[CorporateAction] = []
@@ -174,6 +181,13 @@ def relevant_actions(
         if action.action_type not in wanted_types:
             continue
         if action.ex_date is None:
+            continue
+        if action.action_type in _SPLIT_TYPES and action.ratio is None:
+            # A split with no ratio adjusts nothing. Keeping it put an action in
+            # the lineage, the inputs, the key and the source-version tuple that
+            # changed no number -- and pushed the artifact's availability later
+            # than the numbers it holds, which is the exact failure `relevant`
+            # exists to prevent.
             continue
         # An action taking effect after the interval adjusts none of its bars;
         # one *before* it is already reflected in every bar it holds.
@@ -333,9 +347,23 @@ def bar_lineage_hash(bars: Sequence[PriceBar]) -> str:
 
 
 def action_lineage_hash(actions: Sequence[CorporateAction]) -> str:
-    """Canonical hash of exactly which corporate actions an artifact consumed."""
+    """Canonical hash of the corporate actions an artifact consumed, and what they do.
+
+    Identity plus effect. Hashing the id and version alone meant two artifacts
+    over actions with materially different ratios shared a key, so a cache lookup
+    could return prices computed from a different split.
+    """
     return content_hash(
-        sorted([action.action_id, action.envelope.dataset_version] for action in actions)
+        sorted(
+            [
+                action.action_id,
+                action.envelope.dataset_version,
+                action.action_type.value,
+                "" if action.ex_date is None else action.ex_date.isoformat(),
+                "" if action.ratio is None else str(action.ratio),
+            ]
+            for action in actions
+        )
     )
 
 
@@ -637,7 +665,20 @@ def _resolved_lineage(
         ArtifactIntegrityError: if a reference names a row that is absent, or one
             that resolves in a different dataset version than the artifact read.
     """
-    by_action = {(action.action_id, action.envelope.dataset_version): action for action in actions}
+    by_action: dict[tuple[str, str], CorporateAction] = {}
+    for action in actions:
+        key = (action.action_id, action.envelope.dataset_version)
+        existing = by_action.get(key)
+        if existing is not None and existing != action:
+            # A dict keeps the last write, so which of two conflicting rows an
+            # artifact verified against would be decided by the order the caller
+            # happened to pass them in. Neither is used.
+            raise ArtifactIntegrityError(
+                f"Two different corporate actions share the key {key}. Which one this "
+                "artifact verified against would be decided by list order, so neither is "
+                "used."
+            )
+        by_action[key] = action
     resolved_bars: list[PriceBar] = []
     resolved_actions: list[CorporateAction] = []
 
@@ -654,15 +695,15 @@ def _resolved_lineage(
             # row rather than being checked after one was chosen. A corrected
             # ratio in a later build shares the action_id, and matching on that
             # alone found whichever copy happened to be last in the mapping.
-            action = by_action.get((action_id, ref.dataset_version))
-            if action is None:
+            resolved_action = by_action.get((action_id, ref.dataset_version))
+            if resolved_action is None:
                 raise ArtifactIntegrityError(
                     f"Artifact {artifact.artifact_id} names corporate action {action_id!r} in "
                     f"dataset version {ref.dataset_version!r}, which is not among the actions "
                     "supplied for verification. A later build can carry a corrected ratio, and "
                     "verifying against it would prove nothing about what the artifact read."
                 )
-            resolved_actions.append(action)
+            resolved_actions.append(resolved_action)
         elif ref.entity == "price_bar":
             resolved_bars.extend(_resolve_bar_ref(artifact, ref, bars, approvals=approvals))
         else:

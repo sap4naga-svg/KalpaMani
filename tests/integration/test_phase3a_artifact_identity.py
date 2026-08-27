@@ -591,3 +591,125 @@ def test_every_fixture_listing_is_a_listing() -> None:
     assert all(isinstance(row, Listing) for row in phase3a.listings())
     assert all(isinstance(bar, PriceBar) for bar in phase3a.daily_bars())
     assert BarResolution.DAILY is phase3a.daily_bars()[0].resolution
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review of this round's own closures
+# ---------------------------------------------------------------------------
+
+
+def test_an_unsettled_policy_refuses_in_the_documented_way() -> None:
+    """A bare KeyError reads like a bug in this module rather than a decision."""
+    from kalpamani.data.contracts.errors import PendingContractError
+
+    with pytest.raises(PendingContractError, match="not settled by the merged Phase-3 plan"):
+        relevant_actions(
+            phase3a.corporate_actions(),
+            security_id_scope=SECURITY,
+            policy=AdjustmentPolicy.TOTAL_RETURN,
+            valid_time_start=date(2019, 6, 24),
+            valid_time_end=date(2019, 6, 28),
+            securities=[SECURITY],
+        )
+
+
+def test_a_split_with_no_ratio_is_not_an_input() -> None:
+    """It adjusts nothing, and would push the artifact's availability later anyway."""
+    split = next(
+        action
+        for action in phase3a.corporate_actions()
+        if action.security_id == SECURITY and action.ex_date == SPLIT_EX_DATE
+    )
+    phantom = dataclasses.replace(
+        split,
+        action_id="CA-PHANTOM",
+        ratio=None,
+        envelope=dataclasses.replace(split.envelope, source_id="action:CA-PHANTOM"),
+    )
+    kept = relevant_actions(
+        (*phase3a.corporate_actions(), phantom),
+        security_id_scope=SECURITY,
+        policy=AdjustmentPolicy.SPLIT_ONLY,
+        valid_time_start=date(2019, 6, 24),
+        valid_time_end=date(2019, 6, 28),
+        securities=[SECURITY],
+    )
+    assert "CA-PHANTOM" not in {action.action_id for action in kept}
+
+
+def test_two_actions_with_different_ratios_are_two_artifacts() -> None:
+    """Hashing the id and version alone let a cache return other prices."""
+    from kalpamani.data.curate.adjustment import action_lineage_hash
+
+    split = next(
+        action
+        for action in phase3a.corporate_actions()
+        if action.security_id == SECURITY and action.ex_date == SPLIT_EX_DATE
+    )
+    restated = dataclasses.replace(split, ratio=Decimal(3))
+    assert action_lineage_hash([split]) != action_lineage_hash([restated])
+
+
+def test_two_different_actions_sharing_a_key_refuse_verification() -> None:
+    """Otherwise list order decides which one an artifact verified against."""
+    artifact = _artifact(valid_time_start=SPLIT_EX_DATE, valid_time_end=date(2019, 6, 28))
+    actions = phase3a.corporate_actions()
+    conflicting = tuple(
+        dataclasses.replace(action, ratio=Decimal(9)) if action.ex_date == SPLIT_EX_DATE else action
+        for action in actions
+    )
+    with pytest.raises(ArtifactIntegrityError, match="share"):
+        verify_adjusted_bar_artifact(
+            artifact,
+            _bars(SPLIT_EX_DATE, date(2019, 6, 28)),
+            (*actions, *conflicting),
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_a_header_omitting_an_input_its_rows_consumed_is_refused(tmp_path: Path) -> None:
+    """Replaying proves the named rows exist, not that they are the right rows."""
+    from kalpamani.data.curate.publication import _require_header_covers_its_rows
+
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    session = date(2019, 6, 27)
+    header = publication.dataset.universe_headers[session]
+    rows = publication.dataset.universe[session]
+    _require_header_covers_its_rows(session, header, rows)
+
+    stripped = dataclasses.replace(
+        header,
+        envelope=dataclasses.replace(header.envelope, lineage=header.envelope.lineage[:1]),
+    )
+    with pytest.raises(DatasetPublicationError, match="does not name"):
+        _require_header_covers_its_rows(session, stripped, rows)
+
+
+def test_a_header_naming_an_announcement_is_refused(tmp_path: Path) -> None:
+    """The rule considers listing states; an announcement is not one."""
+    from kalpamani.data.contracts.envelope import LineageRef
+    from kalpamani.data.curate.lineage import listing_selector
+    from kalpamani.data.curate.publication import _require_header_covers_its_rows
+
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    session = date(2019, 6, 27)
+    header = publication.dataset.universe_headers[session]
+    announcement = next(
+        row for row in phase3a.listings() if row.listing_fact_kind is not ListingFactKind.STATE
+    )
+    widened = dataclasses.replace(
+        header,
+        envelope=dataclasses.replace(
+            header.envelope,
+            lineage=(
+                *header.envelope.lineage,
+                LineageRef.of(
+                    entity="listing",
+                    dataset_version=announcement.envelope.dataset_version,
+                    selector=listing_selector(announcement),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(DatasetPublicationError, match="names listing rows of kind"):
+        _require_header_covers_its_rows(session, widened, publication.dataset.universe[session])

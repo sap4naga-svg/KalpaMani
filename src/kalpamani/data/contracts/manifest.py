@@ -781,15 +781,55 @@ def _check_against_execution(
             f"{list(executed.origin_exclusions)}"
         )
 
-    recorded_artifacts = {artifact.artifact_id for artifact in manifest.consumed_artifacts}
-    consumed = {record.artifact_id for record in executed.evidence.consumed_artifacts}
-    missing = sorted(consumed - recorded_artifacts)
+    recorded = {artifact.artifact_id: artifact for artifact in manifest.consumed_artifacts}
+    consumed = {record.artifact_id: record for record in executed.evidence.consumed_artifacts}
+    missing = sorted(set(consumed) - set(recorded))
     if missing:
         problems.append(
             f"derived artifacts {missing} were consumed and are absent from "
             "consumed_artifacts; dataset versions alone cannot reproduce a result that read "
             "them"
         )
+    # Identity, not presence. Comparing ids alone left every field that makes an
+    # artifact reproducible -- content hash, spec version, lineage, first-built
+    # time -- free to say whatever the caller liked, which is precisely the set of
+    # fields run_id depends on to tell two FORWARD_SYSTEM runs apart.
+    for artifact_id in sorted(set(consumed) & set(recorded)):
+        actual, claimed = consumed[artifact_id], recorded[artifact_id]
+        differing = sorted(
+            field
+            for field, left, right in (
+                ("entity", actual.entity, claimed.entity),
+                ("output_validity", actual.output_validity, claimed.output_validity),
+                (
+                    "derivation_spec_version",
+                    actual.derivation_spec_version,
+                    claimed.derivation_spec_version,
+                ),
+                (
+                    "artifact_content_hash",
+                    actual.artifact_content_hash,
+                    claimed.artifact_content_hash,
+                ),
+                (
+                    "artifact_first_built_time",
+                    actual.artifact_first_built_time,
+                    claimed.artifact_first_built_time,
+                ),
+                (
+                    "lineage_selectors",
+                    tuple(actual.lineage_selectors),
+                    tuple(claimed.lineage_selectors),
+                ),
+            )
+            if left != right
+        )
+        if differing:
+            problems.append(
+                f"consumed artifact {artifact_id!r} is described with {differing} that differ "
+                "from what the run read; an artifact named but misdescribed cannot reproduce "
+                "the result that cites it"
+            )
     return problems
 
 

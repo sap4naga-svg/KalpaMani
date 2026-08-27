@@ -402,11 +402,22 @@ def _run_universe_rebuild(context: QualityContext) -> list[QualityFinding]:
         attributes=dataset.attributes,
         bars=dataset.bars,
     )
+    uncovered = sorted(
+        session for session in dataset.universe_headers if session not in context.evaluation_cutoffs
+    )
+    if uncovered:
+        # Skipping them silently reported 6_identity_and_universe as run while
+        # leaving those snapshots unrebuilt -- a check covering less than it
+        # claims, which is worse than one that did not run.
+        raise QualityGateError(
+            f"Snapshots {[session.isoformat() for session in uncovered]} have no declared "
+            "evaluation cutoff, so the rebuild check cannot reproduce them. A check that "
+            "silently covers less than it claims converts an unknown into a false assurance."
+        )
+
     found: list[QualityFinding] = []
     for session, header in sorted(dataset.universe_headers.items()):
-        cutoff = context.evaluation_cutoffs.get(session)
-        if cutoff is None:
-            continue
+        cutoff = context.evaluation_cutoffs[session]
         rebuilt = build_universe_snapshot(
             inputs,
             session_date=session,
@@ -584,6 +595,12 @@ def run_quality_plan(
 ) -> RunnerOutcome:
     """Execute ``plan`` against ``context`` and build the report from what ran.
 
+    ``registry`` exists so a test can substitute an implementation and observe
+    that it ran. A report produced with anything other than :data:`CHECK_REGISTRY`
+    is **not sealed**, and publication refuses it: otherwise a registry of no-op
+    implementations would yield a genuinely runner-produced, plan-satisfying,
+    publishable report that checked nothing at all.
+
     Raises:
         QualityGateError: if a check the plan marks REQUIRED has no registered
             implementation or did not apply; if an implementation declares a
@@ -592,6 +609,7 @@ def run_quality_plan(
             faithful account of what the checks found.
     """
     _require_registry_agrees(plan, registry)
+    sealed = registry is CHECK_REGISTRY or dict(registry) == dict(CHECK_REGISTRY)
 
     invoked: dict[str, list[QualityFinding]] = {}
     skipped: dict[str, str] = {}
@@ -684,7 +702,7 @@ def run_quality_plan(
             session.isoformat() for session in sorted(context.evaluation_cutoffs)
         ),
         produced_at=produced_at if produced_at is not None else context.dataset.build_time,
-        produced_by=_RUNNER_TOKEN,
+        produced_by=_RUNNER_TOKEN if sealed else None,
     )
     return RunnerOutcome(
         report=report,

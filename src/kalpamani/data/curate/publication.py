@@ -99,6 +99,7 @@ from kalpamani.data.contracts.vocabulary import (
     DatasetGapPolicy,
     GlobalProfileResolution,
     InformationSetProfile,
+    ListingFactKind,
     StorageLayer,
 )
 from kalpamani.data.curate.build import dataset_row_fingerprint
@@ -402,9 +403,21 @@ def publish_gold_dataset(
 
     _verify_receipt_covers_rows(dataset)
     _verify_evidence_complete(dataset)
+    # The plan is resolved by version from the registry, never taken on trust.
+    # Accepting the caller's object let a plan reuse the real plan_version with an
+    # empty finding vocabulary: every check ran, every finding was routed nowhere,
+    # and the report satisfied it completely.
+    registered = plan_for(quality_plan.plan_version)
+    if registered != quality_plan:
+        raise QualityGateError(
+            f"The quality plan supplied for {dataset.dataset_version} calls itself "
+            f"{quality_plan.plan_version!r} and differs from the plan of that name this code "
+            "holds. A plan is identified by version, and a caller-supplied one under a known "
+            "version is a weaker plan wearing a trusted name."
+        )
     # Plan first, provenance second. A report that fails the plan should fail
     # for the reason it is wrong, not for where it came from.
-    quality_plan.validate(quality_report, published_tables=GOLD_ENTITIES)
+    registered.validate(quality_report, published_tables=GOLD_ENTITIES)
     require_runner_produced(
         quality_report,
         dataset_version=dataset.dataset_version,
@@ -461,7 +474,7 @@ def publish_gold_dataset(
             resolution_receipt_hash=dataset.resolution_receipt.receipt_hash,
             quality_report_hash=quality_report.report_hash,
             quality_report_file_hash=report_file_hash(quality_report),
-            quality_plan_version=quality_plan.plan_version,
+            quality_plan_version=registered.plan_version,
             tables=tuple(tables),
             source_ingestion_run_ids=tuple(sorted(source_ingestion_run_ids)),
             code_commit_sha=code_commit_sha,
@@ -1091,6 +1104,55 @@ def _verify_tables(store: LocalTableStore, manifest: DatasetManifest) -> None:
             )
 
 
+def _require_header_covers_its_rows(
+    session: date,
+    header: UniverseSnapshotHeader,
+    rows: Sequence[UniverseMembership],
+) -> None:
+    """The header's lineage is a superset of its rows', and names only listing states.
+
+    Replaying the header's lineage proves the rows it names exist. It does not
+    prove they are the *right* rows: a header stripped to a single reference still
+    replayed, and a header naming a ``CHANGE_ANNOUNCEMENT`` -- which the rule
+    explicitly skips -- replayed too. Either way the considered-input evidence
+    said something the build never did.
+
+    Raises:
+        DatasetPublicationError: if a decision's input is missing from the
+            header's lineage, or the header names a listing kind the rule cannot
+            have considered.
+    """
+    named = set(header.envelope.lineage)
+    missing = sorted(
+        {
+            (ref.entity, ref.dataset_version, tuple(ref.selector))
+            for row in rows
+            for ref in row.envelope.lineage
+            if ref not in named
+        }
+    )
+    if missing:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} does not name "
+            f"{len(missing)} input(s) its own membership rows consumed (first {missing[0]}). "
+            "The header's lineage is what the snapshot as a whole read, so a decision resting "
+            "on evidence the header omits is a decision the snapshot cannot account for."
+        )
+    announced = sorted(
+        dict(ref.selector).get("listing_fact_kind", "")
+        for ref in header.envelope.lineage
+        if ref.entity == "listing"
+        and dict(ref.selector).get("listing_fact_kind") != ListingFactKind.STATE.value
+    )
+    if announced:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} names listing rows of kind "
+            f"{announced}. The rule considers listing **states**; an announcement that a "
+            "listing will change is not one, and naming it claims the rule weighed evidence it "
+            "explicitly skips."
+        )
+
+
 def _verify_snapshot_headers(
     headers: Mapping[date, UniverseSnapshotHeader],
     universe: Mapping[date, Sequence[UniverseMembership]],
@@ -1195,6 +1257,7 @@ def _verify_one_header(
         resolved_profile=manifest.resolved_profile,
         approvals=approvals,
     )
+    _require_header_covers_its_rows(session, header, rows)
 
     for row in rows:
         if row.session_date != header.session_date:
