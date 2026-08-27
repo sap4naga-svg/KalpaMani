@@ -8,9 +8,10 @@ programme accumulates results it cannot defend.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import cast
+from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 
@@ -41,6 +42,7 @@ from kalpamani.data.contracts.vocabulary import (
     LimitationToken,
     RevisionView,
 )
+from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
 
 pytestmark = pytest.mark.unit
 
@@ -81,10 +83,32 @@ def _coverage(*, failing: int = 0, minimum: str = "0.9948") -> CoverageEvidence:
     )
 
 
+def _tokens(
+    config: ProfileResolutionConfig,
+    evidence: tuple[DatasetResolutionEvidence, ...],
+) -> tuple[LimitationToken, ...]:
+    """The tokens this run's **evidence** obliges, never the ones its config declared."""
+    return evidence_limitation_tokens(
+        evidence, downgraded=config.resolved_profile is not config.requested_profile
+    )
+
+
+def _evidence_for(
+    config: ProfileResolutionConfig,
+) -> tuple[DatasetResolutionEvidence, ...]:
+    return tuple(_evidence(entry.dataset, entry.policy) for entry in config.dataset_resolutions)
+
+
+def _default_tokens() -> tuple[LimitationToken, ...]:
+    config = phase3a.resolution()
+    return _tokens(config, _evidence_for(config))
+
+
 def _manifest(**overrides: object) -> ResearchManifest:
     config = cast(
         ProfileResolutionConfig, overrides.pop("profile_resolution", phase3a.resolution())
     )
+    evidence = tuple(_evidence(entry.dataset, entry.policy) for entry in config.dataset_resolutions)
     base: dict[str, object] = {
         "code": CodeProvenance(
             commit_sha=COMMIT, working_tree_clean=True, config_version="research/synthetic.a1"
@@ -94,9 +118,7 @@ def _manifest(**overrides: object) -> ResearchManifest:
         "backtest_end": date(2021, 1, 5),
         "profile_resolution": config,
         "revision_view": RevisionView.AS_KNOWN_AT_AS_OF,
-        "dataset_resolution_evidence": tuple(
-            _evidence(entry.dataset, entry.policy) for entry in config.dataset_resolutions
-        ),
+        "dataset_resolution_evidence": evidence,
         "required_inputs": (_coverage(),),
         "datasets": (
             DatasetReference(
@@ -107,7 +129,7 @@ def _manifest(**overrides: object) -> ResearchManifest:
             ),
         ),
         "definitions": {"universe_definition_version": phase3a.UNIVERSE_DEFINITION_VERSION},
-        "limitations": config.limitation_tokens(),
+        "limitations": _tokens(config, evidence),
         "quality": QualitySummary(blocking_issues_open=0, warnings_open=2),
         "random_seed": 20260826,
         "result_artifact_hash": "sha256:result",
@@ -128,6 +150,121 @@ def _emit(manifest: ResearchManifest) -> ResearchManifest:
 # ---------------------------------------------------------------------------
 # run_id
 # ---------------------------------------------------------------------------
+
+
+def test_a_wrong_manifest_version_refuses() -> None:
+    """A schema version the writer does not recognise is not written optimistically."""
+    with pytest.raises(ManifestRefusedError, match="manifest_version"):
+        _emit(_manifest(manifest_version=MANIFEST_VERSION + 1))
+
+
+def test_a_non_utc_as_of_cutoff_is_normalised_at_construction() -> None:
+    """Two spellings of one cutoff must not be two cutoffs."""
+    shifted = _manifest(as_of_cutoff=AS_OF.astimezone(timezone(timedelta(hours=5, minutes=30))))
+    assert shifted.as_of_cutoff == AS_OF
+    assert shifted.as_of_cutoff.utcoffset() == timedelta(0)
+    assert shifted.run_id == _manifest().run_id
+
+
+def test_a_naive_as_of_cutoff_cannot_be_constructed() -> None:
+    with pytest.raises(TypeError, match="naive datetime"):
+        _manifest(as_of_cutoff=datetime(2026, 8, 26, 13, 0))
+
+
+def test_duplicate_dataset_resolution_evidence_refuses() -> None:
+    """Two sets of counts for one dataset cannot both describe it."""
+    config = phase3a.resolution()
+    doubled = (*_evidence_for(config), _evidence("price_bar", DatasetGapPolicy.NONE))
+    with pytest.raises(ManifestRefusedError, match="appears more than once"):
+        _emit(_manifest(dataset_resolution_evidence=doubled))
+
+
+def test_a_dataset_reference_keyed_to_another_profile_refuses() -> None:
+    """Artifacts follow the resolved profile; a mismatch hides a downgrade."""
+    manifest = _manifest(
+        datasets=(
+            DatasetReference(
+                dataset_version=phase3a.DATASET_VERSION,
+                layer="GOLD",
+                content_hash="sha256:abc",
+                resolved_profile=FORWARD,
+            ),
+        )
+    )
+    with pytest.raises(ManifestRefusedError, match="artifacts follow the resolved profile"):
+        _emit(manifest)
+
+
+def test_a_revisable_source_consumed_without_a_revision_view_refuses() -> None:
+    """Which revision a query wanted is never an implicit answer."""
+    manifest = _manifest(revision_view=None)
+    with pytest.raises(ManifestRefusedError, match="no revision_view"):
+        emit_manifest(
+            manifest,
+            directly_read_datasets=[
+                entry.dataset for entry in manifest.profile_resolution.dataset_resolutions
+            ],
+            revisable_datasets_consumed=["listing"],
+        )
+
+
+def test_a_consumed_artifact_absent_from_the_manifest_refuses() -> None:
+    """Dataset versions alone cannot reproduce a result that read an artifact."""
+    manifest = _manifest()
+    with pytest.raises(ManifestRefusedError, match="absent from"):
+        emit_manifest(
+            manifest,
+            directly_read_datasets=[
+                entry.dataset for entry in manifest.profile_resolution.dataset_resolutions
+            ],
+            consumed_artifact_ids=["adj-missing"],
+        )
+
+
+def test_definitions_are_deep_frozen_so_run_id_cannot_drift() -> None:
+    """Mutate-after-hash is structurally impossible, not merely checked for."""
+    manifest = _manifest(definitions={"universe_definition_version": "universe/v1"})
+    before = manifest.run_id
+    with pytest.raises(TypeError):
+        cast("Any", manifest.definitions)["universe_definition_version"] = "universe/v2"
+    assert manifest.run_id == before
+    assert isinstance(manifest.definitions, MappingProxyType)
+
+
+def test_run_id_is_stable_across_repeated_reads() -> None:
+    manifest = _manifest()
+    assert len({manifest.run_id for _ in range(5)}) == 1
+
+
+def test_a_provider_availability_token_needs_bounded_or_excluded_rows() -> None:
+    """Evidence, not configuration: a BOUND that bounded nothing is not an event."""
+    config = phase3a.resolution()
+    inert = tuple(
+        DatasetResolutionEvidence(
+            dataset=entry.dataset,
+            policy=entry.policy,
+            rows_considered=10,
+            public_basis=TimingBasis.EXACT,
+            public_exact_rows=10,
+            public_bounded_rows=0,
+            provider_basis=TimingBasis.EXACT,
+            provider_exact_rows=10,
+            provider_bounded_rows=0,
+            excluded_rows=0,
+            reason="nothing was bounded or excluded",
+        )
+        for entry in config.dataset_resolutions
+    )
+    assert _tokens(config, inert) == ()
+    assert _emit(_manifest(dataset_resolution_evidence=inert, limitations=())) is not None
+
+    with pytest.raises(ManifestRefusedError, match="claimed with no evidence behind it"):
+        _emit(
+            _manifest(
+                dataset_resolution_evidence=inert,
+                limitations=(LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN,),
+            )
+        )
 
 
 def test_run_id_is_deterministic_and_derived_not_generated() -> None:
@@ -179,11 +316,15 @@ def test_two_runs_differing_only_in_how_one_gap_was_resolved_are_two_runs() -> N
 
     bound = _manifest(
         profile_resolution=config(DatasetGapPolicy.BOUND),
-        limitations=config(DatasetGapPolicy.BOUND).limitation_tokens(),
+        limitations=_tokens(
+            config(DatasetGapPolicy.BOUND), _evidence_for(config(DatasetGapPolicy.BOUND))
+        ),
     )
     excluded = _manifest(
         profile_resolution=config(DatasetGapPolicy.EXCLUDE),
-        limitations=config(DatasetGapPolicy.EXCLUDE).limitation_tokens(),
+        limitations=_tokens(
+            config(DatasetGapPolicy.EXCLUDE), _evidence_for(config(DatasetGapPolicy.EXCLUDE))
+        ),
     )
     assert bound.run_id != excluded.run_id
 
@@ -306,7 +447,7 @@ def test_a_latest_restated_run_may_not_call_itself_a_backtest() -> None:
     manifest = _manifest(
         revision_view=RevisionView.LATEST_RESTATED,
         limitations=(
-            *phase3a.resolution().limitation_tokens(),
+            *_default_tokens(),
             LimitationToken.NON_PIT_RESTATED_VIEW,
         ),
     )
@@ -413,7 +554,7 @@ def test_a_whole_domain_input_meeting_its_row_count_passes() -> None:
 def test_a_limitation_token_with_no_evidence_refuses() -> None:
     manifest = _manifest(
         limitations=(
-            *phase3a.resolution().limitation_tokens(),
+            *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         )
     )
@@ -428,7 +569,7 @@ def test_a_zero_row_exclusion_is_not_evidence_of_an_exclusion() -> None:
             OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=0),
         ),
         limitations=(
-            *phase3a.resolution().limitation_tokens(),
+            *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         ),
     )
@@ -442,7 +583,7 @@ def test_a_positive_exclusion_with_its_token_passes() -> None:
             OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=2),
         ),
         limitations=(
-            *phase3a.resolution().limitation_tokens(),
+            *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         ),
     )
@@ -460,8 +601,10 @@ def test_a_downgrade_carries_its_token() -> None:
     config = phase3a.resolution(
         requested=PROVIDER_REALISTIC, downgrade=GlobalProfileResolution.DOWNGRADE
     )
-    assert LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC in config.limitation_tokens()
-    manifest = _manifest(profile_resolution=config, limitations=config.limitation_tokens())
+    assert LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC in _tokens(config, _evidence_for(config))
+    manifest = _manifest(
+        profile_resolution=config, limitations=_tokens(config, _evidence_for(config))
+    )
     assert _emit(manifest) is not None
     assert manifest.resolved_profile is PUBLIC
     assert manifest.requested_profile is PROVIDER_REALISTIC

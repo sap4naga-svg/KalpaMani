@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from kalpamani.data.contracts.errors import EnvelopeError
+from kalpamani.data.contracts.instants import normalize_optional_instant
 from kalpamani.data.contracts.vocabulary import (
     SOURCE_ORIGINS,
     AnnouncementBoundDerivation,
@@ -44,6 +45,22 @@ from kalpamani.data.contracts.vocabulary import (
     QualityStatus,
     TemporalFactClass,
 )
+
+
+def _normalize_instants(target: object, *names: str) -> None:
+    """Rewrite each named instant field in place to canonical UTC.
+
+    Frozen dataclasses do not permit assignment, so this goes through
+    ``object.__setattr__`` -- the same mechanism ``__init__`` itself uses. It runs
+    once, at construction, which is what makes "an entity cannot retain an
+    arbitrary offset" a property of the type rather than a convention.
+    """
+    for name in names:
+        value = getattr(target, name)
+        if value is None:
+            continue
+        object.__setattr__(target, name, normalize_optional_instant(value))
+
 
 # ---------------------------------------------------------------------------
 # The source fact anchor
@@ -78,6 +95,15 @@ class FactAnchor:
     announcement_time_upper_bound: datetime | None = None
     announcement_bound_derivation: AnnouncementBoundDerivation = AnnouncementBoundDerivation.NONE
     sample_time: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _normalize_instants(
+            self,
+            "observation_time",
+            "announcement_time",
+            "announcement_time_upper_bound",
+            "sample_time",
+        )
 
     @classmethod
     def retrospective(cls, observation_time: datetime | None) -> FactAnchor:
@@ -163,6 +189,17 @@ class SourceEnvelope:
     provider: str | None = None
 
     def __post_init__(self) -> None:
+        _normalize_instants(
+            self,
+            "public_available_time",
+            "public_available_upper_bound",
+            "provider_available_time",
+            "provider_available_upper_bound",
+            "system_first_seen_time",
+            "valid_from",
+            "valid_to",
+            "ingestion_time",
+        )
         if self.information_origin not in SOURCE_ORIGINS:
             raise EnvelopeError(
                 f"information_origin={self.information_origin.value} selects the derived "
@@ -303,6 +340,7 @@ class DerivedEnvelope:
         return InformationOrigin.DERIVED_ARTIFACT
 
     def __post_init__(self) -> None:
+        _normalize_instants(self, "artifact_first_built_time", "ingestion_time")
         if not self.lineage:
             raise EnvelopeError(
                 "A derived artifact with no lineage is not a derived artifact. Availability "

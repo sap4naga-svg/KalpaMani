@@ -10,23 +10,36 @@ was answered has to be stated.
 Enforced structurally, by test, in the manner ADR-0004 s.10 already uses for the
 execution boundary:
 
-- ``as_of`` and ``profile`` are **keyword-only with no defaults**, so omitting one
-  is a ``TypeError`` at the call site rather than a quiet fallback.
-- ``adjustment_mode`` is required and explicit. There is no implicit adjustment.
+- ``as_of``, ``profile``, ``resolution`` and ``adjustment_mode`` are
+  **keyword-only with no defaults**, so omitting one is a ``TypeError`` at the
+  call site rather than a quiet fallback.
+- **A price series is one resolution.** Mixing daily and minute rows is not a
+  series; it is two series stacked, and every statistic over it is wrong.
 - No ``latest`` / ``current`` / ``most_recent`` / ``today`` identifier exists in
   this package, and a static test asserts it.
-- Ineligible rows are **excluded and counted**, never substituted, and the count
-  reaches the result.
+- Ineligible rows are **excluded and counted**, never substituted.
 - Every result carries its own provenance: dataset version, ``as_of``, requested
-  and resolved profile, and the limitations that applied. A result that cannot
-  say where it came from is not a result.
+  and resolved profile, the resolution served, and the limitations that applied.
 
-**Four things are refusals here, not empty results.** A missing historical
-universe snapshot; an ``as_of`` before the dataset's declared coverage; an
-``as_of`` after the dataset was built; an open BLOCKING quality issue on a dataset
-the query touches. An empty result and a refusal are different answers, and a
-data layer that returns the first when it means the second produces a backtest
-that looks merely unprofitable rather than broken.
+**A partial answer is refused, not truncated.** These are the four situations a
+price query can be in, and they are deliberately four different answers:
+
+======================================  ===================================
+situation                               outcome
+======================================  ===================================
+valid session, security did not trade   **served** -- a zero-volume or stale
+                                        bar is an answer
+a required bar is missing               ``IncompleteCoverageError``
+the security is unknown here            ``SecurityNotInDatasetError``
+the range is outside declared coverage  ``DatasetCoverageError``
+======================================  ===================================
+
+A short series and a gap-ridden one look identical downstream, and only one of
+them is a result.
+
+**The reader verifies the dataset it was handed.** A build carries the profile
+and resolution policy it was curated under; a reader configured differently is
+refused at construction rather than served something relabelled.
 """
 
 from __future__ import annotations
@@ -36,15 +49,19 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from kalpamani.data.contracts.dataset import GoldDataset
-from kalpamani.data.contracts.entities import DataQualityIssue, PriceBarValues
+from kalpamani.data.contracts.entities import DataQualityIssue, PriceBar, PriceBarValues
 from kalpamani.data.contracts.envelope import SourceEnvelope
 from kalpamani.data.contracts.errors import (
     BlockingQualityIssueError,
     DatasetCoverageError,
+    DatasetPublicationError,
+    IncompleteCoverageError,
     MissingHistoricalSnapshotError,
     NonPointInTimeViewError,
     PendingContractError,
     ProfileResolutionError,
+    QueryRangeError,
+    SecurityNotInDatasetError,
 )
 from kalpamani.data.contracts.profiles import ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import (
@@ -55,11 +72,14 @@ from kalpamani.data.contracts.resolution import (
 )
 from kalpamani.data.contracts.vocabulary import (
     AdjustmentMode,
+    BarResolution,
     InformationSetProfile,
     LimitationToken,
     RevisionView,
 )
 from kalpamani.data.curate.adjustment import adjusted_series, raw_series
+from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
+from kalpamani.data.curate.universe import current_listings
 
 #: Datasets a price query reads directly, in canonical order.
 PRICE_HISTORY_DATASETS = ("corporate_action", "price_bar")
@@ -78,6 +98,7 @@ class ResultProvenance:
     resolved_profile: InformationSetProfile
     revision_view: RevisionView | None
     limitations: tuple[LimitationToken, ...]
+    resolution: BarResolution | None = None
 
     @property
     def was_downgraded(self) -> bool:
@@ -108,9 +129,10 @@ class UniverseSnapshotResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BarSeriesResult:
-    """A price series, with the adjustment question it answered stated on it."""
+    """A price series, with the question it answered stated on it."""
 
     security_id: str
+    resolution: BarResolution
     adjustment_mode: AdjustmentMode
     bars: tuple[PriceBarValues, ...]
     provenance: ResultProvenance
@@ -134,7 +156,28 @@ class PointInTimeReader:
         approvals: BoundApprovals,
         open_issues: Sequence[DataQualityIssue] = (),
     ) -> None:
-        """Bind the reader. Nothing is read until a query is made."""
+        """Bind the reader, refusing a dataset this run cannot legitimately read.
+
+        Raises:
+            DatasetPublicationError: if the dataset was curated under a different
+                resolved profile or a different resolution policy. Serving it
+                anyway would relabel a build as something it is not, which is the
+                profile substitution the contract exists to prevent.
+        """
+        if dataset.resolved_profile is not resolution.resolved_profile:
+            raise DatasetPublicationError(
+                f"Dataset {dataset.dataset_version} was curated under "
+                f"{dataset.resolved_profile.value}; this run resolved to "
+                f"{resolution.resolved_profile.value}. A dataset cannot answer a question it "
+                "was not built for."
+            )
+        if dataset.resolution_policy_version != resolution.resolution_policy_version:
+            raise DatasetPublicationError(
+                f"Dataset {dataset.dataset_version} was resolved under policy "
+                f"{dataset.resolution_policy_version!r}; this run declares "
+                f"{resolution.resolution_policy_version!r}. Two runs that resolved the same "
+                "gaps differently admit different rows."
+            )
         self._dataset = dataset
         self._resolution = resolution
         self._approvals = approvals
@@ -161,16 +204,20 @@ class PointInTimeReader:
         securities: a security delisted before ``as_of`` is absent, and one
         delisted after it but active then is present.
 
+        A snapshot whose rule genuinely selected nobody is a **valid** result: its
+        rows are all non-members, each with an exclusion reason. That is different
+        from a snapshot that does not exist, and different again from one no row
+        of which is admissible yet -- both of which are refusals.
+
         Raises:
-            MissingHistoricalSnapshotError: if no snapshot exists for that date.
-                A universe query for a date with no recorded membership is
-                unanswerable, not answerable with nothing.
+            MissingHistoricalSnapshotError: if no snapshot exists at or before
+                that date, or none of its rows is admissible at ``as_of``.
         """
         self._guard(profile, as_of, UNIVERSE_DATASETS)
         resolved = self.resolved_profile
 
         candidates = [
-            session for session in sorted(self._dataset.universe) if _at_or_before(session, as_of)
+            session for session in sorted(self._dataset.universe) if session <= as_of.date()
         ]
         if not candidates:
             raise MissingHistoricalSnapshotError(
@@ -197,8 +244,8 @@ class PointInTimeReader:
             raise MissingHistoricalSnapshotError(
                 f"The universe snapshot for {session_date.isoformat()} exists but no row in it "
                 f"is admissible at {as_of.isoformat()} under {resolved.value}. Serving an "
-                "empty universe here would be indistinguishable from a market with no "
-                "securities in it."
+                "empty universe here would be indistinguishable from a rule that selected "
+                "nobody, and the two mean opposite things."
             )
 
         definition_versions = {row.universe_definition_version for row in admitted}
@@ -214,7 +261,7 @@ class PointInTimeReader:
             universe_definition_version=definition_versions.pop(),
             members=tuple(sorted(row.security_id for row in admitted if row.is_member)),
             non_members=tuple(sorted(row.security_id for row in admitted if not row.is_member)),
-            provenance=self._provenance(as_of, profile, None, bool(excluded)),
+            provenance=self._provenance(as_of, profile, None, bool(excluded), None),
             origin_exclusions=_counts(excluded),
         )
 
@@ -224,25 +271,49 @@ class PointInTimeReader:
         security_id: str,
         start: date,
         end: date,
+        resolution: BarResolution,
         adjustment_mode: AdjustmentMode,
         as_of: datetime,
         profile: InformationSetProfile,
     ) -> BarSeriesResult:
-        """Raw or explicitly-policied adjusted bars for one security.
+        """Raw or explicitly-policied adjusted bars for one security, at one resolution.
 
         ``adjustment_mode`` is required. "The adjusted close on a date" is not a
-        number -- it is a number *per information set* -- so the policy, the
-        resolved profile and the ``as_of`` that fixed which actions are admissible
-        all have to be named before the question has an answer.
+        number -- it is a number *per information set and per convention* -- so
+        the policy, the convention, the resolved profile and the ``as_of`` that
+        fixed which actions are admissible all have to be named before the
+        question has an answer.
+
+        Raises:
+            QueryRangeError: if ``start`` is after ``end``.
+            DatasetCoverageError: if the range falls outside declared coverage.
+            SecurityNotInDatasetError: if the dataset has no evidence of this
+                security at all.
+            IncompleteCoverageError: if a bar the range requires is missing.
         """
         self._guard(profile, as_of, PRICE_HISTORY_DATASETS)
-        resolved = self.resolved_profile
+        self._validate_range(start, end)
+        if not self._dataset.knows_security(security_id):
+            raise SecurityNotInDatasetError(
+                f"Dataset {self._dataset.dataset_version} holds no listing, bar or attribute "
+                f"for {security_id!r}. That is a question this dataset cannot answer, which "
+                "is not the same as a security that simply did not trade."
+            )
 
+        held = self._dataset.bars_for(security_id, resolution.value)
+        in_range = [bar for bar in held if start <= bar.session_date <= end]
+        self._require_complete_series(
+            security_id=security_id,
+            resolution=resolution,
+            start=start,
+            end=end,
+            held=in_range,
+        )
+
+        resolved = self.resolved_profile
         excluded: dict[tuple[str, str], int] = {}
         bars = []
-        for bar in self._dataset.bars_for(security_id):
-            if not (start <= bar.session_date <= end):
-                continue
+        for bar in in_range:
             if not is_eligible(bar, resolved):
                 key = ("price_bar", bar.envelope.information_origin.value)
                 excluded[key] = excluded.get(key, 0) + 1
@@ -273,9 +344,10 @@ class PointInTimeReader:
 
         return BarSeriesResult(
             security_id=security_id,
+            resolution=resolution,
             adjustment_mode=adjustment_mode,
             bars=series,
-            provenance=self._provenance(as_of, profile, None, bool(excluded)),
+            provenance=self._provenance(as_of, profile, None, bool(excluded), resolution),
             origin_exclusions=_counts(excluded),
         )
 
@@ -310,6 +382,55 @@ class PointInTimeReader:
         )
 
     # -- shared guards -----------------------------------------------------
+
+    def _validate_range(self, start: date, end: date) -> None:
+        if start > end:
+            raise QueryRangeError(
+                f"start {start.isoformat()} is after end {end.isoformat()}. An inverted range "
+                "is not an empty range; it is a mistake, and serving nothing would hide it."
+            )
+        if start < self._dataset.coverage_start:
+            raise DatasetCoverageError(
+                f"start {start.isoformat()} precedes the declared coverage start of dataset "
+                f"{self._dataset.dataset_version} ({self._dataset.coverage_start.isoformat()}). "
+                "An empty result here would look like a market with no securities in it."
+            )
+        if end > self._dataset.coverage_end:
+            raise DatasetCoverageError(
+                f"end {end.isoformat()} is past the declared coverage end of dataset "
+                f"{self._dataset.dataset_version} ({self._dataset.coverage_end.isoformat()}). "
+                "A partially covered request is refused rather than silently truncated."
+            )
+
+    def _require_complete_series(
+        self,
+        *,
+        security_id: str,
+        resolution: BarResolution,
+        start: date,
+        end: date,
+        held: Sequence[PriceBar],
+    ) -> None:
+        """Every trading session the security was listed for must have a bar.
+
+        Deliberately independent of ``as_of``: dataset completeness and
+        point-in-time availability are different questions. A bar that exists but
+        was not yet knowable is filtered afterwards, correctly. A bar that does
+        not exist at all is a gap, and a gap is a refusal.
+        """
+        listed = _listing_sessions(self._dataset, security_id, start, end)
+        if not listed:
+            return
+        covered = {bar.session_date for bar in held}
+        missing = sorted(session for session in listed if session not in covered)
+        if missing:
+            raise IncompleteCoverageError(
+                f"Dataset {self._dataset.dataset_version} has no {resolution.value} bar for "
+                f"{security_id} on {len(missing)} listed trading session(s) in "
+                f"{start.isoformat()}..{end.isoformat()}: {[d.isoformat() for d in missing[:5]]}"
+                f"{' ...' if len(missing) > 5 else ''}. Refused rather than truncated: a short "
+                "series and a gap-ridden one look identical downstream."
+            )
 
     def _guard(
         self,
@@ -354,8 +475,14 @@ class PointInTimeReader:
         requested: InformationSetProfile,
         revision_view: RevisionView | None,
         had_exclusions: bool,
+        resolution: BarResolution | None,
     ) -> ResultProvenance:
-        limitations = list(self._resolution.limitation_tokens())
+        limitations = list(
+            evidence_limitation_tokens(
+                self._dataset.resolution_evidence,
+                downgraded=self.resolved_profile is not self._resolution.requested_profile,
+            )
+        )
         if had_exclusions:
             limitations.append(LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED)
         return ResultProvenance(
@@ -365,7 +492,29 @@ class PointInTimeReader:
             resolved_profile=self.resolved_profile,
             revision_view=revision_view,
             limitations=tuple(limitations),
+            resolution=resolution,
         )
+
+
+def _listing_sessions(
+    dataset: GoldDataset,
+    security_id: str,
+    start: date,
+    end: date,
+) -> tuple[date, ...]:
+    """Trading sessions in range on which the security was listed."""
+    listings = [
+        listing
+        for listing in current_listings(dataset.listings)
+        if listing.security_id == security_id
+    ]
+    if not listings:
+        return ()
+    return tuple(
+        session
+        for session in dataset.trading_sessions_between(start, end)
+        if any(listing.is_listed_on(session) for listing in listings)
+    )
 
 
 def select_revision(
@@ -378,9 +527,9 @@ def select_revision(
 ) -> PitRecord | None:
     """Pick one revision of a revisable fact under an explicitly named view.
 
-    ``revision_view`` is required and positional-free but never defaulted, for the
-    same reason ``as_of`` is: a default here answers the question on the caller's
-    behalf and does not tell them which question it answered.
+    ``revision_view`` is required and never defaulted, for the same reason
+    ``as_of`` is: a default here answers the question on the caller's behalf and
+    does not tell them which question it answered.
 
     Raises:
         NonPointInTimeViewError: for ``LATEST_RESTATED``, which ignores ``as_of``
@@ -420,10 +569,6 @@ def _revision_sequence(record: PitRecord) -> int:
     # A derived artifact has no revision chain: a rebuild from different lineage
     # is a different artifact with its own key, not a later revision of this one.
     return 0
-
-
-def _at_or_before(session_date: date, as_of: datetime) -> bool:
-    return session_date <= as_of.date()
 
 
 def _counts(excluded: dict[tuple[str, str], int]) -> tuple[OriginExclusionCount, ...]:

@@ -944,6 +944,41 @@ def _ranges_overlap(left: TickerHistory, right: TickerHistory) -> bool:
     return left.valid_from <= right_end and right.valid_from <= left_end
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SurvivorshipPolicy:
+    """When the survivorship smoke alarm is entitled to draw a conclusion.
+
+    The alarm is crude on purpose -- "a historical universe in which nobody has
+    since disappeared is not historical" catches a defect nothing else sees. But
+    crude and unscoped is a different thing: a snapshot from three months ago
+    whose members are all still listed is **correct**, and blocking it would make
+    the check something a team switches off.
+
+    So the alarm is explicitly historical and versioned:
+
+    ``deep_history_years``
+        only snapshots at least this far before the dataset cutoff are eligible.
+        Recent snapshots are never faulted for the absence of delistings that have
+        not had time to happen.
+    ``minimum_eligible_snapshots``
+        the domain-wide "nothing has ever delisted" alarm needs at least this many
+        eligible snapshots before it means anything. One snapshot is an anecdote.
+    """
+
+    version: str
+    deep_history_years: int
+    minimum_eligible_snapshots: int
+
+
+#: The policy this slice applies. Changing it changes what the alarm claims, so
+#: it carries a version like any other governed threshold.
+DEFAULT_SURVIVORSHIP_POLICY: Final = SurvivorshipPolicy(
+    version="survivorship/a1.1",
+    deep_history_years=5,
+    minimum_eligible_snapshots=1,
+)
+
+
 def check_universe_snapshots(
     snapshots: Mapping[date, Sequence[UniverseMembership]],
     *,
@@ -951,32 +986,48 @@ def check_universe_snapshots(
     resolved_profile: InformationSetProfile,
     approvals: BoundApprovals,
     evaluation_cutoffs: Mapping[date, datetime],
+    dataset_cutoff: date,
+    survivorship_policy: SurvivorshipPolicy = DEFAULT_SURVIVORSHIP_POLICY,
 ) -> tuple[QualityFinding, ...]:
     """Survivorship, profile keying and eligibility-input admissibility.
 
-    Checks 6.3 and 6.4 are deliberately crude, and that is the point: they are the
-    smoke alarm for the defect that is otherwise invisible. If an old snapshot
-    contains no company that has since disappeared, the data is not historical,
-    whatever the vendor calls it.
+    ``dataset_cutoff`` is the horizon the build knows about -- normally its own
+    build date. How far back a snapshot has to be to count as deep history is
+    measured from that, never from a wall clock: the same dataset must produce the
+    same findings a year from now.
+
+    Checks 6.3 and 6.4 stay the smoke alarm they were, and are now **scoped** by
+    :class:`SurvivorshipPolicy` so a recent, correct snapshot is not faulted for
+    delistings that have not happened yet.
     """
     dataset = "universe_membership"
     found: list[QualityFinding] = []
     ever_delisted = {listing.security_id for listing in listings if listing.listing_end is not None}
+    deep_before = date(
+        dataset_cutoff.year - survivorship_policy.deep_history_years,
+        dataset_cutoff.month,
+        dataset_cutoff.day,
+    )
 
-    any_delisted_anywhere = False
+    eligible_sessions = [session for session in snapshots if session <= deep_before]
+    any_delisted_in_deep_history = False
     for session, rows in sorted(snapshots.items()):
         members = [row.security_id for row in rows if row.is_member]
+        is_deep = session <= deep_before
         delisted_members = [sid for sid in members if sid in ever_delisted]
-        if delisted_members:
-            any_delisted_anywhere = True
-        elif members:
+        if is_deep and delisted_members:
+            any_delisted_in_deep_history = True
+        elif is_deep and members:
             found.append(
                 _blocking(
                     "6.3_survivorship_leakage",
                     dataset,
-                    f"The snapshot for {session.isoformat()} has {len(members)} members and "
-                    "none of them has since delisted. A historical universe with no "
-                    "subsequent disappearances is not historical.",
+                    f"The snapshot for {session.isoformat()} is deep history (at least "
+                    f"{survivorship_policy.deep_history_years} years before the dataset "
+                    f"cutoff {dataset_cutoff.isoformat()}, policy "
+                    f"{survivorship_policy.version}), has {len(members)} members, and none of "
+                    "them has since delisted. A historical universe with no subsequent "
+                    "disappearances is not historical.",
                     session_date=session,
                 )
             )
@@ -1013,12 +1064,18 @@ def check_universe_snapshots(
                     )
                     break
 
-    if snapshots and not any_delisted_anywhere:
+    if (
+        len(eligible_sessions) >= survivorship_policy.minimum_eligible_snapshots
+        and not any_delisted_in_deep_history
+    ):
         found.append(
             _blocking(
                 "6.4_delisted_absence",
                 dataset,
-                "No delisted security appears in any historical snapshot.",
+                f"No delisted security appears in any of the {len(eligible_sessions)} deep-"
+                f"history snapshot(s) at or before {deep_before.isoformat()} (policy "
+                f"{survivorship_policy.version}). Across that span the absence is not "
+                "timing, it is the data.",
             )
         )
     return tuple(_dedupe(found))
@@ -1060,8 +1117,10 @@ def blocking_findings(findings: Sequence[QualityFinding]) -> tuple[QualityFindin
 
 __all__ = [
     "DEFAULT_MARKET_THRESHOLDS",
+    "DEFAULT_SURVIVORSHIP_POLICY",
     "MarketDataThresholds",
     "QualityFinding",
+    "SurvivorshipPolicy",
     "blocking_findings",
     "check_adjusted_artifact_hash",
     "check_envelope",

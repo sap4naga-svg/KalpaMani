@@ -88,6 +88,52 @@ class BronzeIntegrityError(PointInTimeError):
     """
 
 
+class UnresolvedProviderAvailabilityError(ProfileResolutionError):
+    """A dataset's provider timing is unresolvable and its policy does not resolve it.
+
+    Quality check ``4.3.2_unresolved_provider_availability``, raised at the
+    resolution boundary rather than discovered later. Policy ``NONE`` on a dataset
+    with unresolved provider timing under ``PROVIDER_REALISTIC_PIT`` is not a
+    silent pass-through: the rows stay, and the run refuses by name.
+    """
+
+
+class QueryRangeError(PointInTimeError):
+    """A requested range is malformed -- a start after its end, for instance."""
+
+
+class SecurityNotInDatasetError(PointInTimeError):
+    """The dataset holds no evidence of this security at all.
+
+    Distinct from a security that exists and simply did not trade: one is a
+    question the dataset cannot answer, the other is an answer.
+    """
+
+
+class IncompleteCoverageError(PointInTimeError):
+    """The dataset is missing bars the requested range requires.
+
+    Refused rather than silently truncated. A short series and a gap-ridden one
+    look identical downstream, and only one of them is a result.
+    """
+
+
+class DatasetPublicationError(PointInTimeError):
+    """A dataset version is unpublished, partially published, or fails verification.
+
+    A half-written build is not a smaller build. Reading one would produce a
+    result nobody could reproduce, from inputs nobody could name.
+    """
+
+
+class AcquisitionIncompleteError(PointInTimeError):
+    """A Bronze payload exists without its acquisition record, or vice versa.
+
+    Recoverable by repair, never by pretending. Returning success while the
+    acquisition metadata is absent would leave a payload nothing can explain.
+    """
+
+
 class ManifestRefusedError(PointInTimeError):
     """A research manifest could not be emitted, so the result is inadmissible.
 
@@ -107,11 +153,14 @@ class PendingContractError(PointInTimeError):
 
 
 __all__ = [
+    "AcquisitionIncompleteError",
     "ArtifactIntegrityError",
     "BlockingQualityIssueError",
     "BronzeIntegrityError",
     "DatasetCoverageError",
+    "DatasetPublicationError",
     "EnvelopeError",
+    "IncompleteCoverageError",
     "IneligibleUnderProfileError",
     "ManifestRefusedError",
     "MissingHistoricalSnapshotError",
@@ -119,5 +168,8 @@ __all__ = [
     "PendingContractError",
     "PointInTimeError",
     "ProfileResolutionError",
+    "QueryRangeError",
     "RequiredInputUnavailableError",
+    "SecurityNotInDatasetError",
+    "UnresolvedProviderAvailabilityError",
 ]

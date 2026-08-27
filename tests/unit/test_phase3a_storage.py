@@ -1,26 +1,32 @@
-"""Bronze immutability and local analytical storage.
+"""Bronze immutability, crash recovery, and local analytical storage.
 
 Every test writes into a pytest ``tmp_path``. Nothing here touches
 ``.runtime/data``, and nothing opens a network connection -- there is no network
 client in this slice to open one with.
+
+The crash tests matter more than they look. Content and acquisition are two
+immutable things written in a fixed order, and the whole point of that order is
+that the only reachable inconsistency is the *repairable* one.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
 import pytest
 
 from fixtures import phase3a
-from kalpamani.data.contracts.canonical import (
-    canonical_json,
-    content_hash,
-    sha256_hex,
+from kalpamani.data.contracts.canonical import canonical_json, content_hash, sha256_hex
+from kalpamani.data.contracts.errors import (
+    AcquisitionIncompleteError,
+    ArtifactIntegrityError,
+    BronzeIntegrityError,
+    DatasetPublicationError,
 )
-from kalpamani.data.contracts.errors import ArtifactIntegrityError, BronzeIntegrityError
+from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.serde import (
     decode_corporate_action,
     decode_listing,
@@ -44,22 +50,23 @@ pytestmark = pytest.mark.unit
 INGEST_DATE = date(2026, 8, 26)
 
 
-def _retrieval(dataset: str = "daily_bars") -> RetrievalMetadata:
+def _retrieval(run_id: str = "ing-synthetic-0001") -> RetrievalMetadata:
     return RetrievalMetadata(
         provider=phase3a.PROVIDER,
-        dataset=dataset,
+        dataset="daily_bars",
         requested_range="2019-06-24..2019-06-28",
         retrieved_at=datetime(2026, 8, 26, 11, 0, tzinfo=UTC),
         source_schema_version="synthetic/1",
+        ingestion_run_id=run_id,
     )
 
 
 # ---------------------------------------------------------------------------
-# Bronze
+# Bronze content and acquisition
 # ---------------------------------------------------------------------------
 
 
-def test_writing_identical_bytes_twice_is_idempotent(tmp_path: Path) -> None:
+def test_writing_identical_bytes_twice_writes_the_content_once(tmp_path: Path) -> None:
     """A re-run is not a new acquisition, and must not be reported as one."""
     store = BronzeStore(tmp_path)
     payload = phase3a.bronze_payload()
@@ -67,18 +74,97 @@ def test_writing_identical_bytes_twice_is_idempotent(tmp_path: Path) -> None:
     first = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
     second = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
 
-    assert first.was_written is True
-    assert second.was_written is False
+    assert first.content_written is True
+    assert second.content_written is False
     assert first.content_sha256 == second.content_sha256 == sha256_hex(payload)
     assert first.path == second.path
     assert store.verify(second)
 
 
-def test_different_bytes_create_a_distinct_artifact(tmp_path: Path) -> None:
-    """A re-fetch returning different bytes is a NEW artifact, never a replacement.
+def test_a_second_retrieval_records_a_second_acquisition(tmp_path: Path) -> None:
+    """One payload, two acquisitions -- the honest account of fetching it twice.
 
-    That is what makes a vendor backfill visible instead of silent.
+    The content object is not duplicated or rewritten, because identity is a
+    property of what the vendor sent, not of how often we asked.
     """
+    store = BronzeStore(tmp_path)
+    payload = phase3a.bronze_payload()
+
+    first = store.write(payload=payload, retrieval=_retrieval("ing-0001"), ingest_date=INGEST_DATE)
+    second = store.write(payload=payload, retrieval=_retrieval("ing-0002"), ingest_date=INGEST_DATE)
+
+    assert first.path == second.path
+    assert second.content_written is False
+    assert second.acquisition_written is True
+    assert first.acquisition_path != second.acquisition_path
+
+    records = store.acquisitions_for(
+        provider=phase3a.PROVIDER,
+        dataset="daily_bars",
+        ingest_date=INGEST_DATE,
+        digest=first.content_sha256,
+    )
+    assert sorted(record["ingestion_run_id"] for record in records) == ["ing-0001", "ing-0002"]
+    assert len(sorted(first.path.parent.glob("*.json.gz"))) == 1, (
+        "Two acquisitions, one content object."
+    )
+
+
+def test_a_payload_without_its_acquisition_record_is_repaired_on_retry(tmp_path: Path) -> None:
+    """CRASH RECOVERY. The one reachable inconsistency, and it completes.
+
+    Content is written first and acquisition second, so a crash between them
+    leaves a payload with no acquisition record. A retry repairs it. The reverse
+    order would leave an acquisition naming a payload that does not exist, which
+    nothing on disk could repair.
+    """
+    store = BronzeStore(tmp_path)
+    payload = phase3a.bronze_payload()
+    artifact = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
+
+    artifact.acquisition_path.unlink()  # simulate the crash
+    assert store.audit_partition(
+        provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
+    ) == (artifact.content_sha256,)
+    with pytest.raises(AcquisitionIncompleteError, match="no acquisition record"):
+        store.require_complete(
+            provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
+        )
+
+    repaired = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
+    assert repaired.repaired is True
+    assert repaired.content_written is False
+    assert repaired.acquisition_written is True
+    assert repaired.acquisition_path.exists()
+    store.require_complete(provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE)
+
+
+def test_a_complete_partition_reports_no_orphans(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL. The audit must not fault a partition that is fine."""
+    store = BronzeStore(tmp_path)
+    store.write(payload=phase3a.bronze_payload(), retrieval=_retrieval(), ingest_date=INGEST_DATE)
+    assert (
+        store.audit_partition(
+            provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
+        )
+        == ()
+    )
+
+
+def test_an_acquisition_without_an_ingestion_run_id_is_refused() -> None:
+    with pytest.raises(AcquisitionIncompleteError, match="needs an ingestion_run_id"):
+        RetrievalMetadata(
+            provider=phase3a.PROVIDER,
+            dataset="daily_bars",
+            requested_range="x",
+            retrieved_at=datetime(2026, 8, 26, 11, 0, tzinfo=UTC),
+            source_schema_version="synthetic/1",
+            ingestion_run_id="",
+        )
+
+
+def test_different_bytes_create_a_distinct_artifact(tmp_path: Path) -> None:
+    """A re-fetch returning different bytes is a NEW artifact, never a replacement."""
     store = BronzeStore(tmp_path)
     original = phase3a.bronze_payload()
     revised = original.replace(b'"100.00"', b'"100.50"')
@@ -136,10 +222,10 @@ def test_acquisition_metadata_is_stored_outside_the_payload(tmp_path: Path) -> N
     payload = phase3a.bronze_payload()
     artifact = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
 
-    assert artifact.metadata_path.exists()
-    metadata = json.loads(artifact.metadata_path.read_text(encoding="utf-8"))
-    assert metadata["provider"] == phase3a.PROVIDER
-    assert metadata["requested_range"] == "2019-06-24..2019-06-28"
+    assert artifact.acquisition_path.exists()
+    record = json.loads(artifact.acquisition_path.read_text(encoding="utf-8"))
+    assert record["provider"] == phase3a.PROVIDER
+    assert record["requested_range"] == "2019-06-24..2019-06-28"
     assert b"requested_range" not in payload, (
         "Metadata inside the payload would change the bytes and therefore the identity."
     )
@@ -150,8 +236,7 @@ def test_no_temporary_file_survives_a_write(tmp_path: Path) -> None:
     artifact = store.write(
         payload=phase3a.bronze_payload(), retrieval=_retrieval(), ingest_date=INGEST_DATE
     )
-    leftovers = sorted(artifact.path.parent.glob(".tmp-*"))
-    assert leftovers == []
+    assert sorted(artifact.path.parent.glob(".tmp-*")) == []
 
 
 def test_an_ingestion_run_records_every_bronze_hash(tmp_path: Path) -> None:
@@ -160,7 +245,6 @@ def test_an_ingestion_run_records_every_bronze_hash(tmp_path: Path) -> None:
         payload=phase3a.bronze_payload(), retrieval=_retrieval(), ingest_date=INGEST_DATE
     )
     run = build_ingestion_run(
-        ingestion_run_id="ing-synthetic-0001",
         retrieval=_retrieval(),
         started_at=datetime(2026, 8, 26, 11, 0, tzinfo=UTC),
         completed_at=datetime(2026, 8, 26, 11, 1, tzinfo=UTC),
@@ -194,10 +278,10 @@ def test_a_table_is_byte_identical_across_two_builds(tmp_path: Path) -> None:
     rows = [encode_price_bar(bar) for bar in phase3a.daily_bars()]
     shuffled = list(reversed(rows))
 
-    first = LocalTableStore(tmp_path / "a").write_table(
+    first = LocalTableStore(tmp_path / "a").write_staged_table(
         layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows
     )
-    second = LocalTableStore(tmp_path / "b").write_table(
+    second = LocalTableStore(tmp_path / "b").write_staged_table(
         layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=shuffled
     )
     assert first.content_hash == second.content_hash
@@ -207,28 +291,61 @@ def test_a_table_is_byte_identical_across_two_builds(tmp_path: Path) -> None:
     )
 
 
-def test_rewriting_a_table_with_different_content_is_refused(tmp_path: Path) -> None:
+def test_committing_over_an_existing_version_is_refused(tmp_path: Path) -> None:
     """Dataset versions are superseded, never mutated."""
     store = LocalTableStore(tmp_path)
     rows = [encode_price_bar(bar) for bar in phase3a.daily_bars()]
-    store.write_table(layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows)
-    with pytest.raises(ArtifactIntegrityError, match="superseded, never mutated"):
-        store.write_table(
-            layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows[:-1]
-        )
+    store.write_staged_table(
+        layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows
+    )
+    store.commit_version(layer=StorageLayer.GOLD, dataset_version="v1")
+
+    store.write_staged_table(
+        layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows[:-1]
+    )
+    with pytest.raises(DatasetPublicationError, match="superseded, never rewritten"):
+        store.commit_version(layer=StorageLayer.GOLD, dataset_version="v1")
 
 
-def test_rewriting_a_table_with_identical_content_is_idempotent(tmp_path: Path) -> None:
+def test_committing_nothing_is_refused(tmp_path: Path) -> None:
     store = LocalTableStore(tmp_path)
-    rows = [encode_price_bar(bar) for bar in phase3a.daily_bars()]
-    first = store.write_table(
-        layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows
+    with pytest.raises(DatasetPublicationError, match="nothing to commit"):
+        store.commit_version(layer=StorageLayer.GOLD, dataset_version="v1")
+
+
+def test_a_staged_version_is_invisible_to_readers(tmp_path: Path) -> None:
+    """The commit is the rename; before it, nothing is published."""
+    store = LocalTableStore(tmp_path)
+    store.write_staged_table(
+        layer=StorageLayer.GOLD,
+        dataset_version="v1",
+        entity="price_bar",
+        rows=[encode_price_bar(bar) for bar in phase3a.daily_bars()],
     )
-    second = store.write_table(
-        layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=rows
+    with pytest.raises(ArtifactIntegrityError, match="refusal, not an empty result"):
+        store.read_table(layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar")
+
+    store.commit_version(layer=StorageLayer.GOLD, dataset_version="v1")
+    assert store.read_table(layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar")
+
+
+def test_discarding_a_staged_version_loses_nothing_published(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    store.write_staged_table(
+        layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar", rows=[]
     )
-    assert first.content_hash == second.content_hash
-    assert store.verify_table(second)
+    store.discard_staged_version(layer=StorageLayer.GOLD, dataset_version="v1")
+    assert not store.staging_root(layer=StorageLayer.GOLD, dataset_version="v1").exists()
+    assert not store.version_root(layer=StorageLayer.GOLD, dataset_version="v1").exists()
+
+
+def test_a_slash_bearing_version_stages_at_its_leaf(tmp_path: Path) -> None:
+    """A dataset version is path-like, and the commit publishes exactly one of them."""
+    store = LocalTableStore(tmp_path)
+    staging = store.staging_root(layer=StorageLayer.GOLD, dataset_version="gold/2026.08.26.1")
+    final = store.version_root(layer=StorageLayer.GOLD, dataset_version="gold/2026.08.26.1")
+    assert staging.parent == final.parent
+    assert staging.name == "_staging-2026.08.26.1"
 
 
 def test_reading_a_table_that_does_not_exist_is_a_refusal(tmp_path: Path) -> None:
@@ -240,19 +357,22 @@ def test_reading_a_table_that_does_not_exist_is_a_refusal(tmp_path: Path) -> Non
 
 def test_a_tampered_table_fails_verification(tmp_path: Path) -> None:
     store = LocalTableStore(tmp_path)
-    artifact = store.write_table(
+    artifact = store.write_staged_table(
         layer=StorageLayer.GOLD,
         dataset_version="v1",
         entity="price_bar",
         rows=[encode_price_bar(bar) for bar in phase3a.daily_bars()],
     )
+    store.commit_version(layer=StorageLayer.GOLD, dataset_version="v1")
     assert store.verify_table(artifact)
-    artifact.path.write_bytes(artifact.path.read_bytes().replace(b"100.00", b"999.00"))
+
+    path = store.table_path(layer=StorageLayer.GOLD, dataset_version="v1", entity="price_bar")
+    path.write_bytes(path.read_bytes().replace(b"100.00", b"999.00"))
     assert not store.verify_table(artifact)
 
 
 # ---------------------------------------------------------------------------
-# Serialisation
+# Serialisation and UTC normalisation
 # ---------------------------------------------------------------------------
 
 
@@ -278,9 +398,63 @@ def test_every_entity_with_a_decoder_round_trips_exactly(
         assert decode(encode(record)) == record  # type: ignore[operator]
 
 
+def test_two_spellings_of_one_instant_are_one_canonical_value() -> None:
+    """``12:00:00Z`` and ``07:00:00-05:00`` are the same instant, so they hash alike."""
+    utc_form = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    offset_form = datetime(2026, 1, 1, 7, 0, tzinfo=timezone(timedelta(hours=-5)))
+    assert utc_form == offset_form
+
+    assert canonical_json(utc_form) == canonical_json(offset_form)
+    assert content_hash({"t": utc_form}) == content_hash({"t": offset_form})
+    assert normalize_instant(offset_form) == normalize_instant(utc_form)
+    assert normalize_instant(offset_form).utcoffset() == timedelta(0)
+
+
+def test_an_entity_cannot_retain_an_arbitrary_offset() -> None:
+    """Normalisation happens at construction, not at serialisation time."""
+    template = phase3a.daily_bars()[0]
+    shifted = type(template)(
+        security_id=template.security_id,
+        resolution=template.resolution,
+        bar_end_time=template.bar_end_time.astimezone(timezone(timedelta(hours=-5))),
+        bar_start_time=template.bar_start_time.astimezone(timezone(timedelta(hours=9))),
+        session_date=template.session_date,
+        open=template.open,
+        high=template.high,
+        low=template.low,
+        close=template.close,
+        volume=template.volume,
+        curation_source=template.curation_source,
+        bar_construction=template.bar_construction,
+        envelope=template.envelope,
+    )
+    assert shifted.bar_end_time.utcoffset() == timedelta(0)
+    assert shifted.bar_start_time.utcoffset() == timedelta(0)
+    assert encode_price_bar(shifted) == encode_price_bar(template)
+
+
 def test_canonical_rendering_refuses_a_naive_datetime() -> None:
     with pytest.raises(TypeError, match="naive datetime"):
         canonical_json({"when": datetime(2020, 1, 1, 12, 0)})
+
+
+class _OffsetlessZone(tzinfo):
+    """A tzinfo that looks aware and denotes no particular instant."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return "OFFSETLESS"
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+
+def test_normalisation_refuses_a_tzinfo_that_cannot_state_its_offset() -> None:
+    """Aware in name only: it can be neither ordered nor hashed."""
+    with pytest.raises(TypeError, match="cannot state its UTC offset"):
+        normalize_instant(datetime(2026, 1, 1, 12, 0, tzinfo=_OffsetlessZone()))
 
 
 def test_canonical_rendering_refuses_a_float() -> None:

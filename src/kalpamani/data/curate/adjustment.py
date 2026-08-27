@@ -38,6 +38,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
+from typing import Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
 from kalpamani.data.contracts.entities import (
@@ -60,14 +61,24 @@ from kalpamani.data.contracts.resolution import (
 )
 from kalpamani.data.contracts.serde import encode_corporate_action, encode_price_bar
 from kalpamani.data.contracts.vocabulary import (
+    AdjustmentConvention,
     AdjustmentPolicy,
     CorporateActionType,
     InformationSetProfile,
 )
 
-#: Version of this computation. Change it and every artifact it produces is a
-#: different artifact with a different hash -- which is the point.
-ADJUSTMENT_SPEC_VERSION = "adj/a1.1"
+#: The convention this module implements. Named, not implied: an unnamed
+#: "adjusted" series is a number whose meaning depends on which implementation
+#: produced it, and the point of keying an artifact is that its meaning does not.
+ADJUSTMENT_CONVENTION: Final = AdjustmentConvention.FORWARD_BASE_NORMALIZED
+
+#: Version of this computation. Change it -- or the convention -- and every
+#: artifact it produces is a different artifact with a different hash.
+ADJUSTMENT_SPEC_VERSION = f"adj/a1.2+{ADJUSTMENT_CONVENTION.value}"
+
+#: A scope beginning with this prefix authorizes more than one security. Anything
+#: else is a single security id, and a build spanning two of them is refused.
+MULTI_SECURITY_SCOPE_PREFIX: Final = "universe:"
 
 #: Price precision for adjusted output. Fixed so two builds agree exactly.
 _PRICE_QUANTUM = Decimal("0.000001")
@@ -209,6 +220,7 @@ def series_content_hash(series: Sequence[PriceBarValues]) -> str:
 def artifact_key(
     *,
     adjustment_policy: AdjustmentPolicy,
+    adjustment_convention: AdjustmentConvention = ADJUSTMENT_CONVENTION,
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
     corporate_action_dataset_version: str,
@@ -218,6 +230,7 @@ def artifact_key(
     """The complete identity of an adjusted artifact. Nothing else may key one."""
     return {
         "adjustment_policy": adjustment_policy.value,
+        "adjustment_convention": adjustment_convention.value,
         "resolved_profile": resolved_profile.value,
         "as_of_epoch": as_of_epoch,
         "corporate_action_dataset_version": corporate_action_dataset_version,
@@ -232,17 +245,89 @@ def artifact_id_for(key: dict[str, object]) -> str:
     return "adj-" + sha256_hex(canonical_bytes(key))[:16]
 
 
+def _validate_artifact_inputs(
+    bars: Sequence[PriceBar],
+    *,
+    resolved_profile: InformationSetProfile,
+    as_of_epoch: datetime,
+    approvals: BoundApprovals,
+    security_id_scope: str,
+    valid_time_start: date,
+    valid_time_end: date,
+) -> None:
+    """Refuse the four ways an artifact key can describe something it does not contain."""
+    if not bars:
+        raise ArtifactIntegrityError(
+            "Refusing to build an adjusted artifact from zero bars. An empty series still "
+            "gets a key and a hash, and downstream nothing distinguishes it from a series "
+            "that genuinely had no trading."
+        )
+    if valid_time_start > valid_time_end:
+        raise ArtifactIntegrityError(
+            f"Declared validity interval {valid_time_start.isoformat()}.."
+            f"{valid_time_end.isoformat()} is empty."
+        )
+
+    securities = sorted({bar.security_id for bar in bars})
+    if not security_id_scope.startswith(MULTI_SECURITY_SCOPE_PREFIX):
+        if len(securities) > 1:
+            raise ArtifactIntegrityError(
+                f"Scope {security_id_scope!r} names a single security but the bars span "
+                f"{securities}. A multi-security artifact needs a scope that authorizes one, "
+                f"prefixed {MULTI_SECURITY_SCOPE_PREFIX!r}, so the key describes what the "
+                "artifact actually contains."
+            )
+        if securities[0] != security_id_scope:
+            raise ArtifactIntegrityError(
+                f"Scope {security_id_scope!r} does not match the security in the bars "
+                f"({securities[0]!r})."
+            )
+
+    outside = sorted(
+        {
+            bar.session_date
+            for bar in bars
+            if not (valid_time_start <= bar.session_date <= valid_time_end)
+        }
+    )
+    if outside:
+        raise ArtifactIntegrityError(
+            f"{len(outside)} session(s) fall outside the declared validity interval "
+            f"{valid_time_start.isoformat()}..{valid_time_end.isoformat()}: {outside[:5]}. The "
+            "interval is what the artifact claims to be about; bars beyond it are not in it."
+        )
+
+    inadmissible = 0
+    for bar in bars:
+        if not is_eligible(bar, resolved_profile):
+            inadmissible += 1
+            continue
+        available = decision_available_time(bar, resolved_profile, approvals)
+        if available is None or available > as_of_epoch:
+            inadmissible += 1
+    if inadmissible:
+        raise ArtifactIntegrityError(
+            f"{inadmissible} bar(s) are not admissible at {as_of_epoch.isoformat()} under "
+            f"{resolved_profile.value}, yet were supplied to an artifact keyed by that "
+            "cutoff. An artifact built from information its own key says was unavailable is "
+            "look-ahead with a hash attached."
+        )
+
+
 def build_adjusted_bar_artifact(
     bars: Sequence[PriceBar],
     actions: Sequence[CorporateAction],
     *,
     adjustment_policy: AdjustmentPolicy,
+    adjustment_convention: AdjustmentConvention = ADJUSTMENT_CONVENTION,
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
     approvals: BoundApprovals,
     corporate_action_dataset_version: str,
     raw_bar_dataset_version: str,
     security_id_scope: str,
+    valid_time_start: date,
+    valid_time_end: date,
     artifact_first_built_time: datetime,
     ingestion_time: datetime,
     dataset_version: str,
@@ -252,7 +337,27 @@ def build_adjusted_bar_artifact(
     ``artifact_first_built_time`` is passed in rather than read from a clock, so a
     rebuild from identical lineage keeps it: recomputing a value we already had
     does not move when we had it.
+
+    The validity interval is **declared, not inferred**. Deriving it from whatever
+    bars happened to arrive would make it unfalsifiable: any input set would fit,
+    including one silently missing its first month.
+
+    Raises:
+        ArtifactIntegrityError: on zero bars; on a bar not admissible at
+            ``as_of_epoch`` under ``resolved_profile``; on more than one security
+            when the declared scope authorizes only one; or on a bar outside the
+            declared validity interval. Each would produce an artifact whose key
+            describes something other than its contents.
     """
+    _validate_artifact_inputs(
+        bars,
+        resolved_profile=resolved_profile,
+        as_of_epoch=as_of_epoch,
+        approvals=approvals,
+        security_id_scope=security_id_scope,
+        valid_time_start=valid_time_start,
+        valid_time_end=valid_time_end,
+    )
     series = adjusted_series(
         bars,
         actions,
@@ -269,18 +374,19 @@ def build_adjusted_bar_artifact(
     )
     key = artifact_key(
         adjustment_policy=adjustment_policy,
+        adjustment_convention=adjustment_convention,
         resolved_profile=resolved_profile,
         as_of_epoch=as_of_epoch,
         corporate_action_dataset_version=corporate_action_dataset_version,
         raw_bar_dataset_version=raw_bar_dataset_version,
         security_id_scope=security_id_scope,
     )
-    sessions = sorted({bar.session_date for bar in bars})
     inputs: tuple[PitRecord, ...] = (*sorted(bars, key=_bar_sort), *admitted)
 
     return AdjustedBarArtifact(
         artifact_id=artifact_id_for(key),
         adjustment_policy=adjustment_policy,
+        adjustment_convention=adjustment_convention,
         resolved_profile=resolved_profile,
         as_of_epoch=as_of_epoch,
         corporate_action_dataset_version=corporate_action_dataset_version,
@@ -295,9 +401,9 @@ def build_adjusted_bar_artifact(
                     dataset_version=raw_bar_dataset_version,
                     selector={
                         "scope": security_id_scope,
-                        "sessions": f"{sessions[0].isoformat()}..{sessions[-1].isoformat()}"
-                        if sessions
-                        else "",
+                        "sessions": (
+                            f"{valid_time_start.isoformat()}..{valid_time_end.isoformat()}"
+                        ),
                     },
                 ),
                 LineageRef.of(
@@ -312,10 +418,7 @@ def build_adjusted_bar_artifact(
             artifact_first_built_time=artifact_first_built_time,
             derivation_spec_version=ADJUSTMENT_SPEC_VERSION,
             artifact_content_hash=series_content_hash(series),
-            validity=OutputValidityDeclaration.interval(
-                sessions[0] if sessions else date.min,
-                sessions[-1] if sessions else date.min,
-            ),
+            validity=OutputValidityDeclaration.interval(valid_time_start, valid_time_end),
             ingestion_time=ingestion_time,
             dataset_version=dataset_version,
         ),
@@ -340,6 +443,13 @@ def verify_adjusted_bar_artifact(
             recorded hash, or if the stored series itself has been altered. A
             mismatch is a BLOCKING quality issue, not a cache miss.
     """
+    if artifact.adjustment_convention is not ADJUSTMENT_CONVENTION:
+        raise ArtifactIntegrityError(
+            f"Artifact {artifact.artifact_id} declares convention "
+            f"{artifact.adjustment_convention.value}; this implementation produces "
+            f"{ADJUSTMENT_CONVENTION.value}. Recomputing it under a different convention "
+            "would compare two different series and call the difference corruption."
+        )
     recomputed = adjusted_series(
         bars,
         actions,
@@ -392,7 +502,9 @@ def encode_artifact_inputs(artifact: AdjustedBarArtifact) -> list[dict[str, obje
 
 
 __all__ = [
+    "ADJUSTMENT_CONVENTION",
     "ADJUSTMENT_SPEC_VERSION",
+    "MULTI_SECURITY_SCOPE_PREFIX",
     "adjusted_series",
     "adjustment_factor",
     "admissible_actions",

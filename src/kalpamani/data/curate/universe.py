@@ -6,7 +6,7 @@ rule is what stops the defect that is otherwise invisible: a 2018 backtest run
 over the securities that still exist in 2026 will look excellent, and nothing in
 its output will say why.
 
-Three properties this module has to have, and each is tested:
+Four properties this module has to have, and each is tested:
 
 **Determinism.** The same inputs, rule version and resolved profile produce
 byte-identical membership. A rebuild that drifts means the rule was reading
@@ -19,12 +19,20 @@ refused, not quietly used. This is check 6.6, and it exists precisely because
 "universe construction quietly uses current data" is the easiest mistake in the
 whole system to make and the hardest to see afterwards.
 
-**Refusal over substitution.** A definition that declares a threshold whose input
-domain does not exist is **refused**. In this slice that is the market-cap
-threshold: shares outstanding is a Phase-3B fundamental, so a definition naming
-``min_market_cap`` has no admissible input for it. Computing the universe anyway
-would publish a different rule under the declared ``universe_definition_version``
-and nothing downstream would say so.
+**Refusal over an empty answer.** A build whose required inputs are all
+inadmissible under the resolved profile does not produce a zero-security market.
+It produces **no snapshot**, with :class:`RequiredInputUnavailableError` naming
+the domains and the reason. The distinction is load-bearing: a universe that
+could not be computed and a universe that genuinely selected nobody look
+identical downstream and mean opposite things. A rule that legitimately selects
+no securities from admissible inputs still publishes -- as a valid snapshot whose
+rows are all non-members, each carrying its exclusion reason.
+
+**Exact lineage.** Each membership row records only the inputs that decided
+*that security*: one listing revision, one attribute row, and that security's own
+bars. Attaching the whole admissible input set to every row would make lineage
+true and useless -- a changed bar for some other security would look like a
+changed input for this one.
 
 Thresholds here are **versioned synthetic parameters proving the mechanism**.
 Blueprint s.4's production thresholds are not implemented over real data, because
@@ -57,16 +65,25 @@ from kalpamani.data.contracts.resolution import (
     decision_available_time,
     is_eligible,
 )
-from kalpamani.data.contracts.serde import encode_universe_membership
 from kalpamani.data.contracts.vocabulary import (
     BarResolution,
     Exchange,
     InformationSetProfile,
     UniverseExclusionReason,
 )
+from kalpamani.data.curate.lineage import (
+    attribute_selector,
+    bar_selector,
+    lineage_fingerprint,
+    listing_selector,
+)
 
 #: Version of the eligibility computation itself, distinct from the rule version.
-UNIVERSE_SPEC_VERSION = "universe-build/a1.1"
+UNIVERSE_SPEC_VERSION = "universe-build/a1.2"
+
+#: The input domains a universe build declares REQUIRED. Emptying any of them is
+#: a refusal, not a smaller universe.
+REQUIRED_UNIVERSE_DOMAINS = ("listing", "security_attribute", "price_bar")
 
 _MONEY = Decimal("0.01")
 
@@ -93,7 +110,7 @@ class UniverseDefinition:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UniverseBuildInputs:
-    """Everything a snapshot is built from, named so lineage can be complete."""
+    """Everything a universe build reads, named so lineage can be complete."""
 
     listings: tuple[Listing, ...]
     attributes: tuple[SecurityAttribute, ...]
@@ -101,6 +118,18 @@ class UniverseBuildInputs:
     listing_dataset_version: str
     attribute_dataset_version: str
     bar_dataset_version: str
+
+
+def _admissible(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    cutoff: datetime,
+) -> bool:
+    if not is_eligible(record, resolved_profile):
+        return False
+    available = decision_available_time(record, resolved_profile, approvals)
+    return available is not None and available <= cutoff
 
 
 def _admissible_bars(
@@ -138,28 +167,6 @@ def _admissible_attributes(
         attribute
         for attribute in attributes
         if _admissible(attribute, resolved_profile, approvals, cutoff)
-    )
-
-
-def admissible_inputs(
-    *,
-    listings: Sequence[Listing],
-    attributes: Sequence[SecurityAttribute],
-    bars: Sequence[PriceBar],
-    resolved_profile: InformationSetProfile,
-    approvals: BoundApprovals,
-    evaluation_cutoff: datetime,
-) -> tuple[PitRecord, ...]:
-    """The exact input set a universe build at ``evaluation_cutoff`` consumes.
-
-    Shared by the builder and by lineage replay on read, so the two cannot
-    diverge. A rebuild reads what the build read because it runs the same
-    function, not because two implementations agree today.
-    """
-    return (
-        *_admissible_listings(listings, resolved_profile, approvals, evaluation_cutoff),
-        *_admissible_attributes(attributes, resolved_profile, approvals, evaluation_cutoff),
-        *_admissible_bars(bars, resolved_profile, approvals, evaluation_cutoff),
     )
 
 
@@ -203,7 +210,12 @@ def build_universe_snapshot(
 
     Raises:
         RequiredInputUnavailableError: if the definition declares a threshold
-            whose input domain is not available in this slice.
+            whose input domain is not available in this slice, or if any REQUIRED
+            input domain that was supplied is emptied by eligibility or
+            availability filtering under ``resolved_profile``. The second case is
+            the one that matters: an unbuildable universe is **not** a
+            zero-security market, and publishing an empty snapshot would make the
+            two indistinguishable.
     """
     if definition.min_market_cap is not None:
         raise RequiredInputUnavailableError(
@@ -222,33 +234,20 @@ def build_universe_snapshot(
         inputs.attributes, resolved_profile, approvals, evaluation_cutoff
     )
 
-    consumed: tuple[PitRecord, ...] = admissible_inputs(
-        listings=inputs.listings,
-        attributes=inputs.attributes,
-        bars=inputs.bars,
+    _require_inputs(
+        session_date=session_date,
         resolved_profile=resolved_profile,
-        approvals=approvals,
         evaluation_cutoff=evaluation_cutoff,
-    )
-    lineage = (
-        LineageRef.of(
-            entity="listing",
-            dataset_version=inputs.listing_dataset_version,
-            selector={"session": session_date.isoformat()},
-        ),
-        LineageRef.of(
-            entity="security_attribute",
-            dataset_version=inputs.attribute_dataset_version,
-            selector={"attributes": "security_type", "session": session_date.isoformat()},
-        ),
-        LineageRef.of(
-            entity="price_bar",
-            dataset_version=inputs.bar_dataset_version,
-            selector={
-                "resolution": BarResolution.DAILY.value,
-                "through": session_date.isoformat(),
-            },
-        ),
+        supplied={
+            "listing": len(inputs.listings),
+            "security_attribute": len(inputs.attributes),
+            "price_bar": sum(1 for bar in inputs.bars if bar.resolution is BarResolution.DAILY),
+        },
+        admissible={
+            "listing": len(admissible_listings),
+            "security_attribute": len(admissible_attributes),
+            "price_bar": len(admissible_bars),
+        },
     )
 
     rows: list[UniverseMembership] = []
@@ -263,6 +262,9 @@ def build_universe_snapshot(
             bars=admissible_bars,
             attributes=admissible_attributes,
         )
+        lineage = _lineage_for(decision, inputs=inputs, listing=listing)
+        attribute_rows = () if decision.attribute is None else (decision.attribute,)
+        consumed: tuple[PitRecord, ...] = (listing, *attribute_rows, *decision.history)
         rows.append(
             UniverseMembership(
                 session_date=session_date,
@@ -280,15 +282,22 @@ def build_universe_snapshot(
                 envelope=DerivedEnvelope(
                     lineage=lineage,
                     artifact_first_built_time=artifact_first_built_time,
-                    derivation_spec_version=(f"{UNIVERSE_SPEC_VERSION}+{definition.version}"),
-                    artifact_content_hash=content_hash(
-                        {
-                            "session_date": session_date,
-                            "security_id": listing.security_id,
-                            "definition": definition.version,
-                            "resolved_profile": resolved_profile.value,
-                            "is_member": decision.is_member,
-                        }
+                    derivation_spec_version=f"{UNIVERSE_SPEC_VERSION}+{definition.version}",
+                    artifact_content_hash=membership_content_hash(
+                        session_date=session_date,
+                        security_id=listing.security_id,
+                        definition_version=definition.version,
+                        resolved_profile=resolved_profile,
+                        is_member=decision.is_member,
+                        price_at_eval=decision.price,
+                        market_cap_at_eval=None,
+                        addv_at_eval=decision.addv,
+                        history_sessions_at_eval=decision.history_sessions,
+                        exclusion_reason=(
+                            None if decision.reason is None else decision.reason.value
+                        ),
+                        is_common_stock_eligible=decision.is_common_stock_eligible,
+                        lineage=lineage,
                     ),
                     validity=OutputValidityDeclaration.session_scoped(session_date),
                     ingestion_time=ingestion_time,
@@ -299,14 +308,51 @@ def build_universe_snapshot(
     return tuple(rows)
 
 
+def _require_inputs(
+    *,
+    session_date: date,
+    resolved_profile: InformationSetProfile,
+    evaluation_cutoff: datetime,
+    supplied: dict[str, int],
+    admissible: dict[str, int],
+) -> None:
+    """Refuse the build when a REQUIRED domain that was supplied emptied.
+
+    Publishing an empty snapshot instead would let a profile that cannot reach
+    back before we existed answer a historical question with a zero-security
+    market -- the substitution the contract forbids, wearing an empty result
+    rather than the wrong profile's answer.
+    """
+    emptied = [
+        domain
+        for domain in REQUIRED_UNIVERSE_DOMAINS
+        if supplied.get(domain, 0) > 0 and admissible.get(domain, 0) == 0
+    ]
+    if not emptied:
+        return
+    counts = {domain: supplied[domain] for domain in emptied}
+    raise RequiredInputUnavailableError(
+        "REQUIRED_INPUT_UNAVAILABLE: the universe build for "
+        f"{session_date.isoformat()} under {resolved_profile.value} has no admissible rows in "
+        f"{emptied} at the evaluation cutoff {evaluation_cutoff.isoformat()}, although rows "
+        f"were supplied ({counts}). The snapshot is unavailable, not empty: a universe that "
+        "could not be computed and a universe that genuinely selected nobody look identical "
+        "downstream and mean opposite things."
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Decision:
+    security_id: str
     is_member: bool
     reason: UniverseExclusionReason | None
     price: Decimal | None
     addv: Decimal | None
     history_sessions: int
     is_common_stock_eligible: bool
+    #: Exactly the rows this decision read.
+    attribute: SecurityAttribute | None
+    history: tuple[PriceBar, ...]
 
 
 def _evaluate(
@@ -318,20 +364,15 @@ def _evaluate(
     bars: Sequence[PriceBar],
     attributes: Sequence[SecurityAttribute],
 ) -> _Decision:
-    history = tuple(
-        sorted(
-            (
-                bar
-                for bar in bars
-                if bar.security_id == security_id and bar.session_date < session_date
-            ),
-            key=lambda bar: bar.session_date,
-        )
+    prior = (
+        bar for bar in bars if bar.security_id == security_id and bar.session_date < session_date
     )
+    history = tuple(sorted(prior, key=lambda bar: bar.session_date))
     price = history[-1].close if history else None
     window = history[-definition.addv_window_sessions :] if history else ()
     addv = _average_dollar_volume(window)
-    security_type = _attribute_on(attributes, security_id, "security_type", session_date)
+    attribute = _attribute_on(attributes, security_id, "security_type", session_date)
+    security_type = None if attribute is None else attribute.value
     common_eligible = security_type in definition.eligible_security_types
 
     reason: UniverseExclusionReason | None = None
@@ -347,12 +388,104 @@ def _evaluate(
         reason = UniverseExclusionReason.ADDV
 
     return _Decision(
+        security_id=security_id,
         is_member=reason is None,
         reason=reason,
         price=price,
         addv=addv,
         history_sessions=len(history),
         is_common_stock_eligible=common_eligible,
+        attribute=attribute,
+        history=history,
+    )
+
+
+def _lineage_for(
+    decision: _Decision,
+    *,
+    inputs: UniverseBuildInputs,
+    listing: Listing,
+) -> tuple[LineageRef, ...]:
+    """Exactly the rows that decided this security, and nothing else."""
+    refs = [
+        LineageRef.of(
+            entity="listing",
+            dataset_version=inputs.listing_dataset_version,
+            selector=listing_selector(listing),
+        )
+    ]
+    if decision.attribute is not None:
+        refs.append(
+            LineageRef.of(
+                entity="security_attribute",
+                dataset_version=inputs.attribute_dataset_version,
+                selector=attribute_selector(decision.attribute),
+            )
+        )
+    refs.append(
+        LineageRef.of(
+            entity="price_bar",
+            dataset_version=inputs.bar_dataset_version,
+            selector=bar_selector(decision.security_id, BarResolution.DAILY, decision.history),
+        )
+    )
+    return tuple(refs)
+
+
+def membership_content_hash(
+    *,
+    session_date: date,
+    security_id: str,
+    definition_version: str,
+    resolved_profile: InformationSetProfile,
+    is_member: bool,
+    price_at_eval: Decimal | None,
+    market_cap_at_eval: Decimal | None,
+    addv_at_eval: Decimal | None,
+    history_sessions_at_eval: int,
+    exclusion_reason: str | None,
+    is_common_stock_eligible: bool,
+    lineage: Sequence[LineageRef],
+) -> str:
+    """Hash the whole decision, not just its outcome.
+
+    Every value that could differ between two builds while the row still called
+    itself the same membership row is in here, including the canonical lineage. A
+    hash over the outcome alone would verify while the evidence behind it drifted.
+    """
+    return content_hash(
+        {
+            "session_date": session_date,
+            "security_id": security_id,
+            "universe_definition_version": definition_version,
+            "resolved_profile": resolved_profile.value,
+            "is_member": is_member,
+            "price_at_eval": price_at_eval,
+            "market_cap_at_eval": market_cap_at_eval,
+            "addv_at_eval": addv_at_eval,
+            "history_sessions_at_eval": history_sessions_at_eval,
+            "exclusion_reason": exclusion_reason,
+            "is_common_stock_eligible": is_common_stock_eligible,
+            "lineage": [list(item) for item in lineage_fingerprint(lineage)],
+        }
+    )
+
+
+def membership_hash_of(row: UniverseMembership) -> str:
+    """Recompute the content hash a stored membership row should carry."""
+    return membership_content_hash(
+        session_date=row.session_date,
+        security_id=row.security_id,
+        definition_version=row.universe_definition_version,
+        resolved_profile=row.resolved_profile,
+        is_member=row.is_member,
+        price_at_eval=row.price_at_eval,
+        market_cap_at_eval=row.market_cap_at_eval,
+        addv_at_eval=row.addv_at_eval,
+        history_sessions_at_eval=row.history_sessions_at_eval,
+        exclusion_reason=None if row.exclusion_reason is None else row.exclusion_reason.value,
+        is_common_stock_eligible=row.is_common_stock_eligible,
+        lineage=row.envelope.lineage,
     )
 
 
@@ -368,38 +501,28 @@ def _attribute_on(
     security_id: str,
     attribute: str,
     on: date,
-) -> str | None:
+) -> SecurityAttribute | None:
     for row in attributes:
         if row.security_id != security_id or row.attribute != attribute:
             continue
         if row.valid_from <= on and (row.valid_to is None or on <= row.valid_to):
-            return row.value
+            return row
     return None
-
-
-def _admissible(
-    record: PitRecord,
-    resolved_profile: InformationSetProfile,
-    approvals: BoundApprovals,
-    cutoff: datetime,
-) -> bool:
-    if not is_eligible(record, resolved_profile):
-        return False
-    available = decision_available_time(record, resolved_profile, approvals)
-    return available is not None and available <= cutoff
 
 
 def snapshot_content_hash(rows: Sequence[UniverseMembership]) -> str:
     """A hash over the whole snapshot, so a rebuild can be compared bit for bit."""
-    return content_hash([encode_universe_membership(row) for row in rows])
+    return content_hash(sorted(membership_hash_of(row) for row in rows))
 
 
 __all__ = [
+    "REQUIRED_UNIVERSE_DOMAINS",
     "UNIVERSE_SPEC_VERSION",
     "UniverseBuildInputs",
     "UniverseDefinition",
-    "admissible_inputs",
     "build_universe_snapshot",
     "current_listings",
+    "membership_content_hash",
+    "membership_hash_of",
     "snapshot_content_hash",
 ]

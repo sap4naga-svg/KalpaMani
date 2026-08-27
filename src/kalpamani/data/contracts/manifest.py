@@ -35,16 +35,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ManifestRefusedError
+from kalpamani.data.contracts.instants import is_canonical_instant, normalize_instant
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
     ProfileResolutionConfig,
 )
 from kalpamani.data.contracts.vocabulary import (
     CoverageScope,
-    DatasetGapPolicy,
     InformationSetProfile,
     LimitationToken,
     RevisionView,
@@ -203,6 +204,16 @@ class ResearchManifest:
     random_seed: int | None = None
     result_artifact_hash: str = ""
 
+    def __post_init__(self) -> None:
+        # Deep-freeze and canonicalise. `run_id` is a hash over these values, so
+        # a mapping that can be mutated after construction would let an id stop
+        # describing the manifest that carries it. Making that structurally
+        # impossible is worth more than checking for it.
+        object.__setattr__(
+            self, "definitions", MappingProxyType(dict(sorted(self.definitions.items())))
+        )
+        object.__setattr__(self, "as_of_cutoff", normalize_instant(self.as_of_cutoff))
+
     @property
     def requested_profile(self) -> InformationSetProfile:
         """What the caller asked for. Audit evidence only."""
@@ -266,7 +277,7 @@ def _artifact_identity(
 #: Which evidence each limitation token requires in the same manifest.
 _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
     LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: "an origin_exclusions entry with rows > 0",
-    LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: "a dataset with policy EXCLUDE or BOUND",
+    LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: "excluded_rows > 0 or provider_bounded_rows > 0",
     LimitationToken.PROVIDER_TIME_BOUNDED: "provider_bounded_rows > 0 somewhere",
     LimitationToken.PUBLIC_TIME_BOUNDED: "public_bounded_rows > 0 somewhere",
     LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: "global_profile_resolution DOWNGRADE",
@@ -278,6 +289,8 @@ def emit_manifest(
     manifest: ResearchManifest,
     *,
     directly_read_datasets: Sequence[str],
+    consumed_artifact_ids: Sequence[str] = (),
+    revisable_datasets_consumed: Sequence[str] = (),
     unapproved_bounds_relied_upon: Sequence[str] = (),
     hash_mismatches: Sequence[str] = (),
 ) -> ResearchManifest:
@@ -293,6 +306,58 @@ def emit_manifest(
             rediscover the next four one run at a time.
     """
     problems: list[str] = []
+
+    if manifest.manifest_version != MANIFEST_VERSION:
+        problems.append(
+            f"manifest_version is {manifest.manifest_version}; this code emits "
+            f"{MANIFEST_VERSION}. A schema version the writer does not recognise is refused "
+            "rather than written optimistically"
+        )
+    if not is_canonical_instant(manifest.as_of_cutoff):
+        problems.append(
+            "as_of_cutoff is not a canonical UTC instant; a cutoff whose zone is ambiguous "
+            "cannot be compared to an availability time"
+        )
+    if not isinstance(manifest.definitions, MappingProxyType):
+        problems.append(
+            "definitions is a mutable mapping; run_id hashes it, so it must be frozen before "
+            "the id is taken"
+        )
+
+    seen_datasets: set[str] = set()
+    for entry in manifest.dataset_resolution_evidence:
+        if entry.dataset in seen_datasets:
+            problems.append(
+                f"dataset {entry.dataset!r} appears more than once in the resolution "
+                "evidence; two sets of counts for one dataset cannot both describe it"
+            )
+        seen_datasets.add(entry.dataset)
+
+    for reference in manifest.datasets:
+        if (
+            reference.resolved_profile is not None
+            and reference.resolved_profile is not manifest.resolved_profile
+        ):
+            problems.append(
+                f"dataset {reference.dataset_version!r} is keyed to "
+                f"{reference.resolved_profile.value} while the run resolved to "
+                f"{manifest.resolved_profile.value}; artifacts follow the resolved profile"
+            )
+
+    if revisable_datasets_consumed and manifest.revision_view is None:
+        problems.append(
+            f"revisable sources {sorted(set(revisable_datasets_consumed))} were consumed with "
+            "no revision_view; which revision a query wanted is never an implicit answer"
+        )
+
+    recorded_artifacts = {artifact.artifact_id for artifact in manifest.consumed_artifacts}
+    missing_artifacts = sorted(set(consumed_artifact_ids) - recorded_artifacts)
+    if missing_artifacts:
+        problems.append(
+            f"derived artifacts {missing_artifacts} were consumed but are absent from "
+            "derived_artifacts; dataset versions alone cannot reproduce a result that read "
+            "them"
+        )
 
     if not manifest.code.working_tree_clean:
         problems.append(
@@ -392,14 +457,16 @@ def _check_tokens(manifest: ResearchManifest) -> list[str]:
     problems: list[str] = []
     tokens = set(manifest.limitations)
     evidence = manifest.dataset_resolution_evidence
-    policies = {entry.policy for entry in evidence}
 
+    # Evidence, never configuration. A declared BOUND that bounded nothing and a
+    # declared EXCLUDE that excluded nothing are not events, and a token emitted
+    # for one is a claim with nothing behind it.
     have: dict[LimitationToken, bool] = {
         LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: any(
             item.rows > 0 for item in manifest.origin_exclusions
         ),
-        LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: bool(
-            policies & {DatasetGapPolicy.EXCLUDE, DatasetGapPolicy.BOUND}
+        LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: any(
+            entry.excluded_rows > 0 or entry.provider_bounded_rows > 0 for entry in evidence
         ),
         LimitationToken.PROVIDER_TIME_BOUNDED: any(
             entry.provider_bounded_rows > 0 for entry in evidence

@@ -55,7 +55,6 @@ from kalpamani.data.contracts.vocabulary import (
     GlobalProfileResolution,
     InformationOrigin,
     InformationSetProfile,
-    LimitationToken,
     ProviderBoundDerivation,
 )
 
@@ -138,17 +137,12 @@ class ProfileResolutionConfig:
             for entry in sorted(self.dataset_resolutions, key=lambda e: e.dataset)
         )
 
-    def limitation_tokens(self) -> tuple[LimitationToken, ...]:
-        """The tokens this resolution obliges the manifest to carry."""
-        tokens: list[LimitationToken] = []
-        policies = {entry.policy for entry in self.dataset_resolutions}
-        if policies & {DatasetGapPolicy.BOUND, DatasetGapPolicy.EXCLUDE}:
-            tokens.append(LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN)
-        if DatasetGapPolicy.BOUND in policies:
-            tokens.append(LimitationToken.PROVIDER_TIME_BOUNDED)
-        if self.global_profile_resolution is GlobalProfileResolution.DOWNGRADE:
-            tokens.append(LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC)
-        return tuple(tokens)
+    #: There is deliberately no ``limitation_tokens()`` here. A token is a claim
+    #: about what a run *did*, and a declared policy is not evidence that it did
+    #: anything: ``BOUND`` on a dataset with no gaps bounds nothing, and
+    #: ``EXCLUDE`` that removes no rows excluded nothing. Tokens come from
+    #: :func:`kalpamani.data.curate.resolution_run.evidence_limitation_tokens`,
+    #: which reads the counts.
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

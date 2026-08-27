@@ -363,22 +363,47 @@ class AdjustmentPolicy(StrEnum):
     TOTAL_RETURN = "TOTAL_RETURN"
 
 
+class AdjustmentConvention(StrEnum):
+    """*How* an adjustment factor is applied, as distinct from *which* actions.
+
+    ``FORWARD_BASE_NORMALIZED``
+        The factor applies to bars **on or after** the ex-date, re-expressing the
+        series in the terms of its earliest bar. Settled history therefore stays
+        settled: a new split does not rewrite the adjusted close of a date that
+        was already cited. This is the contract's rule (schema 7, check 4.5.2),
+        and it is **not** the more familiar back-adjustment, which rewrites all
+        prior history every time an action arrives.
+
+    Naming it makes the difference auditable. An unnamed "adjusted" series is a
+    number whose meaning depends on which implementation produced it, and the
+    whole point of keying an artifact is that its meaning does not.
+    """
+
+    FORWARD_BASE_NORMALIZED = "FORWARD_BASE_NORMALIZED"
+
+
 @dataclass(frozen=True, slots=True)
 class AdjustmentMode:
     """What a price query asks for. There is no implicit adjustment.
 
     ``RAW`` returns traded prices. ``adjusted(policy)`` returns a series computed
     from raw bars plus the actions admissible at ``as_of`` under the resolved
-    profile -- which is why the policy has to be named: "the adjusted close on a
-    date" is not a number, it is a number *per information set*.
+    profile -- which is why the policy **and the convention** have to be named:
+    "the adjusted close on a date" is not a number, it is a number *per
+    information set and per convention*.
     """
 
     policy: AdjustmentPolicy | None
+    convention: AdjustmentConvention | None = None
 
     @classmethod
-    def adjusted(cls, policy: AdjustmentPolicy) -> AdjustmentMode:
-        """An explicitly policied adjusted series."""
-        return cls(policy=policy)
+    def adjusted(
+        cls,
+        policy: AdjustmentPolicy,
+        convention: AdjustmentConvention = AdjustmentConvention.FORWARD_BASE_NORMALIZED,
+    ) -> AdjustmentMode:
+        """An explicitly policied, explicitly conventioned adjusted series."""
+        return cls(policy=policy, convention=convention)
 
     @property
     def is_raw(self) -> bool:
@@ -387,7 +412,7 @@ class AdjustmentMode:
 
 
 #: Traded prices, unadjusted. Named so a caller states it rather than omits it.
-RAW: Final[AdjustmentMode] = AdjustmentMode(policy=None)
+RAW: Final[AdjustmentMode] = AdjustmentMode(policy=None, convention=None)
 
 
 class ListingFactKind(StrEnum):
@@ -450,6 +475,7 @@ __all__ = [
     "EXACT_PUBLIC_DERIVATIONS",
     "RAW",
     "SOURCE_ORIGINS",
+    "AdjustmentConvention",
     "AdjustmentMode",
     "AdjustmentPolicy",
     "AnnouncementBoundDerivation",

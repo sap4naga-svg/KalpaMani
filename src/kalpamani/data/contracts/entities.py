@@ -32,8 +32,10 @@ from decimal import Decimal
 from typing import Self
 
 from kalpamani.data.contracts.envelope import DerivedEnvelope, SourceEnvelope
+from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.resolution import PitRecord
 from kalpamani.data.contracts.vocabulary import (
+    AdjustmentConvention,
     AdjustmentPolicy,
     BarConstruction,
     BarResolution,
@@ -50,6 +52,20 @@ from kalpamani.data.contracts.vocabulary import (
     TickerChangeReason,
     UniverseExclusionReason,
 )
+
+
+def _normalize_instants(target: object, *names: str) -> None:
+    """Rewrite each named instant field in place to canonical UTC at construction.
+
+    An entity cannot retain the offset the ingestion process happened to hold:
+    two spellings of one instant would otherwise store different bytes and hash
+    to different identities.
+    """
+    for name in names:
+        value = getattr(target, name)
+        if value is not None:
+            object.__setattr__(target, name, normalize_instant(value))
+
 
 # ---------------------------------------------------------------------------
 # Bases
@@ -226,6 +242,11 @@ class MarketSession(SourceFact):
     is_half_day: bool = False
     is_holiday: bool = False
 
+    def __post_init__(self) -> None:
+        _normalize_instants(
+            self, "regular_open", "regular_close", "extended_open", "extended_close"
+        )
+
     @property
     def primary_key(self) -> tuple[str, date]:
         """``(exchange, session_date)``."""
@@ -281,6 +302,9 @@ class PriceBar(SourceFact):
     curation_source: str
     bar_construction: BarConstruction
 
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "bar_end_time", "bar_start_time")
+
     @property
     def primary_key(self) -> tuple[str, str, datetime]:
         """``(security_id, resolution, bar_end_time)``."""
@@ -321,6 +345,9 @@ class PriceBarValues:
     low: Decimal
     close: Decimal
     volume: int
+
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "bar_end_time")
 
 
 # ---------------------------------------------------------------------------
@@ -376,12 +403,18 @@ class AdjustedBarArtifact(DerivedArtifact):
     dataset: str = "adjusted_bar_artifact"
     artifact_id: str
     adjustment_policy: AdjustmentPolicy
+    #: How the factor is applied, not merely which actions it covers. Part of the
+    #: key, because two conventions over the same actions are two different series.
+    adjustment_convention: AdjustmentConvention
     resolved_profile: InformationSetProfile
     as_of_epoch: datetime
     corporate_action_dataset_version: str
     raw_bar_dataset_version: str
     security_id_scope: str
     series: tuple[PriceBarValues, ...]
+
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "as_of_epoch")
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +486,9 @@ class IngestionRun:
     code_commit_sha: str
     config_version: str
 
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "started_at", "completed_at")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DataQualityIssue:
@@ -478,6 +514,9 @@ class DataQualityIssue:
     suppression_reason: str | None = None
     suppressed_by: str | None = None
 
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "detected_at")
+
     @property
     def is_blocking_open(self) -> bool:
         """Whether this issue currently refuses every dependent result."""
@@ -501,11 +540,17 @@ class DatasetVersion:
     content_hash: str
     lag_policy_version: str
     resolved_profile: InformationSetProfile | None = None
+    #: Which policy resolved this build's provider-timing gaps. Part of what the
+    #: build *is*, so a reader can refuse a dataset resolved under another policy.
+    resolution_policy_version: str | None = None
     universe_definition_version: str | None = None
     corporate_action_dataset_version: str | None = None
     adjustment_policy: AdjustmentPolicy | None = None
     is_published: bool = True
     superseded_by: str | None = None
+
+    def __post_init__(self) -> None:
+        _normalize_instants(self, "built_at")
 
 
 # ---------------------------------------------------------------------------

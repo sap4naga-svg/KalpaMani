@@ -1,15 +1,18 @@
 """The A1 production path, end to end.
 
-    Bronze bytes -> normalised source facts -> derived Gold artifacts
+    Bronze bytes -> the resolution boundary -> normalised source facts
+        -> derived Gold artifacts -> atomic publication -> a verified read
         -> a point-in-time query
 
 Every step runs against repository-owned synthetic fixtures in a temporary
 directory. No provider is contacted, no credential exists, no network call is
 made, and nothing is written under ``.runtime``.
 
-The two proofs the slice exists for live here: **adjustment**, where knowing
-about a split and applying it are different operations, and **historical
-universe**, where a security present before its delisting must be absent after.
+The proofs this slice exists for live here: **adjustment**, where knowing about a
+split and applying it are different operations; **historical universe**, where a
+security present before its delisting must be absent after; **resolution**, where
+a declared policy has to actually change the rows; and **publication**, where a
+half-written build is not a smaller build.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -34,37 +37,54 @@ from kalpamani.data.contracts.errors import (
     ArtifactIntegrityError,
     BlockingQualityIssueError,
     DatasetCoverageError,
+    DatasetPublicationError,
+    IncompleteCoverageError,
     MissingHistoricalSnapshotError,
     PendingContractError,
     PointInTimeError,
     ProfileResolutionError,
+    QueryRangeError,
     RequiredInputUnavailableError,
+    SecurityNotInDatasetError,
+    UnresolvedProviderAvailabilityError,
 )
-from kalpamani.data.contracts.profiles import ProfileResolutionConfig
+from kalpamani.data.contracts.profiles import DatasetGapResolution, ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import decision_available_time
 from kalpamani.data.contracts.vocabulary import (
     RAW,
+    AdjustmentConvention,
     AdjustmentMode,
     AdjustmentPolicy,
     BarResolution,
+    DatasetGapPolicy,
+    GlobalProfileResolution,
     InformationSetProfile,
     LimitationToken,
     QualitySeverity,
+    StorageLayer,
 )
 from kalpamani.data.curate.adjustment import (
+    ADJUSTMENT_CONVENTION,
     ADJUSTMENT_SPEC_VERSION,
+    MULTI_SECURITY_SCOPE_PREFIX,
     adjusted_series,
     admissible_actions,
     artifact_id_for,
     artifact_key,
     build_adjusted_bar_artifact,
-    series_content_hash,
     verify_adjusted_bar_artifact,
 )
-from kalpamani.data.curate.gold import read_gold_dataset, write_gold_dataset
+from kalpamani.data.curate.publication import (
+    GOLD_ENTITIES,
+    load_dataset_manifest,
+    publish_gold_dataset,
+    read_published_dataset,
+)
+from kalpamani.data.curate.resolution_run import resolve_run_inputs
 from kalpamani.data.curate.universe import (
     UniverseDefinition,
     build_universe_snapshot,
+    membership_hash_of,
     snapshot_content_hash,
 )
 from kalpamani.data.ingest.bronze import BronzeStore, RetrievalMetadata
@@ -79,21 +99,34 @@ PUBLIC = InformationSetProfile.PUBLIC_PIT
 PROVIDER_REALISTIC = InformationSetProfile.PROVIDER_REALISTIC_PIT
 FORWARD = InformationSetProfile.FORWARD_SYSTEM
 
-SPLIT_ANNOUNCED = phase3a.utc(2019, 6, 25, 20, 15)
 BEFORE_ANNOUNCEMENT = phase3a.utc(2019, 6, 24, 21, 0)
 AFTER_EVERYTHING = phase3a.utc(2019, 6, 28, 21, 0)
+SCOPE = phase3a.SEC_CONTINUOUS
+VALID_START = date(2019, 6, 24)
+VALID_END = date(2019, 6, 28)
 
 
 def _continuous_bars() -> tuple[PriceBar, ...]:
     return tuple(
         bar
         for bar in phase3a.daily_bars()
-        if bar.security_id == phase3a.SEC_CONTINUOUS and bar.session_date.year == 2019
+        if bar.security_id == SCOPE and bar.session_date.year == 2019
     )
 
 
-def _closes(series: tuple[PriceBarValues, ...]) -> list[Decimal]:
+def _closes(series: Sequence[PriceBarValues]) -> list[Decimal]:
     return [value.close for value in series]
+
+
+def _retrieval(run_id: str | None = None) -> RetrievalMetadata:
+    return RetrievalMetadata(
+        provider=phase3a.PROVIDER,
+        dataset="daily_bars",
+        requested_range="2019-06-24..2019-06-28",
+        retrieved_at=phase3a.utc(2026, 8, 26, 11, 0),
+        source_schema_version="synthetic/1",
+        ingestion_run_id=run_id or phase3a.INGESTION_RUN_ID,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -104,22 +137,16 @@ def _closes(series: tuple[PriceBarValues, ...]) -> list[Decimal]:
 def test_bronze_bytes_normalise_into_source_facts(tmp_path: Path) -> None:
     """The first two layers, with availability written by the ladder rather than copied."""
     store = BronzeStore(tmp_path)
-    payload = phase3a.bronze_payload()
     artifact = store.write(
-        payload=payload,
-        retrieval=RetrievalMetadata(
-            provider=phase3a.PROVIDER,
-            dataset="daily_bars",
-            requested_range="2019-06-24..2019-06-28",
-            retrieved_at=phase3a.utc(2026, 8, 26, 11, 0),
-            source_schema_version="synthetic/1",
-        ),
+        payload=phase3a.bronze_payload(),
+        retrieval=_retrieval(),
         ingest_date=date(2026, 8, 26),
     )
+    calendar = SessionCalendar(sessions=phase3a.sessions())
 
     bars = normalize_price_bars(
         store.read(artifact.path),
-        calendar=SessionCalendar(sessions=phase3a.sessions()),
+        calendar=calendar,
         lag_policy=BarLagPolicy(
             lag_policy_version=phase3a.LAG_POLICY_VERSION,
             session_close_lag=phase3a.SESSION_CLOSE_LAG,
@@ -134,7 +161,9 @@ def test_bronze_bytes_normalise_into_source_facts(tmp_path: Path) -> None:
 
     assert len(bars) == 5
     for bar in bars:
-        assert bar.session_date == phase3a.session_close(bar.session_date).date() or True
+        assert bar.session_date == calendar.session_of(bar.bar_end_time), (
+            "The session key comes from the exchange calendar, not from the instant."
+        )
         assert bar.envelope.public_available_time is None, (
             "An officially disseminated bar has no per-bar publication instant, so its "
             "public timing is a declared bound and the exact field stays null."
@@ -152,17 +181,7 @@ def test_normalisation_looks_a_session_up_rather_than_truncating(tmp_path: Path)
     payload = phase3a.bronze_payload().replace(
         b'"2019-06-24T20:00:00+00:00"', b'"2030-01-01T20:00:00+00:00"'
     )
-    artifact = store.write(
-        payload=payload,
-        retrieval=RetrievalMetadata(
-            provider=phase3a.PROVIDER,
-            dataset="daily_bars",
-            requested_range="bad",
-            retrieved_at=phase3a.utc(2026, 8, 26, 11, 0),
-            source_schema_version="synthetic/1",
-        ),
-        ingest_date=date(2026, 8, 26),
-    )
+    artifact = store.write(payload=payload, retrieval=_retrieval(), ingest_date=date(2026, 8, 26))
     with pytest.raises(PointInTimeError, match=r"falls in no known exchange session"):
         normalize_price_bars(
             store.read(artifact.path),
@@ -180,7 +199,7 @@ def test_normalisation_looks_a_session_up_rather_than_truncating(tmp_path: Path)
         )
 
 
-def test_a_half_day_session_comes_from_the_calendar(tmp_path: Path) -> None:
+def test_a_half_day_session_comes_from_the_calendar() -> None:
     """ADR-0004 s.14 already had to make this correction once, for an early close."""
     calendar = SessionCalendar(sessions=phase3a.sessions())
     half_day = calendar.session_on(date(2019, 7, 3))
@@ -190,78 +209,296 @@ def test_a_half_day_session_comes_from_the_calendar(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gold round trip
+# The resolution boundary
 # ---------------------------------------------------------------------------
 
 
-def test_a_gold_dataset_round_trips_through_storage(tmp_path: Path) -> None:
-    """Materialised, versioned, checksummed -- not the live result of a query."""
-    store = LocalTableStore(tmp_path)
-    dataset = phase3a.gold_dataset()
+def test_resolution_changes_the_rows_not_only_the_run_id() -> None:
+    """One dataset BOUND, another EXCLUDE, and both actually happen.
 
-    version, artifacts = write_gold_dataset(
+    The evidence has to describe rows that are really there: an ``EXCLUDE`` that
+    removes nothing and a ``BOUND`` that bounds nothing are declarations, not
+    events, and a manifest built on them would claim what the run did not do.
+    """
+    resolved = phase3a.resolved_inputs(requested=PROVIDER_REALISTIC)
+
+    bounded = resolved.evidence_for("market_session")
+    excluded = resolved.evidence_for("ticker_history")
+
+    assert bounded.policy is DatasetGapPolicy.BOUND
+    assert bounded.provider_bounded_rows == len(phase3a.sessions())
+    for row in resolved.rows("market_session"):
+        assert row.envelope.provider_available_upper_bound is not None
+        assert row.envelope.provider_available_time is None, (
+            "BOUND claims the provider offered the row no later than then, never that it "
+            "published at that instant."
+        )
+
+    assert excluded.policy is DatasetGapPolicy.EXCLUDE
+    assert excluded.excluded_rows == len(phase3a.ticker_history())
+    assert resolved.rows("ticker_history") == (), "EXCLUDE removes rows, it does not annotate."
+
+    tokens = resolved.limitation_tokens()
+    assert LimitationToken.PROVIDER_TIME_BOUNDED in tokens
+    assert LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN in tokens
+
+
+def test_tokens_come_from_evidence_not_from_declared_policy() -> None:
+    """The same config under PUBLIC_PIT resolves no gaps, so it claims none."""
+    public = phase3a.resolved_inputs(requested=PUBLIC)
+    assert public.evidence_for("market_session").policy is DatasetGapPolicy.BOUND
+    assert public.evidence_for("market_session").provider_bounded_rows == 0
+    assert LimitationToken.PROVIDER_TIME_BOUNDED not in public.limitation_tokens(), (
+        "A declared BOUND that bounded nothing is not evidence that anything was bounded."
+    )
+    assert LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN not in public.limitation_tokens()
+
+
+def test_an_unresolved_gap_under_policy_none_refuses_by_name() -> None:
+    """``NONE`` over an unresolvable provider time is not a silent pass-through."""
+    config = ProfileResolutionConfig(
+        requested_profile=PROVIDER_REALISTIC,
+        resolution_policy_version=phase3a.RESOLUTION_POLICY_VERSION,
+        dataset_resolutions=(
+            DatasetGapResolution(
+                dataset="market_session",
+                policy=DatasetGapPolicy.NONE,
+                reason="deliberately unresolved",
+            ),
+        ),
+    )
+    with pytest.raises(
+        UnresolvedProviderAvailabilityError, match=r"4\.3\.2_unresolved_provider_availability"
+    ):
+        resolve_run_inputs(
+            {"market_session": phase3a.sessions()},
+            config=config,
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_a_dataset_consumed_without_a_resolution_entry_refuses() -> None:
+    with pytest.raises(UnresolvedProviderAvailabilityError, match="complete inventory"):
+        resolve_run_inputs(
+            {"unmapped_feed": phase3a.attributes()},
+            config=phase3a.resolution(),
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_reaching_for_rows_that_skipped_resolution_is_loud() -> None:
+    resolved = phase3a.resolved_inputs()
+    with pytest.raises(KeyError, match="did not go through resolution"):
+        resolved.rows("fundamental_fact")
+
+
+def test_a_downgrade_changes_the_whole_run_before_curation() -> None:
+    dataset = phase3a.gold_dataset(
+        requested=PROVIDER_REALISTIC, downgrade=GlobalProfileResolution.DOWNGRADE
+    )
+    assert dataset.resolved_profile is PUBLIC
+    for rows in dataset.universe.values():
+        assert {row.resolved_profile for row in rows} == {PUBLIC}
+
+
+# ---------------------------------------------------------------------------
+# Atomic publication and verified reads
+# ---------------------------------------------------------------------------
+
+
+def _publish(store: LocalTableStore, dataset: Any) -> Any:
+    return publish_gold_dataset(
         store,
         dataset,
         code_commit_sha="0123456789abcdef0123456789abcdef01234567",
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
-        resolved_profile=PUBLIC,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
+        source_ingestion_run_ids=(phase3a.INGESTION_RUN_ID,),
     )
-    assert all(store.verify_table(artifact) for artifact in artifacts)
 
-    reloaded = read_gold_dataset(
+
+def test_a_published_dataset_round_trips_through_verified_storage(tmp_path: Path) -> None:
+    """Materialised, versioned, checksummed -- not the live result of a query."""
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+    version, manifest = _publish(store, dataset)
+
+    assert {table.entity for table in manifest.tables} == set(GOLD_ENTITIES)
+    assert version.resolution_policy_version == phase3a.RESOLUTION_POLICY_VERSION
+
+    reloaded = read_published_dataset(
         store,
         dataset_version=dataset.dataset_version,
-        build_time=dataset.build_time,
-        coverage_start=dataset.coverage_start,
-        coverage_end=dataset.coverage_end,
-        resolved_profile=PUBLIC,
+        config=phase3a.resolution(),
         approvals=phase3a.approvals(),
-        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
     )
-
+    assert reloaded.build_time == dataset.build_time
+    assert reloaded.coverage_start == dataset.coverage_start
+    assert reloaded.resolved_profile is dataset.resolved_profile
     assert set(reloaded.bars) == set(dataset.bars)
-    assert set(reloaded.actions) == set(dataset.actions)
     assert set(reloaded.listings) == set(dataset.listings)
     assert sorted(reloaded.universe) == sorted(dataset.universe)
-    assert version.resolved_profile is PUBLIC
 
     original = dataset.universe[date(2019, 6, 27)]
     replayed = reloaded.universe[date(2019, 6, 27)]
-    approvals = phase3a.approvals()
     assert [row.security_id for row in replayed] == [row.security_id for row in original]
-    assert [decision_available_time(row, PUBLIC, approvals) for row in replayed] == [
-        decision_available_time(row, PUBLIC, approvals) for row in original
-    ], (
-        "Replaying lineage must reconstruct the same input set the build consumed, or the "
-        "lineage is not the set a rebuild would read."
+    assert [membership_hash_of(row) for row in replayed] == [
+        membership_hash_of(row) for row in original
+    ], "Replaying each row's own lineage must reconstruct exactly the decision it recorded."
+
+
+def test_publication_is_invisible_until_the_commit(tmp_path: Path) -> None:
+    """Before the rename nothing is published; after it, everything is."""
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+
+    store.write_staged_table(
+        layer=StorageLayer.GOLD,
+        dataset_version=dataset.dataset_version,
+        entity="price_bar",
+        rows=[],
     )
+    with pytest.raises(DatasetPublicationError, match="never committed"):
+        load_dataset_manifest(store, dataset_version=dataset.dataset_version)
+
+    _publish(store, dataset)
+    assert load_dataset_manifest(store, dataset_version=dataset.dataset_version).is_published
+
+
+def test_a_crash_before_the_commit_leaves_nothing_observable(tmp_path: Path) -> None:
+    """Forced-crash recovery at the Gold publication boundary."""
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+
+    for entity in ("market_session", "listing"):
+        store.write_staged_table(
+            layer=StorageLayer.GOLD,
+            dataset_version=dataset.dataset_version,
+            entity=entity,
+            rows=[],
+        )
+    assert store.staging_root(
+        layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version
+    ).exists()
+    with pytest.raises(DatasetPublicationError):
+        load_dataset_manifest(store, dataset_version=dataset.dataset_version)
+
+    _publish(store, dataset)
+    reloaded = read_published_dataset(
+        store,
+        dataset_version=dataset.dataset_version,
+        config=phase3a.resolution(),
+        approvals=phase3a.approvals(),
+    )
+    assert len(reloaded.bars) == len(dataset.bars), (
+        "The retry discarded the abandoned attempt; nothing partial survived into the "
+        "published version."
+    )
+
+
+def test_a_partial_publication_is_refused(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+    _publish(store, dataset)
+
+    store.table_path(
+        layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version, entity="listing"
+    ).unlink()
+    with pytest.raises(DatasetPublicationError, match="partial publication"):
+        read_published_dataset(
+            store,
+            dataset_version=dataset.dataset_version,
+            config=phase3a.resolution(),
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_a_tampered_table_is_caught_before_it_is_decoded(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+    _publish(store, dataset)
+
+    path = store.table_path(
+        layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version, entity="price_bar"
+    )
+    path.write_bytes(path.read_bytes().replace(b"100.00", b"999.00"))
+    with pytest.raises(DatasetPublicationError, match="before decoding"):
+        read_published_dataset(
+            store,
+            dataset_version=dataset.dataset_version,
+            config=phase3a.resolution(),
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_publishing_over_an_existing_version_is_refused(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+    _publish(store, dataset)
+    with pytest.raises(DatasetPublicationError, match="already published"):
+        _publish(store, dataset)
+
+
+def test_a_reader_refuses_a_dataset_resolved_under_another_profile(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    dataset = phase3a.gold_dataset()
+    _publish(store, dataset)
+    with pytest.raises(DatasetPublicationError, match="was curated under"):
+        read_published_dataset(
+            store,
+            dataset_version=dataset.dataset_version,
+            config=phase3a.resolution(requested=PROVIDER_REALISTIC),
+            approvals=phase3a.approvals(),
+        )
+
+
+def test_a_reader_refuses_a_dataset_resolved_under_another_policy() -> None:
+    dataset = phase3a.gold_dataset()
+    other = ProfileResolutionConfig(
+        requested_profile=PUBLIC,
+        resolution_policy_version="profres/other",
+        dataset_resolutions=phase3a.resolution().dataset_resolutions,
+    )
+    with pytest.raises(DatasetPublicationError, match="resolved under policy"):
+        PointInTimeReader(dataset, resolution=other, approvals=phase3a.approvals())
 
 
 def test_two_builds_from_the_same_inputs_produce_the_same_content_hash(tmp_path: Path) -> None:
-    dataset = phase3a.gold_dataset()
-    first, _ = write_gold_dataset(
-        LocalTableStore(tmp_path / "a"),
-        dataset,
-        code_commit_sha="0" * 40,
-        lag_policy_version=phase3a.LAG_POLICY_VERSION,
-        resolved_profile=PUBLIC,
-        universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
-    )
-    second, _ = write_gold_dataset(
-        LocalTableStore(tmp_path / "b"),
-        phase3a.gold_dataset(),
-        code_commit_sha="0" * 40,
-        lag_policy_version=phase3a.LAG_POLICY_VERSION,
-        resolved_profile=PUBLIC,
-        universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
-    )
+    first, first_manifest = _publish(LocalTableStore(tmp_path / "a"), phase3a.gold_dataset())
+    second, second_manifest = _publish(LocalTableStore(tmp_path / "b"), phase3a.gold_dataset())
     assert first.content_hash == second.content_hash
+    assert first_manifest.dataset_content_hash == second_manifest.dataset_content_hash
+
+
+def test_no_staging_directory_survives_a_successful_publication(tmp_path: Path) -> None:
+    store = LocalTableStore(tmp_path)
+    _publish(store, phase3a.gold_dataset())
+    assert sorted((tmp_path / "gold").glob("_staging-*")) == []
 
 
 # ---------------------------------------------------------------------------
 # Adjustment proof
 # ---------------------------------------------------------------------------
+
+
+def _artifact(**overrides: Any) -> AdjustedBarArtifact:
+    kwargs: dict[str, Any] = {
+        "adjustment_policy": AdjustmentPolicy.SPLIT_ONLY,
+        "resolved_profile": PUBLIC,
+        "as_of_epoch": AFTER_EVERYTHING,
+        "approvals": phase3a.approvals(),
+        "corporate_action_dataset_version": phase3a.ACTION_DATASET_VERSION,
+        "raw_bar_dataset_version": phase3a.BAR_DATASET_VERSION,
+        "security_id_scope": SCOPE,
+        "valid_time_start": VALID_START,
+        "valid_time_end": VALID_END,
+        "artifact_first_built_time": phase3a.ARTIFACT_FIRST_BUILT,
+        "ingestion_time": phase3a.INGESTION_TIME,
+        "dataset_version": phase3a.DATASET_VERSION,
+    }
+    bars = overrides.pop("bars", _continuous_bars())
+    kwargs.update(overrides)
+    return build_adjusted_bar_artifact(bars, phase3a.corporate_actions(), **kwargs)
 
 
 def test_an_action_announced_after_as_of_is_not_applied() -> None:
@@ -323,11 +560,34 @@ def test_an_admissible_action_still_adjusts_no_bar_before_its_ex_date() -> None:
         approvals=phase3a.approvals(),
     )
     pre_ex = [value for value in series if value.session_date < date(2019, 6, 27)]
-    assert _closes(tuple(pre_ex)) == [
+    assert _closes(pre_ex) == [
         Decimal("100.000000"),
         Decimal("101.000000"),
         Decimal("102.000000"),
     ]
+
+
+def test_the_adjustment_convention_is_named_everywhere_it_is_used() -> None:
+    """An unnamed "adjusted" series is a number whose meaning depends on the code."""
+    artifact = _artifact()
+    assert artifact.adjustment_convention is AdjustmentConvention.FORWARD_BASE_NORMALIZED
+    assert ADJUSTMENT_CONVENTION.value in ADJUSTMENT_SPEC_VERSION
+    assert artifact.envelope.derivation_spec_version == ADJUSTMENT_SPEC_VERSION
+
+    key = artifact_key(
+        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
+        resolved_profile=PUBLIC,
+        as_of_epoch=AFTER_EVERYTHING,
+        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
+        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
+        security_id_scope=SCOPE,
+    )
+    assert key["adjustment_convention"] == ADJUSTMENT_CONVENTION.value
+    assert artifact.artifact_id == artifact_id_for(key)
+
+    mode = AdjustmentMode.adjusted(AdjustmentPolicy.SPLIT_ONLY)
+    assert mode.convention is AdjustmentConvention.FORWARD_BASE_NORMALIZED
+    assert RAW.convention is None
 
 
 def test_an_adjusted_artifact_reproduces_from_its_key() -> None:
@@ -339,7 +599,6 @@ def test_an_adjusted_artifact_reproduces_from_its_key() -> None:
         phase3a.corporate_actions(),
         approvals=phase3a.approvals(),
     )
-
     rebuilt = _artifact()
     assert rebuilt.artifact_id == artifact.artifact_id
     assert rebuilt.envelope.artifact_content_hash == artifact.envelope.artifact_content_hash
@@ -353,6 +612,7 @@ def test_a_tampered_adjusted_artifact_is_refused() -> None:
     tampered = AdjustedBarArtifact(
         artifact_id=artifact.artifact_id,
         adjustment_policy=artifact.adjustment_policy,
+        adjustment_convention=artifact.adjustment_convention,
         resolved_profile=artifact.resolved_profile,
         as_of_epoch=artifact.as_of_epoch,
         corporate_action_dataset_version=artifact.corporate_action_dataset_version,
@@ -383,29 +643,58 @@ def test_a_tampered_adjusted_artifact_is_refused() -> None:
         )
 
 
+def test_an_artifact_from_zero_bars_is_refused() -> None:
+    with pytest.raises(ArtifactIntegrityError, match="zero bars"):
+        _artifact(bars=())
+
+
+def test_an_artifact_from_inadmissible_bars_is_refused() -> None:
+    """Look-ahead with a hash attached is still look-ahead."""
+    with pytest.raises(ArtifactIntegrityError, match="not admissible"):
+        _artifact(as_of_epoch=phase3a.utc(2019, 6, 24, 12, 0))
+
+
+def test_an_artifact_spanning_two_securities_needs_an_authorizing_scope() -> None:
+    mixed = (
+        *_continuous_bars(),
+        *[
+            bar
+            for bar in phase3a.daily_bars()
+            if bar.security_id == phase3a.SEC_RENAMED and bar.session_date.year == 2019
+        ],
+    )
+    with pytest.raises(ArtifactIntegrityError, match="names a single security"):
+        _artifact(bars=mixed)
+
+    artifact = _artifact(
+        bars=mixed,
+        security_id_scope=f"{MULTI_SECURITY_SCOPE_PREFIX}{phase3a.UNIVERSE_DEFINITION_VERSION}",
+    )
+    assert {value.security_id for value in artifact.series} == {SCOPE, phase3a.SEC_RENAMED}
+
+
+def test_bars_outside_the_declared_validity_interval_are_refused() -> None:
+    """The interval is what the artifact claims to be about."""
+    with pytest.raises(ArtifactIntegrityError, match="outside the declared validity interval"):
+        _artifact(valid_time_end=date(2019, 6, 26))
+
+
 def test_a_different_as_of_produces_a_different_artifact_identity() -> None:
     """ "The adjusted close on a date" is a number per information set."""
-    early = artifact_id_for(
-        artifact_key(
-            adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-            resolved_profile=PUBLIC,
-            as_of_epoch=BEFORE_ANNOUNCEMENT,
-            corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-            raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-            security_id_scope=phase3a.SEC_CONTINUOUS,
+
+    def identity(as_of: Any) -> str:
+        return artifact_id_for(
+            artifact_key(
+                adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
+                resolved_profile=PUBLIC,
+                as_of_epoch=as_of,
+                corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
+                raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
+                security_id_scope=SCOPE,
+            )
         )
-    )
-    late = artifact_id_for(
-        artifact_key(
-            adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-            resolved_profile=PUBLIC,
-            as_of_epoch=AFTER_EVERYTHING,
-            corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-            raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-            security_id_scope=phase3a.SEC_CONTINUOUS,
-        )
-    )
-    assert early != late
+
+    assert identity(BEFORE_ANNOUNCEMENT) != identity(AFTER_EVERYTHING)
 
 
 def test_an_unsettled_adjustment_policy_is_refused_not_approximated() -> None:
@@ -421,35 +710,6 @@ def test_an_unsettled_adjustment_policy_is_refused_not_approximated() -> None:
         )
 
 
-def _artifact() -> AdjustedBarArtifact:
-    return build_adjusted_bar_artifact(
-        _continuous_bars(),
-        phase3a.corporate_actions(),
-        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-        resolved_profile=PUBLIC,
-        as_of_epoch=AFTER_EVERYTHING,
-        approvals=phase3a.approvals(),
-        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-        security_id_scope=phase3a.SEC_CONTINUOUS,
-        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
-        ingestion_time=phase3a.INGESTION_TIME,
-        dataset_version=phase3a.DATASET_VERSION,
-    )
-
-
-def test_the_adjustment_spec_version_is_part_of_artifact_identity() -> None:
-    key = artifact_key(
-        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-        resolved_profile=PUBLIC,
-        as_of_epoch=AFTER_EVERYTHING,
-        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-        security_id_scope=phase3a.SEC_CONTINUOUS,
-    )
-    assert key["derivation_spec_version"] == ADJUSTMENT_SPEC_VERSION
-
-
 # ---------------------------------------------------------------------------
 # Historical universe proof
 # ---------------------------------------------------------------------------
@@ -462,9 +722,7 @@ def test_a_delisted_security_is_present_before_and_absent_after() -> None:
     after = {row.security_id for row in snapshots[date(2021, 1, 5)]}
 
     assert phase3a.SEC_DELISTED in before
-    assert phase3a.SEC_DELISTED not in after, (
-        "A security delisted before the session is absent from that session's snapshot."
-    )
+    assert phase3a.SEC_DELISTED not in after
     assert phase3a.SEC_TICKER_REUSER in after
     assert phase3a.SEC_TICKER_REUSER not in before
 
@@ -476,30 +734,109 @@ def test_rebuilding_a_universe_snapshot_is_byte_identical() -> None:
     assert snapshot_content_hash(first) == snapshot_content_hash(second)
 
 
+def test_each_membership_row_carries_only_its_own_lineage() -> None:
+    """Attaching every admissible input to every row makes lineage true and useless."""
+    rows = phase3a.universe_snapshots()[date(2019, 6, 27)]
+    for row in rows:
+        entities = [ref.entity for ref in row.envelope.lineage]
+        assert entities.count("listing") == 1
+        assert entities.count("price_bar") == 1
+        for consumed in row.inputs:
+            assert getattr(consumed, "security_id", row.security_id) == row.security_id, (
+                "A membership decision reads only that security's own rows; another "
+                "security's bar changing must not look like this decision changing."
+            )
+
+    by_security = {row.security_id: row for row in rows}
+    assert (
+        by_security[phase3a.SEC_CONTINUOUS].envelope.lineage
+        != by_security[phase3a.SEC_RENAMED].envelope.lineage
+    )
+
+
+def test_the_membership_hash_covers_the_whole_decision() -> None:
+    """A hash over the outcome alone would verify while the evidence drifted."""
+    row = next(
+        item
+        for item in phase3a.universe_snapshots()[date(2019, 6, 27)]
+        if item.security_id == phase3a.SEC_CONTINUOUS
+    )
+    assert membership_hash_of(row) == row.envelope.artifact_content_hash
+
+    altered = type(row)(
+        session_date=row.session_date,
+        security_id=row.security_id,
+        universe_definition_version=row.universe_definition_version,
+        resolved_profile=row.resolved_profile,
+        is_member=row.is_member,
+        price_at_eval=Decimal("1.00"),
+        market_cap_at_eval=row.market_cap_at_eval,
+        addv_at_eval=row.addv_at_eval,
+        history_sessions_at_eval=row.history_sessions_at_eval,
+        exclusion_reason=row.exclusion_reason,
+        is_common_stock_eligible=row.is_common_stock_eligible,
+        inputs=row.inputs,
+        envelope=row.envelope,
+    )
+    assert membership_hash_of(altered) != altered.envelope.artifact_content_hash
+
+
 def test_a_universe_is_profile_keyed_and_two_profiles_are_two_snapshots() -> None:
     """Eligibility is evaluated on admissible data, so membership is profile-specific."""
     public = phase3a.universe_snapshots(resolved_profile=PUBLIC)[date(2019, 6, 27)]
     provider = phase3a.universe_snapshots(resolved_profile=PROVIDER_REALISTIC)[date(2019, 6, 27)]
     assert {row.resolved_profile for row in public} == {PUBLIC}
     assert {row.resolved_profile for row in provider} == {PROVIDER_REALISTIC}
-    assert snapshot_content_hash(public) != snapshot_content_hash(provider), (
-        "A snapshot is keyed by the profile the build resolved to, so the same session "
-        "under two profiles is two artifacts."
-    )
+    assert snapshot_content_hash(public) != snapshot_content_hash(provider)
 
 
-def test_forward_system_cannot_reach_back_before_we_existed() -> None:
-    """The honest answer, not a defect.
+def test_an_unbuildable_forward_universe_is_refused_not_published_empty() -> None:
+    """A universe that could not be computed is not a zero-security market.
 
-    ``FORWARD_SYSTEM`` asks what *we* held. The fixture first saw its 2019
-    reference data in 2026, so nothing is admissible at a 2019 cutoff and the
-    snapshot is empty. That is precisely why the contract says the profile is
-    mandatory for forward validation and never valid for long histories -- and
-    why quietly serving the ``PUBLIC_PIT`` answer instead would be the bug.
+    ``FORWARD_SYSTEM`` asks what *we* held, and the fixture first saw its 2019
+    reference data in 2026. Nothing is admissible at a 2019 cutoff, so the build
+    **refuses** by name. Publishing an empty snapshot instead would make an
+    unanswerable question indistinguishable from an answer, and would let a
+    profile that cannot reach back before we existed answer a historical question
+    anyway.
     """
-    forward = phase3a.universe_snapshots(resolved_profile=FORWARD)[date(2019, 6, 27)]
-    assert forward == ()
-    assert phase3a.universe_snapshots(resolved_profile=PUBLIC)[date(2019, 6, 27)] != ()
+    with pytest.raises(RequiredInputUnavailableError, match="REQUIRED_INPUT_UNAVAILABLE"):
+        phase3a.gold_dataset(requested=FORWARD)
+
+
+def test_a_rule_that_genuinely_selects_nobody_still_publishes() -> None:
+    """NEGATIVE CONTROL. The counterpart the refusal above must not swallow.
+
+    Inputs are admissible; the rule simply excludes everyone. That is a **valid**
+    snapshot: its rows are all non-members, each carrying its reason. Refusing it
+    would collapse "the rule selected nobody" into "the universe is unavailable",
+    which is the conflation the refusal exists to prevent.
+    """
+    unreachable = UniverseDefinition(
+        version="universe/nobody-qualifies",
+        min_close_price=Decimal(1_000_000),
+        min_addv=Decimal(1),
+        min_history_sessions=1,
+        addv_window_sessions=3,
+        eligible_exchanges=phase3a.universe_definition().eligible_exchanges,
+        eligible_security_types=phase3a.universe_definition().eligible_security_types,
+    )
+    rows = build_universe_snapshot(
+        phase3a.universe_inputs(),
+        session_date=date(2019, 6, 27),
+        evaluation_cutoff=phase3a.session_open(date(2019, 6, 27)),
+        definition=unreachable,
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+        dataset_version=phase3a.DATASET_VERSION,
+    )
+    assert rows, "The snapshot exists."
+    assert not any(row.is_member for row in rows), "And it selected nobody."
+    assert all(row.exclusion_reason is not None for row in rows), (
+        "Every non-member says why, which is what makes this an answer rather than a gap."
+    )
 
 
 def test_membership_records_the_values_that_produced_the_decision() -> None:
@@ -551,17 +888,98 @@ def test_a_universe_never_consumes_an_input_published_after_its_own_cutoff() -> 
                 assert available is not None and available <= cutoffs[session]
 
 
+def test_the_universe_mapping_cannot_be_mutated_after_construction() -> None:
+    """ "Frozen" that wraps a mutable dict is not frozen."""
+    dataset = phase3a.gold_dataset()
+    with pytest.raises(TypeError):
+        cast("Any", dataset.universe)[date(2019, 6, 27)] = ()
+
+
 # ---------------------------------------------------------------------------
 # Point-in-time query
 # ---------------------------------------------------------------------------
 
 
-def _reader(**kwargs: object) -> PointInTimeReader:
+def _reader(
+    *,
+    requested: InformationSetProfile = PUBLIC,
+    open_issues: Sequence[DataQualityIssue] = (),
+) -> PointInTimeReader:
     return PointInTimeReader(
-        phase3a.gold_dataset(),
-        resolution=cast(ProfileResolutionConfig, kwargs.pop("resolution", phase3a.resolution())),
+        phase3a.gold_dataset(requested=requested),
+        resolution=phase3a.resolution(requested=requested),
         approvals=phase3a.approvals(),
-        open_issues=cast("Sequence[DataQualityIssue]", kwargs.pop("open_issues", ())),
+        open_issues=open_issues,
+    )
+
+
+def test_the_reader_distinguishes_three_universe_outcomes() -> None:
+    """A valid empty selection, an unavailable snapshot, and a snapshot not yet admissible.
+
+    All three would look like "no members" to a caller that only counted rows,
+    and they mean three different things.
+    """
+    reader = _reader()
+
+    # 1. A valid snapshot that selected members.
+    served = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC)
+    assert served.members
+
+    # 2. No snapshot recorded at or before the cutoff -- unanswerable.
+    with pytest.raises(MissingHistoricalSnapshotError, match="refusal, not an empty result"):
+        reader.get_security_universe(as_of=phase3a.utc(2019, 6, 25, 20, 0), profile=PUBLIC)
+
+    # 3. A snapshot whose rule selected nobody -- an answer, with reasons.
+    empty = _reader_over_snapshot(_nobody_qualifies_snapshot())
+    result = empty.get_security_universe(as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC)
+    assert result.members == ()
+    assert result.non_members, "Every excluded security is named."
+    assert result.session_date == date(2019, 6, 27)
+
+
+def _nobody_qualifies_snapshot() -> Any:
+    unreachable = UniverseDefinition(
+        version="universe/nobody-qualifies",
+        min_close_price=Decimal(1_000_000),
+        min_addv=Decimal(1),
+        min_history_sessions=1,
+        addv_window_sessions=3,
+        eligible_exchanges=phase3a.universe_definition().eligible_exchanges,
+        eligible_security_types=phase3a.universe_definition().eligible_security_types,
+    )
+    return build_universe_snapshot(
+        phase3a.universe_inputs(),
+        session_date=date(2019, 6, 27),
+        evaluation_cutoff=phase3a.session_open(date(2019, 6, 27)),
+        definition=unreachable,
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+        dataset_version=phase3a.DATASET_VERSION,
+    )
+
+
+def _reader_over_snapshot(rows: Any) -> PointInTimeReader:
+    base = phase3a.gold_dataset()
+    replaced = type(base)(
+        dataset_version=base.dataset_version,
+        build_time=base.build_time,
+        coverage_start=base.coverage_start,
+        coverage_end=base.coverage_end,
+        resolved_profile=base.resolved_profile,
+        resolution_policy_version=base.resolution_policy_version,
+        resolution_evidence=base.resolution_evidence,
+        sessions=base.sessions,
+        listings=base.listings,
+        attributes=base.attributes,
+        tickers=base.tickers,
+        bars=base.bars,
+        actions=base.actions,
+        universe={date(2019, 6, 27): rows},
+    )
+    return PointInTimeReader(
+        replaced, resolution=phase3a.resolution(), approvals=phase3a.approvals()
     )
 
 
@@ -576,7 +994,6 @@ def test_the_universe_accessor_serves_the_stored_snapshot() -> None:
     assert phase3a.SEC_DELISTED not in late.members
     assert late.provenance.dataset_version == phase3a.DATASET_VERSION
     assert late.provenance.resolved_profile is PUBLIC
-    assert LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN in late.provenance.limitations
 
 
 def test_a_universe_query_with_no_snapshot_is_a_refusal_not_an_empty_result() -> None:
@@ -611,9 +1028,10 @@ def test_an_open_blocking_issue_refuses_every_dependent_query() -> None:
     reader = _reader(open_issues=(issue,))
     with pytest.raises(BlockingQualityIssueError, match="refused, not annotated"):
         reader.get_price_history(
-            security_id=phase3a.SEC_CONTINUOUS,
-            start=date(2019, 6, 24),
-            end=date(2019, 6, 28),
+            security_id=SCOPE,
+            start=VALID_START,
+            end=VALID_END,
+            resolution=BarResolution.DAILY,
             adjustment_mode=RAW,
             as_of=AFTER_EVERYTHING,
             profile=PUBLIC,
@@ -624,17 +1042,19 @@ def test_an_open_blocking_issue_refuses_every_dependent_query() -> None:
 def test_raw_and_adjusted_are_different_answers_to_different_questions() -> None:
     reader = _reader()
     raw = reader.get_price_history(
-        security_id=phase3a.SEC_CONTINUOUS,
-        start=date(2019, 6, 24),
-        end=date(2019, 6, 28),
+        security_id=SCOPE,
+        start=VALID_START,
+        end=VALID_END,
+        resolution=BarResolution.DAILY,
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
     )
     adjusted = reader.get_price_history(
-        security_id=phase3a.SEC_CONTINUOUS,
-        start=date(2019, 6, 24),
-        end=date(2019, 6, 28),
+        security_id=SCOPE,
+        start=VALID_START,
+        end=VALID_END,
+        resolution=BarResolution.DAILY,
         adjustment_mode=AdjustmentMode.adjusted(AdjustmentPolicy.SPLIT_ONLY),
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
@@ -642,22 +1062,146 @@ def test_raw_and_adjusted_are_different_answers_to_different_questions() -> None
     assert _closes(raw.bars)[-1] == Decimal("52.00")
     assert _closes(adjusted.bars)[-1] == Decimal("104.000000")
     assert raw.adjustment_mode.is_raw and not adjusted.adjustment_mode.is_raw
+    assert raw.provenance.resolution is BarResolution.DAILY
+
+
+def test_a_price_series_is_one_resolution() -> None:
+    """Mixing daily and minute rows is two series stacked, not a series."""
+    reader = _reader()
+    daily = reader.get_price_history(
+        security_id=phase3a.SEC_RENAMED,
+        start=date(2019, 6, 26),
+        end=date(2019, 6, 26),
+        resolution=BarResolution.DAILY,
+        adjustment_mode=RAW,
+        as_of=AFTER_EVERYTHING,
+        profile=PUBLIC,
+    )
+    assert len(daily.bars) == 1
+    assert daily.resolution is BarResolution.DAILY
+    minute_ends = {bar.bar_end_time for bar in phase3a.minute_bars()}
+    assert not ({value.bar_end_time for value in daily.bars} & minute_ends)
+
+
+def test_a_minute_series_is_served_where_the_dataset_holds_one() -> None:
+    reader = _reader(requested=PROVIDER_REALISTIC)
+    result = reader.get_price_history(
+        security_id=phase3a.SEC_RENAMED,
+        start=date(2019, 6, 26),
+        end=date(2019, 6, 26),
+        resolution=BarResolution.MINUTE,
+        adjustment_mode=RAW,
+        as_of=AFTER_EVERYTHING,
+        profile=PROVIDER_REALISTIC,
+    )
+    assert {value.bar_end_time for value in result.bars} == {
+        bar.bar_end_time for bar in phase3a.minute_bars()
+    }
+    assert result.provenance.resolution is BarResolution.MINUTE
+
+
+def test_an_inverted_range_is_refused() -> None:
+    reader = _reader()
+    with pytest.raises(QueryRangeError, match="is after end"):
+        reader.get_price_history(
+            security_id=SCOPE,
+            start=VALID_END,
+            end=VALID_START,
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=AFTER_EVERYTHING,
+            profile=PUBLIC,
+        )
+
+
+def test_a_range_past_declared_coverage_is_refused_not_truncated() -> None:
+    reader = _reader()
+    with pytest.raises(DatasetCoverageError, match="past the declared coverage end"):
+        reader.get_price_history(
+            security_id=SCOPE,
+            start=VALID_START,
+            end=date(2022, 1, 1),
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=AFTER_EVERYTHING,
+            profile=PUBLIC,
+        )
+
+
+def test_a_security_the_dataset_never_heard_of_is_refused() -> None:
+    """Distinct from a security that exists and did not trade."""
+    reader = _reader()
+    with pytest.raises(SecurityNotInDatasetError, match="cannot answer"):
+        reader.get_price_history(
+            security_id="SEC-9999",
+            start=VALID_START,
+            end=VALID_END,
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=AFTER_EVERYTHING,
+            profile=PUBLIC,
+        )
+
+
+def test_a_missing_required_bar_refuses_rather_than_truncating() -> None:
+    """A short series and a gap-ridden one look identical downstream."""
+    reader = _reader()
+    with pytest.raises(IncompleteCoverageError, match="Refused rather than truncated"):
+        reader.get_price_history(
+            security_id=SCOPE,
+            start=VALID_START,
+            end=date(2019, 7, 3),
+            resolution=BarResolution.DAILY,
+            adjustment_mode=RAW,
+            as_of=phase3a.utc(2019, 7, 4, 12, 0),
+            profile=PUBLIC,
+        )
+
+
+def test_a_minute_request_over_sessions_with_no_minute_bars_refuses() -> None:
+    reader = _reader(requested=PROVIDER_REALISTIC)
+    with pytest.raises(IncompleteCoverageError):
+        reader.get_price_history(
+            security_id=phase3a.SEC_RENAMED,
+            start=VALID_START,
+            end=VALID_END,
+            resolution=BarResolution.MINUTE,
+            adjustment_mode=RAW,
+            as_of=AFTER_EVERYTHING,
+            profile=PROVIDER_REALISTIC,
+        )
+
+
+def test_a_fully_covered_listed_range_is_served() -> None:
+    """NEGATIVE CONTROL. Completeness is checked, not assumed to be violated."""
+    reader = _reader()
+    result = reader.get_price_history(
+        security_id=phase3a.SEC_DELISTED,
+        start=VALID_START,
+        end=VALID_END,
+        resolution=BarResolution.DAILY,
+        adjustment_mode=RAW,
+        as_of=AFTER_EVERYTHING,
+        profile=PUBLIC,
+    )
+    assert len(result.bars) == 5
 
 
 def test_a_bar_is_not_served_before_its_own_availability() -> None:
     """R1, at the level a backtest actually experiences it."""
     reader = _reader()
     result = reader.get_price_history(
-        security_id=phase3a.SEC_CONTINUOUS,
-        start=date(2019, 6, 24),
-        end=date(2019, 6, 28),
+        security_id=SCOPE,
+        start=VALID_START,
+        end=date(2019, 6, 25),
+        resolution=BarResolution.DAILY,
         adjustment_mode=RAW,
-        as_of=phase3a.utc(2019, 6, 26, 20, 0),
+        as_of=phase3a.utc(2019, 6, 25, 20, 0),
         profile=PUBLIC,
     )
-    sessions = [value.session_date for value in result.bars]
-    assert sessions == [date(2019, 6, 24), date(2019, 6, 25)], (
-        "The 26 June bar is bounded at 20:30 UTC, half an hour after the cutoff."
+    assert [value.session_date for value in result.bars] == [date(2019, 6, 24)], (
+        "The 25 June bar is bounded at 20:30 UTC, half an hour after the cutoff. Dataset "
+        "completeness and point-in-time availability are different questions."
     )
 
 
@@ -666,47 +1210,33 @@ def test_provider_derived_bars_are_excluded_and_counted_under_public_pit() -> No
     reader = _reader()
     result = reader.get_price_history(
         security_id=phase3a.SEC_RENAMED,
-        start=date(2019, 6, 24),
-        end=date(2019, 6, 28),
+        start=date(2019, 6, 26),
+        end=date(2019, 6, 26),
+        resolution=BarResolution.MINUTE,
         adjustment_mode=RAW,
         as_of=AFTER_EVERYTHING,
         profile=PUBLIC,
     )
-    assert result.origin_exclusions, "The two PROVIDER_AGGREGATED minute bars are ineligible."
+    assert result.bars == ()
+    assert result.origin_exclusions
     excluded = result.origin_exclusions[0]
     assert excluded.dataset == "price_bar"
     assert excluded.information_origin == "PROVIDER_DERIVED"
     assert excluded.rows == 2
     assert LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED in result.provenance.limitations
-    assert all(
-        value.bar_end_time in {bar.bar_end_time for bar in phase3a.daily_bars()}
-        for value in result.bars
-    )
-
-
-def test_provider_realistic_admits_the_minute_bars_that_public_pit_cannot() -> None:
-    """NEGATIVE CONTROL. The profile that can describe them serves them."""
-    reader = _reader(resolution=phase3a.resolution(requested=PROVIDER_REALISTIC))
-    result = reader.get_price_history(
-        security_id=phase3a.SEC_RENAMED,
-        start=date(2019, 6, 24),
-        end=date(2019, 6, 28),
-        adjustment_mode=RAW,
-        as_of=AFTER_EVERYTHING,
-        profile=PROVIDER_REALISTIC,
-    )
-    minute_ends = {bar.bar_end_time for bar in phase3a.minute_bars()}
-    assert minute_ends <= {value.bar_end_time for value in result.bars}
-    assert result.origin_exclusions == ()
 
 
 def test_a_downgraded_run_is_labelled_public_pit_end_to_end() -> None:
-    from kalpamani.data.contracts.vocabulary import GlobalProfileResolution
-
-    config = phase3a.resolution(
+    dataset = phase3a.gold_dataset(
         requested=PROVIDER_REALISTIC, downgrade=GlobalProfileResolution.DOWNGRADE
     )
-    reader = _reader(resolution=config)
+    reader = PointInTimeReader(
+        dataset,
+        resolution=phase3a.resolution(
+            requested=PROVIDER_REALISTIC, downgrade=GlobalProfileResolution.DOWNGRADE
+        ),
+        approvals=phase3a.approvals(),
+    )
     result = reader.get_security_universe(
         as_of=phase3a.utc(2021, 1, 5, 21, 30), profile=PROVIDER_REALISTIC
     )
@@ -720,11 +1250,7 @@ def test_get_classification_reports_a_declared_gap_rather_than_an_empty_result()
     """A caller must be able to tell "not built yet" from "no sector"."""
     reader = _reader()
     with pytest.raises(PendingContractError, match="declared gap, not an empty result"):
-        reader.get_classification(
-            security_id=phase3a.SEC_CONTINUOUS,
-            as_of=AFTER_EVERYTHING,
-            profile=PUBLIC,
-        )
+        reader.get_classification(security_id=SCOPE, as_of=AFTER_EVERYTHING, profile=PUBLIC)
 
 
 def test_the_reference_dataset_passes_its_own_market_data_checks() -> None:
@@ -748,4 +1274,3 @@ def test_the_gold_dataset_hash_changes_when_a_bar_changes() -> None:
         BarResolution.DAILY,
         BarResolution.MINUTE,
     }
-    assert series_content_hash(()) == series_content_hash(())

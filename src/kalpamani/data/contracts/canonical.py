@@ -16,9 +16,10 @@ Rules, each of which exists because its absence would silently break identity:
 - **Mappings are emitted with sorted keys.** Insertion order is not meaning.
 - **Decimals are emitted as their exact string form**, never as floats. A float
   round-trip is how ``0.1`` becomes ``0.1000000000000000055511151231257827``.
-- **Instants must be timezone-aware and are emitted in UTC**, to microsecond
-  precision, with an explicit ``+00:00`` offset. A naive datetime is refused
-  rather than assumed to be UTC.
+- **Instants are normalised through
+  :func:`~kalpamani.data.contracts.instants.normalize_instant`** and emitted in
+  UTC to microsecond precision. A naive datetime is refused; an aware non-UTC one
+  is converted, so ``12:00:00Z`` and ``07:00:00-05:00`` hash identically.
 - **Dates stay dates.** A ``date`` is emitted as ``YYYY-MM-DD`` and is never
   silently promoted to midnight-anything (contract 12.6).
 - **Enums are emitted by value**, so a renamed Python member with the same wire
@@ -30,10 +31,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Final
+
+from kalpamani.data.contracts.instants import normalize_instant
 
 #: Prefix distinguishing a hash from an opaque string wherever one is stored.
 SHA256_PREFIX: Final = "sha256:"
@@ -54,13 +57,9 @@ def canonical_value(value: object) -> Any:
     if isinstance(value, Decimal):
         return f"D:{value}"
     if isinstance(value, datetime):
-        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
-            raise TypeError(
-                "Refusing to canonicalise a naive datetime. Every instant in the data "
-                "platform is timezone-aware UTC; assuming a zone here would be a silent "
-                "look-ahead of up to a full day."
-            )
-        return "T:" + value.astimezone(UTC).isoformat(timespec="microseconds")
+        # One shared normaliser, so two spellings of the same instant cannot
+        # produce two canonical values and therefore two identities.
+        return "T:" + normalize_instant(value).isoformat(timespec="microseconds")
     if isinstance(value, date):
         # Checked after datetime: datetime is a date subclass, and conflating the
         # two is exactly the promotion the contract forbids.

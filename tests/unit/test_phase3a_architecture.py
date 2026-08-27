@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -48,16 +49,61 @@ def _python_files(root: Path) -> Iterator[Path]:
     yield from sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
 
 
-def _imported_modules(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _module_name(path: Path) -> str:
+    """The dotted module name a file would be imported as."""
+    relative = path.relative_to(PACKAGE_ROOT.parent).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _package_name(path: Path) -> str:
+    """The package a relative import inside ``path`` resolves against."""
+    module = _module_name(path)
+    if path.name == "__init__.py":
+        return module
+    return module.rpartition(".")[0]
+
+
+def imported_modules(source: str, *, module_package: str, filename: str = "<memory>") -> set[str]:
+    """Every module a source file imports, absolute and relative alike.
+
+    Resolves three shapes a naive scan misses, each of which would let a
+    forbidden dependency in unnoticed:
+
+    - ``import a.b as c`` -- the **bound name** is ``c``, but the imported module
+      is still ``a.b``, and that is what the boundary is about;
+    - ``from ..data import live`` -- a relative import at any level, resolved
+      against the importing file's own package;
+    - ``from a.b import c`` -- both ``a.b`` and ``a.b.c`` count, because ``c`` may
+      be a submodule rather than a name.
+    """
+    tree = ast.parse(source, filename=filename)
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            modules.add(node.module)
-            modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                base = node.module or ""
+            else:
+                anchor = module_package.split(".")
+                trimmed = anchor[: len(anchor) - (node.level - 1)] if node.level > 1 else anchor
+                base = ".".join([*trimmed, node.module] if node.module else trimmed)
+            if not base:
+                continue
+            modules.add(base)
+            modules.update(f"{base}.{alias.name}" for alias in node.names)
     return modules
+
+
+def _imported_modules(path: Path) -> set[str]:
+    return imported_modules(
+        path.read_text(encoding="utf-8"),
+        module_package=_package_name(path),
+        filename=str(path),
+    )
 
 
 def _identifiers(path: Path) -> set[str]:
@@ -289,16 +335,115 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
     )
 
 
-def test_no_vendor_sdk_or_data_engine_is_importable() -> None:
-    """No provider SDK, no cloud SDK, no database server, no engine dependency."""
-    import importlib
+#: SDKs and data engines this slice must not depend on. The check is about what
+#: the project declares and imports, never about what happens to be installed in
+#: whichever virtualenv the suite runs in.
+FORBIDDEN_DISTRIBUTIONS = (
+    "duckdb",
+    "pyarrow",
+    "pandas",
+    "polars",
+    "boto3",
+    "botocore",
+    "requests",
+    "httpx",
+    "urllib3",
+    "psycopg",
+    "psycopg2",
+    "sqlalchemy",
+    "ibapi",
+    "ib_insync",
+    "ib_async",
+)
 
-    for module_name in ("duckdb", "pyarrow", "pandas", "boto3", "requests", "httpx", "psycopg"):
-        with pytest.raises(ImportError):
-            importlib.import_module(module_name)
+
+def _declared_dependencies() -> list[str]:
+    """Every distribution the project declares, runtime and dev alike."""
+    content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    declared: list[str] = []
+    for match in re.finditer(r"^\s*\"([^\"]+)\",?\s*$", content, flags=re.M):
+        declared.append(match.group(1))
+    return declared
+
+
+def test_no_vendor_sdk_or_data_engine_is_declared_as_a_dependency() -> None:
+    """A dependency the project does not declare cannot be relied on.
+
+    Deliberately **not** "importing X must fail". That would make the result
+    depend on what unrelated tooling happens to be installed in the developer's
+    virtualenv -- passing on a clean machine and failing on one where someone
+    installed pandas for something else, while saying nothing about KalpaMani.
+    """
+    declared = " ".join(_declared_dependencies()).lower()
+    offenders = [name for name in FORBIDDEN_DISTRIBUTIONS if re.search(rf"\b{name}\b", declared)]
+    assert offenders == [], (
+        f"pyproject declares {offenders}. No vendor SDK, cloud SDK, database driver or data "
+        "engine is authorized in this slice."
+    )
+
+
+def test_no_kalpamani_module_imports_a_vendor_sdk_or_data_engine() -> None:
+    """The other half: declared or not, the source must not reach for one."""
+    offenders: list[str] = []
+    for path in _python_files(PACKAGE_ROOT):
+        for module in _imported_modules(path):
+            root = module.split(".")[0]
+            if root in FORBIDDEN_DISTRIBUTIONS:
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)} imports {module}")
+    assert offenders == [], f"Found: {offenders}"
 
 
 def test_the_project_still_declares_no_runtime_dependencies() -> None:
     """The A1 kernel adds none. A data engine is a decision gate G1 has not reached."""
     content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "dependencies = []" in content
+
+
+# ---------------------------------------------------------------------------
+# The scanner's own proof
+# ---------------------------------------------------------------------------
+
+
+def test_the_import_scanner_resolves_a_forbidden_relative_import() -> None:
+    """A boundary check that cannot see a relative import is decoration.
+
+    The fixture is source text rather than a file on disk, so the guard is proven
+    against a violation that must never actually exist in the tree.
+    """
+    # A file at kalpamani/strategies/foo.py: one level up from its own package.
+    modules = imported_modules(
+        "from ..data.live import something\n", module_package="kalpamani.strategies"
+    )
+    assert "kalpamani.data.live" in modules
+    assert any(module.startswith(bad) for module in modules for bad in CONSUMER_FORBIDDEN)
+
+    # And a level deeper, from kalpamani/strategies/breakout/foo.py.
+    deeper = imported_modules(
+        "from ...data.live import something\n", module_package="kalpamani.strategies.breakout"
+    )
+    assert "kalpamani.data.live" in deeper
+
+
+def test_the_import_scanner_resolves_a_single_level_relative_import() -> None:
+    source = "from .curate import publication\n"
+    modules = imported_modules(source, module_package="kalpamani.data")
+    assert "kalpamani.data.curate" in modules
+    assert "kalpamani.data.curate.publication" in modules
+
+
+def test_the_import_scanner_sees_through_an_alias() -> None:
+    """The bound name is not the imported module, and the boundary is about the module."""
+    source = "import kalpamani.data.live as anything\n"
+    modules = imported_modules(source, module_package="kalpamani.research")
+    assert "kalpamani.data.live" in modules
+
+    source = "from kalpamani.data import live as elsewhere\n"
+    modules = imported_modules(source, module_package="kalpamani.research")
+    assert "kalpamani.data.live" in modules
+
+
+def test_the_import_scanner_does_not_invent_violations() -> None:
+    """NEGATIVE CONTROL. A permitted import must not trip the guard."""
+    source = "from kalpamani.data.pit import accessors\nfrom kalpamani.data import contracts\n"
+    modules = imported_modules(source, module_package="kalpamani.research")
+    assert not any(module.startswith(bad) for module in modules for bad in CONSUMER_FORBIDDEN)

@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import (
@@ -45,6 +46,7 @@ from kalpamani.data.contracts.entities import (
     PriceBar,
     Security,
     SecurityAttribute,
+    SourceFact,
     TickerHistory,
     UniverseMembership,
 )
@@ -78,7 +80,12 @@ from kalpamani.data.contracts.vocabulary import (
     PublicTimeDerivation,
     TickerChangeReason,
 )
-from kalpamani.data.curate.universe import UniverseBuildInputs, UniverseDefinition
+from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_inputs
+from kalpamani.data.curate.universe import (
+    UniverseBuildInputs,
+    UniverseDefinition,
+    build_universe_snapshot,
+)
 
 # ---------------------------------------------------------------------------
 # Identities and constants
@@ -348,6 +355,8 @@ def listings() -> tuple[Listing, ...]:
                 anchor=FactAnchor.announced_forward(announcement_time=utc(2019, 6, 21, 21, 0)),
                 public_exact=utc(2019, 6, 21, 21, 0),
                 public_time_derivation=PublicTimeDerivation.AUTHORITATIVE_TIMESTAMP,
+                provider_exact=utc(2019, 6, 21, 22, 0),
+                provider_time_derivation=ProviderTimeDerivation.VENDOR_STAMPED,
                 source_id="LST-0003:announcement",
             ),
         ),
@@ -876,17 +885,84 @@ def universe_snapshots(
     *,
     resolved_profile: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
 ) -> dict[date, tuple[UniverseMembership, ...]]:
-    """Build both stored snapshots under one resolved profile."""
-    from kalpamani.data.curate.universe import build_universe_snapshot
+    """Build both stored snapshots under one resolved profile, via the build path.
 
-    cutoffs = evaluation_cutoffs()
+    Deliberately routed through :func:`gold_dataset` rather than calling the
+    builder directly, so a test can never exercise a universe the resolution step
+    did not produce.
+    """
+    return dict(gold_dataset(requested=resolved_profile).universe)
+
+
+def source_datasets() -> dict[str, tuple[SourceFact, ...]]:
+    """Every directly consumed source dataset, keyed by name.
+
+    This is what goes through resolution. Nothing downstream sees raw rows.
+    """
     return {
+        "corporate_action": corporate_actions(),
+        "listing": listings(),
+        "market_session": sessions(),
+        "price_bar": bars(),
+        "security_attribute": attributes(),
+        "ticker_history": ticker_history(),
+    }
+
+
+def resolved_inputs(
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+) -> ResolvedRunInputs:
+    """Run the source rows through the resolution boundary, as a build must."""
+    return resolve_run_inputs(
+        source_datasets(),
+        config=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
+    )
+
+
+def gold_dataset(
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+) -> GoldDataset:
+    """The complete curated build a point-in-time query is served from.
+
+    Built **from resolved rows**, never from raw ones: the policy that bounds one
+    dataset and excludes another has to have actually run before anything is
+    curated, or the evidence would describe rows the build never saw.
+    """
+    resolved = resolved_inputs(requested=requested, downgrade=downgrade)
+    profile = resolved.resolved_profile
+
+    resolved_listings = tuple(cast("Listing", row) for row in resolved.rows("listing"))
+    resolved_attributes = tuple(
+        cast("SecurityAttribute", row) for row in resolved.rows("security_attribute")
+    )
+    resolved_bars = tuple(cast("PriceBar", row) for row in resolved.rows("price_bar"))
+    resolved_actions = tuple(
+        cast("CorporateAction", row) for row in resolved.rows("corporate_action")
+    )
+    resolved_sessions = tuple(cast("MarketSession", row) for row in resolved.rows("market_session"))
+    resolved_tickers = tuple(cast("TickerHistory", row) for row in resolved.rows("ticker_history"))
+
+    build_inputs = UniverseBuildInputs(
+        listings=resolved_listings,
+        attributes=resolved_attributes,
+        bars=resolved_bars,
+        listing_dataset_version=LISTING_DATASET_VERSION,
+        attribute_dataset_version=ATTRIBUTE_DATASET_VERSION,
+        bar_dataset_version=BAR_DATASET_VERSION,
+    )
+    cutoffs = evaluation_cutoffs()
+    universe = {
         session: build_universe_snapshot(
-            universe_inputs(),
+            build_inputs,
             session_date=session,
             evaluation_cutoff=cutoffs[session],
             definition=universe_definition(),
-            resolved_profile=resolved_profile,
+            resolved_profile=profile,
             approvals=approvals(),
             artifact_first_built_time=ARTIFACT_FIRST_BUILT,
             ingestion_time=INGESTION_TIME,
@@ -895,30 +971,30 @@ def universe_snapshots(
         for session in SNAPSHOT_SESSIONS
     }
 
-
-def gold_dataset(
-    *,
-    resolved_profile: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
-) -> GoldDataset:
-    """The complete curated build a point-in-time query is served from."""
     return GoldDataset(
         dataset_version=DATASET_VERSION,
         build_time=BUILD_TIME,
         coverage_start=COVERAGE_START,
         coverage_end=COVERAGE_END,
-        sessions=sessions(),
-        listings=listings(),
-        attributes=attributes(),
-        tickers=ticker_history(),
-        bars=bars(),
-        actions=corporate_actions(),
-        universe=universe_snapshots(resolved_profile=resolved_profile),
+        resolved_profile=profile,
+        resolution_policy_version=RESOLUTION_POLICY_VERSION,
+        resolution_evidence=resolved.evidence,
+        sessions=resolved_sessions,
+        listings=resolved_listings,
+        attributes=resolved_attributes,
+        tickers=resolved_tickers,
+        bars=resolved_bars,
+        actions=resolved_actions,
+        universe=universe,
     )
 
 
 # ---------------------------------------------------------------------------
 # Bronze payload
 # ---------------------------------------------------------------------------
+
+
+INGESTION_RUN_ID = "ing-synthetic-a1-0001"
 
 
 def bronze_payload() -> bytes:

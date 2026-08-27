@@ -29,6 +29,8 @@ from kalpamani.data.contracts.vocabulary import (
     PublicTimeDerivation,
 )
 from kalpamani.data.quality.checks import (
+    DEFAULT_SURVIVORSHIP_POLICY,
+    SurvivorshipPolicy,
     check_adjusted_artifact_hash,
     check_envelope,
     check_price_bars,
@@ -489,6 +491,7 @@ def test_the_reference_universe_snapshots_pass() -> None:
         resolved_profile=PUBLIC,
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert findings == (), _names(findings)
 
@@ -520,6 +523,7 @@ def test_a_universe_rebuilt_from_current_listings_is_refused() -> None:
         resolved_profile=PUBLIC,
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.3_survivorship_leakage" in _names(findings)
 
@@ -531,6 +535,7 @@ def test_a_membership_keyed_to_the_wrong_profile_is_blocking() -> None:
         resolved_profile=FORWARD,
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.8_profile_free_or_mismatched_universe" in _names(findings)
 
@@ -545,8 +550,80 @@ def test_eligibility_evaluated_from_inadmissible_data_is_blocking() -> None:
         resolved_profile=PUBLIC,
         approvals=phase3a.approvals(),
         evaluation_cutoffs=impossible_cutoffs,
+        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.6_eligibility_from_inadmissible_data" in _names(findings)
+
+
+def test_a_recent_snapshot_with_no_delistings_yet_is_not_faulted() -> None:
+    """NEGATIVE CONTROL. The alarm is historical, and scoped so it stays usable.
+
+    Members of a recent snapshot have not had time to disappear. Blocking it would
+    make the check something a team switches off -- and a disabled check protects
+    nothing.
+    """
+    snapshots = phase3a.universe_snapshots()
+    recent_only = {date(2021, 1, 5): snapshots[date(2021, 1, 5)]}
+    survivors_only = {
+        session: tuple(row for row in rows if row.security_id == phase3a.SEC_CONTINUOUS)
+        for session, rows in recent_only.items()
+    }
+
+    near_cutoff = check_universe_snapshots(
+        survivors_only,
+        listings=phase3a.listings(),
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=date(2021, 6, 1),
+    )
+    assert _names(near_cutoff) == set(), (
+        "Within the deep-history window nothing is concluded, so nothing is faulted."
+    )
+
+    deep_cutoff = check_universe_snapshots(
+        survivors_only,
+        listings=phase3a.listings(),
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=date(2030, 1, 1),
+    )
+    assert "6.3_survivorship_leakage" in _names(deep_cutoff), (
+        "Far enough back, the same snapshot is deep history and the alarm applies."
+    )
+
+
+def test_the_survivorship_policy_is_named_and_versioned() -> None:
+    """A threshold that decides whether results are believable carries a version."""
+    assert DEFAULT_SURVIVORSHIP_POLICY.version
+    assert DEFAULT_SURVIVORSHIP_POLICY.deep_history_years > 0
+    assert DEFAULT_SURVIVORSHIP_POLICY.minimum_eligible_snapshots >= 1
+
+    lenient = SurvivorshipPolicy(
+        version="survivorship/test-lenient",
+        deep_history_years=100,
+        minimum_eligible_snapshots=1,
+    )
+    findings = check_universe_snapshots(
+        {
+            date(2019, 6, 27): tuple(
+                row
+                for row in phase3a.universe_snapshots()[date(2019, 6, 27)]
+                if row.security_id == phase3a.SEC_CONTINUOUS
+            )
+        },
+        listings=phase3a.listings(),
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=phase3a.BUILD_TIME.date(),
+        survivorship_policy=lenient,
+    )
+    assert _names(findings) == set(), (
+        "Under a policy whose deep-history window nothing reaches, the alarm draws no "
+        "conclusion at all."
+    )
 
 
 def test_a_universe_rebuild_that_drifts_is_blocking() -> None:
@@ -693,7 +770,11 @@ def test_an_adjusted_artifact_that_does_not_reproduce_is_blocking() -> None:
     from kalpamani.data.curate.adjustment import build_adjusted_bar_artifact
 
     artifact = build_adjusted_bar_artifact(
-        [b for b in phase3a.daily_bars() if b.security_id == phase3a.SEC_CONTINUOUS],
+        [
+            b
+            for b in phase3a.daily_bars()
+            if b.security_id == phase3a.SEC_CONTINUOUS and b.session_date.year == 2019
+        ],
         phase3a.corporate_actions(),
         adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
         resolved_profile=PUBLIC,
@@ -702,6 +783,8 @@ def test_an_adjusted_artifact_that_does_not_reproduce_is_blocking() -> None:
         corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
         raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
         security_id_scope=phase3a.SEC_CONTINUOUS,
+        valid_time_start=date(2019, 6, 24),
+        valid_time_end=date(2019, 6, 28),
         artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
         ingestion_time=phase3a.INGESTION_TIME,
         dataset_version=phase3a.DATASET_VERSION,
