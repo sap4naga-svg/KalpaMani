@@ -589,6 +589,16 @@ class PointInTimeReader:
         held = self._dataset.bars_for(security_id, resolution.value)
         in_range = tuple(bar for bar in held if start <= bar.session_date <= end)
         expected = self._expected_endpoints(security_id, resolution, start, end)
+        if requirement is SeriesRequirement.REQUIRED and not expected:
+            raise IncompleteCoverageError(
+                f"Dataset {self._dataset.dataset_version} has no listed trading session for "
+                f"{security_id} on its own venue between {start.isoformat()} and "
+                f"{end.isoformat()}, so there is no grid a complete series could be measured "
+                f"against -- and it holds {len(in_range)} bar(s) in that range. Completeness "
+                "cannot be certified against a calendar that says nothing, and serving the "
+                "bars that happen to exist is the truncation this refusal exists to prevent. "
+                "Pass SeriesRequirement.OPTIONAL to accept whatever was knowable."
+            )
         self._require_physical_coverage(
             security_id=security_id,
             resolution=resolution,

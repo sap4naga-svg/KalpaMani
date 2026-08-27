@@ -231,6 +231,47 @@ def test_a_missing_bar_and_an_unavailable_bar_are_different_refusals(
     assert "has no DAILY bar" in str(missing.value)
 
 
+def test_a_required_series_with_no_calendar_basis_is_refused(tmp_path: Path) -> None:
+    """No listed session means no grid, and no grid means completeness is uncheckable.
+
+    This was a real hole in the first version of the two-phase check: a security
+    with no listing rows produced an empty expected grid, so *both* coverage
+    checks returned early and a five-session REQUIRED request came back with
+    whatever bars happened to be available. The vacuous case is the dangerous one
+    precisely because it looks like a pass.
+    """
+    datasets = phase3a.source_datasets()
+    datasets["listing"] = tuple(
+        row
+        for row in datasets["listing"]
+        if isinstance(row, Listing) and row.security_id != SECURITY
+    )
+    reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
+    with pytest.raises(IncompleteCoverageError) as refusal:
+        _series(reader, as_of=phase3a.utc(2019, 6, 26, 20, 0))
+    assert "no listed trading session" in str(refusal.value)
+
+
+def test_the_same_query_is_served_optionally(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL. Best effort remains available, and says what it withheld."""
+    datasets = phase3a.source_datasets()
+    datasets["listing"] = tuple(
+        row
+        for row in datasets["listing"]
+        if isinstance(row, Listing) and row.security_id != SECURITY
+    )
+    reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
+    result = _series(
+        reader,
+        as_of=phase3a.utc(2019, 6, 26, 20, 0),
+        requirement=SeriesRequirement.OPTIONAL,
+    )
+    assert [value.session_date for value in result.bars] == [
+        date(2019, 6, 24),
+        date(2019, 6, 25),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 2 -- a universe snapshot is selected and served whole
 # ---------------------------------------------------------------------------
