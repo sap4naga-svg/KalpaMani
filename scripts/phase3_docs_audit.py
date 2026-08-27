@@ -10,7 +10,8 @@ needs, and whether any document still refers to a field name a later revision re
 Those are exactly the defects the review rounds kept finding by hand. This script finds them by
 running.
 
-It reads `docs/phase3/` and `docs/decisions/ADR-0005-*.md`. It touches no runtime code, opens no
+It reads `docs/phase3/`, the point-in-time and blueprint-adoption ADRs, `docs/architecture/`,
+`CLAUDE.md` and `README.md`. It touches no runtime code, opens no
 network connection, and asserts nothing about data. Exit code 0 means the documents are
 consistent on the named properties below; non-zero lists what disagrees. It is a guard over
 those properties, not a proof that the design is correct.
@@ -28,7 +29,45 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PHASE3 = REPO_ROOT / "docs" / "phase3"
-ADR = REPO_ROOT / "docs" / "decisions" / "ADR-0005-point-in-time-data-architecture.md"
+DECISIONS = REPO_ROOT / "docs" / "decisions"
+ARCHITECTURE = REPO_ROOT / "docs" / "architecture"
+ADR = DECISIONS / "ADR-0005-point-in-time-data-architecture.md"
+
+#: Blueprint V3.0 became repository authority on 2026-08-27 (ADR-0006). The blueprint PDFs are
+#: binary and never edited, so the audit checks the text that governs them: the adopting ADR,
+#: the adoption record carrying the Document Control override, and the two status documents.
+ADR_V3 = DECISIONS / "ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md"
+BLUEPRINT_V3 = ARCHITECTURE / "KalpaMani_Blueprint_V3_0.pdf"
+BLUEPRINT_V21 = ARCHITECTURE / "KalpaMani_Blueprint_V2_1.pdf"
+ADOPTION = ARCHITECTURE / "BLUEPRINT_V3_ADOPTION.md"
+
+#: Every decision gate that must still read as open. V3 adoption resolved none of them and
+#: added two. A gate is "silently resolved" if a document calls it closed/resolved/satisfied.
+OPEN_GATES = ("G1", "G2", "G3", "G4", "G5", "G6", "G7")
+GATE_RESOLVED_WORDS = ("closed", "resolved", "satisfied", "passed", "complete")
+
+#: A resolution word only counts as a claim if it is not negated. "no G1-G7 resolved" and
+#: "none are closed by V3 adoption" assert the opposite of what the bare word suggests.
+GATE_NEGATION = re.compile(r"\b(?:no|not|never|none|nor|un|neither|without)\b[^.]{0,40}$")
+
+#: Wording that would wrongly present V3 as still proposed or non-authoritative. It is legitimate
+#: only next to a marker showing the sentence is historical or describes the superseded PDF page.
+V3_STALE_STATUS = (
+    "v3.0 remains proposed",
+    "v3 remains proposed",
+    "v3.0 is not repository authority",
+    "v3 is not repository authority",
+    "adr-0006 does not exist",
+)
+V3_HISTORICAL_MARKERS = (
+    "superseded",
+    "as printed",
+    "historical",
+    "before adoption",
+    "pre-adoption",
+    "at drafting",
+    "drafted",
+)
 
 CONTRACT = PHASE3 / "pit-data-contract.md"
 SCHEMA = PHASE3 / "conceptual-schema.md"
@@ -199,7 +238,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/10] Closed vocabularies are defined where they are used")
+    print("[1/11] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -223,7 +262,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/10] Source and derived envelopes stay disjoint")
+    print("\n[2/11] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -258,7 +297,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/10] Every declared temporal semantics has its required anchor")
+    print("\n[3/11] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -275,7 +314,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/10] Exact and bound derivations name the correct fields")
+    print("\n[4/11] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -302,7 +341,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/10] Normative rules use the current resolved model")
+    print("\n[5/11] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -348,7 +387,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/10] Entities keep source and derived rows apart")
+    print("\n[6/11] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -418,7 +457,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/10] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/11] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -480,7 +519,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/10] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/11] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -585,7 +624,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/10] Resolved-timing wording, closure rules and current status")
+    print("\n[9/11] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -690,7 +729,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/10] No document refers to a retired field name")
+    print("\n[10/11] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -733,11 +772,139 @@ def main() -> int:
     elif m:
         f.check("manifest_version reflects the current schema", True)
 
+    # ---------------------------------------------------------------- 7. blueprint authority
+    print("\n[11/11] Blueprint V3.0 adoption is recorded consistently")
+
     f.check(
-        "ADR-0005 is still Proposed",
-        "**Status:** **Proposed**" in everything[ADR],
-        "status changed",
+        "Blueprint V3.0 exists at the authoritative path",
+        BLUEPRINT_V3.is_file(),
+        f"missing: {BLUEPRINT_V3}",
     )
+    f.check(
+        "Blueprint V2.1 is preserved, not deleted",
+        BLUEPRINT_V21.is_file(),
+        f"missing: {BLUEPRINT_V21}",
+    )
+    f.check("ADR-0006 exists", ADR_V3.is_file(), f"missing: {ADR_V3}")
+    f.check("the adoption record exists", ADOPTION.is_file(), f"missing: {ADOPTION}")
+
+    if ADR_V3.is_file() and ADOPTION.is_file():
+        adr6 = read(ADR_V3)
+        adoption = read(ADOPTION)
+        claude_md = read(REPO_ROOT / "CLAUDE.md")
+        readme = read(REPO_ROOT / "README.md")
+
+        f.check(
+            "ADR-0006 is Accepted",
+            "**Status:** **Accepted**" in adr6,
+            "ADR-0006 does not declare Accepted status",
+        )
+
+        # The authority order must name V3.0 first, and must not still name V2.1 first.
+        authority = re.search(r"^1\. \*\*Blueprint ([^*]+)\*\*", claude_md, re.M)
+        f.check(
+            "CLAUDE.md names Blueprint V3.0 first in the authority order",
+            authority is not None and authority.group(1).strip() == "V3.0",
+            f"authority slot 1 is {authority.group(1).strip() if authority else 'absent'}",
+        )
+        f.check(
+            "CLAUDE.md records that V2.1 is preserved as historical evidence",
+            "historical architecture evidence and is not deleted" in claude_md,
+            "no V2.1 preservation note",
+        )
+        f.check(
+            "README names Blueprint V3.0 as the current authority",
+            "Blueprint V3.0 \u2192 approved ADRs" in readme,
+            "README authority order still names V2.1",
+        )
+
+        # Adoption must not be presented as a phase milestone.
+        f.check(
+            "no document presents V3 adoption as Phase 3 completion",
+            all(
+                "PHASE 3 OVERALL" not in t.upper() or "NOT COMPLETE" in t.upper()
+                for t in (claude_md, readme)
+            )
+            and "Phase 3 overall NOT COMPLETE" in readme,
+            "a status document stopped saying Phase 3 is incomplete",
+        )
+        f.check(
+            "the adoption record states adoption grants no implementation authority",
+            "grants **no** implementation" in adoption or "no** implementation" in adoption,
+            "adoption record does not disclaim implementation authority",
+        )
+        for name, t in (("CLAUDE.md", claude_md), ("README.md", readme)):
+            f.check(
+                f"{name} still withholds authority for later phases",
+                "NOT AUTHORIZED" in t.upper(),
+                "authorization wording disappeared",
+            )
+
+        # ADR-0005 must not have been swept along by adopting V3.
+        f.check(
+            "ADR-0005 is still Proposed after V3 adoption",
+            "**Status:** **Proposed**" in everything[ADR],
+            "ADR-0005 status changed",
+        )
+
+        # No gate may be silently marked resolved.
+        gate_offenders: list[str] = []
+        for path in (ADR_V3, ADOPTION, REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md"):
+            body = read(path)
+            for lineno, line in enumerate(body.splitlines(), 1):
+                low = line.lower()
+                if "open" in low:
+                    continue
+                for gate in OPEN_GATES:
+                    if not re.search(rf"\b{gate.lower()}\b", low):
+                        continue
+                    for word in GATE_RESOLVED_WORDS:
+                        at = low.find(word)
+                        if at < 0 or GATE_NEGATION.search(low[:at]):
+                            continue
+                        gate_offenders.append(f"{path.name}:{lineno} ({gate}: {word})")
+                        break
+        f.check(
+            "no open gate G1-G7 is marked resolved",
+            not gate_offenders,
+            ", ".join(gate_offenders[:6]),
+        )
+        for gate in OPEN_GATES:
+            f.check(
+                f"{gate} is recorded OPEN",
+                re.search(rf"\*\*{gate}\*\*|{gate}\b", adr6) is not None,
+                f"{gate} is not mentioned in ADR-0006",
+            )
+        f.check(
+            "ADR-0006 states all seven gates are open",
+            "G1\u2013G7 are all OPEN" in adr6 or "G1-G7 are all OPEN" in adr6,
+            "no explicit all-gates-open statement",
+        )
+
+        # Stale proposal wording may survive only where it is explicitly labelled historical.
+        stale: list[str] = []
+        for path in (ADR_V3, ADOPTION, REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md"):
+            doc_lines = read(path).splitlines()
+            for lineno, line in enumerate(doc_lines, 1):
+                if not any(s in line.lower() for s in V3_STALE_STATUS):
+                    continue
+                lo = max(0, lineno - 1 - MARKER_WINDOW)
+                hi = min(len(doc_lines), lineno + MARKER_WINDOW)
+                window = " ".join(doc_lines[lo:hi]).lower()
+                if not any(m in window for m in V3_HISTORICAL_MARKERS):
+                    stale.append(f"{path.name}:{lineno}")
+        f.check(
+            "no document says V3 is still proposed outside labelled historical context",
+            not stale,
+            ", ".join(stale[:6]),
+        )
+
+        # Live trading must not have been loosened by a documentation change.
+        f.check(
+            "live trading is still recorded hard-disabled",
+            "HARD-DISABLED" in claude_md.upper() and "HARD-DISABLED" in readme.upper(),
+            "hard-disabled wording missing",
+        )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
