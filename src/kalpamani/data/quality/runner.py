@@ -39,17 +39,30 @@ splitting it to match the plan's vocabulary would change working code to suit a
 registry. Each implementation instead declares the finding ids it can emit, and a
 planned check counts as run when every implementation owning its ids has been
 invoked.
+
+**Nothing an implementation found is dropped on the way to the report.** Routing
+findings by id means a finding whose id belongs to no planned check has nowhere to
+go, and the obvious implementation of that is to skip it -- which would silently
+discard a BLOCKING defect because the plan's vocabulary had not caught up with the
+code. Every produced finding must be claimed by the implementation that emitted it
+**and** owned by a planned check, or the run refuses.
+
+**What the report says it covered is derived, not claimed.** ``datasets_covered``
+and ``partitions_covered`` come from the scopes of the checks that actually ran and
+the sessions actually evaluated. Taking them from the caller left the one claim in
+the report that nothing checked, and over-claiming coverage is precisely the "check
+that silently covered less than it claims" the plan exists to prevent.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Final
 
 from kalpamani.data.contracts.dataset import GoldDataset
-from kalpamani.data.contracts.entities import AdjustedBarArtifact, PriceBar
+from kalpamani.data.contracts.entities import AdjustedBarArtifact, MarketSession, PriceBar
 from kalpamani.data.contracts.errors import QualityGateError
 from kalpamani.data.contracts.profiles import ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import BoundApprovals, PitRecord, is_eligible
@@ -269,6 +282,28 @@ def _run_run_identity(context: QualityContext) -> list[QualityFinding]:
     return list(check_run_identity_inputs(context.config, context.run_id_inputs()))
 
 
+def _session_dates_by_instant(
+    sessions: Sequence[MarketSession],
+) -> dict[datetime, date]:
+    """Every instant a bar may legitimately end on, mapped to its session date.
+
+    The daily close **and** every minute endpoint in the regular session. Mapping
+    only opens and closes reported every minute bar as belonging to no calendar
+    session -- the check's own words -- which is a defect in the mapping, not in
+    the bars.
+    """
+    out: dict[datetime, date] = {}
+    for session in sessions:
+        if session.is_holiday:
+            continue
+        out[session.regular_close] = session.session_date
+        point = session.regular_open + timedelta(minutes=1)
+        while point <= session.regular_close:
+            out[point] = session.session_date
+            point += timedelta(minutes=1)
+    return out
+
+
 def _listed_sessions(context: QualityContext, security_id: str) -> list[date]:
     """The sessions this security's own venue traded and it was listed on.
 
@@ -303,10 +338,7 @@ def _run_price_bars(context: QualityContext) -> list[QualityFinding]:
     by splitting the pass.
     """
     dataset = context.dataset
-    session_dates: dict[datetime, date] = {}
-    for session in dataset.sessions:
-        session_dates[session.regular_close] = session.session_date
-        session_dates[session.regular_open] = session.session_date
+    session_dates = _session_dates_by_instant(dataset.sessions)
 
     by_security: dict[str, list[PriceBar]] = {}
     for bar in dataset.bars:
@@ -429,7 +461,13 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="stored_envelope_shape",
-            emits=(),
+            emits=(
+                "4.0.0_origin_outside_the_closed_vocabulary",
+                "4.0A.5_missing_system_first_seen_time",
+                "4.0B.1_derived_artifact_carrying_source_timing",
+                "4.0B.4_derived_artifact_declares_a_source_temporal_class",
+                "4.0_mixed_source_and_derived_envelope",
+            ),
             invoke=_run_stored_shape,
             applicable=_always_applicable,
         ),
@@ -475,6 +513,12 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
             implementation_id="price_bar_structure",
             emits=(
                 "3.1_duplicate_price_bar_key",
+                # The bar checks also decide two temporal properties, because
+                # both are about a bar's relationship to the calendar. The plan
+                # assigns them to 4.1, so this implementation serves that check
+                # too rather than the findings being routed nowhere.
+                "4.1.12_bar_outside_any_known_session",
+                "4.1.12_session_date_derived_by_utc_truncation",
                 "5.1_impossible_ohlc",
                 "5.2_non_positive_price_or_negative_volume",
                 "5.4_missing_bar_in_a_listed_range",
@@ -536,30 +580,18 @@ def run_quality_plan(
     plan: QualityPlan = PHASE3A_QUALITY_PLAN,
     registry: Mapping[str, CheckImplementation] = CHECK_REGISTRY,
     produced_at: datetime | None = None,
-    datasets_covered: Sequence[str],
-    partitions_covered: Sequence[str] = (),
     policy_versions: Mapping[str, str] | None = None,
 ) -> RunnerOutcome:
     """Execute ``plan`` against ``context`` and build the report from what ran.
 
     Raises:
         QualityGateError: if a check the plan marks REQUIRED has no registered
-            implementation, or an implementation it needs decided it did not
-            apply. A required check that cannot run is a refusal at publication
-            time rather than a silent absence in the evidence.
+            implementation or did not apply; if an implementation declares a
+            finding id no planned check owns; or if an implementation produces a
+            finding it did not declare. Each would mean the report is not a
+            faithful account of what the checks found.
     """
-    unimplemented = sorted(
-        implementation_id
-        for check in plan.checks
-        for implementation_id in check.implementations
-        if implementation_id not in registry
-    )
-    if unimplemented:
-        raise QualityGateError(
-            f"Quality plan {plan.plan_version} names implementations {unimplemented}, which "
-            "this runner does not have. A plan naming a check nothing implements cannot be "
-            "run, and finding that out at publication is better than finding out it never ran."
-        )
+    _require_registry_agrees(plan, registry)
 
     invoked: dict[str, list[QualityFinding]] = {}
     skipped: dict[str, str] = {}
@@ -571,11 +603,27 @@ def run_quality_plan(
         if reason is not None:
             skipped[implementation_id] = reason
             continue
-        invoked[implementation_id] = list(implementation.invoke(context))
+        produced = list(implementation.invoke(context))
+        undeclared = sorted(
+            {
+                finding.check_name
+                for finding in produced
+                if finding.check_name not in implementation.emits
+            }
+        )
+        if undeclared:
+            raise QualityGateError(
+                f"Implementation {implementation_id!r} produced findings {undeclared} it does "
+                "not declare. Findings are routed to planned checks by id, so an undeclared one "
+                "has nowhere to go -- and dropping it would discard a defect because the "
+                "registry had not caught up with the code."
+            )
+        invoked[implementation_id] = produced
 
     checks_run: list[str] = []
     checks_not_run: list[CheckNotRun] = []
     findings: list[QualityFinding] = []
+    covered: set[str] = set()
     for check in sorted(plan.checks, key=lambda item: item.check_id):
         if not check.implementations:
             checks_not_run.append(
@@ -598,10 +646,13 @@ def run_quality_plan(
             )
             continue
         checks_run.append(check.check_id)
+        covered.update(check.applies_to)
         for ident in check.implementations:
             findings.extend(
                 finding for finding in invoked[ident] if finding.check_name in check.finding_ids
             )
+
+    _require_nothing_dropped(invoked, findings, checks_run, plan)
 
     blocked = [
         item.check_name
@@ -628,8 +679,10 @@ def run_quality_plan(
         policy_versions=versions,
         checks_run=tuple(checks_run),
         checks_not_run=tuple(checks_not_run),
-        datasets_covered=tuple(datasets_covered),
-        partitions_covered=tuple(partitions_covered),
+        datasets_covered=tuple(sorted(covered)),
+        partitions_covered=tuple(
+            session.isoformat() for session in sorted(context.evaluation_cutoffs)
+        ),
         produced_at=produced_at if produced_at is not None else context.dataset.build_time,
         produced_by=_RUNNER_TOKEN,
     )
@@ -637,6 +690,76 @@ def run_quality_plan(
         report=report,
         invoked=tuple(sorted(invoked)),
         skipped=tuple(sorted(skipped.items())),
+    )
+
+
+def _require_registry_agrees(
+    plan: QualityPlan, registry: Mapping[str, CheckImplementation]
+) -> None:
+    """The plan and the registry must describe the same checks.
+
+    Two separate failures, both of which make the report unfaithful: an
+    implementation the plan names but nothing provides cannot run, and an
+    implementation that emits a finding id no planned check owns produces evidence
+    with nowhere to go.
+    """
+    unimplemented = sorted(
+        implementation_id
+        for check in plan.checks
+        for implementation_id in check.implementations
+        if implementation_id not in registry
+    )
+    if unimplemented:
+        raise QualityGateError(
+            f"Quality plan {plan.plan_version} names implementations {unimplemented}, which "
+            "this runner does not have. A plan naming a check nothing implements cannot be "
+            "run, and finding that out at publication is better than finding out it never ran."
+        )
+    named = {ident for check in plan.checks for ident in check.implementations}
+    unowned = sorted(
+        {
+            finding_id
+            for ident in named
+            for finding_id in registry[ident].emits
+            if plan.owner_of(finding_id) is None
+        }
+    )
+    if unowned:
+        raise QualityGateError(
+            f"Implementations declare findings {unowned} that plan {plan.plan_version} assigns "
+            "to no check. A finding with no owner is routed nowhere, so a defect it reports "
+            "would never reach the report."
+        )
+
+
+def _require_nothing_dropped(
+    invoked: Mapping[str, Sequence[QualityFinding]],
+    routed: Sequence[QualityFinding],
+    checks_run: Sequence[str],
+    plan: QualityPlan,
+) -> None:
+    """Every finding an invoked implementation produced reached the report.
+
+    The only legitimate way a produced finding does not appear is if its owning
+    check did not run -- which cannot happen, because an implementation is only
+    invoked on behalf of checks that then count as run. Anything else is a defect
+    silently discarded.
+    """
+    produced = [finding for findings in invoked.values() for finding in findings]
+    if len(_deduplicate(produced)) == len(_deduplicate(list(routed))):
+        return
+    routed_keys = {(finding.check_name, finding.dataset, finding.detail) for finding in routed}
+    lost = sorted(
+        {
+            f"{finding.check_name} ({finding.severity.value})"
+            for finding in produced
+            if (finding.check_name, finding.dataset, finding.detail) not in routed_keys
+        }
+    )
+    raise QualityGateError(
+        f"Findings {lost} were produced by an invoked check and did not reach the report. "
+        f"Plan {plan.plan_version} ran {sorted(checks_run)}; a finding that is produced and "
+        "then dropped is a defect the evidence does not mention."
     )
 
 

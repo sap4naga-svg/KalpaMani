@@ -827,9 +827,10 @@ DIRECTLY_READ_DATASETS = (
     "ticker_history",
 )
 
-#: What the quality report covers: every source dataset plus every table the
-#: build publishes. The plan compares this against the publication, so a table
-#: nothing checked cannot be published as though something had.
+#: Every source dataset plus every table the build publishes -- what a complete
+#: run must end up covering. The report's own ``datasets_covered`` is **derived**
+#: by the runner from the scopes of the checks that ran; this is what tests hold
+#: that derivation to, rather than what the report is told to say.
 QUALITY_COVERAGE = tuple(sorted(set(DIRECTLY_READ_DATASETS) | set(GOLD_ENTITIES)))
 
 
@@ -1032,8 +1033,6 @@ def quality_report(
             downgrade=downgrade,
             universe_sessions=universe_sessions,
         ),
-        datasets_covered=QUALITY_COVERAGE,
-        partitions_covered=tuple(session.isoformat() for session in universe_sessions),
         policy_versions={"lag": LAG_POLICY_VERSION},
     ).report
 

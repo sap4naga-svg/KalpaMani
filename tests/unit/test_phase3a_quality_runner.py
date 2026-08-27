@@ -18,10 +18,11 @@ import pytest
 from fixtures import phase3a
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.errors import QualityGateError
-from kalpamani.data.contracts.vocabulary import InformationSetProfile
+from kalpamani.data.contracts.vocabulary import InformationSetProfile, QualitySeverity
 from kalpamani.data.curate.build import build_gold_dataset
 from kalpamani.data.curate.publication import publish_gold_dataset
 from kalpamani.data.curate.resolution_run import resolve_run_inputs
+from kalpamani.data.quality.checks import QualityFinding
 from kalpamani.data.quality.plan import (
     PHASE3A_QUALITY_PLAN,
     CheckRequirement,
@@ -59,8 +60,6 @@ def _context(**overrides: object) -> QualityContext:
 def _run(**kwargs: object) -> object:
     return run_quality_plan(
         _context(),
-        datasets_covered=phase3a.QUALITY_COVERAGE,
-        partitions_covered=tuple(s.isoformat() for s in phase3a.SNAPSHOT_SESSIONS),
         policy_versions={"lag": phase3a.LAG_POLICY_VERSION},
         **kwargs,  # type: ignore[arg-type]
     )
@@ -140,7 +139,6 @@ def test_an_adjusted_artifact_makes_its_check_applicable() -> None:
     artifact = phase3a.adjusted_artifact()
     outcome = run_quality_plan(
         _context(adjusted_artifacts=(artifact,)),
-        datasets_covered=phase3a.QUALITY_COVERAGE,
         policy_versions={"lag": phase3a.LAG_POLICY_VERSION},
     )
     assert "adjusted_artifact_hash" in outcome.invoked
@@ -412,3 +410,79 @@ def test_the_build_identity_covers_the_rows_and_the_snapshots() -> None:
     assert clean.build_identity == phase3a.gold_dataset().build_identity, (
         "Derived, not generated: the same build always has the same identity."
     )
+
+
+# ---------------------------------------------------------------------------
+# nothing an implementation found is dropped on the way to the report
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_is_derived_from_the_checks_that_ran() -> None:
+    """Taking it from the caller left the one claim in the report nothing checked."""
+    report = _run().report  # type: ignore[attr-defined]
+    assert set(phase3a.QUALITY_COVERAGE) <= set(report.datasets_covered)
+    assert set(report.partitions_covered) == {
+        session.isoformat() for session in phase3a.SNAPSHOT_SESSIONS
+    }
+
+
+def test_an_implementation_emitting_an_undeclared_finding_refuses() -> None:
+    """Findings route by id, so an undeclared one has nowhere to go."""
+
+    def rogue(context: QualityContext) -> list[QualityFinding]:
+        return [
+            QualityFinding(
+                check_name="9.9_not_in_any_vocabulary",
+                severity=QualitySeverity.BLOCKING,
+                dataset="price_bar",
+                detail="a defect the plan has never heard of",
+            )
+        ]
+
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(registry["ticker_history"], invoke=rogue)
+    with pytest.raises(QualityGateError, match="does not declare"):
+        _run(registry=registry)
+
+
+def test_an_implementation_declaring_a_finding_no_check_owns_refuses() -> None:
+    """A finding with no owner is routed nowhere, so it would never reach the report."""
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(
+        registry["ticker_history"],
+        emits=(*registry["ticker_history"].emits, "9.9_owned_by_nothing"),
+    )
+    with pytest.raises(QualityGateError, match="assigns to no check"):
+        _run(registry=registry)
+
+
+def test_a_declared_finding_outside_its_checks_vocabulary_is_not_dropped() -> None:
+    """The silent-drop path, made loud.
+
+    An implementation declares a finding id the plan assigns to a *different*
+    check -- one this implementation does not serve. Routing by id then leaves the
+    finding unclaimed by every check, and the obvious implementation of that is to
+    skip it: a BLOCKING defect discarded because the registry and the plan
+    disagreed about who reports what. The run refuses instead.
+    """
+    registry = dict(CHECK_REGISTRY)
+
+    def strays(context: QualityContext) -> list[QualityFinding]:
+        return [
+            QualityFinding(
+                check_name="5.1_impossible_ohlc",
+                severity=QualitySeverity.BLOCKING,
+                dataset="price_bar",
+                detail="reported by an implementation the plan ties to another check",
+            )
+        ]
+
+    # ticker_history serves 6_identity_and_universe, whose vocabulary does not
+    # include 5.1; 5_market_data owns 5.1 but is served only by price_bar_structure.
+    registry["ticker_history"] = dataclasses.replace(
+        registry["ticker_history"],
+        emits=(*registry["ticker_history"].emits, "5.1_impossible_ohlc"),
+        invoke=strays,
+    )
+    with pytest.raises(QualityGateError, match="did not reach the report"):
+        _run(registry=registry)

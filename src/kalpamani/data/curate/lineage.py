@@ -159,6 +159,14 @@ def negative_coverage_version(publication_versions: Sequence[str]) -> str:
             "a negative-coverage claim names no source publication; an absence that is not "
             "pinned to a build is not a fact about anything"
         )
+    ambiguous = sorted(version for version in unique if _JOIN in version)
+    if ambiguous:
+        raise _refuse(
+            f"source publication(s) {ambiguous} contain {_JOIN!r}, which is what joins the "
+            "versions an absence is pinned to. Replay splits on it, so such a version would "
+            "silently become two that name nothing -- and an absence pinned to nothing is "
+            "satisfied by everything"
+        )
     return _JOIN.join(unique)
 
 

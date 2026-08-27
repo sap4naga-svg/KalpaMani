@@ -311,7 +311,10 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
         ),
         PlannedCheck(
             check_id="4.1_temporal_invariants",
-            implementations=("temporal_invariants",),
+            # Two implementations: the row-by-row temporal checks, and the bar
+            # checks, which decide 4.1.12 because it is about a bar's
+            # relationship to the calendar.
+            implementations=("temporal_invariants", "price_bar_structure"),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE,
             finding_ids=(
