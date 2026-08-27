@@ -8,6 +8,19 @@ statement below carries a **claim id** resolving to
 [provider-source-register.md](provider-source-register.md), where a reviewer will find the
 exact source, the exact wording it supports, and its limitation.
 
+> **Revision 3 (2026-08-27).** A re-verification round for the G1/G3 decision packet corrected
+> three statements below. **(a)** Sharadar Direct is tiered by **history depth**, and the
+> "$29/mo Bundle" quoted throughout this document buys **five years** — the Full History Bundle
+> is **$69/mo or $499/yr** (`PSR-SHD-090`). Scenario A in §4 is restated accordingly.
+> **(b)** §2.5 recorded the corporate-action announcement timestamp as "unresolved — validate
+> in 3A"; the vendor's own column list resolves it, and there is **no announcement or
+> declaration date** (`PSR-SHD-094`). **(c)** §2.1 recorded the tickers table as
+> "time-structured — verify in 3A"; it holds the **current** symbol, so ticker-at-a-date is a
+> KalpaMani-**derived** artifact built from ACTIONS ticker-change events (`PSR-SHD-096`,
+> `PSR-SHD-095`). Full evidence and consequences:
+> [provider-licensing-decision-packet.md](provider-licensing-decision-packet.md). Nothing else
+> in this document is changed, and nothing was purchased, trialled or credentialed.
+>
 > **Revision 2.** Review of PR #6 found four defects in this document: evidence grades were
 > not citations, so nothing could be checked; QuantConnect local data was described as
 > "bundled" when it is a paid product; IBKR borrow history was dismissed categorically on
@@ -411,13 +424,22 @@ row below.
 
 ### Scenario A — Sharadar-only local foundation
 
+**Restated at revision 3.** The $29/mo Bundle is the **5-year** history tier (`PSR-SHD-090`),
+and a five-year product cannot satisfy Phase 3 acceptance criterion 2 (a universe snapshot at
+least eight years past) or provider test P2 (delistings at 5, 10 and 15 years). The purchasable
+product is the **Full History** Bundle.
+
 | Item | First year | Recurring |
 |---|---|---|
-| Sharadar Bundle @ $29/mo | $348 | $348/yr |
+| Sharadar **Bundle, Full History** @ $499/yr annual (or $69/mo = $828/yr) | $499 | $499/yr |
 | SEC EDGAR | $0 | $0 |
 | LEAN calendars, `exchange_calendars` | $0 | $0 |
 | QuantConnect **cloud** free tier — spot cross-checks only | $0 | $0 |
-| **Total** | **~$348** | **~$348/yr** |
+| **Total** | **~$499** | **~$499/yr** |
+
+Still well inside the Blueprint V3.0 base annual data budget of $1,500. Scenarios B and C below
+are **not** restated: both rest on QuantConnect figures whose organization-tier price remains
+`[U]` (`PSR-QC-035`), and re-verifying them belongs to the day a purchase is contemplated.
 
 Cross-provider checks (§7 of [data-quality-plan.md](data-quality-plan.md)) **largely do not
 run**. Every result carries `SINGLE_SOURCE_UNVERIFIED`. The free LEAN sample bundle is **not** a
