@@ -1,16 +1,23 @@
-"""Test-integrity audit: refuse assertions that cannot fail.
+"""Test-integrity audit: refuse assertions that are unconditional by construction.
 
 A test suite is evidence only while every assertion in it can distinguish a
-working system from a broken one. Two assertions on this branch could not::
+working system from a broken one. This scan establishes a narrower thing -- that
+none of them is unconditional in a way a parser can see -- and the gap between
+those two statements is the subject of the last paragraph below.
+
+Three assertions on this branch could not distinguish anything::
 
     assert clean.dataset.build_identity in str(clean.context_hash()) or True
     assert manifest.quality_context_hash in manifest.manifest_hash or True
+    assert not any("BOUNDED" in basis for basis in used) or bounded
 
-Both read as checks and neither was one: ``or True`` makes the whole expression
-unconditional, so the left-hand side was never evaluated for its truth. They
-would have passed against a build with no binding at all, which is precisely the
-property they were written to establish. A green suite containing them says less
-than it appears to, and nothing in the run reports that.
+The first two read as checks and neither was one: ``or True`` makes the whole
+expression unconditional, so the left-hand side was never evaluated for its
+truth. They would have passed against a build with no binding at all, which is
+precisely the property they were written to establish. The third is ``not P or
+P`` -- two spellings of one runtime predicate -- and **this scan cannot see it**.
+A green suite containing any of them says less than it appears to, and nothing in
+the run reports that.
 
 Text search is not enough here. ``or True`` inside a string literal or a comment
 is harmless, ``assert (x or True)``, ``assert x or (1 == 1)`` and ``assert x or
@@ -50,7 +57,8 @@ assertions which *do* vary are the right ones.
 
 Run:  .venv/Scripts/python.exe scripts/test_integrity_audit.py
       .venv/Scripts/python.exe scripts/test_integrity_audit.py tests/unit
-Exit code 0 means every scanned assertion can fail; non-zero lists what cannot.
+Exit code 0 means nothing syntactically unconditional was found; non-zero lists
+what was. It is not a claim that every assertion can fail.
 """
 
 from __future__ import annotations
@@ -71,7 +79,7 @@ SKIP_MARKERS = frozenset({"skip", "skipif", "xfail"})
 
 
 class Finding(NamedTuple):
-    """One assertion, handler or marker that cannot do its job."""
+    """One assertion, handler or marker this scan can show is not doing its job."""
 
     path: Path
     line: int
@@ -186,7 +194,11 @@ def _exception_names(node: ast.expr | None) -> list[str]:
 
 
 class _Scan(ast.NodeVisitor):
-    """Walk one module, recording every assertion that cannot fail."""
+    """Walk one module, recording every **syntactically** unconditional assertion.
+
+    Not every assertion that cannot fail. See :func:`static_truth` for what
+    resolves statically and the module docstring for what does not.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -361,14 +373,15 @@ def main(argv: Sequence[str]) -> int:
     print()
 
     if not findings:
-        print("AUDIT PASSED. Every scanned assertion can fail, every handler is narrow,")
-        print("and every skip states a reason.")
+        print("AUDIT PASSED.")
+        print("No syntactically unconditional assertion, broad test exception,")
+        print("or unexplained skip was found.")
         print()
-        print("This is a guard over those properties, not a proof that the assertions")
-        print("which do vary are the right ones.")
+        print("This is a guard over the named syntactic properties,")
+        print("not proof that every assertion is semantically capable of failing.")
         return 0
 
-    print(f"AUDIT FAILED. {len(findings)} assertion(s) cannot do their job:")
+    print(f"AUDIT FAILED. {len(findings)} item(s) cannot do their job:")
     print()
     for finding in findings:
         print(f"  {finding.render(PROJECT_ROOT)}")

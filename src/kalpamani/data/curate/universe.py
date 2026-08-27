@@ -110,6 +110,17 @@ class UniverseDefinition:
     #: fundamental. A definition that sets it is refused rather than approximated.
     min_market_cap: Decimal | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce the declared collections. The annotations do not enforce themselves.
+
+        ``eligible_exchanges: frozenset[...]`` accepts a mutable ``set``, and the
+        rule's parameters are hashed into ``universe_definition_hash`` and into
+        the persisted quality-context descriptor. A caller keeping the set it
+        passed could widen the eligible venues after the standard recorded them.
+        """
+        object.__setattr__(self, "eligible_exchanges", frozenset(self.eligible_exchanges))
+        object.__setattr__(self, "eligible_security_types", frozenset(self.eligible_security_types))
+
 
 def definition_hash(definition: UniverseDefinition) -> str:
     """Canonical identity of a universe rule's **parameters**, not just its name.

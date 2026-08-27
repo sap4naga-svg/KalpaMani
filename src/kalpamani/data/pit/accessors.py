@@ -401,16 +401,29 @@ class PointInTimeReader:
                 publication's -- profile, policy version, or the complete map with
                 its reasons.
         """
-        if type(publication) is not VerifiedPublication:
-            # The exact type, not an instance of it. ``isinstance`` admits a
-            # subclass, and a subclass supplies its own ``__init__``, its own
-            # properties and its own ``require_internally_consistent`` -- so the
-            # check below would be the object vouching for itself.
-            raise DatasetPublicationError(
-                f"A reader was offered a {type(publication).__name__} where a "
-                "VerifiedPublication is required. A dataset, a manifest and a report "
-                "assembled at a call site have not been checked against storage."
-            )
+        for value, expected in (
+            (publication, VerifiedPublication),
+            (resolution, ProfileResolutionConfig),
+            (approvals, BoundApprovals),
+        ):
+            if type(value) is not expected:
+                # The exact type, not an instance of it. ``isinstance`` admits a
+                # subclass, and a subclass supplies its own ``__init__``, its own
+                # properties and its own methods -- so every check below would be
+                # the object vouching for itself. All three are refused from
+                # subclassing at the contract type; checking here as well means a
+                # future relaxation of any of those refusals cannot silently
+                # reopen the door.
+                #
+                # First, before anything is dereferenced: a wrong type must be
+                # reported as a wrong type, not as an AttributeError from whatever
+                # happened to be read first.
+                raise DatasetPublicationError(
+                    f"A reader was offered a {type(value).__name__} where a "
+                    f"{expected.__name__} is required. The reader compares these values "
+                    "against the publication once and consults them on every query, so a "
+                    "type that can answer the two differently is not one it can bind to."
+                )
         # Revalidated here rather than assumed. Construction established it, and
         # "it was established once" is a different claim from "it holds now" --
         # the first is what a Boolean or a token can carry, and the second is what
@@ -438,15 +451,7 @@ class PointInTimeReader:
                 "differently and admitted different rows."
             )
         recorded = publication.quality_report.quality_context.approvals
-        declared = tuple(
-            (
-                dataset,
-                tuple(sorted(item.value for item in policy.public)),
-                tuple(sorted(item.value for item in policy.provider)),
-                tuple(sorted(item.value for item in policy.announcement)),
-            )
-            for dataset, policy in sorted(approvals.by_dataset.items())
-        )
+        declared = approvals.canonical()
         if declared != recorded:
             # The approvals decide which rows resolve at all, so they decide what a
             # query returns. The publication records the ones the build was judged
@@ -459,6 +464,15 @@ class PointInTimeReader:
                 "An approved bound is what lets a row resolve at all, so two runs approving "
                 "different derivations read different data from one published dataset."
             )
+        # Compared **once**, and once is enough because ``BoundApprovals`` is
+        # deep-frozen: the mapping is copied and proxied at construction, its
+        # nested policies are frozen dataclasses over frozensets, and there is no
+        # route by which the value this reader holds can differ later from the
+        # value compared here. Re-deriving the same identity before every accessor
+        # call would be a check that cannot fail -- which is how a guard becomes
+        # decoration. The identity is kept instead, so a test can observe that it
+        # does not move rather than trusting that it cannot.
+        self._approvals_identity = approvals.identity()
         self._publication = publication
         self._dataset = publication.dataset
         self._manifest = manifest
@@ -485,6 +499,16 @@ class PointInTimeReader:
     def publication(self) -> VerifiedPublication:
         """The verified publication this reader serves, seal included."""
         return self._publication
+
+    @property
+    def approvals_identity(self) -> str:
+        """The canonical identity of the approvals every query on this reader uses.
+
+        Fixed for the reader's lifetime. It is the value that was compared against
+        the publication's persisted standard at construction, kept so the fact can
+        be observed rather than assumed.
+        """
+        return self._approvals_identity
 
     def _recorder(self) -> ExecutionRecorder:
         """A fresh recorder for one query.

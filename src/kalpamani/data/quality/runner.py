@@ -70,6 +70,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import content_hash
@@ -162,7 +163,18 @@ class QualityContext:
     survivorship_policy: SurvivorshipPolicy = DEFAULT_SURVIVORSHIP_POLICY
 
     def __post_init__(self) -> None:
-        """Bind the checks' horizon to the build's own time.
+        """Deep-freeze the caller's mappings, then bind the horizon to the build.
+
+        ``frozen=True`` froze the attribute, not the dictionary behind it. A
+        caller holding the mapping it passed in could change an evaluation cutoff
+        after the descriptor was generated and after the context hash was taken --
+        so the standard a build was judged against could move while every hash
+        over it went on agreeing with itself. The cutoffs decide which rows each
+        snapshot was built from, so this is not a cosmetic freeze.
+
+        Instants are normalised on the way in, so two spellings of one cutoff
+        cannot produce two descriptors.
+
 
         The field was caller-supplied and compared to nothing, so a context could
         declare any horizon it liked: pushing ``as_of`` past every row's
@@ -170,6 +182,20 @@ class QualityContext:
         ``4.1.9_future_dated_availability`` unable to fire, and the report would
         record both checks as run.
         """
+        object.__setattr__(
+            self,
+            "evaluation_cutoffs",
+            MappingProxyType(
+                {
+                    session: normalize_instant(cutoff)
+                    for session, cutoff in sorted(self.evaluation_cutoffs.items())
+                }
+            ),
+        )
+        # Coerced, not trusted: ``tuple[...]`` is a type hint, and a caller
+        # passing a list keeps a value it can append to after the descriptor that
+        # named its artifacts was generated.
+        object.__setattr__(self, "adjusted_artifacts", tuple(self.adjusted_artifacts))
         supplied = normalize_instant(self.as_of)
         object.__setattr__(self, "as_of", supplied)
         if supplied != normalize_instant(self.dataset.build_time):
@@ -294,22 +320,20 @@ class QualityContext:
     def approval_rows(
         self,
     ) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...]:
-        """Approved bound derivations per dataset, in canonical order."""
-        return tuple(
-            (
-                dataset,
-                tuple(sorted(item.value for item in policy.public)),
-                tuple(sorted(item.value for item in policy.provider)),
-                tuple(sorted(item.value for item in policy.announcement)),
-            )
-            for dataset, policy in sorted(self.approvals.by_dataset.items())
-        )
+        """Approved bound derivations per dataset, in canonical order.
+
+        Delegated to :meth:`BoundApprovals.canonical`, which is also what the
+        reader compares against this descriptor. Two spellings of one derivation
+        drift, and a drift here would surface as a disagreement between a run and
+        the standard it was judged under that was really a formatting difference.
+        """
+        return self.approvals.canonical()
 
     def cutoff_rows(self) -> tuple[tuple[str, str], ...]:
         """Each snapshot session and the instant it was evaluated at."""
         return tuple(
-            (session.isoformat(), normalize_instant(cutoff).isoformat())
-            for session, cutoff in sorted(self.evaluation_cutoffs.items())
+            (session.isoformat(), cutoff.isoformat())
+            for session, cutoff in self.evaluation_cutoffs.items()
         )
 
     def universe_parameter_rows(self) -> tuple[tuple[str, str], ...]:
@@ -1129,18 +1153,40 @@ _WOULD_EXAMINE_ALL: Final = frozenset(
 
 
 def registry_identity(registry: Mapping[str, CheckImplementation]) -> str:
-    """Canonical identity of a registry: which implementations, emitting what.
+    """Canonical identity of a registry: which implementations, doing what.
 
     Part of the context hash, so a report cannot be evidence of one set of
     implementations while having been produced by another.
+
+    The **executable** half is included, and was not. Hashing ids and declared
+    finding vocabularies alone left the parts that decide what is actually looked
+    at -- ``invoke``, ``applicable`` and ``subjects`` -- outside the identity, so
+    replacing every ``invoke`` with one that returns no findings produced a
+    registry the descriptor could not tell from the real one. Qualified names
+    rather than the objects, because a function's identity is not canonical
+    across processes and a persisted standard has to be.
     """
     return content_hash(
         {
             "implementations": sorted(
-                [ident, sorted(implementation.emits)] for ident, implementation in registry.items()
+                [
+                    ident,
+                    sorted(implementation.emits),
+                    _callable_name(implementation.invoke),
+                    _callable_name(implementation.applicable),
+                    _callable_name(implementation.subjects),
+                ]
+                for ident, implementation in registry.items()
             )
         }
     )
+
+
+def _callable_name(function: object) -> str:
+    """A stable, cross-process name for a check's executable half."""
+    module = getattr(function, "__module__", "?")
+    qualname = getattr(function, "__qualname__", repr(function))
+    return f"{module}.{qualname}"
 
 
 def run_quality_plan(

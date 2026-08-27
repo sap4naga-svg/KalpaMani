@@ -373,7 +373,67 @@ These are boundaries of a deliberately narrow slice, not defects:
     different times -- which is what an incremental pipeline produces, and what this slice does
     not otherwise build.
 
-## 12. Dependency and provenance closure applied in revision 7
+## 12. Immutability closure applied in revision 8
+
+Revision 7 bound a run to its dependencies and its evidence to a standard. This round makes the
+standard itself unable to move: `frozen=True` refuses reassignment of an *attribute*, and says
+nothing about the dictionary the attribute points at.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | `BoundApprovals` wrapped a caller-owned mapping | `source = {...}; approvals = BoundApprovals(by_dataset=source)`, hand it to a reader, then `source["price_bar"] = permissive` — nothing in that sequence touches the frozen object, and the reader had already compared these approvals against the publication's persisted standard and found them equal. From the next query onward it resolves rows under approvals nobody agreed to. An approved bound is what lets a row resolve at all, so this decides which rows a later query returns. The mapping is now copied and wrapped in a `MappingProxyType` in canonical key order at construction; the nested `ApprovedBoundPolicy` values are frozen dataclasses over `frozenset`s, so the value is immutable to its leaves and `identity()` is fixed for its lifetime |
+| 2 | `QualityContext.evaluation_cutoffs` had the same shape | A caller could move the instant a snapshot was evaluated at **after** the descriptor was generated and the context hash taken — so the standard a build was judged against moved while every hash over it went on agreeing with itself. Copied, proxied and instant-normalised at construction. An AST sweep over every frozen dataclass in `src/kalpamani/data/` confirms these were the last two: `GoldDataset.universe`, `GoldDataset.universe_headers`, `InputInventory.dataset_manifest_hashes`, `ResearchManifest.definitions`, `ResolvedRunInputs.by_dataset`, `ExecutionEvidence.dataset_manifest_hashes` and `QualityReport.policy_versions` were already deep-frozen |
+| 3 | The reader's standard identity was compared and discarded | One comparison at construction is now **sufficient**, and the reason is a property rather than a hope: the approvals value cannot change, so the value compared is the value every query uses. Re-deriving that comparison before each accessor call would be a check with no reachable failure — the "assertion dressed as a derivation" pattern the last two rounds kept finding. `PointInTimeReader.approvals_identity` keeps the canonical identity instead, so a test observes that it does not move rather than trusting that it cannot. `BoundApprovals.canonical()` is the one spelling, shared by the reader's comparison and the quality-context descriptor, so the two cannot drift into a disagreement that is really a formatting difference |
+| 4 | The audit claimed more than it checks | Its success line read *"Every scanned assertion can fail"* — which a syntactic scan cannot establish, and revision 7's review proved by finding an `assert not P or P` it could not see. It now reports that no **syntactically** unconditional assertion, broad test exception or unexplained skip was found, and says in the same breath that this is not proof every assertion is semantically capable of failing. Its AST checks are unchanged, and a test asserts both the narrower wording and that all three detection classes still refuse |
+
+`MANIFEST_VERSION` stays **5**: nothing about the persisted schema changed.
+
+**One mutable mapping is left, deliberately.** `TradeRecord.orders` in
+`src/kalpamani/execution/state_store.py` is a `dict[str, SubmittedOrder]` on a frozen dataclass —
+the same shape. It is Phase-2 execution state, outside this slice's authority and outside the
+quality-context and reader surface this round was scoped to, and changing it would touch certified
+Phase-2 behaviour. Recorded here rather than fixed silently or left unmentioned.
+
+### What adversarial review of revision 8 then found
+
+Nine confirmed, all fixed. The first pass closed the *mappings* named in the review and left the
+level below them open, which is the shape worth recording: a deep-freeze that stops one level
+short is a shallow freeze with a longer docstring.
+
+**The annotations do not enforce themselves.** `ApprovedBoundPolicy(public={x})` stored the
+caller's mutable `set` inside a value the rest of the system treats as immutable — the same defect
+as a frozen dataclass wrapping a caller's dict, one level down, and it made the outer freeze
+pointless: a reader's construction-time agreement check passed and the approvals it went on serving
+then gained a derivation the publication was never judged against. A `frozenset` **subclass** was
+worse still, because overriding `__contains__` splits what the resolution reads from what
+`canonical()` records, so the two come apart with no hash moving. A `str`-subclass key with an
+unstable `__eq__` does the same to `for_dataset`. Every field is now rebuilt as a plain `frozenset`,
+`tuple` or `str`. The same coercion was missing on `UniverseDefinition.eligible_exchanges`,
+`ProfileResolutionConfig.dataset_resolutions` and `QualityContext.adjusted_artifacts` — all three
+hashed into the persisted standard.
+
+**Immutability is not inheritable.** `BoundApprovals`, `ApprovedBoundPolicy` and
+`ProfileResolutionConfig` could each be subclassed, and the coercion and the accessors are both
+overridable — so a subclass answers the reader's one agreement check and its per-query reads
+differently. `ProfileResolutionConfig` matters most: `resolved_profile` is a property the reader
+re-reads on every query. All three now refuse subclassing, and the reader checks the exact type of
+everything it binds to, before dereferencing any of it.
+
+**Two identities were blind to what they were supposed to pin.** `registry_identity` hashed
+implementation ids and declared finding vocabularies, so a registry whose every `invoke` returned
+nothing hashed identically to the real one. And a derived row's `inputs` — what
+`decision_available_time` walks and what `6.6_eligibility_from_inadmissible_data` examines —
+reached no identity at all, so dropping one changed what the checks looked at while the header's
+hash, the build's and the descriptor's all stayed put. A related crash: `inputs` are in-memory
+only, so every *decoded* header carries none, and `max()` over nothing raised a bare `ValueError`
+from inside a check. Unresolvable is the honest answer, and the reader already gave it.
+
+**And the audit still over-claimed in four more places** — its title line, its opening premise, two
+class docstrings and a parametrised test named for "every" spelling — while the guard test pinned
+one exact substring, which the same claim reworded would pass. The guard now rejects any success
+line that speaks about failing without narrowing it to what a parser can see.
+
+## 13. Dependency and provenance closure applied in revision 7
 
 Revision 6 bound a result to the question that produced it. This round closes what a run
 **depends on** — the inputs a query actually rests on, the artifact that decides a snapshot, and
@@ -381,7 +441,7 @@ the standard a build was judged by — and removes two assertions that could not
 
 | # | Gap | Closure |
 |---|---|---|
-| 1 | Two assertions were tautologies | `assert x in str(y) or True` reads as a check and is not one: `or True` makes the whole expression unconditional, so the interesting half was never evaluated. Both would have passed against a build with no binding at all. They are replaced by perturbation proofs — change one load-bearing row under an unchanged version label and the context hash moves; change `quality_context_hash` and `compute_manifest_hash` moves — and `scripts/test_integrity_audit.py` now scans the parsed tree of the whole `tests/` directory for every spelling of the defect, plus broad `pytest.raises(Exception)`/bare handlers inside tests and unexplained skips. A test runs it, so the property stands rather than being cleaned up once |
+| 1 | Two assertions were tautologies | `assert x in str(y) or True` reads as a check and is not one: `or True` makes the whole expression unconditional, so the interesting half was never evaluated. Both would have passed against a build with no binding at all. They are replaced by perturbation proofs — change one load-bearing row under an unchanged version label and the context hash moves; change `quality_context_hash` and `compute_manifest_hash` moves — and `scripts/test_integrity_audit.py` scans the parsed tree of the whole `tests/` directory for **syntactically** unconditional assertions, broad `pytest.raises(Exception)`/bare handlers inside tests, and unexplained skips. A test runs it, so the property stands rather than being cleaned up once. It is a guard over those syntactic properties and not proof that every assertion can fail — a distinction revision 8 makes the audit's own output say |
 | 2 | `VerifiedPublication` was a copyable dataclass | Two compounding defects: `verified_by` sat in a readable field, so `dataclasses.replace` carried the token onto substituted rows for free, and `verification_seal` was **public**, so a caller who swapped the dataset could recompute the seal over the replacement and restore the agreement the seal existed to prove. A seal its holder can recompute is a checksum, not an authorization. It is now a non-dataclass with no authorization field, a module-private seal, and `require_internally_consistent()` re-deriving eight identities — which `PointInTimeReader` calls at construction rather than reading a flag: "it was verified once" and "it holds now" are different claims |
 | 3 | A price query recorded only its bars | Completeness is measured against an endpoint grid, and the grid comes from the security's listing states and its venue's calendar. `market_session` was the one input never filtered point-in-time, so a calendar correction published in 2026 decided what a 2019 query expected. Both tables are now selected as-known-at-`as_of`, refused when contradictory at one revision, recorded in `direct_source_datasets` with their own timing evidence, and hashed into the query's `grid_basis_hash`. A window with trading sessions but no admissible calendar **refuses**, because an empty grid would report that the security traded on no session — a different finding, and a wrong one |
 | 4 | Snapshot availability was computed by scanning rows | A security the rule considered and excluded produced no row, so it could delay nothing; a snapshot with no rows at all had an empty maximum and looked available from the beginning of time. The header is a real derived artifact carrying every considered listing and every membership decision, so `decision_available_time(header)` **is** the snapshot's decision time. Membership checks remain, as integrity checks: they do not turn one stored artifact into a partially available one |
@@ -452,7 +512,7 @@ its ``BoundApprovals`` from a parameter while the publication recorded the ones 
 under: the standard was persisted and verified, and the one component that applies a standard at
 query time ignored it.
 
-## 13. Query identity and quality-context closure applied in revision 6
+## 14. Query identity and quality-context closure applied in revision 6
 
 Revision 5 made a result whole and made the checks actually run. This round closes the places
 where evidence was still a **claim nobody produced**: a query the manifest described but nothing
@@ -482,7 +542,7 @@ they had been reaching are exercised directly and labelled defence in depth. Bin
 narrative to the query immediately caught the manifest fixture itself, which declared a
 2019-06-24..2021-01-05 backtest window over a query that served five days of June 2019.
 
-## 14. Query and evidence atomicity applied in revision 5
+## 15. Query and evidence atomicity applied in revision 5
 
 Revision 4 bound each artifact to what it was about. This round closes the places where a
 **result** was still assembled from parts that could be substituted, or shortened without
@@ -532,7 +592,7 @@ sessions the caller did not declare a cutoff for; the manifest compared consumed
 while every field that makes one reproducible went unchecked; and findings whose id no planned
 check owned were silently dropped.
 
-## 15. Evidence closure applied in revision 4
+## 16. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
 it rather than to the claim itself. Each row below is a way the previous code would have said yes.
@@ -551,7 +611,7 @@ it rather than to the claim itself. Each row below is a way the previous code wo
 | 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
 | 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
 
-## 16. Enforcement closure applied in revision 3
+## 17. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -572,7 +632,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 17. Corrections applied in revision 2
+## 18. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -591,10 +651,10 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 18. Verification
+## 19. Verification
 
 ```
-pytest                          1068 passed   (440 pre-existing, 628 new)
+pytest                          1088 passed   (440 pre-existing, 648 new)
 ruff check .                    clean
 ruff format --check .           clean
 mypy                            clean, strict, 93 files

@@ -35,9 +35,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Final, Protocol, Self, runtime_checkable
 
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.envelope import DerivedEnvelope, Envelope, SourceEnvelope
+from kalpamani.data.contracts.errors import ProfileResolutionError
 from kalpamani.data.contracts.vocabulary import (
     AnnouncementBoundDerivation,
     InformationOrigin,
@@ -106,11 +109,40 @@ class ApprovedBoundPolicy:
 
     Empty by default, and that default is a refusal rather than a permission:
     nothing is approved until someone approves it.
+
+    **The annotations are coerced, not trusted.** ``frozenset[...]`` is a type
+    hint and nothing enforces it at runtime, so ``ApprovedBoundPolicy(public={x})``
+    stored the caller's mutable ``set`` inside a frozen dataclass -- the same
+    defect as a frozen dataclass wrapping a caller's dict, one level down. A
+    ``frozenset`` **subclass** was worse: it could override ``__contains__`` so
+    that ``derivation in policy.public`` answered differently from what
+    :meth:`~BoundApprovals.canonical` iterated, splitting what the resolution
+    reads from what the standard records. Each field is rebuilt as a plain
+    ``frozenset`` here, so neither is expressible.
     """
 
     public: frozenset[PublicBoundDerivation] = frozenset()
     provider: frozenset[ProviderBoundDerivation] = frozenset()
     announcement: frozenset[AnnouncementBoundDerivation] = frozenset()
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. Every guarantee below is an overridable method.
+
+        The immutability is enforced in ``__post_init__`` and read back through
+        ordinary methods, and a subclass supplies its own of both. It would then
+        be a value the reader type-checks nothing about, answering
+        a membership test however it liked while the object still passed every
+        ``isinstance`` in the system -- the same shape as the ``VerifiedPublication``
+        subclass route, on the value that decides which rows resolve.
+        """
+        raise ProfileResolutionError(
+            "ApprovedBoundPolicy may not be subclassed. Its coercion and its accessors are "
+            "both overridable, so a subclass is a route past every guarantee the type makes."
+        )
+
+    def __post_init__(self) -> None:
+        for name in ("public", "provider", "announcement"):
+            object.__setattr__(self, name, frozenset(getattr(self, name)))
 
 
 #: Nothing approved. The fail-closed default for an unconfigured dataset.
@@ -124,13 +156,94 @@ class BoundApprovals:
     A dataset absent from the mapping has **nothing** approved. Silently
     approving an unconfigured dataset would make the approval mechanism
     decorative.
+
+    **Deep-frozen, because ``frozen=True`` froze the wrong thing.** The dataclass
+    refused reassignment of the attribute while the attribute went on pointing at
+    a dictionary the caller still owned::
+
+        source = {"price_bar": strict}
+        approvals = BoundApprovals(by_dataset=source)
+        reader = PointInTimeReader(..., approvals=approvals)
+        source["price_bar"] = permissive          # the reader now resolves differently
+
+    Nothing in that sequence touches the frozen object, and every check that had
+    already compared these approvals to the publication's persisted standard had
+    already passed. An approved bound is what lets a row resolve at all, so a
+    mutation here changes which rows a later query returns -- after the agreement
+    was established.
+
+    The supplied mapping is therefore **copied** at construction and wrapped in a
+    :class:`~types.MappingProxyType`, in canonical key order. Mutating the source
+    afterwards is a no-op, and ``approvals.by_dataset[...] = ...`` raises
+    ``TypeError``. The nested :class:`ApprovedBoundPolicy` values are frozen
+    dataclasses over ``frozenset``s -- coerced there too, so a caller cannot
+    smuggle a mutable ``set`` or a ``__contains__``-overriding subclass past the
+    annotation. The whole value is immutable to its leaves and :meth:`identity` is
+    stable for the object's lifetime.
+
+    The boundary is API integrity, not a sandbox. The dict behind the proxy stays
+    reachable through ``gc.get_referents`` and the module's own privates stay
+    reachable to code that goes looking; what is closed is every route a caller
+    reaches by accident, by convenience, or by using the public API as documented.
     """
 
     by_dataset: Mapping[str, ApprovedBoundPolicy] = field(default_factory=dict)
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. Every guarantee below is an overridable method.
+
+        The immutability is enforced in ``__post_init__`` and read back through
+        ordinary methods, and a subclass supplies its own of both. It would then
+        be a value the reader type-checks nothing about, answering
+        ``for_dataset`` and ``canonical`` however it liked while the object still passed every
+        ``isinstance`` in the system -- the same shape as the ``VerifiedPublication``
+        subclass route, on the value that decides which rows resolve.
+        """
+        raise ProfileResolutionError(
+            "BoundApprovals may not be subclassed. Its coercion and its accessors are "
+            "both overridable, so a subclass is a route past every guarantee the type makes."
+        )
+
+    def __post_init__(self) -> None:
+        # Keys are rebuilt as plain ``str``. A ``str`` subclass with an unstable
+        # ``__eq__``/``__hash__`` would answer ``for_dataset`` differently on
+        # successive lookups while ``canonical()`` went on reporting one value --
+        # the resolution and the recorded standard would then disagree about which
+        # bounds a dataset approves, and no hash over either would move.
+        object.__setattr__(
+            self,
+            "by_dataset",
+            MappingProxyType(
+                {str(dataset): policy for dataset, policy in sorted(self.by_dataset.items())}
+            ),
+        )
+
     def for_dataset(self, dataset: str) -> ApprovedBoundPolicy:
         """The approved bounds for ``dataset``, defaulting to none approved."""
         return self.by_dataset.get(dataset, NO_BOUNDS_APPROVED)
+
+    def canonical(
+        self,
+    ) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...]:
+        """``(dataset, public, provider, announcement)`` derivations, canonically.
+
+        One spelling, shared by the quality-context descriptor and by the reader's
+        agreement check. Two derivations of "the approvals" that drifted would
+        report a disagreement that was a formatting difference.
+        """
+        return tuple(
+            (
+                dataset,
+                tuple(sorted(item.value for item in policy.public)),
+                tuple(sorted(item.value for item in policy.provider)),
+                tuple(sorted(item.value for item in policy.announcement)),
+            )
+            for dataset, policy in self.by_dataset.items()
+        )
+
+    def identity(self) -> str:
+        """A stable hash of the approvals. Immutable, so it cannot move."""
+        return content_hash({"approvals": [list(entry) for entry in self.canonical()]})
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +406,14 @@ def _derived_decision_time(
     approvals: BoundApprovals,
 ) -> datetime | None:
     inputs = _derived_inputs(record)
+    if not inputs:
+        # ``max()`` over nothing raises, and this is not a hypothetical shape: a
+        # header's ``inputs`` are in-memory only, so every decoded one arrives
+        # empty. The reader guards it explicitly and the quality path did not, so
+        # a decoded header reached ``max()`` and came out as a bare ValueError
+        # from inside a check. Unresolvable is the honest answer: an artifact that
+        # consumed nothing has no availability to compute.
+        return None
     resolved: list[datetime] = []
     for item in inputs:
         if not is_eligible(item, profile):

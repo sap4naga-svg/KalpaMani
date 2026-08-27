@@ -1,13 +1,19 @@
-"""The test suite audits itself: no assertion in it may be unable to fail.
+"""The test suite audits itself: no assertion in it may be unconditional.
 
-Two assertions on this branch could not. Both read as checks and neither was
-one -- ``or True`` makes the whole expression unconditional, so the interesting
-half was never evaluated for its truth, and both would have passed against a
-build with no binding at all. That is worse than a missing test: a missing test
-is visibly absent, while a tautological one is counted in a green run.
+Three assertions on this branch were. Two read ``... or True``, which makes the
+whole expression unconditional so the interesting half is never evaluated for its
+truth; the third read ``not P or P``, two spellings of one runtime predicate.
+That is worse than a missing test -- a missing test is visibly absent, while a
+tautological one is counted in a green run.
 
-Running :mod:`scripts.test_integrity_audit` from a test is what makes this a
-standing property rather than a one-off cleanup. The scanner also has its own
+The scan is **syntactic**, and the third of those is why the distinction matters
+enough to state everywhere it appears. It folds literals, literal containers,
+comparisons between literals, and ``and``/``or``/``not`` over those. It cannot
+see a semantic tautology, so passing means nothing here is unconditional **by
+construction** -- not that every assertion can fail.
+
+Running :mod:`scripts.test_integrity_audit` from a test is what makes even that
+narrower property standing rather than a one-off cleanup. The scanner has its own
 fixtures below, because an audit nobody tests is an audit that can quietly stop
 finding anything -- exactly the failure it exists to prevent.
 """
@@ -44,8 +50,15 @@ AUDIT = _audit_module()
 # ---------------------------------------------------------------------------
 
 
-def test_no_assertion_in_the_suite_is_unable_to_fail() -> None:
-    """Every assertion under ``tests/`` depends on something the code decides."""
+def test_no_assertion_in_the_suite_is_syntactically_unconditional() -> None:
+    """The property this audit actually establishes, named as narrowly as it holds.
+
+    Not "every assertion can fail". A scan of the parsed tree cannot see
+    ``assert not P or P`` where both halves are one runtime predicate, and one of
+    those survived a round in which this file claimed the stronger property. What
+    passing means is that nothing under ``tests/`` is unconditional **by
+    construction** -- which is worth having, and is not the same claim.
+    """
     findings = AUDIT.audit([TESTS_ROOT])
     rendered = "\n".join(finding.render(PROJECT_ROOT) for finding in findings)
     assert not findings, (
@@ -84,8 +97,13 @@ def test_the_audit_scans_the_whole_tree() -> None:
         ("assert not True", "IMPOSSIBLE_ASSERT"),
     ],
 )
-def test_the_scanner_catches_every_unconditional_spelling(source: str, kind: str) -> None:
-    """One defect, many spellings. A text search for ``or True`` finds one of them."""
+def test_the_scanner_catches_these_unconditional_spellings(source: str, kind: str) -> None:
+    """One defect, many spellings -- of the ones a parser can resolve.
+
+    Named for the cases it covers rather than for "every" one: ``assert not P or
+    P`` is the same defect and is not in this list, because no syntactic scan can
+    reach it. A text search for ``or True`` finds one of these.
+    """
     findings = AUDIT.scan_source(source, Path("synthetic.py"))
     assert [finding.kind for finding in findings] == [kind], source
 
@@ -169,3 +187,51 @@ def test_the_audit_exits_non_zero_when_it_finds_something(tmp_path: Path) -> Non
     offender.write_text("def test_thing():\n    assert value\n", encoding="utf-8")
     assert AUDIT.main([str(offender)]) == 0
     assert AUDIT.main([str(tmp_path / "nope")]) == 2
+
+
+def test_the_audit_claims_only_what_it_checks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its success line said "every scanned assertion can fail". It cannot know that.
+
+    A syntactic scan is blind to a semantic tautology, and reporting the stronger
+    property turned a useful guard into a claim the reader would rely on. The
+    wording now names the three syntactic properties it does check, and says in
+    the same breath what it is not proof of.
+    """
+    clean = tmp_path / "test_clean.py"
+    clean.write_text("def test_thing():\n    assert value\n", encoding="utf-8")
+    assert AUDIT.main([str(clean)]) == 0
+    printed = capsys.readouterr().out
+
+    assert "AUDIT PASSED." in printed
+    assert "No syntactically unconditional assertion, broad test exception," in printed
+    assert "or unexplained skip was found." in printed
+    assert "This is a guard over the named syntactic properties," in printed
+    assert "not proof that every assertion is semantically capable of failing." in printed
+
+    # Not one exact substring: the same claim reworded would pass that, and the
+    # point is the claim rather than the sentence. Any success line that says an
+    # assertion *can fail* without the word "syntactically" is the strong one.
+    for line in printed.splitlines():
+        lowered = line.lower()
+        if "can fail" in lowered or "cannot fail" in lowered:
+            assert "syntactic" in lowered, (
+                f"{line!r} claims something about failing without narrowing it to what a "
+                "parser can see, which is the whole distinction."
+            )
+    assert "every assertion" not in printed.lower().replace(
+        "not proof that every assertion is semantically capable of failing.", ""
+    ), "Nothing left in the success output speaks for every assertion."
+
+
+def test_the_narrower_wording_did_not_weaken_the_checks(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL for the wording change. All three classes still refuse."""
+    for source in (
+        "def test_thing():\n    assert value or True\n",
+        "def test_thing():\n    with pytest.raises(Exception):\n        f()\n",
+        "@pytest.mark.skip\ndef test_thing():\n    assert value\n",
+    ):
+        offender = tmp_path / "test_offender.py"
+        offender.write_text(source, encoding="utf-8")
+        assert AUDIT.main([str(offender)]) == 1, source

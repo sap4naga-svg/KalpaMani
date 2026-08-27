@@ -103,7 +103,25 @@ class ProfileResolutionConfig:
     resolution_policy_version: str
     dataset_resolutions: tuple[DatasetGapResolution, ...] = ()
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. ``resolved_profile`` is a property the reader re-reads.
+
+        The reader compares this config against the publication once and then
+        consults ``resolved_profile`` on every query. A subclass overriding that
+        property answers the comparison one way and the queries another, so a
+        result would be computed under an information set the publication never
+        agreed to -- with nothing in the run recording that it had changed.
+        """
+        raise ProfileResolutionError(
+            "ProfileResolutionConfig may not be subclassed. Its resolved profile is read "
+            "again on every query, so a subclass can answer the agreement check and the "
+            "queries differently."
+        )
+
     def __post_init__(self) -> None:
+        # A list passed for a ``tuple[...]`` field stays a list, and this one is
+        # hashed into the persisted standard and re-read on every query.
+        object.__setattr__(self, "dataset_resolutions", tuple(self.dataset_resolutions))
         names = [entry.dataset for entry in self.dataset_resolutions]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:

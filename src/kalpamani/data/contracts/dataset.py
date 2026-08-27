@@ -191,6 +191,21 @@ class UniverseSnapshotHeader:
         return self.status == "COMPLETE"
 
 
+def _row_identity(row: PitRecord) -> str:
+    """One identity string for a row of either kind.
+
+    A derived artifact's ``inputs`` mix source rows -- the listings a snapshot
+    considered -- with derived ones -- the membership decisions it made. Source
+    rows are identified by their key and revision; derived rows by their content
+    hash. ``row_fingerprint`` handles only the first, which is why it raised on
+    the second.
+    """
+    envelope = row.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return f"{row.dataset}:{envelope.artifact_content_hash}"
+    return f"{row.dataset}:{envelope.source_id}:{envelope.revision_sequence}"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GoldDataset:
     """One curated build, carrying the receipt that accounts for its rows."""
@@ -274,8 +289,42 @@ class GoldDataset:
                     ]
                     for session, rows in sorted(self.universe.items())
                 ],
+                # The rows each derived artifact was computed **from**, which
+                # nothing hashed. ``inputs`` is what ``decision_available_time``
+                # walks and what 6.6_eligibility_from_inadmissible_data examines,
+                # so appending one late input changed what the checks looked at
+                # and what the snapshot was available from while every identity
+                # -- the header's, the build's, the descriptor's -- stayed put.
+                "derived_inputs": self._derived_input_fingerprints(),
             }
         )
+
+    def _derived_input_fingerprints(self) -> list[list[object]]:
+        """One fingerprint per derived row, over the rows it consumed."""
+        rows: list[tuple[str, PitRecord]] = [
+            (session.isoformat(), header)
+            for session, header in sorted(self.universe_headers.items())
+        ]
+        rows.extend(
+            (session.isoformat(), member)
+            for session, members in sorted(self.universe.items())
+            for member in members
+        )
+        out: list[list[object]] = []
+        for session, row in rows:
+            consumed = getattr(row, "inputs", ())
+            out.append(
+                [
+                    session,
+                    row.dataset,
+                    _row_identity(row),
+                    sorted(_row_identity(item) for item in consumed),
+                ]
+            )
+        return sorted(out, key=repr)
+
+    def _derived_input_identity_note(self) -> None:  # pragma: no cover - documentation
+        """See :func:`_row_identity`: inputs mix source rows and derived rows."""
 
     def source_rows(self) -> tuple[SourceRecord, ...]:
         """Every source row this build holds, in canonical entity order."""
