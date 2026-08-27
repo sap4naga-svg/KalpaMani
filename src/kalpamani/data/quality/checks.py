@@ -136,6 +136,19 @@ class QualityFinding:
         )
 
 
+def _derivation_name(derivation: object) -> str:
+    """How a bound derivation is spelled in a finding, whatever it turns out to be.
+
+    ``.value`` assumed the field held the enum its annotation names, and
+    ``SourceEnvelope`` does not validate it. So the *unapproved* branch -- the one
+    whose whole job is to produce a typed refusal -- raised a bare
+    ``AttributeError`` on a plain string, while a plain string that happened to
+    match an approval passed silently. The check crashed on exactly the input it
+    existed to refuse.
+    """
+    return str(getattr(derivation, "value", derivation))
+
+
 def _blocking(check: str, dataset: str, detail: str, **scope: Any) -> QualityFinding:
     return QualityFinding(
         check_name=check,
@@ -285,9 +298,9 @@ def _check_source_envelope(
             _blocking(
                 "4.0A.9_unapproved_public_bound",
                 dataset,
-                f"public_bound_derivation={envelope.public_bound_derivation.value} is not "
-                "approved for this dataset, so the bound cannot resolve the axis. Approval "
-                "is what makes a bound usable.",
+                f"public_bound_derivation={_derivation_name(envelope.public_bound_derivation)} "
+                "is not approved for this dataset, so the bound cannot resolve the axis. "
+                "Approval is what makes a bound usable.",
             )
         )
     if (
@@ -299,8 +312,9 @@ def _check_source_envelope(
             _blocking(
                 "4.0A.9_unapproved_provider_bound",
                 dataset,
-                f"provider_bound_derivation={envelope.provider_bound_derivation.value} is "
-                "not approved for this dataset.",
+                f"provider_bound_derivation="
+                f"{_derivation_name(envelope.provider_bound_derivation)} is not approved for "
+                "this dataset.",
             )
         )
 

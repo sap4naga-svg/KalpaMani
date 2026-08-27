@@ -48,6 +48,7 @@ from kalpamani.data.contracts.resolution import (
     BoundApprovals,
     PitRecord,
     SourceRecord,
+    plain_str,
     resolved_provider_time,
     resolved_public_time,
 )
@@ -82,11 +83,60 @@ class TimingBasis(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DatasetGapResolution:
-    """The declared policy for one dataset's unknown provider availability."""
+    """The declared policy for one dataset's unknown provider availability.
+
+    A closed contract, for the same reason :class:`ApprovedBoundPolicy` is one.
+    ``ProfileResolutionConfig`` coerced the outer sequence to a tuple and trusted
+    whatever was inside it, so a mutable entry -- or a subclass whose ``policy``
+    is a property answering differently on successive reads -- could report one
+    resolution to :meth:`ProfileResolutionConfig.policy_for`, which the run
+    consults, and another to :meth:`~ProfileResolutionConfig.canonical_map`, which
+    the persisted standard and ``run_id`` record. Neither half is wrong on its
+    own, and nothing compares them.
+
+    Subclassing is refused, and every field is normalised through its exact type:
+    the dataset and reason to non-empty plain ``str``, the policy through the
+    ``DatasetGapPolicy`` constructor -- which accepts a member or its value and
+    refuses everything else.
+    """
 
     dataset: str
     policy: DatasetGapPolicy
     reason: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. ``policy`` is read by the run and by the standard."""
+        raise ProfileResolutionError(
+            "DatasetGapResolution may not be subclassed. Its fields are read once by the "
+            "run and again by the record of what the run resolved under, so a subclass can "
+            "answer the two differently."
+        )
+
+    def __post_init__(self) -> None:
+        dataset = plain_str(self.dataset, what="A gap resolution's dataset name")
+        reason = plain_str(self.reason, what="A gap resolution's reason")
+        if not dataset:
+            raise ProfileResolutionError(
+                "A gap resolution with no dataset name resolves nothing. The per-dataset "
+                "evidence is keyed by that name, so an unnamed entry is unreconcilable."
+            )
+        if not reason:
+            raise ProfileResolutionError(
+                f"The gap resolution for {dataset!r} states no reason. Two runs that bounded "
+                "one dataset for different stated reasons resolved it differently and "
+                "admitted different rows, which is why the reason is part of run identity."
+            )
+        try:
+            policy = DatasetGapPolicy(self.policy)
+        except (ValueError, KeyError, TypeError) as refusal:
+            raise ProfileResolutionError(
+                f"{self.policy!r} is not a DatasetGapPolicy and cannot resolve {dataset!r}. "
+                "The policy decides whether a dataset's rows are excluded, bounded or left "
+                "alone, so a value the enum does not recognise is refused at construction."
+            ) from refusal
+        object.__setattr__(self, "dataset", dataset)
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "policy", policy)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -119,10 +169,34 @@ class ProfileResolutionConfig:
         )
 
     def __post_init__(self) -> None:
-        # A list passed for a ``tuple[...]`` field stays a list, and this one is
-        # hashed into the persisted standard and re-read on every query.
-        object.__setattr__(self, "dataset_resolutions", tuple(self.dataset_resolutions))
-        names = [entry.dataset for entry in self.dataset_resolutions]
+        # Normalise first, then detect collisions, then sort. A list passed for a
+        # ``tuple[...]`` field stays a list, and its entries were trusted whole --
+        # so a policy-shaped object could answer ``policy_for``, which the run
+        # consults, differently from ``canonical_map``, which the standard
+        # records. Detecting duplicates before normalisation missed two entries
+        # whose dataset names differ only in the type that spells them.
+        if not isinstance(self.dataset_resolutions, Sequence):
+            # A generator or a spent iterator materialises to an empty tuple, so a
+            # config that resolved nothing would look like one that declared
+            # nothing -- and the manifest's per-dataset evidence would be missing
+            # rather than wrong, which is harder to notice.
+            raise ProfileResolutionError(
+                f"dataset_resolutions is a {type(self.dataset_resolutions).__name__}, not a "
+                "sequence. An iterator is consumed once, so an exhausted one would silently "
+                "resolve nothing at all."
+            )
+        entries: list[DatasetGapResolution] = []
+        for entry in self.dataset_resolutions:
+            if type(entry) is not DatasetGapResolution:
+                raise ProfileResolutionError(
+                    f"A gap resolution is a {type(entry).__name__}, not an exact "
+                    "DatasetGapResolution. Its fields are read once by the run and again by "
+                    "the record of what the run resolved under, so an object that supplies "
+                    "its own can answer the two differently."
+                )
+            entries.append(entry)
+
+        names = [entry.dataset for entry in entries]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ProfileResolutionError(
@@ -130,11 +204,38 @@ class ProfileResolutionConfig:
                 "one policy; two entries would make the manifest's per-dataset counts "
                 "unreconcilable."
             )
-        if not self.resolution_policy_version:
+        object.__setattr__(
+            self,
+            "dataset_resolutions",
+            tuple(sorted(entries, key=lambda item: item.dataset)),
+        )
+        # The config's own scalars, normalised like everything else. They were
+        # not, and ``resolved_profile`` decides the whole run with an **identity**
+        # test: because ``GlobalProfileResolution`` is a ``StrEnum``, the plain
+        # string ``"DOWNGRADE"`` compares equal to the member and fails ``is``, so
+        # a config that every equality-based check reads as downgraded would have
+        # executed at the requested profile instead.
+        for name, member in (
+            ("requested_profile", InformationSetProfile),
+            ("global_profile_resolution", GlobalProfileResolution),
+        ):
+            supplied = getattr(self, name)
+            try:
+                object.__setattr__(self, name, member(supplied))
+            except (ValueError, KeyError, TypeError) as refusal:
+                raise ProfileResolutionError(
+                    f"{supplied!r} is not a {member.__name__}. The resolved profile decides "
+                    "which rows a whole run may serve, so a value the enum does not "
+                    "recognise is refused at construction."
+                ) from refusal
+
+        version = plain_str(self.resolution_policy_version, what="resolution_policy_version")
+        if not version:
             raise ProfileResolutionError(
                 "resolution_policy_version is required. Which policy chose a resolution is "
                 "part of run identity, and an unnamed policy cannot be reproduced."
             )
+        object.__setattr__(self, "resolution_policy_version", version)
 
     @property
     def resolved_profile(self) -> InformationSetProfile:

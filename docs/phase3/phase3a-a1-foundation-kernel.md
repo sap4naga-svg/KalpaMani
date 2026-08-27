@@ -373,7 +373,91 @@ These are boundaries of a deliberately narrow slice, not defects:
     different times -- which is what an incremental pipeline produces, and what this slice does
     not otherwise build.
 
-## 12. Immutability closure applied in revision 8
+## 12. Nested-type closure applied in revision 9
+
+Revision 8 froze the *containers*. This round closes what is inside them: a value normalised to a
+plain `frozenset` still holds whatever the caller put in it, and a mapping whose keys are
+normalised while it is being sorted has already lost a collision.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | `ApprovedBoundPolicy` rebuilt the container and kept the elements | The resolution asks `envelope.public_bound_derivation in policy.public` — a membership test — while the descriptor records `item.value`. An object supplying `__eq__`, `__hash__` and `.value` satisfies both and can answer them inconsistently. Every element now passes through its **exact** enum constructor, which is both the normalisation and the refusal: a plain valid string becomes the member, a mutable `set` is copied and frozen, a `frozenset` subclass is rebuilt, and an unknown string or arbitrary object is refused at construction — where a caller can still act on it, rather than at the first membership test deep inside a query |
+| 2 | `BoundApprovals` stored whatever policy-shaped object it was given | Fail closed rather than duck-type: `type(policy) is not ApprovedBoundPolicy` refuses. A mutable policy-shaped object and an unrelated dataclass with the three governed field names are both turned away *before* the object is retained, so mutating either afterwards reaches nothing. Keys are normalised to plain `str`, an empty name is refused, and **collisions are detected after normalisation** — normalising inside the sort let the later of two keys that both spell `"price_bar"` win by iteration order, which made "which bounds a dataset approves" a property of how the caller built their dict |
+| 3 | `DatasetGapResolution` entries were trusted whole | `ProfileResolutionConfig` tuple-coerced the outer sequence and looked no further, so a resolution-shaped object — or a subclass whose `policy` is a property — could report one policy to `policy_for`, which the run consults, and another to `canonical_map`, which the persisted standard and `run_id` record. Neither half is wrong on its own and nothing compared them. The entry type now refuses subclassing and normalises `dataset` and `reason` to non-empty plain `str` and `policy` through the exact `DatasetGapPolicy` constructor; the config requires exact entries, detects duplicates after normalisation, and stores one tuple sorted by dataset so both readers see the same rows |
+
+`MANIFEST_VERSION` stays **5**: nothing about the persisted schema changed.
+
+**One consequence worth stating, because it is surprising.** All three bound-derivation enums are
+`StrEnum` and they share values — `NONE` is in all three, `FIRST_SEEN_UPPER_BOUND` in two. So
+handing `ProviderBoundDerivation.NONE` to `public` is *accepted* and becomes
+`PublicBoundDerivation.NONE`: the constructor is the validator and `"NONE"` does name a public
+derivation. The field decides which enum the value belongs to, the stored member is always of that
+exact type, and membership and the record agree — which is the property that matters. A value the
+field's own enum does not have, such as `ProviderBoundDerivation.DELIVERY_WINDOW` in `public`, is
+refused. Recorded here and pinned by a test rather than left to be discovered.
+
+**The scope, stated once.** The property these three rounds establish is that *every value accepted
+through the documented public constructors is copied, normalised to its exact closed type, and
+immutable to its leaves*. It is not a hostile-Python sandbox: `object.__setattr__`, `ctypes`, `gc`
+internals and the modules' own private names can subvert any of it, and that limit is deliberate
+rather than overlooked. `TradeRecord.orders` remains a separately recorded Phase-2 hardening
+concern, outside this PR's authorized data-kernel scope and not a blocker for A1.
+
+### What adversarial review of revision 9 then found
+
+Four confirmed, all fixed, and the first is the one worth remembering.
+
+**`str()` is not a normaliser.** `DatasetGapResolution` reduced its dataset and reason with
+`str(value)`, and the class docstring promised a "plain `str`" — but CPython's `PyObject_Str` calls
+`tp_str` and accepts any `str` **subclass** back, so a class whose `__str__` returns `self` passes
+through intact, carrying whatever `__eq__` and `__hash__` it defines. That is enough for a dataset
+name to answer one lookup and record another. `plain_str` uses `str.__str__`, which returns a fresh
+plain string for a subclass, and then verifies the exact type rather than assuming it.
+
+**The config's own scalars were unchecked while its entries were exact.** `resolved_profile`
+decides the whole run with an **identity** test, and `GlobalProfileResolution` is a `StrEnum` — so
+the plain string `"DOWNGRADE"` compares equal to the member and fails `is`. A config every
+equality-based check reads as downgraded would have executed at the *requested* profile instead,
+which is the one direction that leaks data. All three scalars now go through their exact
+constructors.
+
+**An exhausted iterator resolved nothing, silently.** A generator or spent iterator materialises to
+`()`, so a config that resolved nothing and one that declared nothing produced the same tuple, and
+the manifest's per-dataset evidence would be *missing* rather than wrong. `dataset_resolutions`
+must be a sequence.
+
+**And `NONE` was approvable.** `PublicBoundDerivation.NONE` is the value an envelope carries when it
+has **no** bound derivation, so approving it admits any bound whose provenance nobody stated —
+the opposite of what an approval is for. It is now refused on all three axes. The fixture's own
+"approve everything" helper had been using it as a filler, which is exactly the muddle the refusal
+names.
+
+**"The constructor is the validator" was not sufficient on its own.** `Enum(value)` is a
+`_value2member_map_` dict lookup, and a dict lookup compares the *stored* key against the supplied
+object — delegating `__eq__` to the thing being validated. An object with a colliding `__hash__`
+and a permissive `__eq__` is therefore found and silently becomes a real member. The suite's own
+"sharpest case" test had passed only because its object happened to hash to `0`. `_exact_members`
+now refuses anything that is not a string before the lookup happens; every derivation vocabulary is
+a `StrEnum`, so a genuine member and a plain spelling both still pass.
+
+**And the check that exists to refuse was crashing while writing the refusal.**
+`4.0A.9_unapproved_public_bound` interpolated `envelope.public_bound_derivation.value`, and
+`SourceEnvelope` does not validate that field — so a plain string that *matched* an approval passed
+silently while one that did not raised a bare `AttributeError` from inside the check. It crashed on
+exactly the input it existed to refuse.
+
+Refuted and not changed: routes through `object.__new__`, `gc` internals and module privates, which
+fall under the stated limit above; and a reported `sorted()` crash, which the key normalisation had
+already made unreachable.
+
+**Recorded, not fixed here.** `SourceEnvelope.public_bound_derivation` and its siblings are the
+*other* operand of the membership test, and they are plain annotated fields that nothing normalises.
+Closing them is a change to the envelope contract — every entity constructs one — rather than to the
+approvals surface this round was scoped to, and it is a different blast radius. It joins
+`TradeRecord.orders` as a named follow-up: recorded here rather than fixed silently or left
+unmentioned, and not a blocker for A1.
+
+## 13. Immutability closure applied in revision 8
 
 Revision 7 bound a run to its dependencies and its evidence to a standard. This round makes the
 standard itself unable to move: `frozen=True` refuses reassignment of an *attribute*, and says
@@ -433,7 +517,7 @@ class docstrings and a parametrised test named for "every" spelling — while th
 one exact substring, which the same claim reworded would pass. The guard now rejects any success
 line that speaks about failing without narrowing it to what a parser can see.
 
-## 13. Dependency and provenance closure applied in revision 7
+## 14. Dependency and provenance closure applied in revision 7
 
 Revision 6 bound a result to the question that produced it. This round closes what a run
 **depends on** — the inputs a query actually rests on, the artifact that decides a snapshot, and
@@ -512,7 +596,7 @@ its ``BoundApprovals`` from a parameter while the publication recorded the ones 
 under: the standard was persisted and verified, and the one component that applies a standard at
 query time ignored it.
 
-## 14. Query identity and quality-context closure applied in revision 6
+## 15. Query identity and quality-context closure applied in revision 6
 
 Revision 5 made a result whole and made the checks actually run. This round closes the places
 where evidence was still a **claim nobody produced**: a query the manifest described but nothing
@@ -542,7 +626,7 @@ they had been reaching are exercised directly and labelled defence in depth. Bin
 narrative to the query immediately caught the manifest fixture itself, which declared a
 2019-06-24..2021-01-05 backtest window over a query that served five days of June 2019.
 
-## 15. Query and evidence atomicity applied in revision 5
+## 16. Query and evidence atomicity applied in revision 5
 
 Revision 4 bound each artifact to what it was about. This round closes the places where a
 **result** was still assembled from parts that could be substituted, or shortened without
@@ -592,7 +676,7 @@ sessions the caller did not declare a cutoff for; the manifest compared consumed
 while every field that makes one reproducible went unchecked; and findings whose id no planned
 check owned were silently dropped.
 
-## 16. Evidence closure applied in revision 4
+## 17. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
 it rather than to the claim itself. Each row below is a way the previous code would have said yes.
@@ -611,7 +695,7 @@ it rather than to the claim itself. Each row below is a way the previous code wo
 | 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
 | 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
 
-## 17. Enforcement closure applied in revision 3
+## 18. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -632,7 +716,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 18. Corrections applied in revision 2
+## 19. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -651,10 +735,10 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 19. Verification
+## 20. Verification
 
 ```
-pytest                          1088 passed   (440 pre-existing, 648 new)
+pytest                          1123 passed   (440 pre-existing, 683 new)
 ruff check .                    clean
 ruff format --check .           clean
 mypy                            clean, strict, 93 files

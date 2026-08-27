@@ -31,12 +31,12 @@ what was asked for.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, Protocol, Self, runtime_checkable
+from typing import Any, Final, Protocol, Self, runtime_checkable
 
 from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.envelope import DerivedEnvelope, Envelope, SourceEnvelope
@@ -103,6 +103,105 @@ class DerivedArtifactRecord(PitRecord, Protocol):
 # ---------------------------------------------------------------------------
 
 
+def plain_str(value: object, *, what: str) -> str:
+    """A genuinely plain ``str``, or a refusal.
+
+    ``str(value)`` is not a normaliser. CPython calls ``tp_str`` and accepts any
+    ``str`` **subclass** back, so a class whose ``__str__`` returns ``self``
+    survives it intact -- and with it any ``__eq__``/``__hash__`` it defines. That
+    is enough to make a dataset name answer one lookup and record another.
+
+    ``str.__str__`` returns a fresh plain string for a subclass and the object
+    itself only when it is already exactly ``str``, so it defuses the override.
+    The exact type is then verified rather than assumed, because a non-string
+    whose ``__str__`` misbehaves reaches the second branch.
+
+    Raises:
+        ProfileResolutionError: if the value cannot be reduced to an exact ``str``.
+    """
+    text = str.__str__(value) if isinstance(value, str) else str(value)
+    if type(text) is not str:
+        raise ProfileResolutionError(
+            f"{what} does not reduce to a plain string: {type(value).__name__} returned a "
+            f"{type(text).__name__} from __str__. A name that carries its own equality can "
+            "answer one lookup and record another."
+        )
+    return text
+
+
+def _exact_members(supplied: Iterable[object], member: Any, *, field: str) -> frozenset[Any]:
+    """Rebuild a collection as a plain ``frozenset`` of exact enum members.
+
+    The constructor is the validator. ``PublicBoundDerivation(x)`` returns the
+    member for a member or its value and raises ``ValueError`` for anything else,
+    so accepting what it accepts is both the normalisation and the refusal.
+
+    Only a **string** is offered to that constructor, and that is the load-bearing
+    part. ``Enum(value)`` is a ``_value2member_map_`` dict lookup, and a dict
+    lookup compares the stored key against the supplied object -- so an object
+    with a colliding ``__hash__`` and a permissive ``__eq__`` gets to decide that
+    it matches, and becomes a real member. Refusing non-strings means nothing
+    hostile reaches the lookup at all; every vocabulary here is a ``StrEnum``, so
+    a genuine member and a plain spelling both still pass.
+
+    ``NONE`` is refused as well, and that is not a technicality. It is the value
+    an envelope carries when it has **no** bound derivation, so approving it
+    approves any bound whose provenance nobody stated -- which is the opposite of
+    what an approval is for.
+
+    Raises:
+        ProfileResolutionError: naming the offending element, or the collection
+            itself if it cannot be iterated. Refused at construction rather than
+            at the first membership test, because by then the object is inside a
+            value the whole system treats as a settled standard.
+    """
+    try:
+        items = list(supplied)
+    except TypeError as refusal:
+        raise ProfileResolutionError(
+            f"Approved {field!r} derivations must be a collection, and a "
+            f"{type(supplied).__name__} is not iterable. Every refusal on this path is a "
+            "governed one, so a caller sees why rather than a bare TypeError from inside a "
+            "constructor."
+        ) from refusal
+
+    out: set[Any] = set()
+    for item in items:
+        if not isinstance(item, str):
+            # The enum constructor is a ``_value2member_map_`` dict lookup, and a
+            # dict lookup compares the **stored** key against the supplied object
+            # -- delegating ``__eq__`` to the object being validated. An object
+            # with a colliding ``__hash__`` and a permissive ``__eq__`` is
+            # therefore *found* and silently becomes a real member. Refusing
+            # non-strings outright means nothing hostile reaches that lookup, and
+            # every derivation vocabulary here is a ``StrEnum``, so a genuine
+            # member and a plain spelling both still pass.
+            raise ProfileResolutionError(
+                f"{item!r} is a {type(item).__name__}, and an approved {field!r} derivation "
+                "is named by a string. The enum's own lookup asks the supplied object whether "
+                "it matches, so an object that answers for itself is refused before it is "
+                "asked."
+            )
+        try:
+            resolved = member(plain_str(item, what=f"An approved {field!r} derivation"))
+        except (ValueError, KeyError, TypeError) as refusal:
+            raise ProfileResolutionError(
+                f"{item!r} is not a {member.__name__} and cannot be approved as one for "
+                f"{field!r}. An approved bound decides which rows resolve, so a value the "
+                "enum does not recognise is refused where a caller can still act on it -- "
+                "not at the first membership test, deep inside a query."
+            ) from refusal
+        if resolved.value == "NONE":
+            raise ProfileResolutionError(
+                f"{member.__name__}.NONE cannot be approved for {field!r}. It is the value "
+                "an envelope carries when it has no bound derivation at all, so approving it "
+                "would admit any bound whose provenance nobody stated -- which is what an "
+                "approval exists to require."
+            )
+        out.add(resolved)
+    return frozenset(out)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ApprovedBoundPolicy:
     """Which bound derivations are approved for one dataset.
@@ -117,8 +216,32 @@ class ApprovedBoundPolicy:
     ``frozenset`` **subclass** was worse: it could override ``__contains__`` so
     that ``derivation in policy.public`` answered differently from what
     :meth:`~BoundApprovals.canonical` iterated, splitting what the resolution
-    reads from what the standard records. Each field is rebuilt as a plain
-    ``frozenset`` here, so neither is expressible.
+    reads from what the standard records.
+
+    Rebuilding each field as a plain ``frozenset`` closed the container and left
+    the **elements** as whatever the caller put in it. That is the same gap one
+    level further down, and it matters for the same reason: the resolution asks
+    ``envelope.public_bound_derivation in policy.public``, a membership test, and
+    the descriptor records ``item.value``. An object answering ``__eq__``,
+    ``__hash__`` and ``.value`` however it liked satisfied both and could answer
+    them inconsistently.
+
+    Every element is therefore passed through its **exact** enum constructor.
+    ``PublicBoundDerivation("SESSION_CLOSE_PLUS_LAG")`` is accepted and becomes
+    the member; an unknown string, or an arbitrary object, is refused at
+    construction, where a caller can still act on it.
+
+    One consequence is worth stating because it is surprising. All three
+    derivation enums are ``StrEnum``, and they share some values -- ``NONE`` is in
+    all three, ``FIRST_SEEN_UPPER_BOUND`` in two. So handing
+    ``ProviderBoundDerivation.NONE`` to ``public`` is **accepted** and becomes
+    ``PublicBoundDerivation.NONE``: the constructor is the validator, and
+    ``"NONE"`` does name a public derivation. The field decides which enum the
+    value belongs to, the stored member is always of that exact type, and what
+    the resolution tests membership against is what
+    :meth:`~BoundApprovals.canonical` records -- which is the property that
+    matters. A value the field's own enum does not have, such as
+    ``ProviderBoundDerivation.DELIVERY_WINDOW`` in ``public``, is refused.
     """
 
     public: frozenset[PublicBoundDerivation] = frozenset()
@@ -141,8 +264,22 @@ class ApprovedBoundPolicy:
         )
 
     def __post_init__(self) -> None:
-        for name in ("public", "provider", "announcement"):
-            object.__setattr__(self, name, frozenset(getattr(self, name)))
+        # Unrolled rather than looped: one loop over three enum classes joins
+        # them into a union the type checker cannot call, and the point of this
+        # method is that each field is normalised by its **own** constructor.
+        object.__setattr__(
+            self, "public", _exact_members(self.public, PublicBoundDerivation, field="public")
+        )
+        object.__setattr__(
+            self,
+            "provider",
+            _exact_members(self.provider, ProviderBoundDerivation, field="provider"),
+        )
+        object.__setattr__(
+            self,
+            "announcement",
+            _exact_members(self.announcement, AnnouncementBoundDerivation, field="announcement"),
+        )
 
 
 #: Nothing approved. The fail-closed default for an unconfigured dataset.
@@ -151,7 +288,7 @@ NO_BOUNDS_APPROVED: Final = ApprovedBoundPolicy()
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BoundApprovals:
-    """Per-dataset approved-bound configuration for a run.
+    r"""Per-dataset approved-bound configuration for a run.
 
     A dataset absent from the mapping has **nothing** approved. Silently
     approving an unconfigured dataset would make the approval mechanism
@@ -176,10 +313,16 @@ class BoundApprovals:
     :class:`~types.MappingProxyType`, in canonical key order. Mutating the source
     afterwards is a no-op, and ``approvals.by_dataset[...] = ...`` raises
     ``TypeError``. The nested :class:`ApprovedBoundPolicy` values are frozen
-    dataclasses over ``frozenset``s -- coerced there too, so a caller cannot
-    smuggle a mutable ``set`` or a ``__contains__``-overriding subclass past the
-    annotation. The whole value is immutable to its leaves and :meth:`identity` is
-    stable for the object's lifetime.
+    dataclasses over ``frozenset``\s of exact enum members -- normalised there
+    too, so a caller cannot smuggle a mutable ``set``, a ``__contains__``-overriding
+    subclass or an enum-shaped object past the annotation. The values themselves
+    must be **exactly** ``ApprovedBoundPolicy``: a policy-shaped object supplies
+    its own fields and can answer the resolution's membership test and the
+    descriptor's iteration differently, so it is refused rather than duck-typed.
+    Keys are normalised before collision detection, because two keys that both
+    normalise to one name would otherwise collapse silently with the later one
+    winning by iteration order. The whole value is immutable to its leaves and
+    :meth:`identity` is stable for the object's lifetime.
 
     The boundary is API integrity, not a sandbox. The dict behind the proxy stays
     reachable through ``gc.get_referents`` and the module's own privates stay
@@ -205,18 +348,42 @@ class BoundApprovals:
         )
 
     def __post_init__(self) -> None:
-        # Keys are rebuilt as plain ``str``. A ``str`` subclass with an unstable
-        # ``__eq__``/``__hash__`` would answer ``for_dataset`` differently on
-        # successive lookups while ``canonical()`` went on reporting one value --
-        # the resolution and the recorded standard would then disagree about which
-        # bounds a dataset approves, and no hash over either would move.
-        object.__setattr__(
-            self,
-            "by_dataset",
-            MappingProxyType(
-                {str(dataset): policy for dataset, policy in sorted(self.by_dataset.items())}
-            ),
-        )
+        # Normalise first, then look for collisions, then sort. Sorting the
+        # caller's keys and normalising during the comprehension meant two keys
+        # that both normalise to ``"price_bar"`` silently collapsed, with the
+        # later one winning by iteration order -- so which bounds a dataset
+        # approves would have been decided by dict insertion order.
+        normalised: list[tuple[str, ApprovedBoundPolicy]] = []
+        for dataset, policy in self.by_dataset.items():
+            name = plain_str(dataset, what="An approval's dataset name")
+            if not name:
+                raise ProfileResolutionError(
+                    "An empty dataset name cannot carry an approval. A policy nothing names "
+                    "approves bounds for a dataset nobody can identify."
+                )
+            if type(policy) is not ApprovedBoundPolicy:
+                # Fail closed rather than duck-type. A policy-shaped object
+                # supplies its own ``public``/``provider``/``announcement``, so it
+                # can answer the resolution's membership test and the descriptor's
+                # iteration differently -- and it is the value that decides which
+                # rows resolve at all.
+                raise ProfileResolutionError(
+                    f"Approvals for {name!r} are a {type(policy).__name__}, not an exact "
+                    "ApprovedBoundPolicy. A policy-shaped object supplies its own fields, so "
+                    "what the resolution reads and what the standard records can differ "
+                    "without either being wrong on its own."
+                )
+            normalised.append((name, policy))
+
+        seen = [name for name, _ in normalised]
+        collisions = sorted({name for name in seen if seen.count(name) > 1})
+        if collisions:
+            raise ProfileResolutionError(
+                f"Two approval entries normalise to the same dataset name: {collisions}. "
+                "Each dataset has exactly one policy, and letting the later one win would "
+                "make which bounds it approves a property of iteration order."
+            )
+        object.__setattr__(self, "by_dataset", MappingProxyType(dict(sorted(normalised))))
 
     def for_dataset(self, dataset: str) -> ApprovedBoundPolicy:
         """The approved bounds for ``dataset``, defaulting to none approved."""
