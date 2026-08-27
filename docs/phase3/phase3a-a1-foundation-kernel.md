@@ -16,6 +16,16 @@ This document records what the A1 slice built, and — more usefully — what it
 boundary in §2–§3 was written *before* the code, so it is a commitment rather than a description
 of whatever got written.
 
+> **Revision 2 (2026-08-26).** Independent review of the implementation found ten concrete
+> defects. All are corrected; §12 lists each with the change. The substantive ones: an empty
+> `FORWARD_SYSTEM` universe was **published** where it should have been **refused**;
+> `ProfileResolutionConfig` was audit-only configuration that never touched the rows; a price
+> query could mix resolutions and silently truncate a partially covered range; universe lineage
+> attached every admissible input to every row; dataset publication was not atomic; limitation
+> tokens were emitted from configuration rather than evidence; and one test assertion was
+> disabled by an unconditional `or True`. No architecture changed — the kernel direction was
+> accepted — and no scope widened.
+
 ---
 
 ## 1. What A1 is
@@ -42,18 +52,22 @@ The nine provider tests P1–P9 in [implementation-plan.md](implementation-plan.
 | resolved availability times, origin eligibility, `source_anchor` | `data/contracts/resolution.py` |
 | resolved fact-time anchors and the contract's domain-alias table | `data/contracts/anchors.py` |
 | per-dataset gap resolution and the global downgrade | `data/contracts/profiles.py` |
+| the resolution **execution** boundary | `data/curate/resolution_run.py` |
+| exact per-security lineage selectors and their replay | `data/curate/lineage.py` |
+| atomic dataset publication and verified reads | `data/curate/publication.py` |
+| the single instant normaliser | `data/contracts/instants.py` |
 | the Phase-3A entity subset | `data/contracts/entities.py` |
 | canonical serialisation and content hashing | `data/contracts/canonical.py`, `serde.py` |
 | the reproducibility manifest and deterministic `run_id` | `data/contracts/manifest.py` |
 | immutable content-addressed Bronze | `data/ingest/bronze.py` |
 | Silver normalisation | `data/normalize/silver.py` |
 | local analytical storage | `data/storage.py` |
-| adjustment proof, historical-universe proof, Gold build/read | `data/curate/` |
+| adjustment proof and historical-universe proof | `data/curate/` |
 | deterministic quality checks | `data/quality/checks.py` |
 | point-in-time accessors | `data/pit/accessors.py` |
 | synthetic reference dataset | `tests/fixtures/phase3a.py` |
 
-Roughly 7,000 lines of source and 4,200 lines of tests and fixtures.
+Roughly 8,600 lines of source and 5,700 lines of tests and fixtures.
 
 ## 3. Explicitly NOT authorized, and not done
 
@@ -92,10 +106,32 @@ the same reasoning and because nothing here needs it.
 
 ```
 <root>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.json.gz
-<root>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.meta.json
+<root>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.<run_id>.acquisition.json
 <root>/silver/<dataset_version>/<entity>.jsonl
 <root>/gold/<dataset_version>/<entity>.jsonl
+<root>/gold/<dataset_version>/_dataset_manifest.json
+<root>/gold/<parent>/_staging-<leaf>/…            uncommitted; invisible to readers
 ```
+
+**Publication is atomic.** A version is assembled in a staging directory — every table written
+and `fsync`-ed, then the dataset manifest — and committed by a **single directory rename**. The
+rename *is* the commit: before it nothing is visible under the published name, after it
+everything is. A reader never sees a manifest describing tables that have not landed, nor tables
+no manifest describes. Versions are superseded, never rewritten.
+
+**Reads verify before they decode.** Build time, coverage and resolved profile come from the
+persisted manifest, never from arguments — authoritative build metadata supplied at read time
+would let a caller restate what a dataset covers without touching the dataset. Every table hash
+is checked before its rows are parsed, so corruption is caught as corruption rather than
+surfacing as a strange value three layers up.
+
+**Bronze separates two immutable things.** A *content object* keyed by payload digest alone, and
+an *acquisition record* per retrieval keyed by `(digest, ingestion_run_id)`. Fetching the same
+bytes twice records two acquisitions over one payload — the honest account. They are written
+content-first, acquisition-second, so the only reachable inconsistency is a payload with a
+missing acquisition record, which a retry **repairs**. The reverse order would leave an
+acquisition naming a payload that does not exist, which nothing on disk could repair. A write
+never reports success while the metadata is absent.
 
 The root is **always an explicit argument**. The default configured path
 (`DEFAULT_DATA_ROOT = .runtime/data`) is a path *value*: importing the package creates no
@@ -125,12 +161,25 @@ would make identity a property of when we asked rather than of what the vendor s
 counted*; an eligible-but-unresolvable row is *refused*. They call for opposite responses, and
 collapsing them is how a factor quietly loses an input.
 
-### A recorded consequence, not a defect
+### An unbuildable universe is refused, not published empty
 
 `FORWARD_SYSTEM` **cannot build a 2019 universe from reference data first seen in 2026.** The
-snapshot is legitimately empty. That is exactly why the contract calls the profile mandatory for
-forward validation and never valid for long histories — and why quietly serving the `PUBLIC_PIT`
-answer instead would be the bug rather than the fix. A test asserts the empty result.
+first implementation published the resulting empty snapshot; that was wrong. An empty snapshot
+and an unavailable one look identical downstream and mean opposite things, and publishing one
+would let a profile that cannot reach back before we existed answer a historical question with a
+zero-security market.
+
+The build now **refuses** with `REQUIRED_INPUT_UNAVAILABLE`, naming the emptied domains and the
+cutoff. Three outcomes are kept distinct, and each has a test:
+
+| situation | outcome |
+|---|---|
+| the rule ran and selected members | a valid snapshot with members |
+| the rule ran on admissible inputs and selected **nobody** | a **valid** snapshot, every row a non-member with its exclusion reason |
+| the required inputs were all inadmissible | **refused** — no snapshot exists |
+
+`FORWARD_SYSTEM` still never substitutes `PUBLIC_PIT`. Refusing is what the contract means by
+"mandatory for forward validation, never valid for long histories".
 
 ## 7. Quality checks implemented
 
@@ -246,14 +295,38 @@ These are boundaries of a deliberately narrow slice, not defects:
    requires two licensed sources and there are none.
 9. **`data.live` is empty by design.** The boundary exists before there is anything behind it, so
    it is inherited rather than retrofitted.
+10. **The survivorship alarm needs deep history to say anything.** Over a dataset whose snapshots
+    are all recent it draws no conclusion at all -- correctly, but that means it is not a check
+    a short-horizon build gets any assurance from.
+11. **Silver has no published-version machinery yet.** Only Gold is published atomically with a
+    manifest; Silver remains a plain table layer, because nothing in A1 reads Silver back.
 
-## 12. Verification
+## 12. Corrections applied in revision 2
+
+| # | Defect found | Correction |
+|---|---|---|
+| 1 | An empty `FORWARD_SYSTEM` universe was published as a valid artifact | The build refuses with `REQUIRED_INPUT_UNAVAILABLE` when a supplied REQUIRED domain empties; a genuinely empty *selection* still publishes, with reasons (§6) |
+| 2 | `ProfileResolutionConfig` was audit-only and never touched the rows | `resolve_run_inputs` is the execution boundary: `BOUND` writes the bound before evaluation, `EXCLUDE` removes rows, `NONE` over a gap refuses by check name, and the Gold build consumes only resolved rows |
+| 3 | `get_price_history` could mix resolutions and silently truncate | `resolution` is a mandatory keyword-only parameter; range, coverage, security-existence and series-completeness are validated before serving, with four distinct outcomes |
+| 4 | Every membership row carried every admissible input as lineage | Lineage is exact and per security — one listing revision, one attribute row, that security's own bars — and the content hash covers the whole decision. Readback replays the selectors and refuses missing, broader, narrower or contradictory lineage |
+| 5 | Gold writes were not atomic and reads trusted caller-supplied metadata | Staging plus a single-rename commit, a dataset manifest with per-table hashes, and reads that verify every table before decoding. Bronze separates content from acquisition and repairs an interrupted acquisition |
+| 6 | Limitation tokens were emitted from declared configuration | Tokens come from evidence: bounded rows, excluded rows, positive origin exclusions. `emit_manifest` also refuses a wrong schema version, a non-UTC cutoff, duplicate evidence, a mismatched dataset profile, a missing revision view, missing consumed-artifact evidence, and a mutable definitions mapping |
+| 7 | Instants could retain arbitrary offsets | One `normalize_instant`, applied in every envelope, entity and manifest constructor. `12:00:00Z` and `07:00:00-05:00` produce identical canonical values, stored bytes and hashes. Dates stay dates |
+| 8 | The survivorship alarm faulted any snapshot with no delistings | Scoped by a versioned `SurvivorshipPolicy`: only deep-history snapshots are eligible, and the domain-wide alarm needs a minimum number of them. A recent snapshot with no delistings yet passes |
+| 9 | A session-date assertion was disabled by `or True`; import scanning missed relative and aliased imports; SDK checks depended on the local virtualenv | The assertion compares against the calendar; the scanner resolves relative imports at every level and sees through aliases, with its own fixtures; SDK checks read project metadata and KalpaMani's own imports |
+| 10 | The adjustment convention was unnamed | `FORWARD_BASE_NORMALIZED`, carried in the request, the artifact key, the derivation spec, the artifact row and therefore `run_id`. Building from zero bars, inadmissible bars, an unauthorized multi-security scope, or bars outside the declared validity interval is refused |
+
+Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchManifest.definitions`
+are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
+anyone can mutate after its hash was taken.
+
+## 13. Verification
 
 ```
-pytest                        630 passed   (440 pre-existing, 190 new)
+pytest                        697 passed   (440 pre-existing, 257 new)
 ruff check .                  clean
 ruff format --check .         clean
-mypy                          clean, strict, 72 files
+mypy                          clean, strict, 76 files
 scripts/phase1_preflight.py   exit 0
 scripts/phase2_preflight.py   exit 0
 scripts/phase3_docs_audit.py  exit 0
