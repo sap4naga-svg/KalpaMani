@@ -408,8 +408,14 @@ class AdjustedBarArtifact(DerivedArtifact):
     adjustment_convention: AdjustmentConvention
     resolved_profile: InformationSetProfile
     as_of_epoch: datetime
-    corporate_action_dataset_version: str
-    raw_bar_dataset_version: str
+    #: Every source build the bars came from, canonical and deduplicated. A tuple
+    #: rather than one version because an exact lineage can span several immutable
+    #: builds, and a single field could only ever be true of one of them -- which
+    #: made it either wrong or unverifiable, and it was taken from the caller
+    #: either way.
+    raw_bar_dataset_versions: tuple[str, ...]
+    #: Every source build the consumed corporate actions came from. Same reason.
+    corporate_action_dataset_versions: tuple[str, ...]
     security_id_scope: str
     series: tuple[PriceBarValues, ...]
 

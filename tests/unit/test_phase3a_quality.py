@@ -875,8 +875,6 @@ def test_an_adjusted_artifact_that_does_not_reproduce_is_blocking() -> None:
         resolved_profile=PUBLIC,
         as_of_epoch=phase3a.utc(2019, 6, 28, 21, 0),
         approvals=phase3a.approvals(),
-        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
         security_id_scope=phase3a.SEC_CONTINUOUS,
         valid_time_start=date(2019, 6, 24),
         valid_time_end=date(2019, 6, 28),

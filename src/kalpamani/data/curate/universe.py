@@ -219,6 +219,9 @@ class SnapshotBuild:
 
     rows: tuple[UniverseMembership, ...]
     considered_listings: tuple[Listing, ...]
+    #: Per required domain: rows supplied, and rows admissible at the cutoff. The
+    #: build's own account of what it had to work with.
+    required_domain_coverage: tuple[tuple[str, int, int], ...] = ()
 
 
 def build_universe_snapshot(
@@ -266,21 +269,24 @@ def build_universe_snapshot(
         inputs.attributes, resolved_profile, approvals, evaluation_cutoff
     )
 
+    supplied = {
+        "listing": len(inputs.listings),
+        "security_attribute": len(inputs.attributes),
+        "price_bar": sum(1 for bar in inputs.bars if bar.resolution is BarResolution.DAILY),
+    }
+    admissible = {
+        "listing": len(admissible_listings),
+        "security_attribute": len(admissible_attributes),
+        "price_bar": len(admissible_bars),
+    }
     _require_inputs(
         session_date=session_date,
         resolved_profile=resolved_profile,
         evaluation_cutoff=evaluation_cutoff,
-        supplied={
-            "listing": len(inputs.listings),
-            "security_attribute": len(inputs.attributes),
-            "price_bar": sum(1 for bar in inputs.bars if bar.resolution is BarResolution.DAILY),
-        },
-        admissible={
-            "listing": len(admissible_listings),
-            "security_attribute": len(admissible_attributes),
-            "price_bar": len(admissible_bars),
-        },
+        supplied=supplied,
+        admissible=admissible,
     )
+    coverage = tuple((domain, supplied[domain], admissible[domain]) for domain in sorted(supplied))
 
     # The window the rule actually looks at for prior history: everything ending
     # before the session's own evaluation cutoff. A bar for this session ends at
@@ -360,7 +366,11 @@ def build_universe_snapshot(
                 ),
             )
         )
-    return SnapshotBuild(rows=tuple(rows), considered_listings=tuple(considered))
+    return SnapshotBuild(
+        rows=tuple(rows),
+        considered_listings=tuple(considered),
+        required_domain_coverage=coverage,
+    )
 
 
 def _require_inputs(
@@ -646,6 +656,7 @@ def build_snapshot_header(
     resolved_profile: InformationSetProfile,
     evaluation_cutoff: datetime,
     considered_listings: Sequence[Listing],
+    required_domain_coverage: Sequence[tuple[str, int, int]] = (),
     artifact_first_built_time: datetime,
     ingestion_time: datetime,
     dataset_version: str,
@@ -657,11 +668,11 @@ def build_snapshot_header(
     them, and the separation is the difference between "nobody qualified" and
     "we cannot answer".
 
-    The header is a derived artifact, so it carries the lineage the build read.
-    Where rows exist that is the union of their lineage. Where none does, it is
-    the listing-state rows the rule **considered** and found unlisted on this
-    session -- which is precisely the evidence for "nobody qualified", and
-    without it the zero-row claim would rest on nothing.
+    The header is a derived artifact, so it carries the lineage the build read:
+    every membership decision's exact inputs **and** every listing state the rule
+    considered, whether or not it produced a row. ``required_domain_coverage``
+    records what each required domain supplied and how much of it was admissible,
+    so a zero-row snapshot can be read alongside what the rule had to work with.
 
     Raises:
         RequiredInputUnavailableError: if no listing-state row was considered at
@@ -687,6 +698,7 @@ def build_snapshot_header(
         row_count=len(rows),
         snapshot_content_hash=content,
         derivation_spec_version=spec_version,
+        required_domain_coverage=tuple(sorted(required_domain_coverage)),
         envelope=DerivedEnvelope(
             lineage=lineage,
             artifact_first_built_time=artifact_first_built_time,
@@ -705,19 +717,28 @@ def _snapshot_lineage(
     *,
     considered_listings: Sequence[Listing],
 ) -> tuple[LineageRef, ...]:
-    """Every input the snapshot as a whole read, deduplicated and ordered."""
+    """Every input the snapshot as a whole read, deduplicated and ordered.
+
+    Both halves, always: every membership decision's exact lineage, **and** every
+    listing state the rule considered -- including those that produced no row.
+
+    The considered set used to be attached only when the membership lineage was
+    empty, which is precisely backwards. The evidence for "this security was
+    looked at and did not qualify" appeared only when nothing qualified at all,
+    and disappeared the moment one other security did. A security the rule
+    examined and excluded is part of what the snapshot decided either way.
+    """
     refs: set[LineageRef] = set()
     for row in rows:
         refs.update(row.envelope.lineage)
-    if not refs:
-        for listing in considered_listings:
-            refs.add(
-                LineageRef.of(
-                    entity="listing",
-                    dataset_version=listing.envelope.dataset_version,
-                    selector=listing_selector(listing),
-                )
+    for listing in considered_listings:
+        refs.add(
+            LineageRef.of(
+                entity="listing",
+                dataset_version=listing.envelope.dataset_version,
+                selector=listing_selector(listing),
             )
+        )
     return tuple(sorted(refs, key=lambda ref: (ref.entity, ref.dataset_version, ref.selector)))
 
 

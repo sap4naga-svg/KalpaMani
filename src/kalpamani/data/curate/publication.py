@@ -54,7 +54,13 @@ from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
 from kalpamani.data.contracts.dataset import GoldDataset, UniverseSnapshotHeader
-from kalpamani.data.contracts.entities import DatasetVersion, UniverseMembership
+from kalpamani.data.contracts.entities import (
+    DatasetVersion,
+    Listing,
+    PriceBar,
+    SecurityAttribute,
+    UniverseMembership,
+)
 from kalpamani.data.contracts.errors import (
     BuildBoundaryError,
     DatasetPublicationError,
@@ -303,6 +309,9 @@ def _encode_header(header: UniverseSnapshotHeader) -> dict[str, object]:
         "snapshot_content_hash": header.snapshot_content_hash,
         "derivation_spec_version": header.derivation_spec_version,
         "status": header.status,
+        "required_domain_coverage": [
+            list(entry) for entry in sorted(header.required_domain_coverage)
+        ],
         "envelope": encode_derived_envelope(header.envelope),
         "header_identity_hash": header.header_identity_hash,
     }
@@ -324,6 +333,10 @@ def _decode_header(row: Mapping[str, Any]) -> UniverseSnapshotHeader:
         snapshot_content_hash=str(row["snapshot_content_hash"]),
         derivation_spec_version=str(row["derivation_spec_version"]),
         envelope=decode_derived_envelope(row["envelope"]),
+        required_domain_coverage=tuple(
+            (str(entry[0]), int(entry[1]), int(entry[2]))
+            for entry in row.get("required_domain_coverage", [])
+        ),
         status=str(row["status"]),
     )
     recorded = str(row["header_identity_hash"])
@@ -815,7 +828,15 @@ def read_published_dataset(
         session: tuple(sorted(members, key=lambda m: m.security_id))
         for session, members in sorted(universe.items())
     }
-    _verify_snapshot_headers(headers, stored_universe, manifest)
+    _verify_snapshot_headers(
+        headers,
+        stored_universe,
+        manifest,
+        listings=listings,
+        attributes=attributes,
+        bars=bars,
+        approvals=approvals,
+    )
 
     source_rows: list[SourceRecord] = [
         *sessions,
@@ -1064,13 +1085,23 @@ def _verify_snapshot_headers(
     headers: Mapping[date, UniverseSnapshotHeader],
     universe: Mapping[date, Sequence[UniverseMembership]],
     manifest: DatasetManifest,
+    *,
+    listings: Sequence[Listing],
+    attributes: Sequence[SecurityAttribute],
+    bars: Sequence[PriceBar],
+    approvals: BoundApprovals,
 ) -> None:
-    """Every membership row belongs to a built snapshot, and every header matches its rows.
+    """The snapshot is verified as one artifact, header and rows together.
 
-    The header is the only artifact asserting that a session was built, so it is
-    held to the same standard as the rows: a COMPLETE status, a row count that
-    agrees with what was stored, a content hash that reproduces from those rows,
-    and a build-time no later than the manifest's.
+    The header is the only thing asserting that a session was built, so it is held
+    to the same standard as the rows it heads: its lineage must **replay**, its
+    identity and content hash must recompute, its status must be COMPLETE, and
+    every row under it must agree with it on the session, the definition version
+    and the resolved profile.
+
+    Rows are not filtered here, and that is deliberate. A snapshot is served whole
+    or refused, so a row that disagrees with its header is a corrupt snapshot
+    rather than a row to leave out.
     """
     orphaned = sorted(session for session in universe if session not in headers)
     if orphaned:
@@ -1081,44 +1112,100 @@ def _verify_snapshot_headers(
         )
     for session, header in sorted(headers.items()):
         rows = tuple(universe.get(session, ()))
-        if not header.is_complete:
+        _verify_one_header(
+            session,
+            header,
+            rows,
+            manifest,
+            listings=listings,
+            attributes=attributes,
+            bars=bars,
+            approvals=approvals,
+        )
+
+
+def _verify_one_header(
+    session: date,
+    header: UniverseSnapshotHeader,
+    rows: Sequence[UniverseMembership],
+    manifest: DatasetManifest,
+    *,
+    listings: Sequence[Listing],
+    attributes: Sequence[SecurityAttribute],
+    bars: Sequence[PriceBar],
+    approvals: BoundApprovals,
+) -> None:
+    if not header.is_complete:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} declares status "
+            f"{header.status!r}. Only a COMPLETE snapshot is served: a partial one answers "
+            "the universe question with a subset and nothing in the answer says so."
+        )
+    if header.row_count != len(rows):
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} declares {header.row_count} "
+            f"rows and {len(rows)} were stored. A zero-row snapshot is legitimate; a "
+            "header that miscounts is not."
+        )
+    recomputed = content_hash(sorted(membership_hash_of(row) for row in rows))
+    if recomputed != header.snapshot_content_hash:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} records content hash "
+            f"{header.snapshot_content_hash} and its stored rows hash to {recomputed}. "
+            "The membership changed after the header was written, or the header describes "
+            "a different snapshot."
+        )
+    if header.envelope.dataset_version != manifest.dataset_version:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} is stamped with dataset "
+            f"version {header.envelope.dataset_version!r} inside publication "
+            f"{manifest.dataset_version!r}. A header copied from another build describes "
+            "that build."
+        )
+    if header.envelope.artifact_first_built_time > manifest.build_time:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} claims it was first built at "
+            f"{header.envelope.artifact_first_built_time.isoformat()}, after the build "
+            f"itself at {manifest.build_time.isoformat()}."
+        )
+    if header.resolved_profile is not manifest.resolved_profile:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} is keyed to "
+            f"{header.resolved_profile.value} while the build resolved to "
+            f"{manifest.resolved_profile.value}."
+        )
+
+    # The header's own lineage replays, under the profile the build resolved to.
+    # Without this the considered-listing evidence would be a list nobody checked.
+    resolve_lineage(
+        header.envelope.lineage,
+        listings=listings,
+        attributes=attributes,
+        bars=bars,
+        resolved_profile=manifest.resolved_profile,
+        approvals=approvals,
+    )
+
+    for row in rows:
+        if row.session_date != header.session_date:
             raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} declares status "
-                f"{header.status!r}. Only a COMPLETE snapshot is served: a partial one answers "
-                "the universe question with a subset and nothing in the answer says so."
+                f"A membership row for {row.security_id} is dated "
+                f"{row.session_date.isoformat()} under the header for {session.isoformat()}. "
+                "A snapshot is one session's decisions."
             )
-        if header.row_count != len(rows):
+        if row.universe_definition_version != header.universe_definition_version:
             raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} declares {header.row_count} "
-                f"rows and {len(rows)} were stored. A zero-row snapshot is legitimate; a "
-                "header that miscounts is not."
+                f"The membership row for {row.security_id} on {session.isoformat()} is keyed "
+                f"to universe definition {row.universe_definition_version!r} and its header "
+                f"declares {header.universe_definition_version!r}. Changing the rule creates "
+                "a new version; it does not retroactively change history."
             )
-        recomputed = content_hash(sorted(membership_hash_of(row) for row in rows))
-        if recomputed != header.snapshot_content_hash:
+        if row.resolved_profile is not header.resolved_profile:
             raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} records content hash "
-                f"{header.snapshot_content_hash} and its stored rows hash to {recomputed}. "
-                "The membership changed after the header was written, or the header describes "
-                "a different snapshot."
-            )
-        if header.envelope.dataset_version != manifest.dataset_version:
-            raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} is stamped with dataset "
-                f"version {header.envelope.dataset_version!r} inside publication "
-                f"{manifest.dataset_version!r}. A header copied from another build describes "
-                "that build."
-            )
-        if header.envelope.artifact_first_built_time > manifest.build_time:
-            raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} claims it was first built at "
-                f"{header.envelope.artifact_first_built_time.isoformat()}, after the build "
-                f"itself at {manifest.build_time.isoformat()}."
-            )
-        if header.resolved_profile is not manifest.resolved_profile:
-            raise DatasetPublicationError(
-                f"The snapshot header for {session.isoformat()} is keyed to "
-                f"{header.resolved_profile.value} while the build resolved to "
-                f"{manifest.resolved_profile.value}."
+                f"The membership row for {row.security_id} on {session.isoformat()} is keyed "
+                f"to {row.resolved_profile.value} and its header to "
+                f"{header.resolved_profile.value}. Eligibility is evaluated on admissible "
+                "data, so membership is profile-specific."
             )
 
 

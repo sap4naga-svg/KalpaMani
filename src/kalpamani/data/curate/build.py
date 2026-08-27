@@ -156,6 +156,7 @@ def build_gold_dataset(
             resolved_profile=resolved.resolved_profile,
             evaluation_cutoff=cutoff,
             considered_listings=snapshot.considered_listings,
+            required_domain_coverage=snapshot.required_domain_coverage,
             artifact_first_built_time=artifact_first_built_time,
             ingestion_time=ingestion_time,
             dataset_version=dataset_version,

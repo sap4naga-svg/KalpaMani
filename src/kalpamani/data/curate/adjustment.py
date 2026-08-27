@@ -176,8 +176,14 @@ def relevant_actions(
         if action.ex_date is None:
             continue
         # An action taking effect after the interval adjusts none of its bars;
-        # one before the interval is already reflected in every bar it holds.
-        if action.ex_date > valid_time_end or action.ex_date <= valid_time_start:
+        # one *before* it is already reflected in every bar it holds.
+        #
+        # An action ON the first day is neither. The convention applies a factor
+        # to every bar on or after the ex-date, so a split whose ex-date is
+        # valid_time_start scales the first bar -- and excluding it (`<=`) left the
+        # artifact's numbers and its lineage agreeing with each other while both
+        # contradicted the convention the artifact is labelled with.
+        if action.ex_date > valid_time_end or action.ex_date < valid_time_start:
             continue
         kept.append(action)
     return tuple(sorted(kept, key=lambda item: (item.ex_date or date.min, item.action_id)))
@@ -295,6 +301,16 @@ def series_content_hash(series: Sequence[PriceBarValues]) -> str:
     )
 
 
+def source_versions(records: Sequence[PitRecord]) -> tuple[str, ...]:
+    """Every source build a set of rows came from, canonical and deduplicated.
+
+    Derived from the rows rather than accepted from a caller. A caller-supplied
+    version entered the artifact key unverified, so an artifact could be keyed to
+    a build it had not read -- and the key is what a later result cites.
+    """
+    return tuple(sorted({record.envelope.dataset_version for record in records}))
+
+
 def bar_lineage_hash(bars: Sequence[PriceBar]) -> str:
     """Canonical hash of exactly which raw bars an artifact consumed.
 
@@ -329,8 +345,8 @@ def artifact_key(
     adjustment_convention: AdjustmentConvention,
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
-    corporate_action_dataset_version: str,
-    raw_bar_dataset_version: str,
+    corporate_action_dataset_versions: tuple[str, ...],
+    raw_bar_dataset_versions: tuple[str, ...],
     security_id_scope: str,
     bar_resolution: BarResolution,
     valid_time_start: date,
@@ -353,14 +369,18 @@ def artifact_key(
     ``price_bar_lineage_hash``/``action_lineage_hash``
         Dataset versions say which *builds* were read, not which **rows**. Two
         artifacts reading different subsets of one version had identical keys.
+
+    The two version fields are **tuples derived from the rows**, not scalars
+    supplied by the caller. Exact lineage can span several immutable builds, so a
+    single version could only be true of one of them, and nothing checked which.
     """
     return {
         "adjustment_policy": adjustment_policy.value,
         "adjustment_convention": adjustment_convention.value,
         "resolved_profile": resolved_profile.value,
         "as_of_epoch": as_of_epoch,
-        "corporate_action_dataset_version": corporate_action_dataset_version,
-        "raw_bar_dataset_version": raw_bar_dataset_version,
+        "corporate_action_dataset_versions": list(corporate_action_dataset_versions),
+        "raw_bar_dataset_versions": list(raw_bar_dataset_versions),
         "security_id_scope": security_id_scope,
         "bar_resolution": bar_resolution.value,
         "valid_time_start": valid_time_start,
@@ -461,8 +481,6 @@ def build_adjusted_bar_artifact(
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
     approvals: BoundApprovals,
-    corporate_action_dataset_version: str,
-    raw_bar_dataset_version: str,
     security_id_scope: str,
     valid_time_start: date,
     valid_time_end: date,
@@ -525,13 +543,15 @@ def build_adjusted_bar_artifact(
         approvals=approvals,
     )
     resolution = bars[0].resolution
+    bar_versions = source_versions(bars)
+    action_versions = source_versions(admitted)
     key = artifact_key(
         adjustment_policy=adjustment_policy,
         adjustment_convention=adjustment_convention,
         resolved_profile=resolved_profile,
         as_of_epoch=as_of_epoch,
-        corporate_action_dataset_version=corporate_action_dataset_version,
-        raw_bar_dataset_version=raw_bar_dataset_version,
+        corporate_action_dataset_versions=action_versions,
+        raw_bar_dataset_versions=bar_versions,
         security_id_scope=security_id_scope,
         bar_resolution=resolution,
         valid_time_start=valid_time_start,
@@ -547,8 +567,8 @@ def build_adjusted_bar_artifact(
         adjustment_convention=adjustment_convention,
         resolved_profile=resolved_profile,
         as_of_epoch=as_of_epoch,
-        corporate_action_dataset_version=corporate_action_dataset_version,
-        raw_bar_dataset_version=raw_bar_dataset_version,
+        corporate_action_dataset_versions=action_versions,
+        raw_bar_dataset_versions=bar_versions,
         security_id_scope=security_id_scope,
         series=series,
         inputs=inputs,
@@ -617,7 +637,7 @@ def _resolved_lineage(
         ArtifactIntegrityError: if a reference names a row that is absent, or one
             that resolves in a different dataset version than the artifact read.
     """
-    by_action = {action.action_id: action for action in actions}
+    by_action = {(action.action_id, action.envelope.dataset_version): action for action in actions}
     resolved_bars: list[PriceBar] = []
     resolved_actions: list[CorporateAction] = []
 
@@ -630,19 +650,17 @@ def _resolved_lineage(
                     "reference with no action_id; a predicate cannot say which action was "
                     "consumed."
                 )
-            action = by_action.get(action_id)
+            # Keyed by (action_id, dataset_version), so the version selects the
+            # row rather than being checked after one was chosen. A corrected
+            # ratio in a later build shares the action_id, and matching on that
+            # alone found whichever copy happened to be last in the mapping.
+            action = by_action.get((action_id, ref.dataset_version))
             if action is None:
                 raise ArtifactIntegrityError(
-                    f"Artifact {artifact.artifact_id} names corporate action {action_id!r}, "
-                    "which is not among the actions supplied for verification."
-                )
-            if action.envelope.dataset_version != ref.dataset_version:
-                raise ArtifactIntegrityError(
-                    f"Corporate action {action_id!r} resolves in dataset version "
-                    f"{action.envelope.dataset_version!r}, not the {ref.dataset_version!r} "
-                    "the artifact's lineage names. A later build can carry a corrected "
-                    "ratio, and verifying against it would prove nothing about what the "
-                    "artifact read."
+                    f"Artifact {artifact.artifact_id} names corporate action {action_id!r} in "
+                    f"dataset version {ref.dataset_version!r}, which is not among the actions "
+                    "supplied for verification. A later build can carry a corrected ratio, and "
+                    "verifying against it would prove nothing about what the artifact read."
                 )
             resolved_actions.append(action)
         elif ref.entity == "price_bar":
@@ -691,7 +709,13 @@ def _recomputed_key(
     bars: Sequence[PriceBar],
     actions: Sequence[CorporateAction],
 ) -> dict[str, object]:
-    """The key the resolved lineage implies, rebuilt from scratch."""
+    """The key the resolved lineage implies, rebuilt from scratch.
+
+    Every part comes from the rows the lineage resolved to, including the source
+    version tuples. A version the artifact merely *claims* cannot enter the
+    recomputation, so a false one fails to rebuild the id rather than being
+    carried into it.
+    """
     validity = artifact.envelope.validity
     if (
         validity.output_validity is not OutputValidity.INTERVAL
@@ -715,8 +739,8 @@ def _recomputed_key(
         adjustment_convention=artifact.adjustment_convention,
         resolved_profile=artifact.resolved_profile,
         as_of_epoch=artifact.as_of_epoch,
-        corporate_action_dataset_version=artifact.corporate_action_dataset_version,
-        raw_bar_dataset_version=artifact.raw_bar_dataset_version,
+        corporate_action_dataset_versions=source_versions(actions),
+        raw_bar_dataset_versions=source_versions(bars),
         security_id_scope=artifact.security_id_scope,
         bar_resolution=resolutions[0],
         valid_time_start=validity.valid_time_start,
@@ -739,7 +763,8 @@ def verify_adjusted_bar_artifact(
 
     1. **resolve** every lineage reference to the exact rows it names, in the
        dataset version it names -- a matching key from a later build is not the
-       row the artifact read;
+       row the artifact read, and the artifact's own claimed source versions must
+       agree with what resolved;
     2. **rebuild the key** from those rows and compare the derived
        ``artifact_id``, so an artifact whose identity does not follow from its own
        lineage is refused before its numbers are examined;
@@ -766,6 +791,21 @@ def verify_adjusted_bar_artifact(
         raise ArtifactIntegrityError(
             f"Artifact {artifact.artifact_id} resolves to no price bars. An artifact whose "
             "lineage names nothing cannot be shown to have read anything."
+        )
+
+    derived_bars = source_versions(lineage_bars)
+    derived_actions = source_versions(lineage_actions)
+    if (
+        artifact.raw_bar_dataset_versions != derived_bars
+        or artifact.corporate_action_dataset_versions != derived_actions
+    ):
+        raise ArtifactIntegrityError(
+            f"Adjusted artifact {artifact.artifact_id} claims source versions "
+            f"{list(artifact.raw_bar_dataset_versions)} for bars and "
+            f"{list(artifact.corporate_action_dataset_versions)} for actions, and its lineage "
+            f"resolves in {list(derived_bars)} and {list(derived_actions)}. The recomputed key "
+            "is built from the rows, so a false claim here would otherwise be ignored rather "
+            "than refused -- and the claim is what a later result cites."
         )
 
     rebuilt = artifact_id_for(_recomputed_key(artifact, lineage_bars, lineage_actions))
@@ -845,5 +885,6 @@ __all__ = [
     "relevant_actions",
     "require_supported_convention",
     "series_content_hash",
+    "source_versions",
     "verify_adjusted_bar_artifact",
 ]

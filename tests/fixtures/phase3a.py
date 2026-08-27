@@ -1279,8 +1279,6 @@ def adjusted_artifact() -> AdjustedBarArtifact:
         resolved_profile=InformationSetProfile.PUBLIC_PIT,
         as_of_epoch=utc(2019, 7, 1, 12, 0),
         approvals=approvals(),
-        corporate_action_dataset_version=ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=BAR_DATASET_VERSION,
         security_id_scope=SEC_CONTINUOUS,
         valid_time_start=date(2019, 6, 24),
         valid_time_end=date(2019, 6, 28),

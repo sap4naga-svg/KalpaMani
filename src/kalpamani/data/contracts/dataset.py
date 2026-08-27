@@ -73,6 +73,13 @@ class UniverseSnapshotHeader:
     has an **availability**. Under ``FORWARD_SYSTEM`` a zero-row snapshot cannot
     be served before ``artifact_first_built_time``, because before we built it we
     did not know the rule selected nobody -- we knew nothing.
+
+    **Its lineage is the whole build, not the part that produced rows.** An
+    earlier version attached the considered listing states only when no membership
+    row had lineage of its own, which made the evidence for "this security was
+    looked at and produced nothing" appear exactly when there was nothing else and
+    vanish the moment one other security qualified. A security that was considered
+    and excluded is part of what the snapshot decided, so it is always named.
     """
 
     session_date: date
@@ -83,6 +90,11 @@ class UniverseSnapshotHeader:
     snapshot_content_hash: str
     derivation_spec_version: str
     envelope: DerivedEnvelope
+    #: Per required domain: how many rows were supplied and how many were
+    #: admissible at the evaluation cutoff. The build's own coverage evidence,
+    #: carried here because a snapshot that selected nobody is only interpretable
+    #: alongside what it had to work with.
+    required_domain_coverage: tuple[tuple[str, int, int], ...] = ()
     status: str = "COMPLETE"
 
     def __post_init__(self) -> None:
@@ -126,6 +138,9 @@ class UniverseSnapshotHeader:
                 "snapshot_content_hash": self.snapshot_content_hash,
                 "derivation_spec_version": self.derivation_spec_version,
                 "status": self.status,
+                "required_domain_coverage": [
+                    list(entry) for entry in sorted(self.required_domain_coverage)
+                ],
                 "lineage": [
                     [
                         ref.entity,

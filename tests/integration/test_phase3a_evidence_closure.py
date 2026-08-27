@@ -68,6 +68,7 @@ from kalpamani.data.curate.adjustment import (
     artifact_key,
     bar_lineage_hash,
     build_adjusted_bar_artifact,
+    source_versions,
     verify_adjusted_bar_artifact,
 )
 from kalpamani.data.curate.build import build_gold_dataset
@@ -946,8 +947,6 @@ def _artifact(**overrides: Any) -> Any:
         "resolved_profile": PUBLIC,
         "as_of_epoch": _AS_OF,
         "approvals": phase3a.approvals(),
-        "corporate_action_dataset_version": phase3a.ACTION_DATASET_VERSION,
-        "raw_bar_dataset_version": phase3a.BAR_DATASET_VERSION,
         "security_id_scope": _SCOPE,
         "valid_time_start": _VALID_START,
         "valid_time_end": _VALID_END,
@@ -985,8 +984,8 @@ def test_the_bar_resolution_is_part_of_the_key() -> None:
                 adjustment_convention=ADJUSTMENT_CONVENTION,
                 resolved_profile=PUBLIC,
                 as_of_epoch=_AS_OF,
-                corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-                raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
+                corporate_action_dataset_versions=(),
+                raw_bar_dataset_versions=source_versions(_bars_for()),
                 security_id_scope=_SCOPE,
                 bar_resolution=resolution,
                 valid_time_start=_VALID_START,

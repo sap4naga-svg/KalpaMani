@@ -76,6 +76,7 @@ from kalpamani.data.curate.adjustment import (
     bar_lineage_hash,
     build_adjusted_bar_artifact,
     relevant_actions,
+    source_versions,
     verify_adjusted_bar_artifact,
 )
 from kalpamani.data.curate.build import build_gold_dataset
@@ -530,8 +531,6 @@ def _artifact(**overrides: Any) -> AdjustedBarArtifact:
         "resolved_profile": PUBLIC,
         "as_of_epoch": AFTER_EVERYTHING,
         "approvals": phase3a.approvals(),
-        "corporate_action_dataset_version": phase3a.ACTION_DATASET_VERSION,
-        "raw_bar_dataset_version": phase3a.BAR_DATASET_VERSION,
         "security_id_scope": SCOPE,
         "valid_time_start": VALID_START,
         "valid_time_end": VALID_END,
@@ -574,8 +573,8 @@ def _key(*, as_of: Any, bars: Any = None, actions: Any = None) -> dict[str, Any]
         adjustment_convention=ADJUSTMENT_CONVENTION,
         resolved_profile=PUBLIC,
         as_of_epoch=as_of,
-        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
+        corporate_action_dataset_versions=source_versions(admitted),
+        raw_bar_dataset_versions=source_versions(rows),
         security_id_scope=SCOPE,
         bar_resolution=rows[0].resolution,
         valid_time_start=VALID_START,
@@ -695,8 +694,8 @@ def test_a_tampered_adjusted_artifact_is_refused() -> None:
         adjustment_convention=artifact.adjustment_convention,
         resolved_profile=artifact.resolved_profile,
         as_of_epoch=artifact.as_of_epoch,
-        corporate_action_dataset_version=artifact.corporate_action_dataset_version,
-        raw_bar_dataset_version=artifact.raw_bar_dataset_version,
+        corporate_action_dataset_versions=artifact.corporate_action_dataset_versions,
+        raw_bar_dataset_versions=artifact.raw_bar_dataset_versions,
         security_id_scope=artifact.security_id_scope,
         series=(
             PriceBarValues(
