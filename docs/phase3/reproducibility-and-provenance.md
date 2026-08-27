@@ -10,6 +10,13 @@
 > zero-row exclusion. `ORIGIN_INELIGIBLE_ROWS_EXCLUDED` is emitted only against a positive,
 > evidenced exclusion.
 >
+> **Revision 8 (2026-08-26).** `manifest_version: 5`. The input inventory is **produced by the
+> query path and sealed to the result it describes**, rather than declared. It carries the
+> unapproved bounds and hash mismatches the run recorded — both were previously arguments to
+> emission, which meant the only party who could report them was the one with a reason not to.
+> `quality` carries the identity of the report the counts came from, so a summary cannot describe
+> one report while the run read another. All of it enters `run_id`.
+>
 > **Revision 7 (2026-08-26).** The required-input example was **not a passing manifest** — it
 > reported 34 failing partitions against a contract that refuses on one. Coverage evidence is now
 > per-scope, partition-minimum based, and the example genuinely passes.
@@ -65,7 +72,7 @@ Emitted for every backtest, factor study, scanner run and dataset build. Stored 
 result and immutable once written.
 
 ```yaml
-manifest_version: 4
+manifest_version: 5
 run_id: rs-3f9a2c81b04e7d16          # deterministic from the fields below
 
 code:
@@ -157,6 +164,13 @@ information_set:                        # mandatory
                                               # did not happen -- see section 3b.
 
 inputs:                                 # required vs optional -- see section 3a
+  # PRODUCED BY THE QUERY PATH. The run records what it reads as it reads it, and
+  # the result is sealed to that record: an inventory a caller wrote out could be
+  # shortened, and a shortened one is internally consistent -- which is exactly why
+  # it was accepted. See section 3a.
+  bounds_relied_upon: [price_bar]        # datasets whose answers leant on a bound
+  unapproved_bounds_relied_upon: []      # non-empty => emission refuses
+  hash_mismatches: []                    # non-empty => emission refuses
   required:                             # coverage EVIDENCE, not just a name list.
                                         # PER_* scopes report the PARTITION MINIMUM, never a mean.
     - domain: price_bar
@@ -269,6 +283,9 @@ quality:
   blocking_issues_open: 0            # non-zero => manifest is not emitted at all
   warnings_open: 14
   checks_not_run: [cross_provider_price, cross_provider_security_master]
+  quality_report_hash: sha256:6c1f...  # the report these counts came from. Without it a
+                                       # summary can describe one report while the run
+                                       # read another, and nothing would say so.
 
 execution:
   random_seed: 20260826

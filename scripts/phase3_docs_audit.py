@@ -728,7 +728,7 @@ def main() -> int:
 
     m = re.search(r"manifest_version:\s*(\d+)", manifest)
     f.check("manifest declares a version", m is not None, "no manifest_version found")
-    if m and int(m.group(1)) < 3:
+    if m and int(m.group(1)) < 5:
         f.check("manifest_version reflects the current schema", False, m.group(0))
     elif m:
         f.check("manifest_version reflects the current schema", True)

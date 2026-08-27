@@ -75,13 +75,16 @@ if TYPE_CHECKING:  # pragma: no cover - only the type checker needs this
 
 #: The manifest schema this module writes and reads.
 #:
-#: Deliberately still 4. The ``run_id`` inputs grew this round -- the inventory
-#: now carries the unapproved bounds and hash mismatches the run recorded -- and a
-#: version that does not move when the identity inputs move is a fair criticism.
-#: But 4 is the version an **accepted planning document** defines, and changing it
-#: is a change to that document rather than to this module. It is recorded as an
-#: acceptance limitation instead of decided here.
-MANIFEST_VERSION = 4
+#: The version identifies the **implemented** schema, and the implemented schema
+#: changed: the inventory now carries the unapproved bounds and hash mismatches
+#: the run recorded, the quality summary carries the report identity it describes,
+#: and every one of those enters ``run_id``. A version that does not move when the
+#: identity inputs move is not a version.
+#:
+#: Retaining 4 because an earlier planning example named it would have been the
+#: wrong way round -- the document describes the schema, not the reverse -- and no
+#: production Phase-3 manifest exists to migrate.
+MANIFEST_VERSION = 5
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

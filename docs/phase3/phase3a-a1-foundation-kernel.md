@@ -241,13 +241,21 @@ hand edit, a partial restore. They are executable, not prose.
 All checks are deterministic and return typed findings. **No AI, no sampling, no probabilistic
 judgement.**
 
-**A versioned quality plan says what should have run.** `phase3a.quality-plan.1` declares the
-expected check ids, which are REQUIRED and which may be declared not-run, each check's dataset
-scope, and the closed vocabulary of finding ids it may emit. Publication and read both validate
-the report against it as a **closed** comparison, so a report listing one harmless check and no
-findings -- which looks exactly like a complete clean pass -- refuses. Only
-`7_cross_provider_reconciliation` is CONDITIONAL, because reconciliation needs two independently
-licensed sources and there are none.
+**A versioned quality plan says what should have run, and a runner runs it.**
+`phase3a.quality-plan.1` declares the expected check ids, which are REQUIRED and which may be
+not-run, each check's dataset scope, the closed vocabulary of finding ids it may emit, and the
+implementations that produce them. Publication and read both validate the report against it as a
+**closed** comparison, so a report listing one harmless check and no findings -- which looks
+exactly like a complete clean pass -- refuses.
+
+`phase3a.quality-runner.1` then makes the report a product of that plan rather than an account of
+it: it invokes every applicable implementation and builds the report itself, so `checks_run` comes
+from invocation and `checks_not_run` only from an applicability decision the runner computed from
+the build. Publication accepts no other report. Two checks are CONDITIONAL:
+`7_cross_provider_reconciliation`, because reconciliation needs two independently licensed sources
+and there are none, and `4.5_adjusted_artifacts`, because a build that materialised no adjusted
+artifact has no cache to reproduce -- a decision the runner reaches from the build, not one a
+caller can ask for.
 
 ## 8. Synthetic fixture coverage
 
@@ -341,18 +349,55 @@ These are boundaries of a deliberately narrow slice, not defects:
     which is a conclusion drawn from no evidence.
 11. **Silver has no published-version machinery yet.** Only Gold is published atomically with a
     manifest; Silver remains a plain table layer, because nothing in A1 reads Silver back.
-12. **`MANIFEST_VERSION` stays 4 while the `run_id` inputs grew.** The inventory now carries the
-    unapproved bounds and hash mismatches the run recorded, which changes what `run_id` hashes.
-    A version that does not move when the identity inputs move is a fair criticism -- but 4 is
-    the version an **accepted planning document** defines, and moving it is a change to that
-    document rather than to this module. It is recorded here rather than decided silently.
-13. **The quality plan is versioned by this code, not by the planning package.**
-    `phase3a.quality-plan.1` names the checks, their scope and their finding vocabulary. It makes
-    the report falsifiable, which is what it is for; it does not make the check *content*
-    Blueprint-complete, and a plan naming the right checks is not evidence that each of them is
-    thorough.
+12. **The quality plan and runner are versioned by this code, not by the planning package.**
+    `phase3a.quality-plan.1` names the checks, their scope, their finding vocabulary and the
+    implementations that produce them; `phase3a.quality-runner.1` invokes them. Together they
+    make the report a *product* of checking rather than an account of it. They do not make the
+    check **content** Blueprint-complete: a plan naming the right checks, executed faithfully, is
+    still not evidence that each check is thorough.
+13. **`4.3_profile_service` runs over the rows the build would serve, not every stored row.**
+    Gold deliberately stores rows the resolved profile cannot serve and filters them at query
+    time, so handing the whole build to a check whose subject is "rows in a result" reports every
+    one of them as an ineligible row served. What the check establishes at build time is that
+    everything the build *would* serve resolves, is in the resolution map, is keyed to one
+    profile, and was not admitted before it was knowable. Check 4.3.5 remains a query-path
+    guarantee.
+14. **The reference fixture carries two genuine warnings.** Both continuously listed securities
+    are listed on the half-day session and have no bar for it. They are reported, not suppressed:
+    a warning labels rather than blocks, and a fixture with nothing to report would not
+    demonstrate that the runner reports anything.
+15. **The atomic-selection fallback needs a dataset built incrementally to exercise.** Within one
+    build every membership decision is admissible by its session's evaluation cutoff, so a
+    snapshot that is a candidate is also complete. The fallback and the late-arriving-decision
+    refusal are therefore tested against a dataset whose two snapshots were first built at
+    different times -- which is what an incremental pipeline produces, and what this slice does
+    not otherwise build.
 
-## 12. Evidence closure applied in revision 4
+## 12. Query and evidence atomicity applied in revision 5
+
+Revision 4 bound each artifact to what it was about. This round closes the places where a
+**result** was still assembled from parts that could be substituted, or shortened without
+saying so.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | A price series checked completeness **before** point-in-time filtering | Physical coverage was necessary and never sufficient: a bar that existed but was not yet publishable left the result, so a five-bar request came back four bars long with nothing to say so. Completeness is now checked **twice against one expected endpoint grid** -- against the stored rows, and again against what survived origin eligibility, availability resolution and the `as_of` cutoff. A `REQUIRED` series losing an endpoint to either is refused, the refusal names which of the four reasons applies to each, and where the served rows are a genuine prefix it names the `end` that would answer. `SeriesRequirement.OPTIONAL` accepts a labelled short series; neither is a default, because accessor parameters here never are |
+| 2 | A universe snapshot was selected by UTC date and then filtered row by row | Both halves were wrong. Truncating an instant to a UTC date made a session a candidate at a moment when, in its own venue's terms, it had not opened; candidacy is now decided by the session's own `evaluation_cutoff`, an absolute instant. Filtering rows individually produced a membership set that had existed at **no instant**; candidates are now tried latest-first and the first available **in its entirety** is served, falling back to the whole earlier snapshot rather than part of the later one, and refusing when none is complete |
+| 3 | The inventory conflated source datasets with derived artifacts | A universe query reads a **stored derived artifact**. Recording `universe_membership` as a directly-read source dataset made the manifest demand provider-resolution evidence for a table no resolution produces evidence about. A universe query now records the snapshot's full derived identity and no source dataset; a RAW price query records `price_bar` alone and no revision view, because it reads no corporate actions; an ADJUSTED query records both, requires an explicit `revision_view`, and applies it per action so a corrected and an uncorrected revision cannot both reach the arithmetic |
+| 4 | An `InputInventory` built from evidence and one written by hand were the same type | So the manifest accepted a shortened one on sight -- internally consistent, which is exactly why it passed. `ExecutedResult` binds the result, its exact bytes, the execution evidence, the publication identity and the quality identity into one value only the reader can produce. `emit_manifest` takes it and cross-checks the manifest **against what the run recorded**: the result hash three ways, the quality-report identity, the itemised exclusions and the bounds actually used |
+| 5 | The plan said what should run; nothing established that anything did | `checks_run` was a tuple of strings a caller supplied, so writing out every check id satisfied the plan completely with nothing invoked. A `QualityRunner` holds a registry of implementations, invokes them, and builds the report itself: `checks_run` from actual invocation, `checks_not_run` only from an applicability decision **the runner computed from the build**. A REQUIRED check with no implementation refuses, and so does a plan that marks one REQUIRED while naming none. The rebuild check genuinely rebuilds. Publication accepts only a runner-produced report, checked after the plan so a wrong report still fails for being wrong |
+| 6 | Replay checked `dataset_version` **after** matching | Given two immutable builds of one listing, matching on the logical key found both, the uniqueness rule fired first, and replay refused as ambiguous against lineage that named exactly one of them. Version now selects the candidate; uniqueness is evaluated inside the named build, where a genuine duplicate still refuses |
+| 7 | The empty-history sentinel proved nothing | Version `"none"` with an empty endpoint list resolved to an empty tuple whatever the store held. A no-history claim now names a governed window, the publications it was established against, and the **profile** it was established under -- the last because the rule saw the admissible set, and testing the claim against every stored row refuses builds that were right. Replay searches, and a bar inside the window refuses |
+| 8 | The header named considered listings only when nothing qualified | Precisely backwards: the evidence for "this security was looked at and did not qualify" appeared exactly when nothing qualified, and vanished the moment one other security did. The header now always names both halves -- every decision's exact lineage and every considered listing state -- plus the build's own required-domain coverage. The verified read replays that lineage and holds every row to its header on session, definition version and profile |
+| 9 | The adjusted artifact took its source versions from the caller | Two scalars, unverified, while an exact lineage can span several immutable builds. Both are now **tuples derived from the resolved rows**, and an artifact whose claimed versions disagree with what resolved is refused -- previously such a claim was ignored rather than caught. Corporate-action replay keys on `(action_id, dataset_version)`. The interval boundary was off by one case: the convention applies a factor on or after the ex-date, so a split whose ex-date **is** `valid_time_start` scales the first bar, and excluding it left the numbers and the lineage agreeing while both contradicted the convention |
+| 10 | `MANIFEST_VERSION` did not move when the identity inputs did | Now **5**. The version identifies the implemented schema, and the implemented schema changed. Retaining 4 because an earlier planning example named it would have been the wrong way round -- the document describes the schema, not the reverse -- and no production Phase-3 manifest exists to migrate |
+
+**Running the checks for real found three things.** Two were mistakes in how they were registered:
+the stored-shape check was handed whole encoded rows rather than their envelopes, and the
+profile-service check was handed every stored row rather than the servable ones. The third is a
+real gap in the reference fixture, reported as two warnings (limitation 14).
+
+## 13. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
 it rather than to the claim itself. Each row below is a way the previous code would have said yes.
@@ -371,7 +416,7 @@ it rather than to the claim itself. Each row below is a way the previous code wo
 | 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
 | 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
 
-## 13. Enforcement closure applied in revision 3
+## 14. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -392,7 +437,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 14. Corrections applied in revision 2
+## 15. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -411,13 +456,13 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 15. Verification
+## 16. Verification
 
 ```
-pytest                        815 passed   (440 pre-existing, 375 new)
+pytest                        908 passed   (440 pre-existing, 468 new)
 ruff check .                  clean
 ruff format --check .         clean
-mypy                          clean, strict, 84 files
+mypy                          clean, strict, 88 files
 scripts/phase1_preflight.py   exit 0
 scripts/phase2_preflight.py   exit 0
 scripts/phase3_docs_audit.py  exit 0
