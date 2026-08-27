@@ -241,6 +241,14 @@ hand edit, a partial restore. They are executable, not prose.
 All checks are deterministic and return typed findings. **No AI, no sampling, no probabilistic
 judgement.**
 
+**A versioned quality plan says what should have run.** `phase3a.quality-plan.1` declares the
+expected check ids, which are REQUIRED and which may be declared not-run, each check's dataset
+scope, and the closed vocabulary of finding ids it may emit. Publication and read both validate
+the report against it as a **closed** comparison, so a report listing one harmless check and no
+findings -- which looks exactly like a complete clean pass -- refuses. Only
+`7_cross_provider_reconciliation` is CONDITIONAL, because reconciliation needs two independently
+licensed sources and there are none.
+
 ## 8. Synthetic fixture coverage
 
 Four fictitious securities, an invented calendar, invented prices, and no clock anywhere:
@@ -251,6 +259,9 @@ Four fictitious securities, an invented calendar, invented prices, and no clock 
 - a ticker (`OBSQ`) legitimately recycled by a different security in 2021 — which must **pass**;
   only an *overlap* is a defect, and that adversarial variant is tested separately
 - a regular session, a **half-day** session, and two distinct **minute bars** in one session
+- a **programmatically generated dense minute grid** over one regular session (390 endpoints) and
+  one half day (210), derived from the venue calendar rather than listed, so the accepting path is
+  proven end to end and the half day is short on purpose rather than short by omission
 - a split announced 2019-06-25 with a 2019-06-27 ex-date — knowable on the 26th, applied only
   from the 27th, and invisible at an as-of of the 24th
 - a date-only announcement resolved by an approved `DATE_PLUS_LAG` bound
@@ -325,11 +336,42 @@ These are boundaries of a deliberately narrow slice, not defects:
    it is inherited rather than retrofitted.
 10. **The survivorship alarm needs deep history to say anything.** Over a dataset whose snapshots
     are all recent it draws no conclusion at all -- correctly, but that means it is not a check
-    a short-horizon build gets any assurance from.
+    a short-horizon build gets any assurance from. It now also requires deep-history snapshots
+    that actually **selected members**: two empty ones used to raise the alarm between them,
+    which is a conclusion drawn from no evidence.
 11. **Silver has no published-version machinery yet.** Only Gold is published atomically with a
     manifest; Silver remains a plain table layer, because nothing in A1 reads Silver back.
+12. **`MANIFEST_VERSION` stays 4 while the `run_id` inputs grew.** The inventory now carries the
+    unapproved bounds and hash mismatches the run recorded, which changes what `run_id` hashes.
+    A version that does not move when the identity inputs move is a fair criticism -- but 4 is
+    the version an **accepted planning document** defines, and moving it is a change to that
+    document rather than to this module. It is recorded here rather than decided silently.
+13. **The quality plan is versioned by this code, not by the planning package.**
+    `phase3a.quality-plan.1` names the checks, their scope and their finding vocabulary. It makes
+    the report falsifiable, which is what it is for; it does not make the check *content*
+    Blueprint-complete, and a plan naming the right checks is not evidence that each of them is
+    thorough.
 
-## 12. Enforcement closure applied in revision 3
+## 12. Evidence closure applied in revision 4
+
+Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
+it rather than to the claim itself. Each row below is a way the previous code would have said yes.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | The receipt was keyed on row **names** | A source-row identity now carries entity, source dataset version, source id, vendor record id, logical primary key, revision sequence **and the row's full canonical content hash**. A corrected price or a revised availability time under the same `source_id` changes the fingerprint. Publication checks the row fingerprint, the evidence fingerprint, the policy version, and every evidence entry's policy and stated reason against the canonical map. The read **recomputes the whole receipt** from the manifest, the persisted evidence and the rows it decoded -- the earlier read reconstructed one with empty fingerprints, which could only ever agree with itself |
+| 2 | Lineage named the **Gold** version as every source version | A Gold build stores a *copy* of a row, and a copy does not become the source. Every selector now carries `row.envelope.dataset_version`, and a history spanning several immutable source versions produces one reference per version rather than one that averages them. An empty history is recorded explicitly, so "no prior bars" stays distinguishable from "unrecorded" |
+| 3 | A reader accepted three objects passed side by side | `read_published_dataset` returns a **`VerifiedPublication`** carrying a seal over the manifest, the report and the recomputed receipt, and only the verified read path holds the token that constructs one. A hand-assembled triplet's hashes agree with *each other*, which is not agreeing with storage -- and that is exactly what the old constructor checked |
+| 4 | A report said what ran; nothing said what **should** have | A versioned **`QualityPlan`** declares the expected check ids, which are REQUIRED and which may be declared not-run, each check's dataset scope and its closed finding vocabulary. Validation is a closed comparison: run ∪ not-run must equal expected, disjoint, no duplicates; every finding must belong to a check that ran and fall inside its scope; every published table must be covered; every required policy version must be present. The plan is looked up **by version on read**. The manifest also binds the **exact persisted report bytes**, because the logical hash omits `produced_at` by design |
+| 5 | The snapshot header was an unattributed row count | It is a derived artifact: lineage, first-built time, spec version, content hash, `SESSION_SCOPED` validity, and a `header_identity_hash` covering session, definition, profile, cutoff, status, row count, membership hashes and lineage. The read verifies identity, `COMPLETE` status, row agreement, content hash and stamped dataset version. Under `FORWARD_SYSTEM` a snapshot is **not served before `artifact_first_built_time`** -- the zero-row case has no membership rows to carry that constraint on its behalf |
+| 6 | Two different adjusted artifacts could share one key | The key now covers the validity interval, the source `BarResolution`, and exact canonical **price-bar and action lineage hashes** alongside policy, convention, profile, `as_of`, source dataset versions, spec version and scope. Bar lineage names exact endpoints per security per source version rather than a scope-and-range predicate, and verification resolves the recorded selectors, checks their versions, **rebuilds the key and the id**, and recomputes from only those rows |
+| 7 | "Repaired" was inferred from circumstance | An acquisition has a durable state: `PENDING` record, then content, then `COMPLETE`. `repaired=True` now requires completing a pre-existing `PENDING` identity. A new run id over content the store already holds is `content_written=False, acquisition_written=True, repaired=False` -- an ordinary second fetch, which used to be logged as a recovery event. Acquisition identity is **globally** unique, and an idempotent rewrite still verifies the stored bytes |
+| 8 | Internal filenames were matched by prefix | `write_staged_bytes` accepts an **exact allowlist** of this package's own files; `_dataset_manifest.json/../../escape` also begins with an underscore. Components ending in a dot or space, and Windows device names (`CON PRN AUX NUL COM1-9 LPT1-9`) at any extension, are refused on every platform -- a store written on one is read on another |
+| 9 | The inventory arrived through side channels | The verified query path records what it reads as it reads it and hands out an immutable `ExecutionEvidence`; `InputInventory.from_execution` builds the inventory from that. `emit_manifest` no longer takes `unapproved_bounds_relied_upon` or `hash_mismatches` -- the only party who could have reported them was the one with a reason not to. The result hash covers the **exact bytes** rather than a decoded string, and emission cross-checks the quality-report identity, the origin-exclusion count and the bounds against the resolution evidence |
+| 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
+| 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
+
+## 13. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -350,7 +392,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 13. Corrections applied in revision 2
+## 14. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -369,13 +411,13 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 14. Verification
+## 15. Verification
 
 ```
-pytest                        737 passed   (440 pre-existing, 297 new)
+pytest                        815 passed   (440 pre-existing, 375 new)
 ruff check .                  clean
 ruff format --check .         clean
-mypy                          clean, strict, 80 files
+mypy                          clean, strict, 84 files
 scripts/phase1_preflight.py   exit 0
 scripts/phase2_preflight.py   exit 0
 scripts/phase3_docs_audit.py  exit 0
