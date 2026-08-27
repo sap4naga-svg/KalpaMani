@@ -1333,7 +1333,10 @@ def test_emit_manifest_no_longer_accepts_a_side_channel() -> None:
     parameters = inspect.signature(emit_manifest).parameters
     assert "unapproved_bounds_relied_upon" not in parameters
     assert "hash_mismatches" not in parameters
-    assert set(parameters) == {"manifest", "result_bytes"}
+    assert set(parameters) == {"manifest", "result_bytes", "executed"}, (
+        "`executed` is the sealed result the manifest is checked against -- the opposite of a "
+        "side channel, since only the reader can produce one."
+    )
 
 
 # ---------------------------------------------------------------------------

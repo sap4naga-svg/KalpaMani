@@ -119,9 +119,12 @@ from kalpamani.data.curate.publication import DatasetManifest, VerifiedPublicati
 from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
 from kalpamani.data.curate.universe import current_listings
 from kalpamani.data.pit.execution import (
+    _EXECUTION_TOKEN,
     ConsumedArtifactRecord,
+    ExecutedResult,
     ExecutionEvidence,
     ExecutionRecorder,
+    seal_executed_result,
 )
 from kalpamani.data.quality.report import QualityReport
 
@@ -312,6 +315,30 @@ class PointInTimeReader:
     def publication(self) -> VerifiedPublication:
         """The verified publication this reader serves, seal included."""
         return self._publication
+
+    def seal(self, result: object, *, result_bytes: bytes) -> ExecutedResult:
+        """Bind a result to the evidence this reader recorded while producing it.
+
+        The only way to obtain an :class:`ExecutedResult`, and the only thing the
+        research manifest accepts. A result and an inventory that travel
+        separately can each be substituted; sealed together they cannot.
+
+        ``result_bytes`` are the exact bytes the caller will emit, hashed here so
+        the manifest's claim about what was produced is checked against the thing
+        produced rather than against a description of it.
+        """
+        evidence = self._recorder.evidence()
+        return seal_executed_result(
+            result=result,
+            result_bytes=result_bytes,
+            evidence=evidence,
+            dataset_version=self._manifest.dataset_version,
+            publication_manifest_hash=self._manifest.manifest_hash,
+            quality_report_hash=self._quality.report_hash,
+            origin_exclusions=self._recorder.origin_exclusions(),
+            bounds_relied_upon=evidence.bounds_relied_upon,
+            token=_EXECUTION_TOKEN,
+        )
 
     def execution_evidence(self) -> ExecutionEvidence:
         """What this reader actually read, recorded as it read it.
@@ -644,6 +671,7 @@ class PointInTimeReader:
             datasets,
             revisable=() if adjustment_mode.is_raw else ("corporate_action",),
             excluded_rows=sum(excluded.values()),
+            exclusions=excluded,
         )
         self._record_bounds(datasets)
 
@@ -1197,6 +1225,7 @@ __all__ = [
     "UNIVERSE_DATASETS",
     "BarSeriesResult",
     "Endpoint",
+    "ExecutedResult",
     "OriginExclusionCount",
     "PointInTimeReader",
     "ResultProvenance",

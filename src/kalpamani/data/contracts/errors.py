@@ -162,6 +162,15 @@ class QualityGateError(PointInTimeError):
     """
 
 
+class ExecutionSealError(PointInTimeError):
+    """A result was offered without the evidence that produced it.
+
+    A result and an inventory that travel separately can each be substituted for
+    something else. Sealing them together makes the substitution a type error
+    rather than a discrepancy nobody notices.
+    """
+
+
 class ManifestRefusedError(PointInTimeError):
     """A research manifest could not be emitted, so the result is inadmissible.
 
@@ -189,6 +198,7 @@ __all__ = [
     "DatasetCoverageError",
     "DatasetPublicationError",
     "EnvelopeError",
+    "ExecutionSealError",
     "IncompleteCoverageError",
     "IneligibleUnderProfileError",
     "ManifestRefusedError",

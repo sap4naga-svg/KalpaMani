@@ -17,14 +17,27 @@ reads it, into an accumulator it owns, and hands out an immutable
 :class:`ExecutionEvidence` snapshot. :class:`~kalpamani.data.contracts.manifest.InputInventory`
 is built **from** that snapshot. If the query path did not record a dataset, that
 is a bug here -- not a caller's prerogative.
+
+**And the inventory is not substitutable.** An ``InputInventory`` built from
+evidence and one written out by hand are the same type, so the manifest could not
+tell them apart: a caller who shortened the dataset list, dropped a consumed
+artifact or restated the exclusion count produced an object the manifest accepted
+on sight. :class:`ExecutedResult` closes that. It binds the result bytes, the
+evidence, the verified publication's identity and the quality evidence into one
+sealed value that only the reader can produce, and manifest construction takes
+*it* rather than a freely constructed inventory.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
+from typing import Final
+
+from kalpamani.data.contracts.canonical import sha256_hex
+from kalpamani.data.contracts.errors import ExecutionSealError
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -101,6 +114,7 @@ class ExecutionRecorder:
         self._unapproved_bounds: set[str] = set()
         self._hash_mismatches: set[str] = set()
         self._excluded_rows = 0
+        self._exclusions: dict[tuple[str, str], int] = {}
 
     def record_read(
         self,
@@ -108,11 +122,25 @@ class ExecutionRecorder:
         *,
         revisable: Iterable[str] = (),
         excluded_rows: int = 0,
+        exclusions: Mapping[tuple[str, str], int] | None = None,
     ) -> None:
-        """Record one query's direct source reads."""
+        """Record one query's direct source reads.
+
+        ``exclusions`` are itemised by (dataset, origin) as well as counted, so
+        the manifest's origin-exclusion block and the run's own count come from
+        one place and cannot disagree.
+        """
         self._datasets.update(datasets)
         self._revisable.update(revisable)
         self._excluded_rows += excluded_rows
+        for key, rows in (exclusions or {}).items():
+            self._exclusions[key] = self._exclusions.get(key, 0) + rows
+
+    def origin_exclusions(self) -> tuple[tuple[str, str, int], ...]:
+        """Rows dropped for origin ineligibility, itemised and ordered."""
+        return tuple(
+            (dataset, origin, rows) for (dataset, origin), rows in sorted(self._exclusions.items())
+        )
 
     def record_artifact(self, artifact: ConsumedArtifactRecord) -> None:
         """Record a derived artifact a query consumed, with its full identity.
@@ -153,4 +181,93 @@ class ExecutionRecorder:
         )
 
 
-__all__ = ["ConsumedArtifactRecord", "ExecutionEvidence", "ExecutionRecorder"]
+#: Held by the point-in-time reader alone. An ``ExecutedResult`` carrying it came
+#: out of an actual query.
+_EXECUTION_TOKEN: Final = object()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutedResult:
+    """One query's answer, sealed to the evidence that produced it.
+
+    The result and its provenance travel as one value because separating them is
+    what let them disagree. A caller holding a result and an inventory could
+    substitute either; a caller holding this can substitute neither, because only
+    :class:`~kalpamani.data.pit.accessors.PointInTimeReader` can make one.
+
+    ``result_bytes_hash`` is over the **exact bytes** the caller will emit, so the
+    manifest's claim about what was produced is checked against the thing
+    produced rather than against a description of it.
+    """
+
+    #: The typed query result, whatever the accessor returned.
+    result: object
+    #: SHA-256 of the exact canonical bytes this result is emitted as.
+    result_bytes_hash: str
+    evidence: ExecutionEvidence
+    dataset_version: str
+    publication_manifest_hash: str
+    quality_report_hash: str
+    #: Rows dropped for origin ineligibility, itemised as the manifest records them.
+    origin_exclusions: tuple[tuple[str, str, int], ...]
+    #: Datasets whose answers leant on a bounded availability.
+    bounds_relied_upon: tuple[str, ...]
+    produced_by: object
+
+    def __post_init__(self) -> None:
+        if self.produced_by is not _EXECUTION_TOKEN:
+            raise ExecutionSealError(
+                "An ExecutedResult may only be produced by PointInTimeReader. A result and an "
+                "inventory assembled at a call site can each be substituted for something "
+                "else, which is the whole reason they now travel as one sealed value."
+            )
+        if not self.result_bytes_hash:
+            raise ExecutionSealError(
+                "An ExecutedResult carries no result hash. A result nothing identifies cannot "
+                "be checked against the manifest that claims to describe it."
+            )
+        if not self.quality_report_hash:
+            raise ExecutionSealError(
+                "An ExecutedResult carries no quality-report identity. Absence of evidence and "
+                "absence of a finding are different claims."
+            )
+
+    @property
+    def exclusion_rows(self) -> int:
+        """Total rows dropped for origin ineligibility across this result."""
+        return sum(rows for _, _, rows in self.origin_exclusions)
+
+
+def seal_executed_result(
+    *,
+    result: object,
+    result_bytes: bytes,
+    evidence: ExecutionEvidence,
+    dataset_version: str,
+    publication_manifest_hash: str,
+    quality_report_hash: str,
+    origin_exclusions: Sequence[tuple[str, str, int]],
+    bounds_relied_upon: Sequence[str],
+    token: object,
+) -> ExecutedResult:
+    """Seal a result. ``token`` is the reader's, and nothing else has it."""
+    return ExecutedResult(
+        result=result,
+        result_bytes_hash=sha256_hex(result_bytes),
+        evidence=evidence,
+        dataset_version=dataset_version,
+        publication_manifest_hash=publication_manifest_hash,
+        quality_report_hash=quality_report_hash,
+        origin_exclusions=tuple(sorted(origin_exclusions)),
+        bounds_relied_upon=tuple(sorted(set(bounds_relied_upon))),
+        produced_by=token,
+    )
+
+
+__all__ = [
+    "ConsumedArtifactRecord",
+    "ExecutedResult",
+    "ExecutionEvidence",
+    "ExecutionRecorder",
+    "seal_executed_result",
+]

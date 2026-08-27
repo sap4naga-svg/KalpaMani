@@ -31,6 +31,16 @@ quiet was the one being asked. Both now come from
 :class:`~kalpamani.data.pit.execution.ExecutionEvidence`, produced by the query
 path while it executed.
 
+**And the inventory is not substitutable.** Building it *from* evidence was not
+enough while a hand-written ``InputInventory`` remained the same type: a caller
+who shortened the dataset list, dropped a consumed artifact or restated the
+exclusion count produced an object this module accepted on sight.
+:func:`inventory_for` takes a sealed
+:class:`~kalpamani.data.pit.execution.ExecutedResult` -- which only the
+point-in-time reader can produce -- and :func:`emit_manifest` cross-checks the
+manifest against it: the result hash three ways, the quality-report identity, the
+itemised exclusions and the bounds actually used.
+
 **Every limitation token needs positive evidence in the same manifest.** A token
 is a claim about this run, and a reader must be able to find what it refers to
 without leaving the file. A domain that was never populated is not a domain whose
@@ -61,7 +71,7 @@ from kalpamani.data.contracts.vocabulary import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - only the type checker needs this
-    from kalpamani.data.pit.execution import ExecutionEvidence
+    from kalpamani.data.pit.execution import ExecutedResult, ExecutionEvidence
 
 #: The manifest schema this module writes and reads.
 #:
@@ -279,6 +289,10 @@ class InputInventory:
         earlier version decoded them to text first, which meant two byte strings
         that decode alike shared an identity -- and any payload that is not valid
         UTF-8 had no honest hash at all.
+
+        The production path goes through :func:`inventory_for` instead, which
+        takes a sealed result rather than loose evidence. This stays because
+        adversarial tests need to build an inventory that is wrong on purpose.
         """
         return cls(
             direct_source_datasets=evidence.direct_source_datasets,
@@ -425,12 +439,51 @@ _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
 }
 
 
-def emit_manifest(manifest: ResearchManifest, *, result_bytes: bytes) -> ResearchManifest:
+def inventory_for(executed: ExecutedResult) -> InputInventory:
+    """The inventory for a sealed result. The only production route to one.
+
+    Every field comes from the seal, so there is nothing for a caller to shorten
+    on the way through.
+    """
+    return InputInventory(
+        direct_source_datasets=executed.evidence.direct_source_datasets,
+        dataset_manifest_hashes=dict(executed.evidence.dataset_manifest_hashes),
+        consumed_artifact_ids=executed.evidence.consumed_artifact_ids,
+        revisable_datasets_consumed=executed.evidence.revisable_datasets_consumed,
+        bounds_relied_upon=executed.bounds_relied_upon,
+        unapproved_bounds_relied_upon=executed.evidence.unapproved_bounds_relied_upon,
+        hash_mismatches=executed.evidence.hash_mismatches,
+        origin_exclusion_rows=executed.exclusion_rows,
+        quality_report_hash=executed.quality_report_hash,
+        result_artifact_hash=executed.result_bytes_hash,
+    )
+
+
+def origin_exclusions_for(executed: ExecutedResult) -> tuple[OriginExclusion, ...]:
+    """The manifest's exclusion block, itemised by the run rather than restated."""
+    return tuple(
+        OriginExclusion(dataset=dataset, information_origin=origin, rows=rows)
+        for dataset, origin, rows in executed.origin_exclusions
+    )
+
+
+def emit_manifest(
+    manifest: ResearchManifest,
+    *,
+    result_bytes: bytes,
+    executed: ExecutedResult,
+) -> ResearchManifest:
     """Validate every precondition and return the manifest, or refuse.
 
     Returning the manifest rather than a bare ``None`` keeps the call site honest:
     a caller either has a validated manifest or has an exception, never a
     half-checked object it might publish anyway.
+
+    ``executed`` is the sealed result the manifest claims to describe. It is
+    required, and it is what the manifest is checked *against*: the result hash
+    three ways, the quality-report identity, the itemised exclusions and the
+    bounds actually relied upon. Without it the manifest could only be checked for
+    internal consistency, which a shortened inventory has in abundance.
 
     Raises:
         ManifestRefusedError: naming every precondition that failed. All of them,
@@ -438,6 +491,7 @@ def emit_manifest(manifest: ResearchManifest, *, result_bytes: bytes) -> Researc
             rediscover the next four one run at a time.
     """
     problems: list[str] = []
+    problems.extend(_check_against_execution(manifest, executed, result_bytes))
 
     if manifest.manifest_version != MANIFEST_VERSION:
         problems.append(
@@ -622,6 +676,93 @@ def emit_manifest(manifest: ResearchManifest, *, result_bytes: bytes) -> Researc
     return manifest
 
 
+def _check_against_execution(
+    manifest: ResearchManifest,
+    executed: ExecutedResult,
+    result_bytes: bytes,
+) -> list[str]:
+    """Hold the manifest to the sealed result rather than to itself.
+
+    A shortened inventory is internally consistent -- that is exactly why it was
+    accepted. Every comparison here is against something the *run* recorded.
+    """
+    problems: list[str] = []
+    inventory = manifest.inputs
+
+    if sha256_hex(result_bytes) != executed.result_bytes_hash:
+        problems.append(
+            "the emitted bytes are not the ones the run sealed; the manifest describes a "
+            "result other than the one produced"
+        )
+    for label, value in (
+        ("the manifest", manifest.result_artifact_hash),
+        ("the inventory", inventory.result_artifact_hash),
+    ):
+        if not value:
+            problems.append(f"{label} records no result hash")
+        elif value != executed.result_bytes_hash:
+            problems.append(
+                f"{label} records result hash {value!r} and the run produced "
+                f"{executed.result_bytes_hash!r}"
+            )
+
+    if manifest.quality.quality_report_hash != executed.quality_report_hash:
+        problems.append(
+            f"the quality summary names report {manifest.quality.quality_report_hash!r} and "
+            f"the run read {executed.quality_report_hash!r}"
+        )
+    if inventory.quality_report_hash != executed.quality_report_hash:
+        problems.append(
+            f"the inventory names quality report {inventory.quality_report_hash!r} and the "
+            f"run read {executed.quality_report_hash!r}"
+        )
+
+    if inventory.direct_source_datasets != executed.evidence.direct_source_datasets:
+        problems.append(
+            f"the inventory names direct source datasets "
+            f"{list(inventory.direct_source_datasets)} and the run read "
+            f"{list(executed.evidence.direct_source_datasets)}"
+        )
+    if inventory.consumed_artifact_ids != executed.evidence.consumed_artifact_ids:
+        problems.append(
+            f"the inventory names consumed artifacts {list(inventory.consumed_artifact_ids)} "
+            f"and the run read {list(executed.evidence.consumed_artifact_ids)}"
+        )
+    if inventory.origin_exclusion_rows != executed.exclusion_rows:
+        problems.append(
+            f"the inventory records {inventory.origin_exclusion_rows} origin-excluded row(s) "
+            f"and the run excluded {executed.exclusion_rows}"
+        )
+    if inventory.bounds_relied_upon != executed.bounds_relied_upon:
+        problems.append(
+            f"the inventory names bounds {list(inventory.bounds_relied_upon)} and the run "
+            f"leant on {list(executed.bounds_relied_upon)}"
+        )
+
+    itemised = tuple(
+        sorted(
+            (item.dataset, item.information_origin, item.rows)
+            for item in manifest.origin_exclusions
+        )
+    )
+    if itemised != executed.origin_exclusions:
+        problems.append(
+            f"the manifest itemises origin exclusions {list(itemised)} and the run recorded "
+            f"{list(executed.origin_exclusions)}"
+        )
+
+    recorded_artifacts = {artifact.artifact_id for artifact in manifest.consumed_artifacts}
+    consumed = {record.artifact_id for record in executed.evidence.consumed_artifacts}
+    missing = sorted(consumed - recorded_artifacts)
+    if missing:
+        problems.append(
+            f"derived artifacts {missing} were consumed and are absent from "
+            "consumed_artifacts; dataset versions alone cannot reproduce a result that read "
+            "them"
+        )
+    return problems
+
+
 def _check_resolution_evidence(
     manifest: ResearchManifest,
     directly_read_datasets: Sequence[str],
@@ -743,4 +884,6 @@ __all__ = [
     "ResearchManifest",
     "UnavailableDomain",
     "emit_manifest",
+    "inventory_for",
+    "origin_exclusions_for",
 ]

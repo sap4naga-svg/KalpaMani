@@ -9,8 +9,11 @@ programme accumulates results it cannot defend.
 from __future__ import annotations
 
 import inspect
+import tempfile
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
+from functools import lru_cache
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -18,7 +21,7 @@ import pytest
 
 from fixtures import phase3a
 from kalpamani.data.contracts.canonical import sha256_hex
-from kalpamani.data.contracts.errors import ManifestRefusedError
+from kalpamani.data.contracts.errors import ExecutionSealError, ManifestRefusedError
 from kalpamani.data.contracts.manifest import (
     MANIFEST_VERSION,
     CodeProvenance,
@@ -31,6 +34,8 @@ from kalpamani.data.contracts.manifest import (
     ResearchManifest,
     UnavailableDomain,
     emit_manifest,
+    inventory_for,
+    origin_exclusions_for,
 )
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
@@ -46,6 +51,8 @@ from kalpamani.data.contracts.vocabulary import (
     RevisionView,
 )
 from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
+from kalpamani.data.pit.execution import ExecutedResult
+from kalpamani.data.storage import LocalTableStore
 
 pytestmark = pytest.mark.unit
 
@@ -105,7 +112,15 @@ def _tokens(
 def _evidence_for(
     config: ProfileResolutionConfig,
 ) -> tuple[DatasetResolutionEvidence, ...]:
-    return tuple(_evidence(entry.dataset, entry.policy) for entry in config.dataset_resolutions)
+    """The evidence the real resolution produced for this configuration.
+
+    Real rather than synthetic, so the limitation tokens a manifest must carry are
+    the ones the run's own counts require -- which is what makes the token rules
+    evidence-driven rather than a second declaration.
+    """
+    return phase3a.resolution_evidence(
+        requested=config.requested_profile, downgrade=config.global_profile_resolution
+    )
 
 
 def _default_tokens() -> tuple[LimitationToken, ...]:
@@ -113,11 +128,25 @@ def _default_tokens() -> tuple[LimitationToken, ...]:
     return _tokens(config, _evidence_for(config))
 
 
+@lru_cache(maxsize=1)
+def _executed() -> ExecutedResult:
+    """One sealed result, reused across the module.
+
+    Built by a real query through the verified reader, so every cross-check in
+    ``emit_manifest`` compares the manifest to something a run actually recorded.
+    """
+    directory = tempfile.mkdtemp(prefix="kalpamani-manifest-")
+    return phase3a.sealed_result(LocalTableStore(Path(directory)), result_bytes=RESULT_BYTES)
+
+
 def _manifest(**overrides: object) -> ResearchManifest:
     config = cast(
         ProfileResolutionConfig, overrides.pop("profile_resolution", phase3a.resolution())
     )
-    evidence = tuple(_evidence(entry.dataset, entry.policy) for entry in config.dataset_resolutions)
+    evidence = phase3a.resolution_evidence(
+        requested=config.requested_profile,
+        downgrade=config.global_profile_resolution,
+    )
     base: dict[str, object] = {
         "code": CodeProvenance(
             commit_sha=COMMIT, working_tree_clean=True, config_version="research/synthetic.a1"
@@ -134,15 +163,18 @@ def _manifest(**overrides: object) -> ResearchManifest:
                 dataset_version=phase3a.DATASET_VERSION,
                 layer="GOLD",
                 content_hash="sha256:abc",
-                publication_manifest_hash="sha256:publication",
+                publication_manifest_hash=_executed().publication_manifest_hash,
                 resolved_profile=config.resolved_profile,
             ),
         ),
         "inputs": _inventory(),
+        "origin_exclusions": origin_exclusions_for(_executed()),
         "definitions": {"universe_definition_version": phase3a.UNIVERSE_DEFINITION_VERSION},
         "limitations": _tokens(config, evidence),
         "quality": QualitySummary(
-            blocking_issues_open=0, warnings_open=2, quality_report_hash="sha256:quality"
+            blocking_issues_open=0,
+            warnings_open=2,
+            quality_report_hash=_executed().quality_report_hash,
         ),
         "random_seed": 20260826,
         "result_artifact_hash": sha256_hex(RESULT_BYTES),
@@ -155,20 +187,32 @@ RESULT_BYTES = b'{"result": "synthetic"}'
 
 
 def _inventory(**overrides: object) -> InputInventory:
+    """The inventory the sealed run produced, optionally perturbed.
+
+    The production route is :func:`inventory_for`; overriding a field here is how
+    an adversarial case builds an inventory that is wrong on purpose.
+    """
+    produced = inventory_for(_executed())
+    if not overrides:
+        return produced
     base: dict[str, object] = {
-        "direct_source_datasets": tuple(
-            entry.dataset for entry in phase3a.resolution().dataset_resolutions
-        ),
-        "dataset_manifest_hashes": {phase3a.DATASET_VERSION: "sha256:publication"},
-        "quality_report_hash": "sha256:quality",
-        "result_artifact_hash": sha256_hex(RESULT_BYTES),
+        "direct_source_datasets": produced.direct_source_datasets,
+        "dataset_manifest_hashes": dict(produced.dataset_manifest_hashes),
+        "consumed_artifact_ids": produced.consumed_artifact_ids,
+        "revisable_datasets_consumed": produced.revisable_datasets_consumed,
+        "bounds_relied_upon": produced.bounds_relied_upon,
+        "unapproved_bounds_relied_upon": produced.unapproved_bounds_relied_upon,
+        "hash_mismatches": produced.hash_mismatches,
+        "origin_exclusion_rows": produced.origin_exclusion_rows,
+        "quality_report_hash": produced.quality_report_hash,
+        "result_artifact_hash": produced.result_artifact_hash,
     }
     base.update(overrides)
     return InputInventory(**base)  # type: ignore[arg-type]
 
 
 def _emit(manifest: ResearchManifest, *, result_bytes: bytes = RESULT_BYTES) -> ResearchManifest:
-    return emit_manifest(manifest, result_bytes=result_bytes)
+    return emit_manifest(manifest, result_bytes=result_bytes, executed=_executed())
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +321,10 @@ def test_a_provider_availability_token_needs_bounded_or_excluded_rows() -> None:
         )
         for entry in config.dataset_resolutions
     )
-    assert _tokens(config, inert) == ()
-    assert _emit(_manifest(dataset_resolution_evidence=inert, limitations=())) is not None
+    assert _tokens(config, inert) == (), (
+        "A declared BOUND that bounded nothing and a declared EXCLUDE that excluded nothing "
+        "are not events, so they require no token."
+    )
 
     with pytest.raises(ManifestRefusedError, match="claimed with no evidence behind it"):
         _emit(
@@ -691,17 +737,36 @@ def test_a_zero_row_exclusion_is_not_evidence_of_an_exclusion() -> None:
 
 
 def test_a_positive_exclusion_with_its_token_passes() -> None:
+    """A run that genuinely dropped a row carries the token, itemised as it happened."""
+    directory = tempfile.mkdtemp(prefix="kalpamani-exclusions-")
+    executed = phase3a.sealed_result_with_exclusions(
+        LocalTableStore(Path(directory)), result_bytes=RESULT_BYTES
+    )
+    assert executed.exclusion_rows == 1, "One bar was re-originated beyond PUBLIC_PIT's reach."
+
     manifest = _manifest(
-        origin_exclusions=(
-            OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=2),
+        origin_exclusions=origin_exclusions_for(executed),
+        inputs=inventory_for(executed),
+        datasets=(
+            DatasetReference(
+                dataset_version=phase3a.DATASET_VERSION,
+                layer="GOLD",
+                content_hash="sha256:abc",
+                publication_manifest_hash=executed.publication_manifest_hash,
+                resolved_profile=PUBLIC,
+            ),
         ),
-        inputs=_inventory(origin_exclusion_rows=2),
+        quality=QualitySummary(
+            blocking_issues_open=0,
+            warnings_open=2,
+            quality_report_hash=executed.quality_report_hash,
+        ),
         limitations=(
             *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         ),
     )
-    assert _emit(manifest) is not None
+    assert emit_manifest(manifest, result_bytes=RESULT_BYTES, executed=executed) is not None
 
 
 def test_an_exclusion_count_that_disagrees_with_the_run_refuses() -> None:
@@ -770,11 +835,13 @@ def test_an_unapproved_bound_or_hash_mismatch_refuses() -> None:
                 )
             ),
             result_bytes=RESULT_BYTES,
+            executed=_executed(),
         )
     with pytest.raises(ManifestRefusedError, match="content hash failed to verify"):
         emit_manifest(
             _manifest(inputs=_inventory(hash_mismatches=("gold/synthetic.a1.1",))),
             result_bytes=RESULT_BYTES,
+            executed=_executed(),
         )
 
 
@@ -794,3 +861,110 @@ def test_every_refused_precondition_is_reported_at_once() -> None:
     assert "no code commit is recorded" in message
     assert "BLOCKING quality issue" in message
     assert "REQUIRED_INPUT_UNAVAILABLE" in message
+
+
+# ---------------------------------------------------------------------------
+# The sealed result: an inventory that cannot be substituted
+# ---------------------------------------------------------------------------
+
+
+def test_an_executed_result_cannot_be_assembled_at_a_call_site() -> None:
+    """A result and an inventory that travel separately can each be substituted."""
+    executed = _executed()
+    with pytest.raises(ExecutionSealError, match="only be produced by PointInTimeReader"):
+        ExecutedResult(
+            result=executed.result,
+            result_bytes_hash=executed.result_bytes_hash,
+            evidence=executed.evidence,
+            dataset_version=executed.dataset_version,
+            publication_manifest_hash=executed.publication_manifest_hash,
+            quality_report_hash=executed.quality_report_hash,
+            origin_exclusions=executed.origin_exclusions,
+            bounds_relied_upon=executed.bounds_relied_upon,
+            produced_by=object(),
+        )
+
+
+def test_the_inventory_a_sealed_run_produces_is_the_one_emitted() -> None:
+    """NEGATIVE CONTROL. The production route agrees with itself."""
+    executed = _executed()
+    produced = inventory_for(executed)
+    assert produced.result_artifact_hash == executed.result_bytes_hash
+    assert produced.quality_report_hash == executed.quality_report_hash
+    assert produced.direct_source_datasets == executed.evidence.direct_source_datasets
+    assert _emit(_manifest(inputs=produced)) is not None
+
+
+@pytest.mark.parametrize(
+    ("label", "override", "expected"),
+    [
+        (
+            "a shortened direct-dataset set",
+            {"direct_source_datasets": ()},
+            "names direct source datasets",
+        ),
+        (
+            "a removed consumed artifact",
+            {"consumed_artifact_ids": ("adj-not-read",)},
+            "names consumed artifacts",
+        ),
+        (
+            "a restated exclusion count",
+            {"origin_exclusion_rows": 7},
+            "origin-excluded row",
+        ),
+        (
+            "changed bound evidence",
+            {"bounds_relied_upon": ("corporate_action",)},
+            "names bounds",
+        ),
+        (
+            "a changed quality hash",
+            {"quality_report_hash": "sha256:" + "0" * 64},
+            "names quality report",
+        ),
+        (
+            "a changed result hash",
+            {"result_artifact_hash": "sha256:" + "0" * 64},
+            "records result hash",
+        ),
+    ],
+)
+def test_a_substituted_inventory_field_is_refused(
+    label: str, override: dict[str, object], expected: str
+) -> None:
+    """Each is a way a hand-written inventory used to be accepted on sight."""
+    with pytest.raises(ManifestRefusedError, match=expected):
+        _emit(_manifest(inputs=_inventory(**override)))
+
+
+def test_changed_result_bytes_are_refused() -> None:
+    """The manifest describes a result other than the one produced."""
+    with pytest.raises(ManifestRefusedError, match="not the ones the run sealed"):
+        _emit(_manifest(), result_bytes=b'{"result": "something else"}')
+
+
+def test_a_quality_summary_naming_another_report_is_refused() -> None:
+    """The counts and the evidence would be about different reports."""
+    manifest = _manifest(
+        quality=QualitySummary(
+            blocking_issues_open=0,
+            warnings_open=2,
+            quality_report_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ManifestRefusedError, match="the quality summary names report"):
+        _emit(manifest)
+
+
+def test_an_itemised_exclusion_the_run_did_not_record_is_refused() -> None:
+    """The block and the count come from one place, so they cannot disagree."""
+    manifest = _manifest(
+        origin_exclusions=(
+            OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=3),
+        ),
+        inputs=_inventory(origin_exclusion_rows=3),
+        limitations=(*_default_tokens(), LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED),
+    )
+    with pytest.raises(ManifestRefusedError, match="itemises origin exclusions"):
+        _emit(manifest)
