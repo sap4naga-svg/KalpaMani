@@ -27,24 +27,30 @@ government documentation. Every provider claim carries a claim id resolving to
 
 Sharadar Direct plus SEC EDGAR **remains the right candidate stack** and no alternative
 displaces it (§8). The obstacle is not fitness. It is that two clauses of the governing licence,
-read in full for the first time this round, collide with architecture that
+read in full for the first time this round, **constrain** what
 [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md) has already committed to —
 and a third leaves the project's core permission resting on a sentence that is not in the
 licence at all.
 
 **The three findings that produce recommendation B:**
 
-**1. §10 deletion is wider than the architecture assumed, and it ends reproducibility at
-cancellation.** Round 1 recorded the obligation as "delete all copies of the Services Data"
+**1. §10 deletion is wider than the architecture assumed, and it limits durable rerunability
+after termination.** Round 1 recorded the obligation as "delete all copies of the Services Data"
 (`PSR-SHD-061`). The full clause reads *"delete from all computer systems you own or operate
 all copies of the Services Data (including downloads, bulk files, caches, and extracts), **all
 data sets that contain, substantially copy, or could reproduce the Services Data or Sharadar
 tables**"* (`PSR-SHD-083`). On a plain reading that is the bronze archive, the silver
 normalisation, and every gold artifact from which vendor rows are recoverable — the whole
-storage stack of [implementation-plan.md](implementation-plan.md) §1.1. A research manifest
-whose contract is *"reruns to an identical result hash, or fails loudly naming the missing
-input"* (acceptance criterion 14) would, thirty days after any cancellation, be permanently in
-the second state. **That is a consequence to accept before purchase, not to discover after.**
+storage stack of [implementation-plan.md](implementation-plan.md) §1.1.
+
+**The reproducibility contract itself survives; what narrows is re-execution.** Acceptance
+criterion 14 requires that a manifest *"reruns to an identical result hash, **or fails loudly
+naming the missing input**"*. Thirty days after any cancellation a rerun lands deterministically
+in the second branch — which is the contract working, not failing. Manifest identity, provenance,
+lineage and the permitted retained outputs all remain valid; what is no longer guaranteed is
+**regenerating the result from source**. **The owner must accept explicitly that full historical
+re-execution may depend on maintaining the subscription, or on later reacquiring licensed
+inputs.** That is a consequence to accept before purchase, not to discover after.
 
 **2. §8 confidentiality bars private disclosure, not merely publication — and this repository
 is reviewed in public.** The clause bars fitness conclusions being *"published in any way...or
@@ -62,9 +68,13 @@ money managed for others"* (`PSR-SHD-107`, re-verified verbatim). The Terms cont
 equivalent carve-out, §2 separately bars use *"for yourself as a professional"*
 (`PSR-SHD-049`), and §18 — read for the first time this round — permits Sharadar to change any
 term *"at any time and in its sole discretion"*, effective on posting, accepted by continued
-use (`PSR-SHD-082`). The page carries no version or effective date (`PSR-SHD-089`), so an
-amendment is not detectable. **The single most important permission in this stack is the least
-durable evidence in it.**
+use (`PSR-SHD-082`). §18 does say that notice of changes will be posted to the website, so
+amendment is not silent by design — but **public research did not establish where such notices
+appear, how long they remain available, or whether superseded licence revisions can be
+retrieved**, and the Terms page itself carries no version or effective date (`PSR-SHD-089`).
+The practical consequence is narrower than "undetectable" and still material: **KalpaMani
+currently has no durable way to pin which licence revision governed a historical research run.**
+The single most important permission in this stack is also the least durably evidenced.
 
 ### What recommendation B is not
 
@@ -85,7 +95,7 @@ licensor can answer about its own licence.
 ### The sequencing this implies
 
 ```
-[now]  packet reviewed  ->  owner decides whether to send the §4 clarification questions
+[now]  packet reviewed  ->  owner decides whether to authorize sending Q1-Q8 (§4)
           |
           v
    written answers received   (a decision point, not a formality: the answers may
@@ -178,7 +188,7 @@ it in a compliance decision.**
 
 | Artifact | Class | Controlling language | KalpaMani consequence | Confidence |
 |---|---|---|---|---|
-| Raw downloaded data | **PROHIBITED** | §10: delete within 30 days *"all copies of the Services Data (including downloads, bulk files, caches, and extracts)"* (`PSR-SHD-083`) | The **bronze layer must be destroyed** 30 days after termination. Bronze is the append-only immutable record on which backfill detection and every reproducibility guarantee rests. | High |
+| Raw downloaded data | **PROHIBITED** | §10: delete within 30 days *"all copies of the Services Data (including downloads, bulk files, caches, and extracts)"* (`PSR-SHD-083`) | The **bronze layer must be destroyed** 30 days after termination. Bronze is the append-only immutable record on which backfill detection and re-execution from source rest. | High |
 | Normalized records | **PROHIBITED** | §10: *"all data sets that contain, substantially copy, or could reproduce the Services Data or Sharadar tables"* (`PSR-SHD-083`) | The **silver layer is squarely inside this**, being a normalisation of vendor rows. So is any gold artifact from which vendor rows are recoverable. | High |
 | Historical snapshots | **PROHIBITED** | Same clause; "extracts" and "could reproduce" both reach them | A point-in-time archive **cannot be a durable asset**. Its lifetime is the subscription's. | High |
 | Derived research artifacts | **PROBABLY PERMITTED**, boundary **AMBIGUOUS** | §10 carve-out: *"You may keep research outputs, backtest results, models, summary statistics, trade logs, and similar derived works that do not contain and cannot reproduce the Services Data or Sharadar tables."* (`PSR-SHD-084`) | Real and useful, but the test is **reconstructability, not how derived a thing feels**. A scalar performance summary passes easily. A per-security per-date factor panel is much closer to the line and is not addressed. §4 Q4. | Medium |
@@ -186,14 +196,26 @@ it in a compliance decision.**
 | Backtest **results** | **PROBABLY PERMITTED** | §10 names *"backtest results"* in the carve-out (`PSR-SHD-084`) | Results are keepable. Whether they are *publishable* is a different clause — §3.E. | Medium-high |
 | Backups | **PROHIBITED** | §10 reaches *"all computer systems you own or operate"* and *"all copies"* (`PSR-SHD-083`) | Backups and cold storage are covered. Any retention design must be able to prove deletion, not merely intend it. | Medium-high |
 
-> **The consequence, stated once and plainly.** ADR-0005's reproducibility model and Phase 3
-> acceptance criterion 14 promise that a research manifest reruns to an identical result hash.
-> **Under §10 that promise expires 30 days after the subscription does.** This is not a defect
-> in the vendor and not a defect in the architecture; it is a property of renting data rather
-> than owning it, and it is true of every low-cost provider examined. It must be **accepted
-> explicitly by the owner and declared in the manifest model**, not discovered later. Note the
-> asymmetry that makes it sharper: §10 permits Sharadar to terminate *"without prior notice"*
-> (`PSR-SHD-085`), so the 30-day clock can start unannounced.
+> **The consequence, stated once and precisely: §10 limits durable rerunability after
+> termination.** It does **not** invalidate ADR-0005's reproducibility model. Acceptance
+> criterion 14 requires a manifest to rerun to an identical result hash **or fail loudly naming
+> the missing input**, and thirty days after cancellation a rerun lands deterministically in the
+> second branch. That is the contract behaving correctly.
+>
+> | Survives termination | Does not survive termination |
+> |---|---|
+> | manifest identity and `run_id` | re-execution from source data |
+> | provenance and lineage records | regeneration of a past result |
+> | permitted retained outputs (§10 carve-out) | any artifact that could reproduce the vendor tables |
+> | deterministic missing-input refusal | — |
+>
+> This is not a defect in the vendor and not a defect in the architecture; it is a property of
+> renting data rather than owning it, and it is true of every low-cost provider examined.
+> **The owner must accept explicitly that full historical re-execution may depend on maintaining
+> the subscription, or on later reacquiring licensed inputs** — and it must be declared in the
+> manifest model rather than discovered later. Note the asymmetry that makes it sharper: §10
+> permits Sharadar to terminate *"without prior notice"* (`PSR-SHD-085`), so the 30-day clock can
+> start unannounced.
 
 ### 3.D Derived data
 
@@ -270,14 +292,21 @@ Sharadar rows to a third-party LLM API would be *making the data available to ot
 conclusion to an outside entity* (§8, `PSR-SHD-086`). On the natural reading of clauses that do
 apply: **PROBABLY PROHIBITED.**
 
-> **Architectural consequence, and it is a clean one.** Blueprint V3.0 confines AI to
-> qualitative information processing — filings, news, thesis challenge — while deterministic
-> software owns everything quantitative. That boundary happens to also be the licensing-safe
-> boundary: **SEC filings are public-domain and may be sent to an AI layer; subscribed vendor
-> rows must not be.** Recommended rule, to be recorded when the AI layer is designed rather
-> than asserted here: *no Sharadar-sourced record may enter an AI prompt.* It costs the design
-> nothing, because the AI layer was never meant to see quantitative vendor data. §4 Q6 asks the
-> vendor to confirm.
+> **Architectural consequence.** Blueprint V3.0 confines AI to qualitative information
+> processing — filings, news, thesis challenge — while deterministic software owns everything
+> quantitative. That boundary is also the licensing-safe boundary for **this** licence, and the
+> claim is deliberately narrow: **SEC/EDGAR content is not Sharadar Services Data and is
+> therefore not subject to the Sharadar Personal Use License at all.** Recommended rule, to be
+> recorded when the AI layer is designed rather than asserted here: *no Sharadar-sourced record
+> may enter an AI prompt.* It costs the design nothing, because the AI layer was never meant to
+> see quantitative vendor data. §4 Q6 asks the vendor to confirm.
+>
+> **What this does not say.** It does **not** say every filing or exhibit is automatically safe
+> to send to any third-party AI service. Being outside the Sharadar licence settles only that
+> licence. Sending EDGAR content onward remains subject to any third-party rights in
+> issuer-supplied exhibits (§3.I) and to the AI service's own terms. **That is a use-time
+> question for whoever designs the AI layer, not a Phase-3 data-licensing gate**, and it does
+> not create a gate beyond G3.
 
 ### 3.G Termination and cancellation
 
@@ -324,11 +353,12 @@ Two forward-looking notes, neither of which is a decision:
 
 | Question | Class | Evidence |
 |---|---|---|
-| Public-access status | **CONFIRMED** free public access; public-domain content `V2` | `PSR-SEC-001`, `PSR-SEC-002` — unchanged, and **not re-verifiable this round** because no sec.gov page could be read |
+| Public-access status | **CONFIRMED** free public access; the reuse statement is `V2` | `PSR-SEC-001` records the SEC's supported wording: *"Information presented on sec.gov is considered public information and may be copied or further distributed by users of the web site without the SEC's permission"*, with a request to cite the SEC as the source. **Not re-verifiable this round** — no sec.gov page could be read. |
 | Fair-access / automated-access requirements exist | **CONFIRMED** | `PSR-SEC-045` — SEC-served text, retrieved today: *"Automated access to our sites must comply with SEC.gov's Privacy and Security Policy. Please visit www.sec.gov/developer for more developer resources and Fair Access guidelines."* |
 | Rate limit and identification parameters | **PROBABLY PERMITTED** at stated parameters, `V2` only | `PSR-SEC-046` — declared User-Agent carrying contact information; no more than 10 requests/second per requester; 403 and a temporary IP block otherwise |
-| Redistribution | **PROBABLY PERMITTED**, `V2` | Public-domain content (`PSR-SEC-001`), subject to a **branding** carve-out: the SEC seal, logos and the EDGAR trademarks may not be reused (`PSR-SEC-047`). A branding restriction, not a content restriction. |
-| **Does any licence issue materially block KalpaMani's intended use?** | **NO** | Filing content is public-domain, free, and carries acceptance timestamps — the property that makes EDGAR the only route to `AS_KNOWN_AT_AS_OF`. There is no licence obstacle. |
+| Redistribution | **PROBABLY PERMITTED**, `V2` | Copying and further distribution without SEC permission, per `PSR-SEC-001`, subject to a **branding** carve-out: the SEC seal, logos and the EDGAR trademarks may not be reused (`PSR-SEC-047`). A branding restriction, not a content restriction. |
+| Third-party rights in filing content | **NOT ESTABLISHED** | The SEC's reuse statement addresses **the SEC's** permission. It does not adjudicate copyright that may subsist in issuer-supplied exhibits — third-party reports, images, licensed material incorporated into a filing. **No source examined settles that**, and this packet does not resolve it. |
+| **Does any licence issue materially block KalpaMani's intended use?** | **NO** | Filing content is freely accessible, carries acceptance timestamps — the property that makes EDGAR the only route to `AS_KNOWN_AT_AS_OF` — and is **not Sharadar Services Data**, so the Personal Use License does not reach it. Ingesting and analysing filings internally is unobstructed. The unresolved exhibit-copyright question above bears on **onward distribution or submission to third parties**, not on internal research use. |
 
 **Two operational cautions, neither of them a licensing problem:**
 
@@ -350,8 +380,10 @@ Two forward-looking notes, neither of which is a decision:
 
 ## 4. Open licensing questions
 
-Six questions that public sources cannot answer, drafted at
-[provider-licensing-clarification-draft.md](provider-licensing-clarification-draft.md).
+**Eight questions — Q1–Q8 — that public sources cannot answer**, drafted at
+[provider-licensing-clarification-draft.md](provider-licensing-clarification-draft.md). Q1–Q6
+are licensing questions for the licensor; Q7 and Q8 are data and product questions carried in
+the same message because they gate the same decision.
 
 **That draft has not been sent. No support ticket has been opened. No email has been sent.
 Sending it is an owner decision.**
@@ -361,16 +393,17 @@ Sending it is an owner decision.**
 | **Q1** | Does the Personal Use License cover a single individual running an automated system that trades **only their own capital**, with no clients and no money managed for others — and does the FAQ statement bind? | The only affirmative source is an undated FAQ; the Terms neither repeat nor contradict it; §18 permits unilateral amendment. Only the licensor can say whether the FAQ binds. | **A3 purchase.** Everything downstream. |
 | **Q2** | Is **automated programmatic retrieval** — scheduled incremental sync and an initial historical backfill — within scope? | The licence is silent (`PSR-SHD-088`); permission is inferred from the product's existence. | Bronze ingestion design |
 | **Q3** | Are there **rate limits, request quotas or fair-use expectations** for the API and bulk downloads? | Documented nowhere (`PSR-SHD-102`, `PSR-SHD-105`). | Backfill pacing; wall-clock estimates |
-| **Q4** | Under §10, may a **normalized local store** and **derived point-in-time research artifacts** be retained after cancellation, and where is the line for "could reproduce"? | §10's reproduction test is undefined in the text; the answer decides whether reproducibility survives cancellation. | **The reproducibility architecture.** ADR-0005 acceptance |
+| **Q4** | Under §10, may a **normalized local store** and **derived point-in-time research artifacts** be retained after cancellation, and where is the line for "could reproduce"? | §10's reproduction test is undefined in the text; the answer decides how much **durable rerunability** survives cancellation. | **Post-termination rerunability.** ADR-0005 acceptance |
 | **Q5** | Under §8, may **empirical data-quality findings** be disclosed to reviewers and published in a public repository — and will written approval be granted? | §8 requires *prior written approval* and names no request process. | How P1–P9 evidence is reviewed and retained |
 | **Q6** | May Services Data be **submitted to third-party AI/LLM services** for analysis? | Not addressed anywhere (`PSR-SHD-088`). | The Blueprint AI layer's data boundary |
 
-**A seventh question is not for the licensor but is equally blocking**, and it is a data-fitness
-question rather than a licensing one — see P9 in §6:
+**Two further questions are not for the licensor but are equally blocking.** They are data and
+product questions rather than licensing ones — see P9 in §6, and the tier problem in §7.1:
 
 | # | Question | Why |
 |---|---|---|
 | **Q7** | Are Sharadar's daily bars **officially disseminated**, **provider-aggregated**, or otherwise constructed? | Not stated in the documentation (`PSR-SHD-098`), and **not discoverable from the data**. If provider-aggregated, `price_bar` and everything derived from it — the universe included — is ineligible under `PUBLIC_PIT`. |
+| **Q8** | What start date does the **Full History** tier actually provide, per table? | The subscribe page does not define it (`PSR-SHD-091`), and two vendor statements disagree — documentation says January 1998, the launch post says "since 1999" (`PSR-SHD-099`, `PSR-SHD-101`, `PSR-SHD-104`). Depth is the whole point of the tier, and it determines which tier, if any, is purchasable. |
 
 ---
 
@@ -691,8 +724,7 @@ register's maintenance rule, and the reason this correction exists at all.
 > (`PSR-SHD-099`, `PSR-SHD-101`, `PSR-SHD-100`), and the vendor's own launch post says
 > *"since 1999"* (`PSR-SHD-104`) — **two vendor statements that disagree by a year.** For a
 > plan whose central control is survivorship, purchasing a depth that is stated nowhere and
-> described inconsistently is a defect in the purchase, not a rounding error. It belongs in the
-> clarification questions.
+> described inconsistently is a defect in the purchase, not a rounding error. It is **Q8** in §4.
 
 ### 7.2 Restated scenario A
 
@@ -733,7 +765,7 @@ The task's stated priorities, applied to what was found:
 |---|---|
 | 1. **Point-in-time correctness** | Mixed, and known. AR fundamentals are genuinely filing-date-indexed. Revision chronology is absent (P6). Provider availability is bounded, not exact (P1). Bar origin is **unknown** (P9). |
 | 2. **Licensing fitness** | **The blocker.** §10 retention, §8 disclosure, and an FAQ-only core permission. §3. |
-| 3. **Retained research reproducibility** | **Materially constrained by §10** — reproducibility does not survive cancellation. §3.C. |
+| 3. **Retained research reproducibility** | **Materially constrained by §10** — the reproducibility contract holds, but **durable rerunability from source does not survive cancellation**. §3.C. |
 | 4. **Required Phase-3 coverage** | Good, with two documented gaps: no corporate-action announcement date (P3), and ticker history as a derived artifact (§5.3). |
 | 5. **Cost** | $499/yr, one third of base budget. **The least binding constraint, and it should not drive the decision.** |
 
@@ -846,31 +878,37 @@ source qualifies** (ADR-0005 §15).
 
 ### The decision requested
 
-> **Should the six licensing-clarification questions in §4 be sent to Sharadar at the published
-> contact route (`PSR-SHD-106`), together with question Q7 on bar construction?**
+> **Should questions Q1–Q8 be sent to Sharadar at the published contact route
+> (`PSR-SHD-106`)?**
+
+That is Q1–Q6, the licensing questions, together with **Q7** on daily-bar construction and
+**Q8** on what the Full History tier actually covers. All eight are drafted at
+[provider-licensing-clarification-draft.md](provider-licensing-clarification-draft.md).
 
 A yes is authorization to send correspondence. It is **not** authorization to purchase, to
 trial, to create an account, to enter billing details, to generate an API key, or to fetch
-anything.
+anything. **The draft is not sent without that authorization.**
 
 ### Why this is the next decision and not something else
 
 - **G3 gates G1's purchase** by ADR-0005's own ordering (authorization A2 precedes A3). Any
   qualification work done before the licensing answers risks being work done under terms that
   turn out not to permit it.
-- **Two of the answers change the architecture, not just the paperwork.** Q4 decides whether
-  reproducibility survives cancellation. Q5 decides how P1–P9 evidence can be reviewed at all
+- **Two of the answers change the architecture, not just the paperwork.** Q4 decides how much
+  durable rerunability survives cancellation. Q5 decides how P1–P9 evidence can be reviewed at all
   in a repository that reviews in public. Neither is a detail to settle after a purchase.
-- **Q7 is nearly free and potentially decisive.** A `PROVIDER_AGGREGATED` answer would make
-  prices and the universe ineligible under `PUBLIC_PIT`. Asking costs one sentence.
+- **Q7 and Q8 are nearly free and potentially decisive.** A `PROVIDER_AGGREGATED` answer to Q7
+  would make prices and the universe ineligible under `PUBLIC_PIT`. Q8 determines whether any
+  advertised tier actually delivers the depth P2 and acceptance criterion 2 require. Both cost
+  one sentence to ask.
 
 ### Options the owner may take instead
 
 | Option | Consequence |
 |---|---|
-| **Send §4 + Q7** *(recommended)* | Answers arrive; G3 becomes decidable; the packet is revised; **only then** does a purchase decision arise |
+| **Authorize sending Q1–Q8** *(recommended)* | Answers arrive; G3 becomes decidable; the packet is revised; **only then** does a purchase decision arise |
 | **Authorize a free-sample precheck first** | $0, no subscription. Would exercise P4 and P5 and partially P1, and would confirm undocumented per-action semantics (§5.3). **Still requires its own authorization** — the sample is Services Data under the same Terms, and reading it is vendor-data retrieval |
-| **Accept the §10 and §8 constraints as-is and proceed to purchase** | Legitimate if the owner accepts that reproducibility ends 30 days after cancellation and that provider-test evidence stays undisclosed. **Requires an explicit recorded acceptance**, not silence |
+| **Accept the §10 and §8 constraints as-is and proceed to purchase** | Legitimate if the owner accepts that **full historical re-execution may depend on maintaining the subscription or later reacquiring licensed inputs**, and that provider-test evidence stays undisclosed. **Requires an explicit recorded acceptance**, not silence |
 | **Defer Phase 3A A2 entirely** | Also legitimate. Nothing here is time-critical, and no provider commitment exists |
 
 ### What is needed to close G3 and G1 later
@@ -879,8 +917,8 @@ anything.
 
 | Gate | Remaining |
 |---|---|
-| **G3** | Written answers to Q1–Q6; owner acceptance or rejection of the §10 retention consequence; an ADR or recorded decision; then authorization A2 |
-| **G1** | G3 closed first; Q7/P9 answered; P1–P9 executed against real data under A3; scenario A/B/C selected; then ADR-0005 moves from Proposed |
+| **G3** | Written answers to Q1–Q6; owner acceptance or rejection of the §10 post-termination rerunability consequence; an ADR or recorded decision; then authorization A2 |
+| **G1** | G3 closed first; Q7/P9 and Q8 answered; P1–P9 executed against real data under A3; scenario A/B/C selected; then ADR-0005 moves from Proposed |
 
 ---
 
@@ -972,4 +1010,4 @@ All retrieved **2026-08-27** unless noted. Every claim resolves to
 | **Nasdaq Data Link terms not retrievable**; searches surface Nasdaq *exchange* market-data agreements, a different product family | The commercial channel's terms **cannot be assessed from public sources at all** — material for any future entity or micro-live use |
 | **Sharadar bulk-downloads documentation client-side rendered behind a session check** | File formats, size limits and download quotas remain unestablished |
 | **Licence quotations are model-mediated** — the fetch tool summarised rather than reproducing verbatim | **A reviewer should open the URLs and confirm any string before relying on it in a compliance decision** |
-| **Prices and terms change**, and the Terms page carries no version or effective date | Every figure and clause here must be re-verified on the day of purchase, per the register's maintenance rule |
+| **Prices and terms change.** §18 states that notice of changes is posted to the website, but **where those notices appear, how long they persist, and whether superseded revisions are retrievable were not established**, and the Terms page carries no version or effective date | Every figure and clause here must be re-verified on the day of purchase, per the register's maintenance rule. **No licence revision can currently be pinned to a historical research run** |

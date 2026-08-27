@@ -13,7 +13,7 @@ on a concrete text rather than an intention.
 | | |
 |---|---|
 | **Addressee (published route)** | `connect@sharadar.com` — the contact address published in the site footer and referenced by the privacy policy's contact section (`PSR-SHD-106`) |
-| **Subject of the licence** | Sharadar **Personal Use License**, `https://sharadar.com/terms`, as published **2026-08-27**. The page carries **no version or effective date** (`PSR-SHD-089`), so no revision can be cited |
+| **Subject of the licence** | Sharadar **Personal Use License**, `https://sharadar.com/terms`, as published **2026-08-27**. The page carries **no version or effective date** (`PSR-SHD-089`), so no revision can be cited — §18 provides for notice of changes on the website, but where such notices appear and whether superseded revisions are retrievable was not established |
 | **Governing law / forum** | **Not established.** §15 was fetched and returned liability-cap language rather than a governing-law clause; the privacy policy names no legal entity, address or jurisdiction (`PSR-SHD-106`) |
 | **Why written answers** | §18 permits unilateral amendment effective on posting (`PSR-SHD-082`), and the permission this project most needs sits in an undated FAQ rather than the licence (`PSR-SHD-107`) |
 | **Gate** | G3 — precedes G1's purchase (authorization A2 before A3) |
@@ -22,9 +22,10 @@ on a concrete text rather than an intention.
 
 ## Drafting rules applied
 
-1. **Only unresolved material points.** Six questions, each traced to a specific licence section
-   read on 2026-08-27, plus one question about the data rather than the licence. Anything the
-   public record already settles is not asked.
+1. **Only unresolved material points.** Eight questions in total — **Q1–Q8**. Q1–Q6 are
+   licensing questions, each traced to a specific licence section read on 2026-08-27; Q7 and Q8
+   are data and product questions carried in the same message because they gate the same
+   decision. Anything the public record already settles is not asked.
 2. **Yes/no answerable.** Each question is phrased so a one-word answer is meaningful, with the
    context needed to make that answer safe to give.
 3. **No account identifiers, no credentials, no personal financial details.** No account exists
@@ -43,8 +44,9 @@ rather than reproducing them verbatim (`PSR-SHD-081`…`PSR-SHD-089`).
 
 - [ ] Open `https://sharadar.com/terms` and confirm each quoted string **verbatim**, including
       section numbers
-- [ ] Confirm the Terms have not changed since 2026-08-27 (§18 permits silent amendment, and no
-      version date is published)
+- [ ] Confirm the Terms have not changed since 2026-08-27 (§18 permits unilateral amendment on
+      posting, with notice to the website; no version date is published, so a re-read is the
+      only available check)
 - [ ] Confirm `connect@sharadar.com` is still the published contact route
 - [ ] Confirm the sender description below is accurate on the day it is sent — in particular
       that no entity, client or external money is involved
@@ -130,10 +132,12 @@ artifacts. Specifically:
   **practically recoverable** from the artifact, or on something else? A one-sentence statement
   of the test you apply would settle this.
 
-This matters more than it may appear: a research result is only trustworthy if it can be
-re-derived later. If the underlying data must be destroyed on cancellation, then results
-produced while subscribed cannot be re-verified afterwards. I would rather know that going in
-and design honestly around it than assume otherwise.
+This matters more than it may appear. My records of what was run — the run identifiers, the
+provenance, the retained outputs — would survive cancellation either way, and a rerun that
+cannot find its inputs is designed to stop and say so rather than quietly substitute anything.
+What I am trying to establish is how much can be **regenerated from source** afterwards. If the
+answer is "nothing once the data is deleted", that is workable; I would simply rather know it
+going in and design honestly around it than assume otherwise.
 
 **5. Publication and disclosure of data-quality findings — Section 8.**
 Section 8 provides that conclusions about the *"value, usability or fitness for purpose"* of the
@@ -195,7 +199,7 @@ Best regards,
 | 1 | §2, §3, §5, §18 + FAQ | `PSR-SHD-047`, `049`, `050`, `081`, `082`, `107` | §3.A, §3.H | **A3 purchase** |
 | 2 | silence + API docs | `PSR-SHD-088`, `102`, `107` | §3.B | Bronze ingestion design |
 | 3 | not documented | `PSR-SHD-102`, `105` | §3.B | Backfill pacing |
-| 4 | §10 | `PSR-SHD-083`, `084`, `085` | §3.C, §3.D | **Reproducibility architecture** |
+| 4 | §10 | `PSR-SHD-083`, `084`, `085` | §3.C, §3.D | **Post-termination rerunability** |
 | 5 | §8 | `PSR-SHD-086` | §3.E | How P1–P9 evidence is reviewed |
 | 6 | silence; §4 and §8 apply | `PSR-SHD-086`, `087`, `088` | §3.F | AI-layer data boundary |
 | 7 | not a licence question | `PSR-SHD-098` | §5.1, §6.1 (**P9**) | `PUBLIC_PIT` eligibility of prices **and the universe** |
