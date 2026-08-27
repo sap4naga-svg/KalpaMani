@@ -36,10 +36,20 @@ enough while a hand-written ``InputInventory`` remained the same type: a caller
 who shortened the dataset list, dropped a consumed artifact or restated the
 exclusion count produced an object this module accepted on sight.
 :func:`inventory_for` takes a sealed
-:class:`~kalpamani.data.pit.execution.ExecutedResult` -- which only the
-point-in-time reader can produce -- and :func:`emit_manifest` cross-checks the
+:class:`~kalpamani.data.pit.execution.ExecutedResult` -- which only a
+point-in-time accessor can produce -- and :func:`emit_manifest` cross-checks the
 manifest against it: the result hash three ways, the quality-report identity, the
 itemised exclusions and the bounds actually used.
+
+**The question is execution evidence too.** ``backtest_start``, ``backtest_end``
+and ``definitions`` are a *narrative* a caller writes; they can say anything, and
+nothing compared them to what ran. The accessor records a
+:class:`~kalpamani.data.pit.query.QuerySpec` instead -- the security, range,
+resolution, adjustment policy and convention, requirement, revision view, ``as_of``
+and both profiles for a price query; the selected snapshot's session, cutoff and
+identity for a universe query -- and it enters ``run_id``. Two runs that asked
+different questions cannot share an identity, which they could when the question
+lived only in prose.
 
 **Every limitation token needs positive evidence in the same manifest.** A token
 is a claim about this run, and a reader must be able to find what it refers to
@@ -54,7 +64,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ManifestRefusedError
@@ -63,12 +73,14 @@ from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
     ProfileResolutionConfig,
 )
+from kalpamani.data.contracts.resolution import TimingBasisUsed
 from kalpamani.data.contracts.vocabulary import (
     CoverageScope,
     InformationSetProfile,
     LimitationToken,
     RevisionView,
 )
+from kalpamani.data.pit.query import QuerySpec
 
 if TYPE_CHECKING:  # pragma: no cover - only the type checker needs this
     from kalpamani.data.pit.execution import ExecutedResult, ExecutionEvidence
@@ -253,6 +265,13 @@ class InputInventory:
     origin_exclusion_rows: int = 0
     quality_report_hash: str = ""
     result_artifact_hash: str = ""
+    #: What the accessor recorded about the question it answered. ``None`` only
+    #: for an inventory built by hand, which the production path does not do.
+    query: QuerySpec | None = None
+    #: How the rows this result served were admitted, per dataset. Per query, not
+    #: per build: a dataset containing bounded rows and a result that leant on one
+    #: are different claims.
+    timing_evidence: tuple[tuple[str, tuple[str, ...], int], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -322,6 +341,10 @@ class InputInventory:
             "hash_mismatches": list(self.hash_mismatches),
             "origin_exclusion_rows": self.origin_exclusion_rows,
             "quality_report_hash": self.quality_report_hash,
+            "query": None if self.query is None else self.query.identity(),
+            "timing_evidence": [
+                [dataset, list(bases), rows] for dataset, bases, rows in self.timing_evidence
+            ],
         }
 
 
@@ -431,18 +454,18 @@ def _artifact_identity(
     return identity
 
 
-#: Which evidence each limitation token requires in the same manifest.
+#: Which evidence each limitation token requires from **this run**.
 _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
-    LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: "an origin_exclusions entry with rows > 0",
-    LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: "excluded_rows > 0 or provider_bounded_rows > 0",
-    LimitationToken.PROVIDER_TIME_BOUNDED: "provider_bounded_rows > 0 somewhere",
-    LimitationToken.PUBLIC_TIME_BOUNDED: "public_bounded_rows > 0 somewhere",
-    LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: "global_profile_resolution DOWNGRADE",
+    LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: "this result to have excluded a row",
+    LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: "a served row admitted on a provider bound",
+    LimitationToken.PROVIDER_TIME_BOUNDED: "a served row admitted on a provider bound",
+    LimitationToken.PUBLIC_TIME_BOUNDED: "a served row admitted on a public bound",
+    LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: "resolved_profile to differ from requested",
     LimitationToken.NON_PIT_RESTATED_VIEW: "revision_view LATEST_RESTATED",
 }
 
 
-def inventory_for(executed: ExecutedResult) -> InputInventory:
+def inventory_for(executed: ExecutedResult[Any]) -> InputInventory:
     """The inventory for a sealed result. The only production route to one.
 
     Every field comes from the seal, so there is nothing for a caller to shorten
@@ -459,10 +482,19 @@ def inventory_for(executed: ExecutedResult) -> InputInventory:
         origin_exclusion_rows=executed.exclusion_rows,
         quality_report_hash=executed.quality_report_hash,
         result_artifact_hash=executed.result_bytes_hash,
+        query=executed.query,
+        timing_evidence=tuple(
+            (
+                entry.dataset,
+                tuple(sorted(basis.value for basis in entry.bases)),
+                entry.rows,
+            )
+            for entry in executed.evidence.timing_evidence
+        ),
     )
 
 
-def origin_exclusions_for(executed: ExecutedResult) -> tuple[OriginExclusion, ...]:
+def origin_exclusions_for(executed: ExecutedResult[Any]) -> tuple[OriginExclusion, ...]:
     """The manifest's exclusion block, itemised by the run rather than restated."""
     return tuple(
         OriginExclusion(dataset=dataset, information_origin=origin, rows=rows)
@@ -474,7 +506,7 @@ def emit_manifest(
     manifest: ResearchManifest,
     *,
     result_bytes: bytes,
-    executed: ExecutedResult,
+    executed: ExecutedResult[Any],
 ) -> ResearchManifest:
     """Validate every precondition and return the manifest, or refuse.
 
@@ -661,7 +693,7 @@ def emit_manifest(
 
     problems.extend(_check_resolution_evidence(manifest, inventory.direct_source_datasets))
     problems.extend(_check_coverage(manifest))
-    problems.extend(_check_tokens(manifest))
+    problems.extend(_check_tokens(manifest, executed))
 
     for bound in inventory.unapproved_bounds_relied_upon:
         problems.append(
@@ -681,7 +713,7 @@ def emit_manifest(
 
 def _check_against_execution(
     manifest: ResearchManifest,
-    executed: ExecutedResult,
+    executed: ExecutedResult[Any],
     result_bytes: bytes,
 ) -> list[str]:
     """Hold the manifest to the sealed result rather than to itself.
@@ -735,6 +767,20 @@ def _check_against_execution(
         problems.append(
             f"the inventory records {inventory.origin_exclusion_rows} origin-excluded row(s) "
             f"and the run excluded {executed.exclusion_rows}"
+        )
+    if inventory.query != executed.query:
+        problems.append(
+            "the inventory records a different query than the run answered; a manifest whose "
+            "question and execution disagree describes a result nobody can re-derive"
+        )
+    recorded_timing = tuple(
+        (entry.dataset, tuple(sorted(basis.value for basis in entry.bases)), entry.rows)
+        for entry in executed.evidence.timing_evidence
+    )
+    if inventory.timing_evidence != recorded_timing:
+        problems.append(
+            f"the inventory records timing evidence {list(inventory.timing_evidence)} and the "
+            f"run served {list(recorded_timing)}"
         )
     if inventory.bounds_relied_upon != executed.bounds_relied_upon:
         problems.append(
@@ -892,27 +938,25 @@ def _check_coverage(manifest: ResearchManifest) -> list[str]:
     return problems
 
 
-def _check_tokens(manifest: ResearchManifest) -> list[str]:
+def _check_tokens(manifest: ResearchManifest, executed: ExecutedResult[Any]) -> list[str]:
+    """Every limitation token is required by, and supported by, **this run**.
+
+    Evidence, never configuration -- and never the *build's* evidence either. A
+    declared ``BOUND`` that bounded nothing is not an event, and neither is a
+    bounded row elsewhere in a dataset this result never served. Deriving tokens
+    from build-wide counts attached ``PROVIDER_TIME_BOUNDED`` to results computed
+    entirely from exact times: a token with nothing behind it, reached from the
+    generous direction.
+    """
     problems: list[str] = []
     tokens = set(manifest.limitations)
-    evidence = manifest.dataset_resolution_evidence
+    bases = {basis for entry in executed.evidence.timing_evidence for basis in entry.bases}
 
-    # Evidence, never configuration. A declared BOUND that bounded nothing and a
-    # declared EXCLUDE that excluded nothing are not events, and a token emitted
-    # for one is a claim with nothing behind it.
     have: dict[LimitationToken, bool] = {
-        LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: any(
-            item.rows > 0 for item in manifest.origin_exclusions
-        ),
-        LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: any(
-            entry.excluded_rows > 0 or entry.provider_bounded_rows > 0 for entry in evidence
-        ),
-        LimitationToken.PROVIDER_TIME_BOUNDED: any(
-            entry.provider_bounded_rows > 0 for entry in evidence
-        ),
-        LimitationToken.PUBLIC_TIME_BOUNDED: any(
-            entry.public_bounded_rows > 0 for entry in evidence
-        ),
+        LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: executed.exclusion_rows > 0,
+        LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN: (TimingBasisUsed.PROVIDER_BOUNDED in bases),
+        LimitationToken.PROVIDER_TIME_BOUNDED: TimingBasisUsed.PROVIDER_BOUNDED in bases,
+        LimitationToken.PUBLIC_TIME_BOUNDED: TimingBasisUsed.PUBLIC_BOUNDED in bases,
         LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC: (
             manifest.resolved_profile is not manifest.requested_profile
         ),

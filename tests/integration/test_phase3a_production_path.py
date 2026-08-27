@@ -985,7 +985,9 @@ def test_the_reader_distinguishes_three_universe_outcomes(tmp_path: Path) -> Non
     """
     reader = _reader(tmp_path)
 
-    served = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC)
+    served = reader.get_security_universe(
+        as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC
+    ).result
     assert served.members
 
     with pytest.raises(MissingHistoricalSnapshotError, match="refusal, not an empty result"):
@@ -1022,8 +1024,12 @@ def test_a_zero_row_snapshot_round_trips_as_a_present_snapshot(tmp_path: Path) -
 
 def test_the_universe_accessor_serves_the_stored_snapshot(tmp_path: Path) -> None:
     reader = _reader(tmp_path)
-    early = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC)
-    late = reader.get_security_universe(as_of=phase3a.utc(2021, 1, 5, 21, 30), profile=PUBLIC)
+    early = reader.get_security_universe(
+        as_of=phase3a.utc(2019, 6, 27, 20, 0), profile=PUBLIC
+    ).result
+    late = reader.get_security_universe(
+        as_of=phase3a.utc(2021, 1, 5, 21, 30), profile=PUBLIC
+    ).result
 
     assert early.session_date == date(2019, 6, 27)
     assert phase3a.SEC_DELISTED in early.members
@@ -1142,7 +1148,7 @@ def test_raw_and_adjusted_are_different_answers_to_different_questions(
         profile=PUBLIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
-    )
+    ).result
     adjusted = reader.get_price_history(
         security_id=SCOPE,
         start=VALID_START,
@@ -1153,7 +1159,7 @@ def test_raw_and_adjusted_are_different_answers_to_different_questions(
         profile=PUBLIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
-    )
+    ).result
     assert _closes(raw.bars)[-1] == Decimal("52.00")
     assert _closes(adjusted.bars)[-1] == Decimal("104.000000")
     assert raw.adjustment_mode.is_raw and not adjusted.adjustment_mode.is_raw
@@ -1173,7 +1179,7 @@ def test_a_price_series_is_one_resolution(tmp_path: Path) -> None:
         profile=PUBLIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
-    )
+    ).result
     assert len(daily.bars) == 1
     assert daily.resolution is BarResolution.DAILY
     minute_ends = {bar.bar_end_time for bar in phase3a.minute_bars()}
@@ -1314,7 +1320,7 @@ def test_a_fully_covered_listed_range_is_served(tmp_path: Path) -> None:
         profile=PUBLIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
-    )
+    ).result
     assert len(result.bars) == 5
 
 
@@ -1360,7 +1366,7 @@ def test_the_same_query_serves_a_short_series_when_asked_optionally(
         profile=PUBLIC,
         requirement=SeriesRequirement.OPTIONAL,
         revision_view=None,
-    )
+    ).result
     assert [value.session_date for value in result.bars] == [date(2019, 6, 24)]
     assert result.requirement is SeriesRequirement.OPTIONAL
     assert result.withheld_endpoints == 1, (
@@ -1386,7 +1392,7 @@ def test_a_series_emptied_by_origin_ineligibility_is_refused(tmp_path: Path) -> 
         profile=PROVIDER_REALISTIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
-    )
+    ).result
     assert result.bars, "Daily bars are eligible under PROVIDER_REALISTIC_PIT."
 
     # The ticker-reuser's daily series is complete and entirely provider-derived,
@@ -1414,7 +1420,7 @@ def test_a_downgraded_run_is_labelled_public_pit_end_to_end(tmp_path: Path) -> N
     )
     result = reader.get_security_universe(
         as_of=phase3a.utc(2021, 1, 5, 21, 30), profile=PROVIDER_REALISTIC
-    )
+    ).result
     assert result.provenance.resolved_profile is PUBLIC
     assert result.provenance.requested_profile is PROVIDER_REALISTIC
     assert result.provenance.was_downgraded

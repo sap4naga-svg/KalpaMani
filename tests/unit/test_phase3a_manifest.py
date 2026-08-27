@@ -129,14 +129,14 @@ def _default_tokens() -> tuple[LimitationToken, ...]:
 
 
 @lru_cache(maxsize=1)
-def _executed() -> ExecutedResult:
+def _executed() -> ExecutedResult[Any]:
     """One sealed result, reused across the module.
 
     Built by a real query through the verified reader, so every cross-check in
     ``emit_manifest`` compares the manifest to something a run actually recorded.
     """
     directory = tempfile.mkdtemp(prefix="kalpamani-manifest-")
-    return phase3a.sealed_result(LocalTableStore(Path(directory)), result_bytes=RESULT_BYTES)
+    return phase3a.sealed_result(LocalTableStore(Path(directory)))
 
 
 def _manifest(**overrides: object) -> ResearchManifest:
@@ -177,13 +177,20 @@ def _manifest(**overrides: object) -> ResearchManifest:
             quality_report_hash=_executed().quality_report_hash,
         ),
         "random_seed": 20260826,
-        "result_artifact_hash": sha256_hex(RESULT_BYTES),
+        "result_artifact_hash": sha256_hex(_result_bytes()),
     }
     base.update(overrides)
     return ResearchManifest(**base)  # type: ignore[arg-type]
 
 
-RESULT_BYTES = b'{"result": "synthetic"}'
+def _result_bytes() -> bytes:
+    """The canonical bytes the sealed run produced.
+
+    The manifest is checked against the run's own encoding, so the test emits
+    exactly what the accessor produced rather than a stand-in that would fail the
+    comparison for the wrong reason.
+    """
+    return _executed().result_bytes
 
 
 def _inventory(**overrides: object) -> InputInventory:
@@ -211,8 +218,9 @@ def _inventory(**overrides: object) -> InputInventory:
     return InputInventory(**base)  # type: ignore[arg-type]
 
 
-def _emit(manifest: ResearchManifest, *, result_bytes: bytes = RESULT_BYTES) -> ResearchManifest:
-    return emit_manifest(manifest, result_bytes=result_bytes, executed=_executed())
+def _emit(manifest: ResearchManifest, *, result_bytes: bytes | None = None) -> ResearchManifest:
+    payload = _result_bytes() if result_bytes is None else result_bytes
+    return emit_manifest(manifest, result_bytes=payload, executed=_executed())
 
 
 # ---------------------------------------------------------------------------
@@ -739,14 +747,13 @@ def test_a_zero_row_exclusion_is_not_evidence_of_an_exclusion() -> None:
 def test_a_positive_exclusion_with_its_token_passes() -> None:
     """A run that genuinely dropped a row carries the token, itemised as it happened."""
     directory = tempfile.mkdtemp(prefix="kalpamani-exclusions-")
-    executed = phase3a.sealed_result_with_exclusions(
-        LocalTableStore(Path(directory)), result_bytes=RESULT_BYTES
-    )
+    executed = phase3a.sealed_result_with_exclusions(LocalTableStore(Path(directory)))
     assert executed.exclusion_rows == 1, "One bar was re-originated beyond PUBLIC_PIT's reach."
 
     manifest = _manifest(
         origin_exclusions=origin_exclusions_for(executed),
         inputs=inventory_for(executed),
+        result_artifact_hash=executed.result_bytes_hash,
         datasets=(
             DatasetReference(
                 dataset_version=phase3a.DATASET_VERSION,
@@ -766,7 +773,9 @@ def test_a_positive_exclusion_with_its_token_passes() -> None:
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         ),
     )
-    assert emit_manifest(manifest, result_bytes=RESULT_BYTES, executed=executed) is not None
+    assert (
+        emit_manifest(manifest, result_bytes=executed.result_bytes, executed=executed) is not None
+    )
 
 
 def test_an_exclusion_count_that_disagrees_with_the_run_refuses() -> None:
@@ -834,13 +843,13 @@ def test_an_unapproved_bound_or_hash_mismatch_refuses() -> None:
                     unapproved_bounds_relied_upon=("price_bar",),
                 )
             ),
-            result_bytes=RESULT_BYTES,
+            result_bytes=_result_bytes(),
             executed=_executed(),
         )
     with pytest.raises(ManifestRefusedError, match="content hash failed to verify"):
         emit_manifest(
             _manifest(inputs=_inventory(hash_mismatches=("gold/synthetic.a1.1",))),
-            result_bytes=RESULT_BYTES,
+            result_bytes=_result_bytes(),
             executed=_executed(),
         )
 
@@ -871,18 +880,31 @@ def test_every_refused_precondition_is_reported_at_once() -> None:
 def test_an_executed_result_cannot_be_assembled_at_a_call_site() -> None:
     """A result and an inventory that travel separately can each be substituted."""
     executed = _executed()
-    with pytest.raises(ExecutionSealError, match="only be produced by PointInTimeReader"):
+    with pytest.raises(ExecutionSealError, match="only be produced by a PointInTimeReader"):
         ExecutedResult(
             result=executed.result,
-            result_bytes_hash=executed.result_bytes_hash,
+            result_bytes=executed.result_bytes,
+            query=executed.query,
             evidence=executed.evidence,
             dataset_version=executed.dataset_version,
             publication_manifest_hash=executed.publication_manifest_hash,
             quality_report_hash=executed.quality_report_hash,
             origin_exclusions=executed.origin_exclusions,
-            bounds_relied_upon=executed.bounds_relied_upon,
-            produced_by=object(),
+            token=object(),
         )
+
+
+def test_a_sealed_result_cannot_be_copied_onto_other_contents() -> None:
+    """``dataclasses.replace`` copies a token field straight through.
+
+    Which is why ExecutedResult is not a dataclass: a token in a readable field
+    looks like a boundary and is not, and every check it guards passes for the
+    copy.
+    """
+    import dataclasses as _dataclasses
+
+    with pytest.raises(TypeError):
+        _dataclasses.replace(_executed(), dataset_version="gold/elsewhere.1")  # type: ignore[type-var]
 
 
 def test_the_inventory_a_sealed_run_produces_is_the_one_emitted() -> None:

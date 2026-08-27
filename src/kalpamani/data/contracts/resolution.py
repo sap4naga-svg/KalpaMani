@@ -34,6 +34,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Final, Protocol, Self, runtime_checkable
 
 from kalpamani.data.contracts.envelope import DerivedEnvelope, Envelope, SourceEnvelope
@@ -310,6 +311,93 @@ def _derived_decision_time(
     return lineage_max
 
 
+class TimingBasisUsed(StrEnum):
+    """Which timing a *particular row* was actually admitted on.
+
+    Not the same question as :class:`~kalpamani.data.contracts.profiles.TimingBasis`,
+    which describes a whole dataset at build time. A query serves some rows and
+    not others, so "this dataset contains bounded rows" and "this result leant on
+    a bound" are different claims -- and reporting the first as the second put a
+    ``PROVIDER_TIME_BOUNDED`` limitation on results computed entirely from exact
+    times.
+    """
+
+    PUBLIC_EXACT = "PUBLIC_EXACT"
+    PUBLIC_BOUNDED = "PUBLIC_BOUNDED"
+    PROVIDER_EXACT = "PROVIDER_EXACT"
+    PROVIDER_BOUNDED = "PROVIDER_BOUNDED"
+    SYSTEM_FIRST_SEEN = "SYSTEM_FIRST_SEEN"
+    #: A derived artifact carries its inputs' bases, and this alongside them.
+    DERIVED_FROM_INPUTS = "DERIVED_FROM_INPUTS"
+
+
+def governing_timing_bases(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> frozenset[TimingBasisUsed]:
+    """Exactly which timings decided this row's availability under this profile.
+
+    Mirrors :func:`decision_available_time` axis for axis, because a basis derived
+    from anything else would describe a different admission than the one that
+    happened. A row the profile cannot serve has no basis at all.
+
+    A derived artifact reports the union over its inputs, plus
+    ``DERIVED_FROM_INPUTS``: its availability is its slowest input's, so whatever
+    admitted that input admitted the artifact.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        bases: set[TimingBasisUsed] = {TimingBasisUsed.DERIVED_FROM_INPUTS}
+        for item in _derived_inputs(record):
+            bases |= governing_timing_bases(item, resolved_profile, approvals)
+        return frozenset(bases)
+
+    origin = envelope.information_origin
+    if not origin_eligible(origin, resolved_profile):
+        return frozenset()
+
+    public = _public_basis(record, envelope, approvals)
+    provider = _provider_basis(record, envelope, approvals)
+
+    match resolved_profile:
+        case InformationSetProfile.PUBLIC_PIT:
+            return frozenset({public} if public is not None else set())
+        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
+            if origin is InformationOrigin.PROVIDER_DERIVED:
+                return frozenset({provider} if provider is not None else set())
+            if public is None or provider is None:
+                return frozenset()
+            return frozenset({public, provider})
+        case _:
+            # FORWARD_SYSTEM takes the max over whichever axes the row has, so
+            # every axis that contributed a candidate is part of the basis.
+            found = {basis for basis in (public, provider) if basis is not None}
+            if envelope.system_first_seen_time is not None:
+                found.add(TimingBasisUsed.SYSTEM_FIRST_SEEN)
+            return frozenset(found)
+
+
+def _public_basis(
+    record: PitRecord, envelope: SourceEnvelope, approvals: BoundApprovals
+) -> TimingBasisUsed | None:
+    if envelope.public_available_time is not None:
+        return TimingBasisUsed.PUBLIC_EXACT
+    if resolved_public_time(record, approvals) is not None:
+        return TimingBasisUsed.PUBLIC_BOUNDED
+    return None
+
+
+def _provider_basis(
+    record: PitRecord, envelope: SourceEnvelope, approvals: BoundApprovals
+) -> TimingBasisUsed | None:
+    if envelope.provider_available_time is not None:
+        return TimingBasisUsed.PROVIDER_EXACT
+    if resolved_provider_time(record, approvals) is not None:
+        return TimingBasisUsed.PROVIDER_BOUNDED
+    return None
+
+
 def _derived_inputs(record: PitRecord) -> tuple[PitRecord, ...]:
     if isinstance(record, DerivedArtifactRecord):
         return record.inputs
@@ -360,7 +448,9 @@ __all__ = [
     "DerivedArtifactRecord",
     "PitRecord",
     "SourceRecord",
+    "TimingBasisUsed",
     "decision_available_time",
+    "governing_timing_bases",
     "is_eligible",
     "origin_eligible",
     "resolved_provider_time",

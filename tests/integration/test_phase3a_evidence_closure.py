@@ -36,7 +36,7 @@ from kalpamani.data.contracts.errors import (
     QueryRangeError,
     UnsafePathComponentError,
 )
-from kalpamani.data.contracts.manifest import InputInventory, emit_manifest
+from kalpamani.data.contracts.manifest import InputInventory, emit_manifest, inventory_for
 from kalpamani.data.contracts.paths import (
     internal_filename,
     safe_component,
@@ -97,7 +97,8 @@ from kalpamani.data.ingest.bronze import (
     BronzeStore,
     RetrievalMetadata,
 )
-from kalpamani.data.pit.accessors import PointInTimeReader, SeriesRequirement
+from kalpamani.data.pit.accessors import PointInTimeReader
+from kalpamani.data.pit.query import PriceQuerySpec, SeriesRequirement
 from kalpamani.data.quality.checks import check_universe_snapshots, subsequently_delisted
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement, plan_for
 from kalpamani.data.quality.report import CheckNotRun, report_from_findings
@@ -845,7 +846,7 @@ def test_the_same_zero_row_snapshot_is_a_real_answer_once_it_exists(
         resolution=phase3a.resolution(requested=FORWARD),
         approvals=phase3a.approvals(),
     )
-    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=FORWARD)
+    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=FORWARD).result
     assert result.session_date == date(2021, 1, 5)
     assert result.members == ()
     assert result.non_members == ()
@@ -1152,7 +1153,7 @@ def test_staged_bytes_accept_only_this_packages_own_files(tmp_path: Path) -> Non
 def test_the_input_inventory_is_produced_by_the_query_path(tmp_path: Path) -> None:
     """A dataset the query path did not record is a bug here, not a caller's choice."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    reader.get_price_history(
+    priced = reader.get_price_history(
         security_id=phase3a.SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
@@ -1163,20 +1164,23 @@ def test_the_input_inventory_is_produced_by_the_query_path(tmp_path: Path) -> No
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
     )
-    reader.get_security_universe(as_of=phase3a.utc(2019, 6, 28, 12, 0), profile=PUBLIC)
+    universe = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 28, 12, 0), profile=PUBLIC)
 
-    evidence = reader.execution_evidence()
-    assert "price_bar" in evidence.direct_source_datasets
-    assert "universe_membership" not in evidence.direct_source_datasets, (
+    assert priced.evidence.direct_source_datasets == ("price_bar",)
+    assert universe.evidence.direct_source_datasets == (), (
         "universe_membership is a derived artifact, not a source dataset. Recording it as one "
         "made the manifest demand provider-resolution evidence for a table nobody publishes "
         "resolution evidence about."
     )
-    assert evidence.consumed_artifact_ids, "The snapshot it read is a consumed artifact."
-    assert evidence.quality_report_hash == reader.quality_report.report_hash
+    assert universe.evidence.consumed_artifact_ids, "The snapshot it read is an artifact."
+    assert priced.evidence.consumed_artifact_ids == (), (
+        "And a price query consumed none, which the price query's own evidence says -- it does "
+        "not inherit the universe query's."
+    )
+    assert priced.quality_report_hash == reader.quality_report.report_hash
 
-    inventory = InputInventory.from_execution(evidence, result_bytes=b'{"n": 1}')
-    assert inventory.direct_source_datasets == evidence.direct_source_datasets
+    inventory = inventory_for(priced)
+    assert inventory.direct_source_datasets == priced.evidence.direct_source_datasets
     assert inventory.unapproved_bounds_relied_upon == ()
 
 
@@ -1188,7 +1192,7 @@ def test_a_raw_series_does_not_record_corporate_actions(tmp_path: Path) -> None:
     be evidenced anyway.
     """
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    reader.get_price_history(
+    executed = reader.get_price_history(
         security_id=phase3a.SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
@@ -1199,7 +1203,7 @@ def test_a_raw_series_does_not_record_corporate_actions(tmp_path: Path) -> None:
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
     )
-    evidence = reader.execution_evidence()
+    evidence = executed.evidence
     assert evidence.direct_source_datasets == ("price_bar",)
     assert evidence.revisable_datasets_consumed == ()
 
@@ -1209,7 +1213,7 @@ def test_an_adjusted_series_records_corporate_actions_and_a_revision_view(
 ) -> None:
     """It does read them, and which revision it used is part of the answer."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    result = reader.get_price_history(
+    executed = reader.get_price_history(
         security_id=phase3a.SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
@@ -1220,10 +1224,13 @@ def test_an_adjusted_series_records_corporate_actions_and_a_revision_view(
         requirement=SeriesRequirement.REQUIRED,
         revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
     )
-    evidence = reader.execution_evidence()
+    evidence = executed.evidence
     assert set(evidence.direct_source_datasets) == {"price_bar", "corporate_action"}
     assert evidence.revisable_datasets_consumed == ("corporate_action",)
-    assert result.provenance.revision_view is RevisionView.AS_KNOWN_AT_AS_OF
+    assert executed.result.provenance.revision_view is RevisionView.AS_KNOWN_AT_AS_OF
+    query = executed.query
+    assert isinstance(query, PriceQuerySpec)
+    assert query.revision_view is RevisionView.AS_KNOWN_AT_AS_OF
 
 
 def test_an_adjusted_series_without_a_revision_view_is_refused(tmp_path: Path) -> None:
@@ -1265,7 +1272,8 @@ def test_a_raw_series_naming_a_revision_view_is_refused(tmp_path: Path) -> None:
 def test_the_result_hash_covers_the_exact_bytes(tmp_path: Path) -> None:
     """Decoding first made two different payloads that decode alike one identity."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    evidence = reader.execution_evidence()
+    executed = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 28, 12, 0), profile=PUBLIC)
+    evidence = executed.evidence
     first = InputInventory.from_execution(evidence, result_bytes=b"\xff\xfe")
     second = InputInventory.from_execution(evidence, result_bytes=b"\xff\xfd")
     assert first.result_artifact_hash != second.result_artifact_hash
@@ -1405,7 +1413,7 @@ def _minute_series(reader: Any, *, start: date, end: date) -> Any:
         profile=PUBLIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
-    )
+    ).result
 
 
 def test_a_complete_minute_grid_is_published_read_and_served(tmp_path: Path) -> None:

@@ -161,9 +161,14 @@ def relevant_actions(
     Lineage naming an action the computation ignores is worse than lineage naming
     too few: the artifact's availability is the max over its inputs, so an
     unrelated action -- another security's, a dividend under ``SPLIT_ONLY``, one
-    effective outside the declared interval -- would push the artifact's
+    effective *after* the declared interval -- would push the artifact's
     availability later and its eligibility narrower for a row that changed
     nothing. The artifact would then be less available than the numbers it holds.
+
+    An action **before** the interval is not unrelated. Under
+    ``FORWARD_BASE_NORMALIZED`` every bar is expressed in the original base, so an
+    earlier split scales every bar in the interval; it changes the numbers, so it
+    belongs in the lineage and its availability legitimately governs the artifact.
     """
     if policy not in _POLICY_ACTION_TYPES:
         raise PendingContractError(
@@ -189,15 +194,21 @@ def relevant_actions(
             # than the numbers it holds, which is the exact failure `relevant`
             # exists to prevent.
             continue
-        # An action taking effect after the interval adjusts none of its bars;
-        # one *before* it is already reflected in every bar it holds.
+        # An action taking effect after the interval adjusts none of its bars.
         #
-        # An action ON the first day is neither. The convention applies a factor
-        # to every bar on or after the ex-date, so a split whose ex-date is
-        # valid_time_start scales the first bar -- and excluding it (`<=`) left the
-        # artifact's numbers and its lineage agreeing with each other while both
-        # contradicted the convention the artifact is labelled with.
-        if action.ex_date > valid_time_end or action.ex_date < valid_time_start:
+        # There is no lower bound, and that is the convention rather than an
+        # oversight. FORWARD_BASE_NORMALIZED expresses every bar in the *original*
+        # base, applying each split's factor to bars on or after its ex-date -- so
+        # a split before the interval applies to every bar inside it, and dropping
+        # it left the artifact's numbers disagreeing with the reader's over the
+        # same bars.
+        #
+        # It is also what makes the convention worth the name: a bar's adjusted
+        # value is a property of the bar and the actions, not of the interval a
+        # caller happened to ask for. Excluding earlier splits made the same bar
+        # 104.00 through the reader and 52.00 through an artifact whose interval
+        # started after the split.
+        if action.ex_date > valid_time_end:
             continue
         kept.append(action)
     return tuple(sorted(kept, key=lambda item: (item.ex_date or date.min, item.action_id)))

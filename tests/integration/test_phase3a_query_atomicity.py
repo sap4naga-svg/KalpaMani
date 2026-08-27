@@ -80,7 +80,7 @@ def _series(
         profile=profile,
         requirement=requirement,
         revision_view=None,
-    )
+    ).result
 
 
 def _reader_with_late_bar(tmp_path: Path, session_date: date) -> PointInTimeReader:
@@ -253,8 +253,14 @@ def test_a_required_series_with_no_calendar_basis_is_refused(tmp_path: Path) -> 
     assert "no listed trading session" in str(refusal.value)
 
 
-def test_the_same_query_is_served_optionally(tmp_path: Path) -> None:
-    """NEGATIVE CONTROL. Best effort remains available, and says what it withheld."""
+def test_the_same_query_refuses_under_optional_too(tmp_path: Path) -> None:
+    """OPTIONAL relaxes availability, not the integrity of the data.
+
+    A grid that cannot be determined is a defect in the dataset rather than a fact
+    about what this query was entitled to see, so both requirements refuse. Making
+    OPTIONAL serve through it would have made it a way of asking the system to
+    stop checking.
+    """
     datasets = phase3a.source_datasets()
     datasets["listing"] = tuple(
         row
@@ -262,15 +268,12 @@ def test_the_same_query_is_served_optionally(tmp_path: Path) -> None:
         if isinstance(row, Listing) and row.security_id != SECURITY
     )
     reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
-    result = _series(
-        reader,
-        as_of=phase3a.utc(2019, 6, 26, 20, 0),
-        requirement=SeriesRequirement.OPTIONAL,
-    )
-    assert [value.session_date for value in result.bars] == [
-        date(2019, 6, 24),
-        date(2019, 6, 25),
-    ]
+    with pytest.raises(IncompleteCoverageError, match="no listed trading session"):
+        _series(
+            reader,
+            as_of=phase3a.utc(2019, 6, 26, 20, 0),
+            requirement=SeriesRequirement.OPTIONAL,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +301,7 @@ def test_a_same_day_query_after_the_evaluation_cutoff_sees_it(tmp_path: Path) ->
     reader = phase3a.reader(LocalTableStore(tmp_path))
     result = reader.get_security_universe(
         as_of=phase3a.session_open(EARLY_SESSION) + timedelta(minutes=1), profile=PUBLIC
-    )
+    ).result
     assert result.session_date == EARLY_SESSION
 
 
@@ -323,7 +326,7 @@ def test_a_utc_date_that_runs_ahead_of_the_session_date_is_not_a_candidate(
 def test_the_latest_snapshot_is_preferred_when_both_are_available(tmp_path: Path) -> None:
     """NEGATIVE CONTROL. Latest-first is still the rule."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC)
+    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC).result
     assert result.session_date == LATE_SESSION
 
 
@@ -354,7 +357,7 @@ def test_an_unavailable_latest_snapshot_falls_back_to_the_prior_one(
     """
     reader = _incremental(tmp_path)
     between = T2 - timedelta(hours=1)
-    result = reader.get_security_universe(as_of=between, profile=FORWARD)
+    result = reader.get_security_universe(as_of=between, profile=FORWARD).result
     assert result.session_date == EARLY_SESSION, (
         "The 2021 snapshot's cutoff has long passed, but under FORWARD_SYSTEM it had not been "
         "built yet at this instant, so the query serves the whole snapshot that had."
@@ -366,7 +369,7 @@ def test_an_unavailable_latest_snapshot_falls_back_to_the_prior_one(
 def test_the_later_snapshot_is_served_once_it_has_been_built(tmp_path: Path) -> None:
     """NEGATIVE CONTROL for the fallback."""
     reader = _incremental(tmp_path)
-    result = reader.get_security_universe(as_of=T2 + timedelta(hours=1), profile=FORWARD)
+    result = reader.get_security_universe(as_of=T2 + timedelta(hours=1), profile=FORWARD).result
     assert result.session_date == LATE_SESSION
 
 
@@ -407,7 +410,7 @@ def test_the_partly_recomputed_snapshot_is_whole_once_that_decision_lands(
 ) -> None:
     """NEGATIVE CONTROL. Every row, or none."""
     reader = _incremental(tmp_path, stale_row_security=phase3a.SEC_CONTINUOUS)
-    result = reader.get_security_universe(as_of=T2 + timedelta(hours=1), profile=FORWARD)
+    result = reader.get_security_universe(as_of=T2 + timedelta(hours=1), profile=FORWARD).result
     stored = reader.publication.dataset.universe[result.session_date]
     assert len(result.members) + len(result.non_members) == len(stored)
 
@@ -417,7 +420,9 @@ def test_the_same_snapshot_is_whole_once_its_last_decision_has_landed(
 ) -> None:
     """NEGATIVE CONTROL for the case above."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    result = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 30, 12, 0), profile=PUBLIC)
+    result = reader.get_security_universe(
+        as_of=phase3a.utc(2019, 6, 30, 12, 0), profile=PUBLIC
+    ).result
     assert result.session_date == EARLY_SESSION
     stored = reader.publication.dataset.universe[EARLY_SESSION]
     assert len(result.members) + len(result.non_members) == len(stored), (
@@ -428,7 +433,7 @@ def test_the_same_snapshot_is_whole_once_its_last_decision_has_landed(
 def test_a_universe_result_names_the_snapshot_it_came_from(tmp_path: Path) -> None:
     """A caller citing this result can say exactly which snapshot it was."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC)
+    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC).result
     header = reader.publication.dataset.universe_headers[result.session_date]
     assert result.snapshot_content_hash == header.snapshot_content_hash
     assert result.snapshot_artifact_id == header.artifact_id
@@ -480,7 +485,7 @@ def test_a_zero_row_snapshot_is_served_as_an_answer(
     assert header.row_count == 0, "Nobody was listed, so the rule selected nobody."
     assert header.is_complete, "And the session was nonetheless built."
 
-    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=profile)
+    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=profile).result
     assert result.session_date == LATE_SESSION
     assert result.members == ()
     assert result.non_members == ()
@@ -508,8 +513,9 @@ def test_a_universe_query_records_a_derived_artifact_not_a_source_dataset(
 ) -> None:
     """It reads a stored snapshot. It does not open listing, attribute or bar tables."""
     reader = phase3a.reader(LocalTableStore(tmp_path))
-    result = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC)
-    evidence = reader.execution_evidence()
+    executed = reader.get_security_universe(as_of=phase3a.BUILD_TIME, profile=PUBLIC)
+    result = executed.result
+    evidence = executed.evidence
 
     assert evidence.direct_source_datasets == ()
     assert result.snapshot_artifact_id in evidence.consumed_artifact_ids

@@ -99,8 +99,9 @@ from kalpamani.data.curate.publication import (
 )
 from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_inputs
 from kalpamani.data.curate.universe import UniverseBuildInputs, UniverseDefinition
-from kalpamani.data.pit.accessors import PointInTimeReader, SeriesRequirement
+from kalpamani.data.pit.accessors import BarSeriesResult, PointInTimeReader
 from kalpamani.data.pit.execution import ExecutedResult
+from kalpamani.data.pit.query import SeriesRequirement
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.quality.report import QualityReport
 from kalpamani.data.quality.runner import QualityContext, run_quality_plan
@@ -1296,17 +1297,14 @@ def datasets_with_one_ineligible_bar(
 
 def sealed_result_with_exclusions(
     store: LocalTableStore,
-    *,
-    result_bytes: bytes = b'{"result": "synthetic"}',
-) -> ExecutedResult:
+) -> ExecutedResult[BarSeriesResult]:
     """A sealed result whose run dropped a row for origin ineligibility.
 
     An OPTIONAL series, because a REQUIRED one refuses rather than serving short --
     which is the whole point of the requirement. The seal then carries a genuine
     itemised exclusion for the manifest to be checked against.
     """
-    pit = reader_from(store, datasets_with_one_ineligible_bar())
-    series = pit.get_price_history(
+    return reader_from(store, datasets_with_one_ineligible_bar()).get_price_history(
         security_id=SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
@@ -1317,7 +1315,6 @@ def sealed_result_with_exclusions(
         requirement=SeriesRequirement.OPTIONAL,
         revision_view=None,
     )
-    return pit.seal(series, result_bytes=result_bytes)
 
 
 def zero_row_publication(
@@ -1368,19 +1365,14 @@ def resolution_evidence(
     return resolved_inputs(requested=requested, downgrade=downgrade).evidence
 
 
-def sealed_result(
-    store: LocalTableStore,
-    *,
-    result_bytes: bytes = b'{"result": "synthetic"}',
-) -> ExecutedResult:
+def sealed_result(store: LocalTableStore) -> ExecutedResult[BarSeriesResult]:
     """A sealed result from a real query, for the research-manifest path.
 
     A RAW daily series over the continuously listed security: it reads one source
     dataset, leans on a bounded public availability, and excludes nothing -- so the
     seal carries every field the manifest is cross-checked against.
     """
-    pit = reader(store)
-    series = pit.get_price_history(
+    return reader(store).get_price_history(
         security_id=SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
@@ -1391,7 +1383,6 @@ def sealed_result(
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
     )
-    return pit.seal(series, result_bytes=result_bytes)
 
 
 def adjusted_artifact() -> AdjustedBarArtifact:

@@ -524,8 +524,16 @@ def test_a_split_on_the_first_day_of_the_interval_affects_the_first_bar() -> Non
     )
 
 
-def test_an_action_before_the_interval_is_excluded() -> None:
-    """It is already reflected in every bar the interval holds."""
+def test_an_action_before_the_interval_is_still_relevant() -> None:
+    """Under a fixed-base convention it scales every bar the interval holds.
+
+    This asserted the opposite, and the opposite was a real inconsistency: the
+    reader applied an earlier split and a materialised artifact over the same bars
+    did not, so one bar was 104.00 through one path and 52.00 through the other.
+    ``FORWARD_BASE_NORMALIZED`` expresses every bar in the original base, so a
+    bar's adjusted value is a property of the bar and the actions -- not of the
+    interval a caller happened to ask for.
+    """
     kept = relevant_actions(
         phase3a.corporate_actions(),
         security_id_scope=SECURITY,
@@ -534,7 +542,81 @@ def test_an_action_before_the_interval_is_excluded() -> None:
         valid_time_end=date(2019, 7, 3),
         securities=[SECURITY],
     )
-    assert kept == (), "The 27 June ex-date is before this interval opens."
+    assert [action.ex_date for action in kept] == [SPLIT_EX_DATE], (
+        "The 27 June split is before the interval and still scales every bar in it."
+    )
+
+
+def test_both_adjustment_paths_agree_over_the_same_bars() -> None:
+    """On-demand and materialised are one convention or they are two answers."""
+    bars = _bars(date(2019, 6, 28), date(2019, 7, 3))
+    as_of = phase3a.utc(2019, 7, 10, 12, 0)
+    on_demand = adjusted_series(
+        bars,
+        phase3a.corporate_actions(),
+        policy=AdjustmentPolicy.SPLIT_ONLY,
+        convention=ADJUSTMENT_CONVENTION,
+        as_of_epoch=as_of,
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+    )
+    materialised = adjusted_series(
+        bars,
+        relevant_actions(
+            phase3a.corporate_actions(),
+            security_id_scope=SECURITY,
+            policy=AdjustmentPolicy.SPLIT_ONLY,
+            valid_time_start=date(2019, 6, 28),
+            valid_time_end=date(2019, 7, 3),
+            securities=[SECURITY],
+        ),
+        policy=AdjustmentPolicy.SPLIT_ONLY,
+        convention=ADJUSTMENT_CONVENTION,
+        as_of_epoch=as_of,
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+    )
+    assert [value.close for value in on_demand] == [value.close for value in materialised]
+
+
+def test_one_bar_has_one_adjusted_value_through_two_intervals() -> None:
+    """Which is what makes the convention worth its name."""
+    as_of = phase3a.utc(2019, 7, 10, 12, 0)
+
+    def closes(start: date, end: date) -> dict[date, object]:
+        bars = _bars(start, end)
+        kept = relevant_actions(
+            phase3a.corporate_actions(),
+            security_id_scope=SECURITY,
+            policy=AdjustmentPolicy.SPLIT_ONLY,
+            valid_time_start=start,
+            valid_time_end=end,
+            securities=[SECURITY],
+        )
+        series = adjusted_series(
+            bars,
+            kept,
+            policy=AdjustmentPolicy.SPLIT_ONLY,
+            convention=ADJUSTMENT_CONVENTION,
+            as_of_epoch=as_of,
+            resolved_profile=PUBLIC,
+            approvals=phase3a.approvals(),
+        )
+        return {value.session_date: value.close for value in series}
+
+    wide = closes(date(2019, 6, 24), date(2019, 6, 28))
+    narrow = closes(date(2019, 6, 28), date(2019, 6, 28))
+    assert wide[date(2019, 6, 28)] == narrow[date(2019, 6, 28)]
+
+
+def test_equivalent_instants_produce_one_artifact_id() -> None:
+    """A cutoff written in another offset is the same cutoff."""
+    from datetime import timedelta, timezone
+
+    utc_epoch = phase3a.utc(2019, 7, 1, 12, 0)
+    same = utc_epoch.astimezone(timezone(timedelta(hours=-5)))
+    assert utc_epoch == same and utc_epoch.isoformat() != same.isoformat()
+    assert _artifact(as_of_epoch=utc_epoch).artifact_id == (_artifact(as_of_epoch=same).artifact_id)
 
 
 def test_an_action_after_the_interval_is_excluded() -> None:
