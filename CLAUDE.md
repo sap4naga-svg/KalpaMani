@@ -12,7 +12,7 @@ It trades liquid U.S. common stocks over a primary **2–30 trading-day horizon*
 deterministic discovery, ranking, risk and execution, with AI confined to qualitative
 information processing and thesis challenge.
 
-**Locked principle (Blueprint V2.1 §1):**
+**Locked principle (Blueprint V3.0 §2, carried unchanged from V2.1 §1):**
 
 > AI may improve information processing. Mathematics and deterministic software control
 > money, risk and broker actions.
@@ -23,15 +23,26 @@ information processing and thesis challenge.
 
 When instructions conflict, the higher-numbered authority wins:
 
-1. **Blueprint V2.1** — `docs/architecture/KalpaMani_Blueprint_V2_1.pdf`
+1. **Blueprint V3.0** — `docs/architecture/KalpaMani_Blueprint_V3_0.pdf`
 2. **Approved Architecture Decision Records** — `docs/decisions/`
 3. **This CLAUDE.md**
 4. **The approved task specification** for the current session
 5. **Implementation judgment**
 
-If a lower-level instruction appears to conflict with Blueprint V2.1, **do not silently
+If a lower-level instruction appears to conflict with Blueprint V3.0, **do not silently
 redesign the system.** Stop, report the conflict, and propose the change as an ADR.
 Architectural deviations require an approved ADR before implementation.
+
+**Blueprint V2.1 remains historical architecture evidence and is not deleted.** It stays
+at `docs/architecture/KalpaMani_Blueprint_V2_1.pdf`, unaltered, as the record of the
+architecture under which Phase 1, Phase 2 and early Phase 3 were designed and accepted —
+but it is **no longer in the authority order**. V3.0 was adopted by
+[ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md);
+the delta and the Document Control override are indexed in
+[`docs/architecture/BLUEPRINT_V3_ADOPTION.md`](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
+
+Neither Blueprint PDF is ever edited. Corrections are recorded in an ADR and indexed
+beside the document — `BLUEPRINT_ERRATA.md` for V2.1, `BLUEPRINT_V3_ADOPTION.md` for V3.0.
 
 ---
 
@@ -184,8 +195,8 @@ silently become KalpaMani strategy capital — doing so would inflate every posi
 12.5x. Broker equity may be *observed* (via `StrategyCapital.observe_broker_equity`) for
 reconciliation and alerting; it never participates in sizing.
 
-Initial configuration defaults (Blueprint V2.1 §10) — **research parameters, not
-performance expectations**:
+Initial configuration defaults (Blueprint V3.0 §11.1, unchanged from V2.1 §10) —
+**research parameters, not performance expectations**:
 
 | Control | Value | On USD 80,000 |
 |---|---|---|
@@ -345,7 +356,9 @@ trading remains **hard-disabled**.
 | **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
 | **ADR-0005** | **PROPOSED** |
+| **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
 | **G1–G5** | **OPEN** |
+| **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
 | **Short research** | **NOT AUTHORIZED** |
@@ -366,7 +379,7 @@ point-in-time contract as executable, type-checked Python, proven against reposi
 
 ```
 no provider connected   ·   no production data   ·   no short research
-no Phase 3B / 3C / 3D authority   ·   no G1-G5 resolved   ·   ADR-0005 still PROPOSED
+no Phase 3B / 3C / 3D authority   ·   no G1-G7 resolved   ·   ADR-0005 still PROPOSED
 ```
 
 **A1 proves the vendor-neutral point-in-time mechanism using repository-owned synthetic
@@ -384,10 +397,22 @@ ADR-0005's five open decision gates —
 No provider has been purchased, trialled or credentialed. No external data has been acquired.
 Beginning any further implementation requires explicit written authorization, per §8.
 
-**Blueprint V3.0 remains PROPOSED and is not repository authority.** The proposed PDF is
-deliberately **untracked and unstaged**; the authority order in §2 is unchanged, and
-**ADR-0006 does not exist**. Adopting V3 requires a separate documentation-only branch, pull
-request and owner authorization.
+**Blueprint V3.0 is ADOPTED and is repository authority (2026-08-27).** It was adopted by
+owner authorization through a documentation-only pull request, and the authority order in
+§2 now names it first. See
+[ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md) and
+[`docs/architecture/BLUEPRINT_V3_ADOPTION.md`](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
+
+**Adoption is a governance change, not a phase milestone.** It grants **no** implementation
+authority for A2, A3, Phase 3B/3C/3D, the Phase-4 Brain, strategies, AI agents, provider
+access, Paper expansion, live trading, capital or leverage — each still requires its own
+written authorization, per §8. Phase 3 remains **NOT COMPLETE**, ADR-0005 remains
+**PROPOSED**, and G1–G7 remain **OPEN**.
+
+The adopted PDF is byte-identical to the document the owner reviewed (SHA-256
+`2726b96dd69c8982788b1c2bd646ce7a52879c649994a31858dc41666761996d`). Because a Blueprint PDF
+is never edited, its Document Control page still reads as drafted for review; those fields
+are **superseded** by the override table in `BLUEPRINT_V3_ADOPTION.md`.
 
 ### Non-blocking follow-ups carried forward
 

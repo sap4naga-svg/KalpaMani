@@ -3,12 +3,23 @@
 An autonomous long/short **U.S. equity swing & momentum trading system** with deterministic
 risk and selective, bounded AI research.
 
-> **Status: PHASE 2 COMPLETE AND ACCEPTED (2026-08-26).** The controlled IBKR **Paper**
-> order lifecycle is certified end to end: one `BUY 1 SPY`, actual fill, protective stop,
-> a genuine LEAN/Gateway restart, recovery by durable broker-native identity, controlled
-> exit, flat. **Execution plumbing, not a strategy** — no scanner, no signals, no alpha.
-> Live trading remains hard-disabled. Certified scope is narrow and stated in
-> [the certification record](docs/certification/phase2-paper-order-lifecycle.md).
+> **Architecture authority: Blueprint V3.0, adopted 2026-08-27.**
+> [`docs/architecture/KalpaMani_Blueprint_V3_0.pdf`](docs/architecture/KalpaMani_Blueprint_V3_0.pdf),
+> adopted by [ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md).
+> Blueprint V2.1 is **preserved unaltered as historical architecture evidence** and is no
+> longer in the authority order. The V2.1→V3 delta is indexed in
+> [BLUEPRINT_V3_ADOPTION.md](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
+>
+> **Status: Phase 3A A1 ACCEPTED (2026-08-27). Phase 3 overall NOT COMPLETE.**
+> Phase 1 (Paper connectivity) and Phase 2 (a narrowly certified one-share SPY Paper order
+> lifecycle) are complete and accepted; the vendor-neutral point-in-time foundation kernel
+> is accepted **on synthetic fixtures only**. Adopting V3 is a governance change — it is
+> **not** Phase 3 completion and authorizes no implementation.
+>
+> **Next governed work: provider and licensing decisions, and the remainder of Phase 3A.**
+> **No provider is connected. No real production data exists. Short research is not
+> authorized. No strategy or Brain implementation is authorized. Live trading is
+> hard-disabled.**
 
 ---
 
@@ -19,7 +30,7 @@ automatically discovering, ranking, entering, pyramiding, monitoring and exiting
 while humans govern models, capital scaling, parameter releases, exceptions, broker
 authentication and an independent kill switch rather than individual trades.
 
-**Locked principle (Blueprint V2.1 §1):**
+**Locked principle (Blueprint V3.0 §2, carried unchanged from V2.1 §1):**
 
 > AI may improve information processing. Mathematics and deterministic software control
 > money, risk and broker actions.
@@ -61,11 +72,20 @@ POSITION MANAGEMENT -> RECONCILIATION
 JOURNAL + ATTRIBUTION + HEALTH
 ```
 
-**Core V1 strategies:** Momentum Breakout, Momentum Pullback, PEAD (post-earnings drift).
-**Phase 2:** Peer Catalyst Momentum.
+The Strategy Brain ends at **`CandidateIntent`** — which may carry thesis, evidence,
+lineage and risk context, but never shares, dollar size, order type, route or any order ID.
+Portfolio construction, sizing, risk, order approval and execution stay deterministic and
+downstream. **None of this is implemented or authorized** (Blueprint V3.0 §8, Appendix A).
+
+**Alpha families (V3.0 §9):** Momentum Continuation — containing the *Breakout* and
+*Pullback* modules under one shared factor-risk budget · Event / Information Drift (PEAD) ·
+Fundamental Deterioration Short. **Different labels do not constitute diversification**;
+whether Breakout and Pullback are economically distinct is open gate **G7**.
 **Universe:** ~1,200 liquid U.S. common stocks.
 **Engine:** QuantConnect LEAN. **Broker:** IBKR Pro behind a `BrokerAdapter`.
 **Database:** PostgreSQL (planned).
+**Preferred historical PIT stack:** Sharadar + SEC EDGAR — *preferred, not selected*, and
+subject to gates G1 and G3.
 
 ---
 
@@ -125,8 +145,8 @@ observed broker equity can overwrite the allocation.
 [CAPITAL-SEPARATION]   CONFIRMED DISTINCT: broker equity is 12.50x the KalpaMani allocation.
 ```
 
-Initial configuration defaults (Blueprint V2.1 §10) — **research parameters, not
-performance expectations**:
+Initial configuration defaults (Blueprint V3.0 §11.1, unchanged from V2.1 §10) —
+**research parameters, not performance expectations**:
 
 | Control | Value | On USD 80,000 |
 |---|---|---|
@@ -149,8 +169,10 @@ KalpaMani/
 ├── .env.example              Variable names + placeholders ONLY
 ├── pyproject.toml
 ├── docs/
-│   ├── architecture/         KalpaMani_Blueprint_V2_1.pdf  (authoritative, never edited)
-│   │                         BLUEPRINT_ERRATA.md  (empirical corrections index)
+│   ├── architecture/         KalpaMani_Blueprint_V3_0.pdf  (AUTHORITY, never edited)
+│   │                         KalpaMani_Blueprint_V2_1.pdf  (historical, never edited)
+│   │                         BLUEPRINT_V3_ADOPTION.md  (V2.1->V3 delta + doc control)
+│   │                         BLUEPRINT_ERRATA.md  (V2.1 empirical corrections index)
 │   ├── decisions/            Architecture Decision Records
 │   └── runbooks/             Operational procedures
 ├── src/kalpamani/
@@ -271,7 +293,9 @@ live brokerage execution, real-money operation.
 | Stage 3A A2 / A3 | **NOT STARTED / NOT AUTHORIZED** |
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
+| ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
 | G1–G5 decision gates | **OPEN** |
+| G6 options overlay · G7 strategy-taxonomy evidence | **OPEN (added by V3.0)** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
@@ -304,10 +328,15 @@ by this slice.
 Phase 3B, 3C and 3D carry no authority from it, and beginning any of them requires explicit
 written authorization.
 
-**Blueprint V3.0 remains PROPOSED and is not repository authority.** The proposed PDF is
-untracked and unstaged, the authority order below is unchanged, and **ADR-0006 does not exist**.
-Adopting V3 requires a separate documentation-only branch, pull request and owner
-authorization.
+**Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
+owner authorization through a documentation-only pull request —
+[ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md).
+Blueprint V2.1 is preserved unaltered as historical evidence.
+
+**That is a governance change, not a phase milestone.** V3 adoption does not complete
+Phase 3, does not resolve any gate, and authorizes no implementation: A2, A3, Phase 3B/3C/3D,
+the Phase-4 Brain, strategies, AI agents, provider access, Paper expansion, live trading,
+capital changes and leverage each still require their own written authorization.
 
 Two non-blocking follow-ups are carried forward, neither of which is authorization to begin
 work: `TradeRecord.orders` deep immutability is a separately governed **Phase-2 hardening**
@@ -318,8 +347,12 @@ would create a **new reviewed version** rather than rewrite A1's evidence.
 
 ## Governance
 
-Authority order: **Blueprint V2.1 → approved ADRs → CLAUDE.md → approved task spec →
+Authority order: **Blueprint V3.0 → approved ADRs → CLAUDE.md → approved task spec →
 implementation judgment.** Architectural deviations require an approved ADR. See
 [CLAUDE.md](CLAUDE.md) for the binding rules.
+
+Blueprint V2.1 remains historical architecture evidence and is not deleted, but it is no
+longer in the authority order. **Neither Blueprint PDF is ever edited** — corrections are
+recorded in an ADR and indexed beside the document.
 
 **License:** Proprietary. All rights reserved.
