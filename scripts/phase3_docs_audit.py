@@ -10,7 +10,8 @@ needs, and whether any document still refers to a field name a later revision re
 Those are exactly the defects the review rounds kept finding by hand. This script finds them by
 running.
 
-It reads `docs/phase3/`, the point-in-time and blueprint-adoption ADRs, `docs/architecture/`,
+It reads `docs/phase3/` (including the G1/G3 provider decision packet and its clarification
+draft), the point-in-time and blueprint-adoption ADRs, `docs/architecture/`,
 `CLAUDE.md` and `README.md`. It touches no runtime code, opens no
 network connection, and asserts nothing about data. Exit code 0 means the documents are
 consistent on the named properties below; non-zero lists what disagrees. It is a guard over
@@ -40,6 +41,14 @@ ADR_V3 = DECISIONS / "ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.
 BLUEPRINT_V3 = ARCHITECTURE / "KalpaMani_Blueprint_V3_0.pdf"
 BLUEPRINT_V21 = ARCHITECTURE / "KalpaMani_Blueprint_V2_1.pdf"
 ADOPTION = ARCHITECTURE / "BLUEPRINT_V3_ADOPTION.md"
+
+#: The G1/G3 decision packet and the licensing-clarification draft. Both are evidence documents
+#: that recommend a decision without taking one, and both sit next to a live purchase question.
+#: The audit guards the two properties that make them safe to hold in a public repository: they
+#: never report a gate as closed, and they never read as authorization to buy or to contact a
+#: vendor. The draft additionally has to keep saying it was not sent.
+PACKET = PHASE3 / "provider-licensing-decision-packet.md"
+CLARIFICATION = PHASE3 / "provider-licensing-clarification-draft.md"
 
 #: Every decision gate that must still read as open. V3 adoption resolved none of them and
 #: added two. A gate is "silently resolved" if a document calls it closed/resolved/satisfied.
@@ -243,7 +252,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/11] Closed vocabularies are defined where they are used")
+    print("[1/12] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -267,7 +276,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/11] Source and derived envelopes stay disjoint")
+    print("\n[2/12] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -302,7 +311,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/11] Every declared temporal semantics has its required anchor")
+    print("\n[3/12] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -319,7 +328,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/11] Exact and bound derivations name the correct fields")
+    print("\n[4/12] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -346,7 +355,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/11] Normative rules use the current resolved model")
+    print("\n[5/12] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -392,7 +401,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/11] Entities keep source and derived rows apart")
+    print("\n[6/12] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -462,7 +471,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/11] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/12] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -524,7 +533,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/11] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/12] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -629,7 +638,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/11] Resolved-timing wording, closure rules and current status")
+    print("\n[9/12] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -734,7 +743,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/11] No document refers to a retired field name")
+    print("\n[10/12] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -778,7 +787,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/11] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/12] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -928,6 +937,98 @@ def main() -> int:
             "HARD-DISABLED" in claude_md.upper() and "HARD-DISABLED" in readme.upper(),
             "hard-disabled wording missing",
         )
+
+    # ------------------------------------------------- 8. provider decision packet
+    print("\n[12/12] The provider decision packet decides nothing and closes no gate")
+
+    f.check(
+        "the G1/G3 decision packet exists",
+        PACKET.is_file(),
+        f"missing: {PACKET}",
+    )
+    f.check(
+        "the licensing-clarification draft exists",
+        CLARIFICATION.is_file(),
+        f"missing: {CLARIFICATION}",
+    )
+
+    if PACKET.is_file() and CLARIFICATION.is_file():
+        packet = read(PACKET)
+        draft = read(CLARIFICATION)
+
+        # The packet recommends; it does not decide. Every gate must still read OPEN in it.
+        for gate in OPEN_GATES:
+            f.check(
+                f"the packet records {gate} OPEN",
+                re.search(
+                    rf"\*\*{gate}\*\*[^|\n]*\|\s*\*\*OPEN|{gate}\b[^.\n]{{0,40}}\bOPEN\b", packet
+                )
+                is not None,
+                f"{gate} is not recorded OPEN in the packet",
+            )
+        f.check(
+            "the packet states G1 and G3 are not closed",
+            "G1 remains OPEN" in packet and "G3 remains OPEN" in packet,
+            "the packet does not disclaim closing G1/G3",
+        )
+        f.check(
+            "the packet leaves ADR-0005 proposed",
+            "ADR-0005 remains PROPOSED" in packet,
+            "the packet does not record ADR-0005 as still Proposed",
+        )
+        f.check(
+            "the packet records that nothing was purchased or credentialed",
+            "Nothing has been purchased, trialled or credentialed" in packet,
+            "no purchase/credential disclaimer",
+        )
+        f.check(
+            "the packet records that no vendor data was retrieved",
+            "No vendor data has been retrieved" in packet,
+            "no vendor-data disclaimer",
+        )
+        f.check(
+            "the packet keeps live trading hard-disabled",
+            "HARD-DISABLED" in packet.upper(),
+            "live-trading wording missing from the packet",
+        )
+        f.check(
+            "the packet's recommendation is one of the four defined categories",
+            any(
+                cat in packet
+                for cat in (
+                    "READY TO REQUEST PURCHASE/TRIAL AUTHORIZATION",
+                    "NEED WRITTEN LICENSING CLARIFICATION FIRST",
+                    "QUALIFY A DIFFERENT PROVIDER FIRST",
+                    "MORE PUBLIC RESEARCH REQUIRED",
+                )
+            ),
+            "no A/B/C/D recommendation category found",
+        )
+
+        # The draft is a draft. It must keep saying so, in its status and in its own body.
+        f.check(
+            "the clarification draft is marked not sent",
+            "NOT SENT" in draft.upper(),
+            "the draft does not declare itself unsent",
+        )
+        f.check(
+            "the clarification draft records that no provider was contacted",
+            "NO PROVIDER HAS BEEN CONTACTED" in draft.upper(),
+            "the draft does not disclaim provider contact",
+        )
+        f.check(
+            "the clarification draft withholds authority to send itself",
+            "does not authorize sending it" in draft,
+            "the draft does not disclaim authorization to send",
+        )
+
+        # Neither document may read as authorization. This is the property that matters most.
+        for name, doc in (("the packet", packet), ("the clarification draft", draft)):
+            f.check(
+                f"{name} withholds authorization",
+                "NOT AUTHORIZED" in doc.upper() or "not authorize" in doc,
+                "authorization disclaimer missing",
+            )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
