@@ -138,6 +138,17 @@ def test_a_source_envelope_refuses_the_derived_origin() -> None:
         _envelope(information_origin=InformationOrigin.DERIVED_ARTIFACT)
 
 
+def test_the_derived_origin_refusal_survives_an_untyped_origin() -> None:
+    """The refusal interpolated ``.value``, which a plain string does not have.
+
+    ``InformationOrigin`` is a ``StrEnum``, so the membership test above reads the
+    same for the string and for the member -- and the branch that refuses it then
+    raised ``AttributeError`` on exactly the input it existed to refuse.
+    """
+    with pytest.raises(EnvelopeError, match="selects the derived envelope"):
+        _envelope(information_origin=InformationOrigin.DERIVED_ARTIFACT.value)
+
+
 def test_a_derived_artifact_cannot_accept_source_availability_fields() -> None:
     """The field does not exist, so this is a TypeError at the call site."""
     with pytest.raises(TypeError):

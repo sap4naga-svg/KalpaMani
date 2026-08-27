@@ -39,7 +39,12 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol, Self, runtime_checkable
 
 from kalpamani.data.contracts.canonical import content_hash
-from kalpamani.data.contracts.envelope import DerivedEnvelope, Envelope, SourceEnvelope
+from kalpamani.data.contracts.envelope import (
+    DerivedEnvelope,
+    Envelope,
+    SourceEnvelope,
+    has_exact_source_vocabulary,
+)
 from kalpamani.data.contracts.errors import ProfileResolutionError
 from kalpamani.data.contracts.vocabulary import (
     AnnouncementBoundDerivation,
@@ -129,31 +134,63 @@ def plain_str(value: object, *, what: str) -> str:
     return text
 
 
+def exact_strenum(value: object, enum_type: Any, *, what: str) -> Any:
+    """The exact member of a closed ``StrEnum`` vocabulary, or a governed refusal.
+
+    One normaliser for every closed vocabulary, because the same defect applies to
+    every one of their constructors. ``Enum(value)`` is a ``_value2member_map_``
+    dict lookup, and a dict lookup compares the **stored** key against the
+    supplied object -- delegating ``__eq__`` to the thing being validated. An
+    object with a colliding ``__hash__`` and a permissive ``__eq__`` is therefore
+    *found*, and silently becomes a real member.
+
+    So a non-string is refused **before** the lookup happens. Every vocabulary
+    normalised through here is a ``StrEnum``, so an exact member and a plain
+    spelling both still pass, and a ``str`` subclass is reduced by
+    :func:`plain_str` before it can carry its own equality into the lookup.
+
+    Raises:
+        ProfileResolutionError: for a non-string, or a spelling the enum does not
+            have. Refused where a caller can still act on it.
+    """
+    if type(value) is enum_type:
+        return value
+    if not isinstance(value, str):
+        raise ProfileResolutionError(
+            f"{value!r} is a {type(value).__name__}, and {what} is named by a string. The "
+            f"{enum_type.__name__} lookup asks the supplied object whether it matches, so an "
+            "object that answers for itself is refused before it is asked."
+        )
+    try:
+        return enum_type(plain_str(value, what=what))
+    except (ValueError, KeyError, TypeError) as refusal:
+        raise ProfileResolutionError(
+            f"{value!r} is not a {enum_type.__name__}, and {what} must be one. A value the "
+            "vocabulary does not have is refused at construction rather than wherever it "
+            "would first be read."
+        ) from refusal
+
+
 def _exact_members(supplied: Iterable[object], member: Any, *, field: str) -> frozenset[Any]:
     """Rebuild a collection as a plain ``frozenset`` of exact enum members.
 
-    The constructor is the validator. ``PublicBoundDerivation(x)`` returns the
-    member for a member or its value and raises ``ValueError`` for anything else,
-    so accepting what it accepts is both the normalisation and the refusal.
+        The constructor is the validator. ``PublicBoundDerivation(x)`` returns the
+        member for a member or its value and raises ``ValueError`` for anything else,
+        so accepting what it accepts is both the normalisation and the refusal.
 
-    Only a **string** is offered to that constructor, and that is the load-bearing
-    part. ``Enum(value)`` is a ``_value2member_map_`` dict lookup, and a dict
-    lookup compares the stored key against the supplied object -- so an object
-    with a colliding ``__hash__`` and a permissive ``__eq__`` gets to decide that
-    it matches, and becomes a real member. Refusing non-strings means nothing
-    hostile reaches the lookup at all; every vocabulary here is a ``StrEnum``, so
-    a genuine member and a plain spelling both still pass.
+    Normalisation goes through :func:`exact_strenum`, which is the one normaliser
+        for every closed vocabulary here.
 
-    ``NONE`` is refused as well, and that is not a technicality. It is the value
-    an envelope carries when it has **no** bound derivation, so approving it
-    approves any bound whose provenance nobody stated -- which is the opposite of
-    what an approval is for.
+        ``NONE`` is refused as well, and that is not a technicality. It is the value
+        an envelope carries when it has **no** bound derivation, so approving it
+        approves any bound whose provenance nobody stated -- which is the opposite of
+        what an approval is for. It cannot be approved on any axis, in any spelling.
 
-    Raises:
-        ProfileResolutionError: naming the offending element, or the collection
-            itself if it cannot be iterated. Refused at construction rather than
-            at the first membership test, because by then the object is inside a
-            value the whole system treats as a settled standard.
+        Raises:
+            ProfileResolutionError: naming the offending element, or the collection
+                itself if it cannot be iterated. Refused at construction rather than
+                at the first membership test, because by then the object is inside a
+                value the whole system treats as a settled standard.
     """
     try:
         items = list(supplied)
@@ -167,30 +204,7 @@ def _exact_members(supplied: Iterable[object], member: Any, *, field: str) -> fr
 
     out: set[Any] = set()
     for item in items:
-        if not isinstance(item, str):
-            # The enum constructor is a ``_value2member_map_`` dict lookup, and a
-            # dict lookup compares the **stored** key against the supplied object
-            # -- delegating ``__eq__`` to the object being validated. An object
-            # with a colliding ``__hash__`` and a permissive ``__eq__`` is
-            # therefore *found* and silently becomes a real member. Refusing
-            # non-strings outright means nothing hostile reaches that lookup, and
-            # every derivation vocabulary here is a ``StrEnum``, so a genuine
-            # member and a plain spelling both still pass.
-            raise ProfileResolutionError(
-                f"{item!r} is a {type(item).__name__}, and an approved {field!r} derivation "
-                "is named by a string. The enum's own lookup asks the supplied object whether "
-                "it matches, so an object that answers for itself is refused before it is "
-                "asked."
-            )
-        try:
-            resolved = member(plain_str(item, what=f"An approved {field!r} derivation"))
-        except (ValueError, KeyError, TypeError) as refusal:
-            raise ProfileResolutionError(
-                f"{item!r} is not a {member.__name__} and cannot be approved as one for "
-                f"{field!r}. An approved bound decides which rows resolve, so a value the "
-                "enum does not recognise is refused where a caller can still act on it -- "
-                "not at the first membership test, deep inside a query."
-            ) from refusal
+        resolved = exact_strenum(item, member, what=f"an approved {field!r} derivation")
         if resolved.value == "NONE":
             raise ProfileResolutionError(
                 f"{member.__name__}.NONE cannot be approved for {field!r}. It is the value "
@@ -204,7 +218,7 @@ def _exact_members(supplied: Iterable[object], member: Any, *, field: str) -> fr
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ApprovedBoundPolicy:
-    """Which bound derivations are approved for one dataset.
+    r"""Which bound derivations are approved for one dataset.
 
     Empty by default, and that default is a refusal rather than a permission:
     nothing is approved until someone approves it.
@@ -226,22 +240,22 @@ class ApprovedBoundPolicy:
     ``__hash__`` and ``.value`` however it liked satisfied both and could answer
     them inconsistently.
 
-    Every element is therefore passed through its **exact** enum constructor.
+    Every element is therefore passed through :func:`exact_strenum`.
     ``PublicBoundDerivation("SESSION_CLOSE_PLUS_LAG")`` is accepted and becomes
     the member; an unknown string, or an arbitrary object, is refused at
     construction, where a caller can still act on it.
 
-    One consequence is worth stating because it is surprising. All three
-    derivation enums are ``StrEnum``, and they share some values -- ``NONE`` is in
-    all three, ``FIRST_SEEN_UPPER_BOUND`` in two. So handing
-    ``ProviderBoundDerivation.NONE`` to ``public`` is **accepted** and becomes
-    ``PublicBoundDerivation.NONE``: the constructor is the validator, and
-    ``"NONE"`` does name a public derivation. The field decides which enum the
-    value belongs to, the stored member is always of that exact type, and what
-    the resolution tests membership against is what
-    :meth:`~BoundApprovals.canonical` records -- which is the property that
-    matters. A value the field's own enum does not have, such as
-    ``ProviderBoundDerivation.DELIVERY_WINDOW`` in ``public``, is refused.
+    ``NONE`` is refused on **every** axis, in every spelling. It represents the
+    absence of a derivation -- it is the field default an envelope carries when
+    none was derived -- so approving it would approve any bound whose provenance
+    nobody stated. That is the most permissive thing the mechanism can express,
+    spelled with the token that reads as nothing.
+
+    Because these vocabularies are ``StrEnum``\s that share some values, a
+    sibling member whose value the field's own enum also has -- say
+    ``ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND`` for ``public`` -- is
+    accepted and stored as the field's own member. One the field's enum does not
+    have, such as ``ProviderBoundDerivation.DELIVERY_WINDOW``, is refused.
     """
 
     public: frozenset[PublicBoundDerivation] = frozenset()
@@ -448,6 +462,11 @@ def origin_eligible(origin: InformationOrigin, profile: InformationSetProfile) -
 def is_eligible(record: PitRecord, resolved_profile: InformationSetProfile) -> bool:
     """Whether ``record`` may be served under ``resolved_profile`` at all.
 
+    **Fails closed on untyped vocabulary.** A source row whose
+    ``information_origin`` or derivation fields are not exact members is not
+    eligible under any profile -- see :func:`has_exact_source_vocabulary` for why
+    a plain string is not the same thing as the member it spells.
+
     For a source fact this is origin eligibility. For a derived artifact it is the
     **intersection** of its inputs' eligibility: no amount of arithmetic makes a
     proprietary input public. Under ``FORWARD_SYSTEM`` every source origin is
@@ -455,6 +474,8 @@ def is_eligible(record: PitRecord, resolved_profile: InformationSetProfile) -> b
     """
     envelope = record.envelope
     if isinstance(envelope, SourceEnvelope):
+        if not has_exact_source_vocabulary(envelope):
+            return False
         return origin_eligible(envelope.information_origin, resolved_profile)
     inputs = _derived_inputs(record)
     return all(is_eligible(item, resolved_profile) for item in inputs)
@@ -474,6 +495,8 @@ def resolved_public_time(record: PitRecord, approvals: BoundApprovals) -> dateti
     envelope = record.envelope
     if not isinstance(envelope, SourceEnvelope):
         return None
+    if not has_exact_source_vocabulary(envelope):
+        return None
     if envelope.public_available_time is not None:
         return envelope.public_available_time
     approved = approvals.for_dataset(record.dataset).public
@@ -489,6 +512,8 @@ def resolved_provider_time(record: PitRecord, approvals: BoundApprovals) -> date
     """Exact provider time, else an approved provider upper bound, else ``None``."""
     envelope = record.envelope
     if not isinstance(envelope, SourceEnvelope):
+        return None
+    if not has_exact_source_vocabulary(envelope):
         return None
     if envelope.provider_available_time is not None:
         return envelope.provider_available_time
@@ -525,6 +550,8 @@ def decision_available_time(
     envelope = record.envelope
     if isinstance(envelope, DerivedEnvelope):
         return _derived_decision_time(record, envelope, resolved_profile, approvals)
+    if not has_exact_source_vocabulary(envelope):
+        return None
     return _source_decision_time(record, envelope, resolved_profile, approvals)
 
 
@@ -699,7 +726,9 @@ def required_timing_bases(
     envelope = record.envelope
     if isinstance(envelope, DerivedEnvelope):
         return _derived_bases(record, envelope, resolved_profile, approvals, governing=False)
-    if not origin_eligible(envelope.information_origin, resolved_profile):
+    if not has_exact_source_vocabulary(envelope) or not origin_eligible(
+        envelope.information_origin, resolved_profile
+    ):
         return frozenset()
 
     axes = _source_axes(record, envelope, resolved_profile, approvals)
@@ -728,7 +757,9 @@ def governing_timing_bases(
     envelope = record.envelope
     if isinstance(envelope, DerivedEnvelope):
         return _derived_bases(record, envelope, resolved_profile, approvals, governing=True)
-    if not origin_eligible(envelope.information_origin, resolved_profile):
+    if not has_exact_source_vocabulary(envelope) or not origin_eligible(
+        envelope.information_origin, resolved_profile
+    ):
         return frozenset()
 
     axes = _source_axes(record, envelope, resolved_profile, approvals)

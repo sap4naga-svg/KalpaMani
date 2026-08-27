@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Final
 
 from kalpamani.data.contracts.errors import EnvelopeError
 from kalpamani.data.contracts.instants import normalize_optional_instant
@@ -145,6 +146,71 @@ class FactAnchor:
 # ---------------------------------------------------------------------------
 
 
+#: Every closed vocabulary a source envelope carries, and the exact type each must
+#: be. One list, because the quality gate that reports a defect and the resolution
+#: that refuses to act on one must be looking at the same fields -- two lists
+#: would eventually disagree about which values are load-bearing.
+SOURCE_VOCABULARY: Final[tuple[tuple[str, type], ...]] = (
+    ("information_origin", InformationOrigin),
+    ("public_time_derivation", PublicTimeDerivation),
+    ("public_bound_derivation", PublicBoundDerivation),
+    ("provider_time_derivation", ProviderTimeDerivation),
+    ("provider_bound_derivation", ProviderBoundDerivation),
+    ("quality_status", QualityStatus),
+)
+
+#: The same, for the fact anchor a source envelope carries.
+ANCHOR_VOCABULARY: Final[tuple[tuple[str, type], ...]] = (
+    ("temporal_fact_class", TemporalFactClass),
+    ("announcement_bound_derivation", AnnouncementBoundDerivation),
+)
+
+
+def source_vocabulary_defects(envelope: SourceEnvelope) -> tuple[tuple[str, str, str], ...]:
+    r"""Fields whose runtime type is not the closed vocabulary they declare.
+
+    ``SourceEnvelope`` stays permissive at construction on purpose -- the quality
+    suite needs to be able to build deliberately malformed rows -- so the type
+    check lives here, where both the gate and the resolution can ask for it.
+
+    A plain string is the case that matters. These vocabularies are ``StrEnum``\s,
+    so ``"DATE_PLUS_LAG" == PublicBoundDerivation.DATE_PLUS_LAG`` and
+    ``"DATE_PLUS_LAG" in approved`` are both ``True``: an untyped value *looks*
+    typed to every equality test in the system, and only differs where someone
+    reads ``.value``. That asymmetry is what let a bare string admit a row through
+    an approval check and then crash the finding that would have refused it.
+
+    Returns ``(field, expected type, what was actually there)`` for each defect,
+    empty when the envelope's vocabulary is exact throughout.
+    """
+    defects: list[tuple[str, str, str]] = []
+    for field_name, expected in SOURCE_VOCABULARY:
+        value = getattr(envelope, field_name)
+        if type(value) is not expected:
+            defects.append((field_name, expected.__name__, f"{type(value).__name__} {value!r}"))
+    anchor = envelope.anchor
+    if type(anchor) is not FactAnchor:
+        defects.append(("anchor", "FactAnchor", f"{type(anchor).__name__} {anchor!r}"))
+        return tuple(defects)
+    for field_name, expected in ANCHOR_VOCABULARY:
+        value = getattr(anchor, field_name)
+        if type(value) is not expected:
+            defects.append(
+                (f"anchor.{field_name}", expected.__name__, f"{type(value).__name__} {value!r}")
+            )
+    return tuple(defects)
+
+
+def has_exact_source_vocabulary(envelope: Envelope) -> bool:
+    """Whether every closed vocabulary on ``envelope`` is an exact member.
+
+    A derived envelope carries none of them and is exact by construction.
+    """
+    if not isinstance(envelope, SourceEnvelope):
+        return True
+    return not source_vocabulary_defects(envelope)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SourceEnvelope:
     """Availability of a fact that arrived from outside.
@@ -201,8 +267,12 @@ class SourceEnvelope:
             "ingestion_time",
         )
         if self.information_origin not in SOURCE_ORIGINS:
+            # Rendered with repr rather than .value: this branch is reached by an
+            # origin the source envelope does not accept, and an untyped one has
+            # no .value to read -- so the refusal itself raised AttributeError on
+            # exactly the input it existed to refuse.
             raise EnvelopeError(
-                f"information_origin={self.information_origin.value} selects the derived "
+                f"information_origin={self.information_origin!r} selects the derived "
                 "envelope, not the source envelope. A row carries one or the other, never "
                 "both. Build a DerivedEnvelope instead."
             )

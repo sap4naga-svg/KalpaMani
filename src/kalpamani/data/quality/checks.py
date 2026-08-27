@@ -48,7 +48,11 @@ from kalpamani.data.contracts.entities import (
     PriceBar,
     TickerHistory,
 )
-from kalpamani.data.contracts.envelope import DerivedEnvelope, SourceEnvelope
+from kalpamani.data.contracts.envelope import (
+    DerivedEnvelope,
+    SourceEnvelope,
+    source_vocabulary_defects,
+)
 from kalpamani.data.contracts.profiles import ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import (
     BoundApprovals,
@@ -195,6 +199,30 @@ def _check_source_envelope(
 ) -> tuple[QualityFinding, ...]:
     dataset = record.dataset
     found: list[QualityFinding] = []
+
+    # First, and returning early. Everything below this point resolves an
+    # availability, reads a ``.value`` or tests membership against an approved
+    # set, and none of those means anything on a row whose vocabulary is not
+    # typed. The check exists because these enums are ``StrEnum``\s: a bare
+    # ``"DATE_PLUS_LAG"`` compares equal to the member it spells and passes every
+    # approval test in the system, then fails only where something reads
+    # ``.value`` -- which is a crash in a later check rather than a finding here.
+    defects = source_vocabulary_defects(envelope)
+    if defects:
+        listed = "; ".join(
+            f"{name} must be a {expected}, found {actual}" for name, expected, actual in defects
+        )
+        return (
+            _blocking(
+                "4.0A.0_source_vocabulary_type_mismatch",
+                dataset,
+                f"A closed vocabulary on this row is not an exact member -- {listed}. A value "
+                "that merely spells a member is not that member: it satisfies equality and "
+                "membership while carrying none of the type's guarantees. The row is refused "
+                "here, before any availability or approval is computed on it.",
+            ),
+        )
+
     origin = envelope.information_origin
 
     if origin is InformationOrigin.AUTHORITATIVE_PUBLIC and (

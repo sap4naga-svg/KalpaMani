@@ -48,6 +48,7 @@ from kalpamani.data.contracts.resolution import (
     BoundApprovals,
     PitRecord,
     SourceRecord,
+    exact_strenum,
     plain_str,
     resolved_provider_time,
     resolved_public_time,
@@ -95,9 +96,10 @@ class DatasetGapResolution:
     own, and nothing compares them.
 
     Subclassing is refused, and every field is normalised through its exact type:
-    the dataset and reason to non-empty plain ``str``, the policy through the
-    ``DatasetGapPolicy`` constructor -- which accepts a member or its value and
-    refuses everything else.
+    the dataset and reason to non-empty plain ``str``, the policy through
+    :func:`~kalpamani.data.contracts.resolution.exact_strenum` -- which accepts a
+    member or its value and refuses everything else, including an object that
+    would have answered the enum's own lookup for itself.
     """
 
     dataset: str
@@ -126,14 +128,13 @@ class DatasetGapResolution:
                 "one dataset for different stated reasons resolved it differently and "
                 "admitted different rows, which is why the reason is part of run identity."
             )
-        try:
-            policy = DatasetGapPolicy(self.policy)
-        except (ValueError, KeyError, TypeError) as refusal:
-            raise ProfileResolutionError(
-                f"{self.policy!r} is not a DatasetGapPolicy and cannot resolve {dataset!r}. "
-                "The policy decides whether a dataset's rows are excluded, bounded or left "
-                "alone, so a value the enum does not recognise is refused at construction."
-            ) from refusal
+        # Through the one normaliser, not the enum constructor directly: the
+        # ``_value2member_map_`` equality that motivated it for approved bound
+        # derivations applies to every closed vocabulary, and this one decides
+        # whether a dataset's rows are excluded, bounded or left alone.
+        policy = exact_strenum(
+            self.policy, DatasetGapPolicy, what=f"the gap policy for {dataset!r}"
+        )
         object.__setattr__(self, "dataset", dataset)
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "policy", policy)
@@ -219,15 +220,7 @@ class ProfileResolutionConfig:
             ("requested_profile", InformationSetProfile),
             ("global_profile_resolution", GlobalProfileResolution),
         ):
-            supplied = getattr(self, name)
-            try:
-                object.__setattr__(self, name, member(supplied))
-            except (ValueError, KeyError, TypeError) as refusal:
-                raise ProfileResolutionError(
-                    f"{supplied!r} is not a {member.__name__}. The resolved profile decides "
-                    "which rows a whole run may serve, so a value the enum does not "
-                    "recognise is refused at construction."
-                ) from refusal
+            object.__setattr__(self, name, exact_strenum(getattr(self, name), member, what=name))
 
         version = plain_str(self.resolution_policy_version, what="resolution_policy_version")
         if not version:

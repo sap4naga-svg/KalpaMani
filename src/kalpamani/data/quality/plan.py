@@ -290,6 +290,7 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE,
             finding_ids=(
                 "4.0.0_origin_outside_the_closed_vocabulary",
+                "4.0A.0_source_vocabulary_type_mismatch",
                 "4.0A.10_derivation_disagrees_with_origin",
                 "4.0A.11_class_without_a_resolved_fact_anchor",
                 "4.0A.1_public_fact_without_resolvable_public_time",

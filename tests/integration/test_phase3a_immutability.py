@@ -57,6 +57,9 @@ from kalpamani.data.storage import LocalTableStore
 
 pytestmark = pytest.mark.integration
 
+#: The A1 record, checked by one test for the rule it previously stated wrongly.
+KERNEL_DOCUMENT = "phase3a-a1-foundation-kernel.md"
+
 PUBLIC = InformationSetProfile.PUBLIC_PIT
 PROVIDER = InformationSetProfile.PROVIDER_REALISTIC_PIT
 SECURITY = phase3a.SEC_CONTINUOUS
@@ -585,7 +588,7 @@ def test_an_unrecognised_approved_derivation_is_refused_at_construction(
     supplied: object,
 ) -> None:
     """Where a caller can still act on it, not at the first membership test."""
-    with pytest.raises(ProfileResolutionError, match="cannot be approved as one"):
+    with pytest.raises(ProfileResolutionError, match="is not a PublicBoundDerivation"):
         ApprovedBoundPolicy(public=supplied)  # type: ignore[arg-type]
 
 
@@ -941,14 +944,16 @@ def test_nested_contracts_refuse_before_a_reader_exists_and_hold_after_it_does(
 def test_a_sibling_enum_member_normalises_by_value_or_is_refused() -> None:
     """Stated because it is surprising, and because it is the specified behaviour.
 
-    All three derivation enums are ``StrEnum`` and share some values, so the
-    constructor -- which is the validator -- accepts ``ProviderBoundDerivation.NONE``
-    for ``public`` and stores ``PublicBoundDerivation.NONE``. The field decides
-    which enum the value belongs to; the stored member is always of that exact
-    type; and membership and the record agree, which is the property that matters.
+    The derivation enums are ``StrEnum`` and share some values, so a sibling
+    member whose value the field's own enum also has is accepted and stored as
+    the field's own member: the field decides which enum a *name* belongs to, the
+    stored member is always of that exact type, and membership and the record
+    agree -- which is the property that matters.
 
     A value the field's own enum does not have is refused, so this is
-    normalisation rather than a hole.
+    normalisation rather than a hole. ``NONE`` is not the example used here: it is
+    shared by all three enums and refused on every one of them, which the test
+    below pins.
     """
     shared = ApprovedBoundPolicy(
         public={ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND}  # type: ignore[arg-type]
@@ -957,8 +962,45 @@ def test_a_sibling_enum_member_normalises_by_value_or_is_refused() -> None:
     assert type(member) is PublicBoundDerivation
     assert member is PublicBoundDerivation.FIRST_SEEN_UPPER_BOUND
 
-    with pytest.raises(ProfileResolutionError, match="cannot be approved as one"):
+    with pytest.raises(ProfileResolutionError, match="is not a PublicBoundDerivation"):
         ApprovedBoundPolicy(public={ProviderBoundDerivation.DELIVERY_WINDOW})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        PublicBoundDerivation.NONE,
+        ProviderBoundDerivation.NONE,
+        "NONE",
+    ],
+    ids=["own-enum", "sibling-enum", "plain-string"],
+)
+def test_none_cannot_be_approved_in_any_spelling(supplied: object) -> None:
+    """The one claim this file previously got wrong, pinned so it cannot return.
+
+    An earlier revision documented ``ProviderBoundDerivation.NONE`` in ``public``
+    as *accepted*, normalising to ``PublicBoundDerivation.NONE``. It is not, and
+    the difference is not cosmetic: ``NONE`` is the value an envelope carries when
+    it has **no** bound derivation, so approving it approves every bound whose
+    provenance nobody stated -- the most permissive thing the mechanism can
+    express, spelled with the token that reads as nothing.
+    """
+    with pytest.raises(ProfileResolutionError, match="cannot be approved"):
+        ApprovedBoundPolicy(public={supplied})  # type: ignore[arg-type]
+
+
+def test_the_kernel_document_states_the_rule_that_none_is_refused() -> None:
+    """A written claim that contradicts the code is how the wrong one survived.
+
+    The prose is what a reviewer reads, and for one revision it said the opposite
+    of what the constructor did. This asserts only that the A1 document states the
+    rule the tests above prove; it is not a check that the rest of the document is
+    accurate.
+    """
+    document = (
+        Path(__file__).resolve().parents[2] / "docs" / "phase3" / KERNEL_DOCUMENT
+    ).read_text(encoding="utf-8")
+    assert "`NONE` is refused on **every** axis" in document
 
 
 class _Chameleon(str):
@@ -1122,6 +1164,10 @@ def test_an_unapproved_bound_produces_a_refusal_rather_than_a_crash() -> None:
     bare ``AttributeError`` on a plain string, while a plain string that happened
     to match an approval passed silently -- the check crashed on exactly the input
     it existed to refuse.
+
+    The derivation here is an exact member that is simply not approved, which is
+    the case this finding is for. The untyped spelling is refused earlier now, by
+    the vocabulary gate -- see ``test_phase3a_closed_vocabulary``.
     """
     from kalpamani.data.contracts.envelope import FactAnchor, SourceEnvelope
     from kalpamani.data.contracts.vocabulary import (
@@ -1143,7 +1189,7 @@ def test_an_unapproved_bound_produces_a_refusal_rather_than_a_crash() -> None:
             information_origin=InformationOrigin.AUTHORITATIVE_PUBLIC,
             public_available_upper_bound=instant,
             public_time_derivation=PublicTimeDerivation.UNKNOWN,
-            public_bound_derivation="SESSION_CLOSE_PLUS_LAG",  # type: ignore[arg-type]
+            public_bound_derivation=PublicBoundDerivation.SESSION_CLOSE_PLUS_LAG,
             system_first_seen_time=instant,
             anchor=FactAnchor.retrospective(observation_time=instant),
             ingestion_time=instant,

@@ -39,7 +39,9 @@ from kalpamani.data.contracts.envelope import (
     LineageRef,
     OutputValidityDeclaration,
     SourceEnvelope,
+    source_vocabulary_defects,
 )
+from kalpamani.data.contracts.errors import EnvelopeError
 from kalpamani.data.contracts.resolution import PitRecord
 from kalpamani.data.contracts.vocabulary import (
     AnnouncementBoundDerivation,
@@ -184,7 +186,24 @@ def decode_fact_anchor(row: Mapping[str, Any]) -> FactAnchor:
 
 
 def encode_source_envelope(envelope: SourceEnvelope) -> Row:
-    """Encode the four information times, the derivations and the anchor."""
+    """Encode the four information times, the derivations and the anchor.
+
+    Raises:
+        EnvelopeError: if any closed vocabulary is not an exact member. Every one
+            of them is stored as ``.value``, so an untyped value fails *here*, in
+            the middle of a write, with a bare ``AttributeError`` naming neither
+            the field nor the row. It is refused instead, and named.
+    """
+    defects = source_vocabulary_defects(envelope)
+    if defects:
+        listed = "; ".join(
+            f"{name} must be a {expected}, found {actual}" for name, expected, actual in defects
+        )
+        raise EnvelopeError(
+            f"Source envelope {envelope.source_id!r} cannot be encoded -- {listed}. Storage "
+            "reads each vocabulary's .value, which a value that merely spells a member does "
+            "not have, so this is refused rather than raised from inside a write."
+        )
     return {
         "information_origin": envelope.information_origin.value,
         "public_available_time": _enc_dt(envelope.public_available_time),

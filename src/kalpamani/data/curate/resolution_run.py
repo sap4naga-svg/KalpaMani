@@ -47,7 +47,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from kalpamani.data.contracts.errors import UnresolvedProviderAvailabilityError
+from kalpamani.data.contracts.envelope import source_vocabulary_defects
+from kalpamani.data.contracts.errors import (
+    EnvelopeError,
+    UnresolvedProviderAvailabilityError,
+)
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
     ProfileResolutionConfig,
@@ -204,6 +208,7 @@ def resolve_run_inputs(
             "source reads, not a list of the problematic ones."
         )
     _require_consistent_grouping(datasets)
+    _require_typed_vocabulary(datasets)
 
     resolved: dict[str, tuple[SourceRecord, ...]] = {}
     evidence: list[DatasetResolutionEvidence] = []
@@ -230,6 +235,42 @@ def resolve_run_inputs(
         by_dataset=resolved,
         evidence=tuple(evidence),
     )
+
+
+def _require_typed_vocabulary(datasets: Mapping[str, Sequence[SourceRecord]]) -> None:
+    r"""Every source row's closed vocabularies must be exact members. Before anything reads one.
+
+    This is the earliest boundary a row crosses, and it is placed ahead of the
+    fingerprint on purpose: the fingerprint encodes each row, encoding reads
+    ``.value`` on six envelope fields, and an untyped value that survived this far
+    used to surface as ``AttributeError: 'str' object has no attribute 'value'``
+    from inside the receipt -- a crash that names neither the row nor the field.
+
+    The values are ``StrEnum``\s, so an untyped one is not caught by anything
+    downstream either: it compares equal to the member it spells and satisfies
+    every approval test in the system. It differs only where something reads
+    ``.value``. So it is refused here, named, before it can be counted, hashed,
+    resolved or approved.
+
+    Raises:
+        EnvelopeError: naming each offending row and field.
+    """
+    offenders: list[str] = []
+    for name, rows in sorted(datasets.items()):
+        for row in rows:
+            envelope = row.envelope
+            for field_name, expected, actual in source_vocabulary_defects(envelope):
+                offenders.append(
+                    f"{name}/{envelope.source_id!r} {field_name} must be a "
+                    f"{expected}, found {actual}"
+                )
+    if offenders:
+        raise EnvelopeError(
+            f"{len(offenders)} source field(s) are not exact members of the vocabulary they "
+            f"declare: {offenders[:5]}. A value that merely spells a member satisfies every "
+            "equality and membership test while carrying none of the type's guarantees, so a "
+            "run does not begin with one in it."
+        )
 
 
 def _require_consistent_grouping(datasets: Mapping[str, Sequence[SourceRecord]]) -> None:

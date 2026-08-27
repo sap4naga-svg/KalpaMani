@@ -140,8 +140,16 @@ def resolved_fact_anchor(
     """Dispatch to the anchor function for ``anchor``'s declared class.
 
     Returns ``None`` when the declared class has no usable anchor -- which is a
-    BLOCKING finding, never a reason to skip the invariant.
+    BLOCKING finding, never a reason to skip the invariant -- and also when its
+    vocabulary is not exact. A plain string equal to a ``TemporalFactClass``
+    member is not that member: it satisfies every equality test in the system and
+    differs only where someone reads ``.value``, so treating it as typed is how an
+    untyped anchor comes to look resolved.
     """
+    if type(anchor.temporal_fact_class) is not TemporalFactClass or (
+        type(anchor.announcement_bound_derivation) is not AnnouncementBoundDerivation
+    ):
+        return None
     match anchor.temporal_fact_class:
         case TemporalFactClass.RETROSPECTIVE:
             return retrospective_fact_anchor(anchor)

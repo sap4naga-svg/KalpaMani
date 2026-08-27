@@ -212,7 +212,9 @@ cutoff. Three outcomes are kept distinct, and each has a test:
 ## 7. Quality checks implemented
 
 Envelope conformance branches on envelope **before anything else** (§4.0A source / §4.0B
-derived), then: unresolvable public timing · proprietary rows carrying public timing ·
+derived); a source row's closed vocabularies are then type-checked before any availability
+or approval is computed on it (`4.0A.0_source_vocabulary_type_mismatch`, BLOCKING), and
+then: unresolvable public timing · proprietary rows carrying public timing ·
 system-observed rows carrying vendor timing · exact-derivation-without-exact-value ·
 approximation written into an exact field · bound preceding the exact time it bounds · unapproved
 bound · derivation disagreeing with origin · a declared class with no resolved anchor · incomplete
@@ -373,7 +375,69 @@ These are boundaries of a deliberately narrow slice, not defects:
     different times -- which is what an incremental pipeline produces, and what this slice does
     not otherwise build.
 
-## 12. Nested-type closure applied in revision 9
+## 12. Closed-vocabulary closure applied in revision 10
+
+Revision 9 closed what the *approval* structures accept. This round closes the other side of the
+same equality: what a **stored row** may carry, and what the code does when it carries something
+else.
+
+Every closed vocabulary here is a `StrEnum`, and that is the whole problem:
+
+```python
+envelope.public_bound_derivation = "SESSION_CLOSE_PLUS_LAG"  # a plain str
+
+derivation == PublicBoundDerivation.SESSION_CLOSE_PLUS_LAG  # True
+derivation in approvals.for_dataset("price_bar").public  # True
+```
+
+An untyped value passes equality, passes membership, and passes the approval test that decides
+whether a row's bound may resolve at all. It differs from the member in exactly one place —
+`.value` — which is where storage encodes it and where a refusal interpolates it. So it sailed
+through every gate meant to judge it and then raised `AttributeError: 'str' object has no
+attribute 'value'` from inside the resolution receipt, naming neither the row nor the field. An
+object of its own is worse: `Enum(value)` is a `_value2member_map_` dict lookup, so a class with a
+colliding `__hash__` and a permissive `__eq__` is *found* by the enum's own constructor and
+accepted into a frozenset of approved derivations. That is not hypothetical, and
+`test_an_object_that_answers_for_itself_passes_equality_and_membership` demonstrates it rather
+than assuming it.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | Four closed-vocabulary constructors each rolled their own normalisation | One shared `exact_strenum(value, enum_type, *, what)`. It refuses a non-string **before** the enum lookup — because the lookup delegates `__eq__` to the object being validated — and reduces a `str` subclass through `plain_str` first. Used by `ApprovedBoundPolicy`'s three axes, `DatasetGapResolution.policy`, and both `ProfileResolutionConfig` scalars, so every route is closed by the same code rather than by four that must be kept in agreement |
+| 2 | Nothing type-checked a **stored** envelope's vocabulary | `source_vocabulary_defects(envelope)` names every closed vocabulary a source row carries — six envelope fields plus the two on its `FactAnchor` — and returns `(field, expected, actual)` for each that is not an exact member. One list, so the gate that reports a defect and the resolution that refuses to act on one cannot drift apart |
+| 3 | The quality gate computed availability and membership on untyped rows | `4.0A.0_source_vocabulary_type_mismatch` runs **first** in `_check_source_envelope` and returns early. Everything after it resolves an availability, reads a `.value` or tests an approval, and none of those means anything on a row whose vocabulary is not typed |
+| 4 | The resolution functions resolved on values they could not trust | `is_eligible`, `resolved_public_time`, `resolved_provider_time`, `decision_available_time`, `required_timing_bases`, `governing_timing_bases` and `resolved_fact_anchor` now answer *unresolvable* — `False`, `None`, `frozenset()` — for a malformed source row |
+| 5 | An untyped row crashed the run from inside the receipt | The resolution boundary refuses the run with a typed `EnvelopeError` naming each offending row and field, placed **ahead of** the fingerprint. `encode_source_envelope` refuses too, for any other route into storage |
+| 6 | The document claimed `NONE` was approvable by normalisation | Corrected above, and pinned: `NONE` is refused on every axis in every spelling, and one test reads this document for the rule |
+
+### The behaviour on malformed vocabulary, stated once
+
+Two kinds of code, two consistent answers:
+
+- **Pure resolution functions never raise.** They answer *unresolvable* — `False`, `None`,
+  `frozenset()` — so a caller asking "when did this become knowable" gets "it did not", which is
+  the fail-closed answer. A function that raised here would turn a data defect into a crash at
+  whatever call site happened to reach it first.
+- **Boundaries refuse.** The quality gate reports `4.0A.0` BLOCKING, which is how a build is
+  stopped; the resolution boundary and the encoder raise `EnvelopeError` naming the row and the
+  field, which is how a run is stopped. Both happen before anything reads `.value`.
+
+In the sanctioned build path the resolution boundary is what a malformed row meets first — it runs
+before the receipt, the build and the quality plan — so `4.0A.0` is the reporting form for a row
+that reaches quality by any other route, and is proven directly rather than through a publication
+that cannot be reached. That is stated plainly rather than described as "the quality gate catches
+it", which would be true only of a pipeline this one does not have.
+
+### The scope, unchanged
+
+Still an API-integrity property, not a hostile-Python sandbox: `object.__setattr__`, `ctypes`, `gc`
+internals and the modules' own private names subvert any of it, and that limit is deliberate. The
+construction model is unchanged too — `SourceEnvelope` stays permissive at construction, because
+the quality suite has to be able to hold a deliberately malformed row in order to prove it is
+refused. The type check lives where both the gate and the resolution can ask for it, not in a
+constructor that would make the malformed case unbuildable and the test unwritable.
+
+## 13. Nested-type closure applied in revision 9
 
 Revision 8 froze the *containers*. This round closes what is inside them: a value normalised to a
 plain `frozenset` still holds whatever the caller put in it, and a mapping whose keys are
@@ -388,13 +452,19 @@ normalised while it is being sorted has already lost a collision.
 `MANIFEST_VERSION` stays **5**: nothing about the persisted schema changed.
 
 **One consequence worth stating, because it is surprising.** All three bound-derivation enums are
-`StrEnum` and they share values — `NONE` is in all three, `FIRST_SEEN_UPPER_BOUND` in two. So
-handing `ProviderBoundDerivation.NONE` to `public` is *accepted* and becomes
-`PublicBoundDerivation.NONE`: the constructor is the validator and `"NONE"` does name a public
-derivation. The field decides which enum the value belongs to, the stored member is always of that
-exact type, and membership and the record agree — which is the property that matters. A value the
-field's own enum does not have, such as `ProviderBoundDerivation.DELIVERY_WINDOW` in `public`, is
-refused. Recorded here and pinned by a test rather than left to be discovered.
+`StrEnum` and they share values — `NONE` is in all three, `FIRST_SEEN_UPPER_BOUND` in two. A sibling
+member whose value the field's own enum also has, such as `ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND`
+in `public`, is *accepted* and stored as `PublicBoundDerivation.FIRST_SEEN_UPPER_BOUND`: the field
+decides which enum a *name* belongs to, the stored member is always of that exact type, and
+membership and the record agree — which is the property that matters. A value the field's own
+enum does not have, such as `ProviderBoundDerivation.DELIVERY_WINDOW` in `public`, is refused.
+
+`NONE` is refused on **every** axis, in every spelling. It is the value an envelope carries when it
+has *no* bound derivation, so approving it would approve any bound whose provenance nobody stated —
+the most permissive thing the mechanism can express, written with the token that reads as nothing.
+An earlier revision of this document described `ProviderBoundDerivation.NONE` in `public` as
+accepted; that was true of an earlier constructor and is not true now. Both halves of the rule are
+pinned by tests, and one of those tests reads this paragraph.
 
 **The scope, stated once.** The property these three rounds establish is that *every value accepted
 through the documented public constructors is copied, normalised to its exact closed type, and
@@ -457,7 +527,7 @@ approvals surface this round was scoped to, and it is a different blast radius. 
 `TradeRecord.orders` as a named follow-up: recorded here rather than fixed silently or left
 unmentioned, and not a blocker for A1.
 
-## 13. Immutability closure applied in revision 8
+## 14. Immutability closure applied in revision 8
 
 Revision 7 bound a run to its dependencies and its evidence to a standard. This round makes the
 standard itself unable to move: `frozen=True` refuses reassignment of an *attribute*, and says
@@ -517,7 +587,7 @@ class docstrings and a parametrised test named for "every" spelling — while th
 one exact substring, which the same claim reworded would pass. The guard now rejects any success
 line that speaks about failing without narrowing it to what a parser can see.
 
-## 14. Dependency and provenance closure applied in revision 7
+## 15. Dependency and provenance closure applied in revision 7
 
 Revision 6 bound a result to the question that produced it. This round closes what a run
 **depends on** — the inputs a query actually rests on, the artifact that decides a snapshot, and
@@ -596,7 +666,7 @@ its ``BoundApprovals`` from a parameter while the publication recorded the ones 
 under: the standard was persisted and verified, and the one component that applies a standard at
 query time ignored it.
 
-## 15. Query identity and quality-context closure applied in revision 6
+## 16. Query identity and quality-context closure applied in revision 6
 
 Revision 5 made a result whole and made the checks actually run. This round closes the places
 where evidence was still a **claim nobody produced**: a query the manifest described but nothing
@@ -626,7 +696,7 @@ they had been reaching are exercised directly and labelled defence in depth. Bin
 narrative to the query immediately caught the manifest fixture itself, which declared a
 2019-06-24..2021-01-05 backtest window over a query that served five days of June 2019.
 
-## 16. Query and evidence atomicity applied in revision 5
+## 17. Query and evidence atomicity applied in revision 5
 
 Revision 4 bound each artifact to what it was about. This round closes the places where a
 **result** was still assembled from parts that could be substituted, or shortened without
@@ -676,7 +746,7 @@ sessions the caller did not declare a cutoff for; the manifest compared consumed
 while every field that makes one reproducible went unchecked; and findings whose id no planned
 check owned were silently dropped.
 
-## 17. Evidence closure applied in revision 4
+## 18. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
 it rather than to the claim itself. Each row below is a way the previous code would have said yes.
@@ -695,7 +765,7 @@ it rather than to the claim itself. Each row below is a way the previous code wo
 | 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
 | 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
 
-## 18. Enforcement closure applied in revision 3
+## 19. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -716,7 +786,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 19. Corrections applied in revision 2
+## 20. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -735,7 +805,7 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 20. Verification
+## 21. Verification
 
 ```
 pytest                          1123 passed   (440 pre-existing, 683 new)
