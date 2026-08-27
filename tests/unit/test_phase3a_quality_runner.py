@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from fixtures import phase3a
+from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.errors import QualityGateError
 from kalpamani.data.contracts.vocabulary import InformationSetProfile
 from kalpamani.data.curate.build import build_gold_dataset
@@ -39,6 +40,14 @@ from kalpamani.data.storage import LocalTableStore
 pytestmark = pytest.mark.unit
 
 PUBLIC = InformationSetProfile.PUBLIC_PIT
+
+
+def _subject() -> str:
+    """The identity of the reference build a hand-written report claims to describe."""
+    return phase3a.gold_dataset().build_identity
+
+
+_SUBJECT = _subject()
 
 
 def _context(**overrides: object) -> QualityContext:
@@ -209,6 +218,7 @@ def test_a_report_claiming_every_check_ran_without_the_runner_refuses(
     claimed = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
         policy_versions={
             "lag": phase3a.LAG_POLICY_VERSION,
             "market": "market-checks/a1.1",
@@ -247,6 +257,7 @@ def test_the_plan_is_checked_before_the_provenance(tmp_path: Path) -> None:
     thin = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),
         datasets_covered=phase3a.QUALITY_COVERAGE,
@@ -338,3 +349,66 @@ def test_the_reference_report_carries_the_findings_the_checks_found() -> None:
         ("5.4_missing_bar_in_a_listed_range", phase3a.SEC_RENAMED, date(2019, 7, 3)),
     }
     assert report.passed, "A warning labels; it does not block."
+
+
+# ---------------------------------------------------------------------------
+# the report says what it ran over, not only that it ran
+# ---------------------------------------------------------------------------
+
+
+def _defective_build() -> GoldDataset:
+    resolved = resolve_run_inputs(
+        phase3a.datasets_with_a_blocking_defect(),
+        config=phase3a.resolution(),
+        approvals=phase3a.approvals(),
+    )
+    return build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )
+
+
+def test_a_clean_builds_report_cannot_gate_a_defective_build(tmp_path: Path) -> None:
+    """The seal proves the checks ran. It does not say what they ran over.
+
+    Found by trying to break the runner rather than by trusting it. A genuine
+    clean report over build A satisfied the plan, carried a real runner seal, and
+    published build B -- the same shape of failure as a fabricated report, reached
+    from the other direction. Every finding the checks did not make was a finding
+    about a different set of rows.
+    """
+    clean = phase3a.gold_dataset()
+    clean_report = phase3a.quality_report(clean)
+    assert report_is_runner_produced(clean_report), "It really was run."
+    assert clean_report.passed
+
+    defective = _defective_build()
+    assert phase3a.quality_report(defective).blocking, "And this build really is defective."
+
+    with pytest.raises(QualityGateError, match="was run over build"):
+        _publish(LocalTableStore(tmp_path), defective, clean_report)
+
+
+def test_a_report_run_over_the_build_it_gates_publishes(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL for the refusal above."""
+    dataset = phase3a.gold_dataset()
+    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_report(dataset))
+
+
+def test_the_build_identity_covers_the_rows_and_the_snapshots() -> None:
+    """A subject that did not change with the build would bind nothing."""
+    clean = phase3a.gold_dataset()
+    defective = _defective_build()
+    assert clean.build_identity != defective.build_identity
+    assert clean.build_identity == phase3a.gold_dataset().build_identity, (
+        "Derived, not generated: the same build always has the same identity."
+    )

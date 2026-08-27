@@ -60,7 +60,6 @@ from kalpamani.data.contracts.vocabulary import (
     GlobalProfileResolution,
     InformationSetProfile,
     LimitationToken,
-    ListingFactKind,
     RevisionView,
     StorageLayer,
 )
@@ -91,9 +90,7 @@ from kalpamani.data.curate.publication import (
 from kalpamani.data.curate.resolution_run import resolve_run_inputs
 from kalpamani.data.curate.universe import (
     UniverseDefinition,
-    build_snapshot_header,
     build_universe_snapshot,
-    current_listings,
     membership_hash_of,
     snapshot_content_hash,
 )
@@ -325,7 +322,7 @@ def _publish(store: LocalTableStore, dataset: Any, **kwargs: Any) -> Any:
     return publish_gold_dataset(
         store,
         dataset,
-        quality_report=kwargs.pop("quality_report", phase3a.quality_report()),
+        quality_report=kwargs.pop("quality_report", phase3a.quality_report(dataset)),
         quality_plan=kwargs.pop("quality_plan", PHASE3A_QUALITY_PLAN),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -1008,64 +1005,19 @@ def test_a_zero_row_snapshot_round_trips_as_a_present_snapshot(tmp_path: Path) -
     Without it a genuinely empty selection disappears when the membership table
     is flattened, and "nobody qualified" becomes indistinguishable from "no
     snapshot exists".
-    """
-    store = LocalTableStore(tmp_path)
-    dataset = phase3a.gold_dataset()
-    emptied = _dataset_with_empty_snapshot(dataset)
-    _publish(store, emptied)
 
-    reloaded, _, _ = _read(store)
-    session = date(2019, 6, 27)
+    The empty selection is real: only the delisted security's listings are
+    supplied, and the session evaluated is after it delisted. Removing rows from a
+    published snapshot no longer survives publication, because the quality runner
+    rebuilds it and finds the drift -- so the fabricated construction this test
+    used to rely on is gone, and the genuine one proves more.
+    """
+    publication = phase3a.zero_row_publication(LocalTableStore(tmp_path))
+    session = date(2021, 1, 5)
+    reloaded = publication.dataset
     assert reloaded.snapshot_was_built(session), "The session is present."
     assert reloaded.universe[session] == (), "And it holds no rows."
     assert reloaded.universe_headers[session].row_count == 0
-
-
-def _dataset_with_empty_snapshot(dataset: Any) -> Any:
-    """The same build with one session's membership rows removed, header rebuilt.
-
-    The header is rebuilt through :func:`build_snapshot_header`, not assembled
-    field by field: it is a derived artifact with lineage and an identity hash,
-    and a test able to fabricate one would be testing a route production does not
-    have.
-    """
-    session = date(2019, 6, 27)
-    header = dataset.universe_headers[session]
-    universe = {key: () if key == session else rows for key, rows in dataset.universe.items()}
-    headers = dict(dataset.universe_headers)
-    headers[session] = build_snapshot_header(
-        (),
-        session_date=session,
-        definition=phase3a.universe_definition(),
-        resolved_profile=header.resolved_profile,
-        evaluation_cutoff=header.evaluation_cutoff,
-        considered_listings=[
-            listing
-            for listing in current_listings(dataset.listings)
-            if listing.listing_fact_kind is ListingFactKind.STATE
-        ],
-        artifact_first_built_time=header.envelope.artifact_first_built_time,
-        ingestion_time=header.envelope.ingestion_time,
-        dataset_version=dataset.dataset_version,
-    )
-    return type(dataset)(
-        dataset_version=dataset.dataset_version,
-        build_time=dataset.build_time,
-        coverage_start=dataset.coverage_start,
-        coverage_end=dataset.coverage_end,
-        resolved_profile=dataset.resolved_profile,
-        resolution_policy_version=dataset.resolution_policy_version,
-        resolution_receipt=dataset.resolution_receipt,
-        resolution_evidence=dataset.resolution_evidence,
-        sessions=dataset.sessions,
-        listings=dataset.listings,
-        attributes=dataset.attributes,
-        tickers=dataset.tickers,
-        bars=dataset.bars,
-        actions=dataset.actions,
-        universe=universe,
-        universe_headers=headers,
-    )
 
 
 def test_the_universe_accessor_serves_the_stored_snapshot(tmp_path: Path) -> None:

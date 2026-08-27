@@ -50,6 +50,15 @@ from kalpamani.data.storage import LocalTableStore
 
 pytestmark = pytest.mark.unit
 
+
+def _subject() -> str:
+    """The identity of the reference build a hand-written report claims to describe."""
+    return phase3a.gold_dataset().build_identity
+
+
+_SUBJECT = _subject()
+
+
 PUBLIC = InformationSetProfile.PUBLIC_PIT
 PROVIDER_REALISTIC = InformationSetProfile.PROVIDER_REALISTIC_PIT
 
@@ -151,7 +160,7 @@ def test_raw_gold_rows_cannot_be_published(tmp_path: Path) -> None:
         publish_gold_dataset(
             LocalTableStore(tmp_path),
             tampered,
-            quality_report=phase3a.quality_report(),
+            quality_report=phase3a.quality_report(tampered),
             quality_plan=PHASE3A_QUALITY_PLAN,
             code_commit_sha=phase3a.CODE_COMMIT_SHA,
             lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -243,6 +252,7 @@ def test_a_report_that_ran_no_checks_is_not_evidence() -> None:
         report_from_findings(
             (),
             plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+            subject_build_identity=_SUBJECT,
             policy_versions={"market": "x"},
             checks_run=(),
             datasets_covered=("price_bar",),
@@ -275,6 +285,7 @@ def test_the_report_hash_ignores_when_the_checks_ran() -> None:
             for record in first.findings
         ],
         plan_version=first.plan_version,
+        subject_build_identity=first.subject_build_identity,
         policy_versions=dict(first.policy_versions),
         checks_run=first.checks_run,
         checks_not_run=tuple(
@@ -487,7 +498,7 @@ def _publish_variant(store: LocalTableStore, dataset: GoldDataset) -> str:
     _, manifest = publish_gold_dataset(
         store,
         dataset,
-        quality_report=phase3a.quality_report(),
+        quality_report=phase3a.quality_report(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -564,7 +575,7 @@ def test_a_row_count_that_does_not_match_the_table_is_refused(tmp_path: Path) ->
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=phase3a.quality_report(),
+        quality_report=phase3a.quality_report(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,

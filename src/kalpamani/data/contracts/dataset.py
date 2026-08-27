@@ -209,6 +209,35 @@ class GoldDataset:
         )
         object.__setattr__(self, "build_time", normalize_instant(self.build_time))
 
+    @property
+    def build_identity(self) -> str:
+        """What a quality report is **about**, as a single hash.
+
+        A report proves the checks ran. Without this it does not say what they ran
+        over, so a clean build's report could gate a defective one: the plan is
+        satisfied, the runner seal is genuine, and nothing compares the evidence
+        to the thing it is evidence for.
+
+        Covers the version, the build time, the resolved profile and policy, the
+        content-bound resolution receipt -- which accounts for every source row --
+        and every snapshot header's identity, which accounts for the derived ones.
+        """
+        return content_hash(
+            {
+                "dataset_version": self.dataset_version,
+                "build_time": self.build_time,
+                "coverage_start": self.coverage_start,
+                "coverage_end": self.coverage_end,
+                "resolved_profile": self.resolved_profile.value,
+                "resolution_policy_version": self.resolution_policy_version,
+                "resolution_receipt_hash": self.resolution_receipt.receipt_hash,
+                "universe_headers": [
+                    [session.isoformat(), header.header_identity_hash]
+                    for session, header in sorted(self.universe_headers.items())
+                ],
+            }
+        )
+
     def bars_for(self, security_id: str, resolution: str | None = None) -> tuple[PriceBar, ...]:
         """Raw bars for one security, optionally at one resolution, in canonical order.
 

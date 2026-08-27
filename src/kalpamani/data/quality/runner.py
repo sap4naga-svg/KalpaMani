@@ -624,6 +624,7 @@ def run_quality_plan(
     report = report_from_findings(
         _deduplicate(findings),
         plan_version=plan.plan_version,
+        subject_build_identity=context.dataset.build_identity,
         policy_versions=versions,
         checks_run=tuple(checks_run),
         checks_not_run=tuple(checks_not_run),
@@ -673,20 +674,34 @@ def report_is_runner_produced(report: QualityReport) -> bool:
     return report.produced_by is _RUNNER_TOKEN
 
 
-def require_runner_produced(report: QualityReport, *, dataset_version: str) -> None:
-    """Refuse a report nobody ran.
+def require_runner_produced(
+    report: QualityReport, *, dataset_version: str, build_identity: str
+) -> None:
+    """Refuse a report nobody ran, or one that was run over something else.
+
+    Both halves are needed. The seal establishes that the checks were invoked; the
+    subject establishes what they were invoked over. A report with the first and
+    not the second is a genuine clean pass over a **different build**, which is
+    the same failure as a fabricated report reached from the other direction.
 
     Raises:
-        QualityGateError: if the report was not produced by this runner.
+        QualityGateError: if the report was not produced by this runner, or names
+            a different build than the one being published.
     """
-    if report_is_runner_produced(report):
-        return
-    raise QualityGateError(
-        f"The quality report offered for {dataset_version} was not produced by the quality "
-        f"runner ({QUALITY_RUNNER_VERSION}). Its checks_run list is a claim about work rather "
-        "than a product of it: a caller who writes out every check id satisfies the plan "
-        "completely without a single check having been invoked."
-    )
+    if not report_is_runner_produced(report):
+        raise QualityGateError(
+            f"The quality report offered for {dataset_version} was not produced by the quality "
+            f"runner ({QUALITY_RUNNER_VERSION}). Its checks_run list is a claim about work "
+            "rather than a product of it: a caller who writes out every check id satisfies the "
+            "plan completely without a single check having been invoked."
+        )
+    if report.subject_build_identity != build_identity:
+        raise QualityGateError(
+            f"The quality report offered for {dataset_version} was run over build "
+            f"{report.subject_build_identity} and this build is {build_identity}. The checks "
+            "really did run, and they ran over something else -- so every finding they did not "
+            "make is a finding about a different set of rows."
+        )
 
 
 __all__ = [

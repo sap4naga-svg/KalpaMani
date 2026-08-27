@@ -108,6 +108,14 @@ FORWARD = InformationSetProfile.FORWARD_SYSTEM
 INGEST_DATE = date(2026, 8, 26)
 
 
+def _subject() -> str:
+    """The identity of the reference build a hand-written report claims to describe."""
+    return phase3a.gold_dataset().build_identity
+
+
+_SUBJECT = _subject()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -145,7 +153,7 @@ def _publish(store: LocalTableStore, dataset: GoldDataset, **kwargs: Any) -> Any
     return publish_gold_dataset(
         store,
         dataset,
-        quality_report=kwargs.pop("quality_report", phase3a.quality_report()),
+        quality_report=kwargs.pop("quality_report", phase3a.quality_report(dataset)),
         quality_plan=kwargs.pop("quality_plan", PHASE3A_QUALITY_PLAN),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -637,6 +645,7 @@ def test_a_report_running_one_harmless_check_cannot_publish(tmp_path: Path) -> N
     thin = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),
         datasets_covered=phase3a.QUALITY_COVERAGE,
@@ -651,6 +660,7 @@ def test_a_required_check_cannot_be_declared_away(tmp_path: Path) -> None:
     declared = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
             check.check_id
@@ -674,6 +684,7 @@ def test_a_published_table_nothing_covered_is_refused(tmp_path: Path) -> None:
     uncovered = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
             check.check_id
@@ -796,86 +807,20 @@ def test_a_partial_header_is_never_served(tmp_path: Path) -> None:
         )
 
 
-def _forward_publication(tmp_path: Path) -> VerifiedPublication:
-    """A FORWARD_SYSTEM build whose 2021 snapshot legitimately selected nobody.
-
-    The fixture rows are first seen in 2026, which under FORWARD_SYSTEM makes
-    every 2019 input inadmissible and the build unconstructable. Moving
-    ``system_first_seen_time`` back is the minimum change that lets the profile
-    that asks "what did *we* hold" have anything to hold.
-    """
-    datasets = phase3a.source_datasets()
-    early = phase3a.utc(2018, 1, 1, 0, 0)
-    for name, rows in list(datasets.items()):
-        datasets[name] = tuple(
-            dataclasses.replace(
-                row, envelope=dataclasses.replace(row.envelope, system_first_seen_time=early)
-            )
-            for row in rows
-        )
-    resolved = resolve_run_inputs(
-        datasets,
-        config=phase3a.resolution(requested=FORWARD),
-        approvals=phase3a.approvals(),
-    )
-    dataset = build_gold_dataset(
-        resolved,
-        dataset_version=phase3a.DATASET_VERSION,
-        build_time=phase3a.BUILD_TIME,
-        coverage_start=phase3a.COVERAGE_START,
-        coverage_end=phase3a.COVERAGE_END,
-        universe_definition=phase3a.universe_definition(),
-        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
-        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        approvals=phase3a.approvals(),
-        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
-        ingestion_time=phase3a.INGESTION_TIME,
-    )
-
-    # The case the rule exists for: a session whose rule selected nobody, so no
-    # membership row carries the constraint on its behalf.
-    session = date(2021, 1, 5)
-    considered = [
-        listing
-        for listing in current_listings(dataset.listings)
-        if listing.listing_fact_kind is ListingFactKind.STATE
-    ]
-    emptied = _rebuild(
-        dataset,
-        universe={key: () if key == session else rows for key, rows in dataset.universe.items()},
-        universe_headers={
-            **dataset.universe_headers,
-            session: build_snapshot_header(
-                (),
-                session_date=session,
-                definition=phase3a.universe_definition(),
-                resolved_profile=FORWARD,
-                evaluation_cutoff=phase3a.session_open(session),
-                considered_listings=considered,
-                artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
-                ingestion_time=phase3a.INGESTION_TIME,
-                dataset_version=phase3a.DATASET_VERSION,
-            ),
-        },
-    )
-    store = LocalTableStore(tmp_path)
-    _publish(store, emptied)
-    return read_published_dataset(
-        store,
-        dataset_version=phase3a.DATASET_VERSION,
-        config=phase3a.resolution(requested=FORWARD),
-        approvals=phase3a.approvals(),
-    )
-
-
 def test_a_zero_row_snapshot_is_not_served_before_it_was_built(tmp_path: Path) -> None:
     """Under FORWARD_SYSTEM we did not know the rule selected nobody. We knew nothing.
 
     The zero-row case is the one with no membership rows to carry the constraint,
     so before the header became a derived artifact this query was answered with an
     empty universe and nothing said it was an answer about the future.
+
+    The snapshot is a genuine empty selection -- only the delisted security's
+    listings are supplied, and the session is after it delisted -- rather than a
+    published snapshot with its rows removed. That construction no longer survives
+    publication at all: the quality runner rebuilds the snapshot and finds the
+    drift.
     """
-    publication = _forward_publication(tmp_path)
+    publication = phase3a.zero_row_publication(LocalTableStore(tmp_path), requested=FORWARD)
     session = date(2021, 1, 5)
     header = publication.dataset.universe_headers[session]
     assert header.row_count == 0
@@ -886,15 +831,17 @@ def test_a_zero_row_snapshot_is_not_served_before_it_was_built(tmp_path: Path) -
         resolution=phase3a.resolution(requested=FORWARD),
         approvals=phase3a.approvals(),
     )
-    with pytest.raises(MissingHistoricalSnapshotError, match="was first built at"):
+    with pytest.raises(MissingHistoricalSnapshotError, match="first built at"):
         reader.get_security_universe(
             as_of=phase3a.ARTIFACT_FIRST_BUILT - timedelta(minutes=1), profile=FORWARD
         )
 
 
-def test_the_same_zero_row_snapshot_is_a_real_answer_once_it_exists(tmp_path: Path) -> None:
+def test_the_same_zero_row_snapshot_is_a_real_answer_once_it_exists(
+    tmp_path: Path,
+) -> None:
     """NEGATIVE CONTROL. "Nobody qualified" is an answer, and it is served as one."""
-    publication = _forward_publication(tmp_path)
+    publication = phase3a.zero_row_publication(LocalTableStore(tmp_path), requested=FORWARD)
     reader = PointInTimeReader(
         publication,
         resolution=phase3a.resolution(requested=FORWARD),

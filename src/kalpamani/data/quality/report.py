@@ -22,6 +22,13 @@ drift apart -- swapping the report changes the dataset's identity.
 **Checks not run are recorded, never quietly skipped.** A check that cannot run
 is declared. A check that silently covered less than it claims is worse than no
 check, because it converts an unknown into a false assurance.
+
+**It names the build it is about.** A report proves the checks ran; on its own it
+does not say what they ran over. A clean build's report satisfies the plan,
+carries a genuine runner seal, and would gate a *different* build entirely --
+which is the same shape of failure as evidence a caller wrote, arrived at from the
+other direction. ``subject_build_identity`` is the build's own identity hash, and
+publication refuses a report that names another.
 """
 
 from __future__ import annotations
@@ -96,6 +103,10 @@ class QualityReport:
     #: The versioned plan this report is evidence against. Without it the report
     #: says what ran but nothing says what should have.
     plan_version: str
+    #: The build this report is evidence **about**. Without it the report says
+    #: what ran but nothing says what it ran over, and a clean build's report
+    #: would gate a defective one.
+    subject_build_identity: str
     policy_versions: Mapping[str, str]
     checks_run: tuple[str, ...]
     checks_not_run: tuple[CheckNotRun, ...]
@@ -151,6 +162,7 @@ class QualityReport:
         return content_hash(
             {
                 "plan_version": self.plan_version,
+                "subject_build_identity": self.subject_build_identity,
                 "policy_versions": dict(self.policy_versions),
                 "checks_run": sorted(self.checks_run),
                 "checks_not_run": sorted(
@@ -193,6 +205,7 @@ def report_from_findings(
     findings: Sequence[QualityFinding],
     *,
     plan_version: str,
+    subject_build_identity: str,
     policy_versions: Mapping[str, str],
     checks_run: Sequence[str],
     checks_not_run: Sequence[CheckNotRun] = (),
@@ -209,6 +222,7 @@ def report_from_findings(
     """
     return QualityReport(
         plan_version=plan_version,
+        subject_build_identity=subject_build_identity,
         policy_versions=dict(policy_versions),
         checks_run=tuple(sorted(set(checks_run))),
         checks_not_run=tuple(checks_not_run),
@@ -224,6 +238,7 @@ def encode_quality_report(report: QualityReport) -> dict[str, object]:
     """Encode a report for persistence beside the dataset it gates."""
     return {
         "plan_version": report.plan_version,
+        "subject_build_identity": report.subject_build_identity,
         "policy_versions": dict(report.policy_versions),
         "checks_run": list(report.checks_run),
         "checks_not_run": [
@@ -268,6 +283,7 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
     )
     report = QualityReport(
         plan_version=str(body["plan_version"]),
+        subject_build_identity=str(body["subject_build_identity"]),
         policy_versions={
             str(key): str(value)
             for key, value in dict(body["policy_versions"]).items()  # type: ignore[call-overload]

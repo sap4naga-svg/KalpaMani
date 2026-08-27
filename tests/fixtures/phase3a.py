@@ -1321,6 +1321,40 @@ def sealed_result_with_exclusions(
     return pit.seal(series, result_bytes=result_bytes)
 
 
+def zero_row_publication(
+    store: LocalTableStore,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+) -> VerifiedPublication:
+    """A build whose rule genuinely selected nobody on the 2021 session.
+
+    Only the delisted security's listings are supplied, and the session evaluated
+    is after it delisted: the listing rows are admissible evidence by then, so the
+    build is computable, and nobody is listed, so the rule selects nobody.
+
+    A real empty selection rather than a published snapshot with its rows removed.
+    The distinction is the whole reason the header exists -- and removing rows no
+    longer survives publication anyway, because the quality runner rebuilds the
+    snapshot and finds the drift.
+    """
+    datasets = (
+        forward_datasets()
+        if requested is InformationSetProfile.FORWARD_SYSTEM
+        else source_datasets()
+    )
+    datasets["listing"] = tuple(
+        row
+        for row in datasets["listing"]
+        if isinstance(row, Listing) and row.security_id == SEC_DELISTED
+    )
+    return publication_from(
+        store,
+        datasets,
+        requested=requested,
+        universe_sessions=(date(2021, 1, 5),),
+    )
+
+
 def resolution_evidence(
     *,
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,

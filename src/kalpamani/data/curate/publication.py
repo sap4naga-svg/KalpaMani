@@ -405,7 +405,11 @@ def publish_gold_dataset(
     # Plan first, provenance second. A report that fails the plan should fail
     # for the reason it is wrong, not for where it came from.
     quality_plan.validate(quality_report, published_tables=GOLD_ENTITIES)
-    require_runner_produced(quality_report, dataset_version=dataset.dataset_version)
+    require_runner_produced(
+        quality_report,
+        dataset_version=dataset.dataset_version,
+        build_identity=dataset.build_identity,
+    )
     quality_report.require_publishable(dataset_version=dataset.dataset_version)
 
     final = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)
