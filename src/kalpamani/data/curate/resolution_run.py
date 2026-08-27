@@ -60,6 +60,7 @@ from kalpamani.data.contracts.resolution import (
     SourceRecord,
     resolved_provider_time,
 )
+from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.vocabulary import (
     DatasetGapPolicy,
     InformationOrigin,
@@ -165,20 +166,20 @@ def evidence_limitation_tokens(
     return tuple(tokens)
 
 
-def row_identity_fingerprint(
+def resolved_row_fingerprint(
     by_dataset: Mapping[str, Sequence[SourceRecord]],
-) -> tuple[tuple[str, str], ...]:
-    """A canonical ``(dataset, source_id)`` rendering of every resolved row.
+) -> tuple[tuple[str, ...], ...]:
+    """A content-bound fingerprint over every resolved row.
 
-    Enough for the receipt to be about *these* rows rather than about a policy in
-    the abstract: substituting a row after resolution changes the fingerprint and
-    therefore the receipt, and publication compares both.
+    Names alone were not enough: the same source id carrying a corrected price or
+    a revised availability time produced the same fingerprint, so a substituted
+    row could be published as though resolution had seen it. Each identity now
+    carries the row's full canonical content hash.
     """
-    pairs: list[tuple[str, str]] = []
-    for dataset, rows in by_dataset.items():
-        for row in rows:
-            pairs.append((dataset, row.envelope.source_id))
-    return tuple(sorted(pairs))
+    records: list[SourceRecord] = []
+    for rows in by_dataset.values():
+        records.extend(rows)
+    return row_fingerprint(records)
 
 
 def resolve_run_inputs(
@@ -224,7 +225,7 @@ def resolve_run_inputs(
             resolution_policy_version=config.resolution_policy_version,
             canonical_map=config.canonical_map(),
             evidence_fingerprint=evidence_fingerprint(evidence),
-            row_identity_fingerprint=row_identity_fingerprint(resolved),
+            row_fingerprint=resolved_row_fingerprint(resolved),
         ),
         by_dataset=resolved,
         evidence=tuple(evidence),
@@ -318,5 +319,5 @@ __all__ = [
     "evidence_limitation_tokens",
     "excluded_datasets",
     "resolve_run_inputs",
-    "row_identity_fingerprint",
+    "resolved_row_fingerprint",
 ]

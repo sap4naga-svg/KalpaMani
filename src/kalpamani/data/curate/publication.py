@@ -26,6 +26,22 @@ the decoded row count is checked against the declared one, and the manifest body
 is checked against its own hash. Two manifests that differ in profile, coverage
 or policy evidence cannot share a dataset identity, because all of it is inside
 that hash.
+
+**The receipt is recomputed, not reconstructed.** An earlier read path rebuilt
+the receipt with empty evidence and row fingerprints, which made the hash it
+carried unfalsifiable -- the reconstruction could never disagree with anything,
+so nothing was being checked. The read now rebuilds the **complete** receipt from
+the manifest, the persisted evidence and the rows it actually decoded, and
+compares its hash to ``manifest.resolution_receipt_hash``. A row substituted
+between publication and read fails there, including one that kept its identifier
+and changed only a price or an availability time.
+
+**The verified read path is the only way to obtain a queryable publication.**
+:func:`read_published_dataset` returns a :class:`VerifiedPublication`, which
+cannot be constructed anywhere else, and the point-in-time reader accepts nothing
+else. A hand-assembled dataset/manifest/report triplet is not a smaller amount of
+evidence -- its hashes agree with each other, which is not the same as agreeing
+with what was published.
 """
 
 from __future__ import annotations
@@ -34,7 +50,7 @@ import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
 from kalpamani.data.contracts.dataset import GoldDataset, UniverseSnapshotHeader
@@ -51,10 +67,13 @@ from kalpamani.data.contracts.profiles import (
     ProfileResolutionConfig,
     ResolutionReceipt,
     TimingBasis,
+    evidence_fingerprint,
 )
-from kalpamani.data.contracts.resolution import BoundApprovals
+from kalpamani.data.contracts.resolution import BoundApprovals, SourceRecord
+from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.serde import (
     decode_corporate_action,
+    decode_derived_envelope,
     decode_listing,
     decode_market_session,
     decode_price_bar,
@@ -62,6 +81,7 @@ from kalpamani.data.contracts.serde import (
     decode_ticker_history,
     decode_universe_membership,
     encode_corporate_action,
+    encode_derived_envelope,
     encode_listing,
     encode_market_session,
     encode_price_bar,
@@ -78,10 +98,12 @@ from kalpamani.data.contracts.vocabulary import (
 from kalpamani.data.curate.build import dataset_row_fingerprint
 from kalpamani.data.curate.lineage import resolve_lineage
 from kalpamani.data.curate.universe import membership_hash_of
+from kalpamani.data.quality.plan import QualityPlan, plan_for
 from kalpamani.data.quality.report import (
     QualityReport,
     decode_quality_report,
     encode_quality_report,
+    report_file_hash,
 )
 from kalpamani.data.storage import LocalTableStore
 
@@ -114,7 +136,7 @@ MANIFEST_NAME = "_dataset_manifest.json"
 QUALITY_REPORT_NAME = "_quality_report.json"
 
 #: Version of the publication format itself.
-PUBLICATION_FORMAT_VERSION = 2
+PUBLICATION_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -153,6 +175,13 @@ class DatasetManifest:
     resolution_evidence: tuple[DatasetResolutionEvidence, ...]
     resolution_receipt_hash: str
     quality_report_hash: str
+    #: Hash of the exact persisted quality-report bytes. ``quality_report_hash``
+    #: omits ``produced_at`` by design, so on its own it leaves those bytes
+    #: unbound; this covers the file itself.
+    quality_report_file_hash: str
+    #: The versioned plan the report is evidence against. A publication naming a
+    #: plan this code does not have refuses on read.
+    quality_plan_version: str
     tables: tuple[TableRecord, ...]
     source_ingestion_run_ids: tuple[str, ...]
     code_commit_sha: str
@@ -237,6 +266,8 @@ def _manifest_body(manifest: DatasetManifest, *, include_hash: bool) -> dict[str
         "resolution_evidence": [_evidence_row(e) for e in manifest.resolution_evidence],
         "resolution_receipt_hash": manifest.resolution_receipt_hash,
         "quality_report_hash": manifest.quality_report_hash,
+        "quality_report_file_hash": manifest.quality_report_file_hash,
+        "quality_plan_version": manifest.quality_plan_version,
         "tables": [
             {
                 "entity": table.entity,
@@ -271,11 +302,19 @@ def _encode_header(header: UniverseSnapshotHeader) -> dict[str, object]:
         "snapshot_content_hash": header.snapshot_content_hash,
         "derivation_spec_version": header.derivation_spec_version,
         "status": header.status,
+        "envelope": encode_derived_envelope(header.envelope),
+        "header_identity_hash": header.header_identity_hash,
     }
 
 
 def _decode_header(row: Mapping[str, Any]) -> UniverseSnapshotHeader:
-    return UniverseSnapshotHeader(
+    """Decode a snapshot header, refusing one that does not reproduce its identity.
+
+    The identity covers the session, definition, profile, cutoff, status, row
+    count, membership hashes and lineage. Recomputing it here is what stops a
+    fabricated header from asserting that a session was built.
+    """
+    header = UniverseSnapshotHeader(
         session_date=date.fromisoformat(str(row["session_date"])),
         universe_definition_version=str(row["universe_definition_version"]),
         resolved_profile=InformationSetProfile(str(row["resolved_profile"])),
@@ -283,8 +322,18 @@ def _decode_header(row: Mapping[str, Any]) -> UniverseSnapshotHeader:
         row_count=int(row["row_count"]),
         snapshot_content_hash=str(row["snapshot_content_hash"]),
         derivation_spec_version=str(row["derivation_spec_version"]),
+        envelope=decode_derived_envelope(row["envelope"]),
         status=str(row["status"]),
     )
+    recorded = str(row["header_identity_hash"])
+    if header.header_identity_hash != recorded:
+        raise DatasetPublicationError(
+            f"The snapshot header for {header.session_date.isoformat()} does not reproduce its "
+            f"identity (recorded {recorded}, recomputed {header.header_identity_hash}). A "
+            "header is the only evidence that a session was built at all, so one that can be "
+            "edited afterwards is evidence of nothing."
+        )
+    return header
 
 
 def _encode_tables(dataset: GoldDataset) -> dict[str, list[Mapping[str, object]]]:
@@ -315,6 +364,7 @@ def publish_gold_dataset(
     dataset: GoldDataset,
     *,
     quality_report: QualityReport,
+    quality_plan: QualityPlan,
     code_commit_sha: str,
     lag_policy_version: str,
     universe_definition_version: str | None,
@@ -323,8 +373,10 @@ def publish_gold_dataset(
     """Verify, stage, then commit a version with one atomic rename.
 
     Raises:
-        BuildBoundaryError: if the dataset's receipt does not account for its rows.
-        QualityGateError: if a BLOCKING finding stands against the build.
+        BuildBoundaryError: if the dataset's receipt does not account for its
+            rows, its evidence, its policy map or its policy version.
+        QualityGateError: if a BLOCKING finding stands against the build, or the
+            report does not close against ``quality_plan``.
         DatasetPublicationError: if the version is already published, or a
             required source dataset has no resolution evidence.
     """
@@ -334,6 +386,7 @@ def publish_gold_dataset(
 
     _verify_receipt_covers_rows(dataset)
     _verify_evidence_complete(dataset)
+    quality_plan.validate(quality_report, published_tables=GOLD_ENTITIES)
     quality_report.require_publishable(dataset_version=dataset.dataset_version)
 
     final = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)
@@ -384,6 +437,8 @@ def publish_gold_dataset(
             resolution_evidence=dataset.resolution_evidence,
             resolution_receipt_hash=dataset.resolution_receipt.receipt_hash,
             quality_report_hash=quality_report.report_hash,
+            quality_report_file_hash=report_file_hash(quality_report),
+            quality_plan_version=quality_plan.plan_version,
             tables=tuple(tables),
             source_ingestion_run_ids=tuple(sorted(source_ingestion_run_ids)),
             code_commit_sha=code_commit_sha,
@@ -439,6 +494,8 @@ def _with_hash(draft: DatasetManifest) -> DatasetManifest:
         resolution_evidence=draft.resolution_evidence,
         resolution_receipt_hash=draft.resolution_receipt_hash,
         quality_report_hash=draft.quality_report_hash,
+        quality_report_file_hash=draft.quality_report_file_hash,
+        quality_plan_version=draft.quality_plan_version,
         tables=draft.tables,
         source_ingestion_run_ids=draft.source_ingestion_run_ids,
         code_commit_sha=draft.code_commit_sha,
@@ -449,20 +506,31 @@ def _with_hash(draft: DatasetManifest) -> DatasetManifest:
 
 
 def _verify_receipt_covers_rows(dataset: GoldDataset) -> None:
-    """The receipt must be about *these* rows, not about a policy in the abstract."""
-    actual = dataset_row_fingerprint(dataset)
-    if actual != dataset.resolution_receipt.row_identity_fingerprint:
-        raise BuildBoundaryError(
-            f"The resolution receipt for {dataset.dataset_version} does not account for the "
-            f"rows in the build ({len(actual)} rows present, "
-            f"{len(dataset.resolution_receipt.row_identity_fingerprint)} in the receipt). A "
-            "row substituted after resolution was never resolved, and publishing it would "
-            "record a policy that never saw it."
-        )
+    """The receipt must be about *these* rows, not about a policy in the abstract.
+
+    Four things are compared, not one: the content-bound row fingerprint, the
+    evidence fingerprint, the policy version, and the evidence's agreement with
+    the canonical map it was produced under -- dataset by dataset, policy and
+    stated reason alike. A build that satisfies three of the four has one
+    statement in it that is false, and nothing downstream could say which.
+    """
+    problems = dataset.resolution_receipt.disagreements_with(
+        evidence=dataset.resolution_evidence,
+        row_fingerprint=dataset_row_fingerprint(dataset),
+        resolution_policy_version=dataset.resolution_policy_version,
+    )
     if dataset.resolution_receipt.resolved_profile is not dataset.resolved_profile:
+        problems.append(
+            f"the build claims {dataset.resolved_profile.value} while its receipt records "
+            f"{dataset.resolution_receipt.resolved_profile.value}"
+        )
+    if problems:
         raise BuildBoundaryError(
-            f"{dataset.dataset_version} claims {dataset.resolved_profile.value} while its "
-            f"receipt records {dataset.resolution_receipt.resolved_profile.value}."
+            f"The resolution receipt for {dataset.dataset_version} does not describe this "
+            "build:\n  - "
+            + "\n  - ".join(problems)
+            + "\nA row substituted after resolution was never resolved, and publishing "
+            "it would record a policy that never saw it."
         )
 
 
@@ -480,6 +548,80 @@ def _verify_evidence_complete(dataset: GoldDataset) -> None:
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
+
+
+#: Held by the verified read path alone. ``VerifiedPublication`` refuses to be
+#: constructed without it, so the class cannot be instantiated from a triplet
+#: assembled at a call site -- which is exactly what the reader used to accept.
+_VERIFIED_READ_TOKEN: Final = object()
+
+
+def verification_seal(
+    manifest: DatasetManifest,
+    report: QualityReport,
+    receipt: ResolutionReceipt,
+) -> str:
+    """The seal a verified read stamps onto a publication.
+
+    Binds the three identities that were checked -- the manifest, the quality
+    evidence and the recomputed receipt -- so that a publication carrying a seal
+    names precisely which artifacts the verification passed over.
+    """
+    return content_hash(
+        {
+            "publication_format_version": manifest.publication_format_version,
+            "dataset_version": manifest.dataset_version,
+            "manifest_hash": manifest.manifest_hash,
+            "quality_report_hash": report.report_hash,
+            "quality_report_file_hash": manifest.quality_report_file_hash,
+            "resolution_receipt_hash": receipt.receipt_hash,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VerifiedPublication:
+    """A published dataset that **this process** verified, with its evidence.
+
+    The three artifacts used to travel as a tuple, which meant the point-in-time
+    reader could not tell a verified read from three objects assembled at a call
+    site. It checked what it could -- that the manifest named the dataset, that
+    the report hash matched -- and those checks pass for a hand-built triplet,
+    because they compare the pieces to each other rather than to storage.
+
+    This type carries the fact of verification itself. Only
+    :func:`read_published_dataset` holds the token that constructs it, and the
+    seal records which manifest, report and receipt the verification covered.
+    """
+
+    dataset: GoldDataset
+    manifest: DatasetManifest
+    quality_report: QualityReport
+    verification_seal: str
+    verified_by: object
+
+    def __post_init__(self) -> None:
+        if self.verified_by is not _VERIFIED_READ_TOKEN:
+            raise DatasetPublicationError(
+                "A VerifiedPublication may only be produced by read_published_dataset. A "
+                "dataset, a manifest and a report assembled at a call site have not been "
+                "checked against storage -- their hashes agree with each other, which is not "
+                "the same as agreeing with what was published."
+            )
+        expected = verification_seal(
+            self.manifest, self.quality_report, self.dataset.resolution_receipt
+        )
+        if self.verification_seal != expected:
+            raise DatasetPublicationError(
+                f"The verification seal on {self.manifest.dataset_version} does not describe "
+                "the artifacts it is attached to. A seal that names other artifacts is not "
+                "evidence about these."
+            )
+
+    @property
+    def dataset_version(self) -> str:
+        """The version this publication serves."""
+        return self.manifest.dataset_version
 
 
 def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> DatasetManifest:
@@ -518,6 +660,8 @@ def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> Da
         ),
         resolution_receipt_hash=str(body["resolution_receipt_hash"]),
         quality_report_hash=str(body["quality_report_hash"]),
+        quality_report_file_hash=str(body["quality_report_file_hash"]),
+        quality_plan_version=str(body["quality_plan_version"]),
         tables=tuple(
             TableRecord(
                 entity=str(row["entity"]),
@@ -552,10 +696,14 @@ def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> Da
 def load_quality_report(store: LocalTableStore, manifest: DatasetManifest) -> QualityReport:
     """Load and verify the quality evidence a published version was gated on.
 
+    Both hashes are checked. ``report_hash`` proves the findings did not change;
+    it deliberately omits ``produced_at``, so on its own it leaves those bytes
+    editable. ``quality_report_file_hash`` covers the file exactly as written.
+
     Raises:
-        QualityGateError: if the report is absent, does not reconcile with its own
-            hash, or is not the report the manifest names. A missing report is not
-            a clean one.
+        QualityGateError: if the report is absent, does not reconcile with its
+            own hash, is not the report the manifest names, or is not the file
+            the manifest names. A missing report is not a clean one.
     """
     root = store.version_root(layer=StorageLayer.GOLD, dataset_version=manifest.dataset_version)
     path = root / QUALITY_REPORT_NAME
@@ -564,6 +712,15 @@ def load_quality_report(store: LocalTableStore, manifest: DatasetManifest) -> Qu
             f"Gold version {manifest.dataset_version} has no persisted quality report at "
             f"{path}. A publication with no quality evidence cannot be read: absence of a "
             "finding and absence of a check are different claims."
+        )
+    stored_bytes = path.read_bytes()
+    file_digest = sha256_hex(stored_bytes)
+    if file_digest != manifest.quality_report_file_hash:
+        raise QualityGateError(
+            f"The quality report file stored with {manifest.dataset_version} hashes to "
+            f"{file_digest}, not the {manifest.quality_report_file_hash} its manifest records. "
+            "The logical report hash omits produced_at by design, so only this covers the "
+            "bytes -- and a file that can be edited after the gate is not a gate."
         )
     report = decode_quality_report(store.read_json(path))
     if report.report_hash != manifest.quality_report_hash:
@@ -582,18 +739,23 @@ def read_published_dataset(
     dataset_version: str,
     config: ProfileResolutionConfig,
     approvals: BoundApprovals,
-) -> tuple[GoldDataset, DatasetManifest, QualityReport]:
+) -> VerifiedPublication:
     """Load a published version, verifying everything before decoding anything.
 
-    Returns the dataset, its manifest and its quality report together: a caller
-    that has the data has the evidence, and cannot obtain one without the other.
+    This is the **only** route to a :class:`VerifiedPublication`, and therefore
+    the only route to a point-in-time reader. A caller that has the data has the
+    evidence, cannot obtain one without the other, and cannot assemble the pair
+    at a call site.
 
     Raises:
         DatasetPublicationError: on a missing or partial publication, a table
             whose bytes or row count disagree with the manifest, an incoherent
-            manifest, or a resolution that disagrees with ``config``.
-        QualityGateError: if the quality evidence is missing, mismatched, or
-            carries an open BLOCKING finding.
+            manifest, a resolution that disagrees with ``config``, a snapshot
+            header that does not reproduce its identity, or a receipt that does
+            not recompute from the rows that were stored.
+        QualityGateError: if the quality evidence is missing, mismatched, does
+            not close against the plan the manifest names, or carries an open
+            BLOCKING finding.
         ArtifactIntegrityError: if a stored membership row's lineage does not
             replay to exactly the rows it names.
     """
@@ -601,6 +763,7 @@ def read_published_dataset(
     _verify_manifest_coherence(manifest)
     _verify_resolution_agrees(manifest, config)
     report = load_quality_report(store, manifest)
+    plan_for(manifest.quality_plan_version).validate(report, published_tables=GOLD_ENTITIES)
     _verify_quality_gate(manifest, report)
     _verify_tables(store, manifest)
 
@@ -640,7 +803,21 @@ def read_published_dataset(
             )
         universe.setdefault(member.session_date, []).append(member)
 
-    _verify_snapshot_headers(headers, universe, manifest)
+    stored_universe = {
+        session: tuple(sorted(members, key=lambda m: m.security_id))
+        for session, members in sorted(universe.items())
+    }
+    _verify_snapshot_headers(headers, stored_universe, manifest)
+
+    source_rows: list[SourceRecord] = [
+        *sessions,
+        *listings,
+        *attributes,
+        *tickers,
+        *bars,
+        *actions,
+    ]
+    receipt = _recompute_receipt(manifest, source_rows)
 
     built = GoldDataset(
         dataset_version=manifest.dataset_version,
@@ -649,15 +826,7 @@ def read_published_dataset(
         coverage_end=manifest.coverage_end,
         resolved_profile=manifest.resolved_profile,
         resolution_policy_version=manifest.resolution_policy_version,
-        resolution_receipt=ResolutionReceipt(
-            requested_profile=manifest.requested_profile,
-            resolved_profile=manifest.resolved_profile,
-            global_profile_resolution=manifest.global_profile_resolution,
-            resolution_policy_version=manifest.resolution_policy_version,
-            canonical_map=manifest.resolution_map,
-            evidence_fingerprint=(),
-            row_identity_fingerprint=(),
-        ),
+        resolution_receipt=receipt,
         resolution_evidence=manifest.resolution_evidence,
         sessions=sessions,
         listings=listings,
@@ -665,13 +834,58 @@ def read_published_dataset(
         tickers=tickers,
         bars=bars,
         actions=actions,
-        universe={
-            session: tuple(sorted(members, key=lambda m: m.security_id))
-            for session, members in sorted(universe.items())
-        },
+        universe=stored_universe,
         universe_headers=headers,
     )
-    return built, manifest, report
+    return VerifiedPublication(
+        dataset=built,
+        manifest=manifest,
+        quality_report=report,
+        verification_seal=verification_seal(manifest, report, receipt),
+        verified_by=_VERIFIED_READ_TOKEN,
+    )
+
+
+def _recompute_receipt(
+    manifest: DatasetManifest,
+    source_rows: Sequence[SourceRecord],
+) -> ResolutionReceipt:
+    """Rebuild the **complete** receipt from what was persisted, and check its hash.
+
+    Every part comes from evidence that survived the round trip: both profiles,
+    the global resolution and the canonical map from the manifest; the evidence
+    fingerprint from the persisted evidence; the row fingerprint from the rows
+    just decoded, contents included.
+
+    The earlier version filled the fingerprints with empty tuples, which meant
+    the reconstruction agreed with the recorded hash only when the recorded hash
+    had also been taken over empty tuples -- a check that could not fail. This
+    one fails on a substituted row, a substituted evidence entry and a
+    substituted map alike.
+
+    Raises:
+        DatasetPublicationError: if the recomputed receipt hash is not the one
+            the manifest records.
+    """
+    receipt = ResolutionReceipt(
+        requested_profile=manifest.requested_profile,
+        resolved_profile=manifest.resolved_profile,
+        global_profile_resolution=manifest.global_profile_resolution,
+        resolution_policy_version=manifest.resolution_policy_version,
+        canonical_map=manifest.resolution_map,
+        evidence_fingerprint=evidence_fingerprint(manifest.resolution_evidence),
+        row_fingerprint=row_fingerprint(source_rows),
+    )
+    if receipt.receipt_hash != manifest.resolution_receipt_hash:
+        raise DatasetPublicationError(
+            f"Gold version {manifest.dataset_version} does not recompute its resolution "
+            f"receipt (manifest {manifest.resolution_receipt_hash}, recomputed "
+            f"{receipt.receipt_hash}). The receipt is recomputed from the rows that were "
+            "actually stored, so a row substituted after publication -- including one that "
+            "kept its identifier and changed only a price or an availability time -- fails "
+            "here rather than being served."
+        )
+    return receipt
 
 
 def _verify_manifest_coherence(manifest: DatasetManifest) -> None:
@@ -741,6 +955,16 @@ def _verify_manifest_coherence(manifest: DatasetManifest) -> None:
         if entry.provider_basis is TimingBasis.EXACT and entry.provider_bounded_rows:
             problems.append(
                 f"dataset {entry.dataset!r} claims EXACT provider basis with bounded rows"
+            )
+        if entry.public_basis is TimingBasis.EXACT and not entry.public_exact_rows:
+            problems.append(
+                f"dataset {entry.dataset!r} claims EXACT public basis with no exact rows; a "
+                "basis derived from nothing describes nothing"
+            )
+        if entry.provider_basis is TimingBasis.EXACT and not entry.provider_exact_rows:
+            problems.append(
+                f"dataset {entry.dataset!r} claims EXACT provider basis with no exact rows; a "
+                "basis derived from nothing describes nothing"
             )
 
     map_datasets = [entry[0] for entry in manifest.resolution_map]
@@ -833,7 +1057,13 @@ def _verify_snapshot_headers(
     universe: Mapping[date, Sequence[UniverseMembership]],
     manifest: DatasetManifest,
 ) -> None:
-    """Every membership row belongs to a built snapshot, and every header matches its rows."""
+    """Every membership row belongs to a built snapshot, and every header matches its rows.
+
+    The header is the only artifact asserting that a session was built, so it is
+    held to the same standard as the rows: a COMPLETE status, a row count that
+    agrees with what was stored, a content hash that reproduces from those rows,
+    and a build-time no later than the manifest's.
+    """
     orphaned = sorted(session for session in universe if session not in headers)
     if orphaned:
         raise DatasetPublicationError(
@@ -843,11 +1073,38 @@ def _verify_snapshot_headers(
         )
     for session, header in sorted(headers.items()):
         rows = tuple(universe.get(session, ()))
+        if not header.is_complete:
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} declares status "
+                f"{header.status!r}. Only a COMPLETE snapshot is served: a partial one answers "
+                "the universe question with a subset and nothing in the answer says so."
+            )
         if header.row_count != len(rows):
             raise DatasetPublicationError(
                 f"The snapshot header for {session.isoformat()} declares {header.row_count} "
                 f"rows and {len(rows)} were stored. A zero-row snapshot is legitimate; a "
                 "header that miscounts is not."
+            )
+        recomputed = content_hash(sorted(membership_hash_of(row) for row in rows))
+        if recomputed != header.snapshot_content_hash:
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} records content hash "
+                f"{header.snapshot_content_hash} and its stored rows hash to {recomputed}. "
+                "The membership changed after the header was written, or the header describes "
+                "a different snapshot."
+            )
+        if header.envelope.dataset_version != manifest.dataset_version:
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} is stamped with dataset "
+                f"version {header.envelope.dataset_version!r} inside publication "
+                f"{manifest.dataset_version!r}. A header copied from another build describes "
+                "that build."
+            )
+        if header.envelope.artifact_first_built_time > manifest.build_time:
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} claims it was first built at "
+                f"{header.envelope.artifact_first_built_time.isoformat()}, after the build "
+                f"itself at {manifest.build_time.isoformat()}."
             )
         if header.resolved_profile is not manifest.resolved_profile:
             raise DatasetPublicationError(
@@ -865,9 +1122,11 @@ __all__ = [
     "REQUIRED_EVIDENCE_DATASETS",
     "DatasetManifest",
     "TableRecord",
+    "VerifiedPublication",
     "compute_manifest_hash",
     "load_dataset_manifest",
     "load_quality_report",
     "publish_gold_dataset",
     "read_published_dataset",
+    "verification_seal",
 ]

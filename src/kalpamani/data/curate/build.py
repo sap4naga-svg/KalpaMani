@@ -16,6 +16,15 @@ that question answerable, and makes a dataset that cannot answer it unpublishabl
 The universe is built here rather than by the caller for the same reason: a
 snapshot handed in from outside could have been evaluated against inputs the
 resolution never saw.
+
+**Lineage names the version a row actually came from.** An earlier draft passed
+the final Gold version as every source lineage version, which is wrong in a way
+that only shows up later: a Gold build stores a *copy* of a row, and the copy
+does not become the source. Replaying such lineage would look for the row in the
+Gold version and find it, proving nothing about which source build it was read
+from. Selectors now carry ``row.envelope.dataset_version``, and a history
+spanning two immutable source versions produces two references rather than one
+that quietly averages them.
 """
 
 from __future__ import annotations
@@ -34,7 +43,8 @@ from kalpamani.data.contracts.entities import (
     UniverseMembership,
 )
 from kalpamani.data.contracts.errors import BuildBoundaryError
-from kalpamani.data.contracts.resolution import BoundApprovals
+from kalpamani.data.contracts.resolution import BoundApprovals, SourceRecord
+from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.vocabulary import InformationSetProfile
 from kalpamani.data.curate.resolution_run import ResolvedRunInputs
 from kalpamani.data.curate.universe import (
@@ -121,16 +131,13 @@ def build_gold_dataset(
         listings=listings,  # type: ignore[arg-type]
         attributes=attributes,  # type: ignore[arg-type]
         bars=bars,  # type: ignore[arg-type]
-        listing_dataset_version=dataset_version,
-        attribute_dataset_version=dataset_version,
-        bar_dataset_version=dataset_version,
     )
 
     universe: dict[date, tuple[UniverseMembership, ...]] = {}
     headers: dict[date, UniverseSnapshotHeader] = {}
     for session in sorted(universe_sessions):
         cutoff = evaluation_cutoffs[session]
-        rows = build_universe_snapshot(
+        snapshot = build_universe_snapshot(
             build_inputs,
             session_date=session,
             evaluation_cutoff=cutoff,
@@ -141,13 +148,17 @@ def build_gold_dataset(
             ingestion_time=ingestion_time,
             dataset_version=dataset_version,
         )
-        universe[session] = rows
+        universe[session] = snapshot.rows
         headers[session] = build_snapshot_header(
-            rows,
+            snapshot.rows,
             session_date=session,
             definition=universe_definition,
             resolved_profile=resolved.resolved_profile,
             evaluation_cutoff=cutoff,
+            considered_listings=snapshot.considered_listings,
+            artifact_first_built_time=artifact_first_built_time,
+            ingestion_time=ingestion_time,
+            dataset_version=dataset_version,
         )
 
     return GoldDataset(
@@ -170,14 +181,15 @@ def build_gold_dataset(
     )
 
 
-def dataset_row_fingerprint(dataset: GoldDataset) -> tuple[tuple[str, str], ...]:
-    """A ``(dataset, source_id)`` rendering of every source row a build holds.
+def dataset_row_fingerprint(dataset: GoldDataset) -> tuple[tuple[str, ...], ...]:
+    """A content-bound fingerprint over every source row a build holds.
 
-    Publication compares this against the receipt's own fingerprint. A row
-    substituted after resolution changes it, and the mismatch is what stops a
-    build from being published as though the resolution had seen it.
+    Publication compares this against the receipt's own. A row substituted after
+    resolution changes it -- including a substitution that keeps the identifier
+    and changes only a price or an availability time, which a name-only
+    fingerprint could not see.
     """
-    pairs: list[tuple[str, str]] = []
+    records: list[SourceRecord] = []
     for rows in (
         dataset.sessions,
         dataset.listings,
@@ -186,9 +198,8 @@ def dataset_row_fingerprint(dataset: GoldDataset) -> tuple[tuple[str, str], ...]
         dataset.bars,
         dataset.actions,
     ):
-        for row in rows:
-            pairs.append((row.dataset, row.envelope.source_id))
-    return tuple(sorted(pairs))
+        records.extend(rows)
+    return row_fingerprint(records)
 
 
 def dataset_profile(dataset: GoldDataset) -> InformationSetProfile:

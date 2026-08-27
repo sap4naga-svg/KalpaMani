@@ -52,6 +52,10 @@ from kalpamani.data.contracts.vocabulary import BarResolution
 #: cannot occur inside an ISO instant, a security id or a listing id.
 _JOIN: Final = "|"
 
+#: The version a reference names when a security has **no** prior bars. Recording
+#: the absence keeps an empty history distinguishable from an unrecorded one.
+EMPTY_HISTORY_VERSION: Final = "none"
+
 
 def listing_selector(listing: Listing) -> dict[str, str]:
     """Name exactly one listing revision."""
@@ -105,6 +109,40 @@ def _refuse(detail: str) -> ArtifactIntegrityError:
     return ArtifactIntegrityError(
         f"Lineage does not replay: {detail}. Lineage is the set a rebuild would read; one "
         "that resolves to different rows cannot prove an artifact reproduced."
+    )
+
+
+def bar_lineage_refs(
+    security_id: str,
+    resolution: BarResolution,
+    bars: Sequence[PriceBar],
+) -> tuple[LineageRef, ...]:
+    """One reference per source dataset version the bars came from.
+
+    A history spanning two immutable source versions is two lineage facts, not
+    one: a single reference would look for every endpoint in one version and
+    either miss them or resolve the wrong rows. An empty history still produces a
+    reference -- "no prior bars" is a fact about the security, and dropping it
+    would make an empty history indistinguishable from an unrecorded one.
+    """
+    by_version: dict[str, list[PriceBar]] = {}
+    for bar in bars:
+        by_version.setdefault(bar.envelope.dataset_version, []).append(bar)
+    if not by_version:
+        return (
+            LineageRef.of(
+                entity="price_bar",
+                dataset_version=EMPTY_HISTORY_VERSION,
+                selector=bar_selector(security_id, resolution, ()),
+            ),
+        )
+    return tuple(
+        LineageRef.of(
+            entity="price_bar",
+            dataset_version=version,
+            selector=bar_selector(security_id, resolution, rows),
+        )
+        for version, rows in sorted(by_version.items())
     )
 
 
@@ -196,6 +234,8 @@ def _resolve_bars(
     selector: Mapping[str, str], bars: Sequence[PriceBar], ref: LineageRef
 ) -> tuple[PriceBar, ...]:
     raw = selector["bar_end_times"]
+    if not raw and ref.dataset_version == EMPTY_HISTORY_VERSION:
+        return ()
     if not raw and ref.entity not in MAY_BE_EMPTY:
         raise _refuse(f"a {ref.entity!r} selector names no rows, and this entity requires some")
     try:
@@ -295,9 +335,11 @@ def lineage_fingerprint(refs: Sequence[LineageRef]) -> tuple[tuple[str, str, str
 
 
 __all__ = [
+    "EMPTY_HISTORY_VERSION",
     "MAY_BE_EMPTY",
     "SELECTOR_KEYS",
     "attribute_selector",
+    "bar_lineage_refs",
     "bar_selector",
     "lineage_fingerprint",
     "listing_selector",

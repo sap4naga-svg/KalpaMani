@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from types import MappingProxyType
 
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.entities import (
     CorporateAction,
     Listing,
@@ -41,20 +42,37 @@ from kalpamani.data.contracts.entities import (
     TickerHistory,
     UniverseMembership,
 )
+from kalpamani.data.contracts.envelope import DerivedEnvelope
+from kalpamani.data.contracts.errors import EnvelopeError
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.profiles import DatasetResolutionEvidence, ResolutionReceipt
-from kalpamani.data.contracts.vocabulary import InformationSetProfile
+from kalpamani.data.contracts.vocabulary import InformationSetProfile, OutputValidity
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UniverseSnapshotHeader:
-    """Evidence that a universe snapshot was **built** for a session.
+    """The snapshot itself, as a derived artifact -- not a row count beside one.
 
     Separate from the membership rows on purpose. A snapshot whose rule
     legitimately selected nobody has zero member rows, and a session that was
     never built has zero rows too. Only the header distinguishes them, and the
     distinction is the difference between "nobody qualified" and "we cannot
     answer".
+
+    An earlier version made that distinction with an unattributed count, which
+    left the zero-row case as the one assertion in the system with nothing behind
+    it: a fabricated header claiming a session was built and selected nobody was
+    indistinguishable from a real one. The header now carries a
+    :class:`DerivedEnvelope` like every other computed value -- the lineage the
+    build actually read, when it was first built, the spec version that produced
+    it, its content hash, and ``SESSION_SCOPED`` validity -- and
+    ``header_identity_hash`` binds all of it together with the session, the
+    definition, the profile, the cutoff, the status and the membership hashes.
+
+    Carrying the envelope has a second consequence, and it is the point: a header
+    has an **availability**. Under ``FORWARD_SYSTEM`` a zero-row snapshot cannot
+    be served before ``artifact_first_built_time``, because before we built it we
+    did not know the rule selected nobody -- we knew nothing.
     """
 
     session_date: date
@@ -64,10 +82,69 @@ class UniverseSnapshotHeader:
     row_count: int
     snapshot_content_hash: str
     derivation_spec_version: str
+    envelope: DerivedEnvelope
     status: str = "COMPLETE"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evaluation_cutoff", normalize_instant(self.evaluation_cutoff))
+        if self.row_count < 0:
+            raise EnvelopeError(
+                f"The snapshot header for {self.session_date.isoformat()} declares "
+                f"{self.row_count} rows. A negative count is not a smaller snapshot."
+            )
+        if self.derivation_spec_version != self.envelope.derivation_spec_version:
+            raise EnvelopeError(
+                f"The snapshot header for {self.session_date.isoformat()} declares spec "
+                f"{self.derivation_spec_version!r} while its envelope records "
+                f"{self.envelope.derivation_spec_version!r}. Two spec versions on one artifact "
+                "means one of them did not produce it."
+            )
+        if self.envelope.output_validity is not OutputValidity.SESSION_SCOPED:
+            raise EnvelopeError(
+                f"The snapshot header for {self.session_date.isoformat()} declares "
+                f"{self.envelope.output_validity.value} validity. A universe snapshot governs "
+                "exactly one session; anything wider would let it answer for sessions it was "
+                "never evaluated against."
+            )
+
+    @property
+    def header_identity_hash(self) -> str:
+        """Identity of the whole snapshot claim, lineage included.
+
+        Covers the session, the definition version, the resolved profile, the
+        evaluation cutoff, the status, the row count, the canonical membership
+        hashes and the lineage. A header differing in any of those is a different
+        snapshot, so a fabricated one cannot borrow a real one's identity.
+        """
+        return content_hash(
+            {
+                "session_date": self.session_date,
+                "universe_definition_version": self.universe_definition_version,
+                "resolved_profile": self.resolved_profile.value,
+                "evaluation_cutoff": self.evaluation_cutoff,
+                "row_count": self.row_count,
+                "snapshot_content_hash": self.snapshot_content_hash,
+                "derivation_spec_version": self.derivation_spec_version,
+                "status": self.status,
+                "lineage": [
+                    [
+                        ref.entity,
+                        ref.dataset_version,
+                        sorted(f"{key}={value}" for key, value in ref.selector),
+                        ref.upstream_artifact_id,
+                    ]
+                    for ref in sorted(
+                        self.envelope.lineage,
+                        key=lambda ref: (ref.entity, ref.dataset_version, ref.selector),
+                    )
+                ],
+            }
+        )
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether this header asserts a finished snapshot. Nothing else is served."""
+        return self.status == "COMPLETE"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -63,9 +63,12 @@ from kalpamani.data.contracts.serde import encode_corporate_action, encode_price
 from kalpamani.data.contracts.vocabulary import (
     AdjustmentConvention,
     AdjustmentPolicy,
+    BarResolution,
     CorporateActionType,
     InformationSetProfile,
+    OutputValidity,
 )
+from kalpamani.data.curate.lineage import bar_lineage_refs, resolve_lineage
 
 #: The convention this module implements. Named, not implied: an unnamed
 #: "adjusted" series is a number whose meaning depends on which implementation
@@ -292,6 +295,34 @@ def series_content_hash(series: Sequence[PriceBarValues]) -> str:
     )
 
 
+def bar_lineage_hash(bars: Sequence[PriceBar]) -> str:
+    """Canonical hash of exactly which raw bars an artifact consumed.
+
+    Identity, not summary. Two artifacts over the same policy, profile, cutoff and
+    dataset versions but different bar sets are different artifacts, and a key
+    blind to the difference would let one overwrite the other in a cache and
+    verify.
+    """
+    return content_hash(
+        sorted(
+            [
+                bar.security_id,
+                bar.resolution.value,
+                bar.bar_end_time.isoformat(),
+                bar.envelope.dataset_version,
+            ]
+            for bar in bars
+        )
+    )
+
+
+def action_lineage_hash(actions: Sequence[CorporateAction]) -> str:
+    """Canonical hash of exactly which corporate actions an artifact consumed."""
+    return content_hash(
+        sorted([action.action_id, action.envelope.dataset_version] for action in actions)
+    )
+
+
 def artifact_key(
     *,
     adjustment_policy: AdjustmentPolicy,
@@ -301,8 +332,28 @@ def artifact_key(
     corporate_action_dataset_version: str,
     raw_bar_dataset_version: str,
     security_id_scope: str,
+    bar_resolution: BarResolution,
+    valid_time_start: date,
+    valid_time_end: date,
+    price_bar_lineage_hash: str,
+    action_lineage_hash: str,
 ) -> dict[str, object]:
-    """The complete identity of an adjusted artifact. Nothing else may key one."""
+    """The complete identity of an adjusted artifact. Nothing else may key one.
+
+    Four things were missing and each admitted a collision -- two genuinely
+    different artifacts sharing one id, so a cache lookup could return the wrong
+    series and verification would confirm it:
+
+    ``valid_time_start``/``valid_time_end``
+        The interval is what the artifact claims to be about. One month of a
+        security and one year of it are not the same artifact.
+    ``bar_resolution``
+        A daily series and a minute series over the same span are different
+        numbers.
+    ``price_bar_lineage_hash``/``action_lineage_hash``
+        Dataset versions say which *builds* were read, not which **rows**. Two
+        artifacts reading different subsets of one version had identical keys.
+    """
     return {
         "adjustment_policy": adjustment_policy.value,
         "adjustment_convention": adjustment_convention.value,
@@ -311,6 +362,11 @@ def artifact_key(
         "corporate_action_dataset_version": corporate_action_dataset_version,
         "raw_bar_dataset_version": raw_bar_dataset_version,
         "security_id_scope": security_id_scope,
+        "bar_resolution": bar_resolution.value,
+        "valid_time_start": valid_time_start,
+        "valid_time_end": valid_time_end,
+        "price_bar_lineage_hash": price_bar_lineage_hash,
+        "action_lineage_hash": action_lineage_hash,
         "derivation_spec_version": ADJUSTMENT_SPEC_VERSION,
     }
 
@@ -341,6 +397,13 @@ def _validate_artifact_inputs(
         raise ArtifactIntegrityError(
             f"Declared validity interval {valid_time_start.isoformat()}.."
             f"{valid_time_end.isoformat()} is empty."
+        )
+
+    resolutions = sorted({bar.resolution.value for bar in bars})
+    if len(resolutions) > 1:
+        raise ArtifactIntegrityError(
+            f"An adjusted artifact was supplied bars at {resolutions}. A series mixing "
+            "resolutions is not a series, and one key cannot describe both."
         )
 
     securities = sorted({bar.security_id for bar in bars})
@@ -461,6 +524,7 @@ def build_adjusted_bar_artifact(
         resolved_profile=resolved_profile,
         approvals=approvals,
     )
+    resolution = bars[0].resolution
     key = artifact_key(
         adjustment_policy=adjustment_policy,
         adjustment_convention=adjustment_convention,
@@ -469,6 +533,11 @@ def build_adjusted_bar_artifact(
         corporate_action_dataset_version=corporate_action_dataset_version,
         raw_bar_dataset_version=raw_bar_dataset_version,
         security_id_scope=security_id_scope,
+        bar_resolution=resolution,
+        valid_time_start=valid_time_start,
+        valid_time_end=valid_time_end,
+        price_bar_lineage_hash=bar_lineage_hash(bars),
+        action_lineage_hash=action_lineage_hash(admitted),
     )
     inputs: tuple[PitRecord, ...] = (*sorted(bars, key=_bar_sort), *admitted)
 
@@ -485,20 +554,16 @@ def build_adjusted_bar_artifact(
         inputs=inputs,
         envelope=DerivedEnvelope(
             lineage=(
-                LineageRef.of(
-                    entity="price_bar",
-                    dataset_version=raw_bar_dataset_version,
-                    selector={
-                        "scope": security_id_scope,
-                        "sessions": (
-                            f"{valid_time_start.isoformat()}..{valid_time_end.isoformat()}"
-                        ),
-                    },
-                ),
+                # Exact endpoints, per security and per source version. The
+                # earlier selector named a scope and a date range, which is a
+                # predicate: replaying it would re-evaluate "whatever matches
+                # now" instead of resolving the rows the artifact actually read,
+                # so a bar added to the range later would still satisfy it.
+                *_bar_lineage(bars, resolution),
                 *(
                     LineageRef.of(
                         entity="corporate_action",
-                        dataset_version=corporate_action_dataset_version,
+                        dataset_version=action.envelope.dataset_version,
                         selector={"action_id": action.action_id},
                     )
                     for action in admitted
@@ -518,26 +583,42 @@ def _bar_sort(bar: PriceBar) -> tuple[str, datetime]:
     return (bar.security_id, bar.bar_end_time)
 
 
-def _lineage_actions(
-    artifact: AdjustedBarArtifact,
-    actions: Sequence[CorporateAction],
-) -> tuple[CorporateAction, ...]:
-    """Exactly the actions the artifact's lineage names, in canonical order."""
-    wanted = {
-        dict(ref.selector)["action_id"]
-        for ref in artifact.envelope.lineage
-        if ref.entity == "corporate_action"
-    }
-    return tuple(sorted((a for a in actions if a.action_id in wanted), key=lambda a: a.action_id))
+def _bar_lineage(bars: Sequence[PriceBar], resolution: BarResolution) -> tuple[LineageRef, ...]:
+    """One reference per security **per source dataset version**, naming endpoints.
+
+    A history spanning two immutable source versions is two lineage facts. One
+    reference covering both would look for every endpoint in one version and
+    either miss them or resolve the wrong rows.
+    """
+    by_security: dict[str, list[PriceBar]] = {}
+    for bar in bars:
+        by_security.setdefault(bar.security_id, []).append(bar)
+    refs: list[LineageRef] = []
+    for security_id, rows in sorted(by_security.items()):
+        refs.extend(bar_lineage_refs(security_id, resolution, rows))
+    return tuple(refs)
 
 
-def _replay_artifact_lineage(
+def _resolved_lineage(
     artifact: AdjustedBarArtifact,
     bars: Sequence[PriceBar],
     actions: Sequence[CorporateAction],
-) -> None:
-    """Confirm every lineage reference resolves, in the dataset version it names."""
+) -> tuple[tuple[PriceBar, ...], tuple[CorporateAction, ...]]:
+    """Resolve the artifact's own lineage to exactly the rows it names.
+
+    Every reference is resolved by selector, in the dataset version it names.
+    Verification then recomputes from **these** rows and nothing else: an artifact
+    that reproduces from a different input set has not reproduced, and passing the
+    caller's whole pool to the recomputation would let it.
+
+    Raises:
+        ArtifactIntegrityError: if a reference names a row that is absent, or one
+            that resolves in a different dataset version than the artifact read.
+    """
     by_action = {action.action_id: action for action in actions}
+    resolved_bars: list[PriceBar] = []
+    resolved_actions: list[CorporateAction] = []
+
     for ref in artifact.envelope.lineage:
         if ref.entity == "corporate_action":
             action_id = dict(ref.selector).get("action_id")
@@ -561,19 +642,77 @@ def _replay_artifact_lineage(
                     "ratio, and verifying against it would prove nothing about what the "
                     "artifact read."
                 )
+            resolved_actions.append(action)
         elif ref.entity == "price_bar":
-            wrong = [
-                bar
-                for bar in bars
-                if bar.security_id in {v.security_id for v in artifact.series}
-                and bar.envelope.dataset_version != ref.dataset_version
-            ]
-            if wrong:
-                raise ArtifactIntegrityError(
-                    f"Artifact {artifact.artifact_id} is being verified against bars from "
-                    f"dataset version {wrong[0].envelope.dataset_version!r}, not the "
-                    f"{ref.dataset_version!r} its lineage names."
-                )
+            resolved_bars.extend(_resolve_bar_ref(artifact, ref, bars))
+        else:
+            raise ArtifactIntegrityError(
+                f"Artifact {artifact.artifact_id} carries a lineage reference to "
+                f"{ref.entity!r}, which an adjusted series does not read."
+            )
+
+    return (
+        tuple(sorted(resolved_bars, key=_bar_sort)),
+        tuple(sorted(resolved_actions, key=lambda a: a.action_id)),
+    )
+
+
+def _resolve_bar_ref(
+    artifact: AdjustedBarArtifact,
+    ref: LineageRef,
+    bars: Sequence[PriceBar],
+) -> tuple[PriceBar, ...]:
+    """The exact bars one price_bar reference names, or a refusal."""
+    selector = dict(ref.selector)
+    missing_keys = sorted({"security_id", "resolution", "bar_end_times"} - set(selector))
+    if missing_keys:
+        raise ArtifactIntegrityError(
+            f"Artifact {artifact.artifact_id} carries a price_bar lineage reference missing "
+            f"{missing_keys}. A reference that names a range rather than endpoints is a "
+            "predicate: replaying it would re-evaluate whatever matches now."
+        )
+    resolved = resolve_lineage((ref,), listings=(), attributes=(), bars=bars)
+    return tuple(row for row in resolved if isinstance(row, PriceBar))
+
+
+def _recomputed_key(
+    artifact: AdjustedBarArtifact,
+    bars: Sequence[PriceBar],
+    actions: Sequence[CorporateAction],
+) -> dict[str, object]:
+    """The key the resolved lineage implies, rebuilt from scratch."""
+    validity = artifact.envelope.validity
+    if (
+        validity.output_validity is not OutputValidity.INTERVAL
+        or validity.valid_time_start is None
+        or validity.valid_time_end is None
+    ):
+        raise ArtifactIntegrityError(
+            f"Artifact {artifact.artifact_id} declares {validity.output_validity.value} "
+            "validity without an interval. The interval is part of the key, so an artifact "
+            "without one cannot be identified."
+        )
+    resolutions = sorted({bar.resolution for bar in bars}, key=lambda item: item.value)
+    if len(resolutions) != 1:
+        raise ArtifactIntegrityError(
+            f"Artifact {artifact.artifact_id} resolves to bars at "
+            f"{[item.value for item in resolutions]}. A series mixing resolutions is not a "
+            "series."
+        )
+    return artifact_key(
+        adjustment_policy=artifact.adjustment_policy,
+        adjustment_convention=artifact.adjustment_convention,
+        resolved_profile=artifact.resolved_profile,
+        as_of_epoch=artifact.as_of_epoch,
+        corporate_action_dataset_version=artifact.corporate_action_dataset_version,
+        raw_bar_dataset_version=artifact.raw_bar_dataset_version,
+        security_id_scope=artifact.security_id_scope,
+        bar_resolution=resolutions[0],
+        valid_time_start=validity.valid_time_start,
+        valid_time_end=validity.valid_time_end,
+        price_bar_lineage_hash=bar_lineage_hash(bars),
+        action_lineage_hash=action_lineage_hash(actions),
+    )
 
 
 def verify_adjusted_bar_artifact(
@@ -583,21 +722,27 @@ def verify_adjusted_bar_artifact(
     *,
     approvals: BoundApprovals,
 ) -> None:
-    """Replay the recorded lineage, then recompute, and refuse any divergence.
+    """Resolve the recorded lineage, rebuild the key, recompute, refuse any divergence.
 
-    Verification reads the artifact's **own lineage** rather than whatever the
-    caller happened to pass: an artifact that reproduces from a different input
-    set has not reproduced. The lineage replay also enforces the input dataset
-    versions, so a matching key from a later build cannot stand in for the row
-    the artifact actually read.
+    Four steps, in this order, because each depends on the one before it:
+
+    1. **resolve** every lineage reference to the exact rows it names, in the
+       dataset version it names -- a matching key from a later build is not the
+       row the artifact read;
+    2. **rebuild the key** from those rows and compare the derived
+       ``artifact_id``, so an artifact whose identity does not follow from its own
+       lineage is refused before its numbers are examined;
+    3. **recompute** the series from **only** the resolved rows, not from the
+       pool the caller happened to pass;
+    4. **compare** the recomputed hash and the stored series to the recorded
+       content hash.
 
     Raises:
-        ArtifactIntegrityError: if the lineage does not replay, if the recomputed
-            series does not reproduce the recorded hash, or if the stored series
-            has been altered. A mismatch is a BLOCKING quality issue, not a cache
-            miss.
+        ArtifactIntegrityError: if the lineage does not resolve, if the key does
+            not rebuild, if the recomputed series does not reproduce the recorded
+            hash, or if the stored series has been altered. A mismatch is a
+            BLOCKING quality issue, not a cache miss.
     """
-    _replay_artifact_lineage(artifact, bars, actions)
     if artifact.adjustment_convention is not ADJUSTMENT_CONVENTION:
         raise ArtifactIntegrityError(
             f"Artifact {artifact.artifact_id} declares convention "
@@ -605,9 +750,25 @@ def verify_adjusted_bar_artifact(
             f"{ADJUSTMENT_CONVENTION.value}. Recomputing it under a different convention "
             "would compare two different series and call the difference corruption."
         )
+    lineage_bars, lineage_actions = _resolved_lineage(artifact, bars, actions)
+    if not lineage_bars:
+        raise ArtifactIntegrityError(
+            f"Artifact {artifact.artifact_id} resolves to no price bars. An artifact whose "
+            "lineage names nothing cannot be shown to have read anything."
+        )
+
+    rebuilt = artifact_id_for(_recomputed_key(artifact, lineage_bars, lineage_actions))
+    if rebuilt != artifact.artifact_id:
+        raise ArtifactIntegrityError(
+            f"Adjusted artifact {artifact.artifact_id} does not rebuild its own identity from "
+            f"its lineage (recomputed {rebuilt}). The key covers the interval, the bar "
+            "resolution and the exact rows consumed, so an id that no longer follows from "
+            "them describes a different artifact than the one stored."
+        )
+
     recomputed = adjusted_series(
-        bars,
-        _lineage_actions(artifact, actions),
+        lineage_bars,
+        lineage_actions,
         policy=artifact.adjustment_policy,
         convention=artifact.adjustment_convention,
         as_of_epoch=artifact.as_of_epoch,
@@ -619,8 +780,8 @@ def verify_adjusted_bar_artifact(
         raise ArtifactIntegrityError(
             f"Adjusted artifact {artifact.artifact_id} does not reproduce from its key. "
             "Recomputing from the recorded adjustment policy, resolved profile, as_of epoch "
-            "and input dataset versions produced a different series. This is a BLOCKING "
-            "quality issue, not a cache miss."
+            "and the exact rows its lineage names produced a different series. This is a "
+            "BLOCKING quality issue, not a cache miss."
         )
     if series_content_hash(artifact.series) != expected:
         raise ArtifactIntegrityError(

@@ -75,7 +75,7 @@ from kalpamani.data.contracts.vocabulary import (
 )
 from kalpamani.data.curate.lineage import (
     attribute_selector,
-    bar_selector,
+    bar_lineage_refs,
     lineage_fingerprint,
     listing_selector,
 )
@@ -112,14 +112,16 @@ class UniverseDefinition:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UniverseBuildInputs:
-    """Everything a universe build reads, named so lineage can be complete."""
+    """Everything a universe build reads.
+
+    Deliberately carries no dataset-version fields. Each row already knows which
+    source build it came from, and lineage reads that: a Gold version stores a
+    copy of a row, and a copy does not become the source.
+    """
 
     listings: tuple[Listing, ...]
     attributes: tuple[SecurityAttribute, ...]
     bars: tuple[PriceBar, ...]
-    listing_dataset_version: str
-    attribute_dataset_version: str
-    bar_dataset_version: str
 
 
 def _admissible(
@@ -204,6 +206,20 @@ def current_listings(listings: Sequence[Listing]) -> tuple[Listing, ...]:
     return tuple(sorted(latest.values(), key=lambda item: (item.security_id, item.listing_id)))
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SnapshotBuild:
+    """One session's membership rows, and the listing states the rule considered.
+
+    The considered set is returned rather than recomputed by the caller because
+    the snapshot header's lineage depends on it, and a header whose lineage was
+    derived by running the admissibility rules a second time would be evidence
+    about a second run.
+    """
+
+    rows: tuple[UniverseMembership, ...]
+    considered_listings: tuple[Listing, ...]
+
+
 def build_universe_snapshot(
     inputs: UniverseBuildInputs,
     *,
@@ -215,7 +231,7 @@ def build_universe_snapshot(
     artifact_first_built_time: datetime,
     ingestion_time: datetime,
     dataset_version: str,
-) -> tuple[UniverseMembership, ...]:
+) -> SnapshotBuild:
     """Build the stored membership snapshot for one session.
 
     ``evaluation_cutoff`` is the session's own regular open: a universe has to be
@@ -266,12 +282,14 @@ def build_universe_snapshot(
     )
 
     rows: list[UniverseMembership] = []
+    considered: list[Listing] = []
     for listing in current_listings(admissible_listings):
         if listing.listing_fact_kind is not ListingFactKind.STATE:
             # A CHANGE_ANNOUNCEMENT says a listing is about to change. It is not
             # a listing state, and treating it as one would let an announced
             # future delisting decide today's membership.
             continue
+        considered.append(listing)
         if not listing.is_listed_on(session_date):
             continue
         decision = _evaluate(
@@ -282,7 +300,7 @@ def build_universe_snapshot(
             bars=admissible_bars,
             attributes=admissible_attributes,
         )
-        lineage = _lineage_for(decision, inputs=inputs, listing=listing)
+        lineage = _lineage_for(decision, listing=listing)
         attribute_rows = () if decision.attribute is None else (decision.attribute,)
         consumed: tuple[PitRecord, ...] = (listing, *attribute_rows, *decision.history)
         rows.append(
@@ -325,7 +343,7 @@ def build_universe_snapshot(
                 ),
             )
         )
-    return tuple(rows)
+    return SnapshotBuild(rows=tuple(rows), considered_listings=tuple(considered))
 
 
 def _require_inputs(
@@ -439,17 +457,18 @@ def _evaluate(
     )
 
 
-def _lineage_for(
-    decision: _Decision,
-    *,
-    inputs: UniverseBuildInputs,
-    listing: Listing,
-) -> tuple[LineageRef, ...]:
-    """Exactly the rows that decided this security, and nothing else."""
+def _lineage_for(decision: _Decision, *, listing: Listing) -> tuple[LineageRef, ...]:
+    """Exactly the rows that decided this security, in the versions they came from.
+
+    A price history spanning two immutable source versions produces two
+    references, not one that quietly averages them: replaying a single reference
+    would look for every bar in one version and either miss them or find the
+    wrong ones.
+    """
     refs = [
         LineageRef.of(
             entity="listing",
-            dataset_version=inputs.listing_dataset_version,
+            dataset_version=listing.envelope.dataset_version,
             selector=listing_selector(listing),
         )
     ]
@@ -457,17 +476,11 @@ def _lineage_for(
         refs.append(
             LineageRef.of(
                 entity="security_attribute",
-                dataset_version=inputs.attribute_dataset_version,
+                dataset_version=decision.attribute.envelope.dataset_version,
                 selector=attribute_selector(decision.attribute),
             )
         )
-    refs.append(
-        LineageRef.of(
-            entity="price_bar",
-            dataset_version=inputs.bar_dataset_version,
-            selector=bar_selector(decision.security_id, BarResolution.DAILY, decision.history),
-        )
-    )
+    refs.extend(bar_lineage_refs(decision.security_id, BarResolution.DAILY, decision.history))
     return tuple(refs)
 
 
@@ -575,6 +588,10 @@ def build_snapshot_header(
     definition: UniverseDefinition,
     resolved_profile: InformationSetProfile,
     evaluation_cutoff: datetime,
+    considered_listings: Sequence[Listing],
+    artifact_first_built_time: datetime,
+    ingestion_time: datetime,
+    dataset_version: str,
 ) -> UniverseSnapshotHeader:
     """Record that this session's snapshot was **built**, rows or no rows.
 
@@ -582,17 +599,69 @@ def build_snapshot_header(
     session that was never built has zero rows too. Only the header separates
     them, and the separation is the difference between "nobody qualified" and
     "we cannot answer".
+
+    The header is a derived artifact, so it carries the lineage the build read.
+    Where rows exist that is the union of their lineage. Where none does, it is
+    the listing-state rows the rule **considered** and found unlisted on this
+    session -- which is precisely the evidence for "nobody qualified", and
+    without it the zero-row claim would rest on nothing.
+
+    Raises:
+        RequiredInputUnavailableError: if no listing-state row was considered at
+            all. A snapshot with no lineage asserts that nobody was listed on
+            evidence it cannot name, and "we saw no listing states" is not the
+            same finding as "nobody was listed".
     """
+    lineage = _snapshot_lineage(rows, considered_listings=considered_listings)
+    if not lineage:
+        raise RequiredInputUnavailableError(
+            f"REQUIRED_INPUT_UNAVAILABLE: no listing-state row was available for "
+            f"{session_date.isoformat()} under {resolved_profile.value}, so the snapshot has "
+            "no lineage. A zero-row snapshot means the rule selected nobody; without evidence "
+            "it read, it would instead mean we never looked."
+        )
+    content = snapshot_content_hash(rows)
+    spec_version = f"{UNIVERSE_SPEC_VERSION}+{definition.version}"
     return UniverseSnapshotHeader(
         session_date=session_date,
         universe_definition_version=definition.version,
         resolved_profile=resolved_profile,
         evaluation_cutoff=evaluation_cutoff,
         row_count=len(rows),
-        snapshot_content_hash=snapshot_content_hash(rows),
-        derivation_spec_version=f"{UNIVERSE_SPEC_VERSION}+{definition.version}",
+        snapshot_content_hash=content,
+        derivation_spec_version=spec_version,
+        envelope=DerivedEnvelope(
+            lineage=lineage,
+            artifact_first_built_time=artifact_first_built_time,
+            derivation_spec_version=spec_version,
+            artifact_content_hash=content,
+            validity=OutputValidityDeclaration.session_scoped(session_date),
+            ingestion_time=ingestion_time,
+            dataset_version=dataset_version,
+        ),
         status="COMPLETE",
     )
+
+
+def _snapshot_lineage(
+    rows: Sequence[UniverseMembership],
+    *,
+    considered_listings: Sequence[Listing],
+) -> tuple[LineageRef, ...]:
+    """Every input the snapshot as a whole read, deduplicated and ordered."""
+    refs: set[LineageRef] = set()
+    for row in rows:
+        refs.update(row.envelope.lineage)
+    if not refs:
+        for listing in considered_listings:
+            refs.add(
+                LineageRef.of(
+                    entity="listing",
+                    dataset_version=listing.envelope.dataset_version,
+                    selector=listing_selector(listing),
+                )
+            )
+    return tuple(sorted(refs, key=lambda ref: (ref.entity, ref.dataset_version, ref.selector)))
 
 
 def snapshot_content_hash(rows: Sequence[UniverseMembership]) -> str:
@@ -603,6 +672,7 @@ def snapshot_content_hash(rows: Sequence[UniverseMembership]) -> str:
 __all__ = [
     "REQUIRED_UNIVERSE_DOMAINS",
     "UNIVERSE_SPEC_VERSION",
+    "SnapshotBuild",
     "UniverseBuildInputs",
     "UniverseDefinition",
     "build_snapshot_header",

@@ -63,11 +63,20 @@ RecordT = TypeVar("RecordT", bound=SourceRecord)
 
 
 class TimingBasis(StrEnum):
-    """What governed a dataset's timing on one axis, for manifest evidence."""
+    """What governed a dataset's timing on one axis, for manifest evidence.
+
+    ``NONE_RETAINED`` exists because the alternative was a lie. An axis with rows
+    applicable but none retained -- every one excluded or unresolvable -- used to
+    report ``EXACT``, since the code asked only whether any bound was used. A
+    manifest then said the dataset's public timing was exact on the strength of
+    zero exact rows.
+    """
 
     EXACT = "EXACT"
     BOUND = "BOUND"
     MIXED = "MIXED"
+    #: Rows were applicable on this axis and none survived to carry a timing.
+    NONE_RETAINED = "NONE_RETAINED"
     NOT_APPLICABLE = "N/A"
 
 
@@ -148,19 +157,22 @@ class ProfileResolutionConfig:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolutionReceipt:
-    """Proof that a specific set of rows went through a specific resolution.
+    """Proof that a specific set of rows, with specific contents, was resolved by a
+    specific policy.
 
-    A build is publishable only if it can say **which policy admitted its rows**.
-    A dataset assembled from arbitrary rows cannot, however correct those rows
-    happen to be -- and "correct rows, unknown provenance" is precisely the shape
-    that looks fine in review and cannot be reproduced afterwards.
+    A build is publishable only if it can say **which policy admitted its rows**
+    and **that those rows are the ones it admitted**. Keying the receipt on names
+    alone made a whole class of substitution invisible: the same source id
+    carrying a corrected price or a revised availability time produced the same
+    fingerprint, so a build could be published as though the resolution had seen
+    data it never saw. ``row_fingerprint`` therefore carries each row's full
+    canonical content hash alongside its names.
 
-    The receipt hash covers the requested and resolved profiles, the global
-    resolution, the **complete canonical policy map including each reason**, the
-    policy version, the per-dataset evidence, and the identity of every resolved
-    row. Reasons are in deliberately: two runs that bounded the same dataset for
-    different stated reasons resolved it differently, and a hash blind to that
-    would call them the same run.
+    The receipt hash covers both profiles, the global resolution, the **complete
+    canonical policy map including each reason**, the policy version, the
+    per-dataset evidence and every row identity. Reasons are in deliberately: two
+    runs that bounded the same dataset for different stated reasons resolved it
+    differently, and a hash blind to that would call them the same run.
     """
 
     requested_profile: InformationSetProfile
@@ -169,11 +181,11 @@ class ResolutionReceipt:
     resolution_policy_version: str
     canonical_map: tuple[tuple[str, str, str], ...]
     evidence_fingerprint: tuple[tuple[str, ...], ...]
-    row_identity_fingerprint: tuple[tuple[str, str], ...]
+    row_fingerprint: tuple[tuple[str, ...], ...]
 
     @property
     def receipt_hash(self) -> str:
-        """Derived, not generated. Same resolution, same receipt."""
+        """Derived, not generated. Same resolution over the same rows, same receipt."""
         return content_hash(
             {
                 "requested_profile": self.requested_profile.value,
@@ -182,9 +194,7 @@ class ResolutionReceipt:
                 "resolution_policy_version": self.resolution_policy_version,
                 "canonical_map": [list(entry) for entry in self.canonical_map],
                 "evidence_fingerprint": [list(entry) for entry in self.evidence_fingerprint],
-                "row_identity_fingerprint": [
-                    list(entry) for entry in self.row_identity_fingerprint
-                ],
+                "row_fingerprint": [list(entry) for entry in self.row_fingerprint],
             }
         )
 
@@ -202,6 +212,76 @@ class ResolutionReceipt:
             and self.resolution_policy_version == config.resolution_policy_version
             and self.canonical_map == config.canonical_map()
         )
+
+    def disagreements_with(
+        self,
+        *,
+        evidence: Sequence[DatasetResolutionEvidence],
+        row_fingerprint: tuple[tuple[str, ...], ...],
+        resolution_policy_version: str,
+    ) -> list[str]:
+        """Every way this receipt fails to describe the build it is attached to.
+
+        The canonical map is not passed in, because a build carries no second
+        copy of it to compare against -- doing so would compare the receipt to
+        itself and call the result agreement. The map is instead held to the
+        **evidence**, which was produced by applying the policies rather than by
+        declaring them, and to the run's own configuration at read time.
+
+        All problems at once: a reader fixing one mismatch should not have to
+        rediscover the next three one publication at a time.
+        """
+        problems: list[str] = []
+        if self.resolution_policy_version != resolution_policy_version:
+            problems.append(
+                f"the receipt records policy {self.resolution_policy_version!r}; the build "
+                f"declares {resolution_policy_version!r}"
+            )
+        if self.evidence_fingerprint != evidence_fingerprint(evidence):
+            problems.append(
+                "the receipt's evidence fingerprint differs from the build's resolution evidence"
+            )
+        if self.row_fingerprint != row_fingerprint:
+            problems.append(
+                f"the receipt accounts for {len(self.row_fingerprint)} row identities and the "
+                f"build holds {len(row_fingerprint)}, or a row's contents differ from the ones "
+                "resolution saw"
+            )
+        problems.extend(map_evidence_disagreements(self.canonical_map, evidence))
+        return problems
+
+
+def map_evidence_disagreements(
+    canonical_map: tuple[tuple[str, str, str], ...],
+    evidence: Sequence[DatasetResolutionEvidence],
+) -> list[str]:
+    """Every dataset whose evidence contradicts the policy map that produced it.
+
+    The map says what a run decided; the evidence says what it did. A dataset
+    evidenced under one policy and declared under another has one of the two
+    wrong, and nothing downstream could tell which.
+    """
+    declared = {entry[0]: (entry[1], entry[2]) for entry in canonical_map}
+    problems: list[str] = []
+    for entry in evidence:
+        pair = declared.get(entry.dataset)
+        if pair is None:
+            problems.append(
+                f"dataset {entry.dataset!r} carries evidence but appears in no policy map entry"
+            )
+            continue
+        policy, reason = pair
+        if entry.policy.value != policy:
+            problems.append(
+                f"dataset {entry.dataset!r} is evidenced under {entry.policy.value} and "
+                f"declared under {policy}"
+            )
+        if entry.reason != reason:
+            problems.append(
+                f"dataset {entry.dataset!r} is evidenced with a different stated reason than "
+                "the policy map declares"
+            )
+    return problems
 
 
 def evidence_fingerprint(
@@ -482,12 +562,21 @@ def _has_provider_axis(record: PitRecord) -> bool:
 
 
 def _basis(applicable: bool, exact: int, bounded: int) -> TimingBasis:
+    """What the retained rows on one axis were actually timed by.
+
+    ``NOT_APPLICABLE`` and ``NONE_RETAINED`` are different findings and are kept
+    apart: the first says no row on this axis existed, the second says rows
+    existed and none of them survived. Collapsing either into ``EXACT`` would
+    report a timing basis derived from no rows at all.
+    """
     if not applicable:
         return TimingBasis.NOT_APPLICABLE
     if exact and bounded:
         return TimingBasis.MIXED
     if bounded:
         return TimingBasis.BOUND
+    if not exact:
+        return TimingBasis.NONE_RETAINED
     return TimingBasis.EXACT
 
 
@@ -500,5 +589,6 @@ __all__ = [
     "TimingBasis",
     "bound_provider_time",
     "evidence_fingerprint",
+    "map_evidence_disagreements",
     "resolve_dataset_gap",
 ]

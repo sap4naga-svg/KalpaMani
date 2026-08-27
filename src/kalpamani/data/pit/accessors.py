@@ -7,13 +7,19 @@ accessor rather than by whoever asked the question -- and the question is the
 whole point: "as of 2015-06-30" is not one question, it is three, and which one
 was answered has to be stated.
 
-**A reader is bound to a verified publication.** It is constructed from a Gold
-dataset, its manifest and its quality report *together*, because a caller who has
-the data must also have the evidence. There is no ``open_issues=()`` fallback: a
-reader with no issue list used to be a clean reader, which meant a caller
-obtained a clean result by omitting evidence rather than by producing it. The
-report travels with the dataset, and its blocking findings are enforced
-automatically.
+**A reader is bound to a verified publication.** It takes a
+:class:`~kalpamani.data.curate.publication.VerifiedPublication` and nothing else
+-- not a dataset, a manifest and a report passed side by side. Those three used
+to be separate parameters, which meant the reader could only check them against
+*each other*: that the manifest named the dataset, that the report hash matched.
+A triplet assembled at a call site passes all of that, because none of it
+compares anything to storage. Only the verified read path can produce a
+``VerifiedPublication``, so a reader exists only where a verification happened.
+
+There is no ``open_issues=()`` fallback either: a reader with no issue list used
+to be a clean reader, which meant a caller obtained a clean result by omitting
+evidence rather than by producing it. The report travels with the publication,
+and its blocking findings are enforced automatically.
 
 **A partial answer is refused, not truncated.** These are the situations a price
 query can be in, and they are deliberately different answers:
@@ -47,7 +53,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from kalpamani.data.contracts.dataset import GoldDataset
+from kalpamani.data.contracts.dataset import UniverseSnapshotHeader
 from kalpamani.data.contracts.entities import Listing, MarketSession, PriceBar, PriceBarValues
 from kalpamani.data.contracts.envelope import SourceEnvelope
 from kalpamani.data.contracts.errors import (
@@ -64,7 +70,7 @@ from kalpamani.data.contracts.errors import (
     SecurityNotInDatasetError,
 )
 from kalpamani.data.contracts.instants import normalize_instant
-from kalpamani.data.contracts.profiles import ProfileResolutionConfig
+from kalpamani.data.contracts.profiles import DatasetResolutionEvidence, ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import (
     BoundApprovals,
     PitRecord,
@@ -80,9 +86,10 @@ from kalpamani.data.contracts.vocabulary import (
     RevisionView,
 )
 from kalpamani.data.curate.adjustment import SUPPORTED_CONVENTIONS, adjusted_series, raw_series
-from kalpamani.data.curate.publication import DatasetManifest
+from kalpamani.data.curate.publication import DatasetManifest, VerifiedPublication
 from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
 from kalpamani.data.curate.universe import current_listings
+from kalpamani.data.pit.execution import ExecutionEvidence, ExecutionRecorder
 from kalpamani.data.quality.report import QualityReport
 
 #: Datasets a price query reads directly, in canonical order.
@@ -159,9 +166,7 @@ class PointInTimeReader:
 
     def __init__(
         self,
-        dataset: GoldDataset,
-        manifest: DatasetManifest,
-        quality_report: QualityReport,
+        publication: VerifiedPublication,
         *,
         resolution: ProfileResolutionConfig,
         approvals: BoundApprovals,
@@ -169,23 +174,13 @@ class PointInTimeReader:
         """Bind the reader, refusing anything the publication does not support.
 
         Raises:
-            DatasetPublicationError: if the manifest is not this dataset's, if the
-                report is not the one the manifest names, or if the run's
-                resolution disagrees with the publication's -- profile, policy
-                version, or the complete map with its reasons.
+            DatasetPublicationError: if the run's resolution disagrees with the
+                publication's -- profile, policy version, or the complete map
+                with its reasons. The dataset/manifest/report agreement that used
+                to be checked here is now a precondition of the type: a
+                ``VerifiedPublication`` cannot exist without it.
         """
-        if manifest.dataset_version != dataset.dataset_version:
-            raise DatasetPublicationError(
-                f"manifest names {manifest.dataset_version!r} but the dataset is "
-                f"{dataset.dataset_version!r}. A reader holds one publication, not a pairing "
-                "assembled at the call site."
-            )
-        if quality_report.report_hash != manifest.quality_report_hash:
-            raise DatasetPublicationError(
-                f"the quality report is not the one {manifest.dataset_version} was gated on "
-                f"(manifest {manifest.quality_report_hash}, supplied "
-                f"{quality_report.report_hash})."
-            )
+        manifest = publication.manifest
         if manifest.resolved_profile is not resolution.resolved_profile:
             raise DatasetPublicationError(
                 f"Dataset {manifest.dataset_version} was curated under "
@@ -206,11 +201,17 @@ class PointInTimeReader:
                 "runs that bounded the same dataset for different stated reasons resolved it "
                 "differently and admitted different rows."
             )
-        self._dataset = dataset
+        self._publication = publication
+        self._dataset = publication.dataset
         self._manifest = manifest
-        self._quality = quality_report
+        self._quality = publication.quality_report
         self._resolution = resolution
         self._approvals = approvals
+        self._recorder = ExecutionRecorder(
+            dataset_version=manifest.dataset_version,
+            manifest_hash=manifest.manifest_hash,
+            quality_hash=publication.quality_report.report_hash,
+        )
 
     @property
     def resolved_profile(self) -> InformationSetProfile:
@@ -226,6 +227,21 @@ class PointInTimeReader:
     def quality_report(self) -> QualityReport:
         """The quality evidence the publication was gated on."""
         return self._quality
+
+    @property
+    def publication(self) -> VerifiedPublication:
+        """The verified publication this reader serves, seal included."""
+        return self._publication
+
+    def execution_evidence(self) -> ExecutionEvidence:
+        """What this reader actually read, recorded as it read it.
+
+        The research manifest is built from this rather than from arguments a
+        caller supplies. An inventory the run produces cannot be shortened by
+        omission: a dataset the query path did not record is a bug here, not a
+        caller's prerogative.
+        """
+        return self._recorder.evidence()
 
     # -- accessors ---------------------------------------------------------
 
@@ -269,6 +285,7 @@ class PointInTimeReader:
         session_date = candidates[-1]
         header = self._dataset.universe_headers[session_date]
         rows = self._dataset.universe.get(session_date, ())
+        self._require_snapshot_available(header, cutoff, resolved)
 
         admitted = []
         excluded: dict[tuple[str, str], int] = {}
@@ -298,6 +315,12 @@ class PointInTimeReader:
                 "version; it does not retroactively change history."
             )
 
+        self._recorder.record_read(
+            UNIVERSE_DATASETS,
+            excluded_rows=sum(excluded.values()),
+        )
+        self._record_bounds(UNIVERSE_DATASETS)
+
         return UniverseSnapshotResult(
             session_date=session_date,
             universe_definition_version=(
@@ -310,6 +333,42 @@ class PointInTimeReader:
             provenance=self._provenance(cutoff, profile, None, bool(excluded), None, None),
             origin_exclusions=_counts(excluded),
         )
+
+    def _require_snapshot_available(
+        self,
+        header: UniverseSnapshotHeader,
+        cutoff: datetime,
+        resolved: InformationSetProfile,
+    ) -> None:
+        """Refuse a snapshot the run could not yet have held.
+
+        The header is a derived artifact and therefore has an availability of its
+        own. It matters most in the case that has no rows to carry the constraint
+        instead: a snapshot whose rule selected nobody. Under ``FORWARD_SYSTEM``
+        -- the profile that asks what *we* held -- we did not know the rule
+        selected nobody before we ran it. We knew nothing.
+
+        Raises:
+            MissingHistoricalSnapshotError: if the snapshot was not yet built at
+                ``cutoff``, or does not assert a complete build.
+        """
+        if not header.is_complete:
+            raise MissingHistoricalSnapshotError(
+                f"The universe snapshot for {header.session_date.isoformat()} declares status "
+                f"{header.status!r}. A partial snapshot answers the membership question with a "
+                "subset, and nothing in the answer would say so."
+            )
+        if (
+            resolved is InformationSetProfile.FORWARD_SYSTEM
+            and header.envelope.artifact_first_built_time > cutoff
+        ):
+            raise MissingHistoricalSnapshotError(
+                f"The universe snapshot for {header.session_date.isoformat()} was first built "
+                f"at {header.envelope.artifact_first_built_time.isoformat()}, after "
+                f"{cutoff.isoformat()}. Under FORWARD_SYSTEM the question is what this system "
+                "held at that moment, and it held no snapshot -- serving one now would answer "
+                "a different question, and a zero-row snapshot would answer it invisibly."
+            )
 
     def get_price_history(
         self,
@@ -410,6 +469,13 @@ class PointInTimeReader:
                 approvals=self._approvals,
             )
 
+        self._recorder.record_read(
+            PRICE_HISTORY_DATASETS,
+            revisable=("corporate_action",),
+            excluded_rows=sum(excluded.values()),
+        )
+        self._record_bounds(PRICE_HISTORY_DATASETS)
+
         return BarSeriesResult(
             security_id=security_id,
             resolution=resolution,
@@ -448,6 +514,24 @@ class PointInTimeReader:
         )
 
     # -- shared guards -----------------------------------------------------
+
+    def _record_bounds(self, datasets: Sequence[str]) -> None:
+        """Record every bounded availability an answer over ``datasets`` leant on.
+
+        Read from the publication's own resolution evidence, not from a caller's
+        declaration. A bound is unapproved when its derivation is not approved
+        for that dataset -- which resolution refuses at build time, so a run
+        recording one here means the publication should not have existed.
+        """
+        wanted = set(datasets)
+        for entry in self._dataset.resolution_evidence:
+            if entry.dataset not in wanted:
+                continue
+            if entry.provider_bounded_rows or entry.public_bounded_rows:
+                self._recorder.record_bound(
+                    entry.dataset,
+                    approved=_bounds_are_approved(self._approvals, entry),
+                )
 
     def _validate_range(self, start: date, end: date) -> None:
         if start > end:
@@ -614,6 +698,20 @@ class PointInTimeReader:
             resolution=resolution,
             adjustment_convention=convention,
         )
+
+
+def _bounds_are_approved(approvals: BoundApprovals, entry: DatasetResolutionEvidence) -> bool:
+    """Whether the bounds a dataset relied on were approved for it.
+
+    A bounded availability with no approved derivation for its dataset is a bound
+    nobody sanctioned. Resolution refuses those at build time, so a run that
+    records one is telling the manifest that the publication should not exist --
+    which is exactly the thing a caller-supplied list could previously omit.
+    """
+    policy = approvals.for_dataset(entry.dataset)
+    if entry.provider_bounded_rows and not policy.provider:
+        return False
+    return not (entry.public_bounded_rows and not policy.public)
 
 
 def _minute_endpoints(session: MarketSession) -> tuple[datetime, ...]:
