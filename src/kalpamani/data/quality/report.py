@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from types import MappingProxyType
 
-from kalpamani.data.contracts.canonical import content_hash
+from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
 from kalpamani.data.contracts.errors import QualityGateError
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.vocabulary import QualitySeverity
@@ -93,6 +93,9 @@ class QualityReport:
     is not the one being published.
     """
 
+    #: The versioned plan this report is evidence against. Without it the report
+    #: says what ran but nothing says what should have.
+    plan_version: str
     policy_versions: Mapping[str, str]
     checks_run: tuple[str, ...]
     checks_not_run: tuple[CheckNotRun, ...]
@@ -134,10 +137,14 @@ class QualityReport:
 
         Deliberately excludes ``produced_at``: when the checks ran is not part of
         what they found, and hashing it would make two identical check runs two
-        different reports.
+        different reports. That omission is why the manifest **also** binds
+        :func:`report_file_hash` over the exact persisted bytes -- the logical
+        hash proves the findings did not change, and only the file hash proves
+        the stored file did not.
         """
         return content_hash(
             {
+                "plan_version": self.plan_version,
                 "policy_versions": dict(self.policy_versions),
                 "checks_run": sorted(self.checks_run),
                 "checks_not_run": sorted(
@@ -179,6 +186,7 @@ class QualityReport:
 def report_from_findings(
     findings: Sequence[QualityFinding],
     *,
+    plan_version: str,
     policy_versions: Mapping[str, str],
     checks_run: Sequence[str],
     checks_not_run: Sequence[CheckNotRun] = (),
@@ -188,6 +196,7 @@ def report_from_findings(
 ) -> QualityReport:
     """Build a report from the deterministic checks' output."""
     return QualityReport(
+        plan_version=plan_version,
         policy_versions=dict(policy_versions),
         checks_run=tuple(sorted(set(checks_run))),
         checks_not_run=tuple(checks_not_run),
@@ -201,6 +210,7 @@ def report_from_findings(
 def encode_quality_report(report: QualityReport) -> dict[str, object]:
     """Encode a report for persistence beside the dataset it gates."""
     return {
+        "plan_version": report.plan_version,
         "policy_versions": dict(report.policy_versions),
         "checks_run": list(report.checks_run),
         "checks_not_run": [
@@ -244,6 +254,7 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
         for row in list(body["findings"])  # type: ignore[call-overload]
     )
     report = QualityReport(
+        plan_version=str(body["plan_version"]),
         policy_versions={
             str(key): str(value)
             for key, value in dict(body["policy_versions"]).items()  # type: ignore[call-overload]
@@ -268,11 +279,23 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
     return report
 
 
+def report_file_hash(report: QualityReport) -> str:
+    """Hash of the **exact bytes** a report is persisted as.
+
+    ``report_hash`` deliberately omits ``produced_at``, which leaves a gap: two
+    files differing only in that field share a logical hash, so an edited file
+    could still satisfy the manifest. The manifest binds this hash as well, so
+    every byte of the stored report is covered by something.
+    """
+    return sha256_hex(canonical_bytes(encode_quality_report(report)))
+
+
 __all__ = [
     "CheckNotRun",
     "FindingRecord",
     "QualityReport",
     "decode_quality_report",
     "encode_quality_report",
+    "report_file_hash",
     "report_from_findings",
 ]

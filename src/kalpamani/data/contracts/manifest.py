@@ -23,6 +23,14 @@ ADR-0004 made throughout: an unreproducible result that *looks* reproducible is
 the unrecoverable one, because it gets cited later by someone who was not in the
 room.
 
+**Nothing load-bearing arrives through a side channel.** ``emit_manifest`` used
+to take ``unapproved_bounds_relied_upon`` and ``hash_mismatches`` as arguments,
+which meant the only way a manifest learned that a bound was unapproved or a hash
+failed was for the caller to volunteer it -- the one party with a reason to stay
+quiet was the one being asked. Both now come from
+:class:`~kalpamani.data.pit.execution.ExecutionEvidence`, produced by the query
+path while it executed.
+
 **Every limitation token needs positive evidence in the same manifest.** A token
 is a claim about this run, and a reader must be able to find what it refers to
 without leaving the file. A domain that was never populated is not a domain whose
@@ -36,8 +44,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
-from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ManifestRefusedError
 from kalpamani.data.contracts.instants import is_canonical_instant, normalize_instant
 from kalpamani.data.contracts.profiles import (
@@ -51,7 +60,17 @@ from kalpamani.data.contracts.vocabulary import (
     RevisionView,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - only the type checker needs this
+    from kalpamani.data.pit.execution import ExecutionEvidence
+
 #: The manifest schema this module writes and reads.
+#:
+#: Deliberately still 4. The ``run_id`` inputs grew this round -- the inventory
+#: now carries the unapproved bounds and hash mismatches the run recorded -- and a
+#: version that does not move when the identity inputs move is a fair criticism.
+#: But 4 is the version an **accepted planning document** defines, and changing it
+#: is a change to that document rather than to this module. It is recorded as an
+#: acceptance limitation instead of decided here.
 MANIFEST_VERSION = 4
 
 
@@ -182,6 +201,10 @@ class QualitySummary:
     blocking_issues_open: int
     warnings_open: int
     checks_not_run: tuple[str, ...] = ()
+    #: Identity of the report these counts came from. Cross-checked against the
+    #: inventory, so a summary cannot describe one report while the run read
+    #: another.
+    quality_report_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -195,6 +218,10 @@ class InputInventory:
     query path did not record a dataset, that is a bug in the query path, not a
     caller's prerogative.
 
+    Build one with :meth:`from_execution`. Constructing it field by field is still
+    possible in tests, but the production route runs through the verified query
+    path, which is the only thing that knows what was read.
+
     Every collection is a tuple and every mapping is frozen, because ``run_id``
     hashes them and an identity that can change after it is taken is not an
     identity.
@@ -205,6 +232,11 @@ class InputInventory:
     consumed_artifact_ids: tuple[str, ...] = ()
     revisable_datasets_consumed: tuple[str, ...] = ()
     bounds_relied_upon: tuple[str, ...] = ()
+    #: Bounds the run leant on whose derivation was not approved for their
+    #: dataset. Recorded by execution; refusing on it is not optional.
+    unapproved_bounds_relied_upon: tuple[str, ...] = ()
+    #: Content hashes that failed to verify while the run executed.
+    hash_mismatches: tuple[str, ...] = ()
     origin_exclusion_rows: int = 0
     quality_report_hash: str = ""
     result_artifact_hash: str = ""
@@ -227,6 +259,39 @@ class InputInventory:
             tuple(sorted(set(self.revisable_datasets_consumed))),
         )
         object.__setattr__(self, "bounds_relied_upon", tuple(sorted(set(self.bounds_relied_upon))))
+        object.__setattr__(
+            self,
+            "unapproved_bounds_relied_upon",
+            tuple(sorted(set(self.unapproved_bounds_relied_upon))),
+        )
+        object.__setattr__(self, "hash_mismatches", tuple(sorted(set(self.hash_mismatches))))
+
+    @classmethod
+    def from_execution(
+        cls,
+        evidence: ExecutionEvidence,
+        *,
+        result_bytes: bytes,
+    ) -> InputInventory:
+        """Build an inventory from what a run recorded while it executed.
+
+        ``result_artifact_hash`` is the SHA-256 of the **exact result bytes**. An
+        earlier version decoded them to text first, which meant two byte strings
+        that decode alike shared an identity -- and any payload that is not valid
+        UTF-8 had no honest hash at all.
+        """
+        return cls(
+            direct_source_datasets=evidence.direct_source_datasets,
+            dataset_manifest_hashes=dict(evidence.dataset_manifest_hashes),
+            consumed_artifact_ids=evidence.consumed_artifact_ids,
+            revisable_datasets_consumed=evidence.revisable_datasets_consumed,
+            bounds_relied_upon=evidence.bounds_relied_upon,
+            unapproved_bounds_relied_upon=evidence.unapproved_bounds_relied_upon,
+            hash_mismatches=evidence.hash_mismatches,
+            origin_exclusion_rows=evidence.origin_exclusion_rows,
+            quality_report_hash=evidence.quality_report_hash,
+            result_artifact_hash=sha256_hex(result_bytes),
+        )
 
     def identity(self) -> dict[str, object]:
         """The inventory as ``run_id`` inputs. Canonical and complete."""
@@ -236,6 +301,8 @@ class InputInventory:
             "consumed_artifact_ids": list(self.consumed_artifact_ids),
             "revisable_datasets_consumed": list(self.revisable_datasets_consumed),
             "bounds_relied_upon": list(self.bounds_relied_upon),
+            "unapproved_bounds_relied_upon": list(self.unapproved_bounds_relied_upon),
+            "hash_mismatches": list(self.hash_mismatches),
             "origin_exclusion_rows": self.origin_exclusion_rows,
             "quality_report_hash": self.quality_report_hash,
         }
@@ -358,13 +425,7 @@ _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
 }
 
 
-def emit_manifest(
-    manifest: ResearchManifest,
-    *,
-    result_bytes: bytes,
-    unapproved_bounds_relied_upon: Sequence[str] = (),
-    hash_mismatches: Sequence[str] = (),
-) -> ResearchManifest:
+def emit_manifest(manifest: ResearchManifest, *, result_bytes: bytes) -> ResearchManifest:
     """Validate every precondition and return the manifest, or refuse.
 
     Returning the manifest rather than a bare ``None`` keeps the call site honest:
@@ -401,15 +462,52 @@ def emit_manifest(
             "result_artifact_hash is empty; a result nothing identifies cannot be checked "
             "against the manifest that claims to describe it"
         )
-    elif content_hash(result_bytes.decode("utf-8", errors="surrogateescape")) != (
+    elif sha256_hex(result_bytes) != manifest.result_artifact_hash:
+        problems.append(
+            "result_artifact_hash does not match the emitted result bytes; the manifest "
+            "describes a result other than the one produced. The hash is taken over the exact "
+            "bytes, not over a decoded string: decoding first made two different payloads that "
+            "decode alike share an identity"
+        )
+    if inventory.result_artifact_hash and inventory.result_artifact_hash != (
         manifest.result_artifact_hash
     ):
         problems.append(
-            "result_artifact_hash does not match the emitted result bytes; the manifest "
-            "describes a result other than the one produced"
+            "the inventory recorded a different result hash than the manifest declares; the "
+            "run produced one result and the manifest describes another"
         )
     if not inventory.quality_report_hash:
         problems.append("the input inventory records no quality-report identity")
+    elif (
+        manifest.quality.quality_report_hash
+        and manifest.quality.quality_report_hash != inventory.quality_report_hash
+    ):
+        problems.append(
+            f"the quality summary describes report {manifest.quality.quality_report_hash!r} "
+            f"while the run read {inventory.quality_report_hash!r}; the counts and the "
+            "evidence are about different reports"
+        )
+
+    recorded_exclusions = sum(item.rows for item in manifest.origin_exclusions)
+    if inventory.origin_exclusion_rows != recorded_exclusions:
+        problems.append(
+            f"the run excluded {inventory.origin_exclusion_rows} row(s) for origin "
+            f"ineligibility and the manifest itemises {recorded_exclusions}; a limitation "
+            "whose magnitude is misstated is not evidence of that limitation"
+        )
+
+    evidenced_bounds = {
+        entry.dataset
+        for entry in manifest.dataset_resolution_evidence
+        if entry.provider_bounded_rows or entry.public_bounded_rows
+    }
+    unevidenced = sorted(set(inventory.bounds_relied_upon) - evidenced_bounds)
+    if unevidenced:
+        problems.append(
+            f"the run leant on bounded availability for {unevidenced}, which the resolution "
+            "evidence records no bounded rows for; one of the two is wrong and nothing "
+            "downstream could say which"
+        )
 
     duplicate_datasets = sorted(
         {
@@ -508,10 +606,13 @@ def emit_manifest(
     problems.extend(_check_coverage(manifest))
     problems.extend(_check_tokens(manifest))
 
-    for bound in unapproved_bounds_relied_upon:
-        problems.append(f"an unapproved bound was relied upon: {bound}")
-    for mismatch in hash_mismatches:
-        problems.append(f"a content hash failed to verify: {mismatch}")
+    for bound in inventory.unapproved_bounds_relied_upon:
+        problems.append(
+            f"an unapproved bound was relied upon: {bound}. Recorded by the run, not declared "
+            "by the caller"
+        )
+    for mismatch in inventory.hash_mismatches:
+        problems.append(f"a content hash failed to verify during execution: {mismatch}")
 
     if problems:
         raise ManifestRefusedError(

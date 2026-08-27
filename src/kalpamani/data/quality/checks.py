@@ -39,6 +39,7 @@ from decimal import Decimal
 from typing import Any, Final
 
 from kalpamani.data.contracts.anchors import resolved_fact_anchor
+from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import (
     AdjustedBarArtifact,
     CorporateAction,
@@ -46,7 +47,6 @@ from kalpamani.data.contracts.entities import (
     Listing,
     PriceBar,
     TickerHistory,
-    UniverseMembership,
 )
 from kalpamani.data.contracts.envelope import DerivedEnvelope, SourceEnvelope
 from kalpamani.data.contracts.profiles import ProfileResolutionConfig
@@ -1010,18 +1010,25 @@ def _subtract_years(anchor: date, years: int) -> date:
 def subsequently_delisted(
     listings: Sequence[Listing],
     *,
-    dataset_cutoff: date,
+    after_session: date,
+    horizon: date,
 ) -> frozenset[str]:
-    """Securities whose listing actually ended on or before the dataset horizon.
+    """Securities whose listing ended **after** a session and by the dataset horizon.
 
-    Three things deliberately do **not** count:
+    "Subsequently" is the load-bearing word. The earlier version returned every
+    security delisted at or before the horizon, which included ones already gone
+    before the snapshot was taken -- and a security that had already delisted
+    cannot be evidence that this snapshot's members later disappeared. It was the
+    wrong set, and it made the alarm satisfiable by history the snapshot predates.
+
+    Four things deliberately do **not** count:
 
     - a ``CHANGE_ANNOUNCEMENT`` row. An announcement that a listing will end is
       not the listing ending, and counting it would let a scheduled delisting
       satisfy the alarm before it happened.
-    - a listing whose end is after the dataset horizon. The dataset cannot have
-      observed it, so citing it as evidence of survivorship would be citing
-      something the build does not know.
+    - a listing that ended on or before ``after_session``. It was already gone.
+    - a listing whose end is after ``horizon``. The dataset cannot have observed
+      it, so citing it would be citing something the build does not know.
     - an open-ended listing. It has not ended.
     """
     return frozenset(
@@ -1029,41 +1036,52 @@ def subsequently_delisted(
         for listing in listings
         if listing.listing_fact_kind is ListingFactKind.STATE
         and listing.listing_end is not None
-        and listing.listing_end <= dataset_cutoff
+        and after_session < listing.listing_end <= horizon
     )
 
 
 def check_universe_snapshots(
-    snapshots: Mapping[date, Sequence[UniverseMembership]],
+    dataset: GoldDataset,
     *,
-    listings: Sequence[Listing],
-    resolved_profile: InformationSetProfile,
     approvals: BoundApprovals,
     evaluation_cutoffs: Mapping[date, datetime],
-    dataset_cutoff: date,
     survivorship_policy: SurvivorshipPolicy = DEFAULT_SURVIVORSHIP_POLICY,
 ) -> tuple[QualityFinding, ...]:
     """Survivorship, profile keying and eligibility-input admissibility.
 
-    ``dataset_cutoff`` is the horizon the build knows about -- normally its own
-    build date. How far back a snapshot has to be to count as deep history is
-    measured from that, never from a wall clock: the same dataset must produce the
-    same findings a year from now.
+    The horizon is the build's **own** ``build_time``, taken from the dataset
+    rather than from a caller-supplied cutoff. After a verified read that value
+    comes from the persisted manifest, so the check cannot be widened or narrowed
+    by whoever calls it -- and how far back a snapshot has to be to count as deep
+    history is measured from the build, never from a wall clock. The same dataset
+    produces the same findings a year from now.
 
-    Checks 6.3 and 6.4 stay the smoke alarm they were, and are now **scoped** by
+    Checks 6.3 and 6.4 stay the smoke alarm they were, and are **scoped** by
     :class:`SurvivorshipPolicy` so a recent, correct snapshot is not faulted for
     delistings that have not happened yet.
     """
-    dataset = "universe_membership"
-    found: list[QualityFinding] = []
-    ever_delisted = subsequently_delisted(listings, dataset_cutoff=dataset_cutoff)
-    deep_before = _subtract_years(dataset_cutoff, survivorship_policy.deep_history_years)
+    entity = "universe_membership"
+    snapshots = dataset.universe
+    listings = dataset.listings
+    resolved_profile = dataset.resolved_profile
+    horizon = dataset.build_time.date()
 
-    eligible_sessions = [session for session in snapshots if session <= deep_before]
+    found: list[QualityFinding] = []
+    deep_before = _subtract_years(horizon, survivorship_policy.deep_history_years)
+
+    # Only a deep snapshot that actually selected members can be evidence about
+    # survivorship. An empty one says nothing about who later disappeared, and
+    # counting it would let two empty snapshots raise the alarm on their own.
+    eligible_sessions = [
+        session
+        for session, rows in snapshots.items()
+        if session <= deep_before and any(row.is_member for row in rows)
+    ]
     any_delisted_in_deep_history = False
     for session, rows in sorted(snapshots.items()):
         members = [row.security_id for row in rows if row.is_member]
         is_deep = session <= deep_before
+        ever_delisted = subsequently_delisted(listings, after_session=session, horizon=horizon)
         delisted_members = [sid for sid in members if sid in ever_delisted]
         if is_deep and delisted_members:
             any_delisted_in_deep_history = True
@@ -1071,13 +1089,13 @@ def check_universe_snapshots(
             found.append(
                 _blocking(
                     "6.3_survivorship_leakage",
-                    dataset,
+                    entity,
                     f"The snapshot for {session.isoformat()} is deep history (at least "
-                    f"{survivorship_policy.deep_history_years} years before the dataset "
-                    f"cutoff {dataset_cutoff.isoformat()}, policy "
-                    f"{survivorship_policy.version}), has {len(members)} members, and none of "
-                    "them has since delisted. A historical universe with no subsequent "
-                    "disappearances is not historical.",
+                    f"{survivorship_policy.deep_history_years} years before the build horizon "
+                    f"{horizon.isoformat()}, policy {survivorship_policy.version}), has "
+                    f"{len(members)} members, and none of them delisted between that session "
+                    "and the horizon. A historical universe with no subsequent disappearances "
+                    "is not historical.",
                     session_date=session,
                 )
             )
@@ -1087,8 +1105,8 @@ def check_universe_snapshots(
                 found.append(
                     _blocking(
                         "6.8_profile_free_or_mismatched_universe",
-                        dataset,
-                        f"Membership is keyed to {row.resolved_profile.value} while the run "
+                        entity,
+                        f"Membership is keyed to {row.resolved_profile.value} while the build "
                         f"resolved to {resolved_profile.value}. Eligibility is evaluated on "
                         "admissible data, so membership is profile-specific.",
                         security_id=row.security_id,
@@ -1104,7 +1122,7 @@ def check_universe_snapshots(
                     found.append(
                         _blocking(
                             "6.6_eligibility_from_inadmissible_data",
-                            dataset,
+                            entity,
                             "A membership decision consumed an input that was not admissible "
                             f"at the session cutoff {cutoff.isoformat()}. This is how a "
                             "universe quietly gets built from current data.",
@@ -1121,11 +1139,11 @@ def check_universe_snapshots(
         found.append(
             _blocking(
                 "6.4_delisted_absence",
-                dataset,
-                f"No delisted security appears in any of the {len(eligible_sessions)} deep-"
-                f"history snapshot(s) at or before {deep_before.isoformat()} (policy "
-                f"{survivorship_policy.version}). Across that span the absence is not "
-                "timing, it is the data.",
+                entity,
+                f"No member of any of the {len(eligible_sessions)} non-empty deep-history "
+                f"snapshot(s) at or before {deep_before.isoformat()} delisted by the build "
+                f"horizon {horizon.isoformat()} (policy {survivorship_policy.version}). "
+                "Across that span the absence is not timing, it is the data.",
             )
         )
     return tuple(_dedupe(found))
