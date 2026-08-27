@@ -8,6 +8,7 @@ is "can this be got around?" and not "does this function work?".
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -35,13 +36,14 @@ from kalpamani.data.contracts.vocabulary import (
     ProviderBoundDerivation,
 )
 from kalpamani.data.curate.build import build_gold_dataset, dataset_row_fingerprint
-from kalpamani.data.curate.publication import publish_gold_dataset
+from kalpamani.data.curate.publication import compute_manifest_hash, publish_gold_dataset
 from kalpamani.data.curate.resolution_run import resolve_run_inputs
 from kalpamani.data.curate.universe import (
     UniverseBuildInputs,
     build_universe_snapshot,
     current_listings,
 )
+from kalpamani.data.quality.checks import QualityFinding
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
 from kalpamani.data.storage import LocalTableStore
@@ -259,8 +261,19 @@ def test_checks_that_could_not_run_are_declared() -> None:
 def test_the_report_hash_ignores_when_the_checks_ran() -> None:
     """Two identical check runs are one report, whenever they happened."""
     first = phase3a.quality_report()
+    assert first.findings, "The reference build has findings, so the copy is not trivial."
     later = report_from_findings(
-        (),
+        [
+            QualityFinding(
+                check_name=record.check_name,
+                severity=record.severity,
+                dataset=record.dataset,
+                detail=record.detail,
+                security_id=record.security_id,
+                session_date=record.session_date,
+            )
+            for record in first.findings
+        ],
         plan_version=first.plan_version,
         policy_versions=dict(first.policy_versions),
         checks_run=first.checks_run,
@@ -276,21 +289,34 @@ def test_the_report_hash_ignores_when_the_checks_ran() -> None:
 
 
 def test_the_report_hash_changes_with_a_finding() -> None:
-    from kalpamani.data.contracts.vocabulary import QualitySeverity
-    from kalpamani.data.quality.checks import QualityFinding
+    """A finding is part of what the report is, so it is part of its identity."""
+    clean = phase3a.quality_report()
+    defective = phase3a.quality_report(_defective_dataset())
+    assert defective.report_hash != clean.report_hash
+    assert defective.blocking, "The check found a real defect in the data."
+    assert clean.passed, "A warning does not block; it labels."
 
-    warned = phase3a.quality_report(
-        findings=(
-            QualityFinding(
-                check_name="5.2_non_positive_price_or_negative_volume",
-                severity=QualitySeverity.WARNING,
-                dataset="price_bar",
-                detail="synthetic",
-            ),
-        )
+
+def _defective_dataset() -> GoldDataset:
+    """A build carrying a defect a real check finds, rather than an asserted finding."""
+    resolved = resolve_run_inputs(
+        phase3a.datasets_with_a_blocking_defect(),
+        config=phase3a.resolution(),
+        approvals=phase3a.approvals(),
     )
-    assert warned.report_hash != phase3a.quality_report().report_hash
-    assert warned.passed, "A warning does not block; it labels."
+    return build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )
 
 
 def test_a_publication_requires_a_quality_report() -> None:
@@ -502,32 +528,30 @@ def test_coverage_profile_and_policy_all_change_publication_identity(tmp_path: P
 
 
 def test_a_quality_report_change_changes_publication_identity(tmp_path: Path) -> None:
-    """The evidence is part of what a published dataset is."""
-    from kalpamani.data.contracts.vocabulary import QualitySeverity
-    from kalpamani.data.quality.checks import QualityFinding
+    """The evidence is part of what a published dataset is.
 
+    The report is derived from the build now, so the two cannot be varied
+    independently -- which is the point of the runner. The binding is asserted
+    where it lives instead: the report hash is inside the manifest hash, so a
+    manifest describing different evidence is a different dataset identity.
+    """
     dataset = phase3a.gold_dataset()
-    plain = _publish_variant(LocalTableStore(tmp_path / "plain"), dataset)
-
-    _, warned_manifest = publish_gold_dataset(
-        LocalTableStore(tmp_path / "warned"),
+    store = LocalTableStore(tmp_path / "plain")
+    _, manifest = publish_gold_dataset(
+        store,
         dataset,
-        quality_report=phase3a.quality_report(
-            findings=(
-                QualityFinding(
-                    check_name="5.2_non_positive_price_or_negative_volume",
-                    severity=QualitySeverity.WARNING,
-                    dataset="price_bar",
-                    detail="synthetic",
-                ),
-            )
-        ),
+        quality_report=phase3a.quality_report(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
     )
-    assert warned_manifest.manifest_hash != plain
+    restated = dataclasses.replace(
+        manifest, quality_report_hash="sha256:" + "0" * 64, manifest_hash=""
+    )
+    assert compute_manifest_hash(restated) != manifest.manifest_hash, (
+        "Two manifests differing only in which quality evidence they name are two datasets."
+    )
 
 
 def test_a_row_count_that_does_not_match_the_table_is_refused(tmp_path: Path) -> None:

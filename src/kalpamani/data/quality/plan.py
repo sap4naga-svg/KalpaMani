@@ -83,6 +83,12 @@ class PlannedCheck:
     #: The exact finding ids this check may emit. A closed vocabulary, so an
     #: unrecognised finding cannot be attributed to a check that never emits it.
     finding_ids: tuple[str, ...]
+    #: The runner implementations that produce this check's findings. A check
+    #: counts as run when every one of them has been invoked, which is what makes
+    #: ``checks_run`` a record of work rather than a list somebody wrote.
+    #: Empty means this slice has no implementation -- permitted only where the
+    #: check is CONDITIONAL, and enforced below.
+    implementations: tuple[str, ...] = ()
 
     @property
     def may_be_skipped(self) -> bool:
@@ -109,6 +115,17 @@ class QualityPlan:
             raise QualityGateError(
                 f"Quality plan {self.plan_version} expects no checks. A plan that expects "
                 "nothing is satisfied by nothing."
+            )
+        unimplemented = sorted(
+            check.check_id
+            for check in self.checks
+            if not check.implementations and check.requirement is CheckRequirement.REQUIRED
+        )
+        if unimplemented:
+            raise QualityGateError(
+                f"Quality plan {self.plan_version} marks {unimplemented} REQUIRED and names no "
+                "implementation for them. A required check nothing implements can only ever be "
+                "declared, and a declared check is the thing this plan exists to stop."
             )
 
     @property
@@ -261,12 +278,14 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
     checks=(
         PlannedCheck(
             check_id="3.1_ingestion_identity",
+            implementations=("price_bar_structure",),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE,
             finding_ids=("3.1_duplicate_price_bar_key",),
         ),
         PlannedCheck(
             check_id="4.0_envelope_conformance",
+            implementations=("envelope_conformance", "stored_envelope_shape"),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE,
             finding_ids=(
@@ -292,6 +311,7 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
         ),
         PlannedCheck(
             check_id="4.1_temporal_invariants",
+            implementations=("temporal_invariants",),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE,
             finding_ids=(
@@ -306,6 +326,7 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
         ),
         PlannedCheck(
             check_id="4.3_profile_service",
+            implementations=("profile_service", "run_identity"),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE + RUN_SCOPE,
             finding_ids=(
@@ -323,12 +344,17 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
         ),
         PlannedCheck(
             check_id="4.5_adjusted_artifacts",
-            requirement=CheckRequirement.REQUIRED,
+            implementations=("adjusted_artifact_hash",),
+            # Conditional because a build that materialised no adjusted artifact
+            # has no cache to reproduce. The runner computes that from the build,
+            # so it is not a skip a caller can ask for.
+            requirement=CheckRequirement.CONDITIONAL,
             applies_to=("adjusted_bar_artifact",),
             finding_ids=("4.5.1_adjusted_cache_does_not_reproduce",),
         ),
         PlannedCheck(
             check_id="5_market_data",
+            implementations=("price_bar_structure",),
             requirement=CheckRequirement.REQUIRED,
             applies_to=("price_bar",),
             finding_ids=(
@@ -340,6 +366,7 @@ PHASE3A_QUALITY_PLAN: Final = QualityPlan(
         ),
         PlannedCheck(
             check_id="6_identity_and_universe",
+            implementations=("ticker_history", "universe_snapshots", "universe_rebuild"),
             requirement=CheckRequirement.REQUIRED,
             applies_to=SOURCE_SCOPE + DERIVED_SCOPE,
             finding_ids=(

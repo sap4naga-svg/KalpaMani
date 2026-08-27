@@ -61,7 +61,6 @@ from kalpamani.data.contracts.vocabulary import (
     InformationSetProfile,
     LimitationToken,
     ListingFactKind,
-    QualitySeverity,
     RevisionView,
     StorageLayer,
 )
@@ -79,6 +78,7 @@ from kalpamani.data.curate.adjustment import (
     relevant_actions,
     verify_adjusted_bar_artifact,
 )
+from kalpamani.data.curate.build import build_gold_dataset
 from kalpamani.data.curate.publication import (
     GOLD_ENTITIES,
     QUALITY_REPORT_NAME,
@@ -103,7 +103,7 @@ from kalpamani.data.pit.accessors import (
     SeriesRequirement,
     _minute_endpoints,
 )
-from kalpamani.data.quality.checks import QualityFinding, check_price_bars
+from kalpamani.data.quality.checks import check_price_bars
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.storage import LocalTableStore
 
@@ -1105,22 +1105,36 @@ def test_a_query_under_a_profile_the_reader_was_not_bound_to_is_refused(tmp_path
 def test_an_open_blocking_finding_refuses_every_dependent_query(tmp_path: Path) -> None:
     """Refused, not annotated, and not returned empty.
 
-    The finding travels with the publication, so a caller cannot obtain a clean
-    reader by omitting an issue list -- there is no issue list to omit.
+    The defect is in the data and a real check finds it, rather than being handed
+    to the report as a finding: a caller-supplied finding is the same shape of
+    evidence as a caller-supplied checks_run list.
     """
-    finding = QualityFinding(
-        check_name="5.4_missing_bar_in_a_listed_range",
-        severity=QualitySeverity.BLOCKING,
-        dataset="price_bar",
-        detail="synthetic blocking finding",
-    )
     store = LocalTableStore(tmp_path)
+    datasets = phase3a.datasets_with_a_blocking_defect()
+    resolved = resolve_run_inputs(
+        datasets, config=phase3a.resolution(), approvals=phase3a.approvals()
+    )
+    dataset = build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )
+    report = phase3a.quality_report(dataset)
+    assert any(
+        finding.check_name == "5.2_non_positive_price_or_negative_volume"
+        for finding in report.blocking
+    ), "The check found it; nobody told the report about it."
+
     with pytest.raises(QualityGateError, match="Refusing to publish"):
-        _publish(
-            store,
-            phase3a.gold_dataset(),
-            quality_report=phase3a.quality_report(findings=(finding,)),
-        )
+        _publish(store, dataset, quality_report=report)
     assert not store.version_root(
         layer=StorageLayer.GOLD, dataset_version=phase3a.DATASET_VERSION
     ).exists(), "A build that cannot be believed is never published in the first place."
@@ -1128,18 +1142,14 @@ def test_an_open_blocking_finding_refuses_every_dependent_query(tmp_path: Path) 
 
 def test_quality_evidence_cannot_be_edited_after_the_gate(tmp_path: Path) -> None:
     """Swapping the evidence after the gate is what the binding prevents."""
-    warning = QualityFinding(
-        check_name="5.2_non_positive_price_or_negative_volume",
-        severity=QualitySeverity.WARNING,
-        dataset="price_bar",
-        detail="synthetic warning",
-    )
     store = LocalTableStore(tmp_path)
-    _publish(
-        store,
-        phase3a.gold_dataset(),
-        quality_report=phase3a.quality_report(findings=(warning,)),
+    dataset = phase3a.gold_dataset()
+    report = phase3a.quality_report(dataset)
+    assert report.warnings, (
+        "The reference build carries genuine warnings -- its securities are listed on the "
+        "half-day session and have no bar for it -- so there is real evidence to tamper with."
     )
+    _publish(store, dataset, quality_report=report)
 
     path = (
         store.version_root(layer=StorageLayer.GOLD, dataset_version=phase3a.DATASET_VERSION)

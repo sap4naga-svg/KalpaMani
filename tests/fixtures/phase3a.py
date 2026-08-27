@@ -42,6 +42,7 @@ from typing import Any
 
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import (
+    AdjustedBarArtifact,
     CorporateAction,
     Listing,
     MarketSession,
@@ -65,6 +66,7 @@ from kalpamani.data.contracts.profiles import (
 )
 from kalpamani.data.contracts.resolution import ApprovedBoundPolicy, BoundApprovals
 from kalpamani.data.contracts.vocabulary import (
+    AdjustmentPolicy,
     AnnouncementBoundDerivation,
     BarConstruction,
     BarResolution,
@@ -82,6 +84,10 @@ from kalpamani.data.contracts.vocabulary import (
     PublicTimeDerivation,
     TickerChangeReason,
 )
+from kalpamani.data.curate.adjustment import (
+    ADJUSTMENT_CONVENTION,
+    build_adjusted_bar_artifact,
+)
 from kalpamani.data.curate.build import build_gold_dataset
 from kalpamani.data.curate.publication import (
     GOLD_ENTITIES,
@@ -92,13 +98,9 @@ from kalpamani.data.curate.publication import (
 from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_inputs
 from kalpamani.data.curate.universe import UniverseBuildInputs, UniverseDefinition
 from kalpamani.data.pit.accessors import PointInTimeReader
-from kalpamani.data.quality.checks import (
-    DEFAULT_MARKET_THRESHOLDS,
-    DEFAULT_SURVIVORSHIP_POLICY,
-    QualityFinding,
-)
-from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement
-from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
+from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
+from kalpamani.data.quality.report import QualityReport
+from kalpamani.data.quality.runner import QualityContext, run_quality_plan
 from kalpamani.data.storage import LocalTableStore
 
 # ---------------------------------------------------------------------------
@@ -987,38 +989,50 @@ def gold_dataset(
     )
 
 
-def quality_report(
+def quality_context(
+    dataset: GoldDataset,
     *,
-    findings: Sequence[QualityFinding] = (),
-) -> QualityReport:
-    """A passed quality report for the synthetic build.
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    universe_sessions: Sequence[date] = SNAPSHOT_SESSIONS,
+) -> QualityContext:
+    """Everything the checks read, for one build."""
+    return QualityContext(
+        dataset=dataset,
+        config=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
+        evaluation_cutoffs={session: session_open(session) for session in universe_sessions},
+        universe_definition=universe_definition(),
+        as_of=dataset.build_time,
+    )
 
-    Synthetic tests construct one explicitly, but it goes through the same
-    publication contract as any other: the gate is not bypassed, it is satisfied.
+
+def quality_report(
+    dataset: GoldDataset | None = None,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    universe_sessions: Sequence[date] = SNAPSHOT_SESSIONS,
+) -> QualityReport:
+    """The report for a build, produced by **running** the plan.
+
+    Not assembled: the runner invokes every registered implementation and builds
+    the report from what actually ran. A fixture that wrote out a checks_run list
+    would be testing publication against exactly the evidence the runner exists to
+    make impossible.
     """
-    return report_from_findings(
-        findings,
-        plan_version=PHASE3A_QUALITY_PLAN.plan_version,
-        policy_versions={
-            "market": DEFAULT_MARKET_THRESHOLDS.version,
-            "survivorship": DEFAULT_SURVIVORSHIP_POLICY.version,
-            "lag": LAG_POLICY_VERSION,
-        },
-        checks_run=tuple(
-            check.check_id
-            for check in PHASE3A_QUALITY_PLAN.checks
-            if check.requirement is CheckRequirement.REQUIRED
-        ),
-        checks_not_run=(
-            CheckNotRun(
-                check_name="7_cross_provider_reconciliation",
-                reason="only one source is licensed in this slice, so the check cannot run",
-            ),
+    built = gold_dataset(requested=requested, downgrade=downgrade) if dataset is None else dataset
+    return run_quality_plan(
+        quality_context(
+            built,
+            requested=requested,
+            downgrade=downgrade,
+            universe_sessions=universe_sessions,
         ),
         datasets_covered=QUALITY_COVERAGE,
-        partitions_covered=tuple(session.isoformat() for session in SNAPSHOT_SESSIONS),
-        produced_at=BUILD_TIME,
-    )
+        partitions_covered=tuple(session.isoformat() for session in universe_sessions),
+        policy_versions={"lag": LAG_POLICY_VERSION},
+    ).report
 
 
 def publish(
@@ -1030,7 +1044,11 @@ def publish(
 ) -> VerifiedPublication:
     """Build, publish and read back -- the whole sanctioned path in one call."""
     dataset = gold_dataset(requested=requested, downgrade=downgrade)
-    gate = report if report is not None else quality_report()
+    gate = (
+        report
+        if report is not None
+        else quality_report(dataset, requested=requested, downgrade=downgrade)
+    )
     publish_gold_dataset(
         store,
         dataset,
@@ -1082,11 +1100,6 @@ def reader(
         resolution=resolution(requested=requested, downgrade=downgrade),
         approvals=approvals(),
     )
-
-
-# ---------------------------------------------------------------------------
-# Bronze payload
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1206,90 @@ def sessions_with_a_full_length_half_day() -> tuple[MarketSession, ...]:
     return tuple(out)
 
 
+def seen_when_available(rows: tuple[SourceFact, ...]) -> tuple[SourceFact, ...]:
+    """Set every row's ``system_first_seen_time`` to when it became knowable.
+
+    ``FORWARD_SYSTEM`` asks what this system held, and the fixture's rows are all
+    first seen in 2026 -- which makes every 2019 input inadmissible and a forward
+    build unconstructable. Moving first-seen back is the minimum change that gives
+    that profile something to hold.
+
+    It has to move back to the row's **own availability**, not to an arbitrary
+    early instant. Claiming we held a fact before it was public is check 4.1.1,
+    and it is blocking for good reason: a build that says so is asserting
+    look-ahead in its own envelope.
+    """
+    out: list[SourceFact] = []
+    for row in rows:
+        envelope = row.envelope
+        candidates = [
+            value
+            for value in (
+                envelope.public_available_time,
+                envelope.public_available_upper_bound,
+                envelope.provider_available_time,
+                envelope.provider_available_upper_bound,
+            )
+            if value is not None
+        ]
+        seen = max(candidates) if candidates else envelope.system_first_seen_time
+        out.append(
+            dataclasses.replace(
+                row, envelope=dataclasses.replace(envelope, system_first_seen_time=seen)
+            )
+        )
+    return tuple(out)
+
+
+def datasets_with_a_blocking_defect() -> dict[str, tuple[SourceFact, ...]]:
+    """Source rows carrying a defect a real check finds BLOCKING.
+
+    A negative volume, which check 5.2 refuses. Produced in the data rather than
+    handed to the report as a finding, because a finding a caller supplies is
+    exactly the evidence the runner exists to stop being possible.
+    """
+    datasets = source_datasets()
+    bars = list(datasets["price_bar"])
+    for index, bar in enumerate(bars):
+        if isinstance(bar, PriceBar) and bar.resolution is BarResolution.DAILY:
+            bars[index] = dataclasses.replace(bar, volume=-1)
+            break
+    datasets["price_bar"] = tuple(bars)
+    return datasets
+
+
+def forward_datasets() -> dict[str, tuple[SourceFact, ...]]:
+    """The fixture's source rows, made servable under ``FORWARD_SYSTEM``."""
+    return {name: seen_when_available(rows) for name, rows in source_datasets().items()}
+
+
+def adjusted_artifact() -> AdjustedBarArtifact:
+    """A materialised adjusted series over the continuously-listed security."""
+    bars = tuple(
+        bar
+        for bar in daily_bars()
+        if bar.security_id == SEC_CONTINUOUS
+        and date(2019, 6, 24) <= bar.session_date <= date(2019, 6, 28)
+    )
+    return build_adjusted_bar_artifact(
+        bars,
+        corporate_actions(),
+        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
+        adjustment_convention=ADJUSTMENT_CONVENTION,
+        resolved_profile=InformationSetProfile.PUBLIC_PIT,
+        as_of_epoch=utc(2019, 7, 1, 12, 0),
+        approvals=approvals(),
+        corporate_action_dataset_version=ACTION_DATASET_VERSION,
+        raw_bar_dataset_version=BAR_DATASET_VERSION,
+        security_id_scope=SEC_CONTINUOUS,
+        valid_time_start=date(2019, 6, 24),
+        valid_time_end=date(2019, 6, 28),
+        artifact_first_built_time=ARTIFACT_FIRST_BUILT,
+        ingestion_time=INGESTION_TIME,
+        dataset_version=DATASET_VERSION,
+    )
+
+
 def publication_from(
     store: LocalTableStore,
     datasets: dict[str, tuple[SourceFact, ...]],
@@ -1231,7 +1328,9 @@ def publication_from(
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=quality_report(),
+        quality_report=quality_report(
+            dataset, requested=requested, universe_sessions=universe_sessions
+        ),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
@@ -1342,18 +1441,11 @@ def incremental_publication(
     Every source row is identical between the two builds, so the resolution
     receipt still accounts for the published rows exactly.
     """
-    datasets = source_datasets()
-    if requested is InformationSetProfile.FORWARD_SYSTEM:
-        seen = utc(2018, 1, 1)
-        datasets = {
-            name: tuple(
-                dataclasses.replace(
-                    row, envelope=dataclasses.replace(row.envelope, system_first_seen_time=seen)
-                )
-                for row in rows
-            )
-            for name, rows in datasets.items()
-        }
+    datasets = (
+        forward_datasets()
+        if requested is InformationSetProfile.FORWARD_SYSTEM
+        else source_datasets()
+    )
 
     def _build(built_at: datetime) -> GoldDataset:
         resolved = resolve_run_inputs(
@@ -1412,7 +1504,7 @@ def incremental_publication(
     publish_gold_dataset(
         store,
         combined,
-        quality_report=quality_report(),
+        quality_report=quality_report(combined, requested=requested),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
@@ -1459,7 +1551,7 @@ def dense_minute_publication(
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=quality_report(),
+        quality_report=quality_report(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,

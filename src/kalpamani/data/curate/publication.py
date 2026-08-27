@@ -105,6 +105,7 @@ from kalpamani.data.quality.report import (
     encode_quality_report,
     report_file_hash,
 )
+from kalpamani.data.quality.runner import require_runner_produced
 from kalpamani.data.storage import LocalTableStore
 
 #: Entity tables a Gold dataset version holds, in canonical order.
@@ -375,8 +376,10 @@ def publish_gold_dataset(
     Raises:
         BuildBoundaryError: if the dataset's receipt does not account for its
             rows, its evidence, its policy map or its policy version.
-        QualityGateError: if a BLOCKING finding stands against the build, or the
-            report does not close against ``quality_plan``.
+        QualityGateError: if a BLOCKING finding stands against the build, the
+            report does not close against ``quality_plan``, or the report was not
+            produced by the quality runner. A checks_run list a caller wrote is a
+            claim about work rather than a product of it.
         DatasetPublicationError: if the version is already published, or a
             required source dataset has no resolution evidence.
     """
@@ -386,7 +389,10 @@ def publish_gold_dataset(
 
     _verify_receipt_covers_rows(dataset)
     _verify_evidence_complete(dataset)
+    # Plan first, provenance second. A report that fails the plan should fail
+    # for the reason it is wrong, not for where it came from.
     quality_plan.validate(quality_report, published_tables=GOLD_ENTITIES)
+    require_runner_produced(quality_report, dataset_version=dataset.dataset_version)
     quality_report.require_publishable(dataset_version=dataset.dataset_version)
 
     final = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)

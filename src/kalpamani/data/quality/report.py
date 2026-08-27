@@ -103,6 +103,12 @@ class QualityReport:
     datasets_covered: tuple[str, ...]
     partitions_covered: tuple[str, ...] = ()
     produced_at: datetime
+    #: The token of whatever produced this report. Only the quality runner holds
+    #: the one publication accepts, so a hand-built report stays constructible --
+    #: adversarial tests need one -- and is still distinguishable from a run.
+    #: Deliberately outside ``report_hash``: it is provenance, not content, and
+    #: two identical check runs are one report however they were obtained.
+    produced_by: object = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -193,8 +199,14 @@ def report_from_findings(
     datasets_covered: Sequence[str],
     partitions_covered: Sequence[str] = (),
     produced_at: datetime,
+    produced_by: object = None,
 ) -> QualityReport:
-    """Build a report from the deterministic checks' output."""
+    """Build a report from the deterministic checks' output.
+
+    ``produced_by`` carries through whatever produced the report. The quality
+    runner passes its own token; anything else leaves it unset, and publication
+    can then tell a report that was run from one that was described.
+    """
     return QualityReport(
         plan_version=plan_version,
         policy_versions=dict(policy_versions),
@@ -204,6 +216,7 @@ def report_from_findings(
         datasets_covered=tuple(sorted(set(datasets_covered))),
         partitions_covered=tuple(sorted(set(partitions_covered))),
         produced_at=produced_at,
+        produced_by=produced_by,
     )
 
 

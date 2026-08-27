@@ -409,23 +409,12 @@ def _zero_row_reader(tmp_path: Path, profile: InformationSetProfile) -> PointInT
     removed -- and the distinction matters, because telling "nobody qualified"
     apart from "we could not answer" is the whole point of the header.
     """
-    datasets = phase3a.source_datasets()
+    datasets = phase3a.forward_datasets() if profile is FORWARD else phase3a.source_datasets()
     datasets["listing"] = tuple(
         row
         for row in datasets["listing"]
         if isinstance(row, Listing) and row.security_id == phase3a.SEC_DELISTED
     )
-    if profile is FORWARD:
-        seen = phase3a.utc(2018, 1, 1)
-        datasets = {
-            name: tuple(
-                dataclasses.replace(
-                    row, envelope=dataclasses.replace(row.envelope, system_first_seen_time=seen)
-                )
-                for row in rows
-            )
-            for name, rows in datasets.items()
-        }
     return phase3a.reader_from(
         LocalTableStore(tmp_path),
         datasets,
