@@ -711,6 +711,61 @@ def emit_manifest(
     return manifest
 
 
+def _narrative_disagreements(
+    manifest: ResearchManifest, executed: ExecutedResult[Any]
+) -> list[str]:
+    """The prose fields must not contradict the query that ran.
+
+    ``backtest_start``, ``backtest_end`` and ``revision_view`` are a narrative the
+    caller writes. The run identity no longer rests on them -- it rests on the
+    accessor's own :class:`~kalpamani.data.pit.query.QuerySpec` -- but leaving a
+    contradicting narrative in the file would mean the manifest still *says* one
+    thing while the evidence beside it says another, and a reader has no way to
+    know which half to believe. So they are either absent or accurate.
+    """
+    query = executed.query
+    problems: list[str] = []
+    if query.kind == "price_history":
+        for label, stated, served in (
+            ("backtest_start", manifest.backtest_start, query.start),
+            ("backtest_end", manifest.backtest_end, query.end),
+        ):
+            if stated is not None and stated != served:
+                problems.append(
+                    f"the manifest says {label}={stated.isoformat()} and the query served "
+                    f"{served.isoformat()}; the window a run covered is not a caller's narrative"
+                )
+    else:
+        # A universe answer is one snapshot, so a window spanning anything else
+        # describes a query that was not run.
+        for label, stated in (
+            ("backtest_start", manifest.backtest_start),
+            ("backtest_end", manifest.backtest_end),
+        ):
+            if stated is not None and stated != query.session_date:
+                problems.append(
+                    f"the manifest says {label}={stated.isoformat()} and the query served the "
+                    f"{query.session_date.isoformat()} snapshot"
+                )
+    if manifest.as_of_cutoff != query.as_of:
+        problems.append(
+            f"the manifest says as_of_cutoff={manifest.as_of_cutoff.isoformat()} and the query "
+            f"ran at {query.as_of.isoformat()}"
+        )
+    # A universe snapshot is not a revisable fact, so a universe query chooses no
+    # revision either; both cases collapse to "the view the query recorded".
+    used = query.revision_view if query.kind == "price_history" else None
+    if manifest.revision_view != used:
+        stated_view = None if manifest.revision_view is None else manifest.revision_view.value
+        used_view = None if used is None else used.value
+        problems.append(
+            f"the manifest names revision_view={stated_view!r} and the query used "
+            f"{used_view!r}; a query that consulted no revision reports none, and naming one "
+            "claims the query honoured a view it never read"
+        )
+    return problems
+
+
 def _check_against_execution(
     manifest: ResearchManifest,
     executed: ExecutedResult[Any],
@@ -768,6 +823,8 @@ def _check_against_execution(
             f"the inventory records {inventory.origin_exclusion_rows} origin-excluded row(s) "
             f"and the run excluded {executed.exclusion_rows}"
         )
+    problems.extend(_narrative_disagreements(manifest, executed))
+
     if inventory.query != executed.query:
         problems.append(
             "the inventory records a different query than the run answered; a manifest whose "

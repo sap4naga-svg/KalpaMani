@@ -102,6 +102,7 @@ from kalpamani.data.pit.query import PriceQuerySpec, SeriesRequirement
 from kalpamani.data.quality.checks import check_universe_snapshots, subsequently_delisted
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement, plan_for
 from kalpamani.data.quality.report import CheckNotRun, report_from_findings
+from kalpamani.data.quality.runner import QUALITY_RUNNER_VERSION
 from kalpamani.data.storage import LocalTableStore
 
 PUBLIC = InformationSetProfile.PUBLIC_PIT
@@ -154,7 +155,7 @@ def _publish(store: LocalTableStore, dataset: GoldDataset, **kwargs: Any) -> Any
     return publish_gold_dataset(
         store,
         dataset,
-        quality_report=kwargs.pop("quality_report", phase3a.quality_report(dataset)),
+        quality=kwargs.pop("quality", phase3a.quality_outcome(dataset)),
         quality_plan=kwargs.pop("quality_plan", PHASE3A_QUALITY_PLAN),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -645,13 +646,15 @@ def test_a_report_running_one_harmless_check_cannot_publish(tmp_path: Path) -> N
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
+        quality_context_hash="hand-authored, not a run",
+        runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),
         datasets_covered=phase3a.QUALITY_COVERAGE,
         produced_at=phase3a.BUILD_TIME,
     )
     with pytest.raises(QualityGateError, match="the plan expects checks"):
-        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), quality_report=thin)
+        PHASE3A_QUALITY_PLAN.validate(thin, published_tables=GOLD_ENTITIES)
 
 
 def test_a_required_check_cannot_be_declared_away(tmp_path: Path) -> None:
@@ -660,6 +663,8 @@ def test_a_required_check_cannot_be_declared_away(tmp_path: Path) -> None:
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
+        quality_context_hash="hand-authored, not a run",
+        runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
             check.check_id
@@ -675,7 +680,7 @@ def test_a_required_check_cannot_be_declared_away(tmp_path: Path) -> None:
         produced_at=phase3a.BUILD_TIME,
     )
     with pytest.raises(QualityGateError, match="is REQUIRED and was declared not-run"):
-        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), quality_report=declared)
+        PHASE3A_QUALITY_PLAN.validate(declared, published_tables=GOLD_ENTITIES)
 
 
 def test_a_published_table_nothing_covered_is_refused(tmp_path: Path) -> None:
@@ -684,6 +689,8 @@ def test_a_published_table_nothing_covered_is_refused(tmp_path: Path) -> None:
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
+        quality_context_hash="hand-authored, not a run",
+        runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
             check.check_id
@@ -699,7 +706,7 @@ def test_a_published_table_nothing_covered_is_refused(tmp_path: Path) -> None:
         produced_at=phase3a.BUILD_TIME,
     )
     with pytest.raises(QualityGateError, match="are not in datasets_covered"):
-        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), quality_report=uncovered)
+        PHASE3A_QUALITY_PLAN.validate(uncovered, published_tables=GOLD_ENTITIES)
 
 
 def test_the_persisted_report_bytes_are_bound_to_the_manifest(tmp_path: Path) -> None:
@@ -788,22 +795,22 @@ def test_a_header_that_miscounts_its_rows_is_refused(tmp_path: Path) -> None:
         )
 
 
-def test_a_partial_header_is_never_served(tmp_path: Path) -> None:
-    """A partial snapshot answers with a subset and nothing in the answer says so."""
+def test_a_partial_header_is_never_published(tmp_path: Path) -> None:
+    """A partial snapshot answers with a subset and nothing in the answer says so.
+
+    Caught at publication now rather than on read: the rebuild reproduces the
+    header's whole identity, and status is part of it. The read's own COMPLETE
+    check remains as defence for a snapshot assembled by something other than this
+    builder.
+    """
     dataset = phase3a.gold_dataset()
     session = date(2019, 6, 27)
     header = dataset.universe_headers[session]
     partial = dataclasses.replace(header, status="PARTIAL")
     headers = {**dataset.universe_headers, session: partial}
-    store = LocalTableStore(tmp_path)
-    _publish(store, _rebuild(dataset, universe_headers=headers))
-    with pytest.raises(DatasetPublicationError, match="declares status"):
-        read_published_dataset(
-            store,
-            dataset_version=phase3a.DATASET_VERSION,
-            config=phase3a.resolution(),
-            approvals=phase3a.approvals(),
-        )
+    tampered = _rebuild(dataset, universe_headers=headers)
+    with pytest.raises(QualityGateError, match=r"6\.5_universe_rebuild_drift"):
+        _publish(LocalTableStore(tmp_path), tampered)
 
 
 def test_a_zero_row_snapshot_is_not_served_before_it_was_built(tmp_path: Path) -> None:

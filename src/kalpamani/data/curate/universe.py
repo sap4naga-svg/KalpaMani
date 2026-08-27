@@ -111,6 +111,28 @@ class UniverseDefinition:
     min_market_cap: Decimal | None = None
 
 
+def definition_hash(definition: UniverseDefinition) -> str:
+    """Canonical identity of a universe rule's **parameters**, not just its name.
+
+    A version string is a promise that two builds under one name used one rule.
+    Nothing checked it, so the same ``universe/synthetic.a1`` with a different
+    minimum price produced a different membership set under an identical label --
+    and the snapshot header, which records only the version, said they agreed.
+    """
+    return content_hash(
+        {
+            "version": definition.version,
+            "min_close_price": definition.min_close_price,
+            "min_addv": definition.min_addv,
+            "min_history_sessions": definition.min_history_sessions,
+            "addv_window_sessions": definition.addv_window_sessions,
+            "eligible_exchanges": sorted(item.value for item in definition.eligible_exchanges),
+            "eligible_security_types": sorted(definition.eligible_security_types),
+            "min_market_cap": definition.min_market_cap,
+        }
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UniverseBuildInputs:
     """Everything a universe build reads.
@@ -680,7 +702,8 @@ def build_snapshot_header(
             evidence it cannot name, and "we saw no listing states" is not the
             same finding as "nobody was listed".
     """
-    lineage = _snapshot_lineage(rows, considered_listings=considered_listings)
+    considered = tuple(considered_listings)
+    lineage = _snapshot_lineage(rows, considered_listings=considered)
     if not lineage:
         raise RequiredInputUnavailableError(
             f"REQUIRED_INPUT_UNAVAILABLE: no listing-state row was available for "
@@ -698,7 +721,9 @@ def build_snapshot_header(
         row_count=len(rows),
         snapshot_content_hash=content,
         derivation_spec_version=spec_version,
+        universe_definition_hash=definition_hash(definition),
         required_domain_coverage=tuple(sorted(required_domain_coverage)),
+        inputs=(*considered, *rows),
         envelope=DerivedEnvelope(
             lineage=lineage,
             artifact_first_built_time=artifact_first_built_time,
@@ -756,6 +781,7 @@ __all__ = [
     "build_snapshot_header",
     "build_universe_snapshot",
     "current_listings",
+    "definition_hash",
     "membership_content_hash",
     "membership_hash_of",
     "snapshot_content_hash",

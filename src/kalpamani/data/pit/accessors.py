@@ -587,6 +587,8 @@ class PointInTimeReader:
                 evaluation_cutoff=header.evaluation_cutoff,
                 snapshot_artifact_id=header.artifact_id,
                 snapshot_content_hash=header.snapshot_content_hash,
+                universe_definition_version=header.universe_definition_version,
+                universe_definition_hash=header.universe_definition_hash,
             ),
             recorder=recorder,
             dataset_version=self._manifest.dataset_version,
@@ -817,7 +819,11 @@ class PointInTimeReader:
                 adjustment_policy=adjustment_mode.policy,
                 adjustment_convention=convention,
                 requirement=requirement,
-                revision_view=view,
+                # A raw series consulted no revision, so it records none. The
+                # validator returns a view for the adjustment path to use; putting
+                # that value in the spec made a raw query describe itself as having
+                # honoured a view it never read.
+                revision_view=None if adjustment_mode.is_raw else view,
                 as_of=cutoff,
                 requested_profile=profile,
                 resolved_profile=resolved,

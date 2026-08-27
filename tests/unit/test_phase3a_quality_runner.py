@@ -32,8 +32,9 @@ from kalpamani.data.quality.plan import (
 from kalpamani.data.quality.report import CheckNotRun, report_from_findings
 from kalpamani.data.quality.runner import (
     CHECK_REGISTRY,
+    QUALITY_RUNNER_VERSION,
     QualityContext,
-    report_is_runner_produced,
+    RunnerOutcome,
     run_quality_plan,
 )
 from kalpamani.data.storage import LocalTableStore
@@ -81,7 +82,8 @@ def test_the_complete_synthetic_plan_runs_end_to_end() -> None:
     }
     assert required <= set(report.checks_run)
     assert report.passed
-    assert report_is_runner_produced(report)
+    assert report.runner_version == QUALITY_RUNNER_VERSION
+    assert outcome.sealed  # type: ignore[attr-defined]
 
 
 def test_a_registered_check_is_observably_invoked() -> None:
@@ -192,11 +194,35 @@ def test_a_required_check_whose_implementation_does_not_apply_refuses() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _publish(store: LocalTableStore, dataset: object, report: object) -> object:
+def _forge(outcome: object, **overrides: object) -> object:
+    """Build a tampered outcome the way an attacker with source access would.
+
+    Reaching for the module-private token deliberately: the point of these tests
+    is what publication does when an outcome is *wrong*, and the point of the seal
+    is that nothing outside the module can get here. If this stops working, the
+    seal got stronger, not weaker.
+    """
+    from kalpamani.data.quality import runner as runner_module
+
+    fields = {
+        "report": outcome.report,  # type: ignore[attr-defined]
+        "invoked": outcome.invoked,  # type: ignore[attr-defined]
+        "skipped": outcome.skipped,  # type: ignore[attr-defined]
+        "plan_version": outcome.plan_version,  # type: ignore[attr-defined]
+        "runner_version": outcome.runner_version,  # type: ignore[attr-defined]
+        "quality_context_hash": outcome.quality_context_hash,  # type: ignore[attr-defined]
+        "registry_identity": outcome.registry_identity,  # type: ignore[attr-defined]
+        "sealed": outcome.sealed,  # type: ignore[attr-defined]
+    }
+    fields.update(overrides)
+    return RunnerOutcome(**fields, token=runner_module._RUNNER_TOKEN)
+
+
+def _publish(store: LocalTableStore, dataset: object, outcome: object) -> object:
     return publish_gold_dataset(
         store,
         dataset,  # type: ignore[arg-type]
-        quality_report=report,  # type: ignore[arg-type]
+        quality=outcome,  # type: ignore[arg-type]
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -204,7 +230,7 @@ def _publish(store: LocalTableStore, dataset: object, report: object) -> object:
     )
 
 
-def test_a_report_claiming_every_check_ran_without_the_runner_refuses(
+def test_a_report_claiming_every_check_ran_cannot_be_offered_at_all(
     tmp_path: Path,
 ) -> None:
     """The exact evidence the runner exists to make impossible.
@@ -212,11 +238,17 @@ def test_a_report_claiming_every_check_ran_without_the_runner_refuses(
     Plan-perfect: every expected check accounted for, nothing duplicated, every
     table covered, every policy version present, no findings. It satisfies the
     plan completely, and not one check was invoked.
+
+    It used to be refused at publication by a token in the report. Now it cannot
+    be offered: publication takes a sealed outcome, and there is no route to one
+    that does not run the checks.
     """
     claimed = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
+        quality_context_hash="whatever-i-say-it-is",
+        runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={
             "lag": phase3a.LAG_POLICY_VERSION,
             "market": "market-checks/a1.1",
@@ -238,31 +270,81 @@ def test_a_report_claiming_every_check_ran_without_the_runner_refuses(
     assert (
         PHASE3A_QUALITY_PLAN.disagreements(claimed, published_tables=phase3a.QUALITY_COVERAGE) == []
     ), "It satisfies the plan completely, which is exactly the problem."
-    assert not report_is_runner_produced(claimed)
 
-    with pytest.raises(QualityGateError, match="was not produced by the quality runner"):
+    with pytest.raises(QualityGateError, match="only be produced by running the quality plan"):
+        RunnerOutcome(
+            report=claimed,
+            invoked=(),
+            skipped=(),
+            plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+            runner_version=QUALITY_RUNNER_VERSION,
+            quality_context_hash="whatever-i-say-it-is",
+            registry_identity="",
+            sealed=True,
+            token=object(),
+        )
+
+    with pytest.raises(QualityGateError, match="where a sealed RunnerOutcome is required"):
         _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), claimed)
+
+
+def test_the_outcomes_seal_is_not_a_copyable_field(tmp_path: Path) -> None:
+    """The provenance token lived in a public dataclass field, and replace copies.
+
+    ``dataclasses.replace(fabricated, produced_by=real.produced_by)`` produced a
+    report indistinguishable from a run. The outcome is not a dataclass and holds
+    no such field, so the same move has nothing to take.
+    """
+    real = phase3a.quality_outcome()
+    assert not dataclasses.is_dataclass(real)
+    with pytest.raises(TypeError):
+        dataclasses.replace(real)  # type: ignore[type-var]
+    with pytest.raises(AttributeError):
+        real._report = phase3a.quality_report()
+
+
+def test_a_report_swapped_into_an_outcome_is_refused(tmp_path: Path) -> None:
+    """The outcome records what the run measured against; the report records it too.
+
+    Two copies of one fact, deliberately: if a report is substituted for another
+    real report, the pair stops agreeing and publication has something to compare.
+    """
+    dataset = phase3a.gold_dataset()
+    real = phase3a.quality_outcome(dataset)
+    foreign = dataclasses.replace(real.report, quality_context_hash="a-different-standard")
+    forged = _forge(real, report=foreign)
+    with pytest.raises(QualityGateError, match="records context"):
+        _publish(LocalTableStore(tmp_path), dataset, forged)
 
 
 def test_a_runner_produced_report_publishes(tmp_path: Path) -> None:
     """NEGATIVE CONTROL for the refusal above."""
     dataset = phase3a.gold_dataset()
-    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_report(dataset))
+    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_outcome(dataset))
 
 
 def test_the_plan_is_checked_before_the_provenance(tmp_path: Path) -> None:
-    """A wrong report fails for being wrong, not for where it came from."""
+    """A wrong report fails for being wrong, not for where it came from.
+
+    The type check necessarily comes first -- there is no report to judge until
+    there is an outcome to take one from -- so the ordering claim is made where it
+    still means something: a genuine outcome carrying a report that fails the plan
+    fails on the plan, not on the substitution.
+    """
     thin = report_from_findings(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
+        quality_context_hash="hand-authored, not a run",
+        runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),
         datasets_covered=phase3a.QUALITY_COVERAGE,
         produced_at=phase3a.BUILD_TIME,
     )
+    forged = _forge(phase3a.quality_outcome(), report=thin)
     with pytest.raises(QualityGateError, match="the plan expects checks"):
-        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), thin)
+        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), forged)
 
 
 # ---------------------------------------------------------------------------
@@ -385,21 +467,21 @@ def test_a_clean_builds_report_cannot_gate_a_defective_build(tmp_path: Path) -> 
     about a different set of rows.
     """
     clean = phase3a.gold_dataset()
-    clean_report = phase3a.quality_report(clean)
-    assert report_is_runner_produced(clean_report), "It really was run."
-    assert clean_report.passed
+    clean_outcome = phase3a.quality_outcome(clean)
+    assert clean_outcome.sealed, "It really was run."
+    assert clean_outcome.report.passed
 
     defective = _defective_build()
     assert phase3a.quality_report(defective).blocking, "And this build really is defective."
 
     with pytest.raises(QualityGateError, match="was run over build"):
-        _publish(LocalTableStore(tmp_path), defective, clean_report)
+        _publish(LocalTableStore(tmp_path), defective, clean_outcome)
 
 
 def test_a_report_run_over_the_build_it_gates_publishes(tmp_path: Path) -> None:
     """NEGATIVE CONTROL for the refusal above."""
     dataset = phase3a.gold_dataset()
-    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_report(dataset))
+    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_outcome(dataset))
 
 
 def test_the_build_identity_covers_the_rows_and_the_snapshots() -> None:

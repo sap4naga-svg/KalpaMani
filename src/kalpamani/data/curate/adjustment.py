@@ -53,6 +53,7 @@ from kalpamani.data.contracts.envelope import (
     OutputValidityDeclaration,
 )
 from kalpamani.data.contracts.errors import ArtifactIntegrityError, PendingContractError
+from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.resolution import (
     BoundApprovals,
     PitRecord,
@@ -417,7 +418,10 @@ def artifact_key(
         "adjustment_policy": adjustment_policy.value,
         "adjustment_convention": adjustment_convention.value,
         "resolved_profile": resolved_profile.value,
-        "as_of_epoch": as_of_epoch,
+        # Normalised here, not left to the caller. The epoch is part of the
+        # artifact's identity, and the same instant offered in two zones must not
+        # key two artifacts.
+        "as_of_epoch": normalize_instant(as_of_epoch),
         "corporate_action_dataset_versions": list(corporate_action_dataset_versions),
         "raw_bar_dataset_versions": list(raw_bar_dataset_versions),
         "security_id_scope": security_id_scope,

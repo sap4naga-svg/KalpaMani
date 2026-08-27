@@ -151,11 +151,14 @@ def _manifest(**overrides: object) -> ResearchManifest:
         "code": CodeProvenance(
             commit_sha=COMMIT, working_tree_clean=True, config_version="research/synthetic.a1"
         ),
-        "as_of_cutoff": AS_OF,
-        "backtest_start": date(2019, 6, 24),
-        "backtest_end": date(2021, 1, 5),
+        # Taken from the query that ran, not written independently of it. The
+        # narrative used to say 2019-06-24..2021-01-05 while the run served five
+        # days of June 2019, and nothing compared the two.
+        "as_of_cutoff": _executed().query.as_of,
+        "backtest_start": _executed().query.start,  # type: ignore[union-attr]
+        "backtest_end": _executed().query.end,  # type: ignore[union-attr]
         "profile_resolution": config,
-        "revision_view": RevisionView.AS_KNOWN_AT_AS_OF,
+        "revision_view": _executed().query.revision_view,  # type: ignore[union-attr]
         "dataset_resolution_evidence": evidence,
         "required_inputs": (_coverage(),),
         "datasets": (
@@ -236,8 +239,9 @@ def test_a_wrong_manifest_version_refuses() -> None:
 
 def test_a_non_utc_as_of_cutoff_is_normalised_at_construction() -> None:
     """Two spellings of one cutoff must not be two cutoffs."""
-    shifted = _manifest(as_of_cutoff=AS_OF.astimezone(timezone(timedelta(hours=5, minutes=30))))
-    assert shifted.as_of_cutoff == AS_OF
+    cutoff = _executed().query.as_of
+    shifted = _manifest(as_of_cutoff=cutoff.astimezone(timezone(timedelta(hours=5, minutes=30))))
+    assert shifted.as_of_cutoff == cutoff
     assert shifted.as_of_cutoff.utcoffset() == timedelta(0)
     assert shifted.run_id == _manifest().run_id
 
@@ -1010,3 +1014,26 @@ def test_an_itemised_exclusion_the_run_did_not_record_is_refused() -> None:
     )
     with pytest.raises(ManifestRefusedError, match="itemises origin exclusions"):
         _emit(manifest)
+
+
+def test_a_narrative_window_that_contradicts_the_query_is_refused() -> None:
+    """The prose is either absent or accurate. It is not a free text field.
+
+    ``backtest_start``, ``backtest_end`` and ``revision_view`` are a narrative the
+    caller writes. Run identity no longer rests on them -- the accessor's own
+    query spec does -- but leaving a contradicting narrative in the file would
+    mean the manifest still says one thing while the evidence beside it says
+    another, and a reader has no way to know which half to believe.
+    """
+    _emit(_manifest())  # NEGATIVE CONTROL: the truthful one emits.
+
+    for override, expected in (
+        ({"backtest_end": date(2030, 1, 1)}, "the window a run covered"),
+        ({"as_of_cutoff": datetime(2030, 1, 1, tzinfo=UTC)}, "as_of_cutoff"),
+        (
+            {"revision_view": RevisionView.AS_KNOWN_AT_AS_OF},
+            "claims the query honoured a view it never read",
+        ),
+    ):
+        with pytest.raises(ManifestRefusedError, match=expected):
+            _emit(_manifest(**override))

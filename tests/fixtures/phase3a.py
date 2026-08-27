@@ -104,7 +104,7 @@ from kalpamani.data.pit.execution import ExecutedResult
 from kalpamani.data.pit.query import SeriesRequirement
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.quality.report import QualityReport
-from kalpamani.data.quality.runner import QualityContext, run_quality_plan
+from kalpamani.data.quality.runner import QualityContext, RunnerOutcome, run_quality_plan
 from kalpamani.data.storage import LocalTableStore
 
 # ---------------------------------------------------------------------------
@@ -1012,19 +1012,23 @@ def quality_context(
     )
 
 
-def quality_report(
+def quality_outcome(
     dataset: GoldDataset | None = None,
     *,
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
     downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
     universe_sessions: Sequence[date] = SNAPSHOT_SESSIONS,
-) -> QualityReport:
-    """The report for a build, produced by **running** the plan.
+) -> RunnerOutcome:
+    """The sealed outcome for a build, produced by **running** the plan.
 
     Not assembled: the runner invokes every registered implementation and builds
     the report from what actually ran. A fixture that wrote out a checks_run list
     would be testing publication against exactly the evidence the runner exists to
     make impossible.
+
+    Returns the outcome rather than the report because publication takes the
+    outcome -- a report's provenance token lived in a copyable field, and an
+    object with no such field is the fix.
     """
     built = gold_dataset(requested=requested, downgrade=downgrade) if dataset is None else dataset
     return run_quality_plan(
@@ -1035,6 +1039,22 @@ def quality_report(
             universe_sessions=universe_sessions,
         ),
         policy_versions={"lag": LAG_POLICY_VERSION},
+    )
+
+
+def quality_report(
+    dataset: GoldDataset | None = None,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    universe_sessions: Sequence[date] = SNAPSHOT_SESSIONS,
+) -> QualityReport:
+    """The report inside that outcome, for tests that only read findings."""
+    return quality_outcome(
+        dataset,
+        requested=requested,
+        downgrade=downgrade,
+        universe_sessions=universe_sessions,
     ).report
 
 
@@ -1043,19 +1063,19 @@ def publish(
     *,
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
     downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
-    report: QualityReport | None = None,
+    outcome: RunnerOutcome | None = None,
 ) -> VerifiedPublication:
     """Build, publish and read back -- the whole sanctioned path in one call."""
     dataset = gold_dataset(requested=requested, downgrade=downgrade)
     gate = (
-        report
-        if report is not None
-        else quality_report(dataset, requested=requested, downgrade=downgrade)
+        outcome
+        if outcome is not None
+        else quality_outcome(dataset, requested=requested, downgrade=downgrade)
     )
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=gate,
+        quality=gate,
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
@@ -1075,7 +1095,7 @@ def build_verified_synthetic_publication(
     *,
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
     downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
-    report: QualityReport | None = None,
+    outcome: RunnerOutcome | None = None,
 ) -> VerifiedPublication:
     """The named synthetic factory for a verified publication.
 
@@ -1084,7 +1104,7 @@ def build_verified_synthetic_publication(
     stamps a seal onto a hand-assembled triplet: a test able to fabricate one
     would be testing a route production does not have.
     """
-    return publish(store, requested=requested, downgrade=downgrade, report=report)
+    return publish(store, requested=requested, downgrade=downgrade, outcome=outcome)
 
 
 def reader(
@@ -1092,11 +1112,11 @@ def reader(
     *,
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
     downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
-    report: QualityReport | None = None,
+    outcome: RunnerOutcome | None = None,
 ) -> PointInTimeReader:
     """A reader over a verified publication. There is no unverified route."""
     publication = build_verified_synthetic_publication(
-        store, requested=requested, downgrade=downgrade, report=report
+        store, requested=requested, downgrade=downgrade, outcome=outcome
     )
     return PointInTimeReader(
         publication,
@@ -1448,9 +1468,7 @@ def publication_from(
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=quality_report(
-            dataset, requested=requested, universe_sessions=universe_sessions
-        ),
+        quality=quality_outcome(dataset, requested=requested, universe_sessions=universe_sessions),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
@@ -1624,7 +1642,7 @@ def incremental_publication(
     publish_gold_dataset(
         store,
         combined,
-        quality_report=quality_report(combined, requested=requested),
+        quality=quality_outcome(combined, requested=requested),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
@@ -1671,7 +1689,7 @@ def dense_minute_publication(
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=quality_report(dataset),
+        quality=quality_outcome(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,

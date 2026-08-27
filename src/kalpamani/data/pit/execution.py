@@ -294,6 +294,17 @@ class ExecutedResult(Generic[ResultT]):
     identities it depends on rather than trusting them.
     """
 
+    _result: ResultT
+    _canonical_bytes: bytes
+    _result_bytes_hash: str
+    _query: QuerySpec
+    _evidence: ExecutionEvidence
+    _dataset_version: str
+    _publication_manifest_hash: str
+    _quality_report_hash: str
+    _origin_exclusions: tuple[tuple[str, str, int], ...]
+    _bounds_relied_upon: tuple[str, ...]
+
     __slots__ = (
         "_bounds_relied_upon",
         "_canonical_bytes",
@@ -332,16 +343,33 @@ class ExecutedResult(Generic[ResultT]):
                 "An ExecutedResult carries no quality-report identity. Absence of evidence and "
                 "absence of a finding are different claims."
             )
-        self._result = result
-        self._canonical_bytes = result_bytes
-        self._result_bytes_hash = sha256_hex(result_bytes)
-        self._query = query
-        self._evidence = evidence
-        self._dataset_version = dataset_version
-        self._publication_manifest_hash = publication_manifest_hash
-        self._quality_report_hash = quality_report_hash
-        self._origin_exclusions = tuple(sorted(origin_exclusions))
-        self._bounds_relied_upon = evidence.bounds_relied_upon
+        set_ = object.__setattr__
+        set_(self, "_result", result)
+        set_(self, "_canonical_bytes", result_bytes)
+        set_(self, "_result_bytes_hash", sha256_hex(result_bytes))
+        set_(self, "_query", query)
+        set_(self, "_evidence", evidence)
+        set_(self, "_dataset_version", dataset_version)
+        set_(self, "_publication_manifest_hash", publication_manifest_hash)
+        set_(self, "_quality_report_hash", quality_report_hash)
+        set_(self, "_origin_exclusions", tuple(sorted(origin_exclusions)))
+        set_(self, "_bounds_relied_upon", evidence.bounds_relied_upon)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Refuse every edit. Not a dataclass, and not assignable either.
+
+        ``replace`` cannot reach a non-dataclass, but plain attribute assignment
+        could, and a sealed result whose contents can be swapped afterwards is a
+        seal over whatever was put there last.
+        """
+        raise AttributeError(
+            "An ExecutedResult is what one execution produced and cannot be edited "
+            "afterwards. Editing it would separate the result from the evidence that it "
+            "was served."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("An ExecutedResult is what one execution produced.")
 
     @property
     def result(self) -> ResultT:

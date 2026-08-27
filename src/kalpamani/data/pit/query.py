@@ -127,6 +127,12 @@ class UniverseQuerySpec:
     evaluation_cutoff: datetime
     snapshot_artifact_id: str
     snapshot_content_hash: str
+    #: The rule the served snapshot was built under -- its name **and** its
+    #: parameters. A caller-authored definition string described a rule the query
+    #: had not necessarily applied, and a version alone does not distinguish two
+    #: builds that used different thresholds under one name.
+    universe_definition_version: str
+    universe_definition_hash: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "as_of", normalize_instant(self.as_of))
@@ -143,6 +149,8 @@ class UniverseQuerySpec:
             "evaluation_cutoff": self.evaluation_cutoff,
             "snapshot_artifact_id": self.snapshot_artifact_id,
             "snapshot_content_hash": self.snapshot_content_hash,
+            "universe_definition_version": self.universe_definition_version,
+            "universe_definition_hash": self.universe_definition_hash,
         }
 
 

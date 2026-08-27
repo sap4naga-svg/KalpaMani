@@ -46,7 +46,7 @@ from kalpamani.data.contracts.envelope import DerivedEnvelope
 from kalpamani.data.contracts.errors import EnvelopeError
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.profiles import DatasetResolutionEvidence, ResolutionReceipt
-from kalpamani.data.contracts.resolution import SourceRecord
+from kalpamani.data.contracts.resolution import PitRecord, SourceRecord
 from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.vocabulary import InformationSetProfile, OutputValidity
 
@@ -84,6 +84,9 @@ class UniverseSnapshotHeader:
     and excluded is part of what the snapshot decided, so it is always named.
     """
 
+    #: Fixed. The header is a row of this entity, and the quality checks select a
+    #: dataset's approved-bound policy by it.
+    dataset: str = "universe_snapshot_header"
     session_date: date
     universe_definition_version: str
     resolved_profile: InformationSetProfile
@@ -91,12 +94,23 @@ class UniverseSnapshotHeader:
     row_count: int
     snapshot_content_hash: str
     derivation_spec_version: str
+    #: Canonical hash of the universe rule's **parameters**. The version string is
+    #: a promise that two builds under one name used one rule, and nothing checked
+    #: it: the same version with a different minimum price produced a different
+    #: membership set under an identical label.
+    universe_definition_hash: str
     envelope: DerivedEnvelope
     #: Per required domain: how many rows were supplied and how many were
     #: admissible at the evaluation cutoff. The build's own coverage evidence,
     #: carried here because a snapshot that selected nobody is only interpretable
     #: alongside what it had to work with.
     required_domain_coverage: tuple[tuple[str, int, int], ...] = ()
+    #: The rows this snapshot consumed -- every considered listing state and every
+    #: membership decision. In memory only, like a membership row's: lineage is
+    #: what survives storage, and inputs are what an availability computation
+    #: needs. Without them the header is not a derived artifact the quality checks
+    #: can reason about, which is why they never examined it.
+    inputs: tuple[PitRecord, ...] = ()
     status: str = "COMPLETE"
 
     def __post_init__(self) -> None:
@@ -139,6 +153,7 @@ class UniverseSnapshotHeader:
                 "row_count": self.row_count,
                 "snapshot_content_hash": self.snapshot_content_hash,
                 "derivation_spec_version": self.derivation_spec_version,
+                "universe_definition_hash": self.universe_definition_hash,
                 "status": self.status,
                 "required_domain_coverage": [
                     list(entry) for entry in sorted(self.required_domain_coverage)

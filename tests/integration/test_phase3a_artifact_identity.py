@@ -40,7 +40,7 @@ from kalpamani.data.curate.adjustment import (
     source_versions,
     verify_adjusted_bar_artifact,
 )
-from kalpamani.data.curate.publication import publish_gold_dataset, read_published_dataset
+from kalpamani.data.curate.publication import publish_gold_dataset
 from kalpamani.data.curate.universe import build_snapshot_header, current_listings
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.storage import LocalTableStore
@@ -188,6 +188,7 @@ def _manifest_for() -> Any:
         quality_report_hash="",
         quality_report_file_hash="",
         quality_plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        quality_context_hash="",
         tables=(),
         source_ingestion_run_ids=(),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
@@ -272,7 +273,7 @@ def test_the_quality_runner_catches_a_tampered_row_before_publication(
         publish_gold_dataset(
             LocalTableStore(tmp_path),
             tampered,
-            quality_report=phase3a.quality_report(tampered),
+            quality=phase3a.quality_outcome(tampered),
             quality_plan=PHASE3A_QUALITY_PLAN,
             code_commit_sha=phase3a.CODE_COMMIT_SHA,
             lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -310,10 +311,18 @@ def _rebuild(dataset: Any, **overrides: Any) -> Any:
     return type(dataset)(**base)
 
 
-def test_a_header_lineage_naming_a_wrong_source_version_refuses_on_read(
+def test_a_header_lineage_naming_a_wrong_source_version_is_refused(
     tmp_path: Path,
 ) -> None:
-    """Replaying the header's lineage is what makes its evidence evidence."""
+    """Now caught at publication, by rebuilding the header rather than the rows.
+
+    The read still replays the header's lineage, but it no longer gets the chance:
+    comparing only membership content left everything else in the header
+    unchecked, and rebuilding the whole identity means a misdirected lineage is a
+    drift the quality gate refuses.
+    """
+    from kalpamani.data.contracts.errors import QualityGateError
+
     dataset = phase3a.gold_dataset()
     session = date(2019, 6, 27)
     header = dataset.universe_headers[session]
@@ -332,23 +341,31 @@ def test_a_header_lineage_naming_a_wrong_source_version_refuses_on_read(
     tampered = _rebuild(
         dataset, universe_headers={**dataset.universe_headers, session: misdirected}
     )
-    store = LocalTableStore(tmp_path)
-    publish_gold_dataset(
-        store,
-        tampered,
-        quality_report=phase3a.quality_report(tampered),
-        quality_plan=PHASE3A_QUALITY_PLAN,
-        code_commit_sha=phase3a.CODE_COMMIT_SHA,
-        lag_policy_version=phase3a.LAG_POLICY_VERSION,
-        universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
-    )
-    with pytest.raises(ArtifactIntegrityError, match="in dataset version"):
-        read_published_dataset(
-            store,
-            dataset_version=phase3a.DATASET_VERSION,
-            config=phase3a.resolution(),
-            approvals=phase3a.approvals(),
+    with pytest.raises(QualityGateError, match=r"6\.5_universe_rebuild_drift"):
+        publish_gold_dataset(
+            LocalTableStore(tmp_path),
+            tampered,
+            quality=phase3a.quality_outcome(tampered),
+            quality_plan=PHASE3A_QUALITY_PLAN,
+            code_commit_sha=phase3a.CODE_COMMIT_SHA,
+            lag_policy_version=phase3a.LAG_POLICY_VERSION,
+            universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
         )
+
+
+def test_the_same_thresholds_under_one_version_must_rebuild(tmp_path: Path) -> None:
+    """A version string is a promise that two builds used one rule.
+
+    Nothing checked it, so the same ``universe/synthetic.a1`` with a different
+    minimum price produced a different membership set under an identical label --
+    and the header, which recorded only the version, said they agreed.
+    """
+    from kalpamani.data.curate.universe import definition_hash
+
+    original = phase3a.universe_definition()
+    restated = dataclasses.replace(original, min_close_price=original.min_close_price + 1)
+    assert restated.version == original.version
+    assert definition_hash(restated) != definition_hash(original)
 
 
 def test_a_header_with_no_listing_evidence_at_all_is_refused() -> None:
@@ -749,29 +766,45 @@ def test_two_different_actions_sharing_a_key_refuse_verification() -> None:
         )
 
 
+def _exact_lineage(header: Any, rows: Any) -> Any:
+    from kalpamani.data.curate.publication import _require_header_lineage_is_exact
+
+    return _require_header_lineage_is_exact(
+        header.session_date,
+        header,
+        rows,
+        listings=phase3a.listings(),
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+    )
+
+
 def test_a_header_omitting_an_input_its_rows_consumed_is_refused(tmp_path: Path) -> None:
     """Replaying proves the named rows exist, not that they are the right rows."""
-    from kalpamani.data.curate.publication import _require_header_covers_its_rows
-
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
     session = date(2019, 6, 27)
     header = publication.dataset.universe_headers[session]
     rows = publication.dataset.universe[session]
-    _require_header_covers_its_rows(session, header, rows)
+    _exact_lineage(header, rows)
 
     stripped = dataclasses.replace(
         header,
         envelope=dataclasses.replace(header.envelope, lineage=header.envelope.lineage[:1]),
     )
     with pytest.raises(DatasetPublicationError, match="does not name"):
-        _require_header_covers_its_rows(session, stripped, rows)
+        _exact_lineage(stripped, rows)
 
 
 def test_a_header_naming_an_announcement_is_refused(tmp_path: Path) -> None:
-    """The rule considers listing states; an announcement is not one."""
+    """The rule considers listing states; an announcement is not one.
+
+    Recomputed rather than pattern-matched: the read derives the governed set the
+    builder would have produced and requires equality, so an announcement is
+    refused for the reason it is wrong -- the rule never weighed it -- rather than
+    because its selector happened to carry a recognisable kind.
+    """
     from kalpamani.data.contracts.envelope import LineageRef
     from kalpamani.data.curate.lineage import listing_selector
-    from kalpamani.data.curate.publication import _require_header_covers_its_rows
 
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
     session = date(2019, 6, 27)
@@ -793,5 +826,35 @@ def test_a_header_naming_an_announcement_is_refused(tmp_path: Path) -> None:
             ),
         ),
     )
-    with pytest.raises(DatasetPublicationError, match="names listing rows of kind"):
-        _require_header_covers_its_rows(session, widened, publication.dataset.universe[session])
+    with pytest.raises(DatasetPublicationError, match="could not have considered"):
+        _exact_lineage(widened, publication.dataset.universe[session])
+
+
+def test_a_header_omitting_a_considered_listing_is_refused(tmp_path: Path) -> None:
+    """A security examined and excluded is part of what the snapshot decided.
+
+    Recomputing the header hash afterwards does not help: the governed set is
+    re-derived from the published listings and the snapshot's own cutoff, so the
+    omission is visible whatever the header says about itself.
+    """
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    session = date(2021, 1, 5)
+    header = publication.dataset.universe_headers[session]
+    rows = publication.dataset.universe[session]
+
+    # A listing the rule considered that produced no membership row -- the exact
+    # evidence a superset check could never miss, because nothing else names it.
+    from_rows = {ref for row in rows for ref in row.envelope.lineage}
+    non_member_refs = [
+        ref for ref in header.envelope.lineage if ref.entity == "listing" and ref not in from_rows
+    ]
+    assert non_member_refs, "The 2021 snapshot considers a security that qualified for nothing."
+    dropped = dataclasses.replace(
+        header,
+        envelope=dataclasses.replace(
+            header.envelope,
+            lineage=tuple(ref for ref in header.envelope.lineage if ref != non_member_refs[0]),
+        ),
+    )
+    with pytest.raises(DatasetPublicationError, match="omits listing rows the rule did"):
+        _exact_lineage(dropped, rows)

@@ -47,11 +47,22 @@ discard a BLOCKING defect because the plan's vocabulary had not caught up with t
 code. Every produced finding must be claimed by the implementation that emitted it
 **and** owned by a planned check, or the run refuses.
 
-**What the report says it covered is derived, not claimed.** ``datasets_covered``
-and ``partitions_covered`` come from the scopes of the checks that actually ran and
-the sessions actually evaluated. Taking them from the caller left the one claim in
-the report that nothing checked, and over-claiming coverage is precisely the "check
-that silently covered less than it claims" the plan exists to prevent.
+**What the report says it covered is derived from what was examined.**
+``datasets_covered`` used to come from the plan's ``applies_to`` -- the *scope* a
+check declares -- which is a statement of intent. A check whose implementation
+never received a snapshot header still reported ``universe_snapshot_header``
+covered, and for two entities that was exactly the case: headers and adjusted
+artifacts were absent from the context's derived rows entirely, so nothing
+examined them and the report said otherwise. Coverage now comes from the objects
+each implementation was actually handed.
+
+**The whole context is bound.** The checks read a profile resolution, approved
+bounds, evaluation cutoffs, universe thresholds, market thresholds and a
+survivorship policy -- all supplied by the caller, none of it in the report's
+identity. Two runs under the same plan with different thresholds produced
+interchangeable evidence. ``quality_context_hash`` covers every standard the run
+was judged against, plus the build itself, and enters both the report's identity
+and the dataset manifest's.
 """
 
 from __future__ import annotations
@@ -61,6 +72,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import AdjustedBarArtifact, MarketSession, PriceBar
 from kalpamani.data.contracts.errors import QualityGateError
@@ -68,6 +80,7 @@ from kalpamani.data.contracts.profiles import ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import BoundApprovals, PitRecord, is_eligible
 from kalpamani.data.contracts.serde import (
     encode_corporate_action,
+    encode_derived_envelope,
     encode_listing,
     encode_market_session,
     encode_price_bar,
@@ -80,9 +93,10 @@ from kalpamani.data.curate.adjustment import series_content_hash
 from kalpamani.data.curate.universe import (
     UniverseBuildInputs,
     UniverseDefinition,
+    build_snapshot_header,
     build_universe_snapshot,
     current_listings,
-    snapshot_content_hash,
+    definition_hash,
 )
 from kalpamani.data.quality.checks import (
     DEFAULT_MARKET_THRESHOLDS,
@@ -148,11 +162,94 @@ class QualityContext:
         )
 
     def derived_records(self) -> tuple[PitRecord, ...]:
-        """Every derived row the build holds."""
+        """Every derived row the build holds -- **including** the headers and artifacts.
+
+        Membership rows alone was the whole of it, so the envelope, temporal and
+        profile checks never once examined a snapshot header or an adjusted
+        artifact while the plan reported both covered. Two entities the report
+        claimed and nothing looked at.
+        """
         rows: list[PitRecord] = []
         for members in self.dataset.universe.values():
             rows.extend(members)
+        rows.extend(self.dataset.universe_headers.values())
+        rows.extend(self.adjusted_artifacts)
         return tuple(rows)
+
+    def derived_subjects(self) -> tuple[str, ...]:
+        """Which derived entities were actually available to be examined."""
+        found: set[str] = set()
+        if self.dataset.universe:
+            found.add("universe_membership")
+        if self.dataset.universe_headers:
+            found.add("universe_snapshot_header")
+        if self.adjusted_artifacts:
+            found.add("adjusted_bar_artifact")
+        return tuple(sorted(found))
+
+    def source_subjects(self) -> tuple[str, ...]:
+        """Which source entities the build actually holds rows for."""
+        return tuple(
+            sorted(
+                name
+                for name, rows in (
+                    ("market_session", self.dataset.sessions),
+                    ("listing", self.dataset.listings),
+                    ("security_attribute", self.dataset.attributes),
+                    ("ticker_history", self.dataset.tickers),
+                    ("price_bar", self.dataset.bars),
+                    ("corporate_action", self.dataset.actions),
+                )
+                if rows
+            )
+        )
+
+    def context_hash(self) -> str:
+        """Every standard this build was judged against, and the build itself.
+
+        A report says which checks ran and what they found. It did not say what
+        they were *measured with*: the same plan over the same build with a
+        different minimum price, a different approved bound or a different
+        survivorship threshold produced interchangeable evidence. All of it is
+        caller-supplied, so all of it is bound.
+        """
+        return content_hash(
+            {
+                "build_identity": self.dataset.build_identity,
+                "requested_profile": self.config.requested_profile.value,
+                "resolved_profile": self.config.resolved_profile.value,
+                "global_profile_resolution": self.config.global_profile_resolution.value,
+                "resolution_policy_version": self.config.resolution_policy_version,
+                "resolution_map": [list(entry) for entry in self.config.canonical_map()],
+                "approvals": [
+                    [
+                        dataset,
+                        sorted(item.value for item in policy.public),
+                        sorted(item.value for item in policy.provider),
+                        sorted(item.value for item in policy.announcement),
+                    ]
+                    for dataset, policy in sorted(self.approvals.by_dataset.items())
+                ],
+                "evaluation_cutoffs": [
+                    [session.isoformat(), cutoff.isoformat()]
+                    for session, cutoff in sorted(self.evaluation_cutoffs.items())
+                ],
+                "universe_definition": definition_hash(self.universe_definition),
+                "as_of": self.as_of,
+                "market_thresholds": [
+                    self.market_thresholds.version,
+                    str(self.market_thresholds.split_discontinuity_fraction),
+                ],
+                "survivorship_policy": [
+                    self.survivorship_policy.version,
+                    self.survivorship_policy.deep_history_years,
+                    self.survivorship_policy.minimum_eligible_snapshots,
+                ],
+                "adjusted_artifacts": sorted(
+                    artifact.artifact_id for artifact in self.adjusted_artifacts
+                ),
+            }
+        )
 
     def run_id_inputs(self) -> dict[str, Any]:
         """The build's own identity inputs, for the run-identity check.
@@ -182,6 +279,11 @@ class CheckImplementation:
     #: Returns ``None`` when the check applies, or the governed reason it does
     #: not. Computed from the context, never declared by a caller.
     applicable: Callable[[QualityContext], str | None]
+    #: The entities this implementation actually examined, given this context.
+    #: Not the plan's ``applies_to``, which is a declared *scope*: a check whose
+    #: implementation never received a snapshot header still reported one
+    #: covered, and for two entities that was exactly what happened.
+    subjects: Callable[[QualityContext], tuple[str, ...]]
 
 
 def _run_envelope(context: QualityContext) -> list[QualityFinding]:
@@ -230,6 +332,18 @@ def _run_stored_shape(context: QualityContext) -> list[QualityFinding]:
                     dataset="universe_membership",
                 )
             )
+    for header in dataset.universe_headers.values():
+        found.extend(
+            check_stored_envelope_shape(
+                encode_derived_envelope(header.envelope), dataset="universe_snapshot_header"
+            )
+        )
+    for artifact in context.adjusted_artifacts:
+        found.extend(
+            check_stored_envelope_shape(
+                encode_derived_envelope(artifact.envelope), dataset="adjusted_bar_artifact"
+            )
+        )
     return found
 
 
@@ -390,11 +504,17 @@ def _run_universe_snapshots(context: QualityContext) -> list[QualityFinding]:
 
 
 def _run_universe_rebuild(context: QualityContext) -> list[QualityFinding]:
-    """Rebuild every stored snapshot and compare, rather than trusting a hash.
+    """Rebuild every snapshot **and its header**, and compare the whole identity.
 
-    The check takes two hashes. Accepting the rebuilt one from a caller would make
-    the drift check a formality -- the caller would supply the stored hash and the
-    comparison would pass by construction -- so the runner does the rebuild.
+    Comparing membership content alone left everything else in the header
+    unchecked: the considered listings that produced no row, the required-domain
+    coverage, the evaluation cutoff, the universe rule's actual thresholds. A
+    build could change any of them and the drift check would say the snapshot
+    reproduced -- because the rows did.
+
+    The check takes two hashes, and the runner produces the second itself.
+    Accepting it from a caller would make drift detection a formality: the caller
+    would supply the stored hash and the comparison would pass by construction.
     """
     dataset = context.dataset
     inputs = UniverseBuildInputs(
@@ -429,10 +549,20 @@ def _run_universe_rebuild(context: QualityContext) -> list[QualityFinding]:
             ingestion_time=header.envelope.ingestion_time,
             dataset_version=dataset.dataset_version,
         )
+        rebuilt_header = build_snapshot_header(
+            rebuilt.rows,
+            session_date=session,
+            definition=context.universe_definition,
+            resolved_profile=dataset.resolved_profile,
+            evaluation_cutoff=cutoff,
+            considered_listings=rebuilt.considered_listings,
+            required_domain_coverage=rebuilt.required_domain_coverage,
+            artifact_first_built_time=header.envelope.artifact_first_built_time,
+            ingestion_time=header.envelope.ingestion_time,
+            dataset_version=dataset.dataset_version,
+        )
         found.extend(
-            check_universe_rebuild(
-                header.snapshot_content_hash, snapshot_content_hash(rebuilt.rows)
-            )
+            check_universe_rebuild(header.header_identity_hash, rebuilt_header.header_identity_hash)
         )
     return found
 
@@ -441,12 +571,43 @@ def _always_applicable(context: QualityContext) -> str | None:
     return None
 
 
+def _all_subjects(context: QualityContext) -> tuple[str, ...]:
+    """Every entity the build actually holds rows for, source and derived."""
+    return tuple(sorted({*context.source_subjects(), *context.derived_subjects()}))
+
+
+def _price_bar_subject(context: QualityContext) -> tuple[str, ...]:
+    # The table, not its rows. This implementation is handed the whole bar
+    # collection and traverses it, so it examined the entity even when the
+    # traversal found nothing -- an empty table honestly checked is checked.
+    # Contrast the artifacts below, whose implementation is skipped outright.
+    return ("price_bar",)
+
+
+def _ticker_subject(context: QualityContext) -> tuple[str, ...]:
+    return ("ticker_history",)
+
+
+def _universe_subjects(context: QualityContext) -> tuple[str, ...]:
+    return ("universe_membership", "universe_snapshot_header")
+
+
+def _adjusted_subject(context: QualityContext) -> tuple[str, ...]:
+    return ("adjusted_bar_artifact",) if context.adjusted_artifacts else ()
+
+
+def _run_subject(context: QualityContext) -> tuple[str, ...]:
+    """The whole-run pseudo-entity, plus whatever the profile check examined."""
+    return tuple(sorted({"run", *_all_subjects(context)}))
+
+
 #: Every implementation this runner can invoke, by id.
 CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
     implementation.implementation_id: implementation
     for implementation in (
         CheckImplementation(
             implementation_id="envelope_conformance",
+            subjects=_all_subjects,
             emits=(
                 "4.0.0_origin_outside_the_closed_vocabulary",
                 "4.0A.10_derivation_disagrees_with_origin",
@@ -472,6 +633,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="stored_envelope_shape",
+            subjects=_all_subjects,
             emits=(
                 "4.0.0_origin_outside_the_closed_vocabulary",
                 "4.0A.5_missing_system_first_seen_time",
@@ -484,6 +646,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="temporal_invariants",
+            subjects=_all_subjects,
             emits=(
                 "4.1.12_bar_outside_any_known_session",
                 "4.1.12_session_date_derived_by_utc_truncation",
@@ -498,6 +661,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="profile_service",
+            subjects=_run_subject,
             emits=(
                 "4.3.10_bound_applied_to_a_system_observed_row",
                 "4.3.12_dataset_absent_from_the_resolution_map",
@@ -512,6 +676,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="run_identity",
+            subjects=lambda context: ("run",),
             emits=(
                 "4.3.11_downgrade_not_carried_through",
                 "4.3.13_resolution_map_not_in_run_id",
@@ -522,6 +687,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="price_bar_structure",
+            subjects=_price_bar_subject,
             emits=(
                 "3.1_duplicate_price_bar_key",
                 # The bar checks also decide two temporal properties, because
@@ -540,18 +706,21 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="adjusted_artifact_hash",
+            subjects=_adjusted_subject,
             emits=("4.5.1_adjusted_cache_does_not_reproduce",),
             invoke=_run_adjusted_artifacts,
             applicable=_adjusted_applicable,
         ),
         CheckImplementation(
             implementation_id="ticker_history",
+            subjects=_ticker_subject,
             emits=("6.1_ticker_history_overlap",),
             invoke=_run_ticker_history,
             applicable=_always_applicable,
         ),
         CheckImplementation(
             implementation_id="universe_snapshots",
+            subjects=_universe_subjects,
             emits=(
                 "6.3_survivorship_leakage",
                 "6.4_delisted_absence",
@@ -563,6 +732,7 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
         ),
         CheckImplementation(
             implementation_id="universe_rebuild",
+            subjects=_universe_subjects,
             emits=("6.5_universe_rebuild_drift",),
             invoke=_run_universe_rebuild,
             applicable=_always_applicable,
@@ -571,18 +741,134 @@ CHECK_REGISTRY: Final[Mapping[str, CheckImplementation]] = {
 }
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
 class RunnerOutcome:
     """What the runner did, alongside the report it produced.
 
-    Kept separate from the report because it is about the *execution* -- which
-    implementations were invoked, in what order -- and the report is about the
-    build. A test asserting that an implementation actually ran reads this.
+    Deliberately **not** a dataclass, and deliberately not constructible outside
+    this module. The report's ``produced_by`` token was the whole seal, and it sat
+    in a public dataclass field: ``dataclasses.replace`` copies such a field, so a
+    fabricated report could be handed the real one's token and publication would
+    accept a report nothing had run. A token in a readable field is a value, and a
+    value can be moved.
+
+    Publication takes this object instead. There is no field to copy: the only
+    route to one is :func:`run_quality_plan`, which builds it after the checks
+    have actually been invoked.
     """
 
-    report: QualityReport
-    invoked: tuple[str, ...]
-    skipped: tuple[tuple[str, str], ...]
+    __slots__ = (
+        "_invoked",
+        "_plan_version",
+        "_quality_context_hash",
+        "_registry_identity",
+        "_report",
+        "_runner_version",
+        "_sealed",
+        "_skipped",
+    )
+
+    # Declared for the type checker: every assignment goes through
+    # object.__setattr__ because __setattr__ itself refuses.
+    _report: QualityReport
+    _invoked: tuple[str, ...]
+    _skipped: tuple[tuple[str, str], ...]
+    _plan_version: str
+    _runner_version: str
+    _quality_context_hash: str
+    _registry_identity: str
+    _sealed: bool
+
+    def __init__(
+        self,
+        *,
+        report: QualityReport,
+        invoked: tuple[str, ...],
+        skipped: tuple[tuple[str, str], ...],
+        plan_version: str,
+        runner_version: str,
+        quality_context_hash: str,
+        registry_identity: str,
+        sealed: bool,
+        token: object,
+    ) -> None:
+        if token is not _RUNNER_TOKEN:
+            raise QualityGateError(
+                "A RunnerOutcome may only be produced by running the quality plan. "
+                "Constructing one directly would recreate exactly the hole this type "
+                "closes: evidence of a run, without the run."
+            )
+        object.__setattr__(self, "_report", report)
+        object.__setattr__(self, "_invoked", invoked)
+        object.__setattr__(self, "_skipped", skipped)
+        object.__setattr__(self, "_plan_version", plan_version)
+        object.__setattr__(self, "_runner_version", runner_version)
+        object.__setattr__(self, "_quality_context_hash", quality_context_hash)
+        object.__setattr__(self, "_registry_identity", registry_identity)
+        object.__setattr__(self, "_sealed", sealed)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError(
+            "A RunnerOutcome is what one run produced and cannot be edited afterwards. "
+            "Editing it would separate the evidence from the run."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("A RunnerOutcome is what one run produced.")
+
+    @property
+    def report(self) -> QualityReport:
+        """The report these checks produced."""
+        return self._report
+
+    @property
+    def invoked(self) -> tuple[str, ...]:
+        """Implementations actually invoked, in id order."""
+        return self._invoked
+
+    @property
+    def skipped(self) -> tuple[tuple[str, str], ...]:
+        """Implementations not invoked, each with its governed reason."""
+        return self._skipped
+
+    @property
+    def plan_version(self) -> str:
+        """The plan this run executed."""
+        return self._plan_version
+
+    @property
+    def runner_version(self) -> str:
+        """The runner that executed it."""
+        return self._runner_version
+
+    @property
+    def quality_context_hash(self) -> str:
+        """Identity of every standard the build was judged against."""
+        return self._quality_context_hash
+
+    @property
+    def registry_identity(self) -> str:
+        """Identity of the implementations that ran, by id and declared findings."""
+        return self._registry_identity
+
+    @property
+    def sealed(self) -> bool:
+        """Whether the canonical registry ran. A substituted one is never sealed."""
+        return self._sealed
+
+
+def registry_identity(registry: Mapping[str, CheckImplementation]) -> str:
+    """Canonical identity of a registry: which implementations, emitting what.
+
+    Part of the context hash, so a report cannot be evidence of one set of
+    implementations while having been produced by another.
+    """
+    return content_hash(
+        {
+            "implementations": sorted(
+                [ident, sorted(implementation.emits)] for ident, implementation in registry.items()
+            )
+        }
+    )
 
 
 def run_quality_plan(
@@ -610,6 +896,15 @@ def run_quality_plan(
     """
     _require_registry_agrees(plan, registry)
     sealed = registry is CHECK_REGISTRY or dict(registry) == dict(CHECK_REGISTRY)
+    identity = registry_identity(registry)
+    context_hash_value = content_hash(
+        {
+            "context": context.context_hash(),
+            "plan_version": plan.plan_version,
+            "runner_version": QUALITY_RUNNER_VERSION,
+            "registry_identity": identity,
+        }
+    )
 
     invoked: dict[str, list[QualityFinding]] = {}
     skipped: dict[str, str] = {}
@@ -664,7 +959,8 @@ def run_quality_plan(
             )
             continue
         checks_run.append(check.check_id)
-        covered.update(check.applies_to)
+        for ident in check.implementations:
+            covered.update(registry[ident].subjects(context))
         for ident in check.implementations:
             findings.extend(
                 finding for finding in invoked[ident] if finding.check_name in check.finding_ids
@@ -694,6 +990,10 @@ def run_quality_plan(
         _deduplicate(findings),
         plan_version=plan.plan_version,
         subject_build_identity=context.dataset.build_identity,
+        quality_context_hash=context_hash_value,
+        runner_version=QUALITY_RUNNER_VERSION,
+        implementations_invoked=tuple(sorted(invoked)),
+        implementations_not_run=tuple(sorted(skipped.items())),
         policy_versions=versions,
         checks_run=tuple(checks_run),
         checks_not_run=tuple(checks_not_run),
@@ -708,6 +1008,12 @@ def run_quality_plan(
         report=report,
         invoked=tuple(sorted(invoked)),
         skipped=tuple(sorted(skipped.items())),
+        plan_version=plan.plan_version,
+        runner_version=QUALITY_RUNNER_VERSION,
+        quality_context_hash=context_hash_value,
+        registry_identity=identity,
+        sealed=sealed,
+        token=_RUNNER_TOKEN,
     )
 
 
@@ -805,43 +1111,54 @@ def _deduplicate(findings: Sequence[QualityFinding]) -> list[QualityFinding]:
     return out
 
 
-def report_is_runner_produced(report: QualityReport) -> bool:
-    """Whether this exact report object came out of :func:`run_quality_plan`.
-
-    Identity, not a recomputable hash. A seal a caller could compute is a seal a
-    caller can forge, and the whole point is telling a produced report from a
-    described one.
-    """
-    return report.produced_by is _RUNNER_TOKEN
-
-
-def require_runner_produced(
-    report: QualityReport, *, dataset_version: str, build_identity: str
+def require_sealed_outcome(
+    outcome: RunnerOutcome, *, dataset_version: str, build_identity: str
 ) -> None:
-    """Refuse a report nobody ran, or one that was run over something else.
+    """Refuse an outcome nobody ran, one run over something else, or one restated.
 
-    Both halves are needed. The seal establishes that the checks were invoked; the
-    subject establishes what they were invoked over. A report with the first and
-    not the second is a genuine clean pass over a **different build**, which is
-    the same failure as a fabricated report reached from the other direction.
+    Four separate claims, and a report alone establishes none of them
+    structurally. The seal establishes that the canonical implementations were the
+    ones invoked; the subject establishes what they were invoked over; the context
+    hash establishes what they were measured with; and the outcome's own identity
+    establishes that the report inside it is the one that run produced.
 
     Raises:
-        QualityGateError: if the report was not produced by this runner, or names
-            a different build than the one being published.
+        QualityGateError: if a substituted registry ran, if the report names a
+            different build, or if the report's recorded context or runner does
+            not match the run that produced it.
     """
-    if not report_is_runner_produced(report):
+    if not isinstance(outcome, RunnerOutcome):
         raise QualityGateError(
-            f"The quality report offered for {dataset_version} was not produced by the quality "
-            f"runner ({QUALITY_RUNNER_VERSION}). Its checks_run list is a claim about work "
-            "rather than a product of it: a caller who writes out every check id satisfies the "
-            "plan completely without a single check having been invoked."
+            f"Publication of {dataset_version} was offered a {type(outcome).__name__} where a "
+            "sealed RunnerOutcome is required. A quality report on its own is a description of "
+            "a run; only the runner's own outcome is a product of one."
         )
+    if not outcome.sealed:
+        raise QualityGateError(
+            f"The quality outcome offered for {dataset_version} was produced with a "
+            f"substituted check registry, not {QUALITY_RUNNER_VERSION}'s. A registry of "
+            "no-op implementations yields a genuinely runner-produced, plan-satisfying "
+            "report that checked nothing at all."
+        )
+    report = outcome.report
     if report.subject_build_identity != build_identity:
         raise QualityGateError(
             f"The quality report offered for {dataset_version} was run over build "
             f"{report.subject_build_identity} and this build is {build_identity}. The checks "
             "really did run, and they ran over something else -- so every finding they did not "
             "make is a finding about a different set of rows."
+        )
+    if report.quality_context_hash != outcome.quality_context_hash:
+        raise QualityGateError(
+            f"The quality report offered for {dataset_version} records context "
+            f"{report.quality_context_hash} and the run that produced it measured against "
+            f"{outcome.quality_context_hash}. A report substituted into an outcome is a "
+            "different report than the one those checks produced."
+        )
+    if report.runner_version != outcome.runner_version:
+        raise QualityGateError(
+            f"The quality report offered for {dataset_version} names runner "
+            f"{report.runner_version!r} and this run was {outcome.runner_version!r}."
         )
 
 
@@ -851,7 +1168,7 @@ __all__ = [
     "CheckImplementation",
     "QualityContext",
     "RunnerOutcome",
-    "report_is_runner_produced",
-    "require_runner_produced",
+    "registry_identity",
+    "require_sealed_outcome",
     "run_quality_plan",
 ]

@@ -322,7 +322,7 @@ def _publish(store: LocalTableStore, dataset: Any, **kwargs: Any) -> Any:
     return publish_gold_dataset(
         store,
         dataset,
-        quality_report=kwargs.pop("quality_report", phase3a.quality_report(dataset)),
+        quality=kwargs.pop("quality", phase3a.quality_outcome(dataset)),
         quality_plan=kwargs.pop("quality_plan", PHASE3A_QUALITY_PLAN),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -972,9 +972,9 @@ def _reader(
     tmp_path: Path,
     *,
     requested: InformationSetProfile = PUBLIC,
-    report: Any = None,
+    outcome: Any = None,
 ) -> PointInTimeReader:
-    return phase3a.reader(LocalTableStore(tmp_path), requested=requested, report=report)
+    return phase3a.reader(LocalTableStore(tmp_path), requested=requested, outcome=outcome)
 
 
 def test_the_reader_distinguishes_three_universe_outcomes(tmp_path: Path) -> None:
@@ -993,11 +993,7 @@ def test_the_reader_distinguishes_three_universe_outcomes(tmp_path: Path) -> Non
     with pytest.raises(MissingHistoricalSnapshotError, match="refusal, not an empty result"):
         reader.get_security_universe(as_of=phase3a.utc(2019, 6, 25, 20, 0), profile=PUBLIC)
 
-    empty_reader = (
-        phase3a.reader(LocalTableStore(tmp_path / "nobody"), report=phase3a.quality_report())
-        if False
-        else None
-    )
+    empty_reader = None
     assert empty_reader is None  # the zero-row case is covered by the build test below
 
 
@@ -1084,14 +1080,14 @@ def test_an_open_blocking_finding_refuses_every_dependent_query(tmp_path: Path) 
         artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
         ingestion_time=phase3a.INGESTION_TIME,
     )
-    report = phase3a.quality_report(dataset)
+    outcome = phase3a.quality_outcome(dataset)
     assert any(
         finding.check_name == "5.2_non_positive_price_or_negative_volume"
-        for finding in report.blocking
+        for finding in outcome.report.blocking
     ), "The check found it; nobody told the report about it."
 
     with pytest.raises(QualityGateError, match="Refusing to publish"):
-        _publish(store, dataset, quality_report=report)
+        _publish(store, dataset, quality=outcome)
     assert not store.version_root(
         layer=StorageLayer.GOLD, dataset_version=phase3a.DATASET_VERSION
     ).exists(), "A build that cannot be believed is never published in the first place."
@@ -1101,12 +1097,12 @@ def test_quality_evidence_cannot_be_edited_after_the_gate(tmp_path: Path) -> Non
     """Swapping the evidence after the gate is what the binding prevents."""
     store = LocalTableStore(tmp_path)
     dataset = phase3a.gold_dataset()
-    report = phase3a.quality_report(dataset)
-    assert report.warnings, (
+    outcome = phase3a.quality_outcome(dataset)
+    assert outcome.report.warnings, (
         "The reference build carries genuine warnings -- its securities are listed on the "
         "half-day session and have no bar for it -- so there is real evidence to tamper with."
     )
-    _publish(store, dataset, quality_report=report)
+    _publish(store, dataset, quality=outcome)
 
     path = (
         store.version_root(layer=StorageLayer.GOLD, dataset_version=phase3a.DATASET_VERSION)

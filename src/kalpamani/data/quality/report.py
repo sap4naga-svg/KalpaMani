@@ -107,6 +107,25 @@ class QualityReport:
     #: what ran but nothing says what it ran over, and a clean build's report
     #: would gate a defective one.
     subject_build_identity: str
+    #: Canonical identity of everything the build was judged **against**: the
+    #: profile resolution, the approved bounds, the evaluation cutoffs, the
+    #: universe rule's actual parameters, the market and survivorship thresholds,
+    #: the adjusted artifacts, the runner, the plan and the registry.
+    #:
+    #: A report said which checks ran and what they found, and nothing said what
+    #: they measured with. Two runs over one build under one plan with different
+    #: minimum prices and different approved bounds produced interchangeable
+    #: evidence, and the standard a build passed was unrecoverable from the
+    #: evidence that it passed.
+    quality_context_hash: str
+    #: The runner that produced this report.
+    runner_version: str
+    #: The check implementations actually invoked, and the governed reason each
+    #: uninvoked one did not run. ``checks_run`` is the plan's vocabulary; this is
+    #: the execution beneath it, and a check id can be absent because no
+    #: implementation applied rather than because nothing exists.
+    implementations_invoked: tuple[str, ...] = ()
+    implementations_not_run: tuple[tuple[str, str], ...] = ()
     policy_versions: Mapping[str, str]
     checks_run: tuple[str, ...]
     checks_not_run: tuple[CheckNotRun, ...]
@@ -163,6 +182,12 @@ class QualityReport:
             {
                 "plan_version": self.plan_version,
                 "subject_build_identity": self.subject_build_identity,
+                "quality_context_hash": self.quality_context_hash,
+                "runner_version": self.runner_version,
+                "implementations_invoked": sorted(self.implementations_invoked),
+                "implementations_not_run": sorted(
+                    list(entry) for entry in self.implementations_not_run
+                ),
                 "policy_versions": dict(self.policy_versions),
                 "checks_run": sorted(self.checks_run),
                 "checks_not_run": sorted(
@@ -206,6 +231,10 @@ def report_from_findings(
     *,
     plan_version: str,
     subject_build_identity: str,
+    quality_context_hash: str,
+    runner_version: str,
+    implementations_invoked: Sequence[str] = (),
+    implementations_not_run: Sequence[tuple[str, str]] = (),
     policy_versions: Mapping[str, str],
     checks_run: Sequence[str],
     checks_not_run: Sequence[CheckNotRun] = (),
@@ -223,6 +252,10 @@ def report_from_findings(
     return QualityReport(
         plan_version=plan_version,
         subject_build_identity=subject_build_identity,
+        quality_context_hash=quality_context_hash,
+        runner_version=runner_version,
+        implementations_invoked=tuple(implementations_invoked),
+        implementations_not_run=tuple(implementations_not_run),
         policy_versions=dict(policy_versions),
         checks_run=tuple(sorted(set(checks_run))),
         checks_not_run=tuple(checks_not_run),
@@ -239,6 +272,10 @@ def encode_quality_report(report: QualityReport) -> dict[str, object]:
     return {
         "plan_version": report.plan_version,
         "subject_build_identity": report.subject_build_identity,
+        "quality_context_hash": report.quality_context_hash,
+        "runner_version": report.runner_version,
+        "implementations_invoked": list(report.implementations_invoked),
+        "implementations_not_run": [list(entry) for entry in report.implementations_not_run],
         "policy_versions": dict(report.policy_versions),
         "checks_run": list(report.checks_run),
         "checks_not_run": [
@@ -284,6 +321,16 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
     report = QualityReport(
         plan_version=str(body["plan_version"]),
         subject_build_identity=str(body["subject_build_identity"]),
+        quality_context_hash=str(body["quality_context_hash"]),
+        runner_version=str(body["runner_version"]),
+        implementations_invoked=tuple(
+            str(item)
+            for item in list(body["implementations_invoked"])  # type: ignore[call-overload]
+        ),
+        implementations_not_run=tuple(
+            (str(entry[0]), str(entry[1]))
+            for entry in list(body["implementations_not_run"])  # type: ignore[call-overload]
+        ),
         policy_versions={
             str(key): str(value)
             for key, value in dict(body["policy_versions"]).items()  # type: ignore[call-overload]

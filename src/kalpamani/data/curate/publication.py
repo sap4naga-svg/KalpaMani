@@ -61,6 +61,7 @@ from kalpamani.data.contracts.entities import (
     SecurityAttribute,
     UniverseMembership,
 )
+from kalpamani.data.contracts.envelope import LineageRef
 from kalpamani.data.contracts.errors import (
     BuildBoundaryError,
     DatasetPublicationError,
@@ -75,7 +76,13 @@ from kalpamani.data.contracts.profiles import (
     TimingBasis,
     evidence_fingerprint,
 )
-from kalpamani.data.contracts.resolution import BoundApprovals, SourceRecord
+from kalpamani.data.contracts.resolution import (
+    BoundApprovals,
+    PitRecord,
+    SourceRecord,
+    decision_available_time,
+    is_eligible,
+)
 from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.serde import (
     decode_corporate_action,
@@ -103,8 +110,8 @@ from kalpamani.data.contracts.vocabulary import (
     StorageLayer,
 )
 from kalpamani.data.curate.build import dataset_row_fingerprint
-from kalpamani.data.curate.lineage import resolve_lineage
-from kalpamani.data.curate.universe import membership_hash_of
+from kalpamani.data.curate.lineage import listing_selector, resolve_lineage
+from kalpamani.data.curate.universe import current_listings, membership_hash_of
 from kalpamani.data.quality.plan import QualityPlan, plan_for
 from kalpamani.data.quality.report import (
     QualityReport,
@@ -112,7 +119,7 @@ from kalpamani.data.quality.report import (
     encode_quality_report,
     report_file_hash,
 )
-from kalpamani.data.quality.runner import require_runner_produced
+from kalpamani.data.quality.runner import RunnerOutcome, require_sealed_outcome
 from kalpamani.data.storage import LocalTableStore
 
 #: Entity tables a Gold dataset version holds, in canonical order.
@@ -190,6 +197,12 @@ class DatasetManifest:
     #: The versioned plan the report is evidence against. A publication naming a
     #: plan this code does not have refuses on read.
     quality_plan_version: str
+    #: Identity of everything the build was judged **against** -- thresholds,
+    #: approvals, cutoffs, the universe rule's parameters, the runner and the
+    #: registry. The manifest bound which checks ran and what they found, and
+    #: nothing bound the standard they applied, so two builds judged to different
+    #: standards produced manifests that could not be told apart.
+    quality_context_hash: str
     tables: tuple[TableRecord, ...]
     source_ingestion_run_ids: tuple[str, ...]
     code_commit_sha: str
@@ -276,6 +289,7 @@ def _manifest_body(manifest: DatasetManifest, *, include_hash: bool) -> dict[str
         "quality_report_hash": manifest.quality_report_hash,
         "quality_report_file_hash": manifest.quality_report_file_hash,
         "quality_plan_version": manifest.quality_plan_version,
+        "quality_context_hash": manifest.quality_context_hash,
         "tables": [
             {
                 "entity": table.entity,
@@ -309,6 +323,7 @@ def _encode_header(header: UniverseSnapshotHeader) -> dict[str, object]:
         "row_count": header.row_count,
         "snapshot_content_hash": header.snapshot_content_hash,
         "derivation_spec_version": header.derivation_spec_version,
+        "universe_definition_hash": header.universe_definition_hash,
         "status": header.status,
         "required_domain_coverage": [
             list(entry) for entry in sorted(header.required_domain_coverage)
@@ -333,6 +348,7 @@ def _decode_header(row: Mapping[str, Any]) -> UniverseSnapshotHeader:
         row_count=int(row["row_count"]),
         snapshot_content_hash=str(row["snapshot_content_hash"]),
         derivation_spec_version=str(row["derivation_spec_version"]),
+        universe_definition_hash=str(row["universe_definition_hash"]),
         envelope=decode_derived_envelope(row["envelope"]),
         required_domain_coverage=tuple(
             (str(entry[0]), int(entry[1]), int(entry[2]))
@@ -378,7 +394,7 @@ def publish_gold_dataset(
     store: LocalTableStore,
     dataset: GoldDataset,
     *,
-    quality_report: QualityReport,
+    quality: RunnerOutcome,
     quality_plan: QualityPlan,
     code_commit_sha: str,
     lag_policy_version: str,
@@ -391,9 +407,11 @@ def publish_gold_dataset(
         BuildBoundaryError: if the dataset's receipt does not account for its
             rows, its evidence, its policy map or its policy version.
         QualityGateError: if a BLOCKING finding stands against the build, the
-            report does not close against ``quality_plan``, or the report was not
-            produced by the quality runner. A checks_run list a caller wrote is a
-            claim about work rather than a product of it.
+            report does not close against ``quality_plan``, or the outcome was not
+            produced by the quality runner over this build. ``quality`` is a
+            sealed :class:`RunnerOutcome` rather than a report precisely because a
+            report's provenance token sat in a copyable field: a checks_run list a
+            caller wrote is a claim about work rather than a product of it.
         DatasetPublicationError: if the version is already published, or a
             required source dataset has no resolution evidence.
     """
@@ -415,14 +433,29 @@ def publish_gold_dataset(
             "holds. A plan is identified by version, and a caller-supplied one under a known "
             "version is a weaker plan wearing a trusted name."
         )
-    # Plan first, provenance second. A report that fails the plan should fail
-    # for the reason it is wrong, not for where it came from.
+    # Provenance is checked far enough ahead to establish that there *is* an
+    # outcome; the plan is still checked before the rest of it, so a report that
+    # fails the plan fails for the reason it is wrong rather than for its origin.
+    if not isinstance(quality, RunnerOutcome):
+        raise QualityGateError(
+            f"Publication of {dataset.dataset_version} was offered a {type(quality).__name__} "
+            "where a sealed RunnerOutcome is required. A quality report on its own is a "
+            "description of a run; only the runner's own outcome is a product of one."
+        )
+    quality_report = quality.report
     registered.validate(quality_report, published_tables=GOLD_ENTITIES)
-    require_runner_produced(
-        quality_report,
+    require_sealed_outcome(
+        quality,
         dataset_version=dataset.dataset_version,
         build_identity=dataset.build_identity,
     )
+    if quality.plan_version != quality_plan.plan_version:
+        raise QualityGateError(
+            f"The quality outcome offered for {dataset.dataset_version} executed plan "
+            f"{quality.plan_version!r} and publication was asked to gate on "
+            f"{quality_plan.plan_version!r}. A run under one plan is not evidence against "
+            "another, however similar the two look."
+        )
     quality_report.require_publishable(dataset_version=dataset.dataset_version)
 
     final = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)
@@ -474,6 +507,7 @@ def publish_gold_dataset(
             resolution_receipt_hash=dataset.resolution_receipt.receipt_hash,
             quality_report_hash=quality_report.report_hash,
             quality_report_file_hash=report_file_hash(quality_report),
+            quality_context_hash=quality.quality_context_hash,
             quality_plan_version=registered.plan_version,
             tables=tuple(tables),
             source_ingestion_run_ids=tuple(sorted(source_ingestion_run_ids)),
@@ -531,6 +565,7 @@ def _with_hash(draft: DatasetManifest) -> DatasetManifest:
         resolution_receipt_hash=draft.resolution_receipt_hash,
         quality_report_hash=draft.quality_report_hash,
         quality_report_file_hash=draft.quality_report_file_hash,
+        quality_context_hash=draft.quality_context_hash,
         quality_plan_version=draft.quality_plan_version,
         tables=draft.tables,
         source_ingestion_run_ids=draft.source_ingestion_run_ids,
@@ -615,6 +650,8 @@ def verification_seal(
             "manifest_hash": manifest.manifest_hash,
             "quality_report_hash": report.report_hash,
             "quality_report_file_hash": manifest.quality_report_file_hash,
+            "quality_context_hash": report.quality_context_hash,
+            "runner_version": report.runner_version,
             "resolution_receipt_hash": dataset.resolution_receipt.receipt_hash,
             "build_identity": dataset.build_identity,
         }
@@ -703,6 +740,7 @@ def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> Da
         resolution_receipt_hash=str(body["resolution_receipt_hash"]),
         quality_report_hash=str(body["quality_report_hash"]),
         quality_report_file_hash=str(body["quality_report_file_hash"]),
+        quality_context_hash=str(body["quality_context_hash"]),
         quality_plan_version=str(body["quality_plan_version"]),
         tables=tuple(
             TableRecord(
@@ -765,6 +803,13 @@ def load_quality_report(store: LocalTableStore, manifest: DatasetManifest) -> Qu
             "bytes -- and a file that can be edited after the gate is not a gate."
         )
     report = decode_quality_report(store.read_json(path))
+    if report.quality_context_hash != manifest.quality_context_hash:
+        raise QualityGateError(
+            f"The stored quality report for {manifest.dataset_version} was measured against "
+            f"context {report.quality_context_hash} and its manifest names "
+            f"{manifest.quality_context_hash}. The standard a build passed is part of what "
+            "the manifest asserts, so a report judged to a different one does not gate it."
+        )
     if report.report_hash != manifest.quality_report_hash:
         raise QualityGateError(
             f"The quality report stored with {manifest.dataset_version} is not the one its "
@@ -1104,23 +1149,34 @@ def _verify_tables(store: LocalTableStore, manifest: DatasetManifest) -> None:
             )
 
 
-def _require_header_covers_its_rows(
+def _require_header_lineage_is_exact(
     session: date,
     header: UniverseSnapshotHeader,
     rows: Sequence[UniverseMembership],
-) -> None:
-    """The header's lineage is a superset of its rows', and names only listing states.
+    *,
+    listings: Sequence[Listing],
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> tuple[PitRecord, ...]:
+    """The header names **exactly** the governed set, and returns what it consumed.
 
-    Replaying the header's lineage proves the rows it names exist. It does not
-    prove they are the *right* rows: a header stripped to a single reference still
-    replayed, and a header naming a ``CHANGE_ANNOUNCEMENT`` -- which the rule
-    explicitly skips -- replayed too. Either way the considered-input evidence
-    said something the build never did.
+    Replaying the header's lineage proves the rows it names exist; a superset
+    check proves it names at least its decisions' inputs. Neither proves it names
+    the *right* set: a header could still name a listing the rule provably never
+    considered, or omit one it did.
+
+    The governed set is recomputable from what was published. The considered
+    listing states are the current listing revisions admissible at this snapshot's
+    own evaluation cutoff under its own profile -- the same rule the builder ran --
+    so the read derives them and requires equality rather than containment.
+
+    Returns the rows the header consumed, so the caller can populate ``inputs``
+    without replaying twice.
 
     Raises:
-        DatasetPublicationError: if a decision's input is missing from the
-            header's lineage, or the header names a listing kind the rule cannot
-            have considered.
+        DatasetPublicationError: if the header omits an input its decisions
+            consumed, names a listing the rule could not have considered, or names
+            a listing kind that is not a state.
     """
     named = set(header.envelope.lineage)
     missing = sorted(
@@ -1138,19 +1194,83 @@ def _require_header_covers_its_rows(
             "The header's lineage is what the snapshot as a whole read, so a decision resting "
             "on evidence the header omits is a decision the snapshot cannot account for."
         )
-    announced = sorted(
-        dict(ref.selector).get("listing_fact_kind", "")
-        for ref in header.envelope.lineage
-        if ref.entity == "listing"
-        and dict(ref.selector).get("listing_fact_kind") != ListingFactKind.STATE.value
-    )
-    if announced:
-        raise DatasetPublicationError(
-            f"The snapshot header for {session.isoformat()} names listing rows of kind "
-            f"{announced}. The rule considers listing **states**; an announcement that a "
-            "listing will change is not one, and naming it claims the rule weighed evidence it "
-            "explicitly skips."
+
+    governed = {
+        LineageRef.of(
+            entity="listing",
+            dataset_version=listing.envelope.dataset_version,
+            selector=listing_selector(listing),
         )
+        for listing in _considered_listings(
+            listings,
+            cutoff=header.evaluation_cutoff,
+            resolved_profile=resolved_profile,
+            approvals=approvals,
+        )
+    }
+    claimed = {ref for ref in header.envelope.lineage if ref.entity == "listing"}
+    unconsidered = sorted(
+        (dict(ref.selector).get("listing_id", ""), ref.dataset_version)
+        for ref in claimed - governed
+    )
+    if unconsidered:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} names listing rows the rule could "
+            f"not have considered: {unconsidered}. The considered set is the current listing "
+            "states admissible at this snapshot's own evaluation cutoff, and it is recomputed "
+            "here rather than taken on trust -- a header naming evidence the rule never weighed "
+            "claims a decision that was never made."
+        )
+    absent = sorted(
+        (dict(ref.selector).get("listing_id", ""), ref.dataset_version)
+        for ref in governed - claimed
+    )
+    if absent:
+        raise DatasetPublicationError(
+            f"The snapshot header for {session.isoformat()} omits listing rows the rule did "
+            f"consider: {absent}. A security examined and excluded is part of what the "
+            "snapshot decided, and a header that drops it cannot account for the exclusion."
+        )
+    return (
+        *sorted(
+            _considered_listings(
+                listings,
+                cutoff=header.evaluation_cutoff,
+                resolved_profile=resolved_profile,
+                approvals=approvals,
+            ),
+            key=lambda item: (item.security_id, item.listing_id),
+        ),
+        *rows,
+    )
+
+
+def _considered_listings(
+    listings: Sequence[Listing],
+    *,
+    cutoff: datetime,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> tuple[Listing, ...]:
+    """The listing states the universe rule would have weighed at ``cutoff``.
+
+    The builder's own rule, recomputed: admissible under the profile at the
+    session's evaluation cutoff, current revision, and a ``STATE`` -- an
+    announcement that a listing will change is not a listing state, and treating
+    it as one would let an announced future delisting decide today's membership.
+    """
+    admissible = [
+        listing
+        for listing in listings
+        if is_eligible(listing, resolved_profile)
+        and (available := decision_available_time(listing, resolved_profile, approvals)) is not None
+        and available <= cutoff
+    ]
+    return tuple(
+        listing
+        for listing in current_listings(admissible)
+        if listing.listing_fact_kind is ListingFactKind.STATE
+    )
 
 
 def _verify_snapshot_headers(
@@ -1257,7 +1377,18 @@ def _verify_one_header(
         resolved_profile=manifest.resolved_profile,
         approvals=approvals,
     )
-    _require_header_covers_its_rows(session, header, rows)
+    consumed = _require_header_lineage_is_exact(
+        session,
+        header,
+        rows,
+        listings=listings,
+        resolved_profile=manifest.resolved_profile,
+        approvals=approvals,
+    )
+    # The header is a derived artifact, so it needs its inputs to have an
+    # availability at all. Without them the quality checks cannot reason about it,
+    # which is exactly why they never examined one.
+    object.__setattr__(header, "inputs", consumed)
 
     for row in rows:
         if row.session_date != header.session_date:

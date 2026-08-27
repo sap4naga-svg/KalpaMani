@@ -46,6 +46,7 @@ from kalpamani.data.curate.universe import (
 from kalpamani.data.quality.checks import QualityFinding
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
+from kalpamani.data.quality.runner import QUALITY_RUNNER_VERSION
 from kalpamani.data.storage import LocalTableStore
 
 pytestmark = pytest.mark.unit
@@ -160,7 +161,7 @@ def test_raw_gold_rows_cannot_be_published(tmp_path: Path) -> None:
         publish_gold_dataset(
             LocalTableStore(tmp_path),
             tampered,
-            quality_report=phase3a.quality_report(tampered),
+            quality=phase3a.quality_outcome(tampered),
             quality_plan=PHASE3A_QUALITY_PLAN,
             code_commit_sha=phase3a.CODE_COMMIT_SHA,
             lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -253,6 +254,8 @@ def test_a_report_that_ran_no_checks_is_not_evidence() -> None:
             (),
             plan_version=PHASE3A_QUALITY_PLAN.plan_version,
             subject_build_identity=_SUBJECT,
+            quality_context_hash="hand-authored, not a run",
+            runner_version=QUALITY_RUNNER_VERSION,
             policy_versions={"market": "x"},
             checks_run=(),
             datasets_covered=("price_bar",),
@@ -286,6 +289,10 @@ def test_the_report_hash_ignores_when_the_checks_ran() -> None:
         ],
         plan_version=first.plan_version,
         subject_build_identity=first.subject_build_identity,
+        quality_context_hash=first.quality_context_hash,
+        runner_version=first.runner_version,
+        implementations_invoked=first.implementations_invoked,
+        implementations_not_run=first.implementations_not_run,
         policy_versions=dict(first.policy_versions),
         checks_run=first.checks_run,
         checks_not_run=tuple(
@@ -330,13 +337,21 @@ def _defective_dataset() -> GoldDataset:
     )
 
 
-def test_a_publication_requires_a_quality_report() -> None:
-    """There is no default and no empty fallback."""
+def test_a_publication_requires_a_sealed_quality_outcome() -> None:
+    """There is no default, no empty fallback, and no report-shaped alternative.
+
+    It takes the outcome rather than the report because a report's provenance
+    token sat in a copyable dataclass field, and copying it was one call.
+    """
     import inspect
 
-    parameter = inspect.signature(publish_gold_dataset).parameters["quality_report"]
+    from kalpamani.data.quality.runner import RunnerOutcome
+
+    parameter = inspect.signature(publish_gold_dataset).parameters["quality"]
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.annotation == "RunnerOutcome"
+    assert not dataclasses.is_dataclass(RunnerOutcome)
 
 
 def test_a_reader_takes_no_issue_list_at_all() -> None:
@@ -498,7 +513,7 @@ def _publish_variant(store: LocalTableStore, dataset: GoldDataset) -> str:
     _, manifest = publish_gold_dataset(
         store,
         dataset,
-        quality_report=phase3a.quality_report(dataset),
+        quality=phase3a.quality_outcome(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -551,7 +566,7 @@ def test_a_quality_report_change_changes_publication_identity(tmp_path: Path) ->
     _, manifest = publish_gold_dataset(
         store,
         dataset,
-        quality_report=phase3a.quality_report(dataset),
+        quality=phase3a.quality_outcome(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
@@ -575,7 +590,7 @@ def test_a_row_count_that_does_not_match_the_table_is_refused(tmp_path: Path) ->
     publish_gold_dataset(
         store,
         dataset,
-        quality_report=phase3a.quality_report(dataset),
+        quality=phase3a.quality_outcome(dataset),
         quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
