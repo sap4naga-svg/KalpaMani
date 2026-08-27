@@ -60,6 +60,7 @@ from kalpamani.data.contracts.vocabulary import (
     GlobalProfileResolution,
     InformationSetProfile,
     LimitationToken,
+    ListingFactKind,
     QualitySeverity,
     StorageLayer,
 )
@@ -67,11 +68,14 @@ from kalpamani.data.curate.adjustment import (
     ADJUSTMENT_CONVENTION,
     ADJUSTMENT_SPEC_VERSION,
     MULTI_SECURITY_SCOPE_PREFIX,
+    action_lineage_hash,
     adjusted_series,
     admissible_actions,
     artifact_id_for,
     artifact_key,
+    bar_lineage_hash,
     build_adjusted_bar_artifact,
+    relevant_actions,
     verify_adjusted_bar_artifact,
 )
 from kalpamani.data.curate.publication import (
@@ -85,7 +89,9 @@ from kalpamani.data.curate.publication import (
 from kalpamani.data.curate.resolution_run import resolve_run_inputs
 from kalpamani.data.curate.universe import (
     UniverseDefinition,
+    build_snapshot_header,
     build_universe_snapshot,
+    current_listings,
     membership_hash_of,
     snapshot_content_hash,
 )
@@ -93,6 +99,7 @@ from kalpamani.data.ingest.bronze import BronzeStore, RetrievalMetadata
 from kalpamani.data.normalize.silver import BarLagPolicy, SessionCalendar, normalize_price_bars
 from kalpamani.data.pit.accessors import PointInTimeReader, _minute_endpoints
 from kalpamani.data.quality.checks import QualityFinding, check_price_bars
+from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.storage import LocalTableStore
 
 pytestmark = pytest.mark.integration
@@ -313,6 +320,7 @@ def _publish(store: LocalTableStore, dataset: Any, **kwargs: Any) -> Any:
         store,
         dataset,
         quality_report=kwargs.pop("quality_report", phase3a.quality_report()),
+        quality_plan=kwargs.pop("quality_plan", PHASE3A_QUALITY_PLAN),
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
@@ -322,12 +330,24 @@ def _publish(store: LocalTableStore, dataset: Any, **kwargs: Any) -> Any:
 
 
 def _read(store: LocalTableStore, *, requested: InformationSetProfile = PUBLIC) -> Any:
-    return read_published_dataset(
+    """The verified read, unpacked to the triplet the older assertions expect.
+
+    ``read_published_dataset`` returns a ``VerifiedPublication`` now, because the
+    reader accepts nothing else. Unpacking here keeps the assertions about the
+    three artifacts readable without giving any test a way to build one.
+    """
+    publication = read_published_dataset(
         store,
         dataset_version=phase3a.DATASET_VERSION,
         config=phase3a.resolution(requested=requested),
         approvals=phase3a.approvals(),
     )
+    return publication.dataset, publication.manifest, publication.quality_report
+
+
+def _snapshot_rows(*args: Any, **kwargs: Any) -> Any:
+    """One session's membership rows, from the build that also names its inputs."""
+    return build_universe_snapshot(*args, **kwargs).rows
 
 
 def test_a_published_dataset_round_trips_through_verified_storage(tmp_path: Path) -> None:
@@ -446,16 +466,14 @@ def test_a_reader_refuses_a_dataset_resolved_under_another_profile(tmp_path: Pat
 
 def test_a_reader_refuses_a_dataset_resolved_under_another_policy(tmp_path: Path) -> None:
     store = LocalTableStore(tmp_path)
-    dataset, manifest, report = phase3a.publish(store)
+    publication = phase3a.publish(store)
     other = ProfileResolutionConfig(
         requested_profile=PUBLIC,
         resolution_policy_version="profres/other",
         dataset_resolutions=phase3a.resolution().dataset_resolutions,
     )
     with pytest.raises(DatasetPublicationError, match="resolved under policy"):
-        PointInTimeReader(
-            dataset, manifest, report, resolution=other, approvals=phase3a.approvals()
-        )
+        PointInTimeReader(publication, resolution=other, approvals=phase3a.approvals())
 
 
 def test_a_reader_refuses_a_dataset_whose_policy_reason_differs(tmp_path: Path) -> None:
@@ -465,7 +483,7 @@ def test_a_reader_refuses_a_dataset_whose_policy_reason_differs(tmp_path: Path) 
     would then describe a resolution nobody performed.
     """
     store = LocalTableStore(tmp_path)
-    dataset, manifest, report = phase3a.publish(store)
+    publication = phase3a.publish(store)
     restated = ProfileResolutionConfig(
         requested_profile=PUBLIC,
         resolution_policy_version=phase3a.RESOLUTION_POLICY_VERSION,
@@ -479,9 +497,7 @@ def test_a_reader_refuses_a_dataset_whose_policy_reason_differs(tmp_path: Path) 
         ),
     )
     with pytest.raises(DatasetPublicationError, match="different resolution map"):
-        PointInTimeReader(
-            dataset, manifest, report, resolution=restated, approvals=phase3a.approvals()
-        )
+        PointInTimeReader(publication, resolution=restated, approvals=phase3a.approvals())
 
 
 def test_two_builds_from_the_same_inputs_produce_the_same_identity(tmp_path: Path) -> None:
@@ -521,6 +537,47 @@ def _artifact(**overrides: Any) -> AdjustedBarArtifact:
     bars = overrides.pop("bars", _continuous_bars())
     kwargs.update(overrides)
     return build_adjusted_bar_artifact(bars, phase3a.corporate_actions(), **kwargs)
+
+
+def _key(*, as_of: Any, bars: Any = None, actions: Any = None) -> dict[str, Any]:
+    """The artifact key for the continuous-security fixture, at one cutoff.
+
+    Built here rather than inline because the key now covers the validity
+    interval, the bar resolution and the exact rows consumed -- the four things
+    whose absence let two different artifacts share one identity.
+    """
+    rows = _continuous_bars() if bars is None else bars
+    admitted = (
+        admissible_actions(
+            relevant_actions(
+                phase3a.corporate_actions(),
+                security_id_scope=SCOPE,
+                policy=AdjustmentPolicy.SPLIT_ONLY,
+                valid_time_start=VALID_START,
+                valid_time_end=VALID_END,
+                securities=sorted({bar.security_id for bar in rows}),
+            ),
+            as_of_epoch=as_of,
+            resolved_profile=PUBLIC,
+            approvals=phase3a.approvals(),
+        )
+        if actions is None
+        else actions
+    )
+    return artifact_key(
+        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
+        adjustment_convention=ADJUSTMENT_CONVENTION,
+        resolved_profile=PUBLIC,
+        as_of_epoch=as_of,
+        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
+        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
+        security_id_scope=SCOPE,
+        bar_resolution=rows[0].resolution,
+        valid_time_start=VALID_START,
+        valid_time_end=VALID_END,
+        price_bar_lineage_hash=bar_lineage_hash(rows),
+        action_lineage_hash=action_lineage_hash(admitted),
+    )
 
 
 def test_an_action_announced_after_as_of_is_not_applied() -> None:
@@ -599,15 +656,7 @@ def test_the_adjustment_convention_is_named_everywhere_it_is_used() -> None:
     assert ADJUSTMENT_CONVENTION.value in ADJUSTMENT_SPEC_VERSION
     assert artifact.envelope.derivation_spec_version == ADJUSTMENT_SPEC_VERSION
 
-    key = artifact_key(
-        adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-        adjustment_convention=ADJUSTMENT_CONVENTION,
-        resolved_profile=PUBLIC,
-        as_of_epoch=AFTER_EVERYTHING,
-        corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-        raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-        security_id_scope=SCOPE,
-    )
+    key = _key(as_of=AFTER_EVERYTHING)
     assert key["adjustment_convention"] == ADJUSTMENT_CONVENTION.value
     assert artifact.artifact_id == artifact_id_for(key)
 
@@ -709,17 +758,7 @@ def test_a_different_as_of_produces_a_different_artifact_identity() -> None:
     """ "The adjusted close on a date" is a number per information set."""
 
     def identity(as_of: Any) -> str:
-        return artifact_id_for(
-            artifact_key(
-                adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
-                adjustment_convention=ADJUSTMENT_CONVENTION,
-                resolved_profile=PUBLIC,
-                as_of_epoch=as_of,
-                corporate_action_dataset_version=phase3a.ACTION_DATASET_VERSION,
-                raw_bar_dataset_version=phase3a.BAR_DATASET_VERSION,
-                security_id_scope=SCOPE,
-            )
-        )
+        return artifact_id_for(_key(as_of=as_of))
 
     assert identity(BEFORE_ANNOUNCEMENT) != identity(AFTER_EVERYTHING)
 
@@ -849,7 +888,7 @@ def test_a_rule_that_genuinely_selects_nobody_still_publishes() -> None:
         eligible_exchanges=phase3a.universe_definition().eligible_exchanges,
         eligible_security_types=phase3a.universe_definition().eligible_security_types,
     )
-    rows = build_universe_snapshot(
+    rows = _snapshot_rows(
         phase3a.universe_inputs(),
         session_date=date(2019, 6, 27),
         evaluation_cutoff=phase3a.session_open(date(2019, 6, 27)),
@@ -893,7 +932,7 @@ def test_a_definition_declaring_an_unavailable_threshold_is_refused() -> None:
         min_market_cap=Decimal(1_500_000_000),
     )
     with pytest.raises(RequiredInputUnavailableError, match="REQUIRED_INPUT_UNAVAILABLE"):
-        build_universe_snapshot(
+        _snapshot_rows(
             phase3a.universe_inputs(),
             session_date=date(2019, 6, 27),
             evaluation_cutoff=phase3a.session_open(date(2019, 6, 27)),
@@ -979,21 +1018,31 @@ def test_a_zero_row_snapshot_round_trips_as_a_present_snapshot(tmp_path: Path) -
 
 
 def _dataset_with_empty_snapshot(dataset: Any) -> Any:
-    """The same build with one session's membership rows removed, header kept."""
-    from kalpamani.data.contracts.dataset import UniverseSnapshotHeader
+    """The same build with one session's membership rows removed, header rebuilt.
 
+    The header is rebuilt through :func:`build_snapshot_header`, not assembled
+    field by field: it is a derived artifact with lineage and an identity hash,
+    and a test able to fabricate one would be testing a route production does not
+    have.
+    """
     session = date(2019, 6, 27)
     header = dataset.universe_headers[session]
     universe = {key: () if key == session else rows for key, rows in dataset.universe.items()}
     headers = dict(dataset.universe_headers)
-    headers[session] = UniverseSnapshotHeader(
-        session_date=header.session_date,
-        universe_definition_version=header.universe_definition_version,
+    headers[session] = build_snapshot_header(
+        (),
+        session_date=session,
+        definition=phase3a.universe_definition(),
         resolved_profile=header.resolved_profile,
         evaluation_cutoff=header.evaluation_cutoff,
-        row_count=0,
-        snapshot_content_hash=snapshot_content_hash(()),
-        derivation_spec_version=header.derivation_spec_version,
+        considered_listings=[
+            listing
+            for listing in current_listings(dataset.listings)
+            if listing.listing_fact_kind is ListingFactKind.STATE
+        ],
+        artifact_first_built_time=header.envelope.artifact_first_built_time,
+        ingestion_time=header.envelope.ingestion_time,
+        dataset_version=dataset.dataset_version,
     )
     return type(dataset)(
         dataset_version=dataset.dataset_version,
@@ -1075,7 +1124,7 @@ def test_an_open_blocking_finding_refuses_every_dependent_query(tmp_path: Path) 
 def test_quality_evidence_cannot_be_edited_after_the_gate(tmp_path: Path) -> None:
     """Swapping the evidence after the gate is what the binding prevents."""
     warning = QualityFinding(
-        check_name="5.7_zero_volume_on_a_regular_session",
+        check_name="5.2_non_positive_price_or_negative_volume",
         severity=QualitySeverity.WARNING,
         dataset="price_bar",
         detail="synthetic warning",
@@ -1095,7 +1144,9 @@ def test_quality_evidence_cannot_be_edited_after_the_gate(tmp_path: Path) -> Non
     body["findings"] = []
     path.write_text(json.dumps(body), encoding="utf-8")
 
-    with pytest.raises(QualityGateError, match="does not reconcile"):
+    # The file hash is checked before the body is decoded, so an edited report is
+    # refused as edited bytes rather than as a report that fails to reconcile.
+    with pytest.raises(QualityGateError, match="hashes to"):
         _read(store)
 
 

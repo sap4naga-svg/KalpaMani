@@ -42,6 +42,7 @@ from kalpamani.data.curate.universe import (
     build_universe_snapshot,
     current_listings,
 )
+from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
 from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
 from kalpamani.data.storage import LocalTableStore
 
@@ -143,14 +144,13 @@ def test_raw_gold_rows_cannot_be_published(tmp_path: Path) -> None:
         universe=dataset.universe,
         universe_headers=dataset.universe_headers,
     )
-    assert dataset_row_fingerprint(tampered) != (
-        tampered.resolution_receipt.row_identity_fingerprint
-    )
-    with pytest.raises(BuildBoundaryError, match="does not account for the rows"):
+    assert dataset_row_fingerprint(tampered) != tampered.resolution_receipt.row_fingerprint
+    with pytest.raises(BuildBoundaryError, match="does not describe this build"):
         publish_gold_dataset(
             LocalTableStore(tmp_path),
             tampered,
             quality_report=phase3a.quality_report(),
+            quality_plan=PHASE3A_QUALITY_PLAN,
             code_commit_sha=phase3a.CODE_COMMIT_SHA,
             lag_policy_version=phase3a.LAG_POLICY_VERSION,
             universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
@@ -240,6 +240,7 @@ def test_a_report_that_ran_no_checks_is_not_evidence() -> None:
     with pytest.raises(QualityGateError, match="ran no checks"):
         report_from_findings(
             (),
+            plan_version=PHASE3A_QUALITY_PLAN.plan_version,
             policy_versions={"market": "x"},
             checks_run=(),
             datasets_covered=("price_bar",),
@@ -260,6 +261,7 @@ def test_the_report_hash_ignores_when_the_checks_ran() -> None:
     first = phase3a.quality_report()
     later = report_from_findings(
         (),
+        plan_version=first.plan_version,
         policy_versions=dict(first.policy_versions),
         checks_run=first.checks_run,
         checks_not_run=tuple(
@@ -280,7 +282,7 @@ def test_the_report_hash_changes_with_a_finding() -> None:
     warned = phase3a.quality_report(
         findings=(
             QualityFinding(
-                check_name="5.7_zero_volume_on_a_regular_session",
+                check_name="5.2_non_positive_price_or_negative_volume",
                 severity=QualitySeverity.WARNING,
                 dataset="price_bar",
                 detail="synthetic",
@@ -304,12 +306,20 @@ def test_a_reader_takes_no_issue_list_at_all() -> None:
     """A caller cannot obtain a clean reader by omitting evidence."""
     import inspect
 
+    from kalpamani.data.curate.publication import VerifiedPublication
     from kalpamani.data.pit.accessors import PointInTimeReader
 
     parameters = inspect.signature(PointInTimeReader.__init__).parameters
     assert "open_issues" not in parameters
-    assert "quality_report" in parameters
-    assert parameters["quality_report"].default is inspect.Parameter.empty
+    assert "quality_report" not in parameters, (
+        "The report is no longer a separate argument -- passing it beside a dataset and a "
+        "manifest is exactly the hand-assembled triplet the reader must not accept."
+    )
+    assert parameters["publication"].annotation in {
+        VerifiedPublication,
+        "VerifiedPublication",
+    }
+    assert parameters["publication"].default is inspect.Parameter.empty
 
 
 # ---------------------------------------------------------------------------
@@ -322,9 +332,6 @@ def _inputs(**overrides: object) -> UniverseBuildInputs:
         "listings": phase3a.listings(),
         "attributes": phase3a.attributes(),
         "bars": phase3a.bars(),
-        "listing_dataset_version": phase3a.DATASET_VERSION,
-        "attribute_dataset_version": phase3a.DATASET_VERSION,
-        "bar_dataset_version": phase3a.DATASET_VERSION,
     }
     base.update(overrides)
     return UniverseBuildInputs(**base)  # type: ignore[arg-type]
@@ -455,6 +462,7 @@ def _publish_variant(store: LocalTableStore, dataset: GoldDataset) -> str:
         store,
         dataset,
         quality_report=phase3a.quality_report(),
+        quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
@@ -507,13 +515,14 @@ def test_a_quality_report_change_changes_publication_identity(tmp_path: Path) ->
         quality_report=phase3a.quality_report(
             findings=(
                 QualityFinding(
-                    check_name="5.7_zero_volume_on_a_regular_session",
+                    check_name="5.2_non_positive_price_or_negative_volume",
                     severity=QualitySeverity.WARNING,
                     dataset="price_bar",
                     detail="synthetic",
                 ),
             )
         ),
+        quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
@@ -532,6 +541,7 @@ def test_a_row_count_that_does_not_match_the_table_is_refused(tmp_path: Path) ->
         store,
         dataset,
         quality_report=phase3a.quality_report(),
+        quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=phase3a.CODE_COMMIT_SHA,
         lag_policy_version=phase3a.LAG_POLICY_VERSION,
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
@@ -554,7 +564,12 @@ def test_a_row_count_that_does_not_match_the_table_is_refused(tmp_path: Path) ->
 def test_a_quality_report_is_required_for_a_reader(tmp_path: Path) -> None:
     """The three come back together, and the reader will not take two of them."""
     store = LocalTableStore(tmp_path)
-    dataset, manifest, report = phase3a.publish(store)
+    publication = phase3a.publish(store)
+    dataset, manifest, report = (
+        publication.dataset,
+        publication.manifest,
+        publication.quality_report,
+    )
     assert isinstance(report, QualityReport)
     assert manifest.quality_report_hash == report.report_hash
     assert dataset.resolution_receipt.resolved_profile is manifest.resolved_profile

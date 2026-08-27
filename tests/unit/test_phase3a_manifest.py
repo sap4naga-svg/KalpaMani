@@ -17,7 +17,7 @@ from typing import Any, cast
 import pytest
 
 from fixtures import phase3a
-from kalpamani.data.contracts.canonical import content_hash
+from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.errors import ManifestRefusedError
 from kalpamani.data.contracts.manifest import (
     MANIFEST_VERSION,
@@ -141,9 +141,11 @@ def _manifest(**overrides: object) -> ResearchManifest:
         "inputs": _inventory(),
         "definitions": {"universe_definition_version": phase3a.UNIVERSE_DEFINITION_VERSION},
         "limitations": _tokens(config, evidence),
-        "quality": QualitySummary(blocking_issues_open=0, warnings_open=2),
+        "quality": QualitySummary(
+            blocking_issues_open=0, warnings_open=2, quality_report_hash="sha256:quality"
+        ),
         "random_seed": 20260826,
-        "result_artifact_hash": content_hash(RESULT_BYTES.decode("utf-8")),
+        "result_artifact_hash": sha256_hex(RESULT_BYTES),
     }
     base.update(overrides)
     return ResearchManifest(**base)  # type: ignore[arg-type]
@@ -159,7 +161,7 @@ def _inventory(**overrides: object) -> InputInventory:
         ),
         "dataset_manifest_hashes": {phase3a.DATASET_VERSION: "sha256:publication"},
         "quality_report_hash": "sha256:quality",
-        "result_artifact_hash": content_hash(RESULT_BYTES.decode("utf-8")),
+        "result_artifact_hash": sha256_hex(RESULT_BYTES),
     }
     base.update(overrides)
     return InputInventory(**base)  # type: ignore[arg-type]
@@ -693,12 +695,29 @@ def test_a_positive_exclusion_with_its_token_passes() -> None:
         origin_exclusions=(
             OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=2),
         ),
+        inputs=_inventory(origin_exclusion_rows=2),
         limitations=(
             *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
         ),
     )
     assert _emit(manifest) is not None
+
+
+def test_an_exclusion_count_that_disagrees_with_the_run_refuses() -> None:
+    """A limitation whose magnitude is misstated is not evidence of that limitation."""
+    manifest = _manifest(
+        origin_exclusions=(
+            OriginExclusion(dataset="price_bar", information_origin="PROVIDER_DERIVED", rows=2),
+        ),
+        inputs=_inventory(origin_exclusion_rows=9),
+        limitations=(
+            *_default_tokens(),
+            LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
+        ),
+    )
+    with pytest.raises(ManifestRefusedError, match="the manifest itemises"):
+        _emit(manifest)
 
 
 def test_a_bound_resolution_without_its_token_refuses() -> None:
@@ -736,17 +755,26 @@ def test_an_unavailable_domain_must_carry_its_limitation() -> None:
 
 
 def test_an_unapproved_bound_or_hash_mismatch_refuses() -> None:
+    """Both come from the run's own execution evidence, never from an argument.
+
+    They used to be ``emit_manifest`` parameters, which made the only route to
+    either finding a caller volunteering it -- and the caller is the party with a
+    reason to stay quiet.
+    """
     with pytest.raises(ManifestRefusedError, match="unapproved bound was relied upon"):
         emit_manifest(
-            _manifest(),
+            _manifest(
+                inputs=_inventory(
+                    bounds_relied_upon=("price_bar",),
+                    unapproved_bounds_relied_upon=("price_bar",),
+                )
+            ),
             result_bytes=RESULT_BYTES,
-            unapproved_bounds_relied_upon=["price_bar:SESSION_CLOSE_PLUS_LAG"],
         )
     with pytest.raises(ManifestRefusedError, match="content hash failed to verify"):
         emit_manifest(
-            _manifest(),
+            _manifest(inputs=_inventory(hash_mismatches=("gold/synthetic.a1.1",))),
             result_bytes=RESULT_BYTES,
-            hash_mismatches=["gold/synthetic.a1.1"],
         )
 
 

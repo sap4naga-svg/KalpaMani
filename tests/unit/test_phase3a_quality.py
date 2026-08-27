@@ -14,7 +14,13 @@ from decimal import Decimal
 import pytest
 
 from fixtures import phase3a
-from kalpamani.data.contracts.entities import PriceBar, SecurityAttribute, UniverseMembership
+from kalpamani.data.contracts.dataset import GoldDataset
+from kalpamani.data.contracts.entities import (
+    Listing,
+    PriceBar,
+    SecurityAttribute,
+    UniverseMembership,
+)
 from kalpamani.data.contracts.envelope import FactAnchor, SourceEnvelope
 from kalpamani.data.contracts.serde import encode_price_bar, encode_universe_membership
 from kalpamani.data.contracts.vocabulary import (
@@ -485,15 +491,47 @@ def test_a_ticker_overlapping_two_securities_is_blocking() -> None:
     assert "6.1_ticker_history_overlap" in _names(findings)
 
 
+def _build(
+    snapshots: dict[date, tuple[UniverseMembership, ...]] | None = None,
+    *,
+    build_time: datetime | None = None,
+    listings: tuple[Listing, ...] | None = None,
+    resolved_profile: InformationSetProfile | None = None,
+) -> GoldDataset:
+    """A build carrying the snapshots and horizon a survivorship case needs.
+
+    The check reads its horizon from the build's own ``build_time`` rather than
+    from a caller-supplied cutoff, so an adversarial case moves the build rather
+    than the argument -- which is the point: there is no argument left to move.
+    """
+    base = phase3a.gold_dataset()
+    universe = base.universe if snapshots is None else snapshots
+    return GoldDataset(
+        dataset_version=base.dataset_version,
+        build_time=base.build_time if build_time is None else build_time,
+        coverage_start=base.coverage_start,
+        coverage_end=base.coverage_end,
+        resolved_profile=(base.resolved_profile if resolved_profile is None else resolved_profile),
+        resolution_policy_version=base.resolution_policy_version,
+        resolution_receipt=base.resolution_receipt,
+        resolution_evidence=base.resolution_evidence,
+        sessions=base.sessions,
+        listings=base.listings if listings is None else listings,
+        attributes=base.attributes,
+        tickers=base.tickers,
+        bars=base.bars,
+        actions=base.actions,
+        universe=universe,
+        universe_headers=base.universe_headers,
+    )
+
+
 def test_the_reference_universe_snapshots_pass() -> None:
     """NEGATIVE CONTROL. Correctly built history is not flagged."""
     findings = check_universe_snapshots(
-        phase3a.universe_snapshots(),
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert findings == (), _names(findings)
 
@@ -520,24 +558,18 @@ def test_a_universe_rebuilt_from_current_listings_is_refused() -> None:
         for session, rows in phase3a.universe_snapshots().items()
     }
     findings = check_universe_snapshots(
-        reconstructed,
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(reconstructed),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.3_survivorship_leakage" in _names(findings)
 
 
 def test_a_membership_keyed_to_the_wrong_profile_is_blocking() -> None:
     findings = check_universe_snapshots(
-        phase3a.universe_snapshots(resolved_profile=PUBLIC),
-        listings=phase3a.listings(),
-        resolved_profile=FORWARD,
+        _build(phase3a.universe_snapshots(resolved_profile=PUBLIC), resolved_profile=FORWARD),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.8_profile_free_or_mismatched_universe" in _names(findings)
 
@@ -547,12 +579,9 @@ def test_eligibility_evaluated_from_inadmissible_data_is_blocking() -> None:
     snapshots = phase3a.universe_snapshots()
     impossible_cutoffs = {session: phase3a.utc(2015, 1, 1) for session in snapshots}
     findings = check_universe_snapshots(
-        snapshots,
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(snapshots),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=impossible_cutoffs,
-        dataset_cutoff=phase3a.BUILD_TIME.date(),
     )
     assert "6.6_eligibility_from_inadmissible_data" in _names(findings)
 
@@ -572,24 +601,18 @@ def test_a_recent_snapshot_with_no_delistings_yet_is_not_faulted() -> None:
     }
 
     near_cutoff = check_universe_snapshots(
-        survivors_only,
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(survivors_only, build_time=phase3a.utc(2021, 6, 1, 12)),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=date(2021, 6, 1),
     )
     assert _names(near_cutoff) == set(), (
         "Within the deep-history window nothing is concluded, so nothing is faulted."
     )
 
     deep_cutoff = check_universe_snapshots(
-        survivors_only,
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(survivors_only, build_time=phase3a.utc(2030, 1, 1, 12)),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=date(2030, 1, 1),
     )
     assert "6.3_survivorship_leakage" in _names(deep_cutoff), (
         "Far enough back, the same snapshot is deep history and the alarm applies."
@@ -623,18 +646,17 @@ def test_the_survivorship_policy_is_named_and_versioned() -> None:
         minimum_eligible_snapshots=2,
     )
     findings = check_universe_snapshots(
-        {
-            date(2019, 6, 27): tuple(
-                row
-                for row in phase3a.universe_snapshots()[date(2019, 6, 27)]
-                if row.security_id == phase3a.SEC_CONTINUOUS
-            )
-        },
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(
+            {
+                date(2019, 6, 27): tuple(
+                    row
+                    for row in phase3a.universe_snapshots()[date(2019, 6, 27)]
+                    if row.security_id == phase3a.SEC_CONTINUOUS
+                )
+            }
+        ),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=phase3a.BUILD_TIME.date(),
         survivorship_policy=lenient,
     )
     assert _names(findings) == set(), (
@@ -656,33 +678,41 @@ def test_survivorship_ignores_an_announcement_only_future_delisting() -> None:
         if listing.listing_fact_kind is ListingFactKind.CHANGE_ANNOUNCEMENT
         or listing.listing_end is None
     )
-    assert subsequently_delisted(announced_only, dataset_cutoff=date(2030, 1, 1)) == frozenset()
+    assert (
+        subsequently_delisted(
+            announced_only, after_session=date(2015, 1, 1), horizon=date(2030, 1, 1)
+        )
+        == frozenset()
+    )
 
-    assert phase3a.SEC_DELISTED in subsequently_delisted(listings, dataset_cutoff=date(2030, 1, 1))
+    assert phase3a.SEC_DELISTED in subsequently_delisted(
+        listings, after_session=date(2015, 1, 1), horizon=date(2030, 1, 1)
+    )
 
 
 def test_survivorship_ignores_a_delisting_after_the_dataset_horizon() -> None:
     """The build cannot have observed it, so it is not evidence the build holds."""
     listings = phase3a.listings()
-    early = subsequently_delisted(listings, dataset_cutoff=date(2019, 1, 1))
-    later = subsequently_delisted(listings, dataset_cutoff=date(2024, 1, 1))
+    early = subsequently_delisted(
+        listings, after_session=date(2015, 1, 1), horizon=date(2019, 1, 1)
+    )
+    later = subsequently_delisted(
+        listings, after_session=date(2015, 1, 1), horizon=date(2024, 1, 1)
+    )
     assert phase3a.SEC_DELISTED not in early
     assert phase3a.SEC_DELISTED in later
     assert phase3a.SEC_RENAMED in later, "Its 2023 delisting is inside the later horizon."
     assert phase3a.SEC_RENAMED not in subsequently_delisted(
-        listings, dataset_cutoff=date(2022, 1, 1)
+        listings, after_session=date(2015, 1, 1), horizon=date(2022, 1, 1)
     )
 
 
 def test_the_deep_history_window_is_leap_day_safe() -> None:
     """29 February minus five years is not a date, and the alarm must not raise."""
     findings = check_universe_snapshots(
-        phase3a.universe_snapshots(),
-        listings=phase3a.listings(),
-        resolved_profile=PUBLIC,
+        _build(build_time=phase3a.utc(2028, 2, 29, 12)),
         approvals=phase3a.approvals(),
         evaluation_cutoffs=phase3a.evaluation_cutoffs(),
-        dataset_cutoff=date(2028, 2, 29),
     )
     assert _names(findings) == set()
 

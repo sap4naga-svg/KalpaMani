@@ -82,7 +82,8 @@ from kalpamani.data.contracts.vocabulary import (
 )
 from kalpamani.data.curate.build import build_gold_dataset
 from kalpamani.data.curate.publication import (
-    DatasetManifest,
+    GOLD_ENTITIES,
+    VerifiedPublication,
     publish_gold_dataset,
     read_published_dataset,
 )
@@ -94,6 +95,7 @@ from kalpamani.data.quality.checks import (
     DEFAULT_SURVIVORSHIP_POLICY,
     QualityFinding,
 )
+from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement
 from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
 from kalpamani.data.storage import LocalTableStore
 
@@ -818,6 +820,11 @@ DIRECTLY_READ_DATASETS = (
     "ticker_history",
 )
 
+#: What the quality report covers: every source dataset plus every table the
+#: build publishes. The plan compares this against the publication, so a table
+#: nothing checked cannot be published as though something had.
+QUALITY_COVERAGE = tuple(sorted(set(DIRECTLY_READ_DATASETS) | set(GOLD_ENTITIES)))
+
 
 def resolution(
     *,
@@ -898,14 +905,15 @@ def evaluation_cutoffs() -> dict[date, datetime]:
 
 
 def universe_inputs() -> UniverseBuildInputs:
-    """Everything a universe build reads, named so lineage can be complete."""
+    """Everything a universe build reads.
+
+    No dataset-version arguments: each row already knows which source build it
+    came from, and lineage reads that rather than being told.
+    """
     return UniverseBuildInputs(
         listings=listings(),
         attributes=attributes(),
         bars=bars(),
-        listing_dataset_version=LISTING_DATASET_VERSION,
-        attribute_dataset_version=ATTRIBUTE_DATASET_VERSION,
-        bar_dataset_version=BAR_DATASET_VERSION,
     )
 
 
@@ -988,16 +996,16 @@ def quality_report(
     """
     return report_from_findings(
         findings,
+        plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         policy_versions={
             "market": DEFAULT_MARKET_THRESHOLDS.version,
             "survivorship": DEFAULT_SURVIVORSHIP_POLICY.version,
             "lag": LAG_POLICY_VERSION,
         },
-        checks_run=(
-            "4.0_envelope_conformance",
-            "4.1_temporal_invariants",
-            "5_market_data",
-            "6_identity_and_universe",
+        checks_run=tuple(
+            check.check_id
+            for check in PHASE3A_QUALITY_PLAN.checks
+            if check.requirement is CheckRequirement.REQUIRED
         ),
         checks_not_run=(
             CheckNotRun(
@@ -1005,7 +1013,7 @@ def quality_report(
                 reason="only one source is licensed in this slice, so the check cannot run",
             ),
         ),
-        datasets_covered=DIRECTLY_READ_DATASETS,
+        datasets_covered=QUALITY_COVERAGE,
         partitions_covered=tuple(session.isoformat() for session in SNAPSHOT_SESSIONS),
         produced_at=BUILD_TIME,
     )
@@ -1017,7 +1025,7 @@ def publish(
     requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
     downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
     report: QualityReport | None = None,
-) -> tuple[GoldDataset, DatasetManifest, QualityReport]:
+) -> VerifiedPublication:
     """Build, publish and read back -- the whole sanctioned path in one call."""
     dataset = gold_dataset(requested=requested, downgrade=downgrade)
     gate = report if report is not None else quality_report()
@@ -1025,6 +1033,7 @@ def publish(
         store,
         dataset,
         quality_report=gate,
+        quality_plan=PHASE3A_QUALITY_PLAN,
         code_commit_sha=CODE_COMMIT_SHA,
         lag_policy_version=LAG_POLICY_VERSION,
         universe_definition_version=UNIVERSE_DEFINITION_VERSION,
@@ -1038,6 +1047,23 @@ def publish(
     )
 
 
+def build_verified_synthetic_publication(
+    store: LocalTableStore,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    report: QualityReport | None = None,
+) -> VerifiedPublication:
+    """The named synthetic factory for a verified publication.
+
+    Every test that needs one goes through here, and here goes through the real
+    publication and verified-read path. There is deliberately no shortcut that
+    stamps a seal onto a hand-assembled triplet: a test able to fabricate one
+    would be testing a route production does not have.
+    """
+    return publish(store, requested=requested, downgrade=downgrade, report=report)
+
+
 def reader(
     store: LocalTableStore,
     *,
@@ -1046,13 +1072,11 @@ def reader(
     report: QualityReport | None = None,
 ) -> PointInTimeReader:
     """A reader over a verified publication. There is no unverified route."""
-    dataset, manifest, gate = publish(
+    publication = build_verified_synthetic_publication(
         store, requested=requested, downgrade=downgrade, report=report
     )
     return PointInTimeReader(
-        dataset,
-        manifest,
-        gate,
+        publication,
         resolution=resolution(requested=requested, downgrade=downgrade),
         approvals=approvals(),
     )
@@ -1061,6 +1085,171 @@ def reader(
 # ---------------------------------------------------------------------------
 # Bronze payload
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# The dense minute path
+# ---------------------------------------------------------------------------
+
+#: The security whose minute grid is generated in full. NASDAQ-listed and
+#: continuously listed across both sessions, so its own venue calendar decides
+#: what "complete" means.
+DENSE_MINUTE_SECURITY = SEC_RENAMED
+
+#: One ordinary session and one half day, adjacent. The pair is the point: a
+#: grid derived from the bars themselves would call both complete, and only a
+#: grid derived from the calendar can tell that the half day is shorter on
+#: purpose rather than short by omission.
+DENSE_MINUTE_SESSIONS = (date(2019, 6, 28), date(2019, 7, 3))
+
+
+def minute_endpoints_for(
+    session_date: date, exchange: Exchange = Exchange.NASDAQ
+) -> tuple[datetime, ...]:
+    """Every minute endpoint the calendar implies for one session."""
+    open_time = session_open(session_date, exchange)
+    close_time = session_close(session_date, exchange)
+    points: list[datetime] = []
+    point = open_time + timedelta(minutes=1)
+    while point <= close_time:
+        points.append(point)
+        point += timedelta(minutes=1)
+    return tuple(points)
+
+
+def dense_minute_bars(
+    *,
+    session_dates: Sequence[date] = DENSE_MINUTE_SESSIONS,
+    omit: datetime | None = None,
+) -> tuple[PriceBar, ...]:
+    """A complete minute grid, generated from the calendar rather than listed.
+
+    Written as a generator over the session's own endpoints because a hand-listed
+    grid is a second, silent definition of what a complete session is -- and the
+    one place it disagreed with the calendar would be the one case worth testing.
+
+    ``omit`` drops exactly one endpoint, which is how the incomplete case is
+    produced without changing anything else about the series.
+    """
+    out: list[PriceBar] = []
+    for session_date in session_dates:
+        close_time = session_close(session_date, Exchange.NASDAQ)
+        for index, end in enumerate(minute_endpoints_for(session_date)):
+            if omit is not None and end == omit:
+                continue
+            close = Decimal("40.00") + Decimal(index) / Decimal(100)
+            out.append(
+                PriceBar(
+                    security_id=DENSE_MINUTE_SECURITY,
+                    resolution=BarResolution.MINUTE,
+                    bar_end_time=end,
+                    bar_start_time=end - timedelta(minutes=1),
+                    session_date=session_date,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=1_000,
+                    curation_source="synthetic:minute-dense",
+                    bar_construction=BarConstruction.OFFICIAL_DISSEMINATED,
+                    envelope=_bar_envelope(
+                        construction=BarConstruction.OFFICIAL_DISSEMINATED,
+                        bar_end_time=end,
+                        session_close_time=close_time,
+                        source_id=f"bar:{DENSE_MINUTE_SECURITY}:M1:{end.isoformat()}",
+                    ),
+                )
+            )
+    return tuple(out)
+
+
+def sessions_with_a_full_length_half_day() -> tuple[MarketSession, ...]:
+    """The calendar with the half day recorded as an ordinary session.
+
+    A deliberately wrong calendar. The bars are unchanged and genuinely complete
+    for a half day; only the venue's own hours are misstated, which is what makes
+    the resulting refusal evidence that the grid comes from the calendar.
+    """
+    out: list[MarketSession] = []
+    for session in sessions():
+        if session.session_date != date(2019, 7, 3):
+            out.append(session)
+            continue
+        out.append(
+            MarketSession(
+                exchange=session.exchange,
+                session_date=session.session_date,
+                regular_open=session.regular_open,
+                regular_close=utc(2019, 7, 3, 20, 0),
+                extended_open=session.extended_open,
+                extended_close=session.extended_close,
+                is_half_day=False,
+                is_holiday=False,
+                envelope=session.envelope,
+            )
+        )
+    return tuple(out)
+
+
+def dense_minute_publication(
+    store: LocalTableStore,
+    *,
+    omit: datetime | None = None,
+    calendar: Sequence[MarketSession] | None = None,
+) -> VerifiedPublication:
+    """Publish and verify a build whose minute grid is complete for both sessions."""
+    datasets = source_datasets()
+    datasets["price_bar"] = (*bars(), *dense_minute_bars(omit=omit))
+    if calendar is not None:
+        datasets["market_session"] = tuple(calendar)
+    resolved = resolve_run_inputs(
+        datasets,
+        config=resolution(),
+        approvals=approvals(),
+    )
+    dataset = build_gold_dataset(
+        resolved,
+        dataset_version=DATASET_VERSION,
+        build_time=BUILD_TIME,
+        coverage_start=COVERAGE_START,
+        coverage_end=COVERAGE_END,
+        universe_definition=universe_definition(),
+        universe_sessions=SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=evaluation_cutoffs(),
+        approvals=approvals(),
+        artifact_first_built_time=ARTIFACT_FIRST_BUILT,
+        ingestion_time=INGESTION_TIME,
+    )
+    publish_gold_dataset(
+        store,
+        dataset,
+        quality_report=quality_report(),
+        quality_plan=PHASE3A_QUALITY_PLAN,
+        code_commit_sha=CODE_COMMIT_SHA,
+        lag_policy_version=LAG_POLICY_VERSION,
+        universe_definition_version=UNIVERSE_DEFINITION_VERSION,
+        source_ingestion_run_ids=(INGESTION_RUN_ID,),
+    )
+    return read_published_dataset(
+        store,
+        dataset_version=DATASET_VERSION,
+        config=resolution(),
+        approvals=approvals(),
+    )
+
+
+def dense_minute_reader(
+    store: LocalTableStore,
+    *,
+    omit: datetime | None = None,
+    calendar: Sequence[MarketSession] | None = None,
+) -> PointInTimeReader:
+    """A reader over the dense-minute publication."""
+    return PointInTimeReader(
+        dense_minute_publication(store, omit=omit, calendar=calendar),
+        resolution=resolution(),
+        approvals=approvals(),
+    )
 
 
 INGESTION_RUN_ID = "ing-synthetic-a1-0001"
