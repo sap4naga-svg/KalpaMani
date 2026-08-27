@@ -628,9 +628,7 @@ def test_the_verified_read_is_the_only_route_to_a_reader(tmp_path: Path) -> None
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
     assert isinstance(publication, VerifiedPublication)
     assert publication.verification_seal == verification_seal(
-        publication.manifest,
-        publication.quality_report,
-        publication.dataset.resolution_receipt,
+        publication.manifest, publication.quality_report, publication.dataset
     )
     assert publication.dataset_version == phase3a.DATASET_VERSION
 
@@ -1494,3 +1492,27 @@ def test_the_calendar_grid_is_venue_specific() -> None:
     nyse = phase3a.minute_endpoints_for(date(2019, 7, 3), Exchange.NYSE)
     assert nasdaq == nyse
     assert nasdaq[-1] == datetime.fromisoformat("2019-07-03T17:00:00+00:00")
+
+
+def test_a_verified_publication_cannot_be_edited_after_verification(
+    tmp_path: Path,
+) -> None:
+    """The seal covers the build, not only the hashes that describe it.
+
+    ``dataclasses.replace`` re-runs the seal check but carried the token through,
+    and a seal over the manifest, report and receipt hashes agreed with a dataset
+    whose rows had been removed -- because none of those hashes is about the rows.
+    """
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    dataset = publication.dataset
+    for label, mutated in (
+        (
+            "emptied universe",
+            dataclasses.replace(dataset, universe={session: () for session in dataset.universe}),
+        ),
+        ("dropped bar", dataclasses.replace(dataset, bars=dataset.bars[:-1])),
+        ("dropped listing", dataclasses.replace(dataset, listings=dataset.listings[:-1])),
+    ):
+        with pytest.raises(DatasetPublicationError, match="does not describe the artifacts"):
+            dataclasses.replace(publication, dataset=mutated)
+        assert mutated.build_identity != dataset.build_identity, label

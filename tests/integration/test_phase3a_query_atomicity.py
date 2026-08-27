@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from fixtures import phase3a
-from kalpamani.data.contracts.entities import Listing, PriceBar
+from kalpamani.data.contracts.entities import Listing, MarketSession, PriceBar
 from kalpamani.data.contracts.errors import (
     IncompleteCoverageError,
     MissingHistoricalSnapshotError,
@@ -32,6 +32,7 @@ from kalpamani.data.contracts.errors import (
 from kalpamani.data.contracts.vocabulary import (
     RAW,
     BarResolution,
+    Exchange,
     InformationOrigin,
     InformationSetProfile,
     ProviderTimeDerivation,
@@ -516,3 +517,129 @@ def test_a_universe_query_records_a_derived_artifact_not_a_source_dataset(
     assert artifact.entity == "universe_snapshot_header"
     assert artifact.artifact_content_hash == result.snapshot_content_hash
     assert artifact.lineage_selectors, "The snapshot's lineage travels with it."
+
+
+# ---------------------------------------------------------------------------
+# the grid and the data are checked against each other
+# ---------------------------------------------------------------------------
+#
+# Found by adversarial review of the two-phase check, not by trusting it. All
+# three reach the same defect from different directions: completeness was
+# measured against a grid nothing held to the data, so editing the grid made a
+# genuine gap stop being one.
+
+
+def _late_bar_datasets() -> dict[str, Any]:
+    return phase3a.with_bar_available_at(
+        phase3a.source_datasets(),
+        security_id=SECURITY,
+        session_date=MIDDLE,
+        provider_available=phase3a.utc(2025, 1, 1, 12, 0),
+    )
+
+
+def test_deleting_a_calendar_row_does_not_shrink_the_grid_past_a_gap(
+    tmp_path: Path,
+) -> None:
+    """The completeness check measuring itself against an edited calendar."""
+    datasets = _late_bar_datasets()
+    datasets["market_session"] = tuple(
+        row
+        for row in datasets["market_session"]
+        if not (
+            isinstance(row, MarketSession)
+            and row.session_date == MIDDLE
+            and row.exchange is Exchange.NYSE
+        )
+    )
+    reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
+    with pytest.raises(IncompleteCoverageError) as refusal:
+        _series(reader)
+    assert "its own calendar and listings do not expect" in str(refusal.value)
+
+
+def test_flagging_a_session_a_holiday_does_not_shrink_the_grid_either(
+    tmp_path: Path,
+) -> None:
+    """Same defect without removing a row at all."""
+    datasets = _late_bar_datasets()
+    datasets["market_session"] = tuple(
+        dataclasses.replace(row, is_holiday=True)
+        if (
+            isinstance(row, MarketSession)
+            and row.session_date == MIDDLE
+            and row.exchange is Exchange.NYSE
+        )
+        else row
+        for row in datasets["market_session"]
+    )
+    reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
+    with pytest.raises(IncompleteCoverageError, match="do not expect"):
+        _series(reader)
+
+
+def test_a_listing_revision_published_after_as_of_cannot_shrink_the_grid(
+    tmp_path: Path,
+) -> None:
+    """A 2020 delisting decided a 2019 query's expected sessions.
+
+    Listing rows were the one input that never passed point-in-time filtering, so
+    a fact the query was not entitled to see removed the very sessions where a
+    genuine gap lay -- and the gap stopped being a gap.
+    """
+    datasets = phase3a.without_bar(
+        phase3a.source_datasets(), security_id=SECURITY, session_date=MIDDLE
+    )
+    original = next(
+        row
+        for row in datasets["listing"]
+        if isinstance(row, Listing) and row.security_id == SECURITY
+    )
+    published_later = dataclasses.replace(
+        original,
+        listing_end=date(2019, 6, 25),
+        envelope=dataclasses.replace(
+            original.envelope,
+            revision_sequence=1,
+            public_available_time=phase3a.utc(2020, 6, 1, 20, 0),
+            provider_available_time=phase3a.utc(2020, 6, 1, 20, 0),
+            system_first_seen_time=phase3a.utc(2020, 6, 1, 20, 0),
+            source_id=f"{original.envelope.source_id}:r1",
+        ),
+    )
+    datasets["listing"] = (*datasets["listing"], published_later)
+
+    reader = phase3a.reader_from(LocalTableStore(tmp_path), datasets)
+    with pytest.raises(IncompleteCoverageError) as refusal:
+        _series(reader)
+    assert "has no DAILY bar" in str(refusal.value), (
+        "The gap is still a gap: the 2020 revision is not admissible at a 2019 as_of, so it "
+        "does not decide which sessions this query expects."
+    )
+
+
+def test_a_required_result_never_carries_a_withheld_endpoint(tmp_path: Path) -> None:
+    """The field documents an invariant, so the invariant is enforced.
+
+    A bar the grid does not expect used to be withheld silently and reported in
+    ``withheld_endpoints`` on a REQUIRED result -- the invariant's own
+    counter-example, returned rather than refused.
+    """
+    reader = phase3a.reader(LocalTableStore(tmp_path))
+    result = _series(reader)
+    assert result.requirement is SeriesRequirement.REQUIRED
+    assert result.withheld_endpoints == 0
+
+    datasets = _late_bar_datasets()
+    datasets["market_session"] = tuple(
+        row
+        for row in datasets["market_session"]
+        if not (
+            isinstance(row, MarketSession)
+            and row.session_date == MIDDLE
+            and row.exchange is Exchange.NYSE
+        )
+    )
+    gapped = phase3a.reader_from(LocalTableStore(tmp_path / "gapped"), datasets)
+    with pytest.raises(IncompleteCoverageError):
+        _series(gapped)

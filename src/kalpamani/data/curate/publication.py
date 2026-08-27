@@ -582,13 +582,18 @@ _VERIFIED_READ_TOKEN: Final = object()
 def verification_seal(
     manifest: DatasetManifest,
     report: QualityReport,
-    receipt: ResolutionReceipt,
+    dataset: GoldDataset,
 ) -> str:
     """The seal a verified read stamps onto a publication.
 
-    Binds the three identities that were checked -- the manifest, the quality
-    evidence and the recomputed receipt -- so that a publication carrying a seal
-    names precisely which artifacts the verification passed over.
+    Binds the manifest, the quality evidence and the **build itself** -- source
+    rows via the recomputed receipt, derived rows via the build identity -- so a
+    publication carrying a seal names precisely what the verification passed over.
+
+    The build identity is why the dataset cannot be swapped afterwards. Sealing
+    only the three hashes left ``dataclasses.replace(publication, dataset=...)``
+    carrying the seal through onto different contents: every hash still agreed,
+    because none of them was about the rows.
     """
     return content_hash(
         {
@@ -597,7 +602,8 @@ def verification_seal(
             "manifest_hash": manifest.manifest_hash,
             "quality_report_hash": report.report_hash,
             "quality_report_file_hash": manifest.quality_report_file_hash,
-            "resolution_receipt_hash": receipt.receipt_hash,
+            "resolution_receipt_hash": dataset.resolution_receipt.receipt_hash,
+            "build_identity": dataset.build_identity,
         }
     )
 
@@ -614,7 +620,9 @@ class VerifiedPublication:
 
     This type carries the fact of verification itself. Only
     :func:`read_published_dataset` holds the token that constructs it, and the
-    seal records which manifest, report and receipt the verification covered.
+    seal records which manifest, report and **build** the verification covered --
+    the last because a seal over hashes alone travelled through
+    ``dataclasses.replace`` onto a different dataset unchallenged.
     """
 
     dataset: GoldDataset
@@ -631,9 +639,7 @@ class VerifiedPublication:
                 "checked against storage -- their hashes agree with each other, which is not "
                 "the same as agreeing with what was published."
             )
-        expected = verification_seal(
-            self.manifest, self.quality_report, self.dataset.resolution_receipt
-        )
+        expected = verification_seal(self.manifest, self.quality_report, self.dataset)
         if self.verification_seal != expected:
             raise DatasetPublicationError(
                 f"The verification seal on {self.manifest.dataset_version} does not describe "
@@ -874,7 +880,7 @@ def read_published_dataset(
         dataset=built,
         manifest=manifest,
         quality_report=report,
-        verification_seal=verification_seal(manifest, report, receipt),
+        verification_seal=verification_seal(manifest, report, built),
         verified_by=_VERIFIED_READ_TOKEN,
     )
 

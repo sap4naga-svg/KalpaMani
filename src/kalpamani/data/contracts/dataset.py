@@ -46,6 +46,8 @@ from kalpamani.data.contracts.envelope import DerivedEnvelope
 from kalpamani.data.contracts.errors import EnvelopeError
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.profiles import DatasetResolutionEvidence, ResolutionReceipt
+from kalpamani.data.contracts.resolution import SourceRecord
+from kalpamani.data.contracts.row_identity import row_fingerprint
 from kalpamani.data.contracts.vocabulary import InformationSetProfile, OutputValidity
 
 
@@ -220,7 +222,12 @@ class GoldDataset:
 
         Covers the version, the build time, the resolved profile and policy, the
         content-bound resolution receipt -- which accounts for every source row --
-        and every snapshot header's identity, which accounts for the derived ones.
+        every snapshot header's identity, and the membership rows themselves.
+
+        The last is not redundant with the headers. A header's
+        ``snapshot_content_hash`` is a *claim* about its rows, so an identity
+        built from headers alone stays the same when the rows beneath them are
+        removed.
         """
         return content_hash(
             {
@@ -231,11 +238,39 @@ class GoldDataset:
                 "resolved_profile": self.resolved_profile.value,
                 "resolution_policy_version": self.resolution_policy_version,
                 "resolution_receipt_hash": self.resolution_receipt.receipt_hash,
+                # The source rows themselves, for the same reason as the
+                # membership rows below: the receipt is a claim *about* them, so
+                # an identity built from the claim alone is unchanged when the
+                # rows it describes are removed.
+                "source_rows": [list(entry) for entry in row_fingerprint(self.source_rows())],
                 "universe_headers": [
                     [session.isoformat(), header.header_identity_hash]
                     for session, header in sorted(self.universe_headers.items())
                 ],
+                # The rows themselves, not only the headers' claims about them.
+                # A header's snapshot_content_hash is a claim, so an identity
+                # built from headers alone is unchanged when the rows beneath
+                # them are removed -- and a sealed publication could then be
+                # emptied after it was verified.
+                "universe_rows": [
+                    [
+                        session.isoformat(),
+                        sorted(row.envelope.artifact_content_hash for row in rows),
+                    ]
+                    for session, rows in sorted(self.universe.items())
+                ],
             }
+        )
+
+    def source_rows(self) -> tuple[SourceRecord, ...]:
+        """Every source row this build holds, in canonical entity order."""
+        return (
+            *self.sessions,
+            *self.listings,
+            *self.attributes,
+            *self.tickers,
+            *self.bars,
+            *self.actions,
         )
 
     def bars_for(self, security_id: str, resolution: str | None = None) -> tuple[PriceBar, ...]:

@@ -111,13 +111,13 @@ from kalpamani.data.contracts.vocabulary import (
     BarResolution,
     InformationSetProfile,
     LimitationToken,
+    ListingFactKind,
     RevisionView,
 )
 from kalpamani.data.curate.adjustment import SUPPORTED_CONVENTIONS, adjusted_series, raw_series
 from kalpamani.data.curate.lineage import lineage_fingerprint
 from kalpamani.data.curate.publication import DatasetManifest, VerifiedPublication
 from kalpamani.data.curate.resolution_run import evidence_limitation_tokens
-from kalpamani.data.curate.universe import current_listings
 from kalpamani.data.pit.execution import (
     _EXECUTION_TOKEN,
     ConsumedArtifactRecord,
@@ -234,8 +234,10 @@ class BarSeriesResult:
     #: What the caller asked for. An ``OPTIONAL`` result may be shorter than the
     #: range, and says so here rather than leaving the reader to notice.
     requirement: SeriesRequirement = SeriesRequirement.REQUIRED
-    #: Endpoints the dataset holds that this query was not entitled to see. Always
-    #: empty for a ``REQUIRED`` result, because that case refuses instead.
+    #: Endpoints the dataset holds that this query was not entitled to see. Zero
+    #: for a ``REQUIRED`` result, and that is enforced rather than asserted: a
+    #: REQUIRED result carrying a withheld endpoint was the invariant's own
+    #: counter-example, reached through bars the expected grid did not cover.
     withheld_endpoints: int = 0
 
 
@@ -588,7 +590,7 @@ class PointInTimeReader:
 
         held = self._dataset.bars_for(security_id, resolution.value)
         in_range = tuple(bar for bar in held if start <= bar.session_date <= end)
-        expected = self._expected_endpoints(security_id, resolution, start, end)
+        expected = self._expected_endpoints(security_id, resolution, start, end, cutoff)
         if requirement is SeriesRequirement.REQUIRED and not expected:
             raise IncompleteCoverageError(
                 f"Dataset {self._dataset.dataset_version} has no listed trading session for "
@@ -607,6 +609,15 @@ class PointInTimeReader:
             expected=expected,
             held=in_range,
         )
+        if requirement is SeriesRequirement.REQUIRED:
+            self._require_grid_explains_the_data(
+                security_id=security_id,
+                resolution=resolution,
+                start=start,
+                end=end,
+                expected=expected,
+                held=in_range,
+            )
 
         resolved = self.resolved_profile
         excluded: dict[tuple[str, str], int] = {}
@@ -806,15 +817,42 @@ class PointInTimeReader:
                 "A partially covered request is refused rather than silently truncated."
             )
 
-    def _listing_venues(self, security_id: str) -> tuple[Listing, ...]:
-        return tuple(
-            listing
-            for listing in current_listings(self._dataset.listings)
-            if listing.security_id == security_id
-        )
+    def _listing_venues(self, security_id: str, as_of: datetime) -> tuple[Listing, ...]:
+        """The listing revisions this query was entitled to see, one per listing.
+
+        Point-in-time like every other input, and it was not. ``current_listings``
+        takes the highest revision unconditionally, so a listing revision
+        published *after* ``as_of`` still decided which sessions a query expected:
+        a 2020 delisting shrank a 2019 query's grid, and a genuine gap inside the
+        removed span stopped being a gap. That is look-ahead deciding what counts
+        as complete.
+        """
+        by_listing: dict[str, list[Listing]] = {}
+        for listing in self._dataset.listings:
+            if listing.security_id != security_id:
+                continue
+            if listing.listing_fact_kind is not ListingFactKind.STATE:
+                # An announcement that a listing will change is not a listing
+                # state, and treating it as one would let an announced future
+                # delisting decide today's expected sessions.
+                continue
+            by_listing.setdefault(listing.listing_id, []).append(listing)
+
+        chosen: list[Listing] = []
+        for revisions in by_listing.values():
+            selected = select_revision(
+                revisions,
+                revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
+                as_of=as_of,
+                resolved_profile=self.resolved_profile,
+                approvals=self._approvals,
+            )
+            if isinstance(selected, Listing):
+                chosen.append(selected)
+        return tuple(chosen)
 
     def _required_sessions(
-        self, security_id: str, start: date, end: date
+        self, security_id: str, start: date, end: date, as_of: datetime
     ) -> tuple[MarketSession, ...]:
         """Sessions the security's own venue traded, on which it was listed.
 
@@ -822,7 +860,7 @@ class PointInTimeReader:
         on an NYSE-only session, and pooling calendars would fault it for absences
         that are not absences.
         """
-        listings = self._listing_venues(security_id)
+        listings = self._listing_venues(security_id, as_of)
         if not listings:
             return ()
         required = [
@@ -843,6 +881,7 @@ class PointInTimeReader:
         resolution: BarResolution,
         start: date,
         end: date,
+        as_of: datetime,
     ) -> tuple[Endpoint, ...]:
         """Every endpoint a complete series must carry, from the venue's calendar.
 
@@ -857,7 +896,7 @@ class PointInTimeReader:
         minute follows the dense contract and expects the session's whole endpoint
         grid, so one arbitrary bar cannot pass for an observed session.
         """
-        sessions = self._required_sessions(security_id, start, end)
+        sessions = self._required_sessions(security_id, start, end, as_of)
         if resolution is BarResolution.DAILY:
             return tuple(session.session_date for session in sessions)
         points: list[Endpoint] = []
@@ -895,6 +934,53 @@ class PointInTimeReader:
             f"({_render_endpoints(missing)}). Refused rather than truncated: a short series "
             "and a gap-ridden one look identical downstream. A session the security did not "
             "trade is still covered by an explicit no-trade bar."
+        )
+
+    def _require_grid_explains_the_data(
+        self,
+        *,
+        security_id: str,
+        resolution: BarResolution,
+        start: date,
+        end: date,
+        expected: Sequence[Endpoint],
+        held: Sequence[PriceBar],
+    ) -> None:
+        """Every bar in range sits on the expected grid, or the grid is wrong.
+
+        Coverage was checked in one direction only -- every expected endpoint has
+        a bar -- and that is half the question. A bar the grid does **not** expect
+        means the calendar and the data disagree: a session row missing or flagged
+        as a holiday, or a listing that says the security was not trading then.
+
+        The asymmetry was exploitable in exactly the way the round set out to
+        close. Deleting one session row shrank the grid past a genuine gap, so a
+        REQUIRED series that had refused began returning a hole in the middle --
+        the completeness check measuring itself against a calendar that had been
+        edited to agree with the data.
+
+        Raises:
+            IncompleteCoverageError: naming the off-grid endpoints. Completeness
+                cannot be certified while the calendar and the bars contradict
+                each other.
+        """
+        if not held:
+            return
+        grid = set(expected)
+        stray = sorted(
+            {_endpoint_key(bar, resolution) for bar in held} - grid,
+            key=str,
+        )
+        if not stray:
+            return
+        raise IncompleteCoverageError(
+            f"Dataset {self._dataset.dataset_version} holds {len(stray)} {resolution.value} "
+            f"bar(s) for {security_id} in {start.isoformat()}..{end.isoformat()} that its own "
+            f"calendar and listings do not expect ({_render_endpoints(stray)}). A session row "
+            "that is absent or flagged as a holiday, or a listing that says the security was "
+            "not trading, shrinks the grid a complete series is measured against -- so a "
+            "genuine gap elsewhere in the range would stop being a gap. Completeness cannot be "
+            "certified while the calendar and the bars contradict each other."
         )
 
     def _require_servable_coverage(
