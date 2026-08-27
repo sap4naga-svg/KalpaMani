@@ -7,13 +7,15 @@ adoption made untrue are corrected in text.
 
 | | |
 |---|---|
-| **Adoption date** | 2026-08-27 |
+| **Owner approval date** | 2026-08-27 |
 | **Adopted document** | [`KalpaMani_Blueprint_V3_0.pdf`](KalpaMani_Blueprint_V3_0.pdf) — 17 pages |
 | **Adopted SHA-256** | `2726b96dd69c8982788b1c2bd646ce7a52879c649994a31858dc41666761996d` |
 | **Historical document** | [`KalpaMani_Blueprint_V2_1.pdf`](KalpaMani_Blueprint_V2_1.pdf) — preserved, unaltered |
 | **Historical SHA-256** | `3adaf59f01616c3b491ee988e2f60c43e863578edca74241c12b6b0b1c1495d2` |
 | **Governing ADR** | [ADR-0006](../decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md) — **Accepted** |
-| **Adoption base main** | `7e76cce22b98e78071076d04f43a29dc60b0d38c` |
+| **Adoption PR** | **#8** — *Adopt KalpaMani Blueprint V3.0* |
+| **Adoption base main** | `7e76cce22b98e78071076d04f43a29dc60b0d38c` — the commit PR #8 was branched from |
+| **Effective adoption event** | **the merge of PR #8 into `main`** |
 
 ## PR #7 merge evidence
 
@@ -26,7 +28,7 @@ was written against that state. A1 has since been accepted and merged.
 | State | **MERGED**, 2026-08-27 |
 | Final implementation commit | `6d33b11e52a875964c5b78b2f77685f4a73b7f45` |
 | Final head at merge | `6739643c79ab06f841ded2c70add4c6747039fdd` |
-| Merge commit (= adoption base main) | `7e76cce22b98e78071076d04f43a29dc60b0d38c` |
+| Merge commit — became the adoption base main for PR #8 | `7e76cce22b98e78071076d04f43a29dc60b0d38c` |
 
 ---
 
@@ -43,12 +45,27 @@ pre-adoption state. **That table is superseded by the values below**, which are 
 |---|---|---|
 | Status | proposed; owner review required | **ADOPTED / REPOSITORY AUTHORITY** |
 | Supersedes | V2.1 only after formal repository adoption | **Blueprint V2.1, as highest architecture authority** |
-| Current repository main | `9ffeea2f57de1dec233937e1627d2acb27fb1051` | **`7e76cce22b98e78071076d04f43a29dc60b0d38c`** |
+| Current repository main | `9ffeea2f57de1dec233937e1627d2acb27fb1051` | **Adoption base main `7e76cce22b98e78071076d04f43a29dc60b0d38c`** — *not* a permanent value; see below |
 | Current implementation | PR #7 open / unmerged | **PR #7 MERGED** |
 | Current PR #7 head | `6b680c03b85f21ce8d3703c1181c07a6e4bfa3bc` | **final implementation `6d33b11e52a875964c5b78b2f77685f4a73b7f45`** |
 | Current project phase | A1 in review, not accepted | **A1 ACCEPTED; remaining Phase 3A — provider and real-data qualification** |
 | ADR-0005 | Proposed | **Proposed — unchanged** |
 | Decision gates | G1–G5 open | **G1–G7 OPEN** |
+
+### The main SHA is repository state, not an architecture input
+
+`7e76cce22b98e78071076d04f43a29dc60b0d38c` is the **adoption base main** — the commit
+PR #8 was branched from. It is **not** the permanent or current value of `main` after
+adoption, and must never be recorded as one.
+
+Merging PR #8 necessarily advances `main`. **The repository main SHA after adoption is the
+commit that merges PR #8, and that is repository state, not an immutable architecture
+input.** The blueprint's authority does not depend on it, and no document here pins it.
+
+The final merge SHA and merge timestamp are **deliberately not recorded in advance**. For
+an open pull request, GitHub's pre-merge `merge_commit_sha` is a provisional test-merge
+value, not adoption evidence; it is not predicted or hard-coded. Those values may be
+recorded in the post-merge closeout report, which requires no further documentation commit.
 
 The same override applies to the running header and footer on all 17 pages, and to the cover
 banner. Those describe the document's status at drafting time; the status is set by ADR-0006.

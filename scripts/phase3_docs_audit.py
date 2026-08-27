@@ -59,6 +59,11 @@ V3_STALE_STATUS = (
     "v3 is not repository authority",
     "adr-0006 does not exist",
 )
+#: The commit PR #8 was branched from. Merging the adoption PR necessarily advances main, so
+#: this SHA is the *adoption base*, never the permanent or current post-adoption main.
+ADOPTION_BASE_MAIN = "7e76cce22b98e78071076d04f43a29dc60b0d38c"
+BASE_MAIN_QUALIFIER = "adoption base main"
+
 V3_HISTORICAL_MARKERS = (
     "superseded",
     "as printed",
@@ -898,6 +903,24 @@ def main() -> int:
             not stale,
             ", ".join(stale[:6]),
         )
+
+        # The adoption base SHA is repository state, not a permanent architecture input.
+        unqualified: list[str] = []
+        for path in (ADR_V3, ADOPTION):
+            for lineno, line in enumerate(read(path).splitlines(), 1):
+                if ADOPTION_BASE_MAIN in line and BASE_MAIN_QUALIFIER not in line.lower():
+                    unqualified.append(f"{path.name}:{lineno}")
+        f.check(
+            "the adoption base SHA is never called the current/permanent main",
+            not unqualified,
+            ", ".join(unqualified[:6]),
+        )
+        for name, doc in (("ADR-0006", adr6), ("the adoption record", adoption)):
+            f.check(
+                f"{name} names the merge of PR #8 as the effective adoption event",
+                "merge of PR #8" in doc,
+                "no effective-adoption-event statement",
+            )
 
         # Live trading must not have been loosened by a documentation change.
         f.check(

@@ -60,12 +60,34 @@ Control values in text, where they are auditable:
 |---|---|---|
 | Status | proposed, owner review required | **ADOPTED / REPOSITORY AUTHORITY** |
 | Supersedes | V2.1 only after formal repository adoption | **Blueprint V2.1, as highest architecture authority** |
-| Repository main | `9ffeea2f57de1dec233937e1627d2acb27fb1051` | **`7e76cce22b98e78071076d04f43a29dc60b0d38c`** |
+| Repository main | `9ffeea2f57de1dec233937e1627d2acb27fb1051` | **Adoption base main `7e76cce22b98e78071076d04f43a29dc60b0d38c`** — *not* a permanent value |
 | PR #7 | open / unmerged | **MERGED** (2026-08-27) |
 | PR #7 final implementation | `6b680c03b85f21ce8d3703c1181c07a6e4bfa3bc` | **`6d33b11e52a875964c5b78b2f77685f4a73b7f45`** |
 | Current project phase | A1 in review, not accepted | **Phase 3A A1 ACCEPTED; remaining Phase 3A — provider and real-data qualification** |
 | ADR-0005 | Proposed | **Proposed — unchanged** |
 | G1–G5 | Open | **Open — unchanged; G6 and G7 added** |
+
+### When adoption takes effect
+
+Owner approval and this ADR are recorded as of **2026-08-27**, but **repository authority
+changes when the adoption artifacts land on `main`**. The adoption event is therefore:
+
+| | |
+|---|---|
+| Owner approval date | 2026-08-27 |
+| Adoption base main | `7e76cce22b98e78071076d04f43a29dc60b0d38c` — the commit PR #8 was branched from |
+| Adoption PR | **#8** — *Adopt KalpaMani Blueprint V3.0* |
+| **Effective adoption event** | **the merge of PR #8 into `main`** |
+
+**Blueprint V3.0 becomes repository authority when PR #8 is merged into `main`.**
+
+The adoption base main is **not** the permanent or current value of `main` after adoption.
+Merging PR #8 necessarily advances `main`; the resulting main SHA is **repository state,
+not an immutable architecture input**, and the blueprint's authority does not depend on it.
+The final merge SHA and timestamp are **not predicted or hard-coded here** — for an open
+pull request GitHub's pre-merge `merge_commit_sha` is provisional and is not adoption
+evidence. They may be recorded in the post-merge closeout report without a further
+documentation commit.
 
 The alternative — rewriting the PDF's status page — was rejected. The document is produced from
 subsetted fonts with absolutely positioned, non-reflowing text; no target string exists as a
