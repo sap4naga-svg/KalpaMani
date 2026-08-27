@@ -329,6 +329,97 @@ class TimingBasisUsed(StrEnum):
     SYSTEM_FIRST_SEEN = "SYSTEM_FIRST_SEEN"
     #: A derived artifact carries its inputs' bases, and this alongside them.
     DERIVED_FROM_INPUTS = "DERIVED_FROM_INPUTS"
+    #: When a computed value first existed. Only ``FORWARD_SYSTEM`` consults it,
+    #: and it governs there whenever it is later than every input.
+    ARTIFACT_FIRST_BUILT = "ARTIFACT_FIRST_BUILT"
+
+
+#: One axis the profile consulted, and the instant it resolved to.
+_Axis = tuple[TimingBasisUsed, datetime]
+
+
+def _source_axes(
+    record: PitRecord,
+    envelope: SourceEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> list[_Axis]:
+    """Exactly the axes :func:`decision_available_time` consults, with their times.
+
+    One function, so the two basis sets below cannot drift from the availability
+    they are supposed to explain. An empty list means the profile cannot resolve
+    this row at all.
+    """
+    public_at = resolved_public_time(record, approvals)
+    provider_at = resolved_provider_time(record, approvals)
+    seen_at = envelope.system_first_seen_time
+    public_basis = _public_basis(record, envelope, approvals)
+    provider_basis = _provider_basis(record, envelope, approvals)
+
+    match profile:
+        case InformationSetProfile.PUBLIC_PIT:
+            if public_at is None or public_basis is None:
+                return []
+            return [(public_basis, public_at)]
+
+        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
+            if envelope.information_origin is InformationOrigin.PROVIDER_DERIVED:
+                if provider_at is None or provider_basis is None:
+                    return []
+                return [(provider_basis, provider_at)]
+            if public_at is None or provider_at is None:
+                return []
+            if public_basis is None or provider_basis is None:  # pragma: no cover - unreachable
+                return []
+            return [(public_basis, public_at), (provider_basis, provider_at)]
+
+        case _:
+            axes: list[_Axis] = []
+            if public_at is not None and public_basis is not None:
+                axes.append((public_basis, public_at))
+            if provider_at is not None and provider_basis is not None:
+                axes.append((provider_basis, provider_at))
+            if seen_at is not None:
+                axes.append((TimingBasisUsed.SYSTEM_FIRST_SEEN, seen_at))
+            return axes
+
+
+def required_timing_bases(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> frozenset[TimingBasisUsed]:
+    """The axes without which this row could not be admitted at all.
+
+    Distinct from :func:`governing_timing_bases`, and the two were previously one
+    function returning their union -- which described neither. Under
+    ``PROVIDER_REALISTIC_PIT`` an authoritative-public row needs **both** a public
+    and a provider time, and its availability is the later of the two: both are
+    required, one governs. Reporting the union as "the governing basis" claimed
+    that an exact provider time had determined a cutoff a bounded public time
+    actually set, and the reverse.
+
+    This is the set the bound-**required** limitation tokens rest on: a profile
+    that needed a bounded axis to admit a row served a result subject to that
+    bound's imprecision, whether or not the bound also set the cutoff.
+
+    Under ``FORWARD_SYSTEM`` the answer is deliberately narrow. That profile takes
+    the maximum over whichever axes the row happens to have, so removing one of
+    three leaves two and changes nothing about resolvability: an axis is required
+    there only when it is the only one.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return _derived_bases(record, envelope, resolved_profile, approvals, governing=False)
+    if not origin_eligible(envelope.information_origin, resolved_profile):
+        return frozenset()
+
+    axes = _source_axes(record, envelope, resolved_profile, approvals)
+    if not axes:
+        return frozenset()
+    if resolved_profile is InformationSetProfile.FORWARD_SYSTEM:
+        return frozenset({axes[0][0]}) if len(axes) == 1 else frozenset()
+    return frozenset(basis for basis, _ in axes)
 
 
 def governing_timing_bases(
@@ -336,46 +427,76 @@ def governing_timing_bases(
     resolved_profile: InformationSetProfile,
     approvals: BoundApprovals,
 ) -> frozenset[TimingBasisUsed]:
-    """Exactly which timings decided this row's availability under this profile.
+    """The axis -- or tied axes -- that actually set this row's decision time.
 
-    Mirrors :func:`decision_available_time` axis for axis, because a basis derived
-    from anything else would describe a different admission than the one that
-    happened. A row the profile cannot serve has no basis at all.
+    Availability is a maximum over the axes the profile consults, so exactly the
+    axes attaining that maximum determined when the row became usable. Everything
+    else the profile required was already satisfied earlier and decided nothing.
 
-    A derived artifact reports the union over its inputs, plus
-    ``DERIVED_FROM_INPUTS``: its availability is its slowest input's, so whatever
-    admitted that input admitted the artifact.
+    A derived artifact governs through its **slowest** input, not all of them. A
+    union over every input reported a fast exact input as having governed a cutoff
+    a slow bounded one had set.
     """
     envelope = record.envelope
     if isinstance(envelope, DerivedEnvelope):
-        bases: set[TimingBasisUsed] = {TimingBasisUsed.DERIVED_FROM_INPUTS}
-        for item in _derived_inputs(record):
-            bases |= governing_timing_bases(item, resolved_profile, approvals)
-        return frozenset(bases)
-
-    origin = envelope.information_origin
-    if not origin_eligible(origin, resolved_profile):
+        return _derived_bases(record, envelope, resolved_profile, approvals, governing=True)
+    if not origin_eligible(envelope.information_origin, resolved_profile):
         return frozenset()
 
-    public = _public_basis(record, envelope, approvals)
-    provider = _provider_basis(record, envelope, approvals)
+    axes = _source_axes(record, envelope, resolved_profile, approvals)
+    if not axes:
+        return frozenset()
+    latest = max(at for _, at in axes)
+    return frozenset(basis for basis, at in axes if at == latest)
 
-    match resolved_profile:
-        case InformationSetProfile.PUBLIC_PIT:
-            return frozenset({public} if public is not None else set())
-        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
-            if origin is InformationOrigin.PROVIDER_DERIVED:
-                return frozenset({provider} if provider is not None else set())
-            if public is None or provider is None:
-                return frozenset()
-            return frozenset({public, provider})
-        case _:
-            # FORWARD_SYSTEM takes the max over whichever axes the row has, so
-            # every axis that contributed a candidate is part of the basis.
-            found = {basis for basis in (public, provider) if basis is not None}
-            if envelope.system_first_seen_time is not None:
-                found.add(TimingBasisUsed.SYSTEM_FIRST_SEEN)
-            return frozenset(found)
+
+def _derived_bases(
+    record: PitRecord,
+    envelope: DerivedEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    *,
+    governing: bool,
+) -> frozenset[TimingBasisUsed]:
+    """Both basis sets for a derived artifact, mirroring ``_derived_decision_time``.
+
+    Required evidence follows **every** required input, because an artifact whose
+    input cannot be resolved cannot be resolved either. Governing evidence follows
+    only the slowest input, or -- under ``FORWARD_SYSTEM``, where we did not hold a
+    computed value before computing it -- the build time when that is later.
+    """
+    resolved: list[tuple[PitRecord, datetime]] = []
+    for item in _derived_inputs(record):
+        if not is_eligible(item, profile):
+            return frozenset()
+        available = decision_available_time(item, profile, approvals)
+        if available is None:
+            return frozenset()
+        resolved.append((item, available))
+    if not resolved:
+        return frozenset()
+
+    lineage_max = max(available for _, available in resolved)
+    built = envelope.artifact_first_built_time
+    forward = profile is InformationSetProfile.FORWARD_SYSTEM
+
+    if not governing:
+        required = {TimingBasisUsed.DERIVED_FROM_INPUTS}
+        for item, _ in resolved:
+            required |= required_timing_bases(item, profile, approvals)
+        if forward:
+            required.add(TimingBasisUsed.ARTIFACT_FIRST_BUILT)
+        return frozenset(required)
+
+    if forward and built > lineage_max:
+        return frozenset({TimingBasisUsed.ARTIFACT_FIRST_BUILT})
+    bases = {TimingBasisUsed.DERIVED_FROM_INPUTS}
+    for item, available in resolved:
+        if available == lineage_max:
+            bases |= governing_timing_bases(item, profile, approvals)
+    if forward and built == lineage_max:
+        bases.add(TimingBasisUsed.ARTIFACT_FIRST_BUILT)
+    return frozenset(bases)
 
 
 def _public_basis(
@@ -396,6 +517,20 @@ def _provider_basis(
     if resolved_provider_time(record, approvals) is not None:
         return TimingBasisUsed.PROVIDER_BOUNDED
     return None
+
+
+#: The two bounded axes. A result that needed either is subject to its imprecision.
+BOUNDED_BASES: Final = frozenset({TimingBasisUsed.PUBLIC_BOUNDED, TimingBasisUsed.PROVIDER_BOUNDED})
+
+
+def derived_inputs(record: PitRecord) -> tuple[PitRecord, ...]:
+    """The resolved rows a derived artifact was computed from.
+
+    Public because availability, eligibility, timing basis and bound approval all
+    have to walk the same inputs, and a private helper meant each caller either
+    reached past the boundary or invented its own traversal.
+    """
+    return _derived_inputs(record)
 
 
 def _derived_inputs(record: PitRecord) -> tuple[PitRecord, ...]:
@@ -442,6 +577,7 @@ def source_anchor(
 
 
 __all__ = [
+    "BOUNDED_BASES",
     "NO_BOUNDS_APPROVED",
     "ApprovedBoundPolicy",
     "BoundApprovals",
@@ -450,9 +586,11 @@ __all__ = [
     "SourceRecord",
     "TimingBasisUsed",
     "decision_available_time",
+    "derived_inputs",
     "governing_timing_bases",
     "is_eligible",
     "origin_eligible",
+    "required_timing_bases",
     "resolved_provider_time",
     "resolved_public_time",
     "source_anchor",

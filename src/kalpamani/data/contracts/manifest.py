@@ -271,7 +271,12 @@ class InputInventory:
     #: How the rows this result served were admitted, per dataset. Per query, not
     #: per build: a dataset containing bounded rows and a result that leant on one
     #: are different claims.
-    timing_evidence: tuple[tuple[str, tuple[str, ...], int], ...] = ()
+    #: ``(dataset, required bases, governing bases, rows served)``. Both sets,
+    #: because they answer different questions: the profile can need a bounded
+    #: axis that decided nothing, and be decided by one it could have resolved
+    #: without. Collapsing them into a union put a bound in a run's identity
+    #: whichever of the two had happened.
+    timing_evidence: tuple[tuple[str, tuple[str, ...], tuple[str, ...], int], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -343,7 +348,8 @@ class InputInventory:
             "quality_report_hash": self.quality_report_hash,
             "query": None if self.query is None else self.query.identity(),
             "timing_evidence": [
-                [dataset, list(bases), rows] for dataset, bases, rows in self.timing_evidence
+                [dataset, list(required), list(governing), rows]
+                for dataset, required, governing, rows in self.timing_evidence
             ],
         }
 
@@ -465,6 +471,25 @@ _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
 }
 
 
+def _timing_rows(
+    executed: ExecutedResult[Any],
+) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...], int], ...]:
+    """One canonical shape for the inventory and for the cross-check.
+
+    Two spellings of the same derivation eventually disagree, and a disagreement
+    here reads as a shortened inventory rather than as a formatting difference.
+    """
+    return tuple(
+        (
+            entry.dataset,
+            tuple(sorted(basis.value for basis in entry.required_bases)),
+            tuple(sorted(basis.value for basis in entry.governing_bases)),
+            entry.rows,
+        )
+        for entry in executed.evidence.timing_evidence
+    )
+
+
 def inventory_for(executed: ExecutedResult[Any]) -> InputInventory:
     """The inventory for a sealed result. The only production route to one.
 
@@ -483,14 +508,7 @@ def inventory_for(executed: ExecutedResult[Any]) -> InputInventory:
         quality_report_hash=executed.quality_report_hash,
         result_artifact_hash=executed.result_bytes_hash,
         query=executed.query,
-        timing_evidence=tuple(
-            (
-                entry.dataset,
-                tuple(sorted(basis.value for basis in entry.bases)),
-                entry.rows,
-            )
-            for entry in executed.evidence.timing_evidence
-        ),
+        timing_evidence=_timing_rows(executed),
     )
 
 
@@ -502,11 +520,30 @@ def origin_exclusions_for(executed: ExecutedResult[Any]) -> tuple[OriginExclusio
     )
 
 
+def quality_summary_for(executed: ExecutedResult[Any]) -> QualitySummary:
+    """The summary the run's own quality evidence supports.
+
+    Every field is countable from the report the run read, and a caller writing
+    them by hand could write anything: a manifest claiming zero warnings while
+    citing a report holding two is internally consistent and false, and each half
+    reads correctly on its own. The field stays -- a reader should not have to
+    open the report to see the counts -- but the values come from the run, and
+    :func:`emit_manifest` refuses a manifest whose summary disagrees with it.
+    """
+    evidence = executed.evidence
+    return QualitySummary(
+        blocking_issues_open=evidence.quality_blocking_open,
+        warnings_open=evidence.quality_warnings_open,
+        checks_not_run=evidence.quality_checks_not_run,
+        quality_report_hash=executed.quality_report_hash,
+    )
+
+
 def emit_manifest(
     manifest: ResearchManifest,
     *,
-    result_bytes: bytes,
     executed: ExecutedResult[Any],
+    result_bytes: bytes | None = None,
 ) -> ResearchManifest:
     """Validate every precondition and return the manifest, or refuse.
 
@@ -525,8 +562,15 @@ def emit_manifest(
             not the first -- a reader fixing one failure should not have to
             rediscover the next four one run at a time.
     """
+    # The sealed result already carries its own canonical bytes. Asking the
+    # caller to resupply them was one more chance to hand over a different value
+    # than the one the run sealed, for no benefit; the parameter remains only so a
+    # test can offer the wrong bytes and observe the refusal.
+    payload = executed.result_bytes if result_bytes is None else result_bytes
     problems: list[str] = []
-    problems.extend(_check_against_execution(manifest, executed, result_bytes))
+    problems.extend(_check_against_execution(manifest, executed, payload))
+    problems.extend(_check_derived_claims(manifest, executed))
+    problems.extend(_check_dataset_references(manifest, executed))
 
     if manifest.manifest_version != MANIFEST_VERSION:
         problems.append(
@@ -551,7 +595,7 @@ def emit_manifest(
             "result_artifact_hash is empty; a result nothing identifies cannot be checked "
             "against the manifest that claims to describe it"
         )
-    elif sha256_hex(result_bytes) != manifest.result_artifact_hash:
+    elif sha256_hex(payload) != manifest.result_artifact_hash:
         problems.append(
             "result_artifact_hash does not match the emitted result bytes; the manifest "
             "describes a result other than the one produced. The hash is taken over the exact "
@@ -725,6 +769,16 @@ def _narrative_disagreements(
     """
     query = executed.query
     problems: list[str] = []
+    for profile_label, declared, ran in (
+        ("requested_profile", manifest.requested_profile, query.requested_profile),
+        ("resolved_profile", manifest.resolved_profile, query.resolved_profile),
+    ):
+        if declared is not ran:
+            problems.append(
+                f"the manifest says {profile_label}={declared.value} and the query ran under "
+                f"{ran.value}; the information set a result was computed in is not a "
+                "caller's narrative either"
+            )
     if query.kind == "price_history":
         for label, stated, served in (
             ("backtest_start", manifest.backtest_start, query.start),
@@ -762,6 +816,91 @@ def _narrative_disagreements(
             f"the manifest names revision_view={stated_view!r} and the query used "
             f"{used_view!r}; a query that consulted no revision reports none, and naming one "
             "claims the query honoured a view it never read"
+        )
+    return problems
+
+
+def _check_dataset_references(
+    manifest: ResearchManifest, executed: ExecutedResult[Any]
+) -> list[str]:
+    """Every field of the reference to the dataset the run actually read.
+
+    Two of the five were compared to something and three were compared to nothing:
+    ``content_hash`` and ``layer`` were pure narrative, and both enter ``run_id``.
+    The repository's own fixtures carried ``content_hash="sha256:abc"`` through
+    every green test, which is what a field nobody checks looks like from the
+    inside.
+    """
+    evidence = executed.evidence
+    problems: list[str] = []
+    for reference in manifest.datasets:
+        if reference.dataset_version != executed.dataset_version:
+            continue
+        if reference.publication_manifest_hash != executed.publication_manifest_hash:
+            problems.append(
+                f"the reference to {reference.dataset_version} names publication "
+                f"{reference.publication_manifest_hash!r} and the run read "
+                f"{executed.publication_manifest_hash!r}"
+            )
+        if reference.content_hash != evidence.build_identity:
+            problems.append(
+                f"the reference to {reference.dataset_version} names content "
+                f"{reference.content_hash!r} and the build the run read is "
+                f"{evidence.build_identity!r}; a content hash nothing compares is a "
+                "field that reads correctly whatever it says"
+            )
+        if reference.layer != evidence.layer:
+            problems.append(
+                f"the reference to {reference.dataset_version} names layer "
+                f"{reference.layer!r} and the run read {evidence.layer!r}"
+            )
+    return problems
+
+
+def _check_derived_claims(manifest: ResearchManifest, executed: ExecutedResult[Any]) -> list[str]:
+    """Fields the manifest restates that the run already established.
+
+    A duplicated claim is only useful while it agrees with its source, and each
+    half reads correctly on its own -- which is why a disagreement between them is
+    the kind nobody notices.
+    """
+    problems: list[str] = []
+    summary = manifest.quality
+    evidence = executed.evidence
+    resolution = manifest.profile_resolution
+    if resolution.resolution_policy_version != evidence.resolution_policy_version:
+        problems.append(
+            f"the manifest declares resolution policy "
+            f"{resolution.resolution_policy_version!r} and the run executed under "
+            f"{evidence.resolution_policy_version!r}"
+        )
+    declared_map = tuple(
+        (str(entry[0]), str(entry[1]), str(entry[2])) for entry in resolution.canonical_map()
+    )
+    if declared_map != evidence.resolution_map:
+        problems.append(
+            f"the manifest declares gap resolutions {list(declared_map)} and the run executed "
+            f"under {list(evidence.resolution_map)}; reasons included, because two runs that "
+            "bounded one dataset for different stated reasons admitted different rows"
+        )
+    if summary.quality_report_hash != executed.quality_report_hash:
+        # Already reported against the run. Comparing counts to a different
+        # report's counts would produce a second, misleading refusal.
+        return problems
+    for label, stated, found in (
+        ("blocking_issues_open", summary.blocking_issues_open, evidence.quality_blocking_open),
+        ("warnings_open", summary.warnings_open, evidence.quality_warnings_open),
+    ):
+        if stated != found:
+            problems.append(
+                f"the quality summary says {label}={stated} and the report it names holds "
+                f"{found}; a summary that disagrees with its own source is the half a reader "
+                "believes"
+            )
+    if tuple(sorted(summary.checks_not_run)) != evidence.quality_checks_not_run:
+        problems.append(
+            f"the quality summary lists checks_not_run {sorted(summary.checks_not_run)} and "
+            f"the report it names records {list(evidence.quality_checks_not_run)}"
         )
     return problems
 
@@ -830,10 +969,7 @@ def _check_against_execution(
             "the inventory records a different query than the run answered; a manifest whose "
             "question and execution disagree describes a result nobody can re-derive"
         )
-    recorded_timing = tuple(
-        (entry.dataset, tuple(sorted(basis.value for basis in entry.bases)), entry.rows)
-        for entry in executed.evidence.timing_evidence
-    )
+    recorded_timing = _timing_rows(executed)
     if inventory.timing_evidence != recorded_timing:
         problems.append(
             f"the inventory records timing evidence {list(inventory.timing_evidence)} and the "
@@ -1007,7 +1143,11 @@ def _check_tokens(manifest: ResearchManifest, executed: ExecutedResult[Any]) -> 
     """
     problems: list[str] = []
     tokens = set(manifest.limitations)
-    bases = {basis for entry in executed.evidence.timing_evidence for basis in entry.bases}
+    # The **required** set. A bound-required token says the profile could not
+    # have admitted the row without a bounded axis, which is the claim that
+    # makes a result subject to that bound's imprecision. Whether the bound
+    # also set the cutoff is a different fact, recorded separately.
+    bases = {basis for entry in executed.evidence.timing_evidence for basis in entry.required_bases}
 
     have: dict[LimitationToken, bool] = {
         LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED: executed.exclusion_rows > 0,
@@ -1057,4 +1197,5 @@ __all__ = [
     "emit_manifest",
     "inventory_for",
     "origin_exclusions_for",
+    "quality_summary_for",
 ]

@@ -113,6 +113,18 @@ FORWARD = InformationSetProfile.FORWARD_SYSTEM
 
 BEFORE_ANNOUNCEMENT = phase3a.utc(2019, 6, 24, 21, 0)
 AFTER_EVERYTHING = phase3a.utc(2019, 6, 28, 21, 0)
+
+#: After the synthetic calendar itself became available.
+#:
+#: ``market_session`` is the one dataset whose provider axis the fixture leaves to
+#: a ``FIRST_SEEN_UPPER_BOUND``, and the resolution step derives that bound from
+#: when the row was first seen -- 2026. Under ``PROVIDER_REALISTIC_PIT`` the
+#: calendar is therefore not available to a 2019 query at all, which is the honest
+#: consequence of "we do not know when the vendor published it, so we bound it by
+#: when we first held it". Until the calendar was filtered point-in-time like every
+#: other input, provider-realistic queries measured completeness against sessions
+#: they could not have seen.
+AFTER_THE_CALENDAR_WAS_AVAILABLE = phase3a.utc(2026, 8, 21, 0, 0)
 SCOPE = phase3a.SEC_CONTINUOUS
 VALID_START = date(2019, 6, 24)
 VALID_END = date(2019, 6, 28)
@@ -1197,7 +1209,7 @@ def test_minute_coverage_cannot_pass_with_one_arbitrary_bar(tmp_path: Path) -> N
             end=date(2019, 6, 26),
             resolution=BarResolution.MINUTE,
             adjustment_mode=RAW,
-            as_of=AFTER_EVERYTHING,
+            as_of=AFTER_THE_CALENDAR_WAS_AVAILABLE,
             profile=PROVIDER_REALISTIC,
             requirement=SeriesRequirement.REQUIRED,
             revision_view=None,
@@ -1384,7 +1396,7 @@ def test_a_series_emptied_by_origin_ineligibility_is_refused(tmp_path: Path) -> 
         end=date(2019, 6, 28),
         resolution=BarResolution.DAILY,
         adjustment_mode=RAW,
-        as_of=AFTER_EVERYTHING,
+        as_of=AFTER_THE_CALENDAR_WAS_AVAILABLE,
         profile=PROVIDER_REALISTIC,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,

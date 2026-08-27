@@ -35,9 +35,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from kalpamani.data.contracts.dataset import GoldDataset
@@ -60,6 +62,15 @@ from kalpamani.data.contracts.envelope import (
     OutputValidityDeclaration,
     SourceEnvelope,
 )
+from kalpamani.data.contracts.manifest import (
+    CodeProvenance,
+    CoverageEvidence,
+    DatasetReference,
+    ResearchManifest,
+    inventory_for,
+    origin_exclusions_for,
+    quality_summary_for,
+)
 from kalpamani.data.contracts.profiles import (
     DatasetGapResolution,
     DatasetResolutionEvidence,
@@ -68,11 +79,14 @@ from kalpamani.data.contracts.profiles import (
 from kalpamani.data.contracts.resolution import ApprovedBoundPolicy, BoundApprovals
 from kalpamani.data.contracts.vocabulary import (
     RAW,
+    AdjustmentConvention,
+    AdjustmentMode,
     AdjustmentPolicy,
     AnnouncementBoundDerivation,
     BarConstruction,
     BarResolution,
     CorporateActionType,
+    CoverageScope,
     DatasetGapPolicy,
     DelistingReason,
     Exchange,
@@ -84,6 +98,7 @@ from kalpamani.data.contracts.vocabulary import (
     ProviderTimeDerivation,
     PublicBoundDerivation,
     PublicTimeDerivation,
+    RevisionView,
     TickerChangeReason,
 )
 from kalpamani.data.curate.adjustment import (
@@ -101,10 +116,17 @@ from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_
 from kalpamani.data.curate.universe import UniverseBuildInputs, UniverseDefinition
 from kalpamani.data.pit.accessors import BarSeriesResult, PointInTimeReader
 from kalpamani.data.pit.execution import ExecutedResult
-from kalpamani.data.pit.query import SeriesRequirement
+from kalpamani.data.pit.query import PriceQuerySpec, SeriesRequirement
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN
-from kalpamani.data.quality.report import QualityReport
-from kalpamani.data.quality.runner import QualityContext, RunnerOutcome, run_quality_plan
+from kalpamani.data.quality.report import QualityContextDescriptor, QualityReport
+from kalpamani.data.quality.runner import (
+    CHECK_REGISTRY,
+    QUALITY_RUNNER_VERSION,
+    QualityContext,
+    RunnerOutcome,
+    registry_identity,
+    run_quality_plan,
+)
 from kalpamani.data.storage import LocalTableStore
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1034,25 @@ def quality_context(
     )
 
 
+def quality_context_descriptor(
+    dataset: GoldDataset | None = None,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+) -> QualityContextDescriptor:
+    """The readable standard for a build, as the runner would record it.
+
+    Hand-built reports still need one: a report that names no standard cannot be
+    audited, and letting the field be optional would put that hole back.
+    """
+    built = gold_dataset(requested=requested, downgrade=downgrade) if dataset is None else dataset
+    return quality_context(built, requested=requested, downgrade=downgrade).descriptor(
+        plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        runner_version=QUALITY_RUNNER_VERSION,
+        registry_identity=registry_identity(CHECK_REGISTRY),
+    )
+
+
 def quality_outcome(
     dataset: GoldDataset | None = None,
     *,
@@ -1385,23 +1426,105 @@ def resolution_evidence(
     return resolved_inputs(requested=requested, downgrade=downgrade).evidence
 
 
-def sealed_result(store: LocalTableStore) -> ExecutedResult[BarSeriesResult]:
+def sealed_result(
+    store: LocalTableStore,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+) -> ExecutedResult[BarSeriesResult]:
     """A sealed result from a real query, for the research-manifest path.
 
-    A RAW daily series over the continuously listed security: it reads one source
-    dataset, leans on a bounded public availability, and excludes nothing -- so the
-    seal carries every field the manifest is cross-checked against.
+    A RAW daily series over the continuously listed security: it reads the
+    listings and calendar its grid comes from and the bars themselves, leans on a
+    bounded public availability, and excludes nothing -- so the seal carries every
+    field the manifest is cross-checked against.
+
+    ``requested``/``downgrade`` exist so a manifest that describes a downgraded run
+    can be checked against a run that was actually downgraded. A manifest declaring
+    one information set beside a query executed in another is exactly what the
+    cross-check refuses.
     """
-    return reader(store).get_price_history(
+    return reader(store, requested=requested, downgrade=downgrade).get_price_history(
         security_id=SEC_CONTINUOUS,
         start=date(2019, 6, 24),
         end=date(2019, 6, 28),
         resolution=BarResolution.DAILY,
         adjustment_mode=RAW,
         as_of=utc(2019, 7, 1, 12, 0),
-        profile=InformationSetProfile.PUBLIC_PIT,
+        profile=requested,
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
+    )
+
+
+#: The point-in-time revision view an adjusted query must name explicitly.
+AS_KNOWN = RevisionView.AS_KNOWN_AT_AS_OF
+
+
+def split_adjusted_mode() -> AdjustmentMode:
+    """The one adjustment mode this slice computes, named rather than inlined."""
+    return AdjustmentMode(
+        policy=AdjustmentPolicy.SPLIT_ONLY,
+        convention=AdjustmentConvention.FORWARD_BASE_NORMALIZED,
+    )
+
+
+def sealed_result_in_memory() -> ExecutedResult[BarSeriesResult]:
+    """A sealed result over a throwaway store, for tests that need no filesystem."""
+    return sealed_result(LocalTableStore(Path(tempfile.mkdtemp(prefix="kalpamani-sealed-"))))
+
+
+def research_manifest_for(executed: ExecutedResult[BarSeriesResult]) -> ResearchManifest:
+    """A manifest that agrees with the run in every derived field.
+
+    Built from the sealed result rather than written beside it: the fields a
+    caller used to restate -- the window, the cutoff, both profiles, the finding
+    counts, the dataset identity -- are exactly the ones a hand-written manifest
+    could get wrong without anything noticing.
+    """
+    query = executed.query
+    assert isinstance(query, PriceQuerySpec)
+    return ResearchManifest(
+        code=CodeProvenance(
+            commit_sha=CODE_COMMIT_SHA,
+            working_tree_clean=True,
+            config_version="research/synthetic.a1",
+        ),
+        as_of_cutoff=query.as_of,
+        backtest_start=query.start,
+        backtest_end=query.end,
+        profile_resolution=resolution(requested=query.requested_profile),
+        revision_view=query.revision_view,
+        dataset_resolution_evidence=resolution_evidence(requested=query.requested_profile),
+        required_inputs=(
+            CoverageEvidence(
+                domain="price_bar",
+                coverage_scope=CoverageScope.PER_SESSION,
+                min_coverage_fraction=Decimal("0.99"),
+                minimum_observed_partition_coverage=Decimal("1.0"),
+                total_partitions=len(executed.result.bars),
+                failing_partitions=0,
+            ),
+        ),
+        datasets=(
+            DatasetReference(
+                dataset_version=executed.dataset_version,
+                layer=executed.evidence.layer,
+                # From the run, not restated beside it. Every fixture in this
+                # repository shipped ``content_hash="sha256:abc"`` and every green
+                # test emitted a manifest whose dataset content hash was fictitious,
+                # because nothing compared it to anything.
+                content_hash=executed.evidence.build_identity,
+                publication_manifest_hash=executed.publication_manifest_hash,
+                resolved_profile=query.resolved_profile,
+            ),
+        ),
+        inputs=inventory_for(executed),
+        origin_exclusions=origin_exclusions_for(executed),
+        definitions={"universe_definition_version": UNIVERSE_DEFINITION_VERSION},
+        limitations=tuple(executed.result.provenance.limitations),
+        quality=quality_summary_for(executed),
+        result_artifact_hash=executed.result_bytes_hash,
     )
 
 

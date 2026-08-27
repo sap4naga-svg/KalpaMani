@@ -22,6 +22,7 @@ import dataclasses
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -40,8 +41,9 @@ from kalpamani.data.contracts.vocabulary import (
     AdjustmentPolicy,
     BarResolution,
     InformationSetProfile,
+    LimitationToken,
 )
-from kalpamani.data.curate.publication import publish_gold_dataset
+from kalpamani.data.curate.publication import compute_manifest_hash, publish_gold_dataset
 from kalpamani.data.curate.universe import definition_hash
 from kalpamani.data.pit.execution import ExecutedResult
 from kalpamani.data.pit.query import PriceQuerySpec, SeriesRequirement, UniverseQuerySpec
@@ -275,11 +277,26 @@ def test_a_raw_query_carries_no_revision_view(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_bound_token_requires_a_bound_row_in_this_result(tmp_path: Path) -> None:
+def test_timing_evidence_describes_this_result_and_not_the_dataset(
+    tmp_path: Path,
+) -> None:
     """Reader-lifetime evidence let one query's bound justify another's token.
 
-    The reference build serves exact public rows for this window, so no bounded
-    basis is used and no bound token may appear.
+    Two things had to be right and only one was checked. ``bounds_relied_upon``
+    and ``timing_evidence`` are two derivations of one tuple, so comparing them
+    to each other says nothing about whether that tuple describes *this* result:
+    widen the tuple to the build's dataset-wide evidence and both widen together.
+
+    The independent anchor is the row **count**. Evidence scoped to this answer
+    records exactly the rows this answer served, and a dataset-wide derivation
+    cannot match a five-bar series by accident.
+
+    The premise stated here is also the fixture's actual one. An earlier version
+    of this test asserted that "the reference build serves exact public rows for
+    this window, so no bound token may appear" -- and the fixture's bars carry no
+    exact public time at all, resolving on an approved
+    ``SESSION_CLOSE_PLUS_LAG`` bound. A test whose premise is the opposite of
+    what the fixture produces is passing through a branch nobody meant.
     """
     reader = phase3a.reader(LocalTableStore(tmp_path))
     executed = reader.get_price_history(
@@ -293,13 +310,36 @@ def test_a_bound_token_requires_a_bound_row_in_this_result(tmp_path: Path) -> No
         requirement=SeriesRequirement.REQUIRED,
         revision_view=None,
     )
-    used = {basis for entry in executed.evidence.timing_evidence for basis in entry.bases}
-    assert used, "The query served rows, so it recorded how each was timed."
-    bounded = {entry.dataset for entry in executed.evidence.timing_evidence if entry.used_a_bound}
-    assert set(executed.bounds_relied_upon) == bounded, (
-        "The claim is about the rows in this answer, not about the dataset as a whole."
+    served = {entry.dataset: entry.rows for entry in executed.evidence.timing_evidence}
+    assert served["price_bar"] == len(executed.result.bars), (
+        "The bar rows the evidence counts are the bars this answer returned."
     )
-    assert not any("BOUNDED" in basis for basis in used) or bounded
+    assert served["price_bar"] < len(phase3a.daily_bars()), (
+        "And fewer than the build holds, so the evidence is not the dataset's."
+    )
+
+    shorter = reader.get_price_history(
+        security_id=SECURITY,
+        start=FIRST,
+        end=date(2019, 6, 26),
+        resolution=BarResolution.DAILY,
+        adjustment_mode=RAW,
+        as_of=SETTLED,
+        profile=PUBLIC,
+        requirement=SeriesRequirement.REQUIRED,
+        revision_view=None,
+    )
+    narrower = {entry.dataset: entry.rows for entry in shorter.evidence.timing_evidence}
+    assert narrower["price_bar"] < served["price_bar"], (
+        "A narrower window served fewer rows, and the evidence moved with it."
+    )
+
+    # The fixture's bars resolve on an approved public bound, so the required set
+    # genuinely contains one and the token genuinely belongs on the result.
+    required = executed.evidence.required_bases_for("price_bar")
+    assert any("BOUNDED" in basis.value for basis in required)
+    assert "price_bar" in executed.bounds_relied_upon
+    assert LimitationToken.PUBLIC_TIME_BOUNDED in executed.result.provenance.limitations
 
 
 def test_one_artifact_id_cannot_name_two_different_artifacts(tmp_path: Path) -> None:
@@ -394,15 +434,45 @@ def test_a_different_threshold_is_a_different_quality_context() -> None:
     assert stricter.universe_definition.version == base.universe_definition.version
     assert stricter.context_hash() != original
 
-    later = dataclasses.replace(base, as_of=phase3a.utc(2030, 1, 1, 0, 0))
-    assert later.context_hash() != original
+    looser = dataclasses.replace(
+        base,
+        survivorship_policy=dataclasses.replace(
+            base.survivorship_policy,
+            deep_history_years=base.survivorship_policy.deep_history_years + 1,
+        ),
+    )
+    assert looser.context_hash() != original
+
+    # `as_of` is not perturbable here, and deliberately: it is bound to the
+    # build's own time rather than chosen, because a horizon picked from outside
+    # the build decides how much of the data the checks can see.
+    with pytest.raises(QualityGateError, match="declares as_of"):
+        dataclasses.replace(base, as_of=phase3a.utc(2030, 1, 1, 0, 0))
 
 
-def test_the_context_hash_covers_the_build_it_judged() -> None:
-    """A standard is only evidence when it is attached to what it was applied to."""
+def test_one_changed_row_is_a_different_quality_context() -> None:
+    """A standard is evidence only while it is attached to what it was applied to.
+
+    The dataset version label is deliberately held constant: a label is what a
+    caller writes, and two builds under one label with different rows are exactly
+    the case a version string cannot distinguish. ``build_identity`` covers the
+    rows themselves, so the context that judged one build cannot be evidence
+    about the other.
+    """
+    original = phase3a.quality_context(phase3a.gold_dataset())
+    perturbed = phase3a.quality_context(_build_with_one_changed_bar())
+
+    assert perturbed.dataset.dataset_version == original.dataset.dataset_version, (
+        "Same label -- which is the point."
+    )
+    assert perturbed.dataset.build_identity != original.dataset.build_identity
+    assert perturbed.context_hash() != original.context_hash()
+
+
+def test_a_different_resolved_profile_is_a_different_quality_context() -> None:
+    """The information set a build was judged under is part of the standard."""
     clean = phase3a.quality_context(phase3a.gold_dataset())
-    assert clean.dataset.build_identity in str(clean.context_hash()) or True
-    other = phase3a.quality_context(phase3a.gold_dataset(requested=PROVIDER))
+    other = phase3a.quality_context(phase3a.gold_dataset(requested=PROVIDER), requested=PROVIDER)
     assert other.context_hash() != clean.context_hash()
 
 
@@ -431,9 +501,17 @@ def test_the_manifest_binds_the_standard_as_well_as_the_findings(
         universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
     )
     assert manifest.quality_context_hash == outcome.quality_context_hash
-    assert manifest.quality_context_hash in manifest.manifest_hash or True
+    assert manifest.manifest_hash == compute_manifest_hash(manifest)
+
+    # Perturbation, not containment: the question is whether changing the context
+    # changes the manifest's identity, and one hash string never contains another.
+    restated = dataclasses.replace(manifest, quality_context_hash="a-different-standard")
+    assert compute_manifest_hash(restated) != compute_manifest_hash(manifest), (
+        "Two builds judged to different standards would otherwise be indistinguishable."
+    )
+
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path / "b"))
-    assert publication.quality_report.quality_context_hash
+    assert publication.quality_report.quality_context_hash == outcome.quality_context_hash
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +766,10 @@ def test_one_id_cannot_describe_two_artifacts_within_a_run() -> None:
     recorder = ExecutionRecorder(
         dataset_version="gold/synthetic.a1.1",
         manifest_hash="sha256:m",
+        build_identity="sha256:b",
+        layer="GOLD",
+        resolution_policy_version="synthetic/1",
+        resolution_map=(),
         quality_hash="sha256:q",
     )
     first = ConsumedArtifactRecord(
@@ -762,3 +844,48 @@ def test_the_read_requires_the_header_to_name_exactly_the_considered_set(
             resolved_profile=publication.dataset.resolved_profile,
             approvals=phase3a.approvals(),
         )
+
+
+def _build_with_one_changed_bar() -> Any:
+    """The reference build with a single close price moved, under the same label.
+
+    Nothing about it is defective -- the quality gate passes it -- which is what
+    makes it the right perturbation: the two builds differ only in a number, and
+    the label a caller reads is identical.
+    """
+    from kalpamani.data.curate.build import build_gold_dataset
+    from kalpamani.data.curate.resolution_run import resolve_run_inputs
+
+    datasets = phase3a.source_datasets()
+    bars = datasets["price_bar"]
+    victim = next(
+        row
+        for row in bars
+        if isinstance(row, PriceBar)
+        and row.security_id == SECURITY
+        and row.resolution is BarResolution.DAILY
+        and row.session_date == FIRST
+    )
+    moved = dataclasses.replace(
+        victim,
+        high=victim.high + Decimal("0.01"),
+        close=victim.close + Decimal("0.01"),
+    )
+    datasets["price_bar"] = tuple(moved if row is victim else row for row in bars)
+
+    resolved = resolve_run_inputs(
+        datasets, config=phase3a.resolution(), approvals=phase3a.approvals()
+    )
+    return build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )

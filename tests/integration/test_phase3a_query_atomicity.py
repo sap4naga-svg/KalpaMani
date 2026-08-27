@@ -395,13 +395,18 @@ def test_one_membership_decision_arriving_late_withholds_the_whole_snapshot(
     became available at T2 while its siblings had been available since T1.
     Serving the snapshot between those instants would return every row but that
     one -- silently.
+
+    The header carries every row the build consumed, so its own decision time is
+    the later of the two and the whole artifact waits. That is a stronger statement
+    than the row-by-row scan it replaced: a security the rule considered and
+    excluded delays the snapshot too, and it produced no row to scan.
     """
     reader = _incremental(tmp_path, stale_row_security=phase3a.SEC_CONTINUOUS)
     between = T2 - timedelta(hours=1)
     with pytest.raises(MissingHistoricalSnapshotError) as refusal:
         reader.get_security_universe(as_of=between, profile=FORWARD)
     message = str(refusal.value)
-    assert "still arriving until" in message
+    assert "became available at" in message
     assert T2.isoformat() in message
 
 
@@ -497,7 +502,7 @@ def test_a_zero_row_snapshot_is_not_served_before_it_was_built_under_forward_sys
 ) -> None:
     """Before we ran the rule we did not know it selected nobody. We knew nothing."""
     reader = _zero_row_reader(tmp_path, FORWARD)
-    with pytest.raises(MissingHistoricalSnapshotError, match="first built at"):
+    with pytest.raises(MissingHistoricalSnapshotError, match="became available at"):
         reader.get_security_universe(
             as_of=phase3a.ARTIFACT_FIRST_BUILT - timedelta(minutes=1), profile=FORWARD
         )

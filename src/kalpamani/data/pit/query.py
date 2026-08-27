@@ -75,6 +75,11 @@ class PriceQuerySpec:
     adjustment_policy: AdjustmentPolicy | None
     adjustment_convention: AdjustmentConvention | None
     requirement: SeriesRequirement
+    #: Canonical identity of the listing and calendar rows that produced this
+    #: series' expected endpoint grid. Two runs can expect the same endpoints from
+    #: different evidence -- a re-stated listing, a corrected calendar -- and
+    #: without this they were the same question with the same answer.
+    grid_basis_hash: str
     #: ``None`` for a raw series, and that is a fact rather than an omission: a
     #: raw series reads no revisable row, so reporting a view would say the query
     #: honoured something it never consulted.
@@ -102,6 +107,7 @@ class PriceQuerySpec:
                 None if self.adjustment_convention is None else self.adjustment_convention.value
             ),
             "requirement": self.requirement.value,
+            "grid_basis_hash": self.grid_basis_hash,
             "revision_view": None if self.revision_view is None else self.revision_view.value,
             "as_of": self.as_of,
             "requested_profile": self.requested_profile.value,
@@ -127,6 +133,10 @@ class UniverseQuerySpec:
     evaluation_cutoff: datetime
     snapshot_artifact_id: str
     snapshot_content_hash: str
+    #: Always absent. A universe snapshot is not a revisable fact, so there is no
+    #: revision to choose -- and the field exists so that saying so is a value the
+    #: manifest can check rather than a convention it has to know.
+    revision_view: RevisionView | None = None
     #: The rule the served snapshot was built under -- its name **and** its
     #: parameters. A caller-authored definition string described a rule the query
     #: had not necessarily applied, and a version alone does not distinguish two

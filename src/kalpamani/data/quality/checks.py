@@ -1178,6 +1178,18 @@ def _dedupe(findings: Sequence[QualityFinding]) -> list[QualityFinding]:
     return out
 
 
+def blocking_finding(check: str, dataset: str, detail: str) -> QualityFinding:
+    """One BLOCKING finding, for a check whose refusal arrives as an exception.
+
+    :func:`~kalpamani.data.curate.adjustment.verify_adjusted_bar_artifact` refuses
+    by raising, because its callers on the build path want the build to stop. The
+    runner wants the same defect recorded as evidence rather than propagated, so
+    it translates -- and translating needs a constructor the module exports rather
+    than a private one reached across the boundary.
+    """
+    return _blocking(check, dataset, detail)
+
+
 def blocking_findings(findings: Sequence[QualityFinding]) -> tuple[QualityFinding, ...]:
     """Only the findings that refuse a result."""
     return tuple(f for f in findings if f.is_blocking)
@@ -1189,6 +1201,7 @@ __all__ = [
     "MarketDataThresholds",
     "QualityFinding",
     "SurvivorshipPolicy",
+    "blocking_finding",
     "blocking_findings",
     "check_adjusted_artifact_hash",
     "check_envelope",

@@ -68,6 +68,7 @@ from kalpamani.data.contracts.errors import (
     QualityGateError,
 )
 from kalpamani.data.contracts.instants import is_canonical_instant, normalize_instant
+from kalpamani.data.contracts.manifest import DatasetReference
 from kalpamani.data.contracts.paths import safe_component, safe_relative_path
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
@@ -627,7 +628,7 @@ def _verify_evidence_complete(dataset: GoldDataset) -> None:
 _VERIFIED_READ_TOKEN: Final = object()
 
 
-def verification_seal(
+def _verification_seal(
     manifest: DatasetManifest,
     report: QualityReport,
     dataset: GoldDataset,
@@ -642,6 +643,12 @@ def verification_seal(
     only the three hashes left ``dataclasses.replace(publication, dataset=...)``
     carrying the seal through onto different contents: every hash still agreed,
     because none of them was about the rows.
+
+    **Module-private on purpose.** While this was public a caller could swap the
+    dataset, recompute the seal over the replacement and hand back an object that
+    validated: the seal proved internal agreement, and a caller who could compute
+    it could manufacture that agreement. It is now reachable only from the read
+    path that establishes the agreement against storage.
     """
     return content_hash(
         {
@@ -658,7 +665,6 @@ def verification_seal(
     )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
 class VerifiedPublication:
     """A published dataset that **this process** verified, with its evidence.
 
@@ -668,39 +674,211 @@ class VerifiedPublication:
     the report hash matched -- and those checks pass for a hand-built triplet,
     because they compare the pieces to each other rather than to storage.
 
-    This type carries the fact of verification itself. Only
-    :func:`read_published_dataset` holds the token that constructs it, and the
-    seal records which manifest, report and **build** the verification covered --
-    the last because a seal over hashes alone travelled through
-    ``dataclasses.replace`` onto a different dataset unchallenged.
+    Deliberately **not a dataclass**, and deliberately without an authorization
+    field. As a frozen dataclass carrying ``verified_by`` it looked sealed and was
+    not, for two compounding reasons:
+
+    - ``dataclasses.replace`` copies every field it is not asked to change, so
+      the token travelled onto a substituted dataset for free; and
+    - :func:`_verification_seal` was public, so a caller who swapped the dataset
+      could recompute the seal over the replacement and restore agreement.
+
+    A seal that its holder can recompute is a checksum, not an authorization. The
+    construction token is now a parameter, not a field -- there is nothing to
+    copy -- and :meth:`require_internally_consistent` re-derives every identity
+    rather than reading one Boolean.
+
+    This is an API-integrity boundary, and it is worth being exact about what it
+    buys. The construction token is the part that holds: nothing outside this
+    module can produce one, and subclassing -- which would supply its own
+    ``__init__``, its own properties and its own revalidation -- is refused
+    outright.
+
+    :func:`_verification_seal` being private buys **less** than it appears to.
+    Every input to it is readable from the public properties, so a caller with the
+    same content-hash function can recompute the value; what they cannot do is
+    construct the object that carries it. The seal is therefore a consistency
+    check, not an authorization, and :meth:`require_internally_consistent` is
+    written to re-derive the identities rather than to trust it.
+
+    Python is not a sandbox and this does not pretend otherwise: the module's own
+    privates remain reachable to code that goes looking. What the boundary removes
+    is every route a caller reaches by accident, by convenience, or by using the
+    public API as documented.
     """
 
-    dataset: GoldDataset
-    manifest: DatasetManifest
-    quality_report: QualityReport
-    verification_seal: str
-    verified_by: object
+    __slots__ = ("_dataset", "_manifest", "_quality_report", "_verification_seal")
 
-    def __post_init__(self) -> None:
-        if self.verified_by is not _VERIFIED_READ_TOKEN:
+    _dataset: GoldDataset
+    _manifest: DatasetManifest
+    _quality_report: QualityReport
+    _verification_seal: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. The gate is in ``__init__``, and a subclass need not call it.
+
+        Everything below -- the construction token, the read-only properties, the
+        refusing ``__setattr__`` -- lives on this class, and a subclass overrides
+        every one of them with ordinary public syntax: an ``__init__`` that never
+        calls ``super()``, plain class attributes shadowing the properties, and a
+        :meth:`require_internally_consistent` that returns ``None``. The consumer
+        would then be asking the object being authorized to authorize itself,
+        which is the shape of defect the ``verified_by`` field had.
+        """
+        raise DatasetPublicationError(
+            "VerifiedPublication may not be subclassed. Its construction token, its "
+            "immutability and its revalidation are all overridable by a subclass, so a "
+            "subclass is a route past every one of them -- reached with nothing more than "
+            "the documented public API."
+        )
+
+    def __init__(
+        self,
+        *,
+        dataset: GoldDataset,
+        manifest: DatasetManifest,
+        quality_report: QualityReport,
+        verification_seal: str,
+        token: object,
+    ) -> None:
+        """Seal a verified read. ``token`` is the read path's, and nothing else has it."""
+        if token is not _VERIFIED_READ_TOKEN:
             raise DatasetPublicationError(
                 "A VerifiedPublication may only be produced by read_published_dataset. A "
                 "dataset, a manifest and a report assembled at a call site have not been "
                 "checked against storage -- their hashes agree with each other, which is not "
                 "the same as agreeing with what was published."
             )
-        expected = verification_seal(self.manifest, self.quality_report, self.dataset)
-        if self.verification_seal != expected:
-            raise DatasetPublicationError(
-                f"The verification seal on {self.manifest.dataset_version} does not describe "
-                "the artifacts it is attached to. A seal that names other artifacts is not "
-                "evidence about these."
-            )
+        set_ = object.__setattr__
+        set_(self, "_dataset", dataset)
+        set_(self, "_manifest", manifest)
+        set_(self, "_quality_report", quality_report)
+        set_(self, "_verification_seal", verification_seal)
+        self.require_internally_consistent()
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise DatasetPublicationError(
+            "A VerifiedPublication records what one verified read established and cannot "
+            "be edited afterwards. Editing it would separate the evidence from the read."
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise DatasetPublicationError(
+            "A VerifiedPublication records what one verified read established."
+        )
+
+    # -- the artifacts ------------------------------------------------------
+
+    @property
+    def dataset(self) -> GoldDataset:
+        """The rows this publication serves."""
+        return self._dataset
+
+    @property
+    def manifest(self) -> DatasetManifest:
+        """What the published version claims about itself."""
+        return self._manifest
+
+    @property
+    def quality_report(self) -> QualityReport:
+        """The quality evidence publication was gated on."""
+        return self._quality_report
+
+    @property
+    def verification_seal(self) -> str:
+        """The seal the verified read stamped, over all three artifacts."""
+        return self._verification_seal
 
     @property
     def dataset_version(self) -> str:
         """The version this publication serves."""
-        return self.manifest.dataset_version
+        return self._manifest.dataset_version
+
+    # -- revalidation -------------------------------------------------------
+
+    def require_internally_consistent(self) -> None:
+        """Re-derive every identity rather than trusting one flag.
+
+        Run at construction and again by every consumer that binds to a
+        publication. A single Boolean or token answers "was this blessed", which
+        is not the question: the question is whether the artifacts in hand are
+        still the ones the blessing was about.
+
+        For an object this module produced, every comparison here holds by
+        construction -- that is the point, and it is why the tests that exercise
+        the refusals reach for the module-private constructor to build artifacts
+        that are wrong on purpose. The value is in what happens when a future
+        change, or a publication produced by other code, breaks one of them
+        silently.
+
+        Raises:
+            DatasetPublicationError: naming the first identity that disagrees.
+        """
+        manifest = self._manifest
+        report = self._quality_report
+        dataset = self._dataset
+
+        if dataset.dataset_version != manifest.dataset_version:
+            raise DatasetPublicationError(
+                f"The build in this publication is {dataset.dataset_version} and its manifest "
+                f"describes {manifest.dataset_version}. A manifest that is not about these "
+                "rows says nothing about them."
+            )
+        if compute_manifest_hash(manifest) != manifest.manifest_hash:
+            raise DatasetPublicationError(
+                f"The manifest for {manifest.dataset_version} does not reconcile with its own "
+                f"hash (records {manifest.manifest_hash}, recomputes "
+                f"{compute_manifest_hash(manifest)}). A manifest editable after the read that "
+                "verified it is not evidence of that read."
+            )
+        if report.report_hash != manifest.quality_report_hash:
+            raise DatasetPublicationError(
+                f"The quality report in this publication hashes to {report.report_hash} and "
+                f"its manifest names {manifest.quality_report_hash}."
+            )
+        if report.quality_context_hash != manifest.quality_context_hash:
+            raise DatasetPublicationError(
+                f"The quality report was measured against context "
+                f"{report.quality_context_hash} and the manifest names "
+                f"{manifest.quality_context_hash}. The standard a build passed is part of "
+                "what the manifest asserts."
+            )
+        if report.subject_build_identity != dataset.build_identity:
+            raise DatasetPublicationError(
+                f"The quality report was run over build {report.subject_build_identity} and "
+                f"this publication holds {dataset.build_identity}. Every finding those checks "
+                "did not make is a finding about a different set of rows."
+            )
+        if dataset.resolution_receipt.receipt_hash != manifest.resolution_receipt_hash:
+            raise DatasetPublicationError(
+                f"The resolution receipt in this publication hashes to "
+                f"{dataset.resolution_receipt.receipt_hash} and its manifest names "
+                f"{manifest.resolution_receipt_hash}."
+            )
+        expected = _verification_seal(manifest, report, dataset)
+        if self._verification_seal != expected:
+            raise DatasetPublicationError(
+                f"The verification seal on {manifest.dataset_version} does not describe the "
+                "artifacts it is attached to. A seal that names other artifacts is not "
+                "evidence about these."
+            )
+
+
+def dataset_reference_for(publication: VerifiedPublication) -> DatasetReference:
+    """The reference a verified publication supports, rather than a restatement.
+
+    Asking the caller for the version, the layer, the content identity, the
+    publication hash and the profile was five chances to describe a different
+    dataset than the one the run actually read -- and each of the five reads
+    plausibly on its own.
+    """
+    return DatasetReference(
+        dataset_version=publication.manifest.dataset_version,
+        layer=publication.manifest.layer.value,
+        content_hash=publication.dataset.build_identity,
+        publication_manifest_hash=publication.manifest.manifest_hash,
+        resolved_profile=publication.manifest.resolved_profile,
+    )
 
 
 def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> DatasetManifest:
@@ -938,8 +1116,8 @@ def read_published_dataset(
         dataset=built,
         manifest=manifest,
         quality_report=report,
-        verification_seal=verification_seal(manifest, report, built),
-        verified_by=_VERIFIED_READ_TOKEN,
+        verification_seal=_verification_seal(manifest, report, built),
+        token=_VERIFIED_READ_TOKEN,
     )
 
 
@@ -1423,9 +1601,9 @@ __all__ = [
     "TableRecord",
     "VerifiedPublication",
     "compute_manifest_hash",
+    "dataset_reference_for",
     "load_dataset_manifest",
     "load_quality_report",
     "publish_gold_dataset",
     "read_published_dataset",
-    "verification_seal",
 ]

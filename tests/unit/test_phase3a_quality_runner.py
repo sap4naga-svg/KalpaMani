@@ -108,12 +108,21 @@ def test_a_registered_check_is_observably_invoked() -> None:
 
 
 def test_checks_not_run_come_only_from_a_computed_applicability_decision() -> None:
-    """A skip is the runner's finding about the build, never a caller's request."""
+    """A skip is the runner's finding about what it was handed, never a request.
+
+    The distinction the reason has to carry: ``adjusted_artifacts`` is a field of
+    the quality **context**, not of the ``GoldDataset``, so its absence is a
+    caller's choice. Calling that "computed from the build" put the one decision
+    that switches the artifact replay off beyond the reader's view.
+    """
     outcome = _run()
     report = outcome.report  # type: ignore[attr-defined]
     skipped = {item.check_name: item.reason for item in report.checks_not_run}
     assert "4.5_adjusted_artifacts" in skipped
-    assert "materialised no adjusted bar artifacts" in skipped["4.5_adjusted_artifacts"]
+    assert "no adjusted bar artifacts were supplied" in skipped["4.5_adjusted_artifacts"]
+    assert "a caller's choice" in skipped["4.5_adjusted_artifacts"], (
+        "The reason says whose decision it was, rather than dressing it as the build's."
+    )
     assert "7_cross_provider_reconciliation" in skipped
     assert skipped["7_cross_provider_reconciliation"].strip()
 
@@ -247,7 +256,7 @@ def test_a_report_claiming_every_check_ran_cannot_be_offered_at_all(
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
-        quality_context_hash="whatever-i-say-it-is",
+        quality_context=phase3a.quality_context_descriptor(),
         runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={
             "lag": phase3a.LAG_POLICY_VERSION,
@@ -335,7 +344,7 @@ def test_the_plan_is_checked_before_the_provenance(tmp_path: Path) -> None:
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
-        quality_context_hash="hand-authored, not a run",
+        quality_context=phase3a.quality_context_descriptor(),
         runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),

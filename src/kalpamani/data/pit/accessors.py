@@ -90,6 +90,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
 
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.dataset import UniverseSnapshotHeader
 from kalpamani.data.contracts.entities import (
     CorporateAction,
@@ -99,11 +100,12 @@ from kalpamani.data.contracts.entities import (
     PriceBarValues,
     UniverseMembership,
 )
-from kalpamani.data.contracts.envelope import SourceEnvelope
+from kalpamani.data.contracts.envelope import DerivedEnvelope, SourceEnvelope
 from kalpamani.data.contracts.errors import (
     BlockingQualityIssueError,
     DatasetCoverageError,
     DatasetPublicationError,
+    ExecutionSealError,
     IncompleteCoverageError,
     MissingHistoricalSnapshotError,
     NonPointInTimeViewError,
@@ -120,19 +122,30 @@ from kalpamani.data.contracts.resolution import (
     PitRecord,
     TimingBasisUsed,
     decision_available_time,
+    derived_inputs,
     governing_timing_bases,
     is_eligible,
+    origin_eligible,
+    required_timing_bases,
 )
 from kalpamani.data.contracts.vocabulary import (
     AdjustmentConvention,
     AdjustmentMode,
+    AdjustmentPolicy,
     BarResolution,
+    Exchange,
+    InformationOrigin,
     InformationSetProfile,
     LimitationToken,
     ListingFactKind,
     RevisionView,
 )
-from kalpamani.data.curate.adjustment import SUPPORTED_CONVENTIONS, adjusted_series, raw_series
+from kalpamani.data.curate.adjustment import (
+    SUPPORTED_CONVENTIONS,
+    adjusted_series,
+    raw_series,
+    relevant_actions,
+)
 from kalpamani.data.curate.lineage import lineage_fingerprint
 from kalpamani.data.curate.publication import DatasetManifest, VerifiedPublication
 from kalpamani.data.pit.execution import (
@@ -145,25 +158,88 @@ from kalpamani.data.pit.execution import (
 )
 from kalpamani.data.pit.query import (
     PriceQuerySpec,
+    QuerySpec,
     SeriesRequirement,
     UniverseQuerySpec,
 )
 from kalpamani.data.quality.report import QualityReport
 
 #: Datasets an **adjusted** price query reads directly, in canonical order.
-PRICE_HISTORY_DATASETS = ("corporate_action", "price_bar")
+#:
+#: The raw set plus corporate actions. Listing states and the venue calendar are
+#: in both, because both kinds of query measure completeness against a grid those
+#: two tables produce -- an adjusted query that named only its actions and bars
+#: left the same two inputs out of the inventory, and the manifest then demanded
+#: no resolution evidence for either.
+PRICE_HISTORY_DATASETS = ("corporate_action", "listing", "market_session", "price_bar")
 
-#: Datasets a **raw** price query reads. Deliberately narrower: a raw series does
-#: not consult corporate actions, so recording one as read would put a dataset in
-#: the run's inventory that the run never opened -- and would then demand
-#: resolution evidence for it.
-RAW_PRICE_DATASETS = ("price_bar",)
+#: Datasets a **raw** price query reads. Deliberately narrower than the adjusted
+#: set: a raw series does not consult corporate actions, so recording one as read
+#: would put a dataset in the run's inventory that the run never opened -- and
+#: would then demand resolution evidence for it.
+#:
+#: ``listing`` and ``market_session`` are here because a price series is not only
+#: its bars. The expected endpoint grid -- the thing completeness is measured
+#: against -- is computed from the security's listing states and its venue's
+#: calendar, so both decide the answer as directly as the bars do. Recording only
+#: ``price_bar`` left a run's inventory silent about two inputs that could change
+#: the result, and one of them was not point-in-time filtered at all.
+RAW_PRICE_DATASETS = ("listing", "market_session", "price_bar")
 
 #: Datasets a universe query reads directly.
 UNIVERSE_DATASETS = ("universe_membership",)
 
 #: One minute. The grid a dense minute series is expected to cover.
 _MINUTE = timedelta(minutes=1)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _GridBasis:
+    """The exact rows that decided which endpoints a price series must carry.
+
+    A grid is a conclusion. The evidence for it is the listing states that said
+    where and when the security traded and the calendar rows that said which days
+    its venue opened -- and until this existed, neither appeared anywhere in a
+    run's inventory, so two runs reaching the same grid from different revisions
+    were indistinguishable.
+    """
+
+    #: Listing STATE revisions admissible at ``as_of``, one per listing.
+    listings: tuple[Listing, ...]
+    #: Calendar rows admissible at ``as_of`` in the requested window.
+    sessions: tuple[MarketSession, ...]
+    #: The subset of those the security was actually listed for and that traded.
+    required: tuple[MarketSession, ...]
+    #: The endpoints a complete series must carry.
+    endpoints: tuple[Endpoint, ...]
+
+    def identity(self) -> str:
+        """A canonical hash of the rows themselves, not of the grid they produce.
+
+        Two windows can expect the same endpoints from different evidence. Hashing
+        the endpoints would call those one question; hashing the rows does not.
+        """
+        return content_hash(
+            {
+                "listings": sorted(
+                    [
+                        listing.listing_id,
+                        listing.envelope.dataset_version,
+                        str(listing.envelope.revision_sequence),
+                    ]
+                    for listing in self.listings
+                ),
+                "sessions": sorted(
+                    [
+                        session.exchange.value,
+                        session.session_date.isoformat(),
+                        session.envelope.dataset_version,
+                        str(session.envelope.revision_sequence),
+                    ]
+                    for session in self.sessions
+                ),
+            }
+        )
 
 
 #: A position on the expected grid: a session date for DAILY, a bar endpoint for
@@ -320,12 +396,26 @@ class PointInTimeReader:
         """Bind the reader, refusing anything the publication does not support.
 
         Raises:
-            DatasetPublicationError: if the run's resolution disagrees with the
-                publication's -- profile, policy version, or the complete map
-                with its reasons. The dataset/manifest/report agreement that used
-                to be checked here is now a precondition of the type: a
-                ``VerifiedPublication`` cannot exist without it.
+            DatasetPublicationError: if the publication's own identities no longer
+                reconcile, or if the run's resolution disagrees with the
+                publication's -- profile, policy version, or the complete map with
+                its reasons.
         """
+        if type(publication) is not VerifiedPublication:
+            # The exact type, not an instance of it. ``isinstance`` admits a
+            # subclass, and a subclass supplies its own ``__init__``, its own
+            # properties and its own ``require_internally_consistent`` -- so the
+            # check below would be the object vouching for itself.
+            raise DatasetPublicationError(
+                f"A reader was offered a {type(publication).__name__} where a "
+                "VerifiedPublication is required. A dataset, a manifest and a report "
+                "assembled at a call site have not been checked against storage."
+            )
+        # Revalidated here rather than assumed. Construction established it, and
+        # "it was established once" is a different claim from "it holds now" --
+        # the first is what a Boolean or a token can carry, and the second is what
+        # a reader actually depends on.
+        publication.require_internally_consistent()
         manifest = publication.manifest
         if manifest.resolved_profile is not resolution.resolved_profile:
             raise DatasetPublicationError(
@@ -346,6 +436,28 @@ class PointInTimeReader:
                 "map than this run declares. The whole map is compared, reasons included: two "
                 "runs that bounded the same dataset for different stated reasons resolved it "
                 "differently and admitted different rows."
+            )
+        recorded = publication.quality_report.quality_context.approvals
+        declared = tuple(
+            (
+                dataset,
+                tuple(sorted(item.value for item in policy.public)),
+                tuple(sorted(item.value for item in policy.provider)),
+                tuple(sorted(item.value for item in policy.announcement)),
+            )
+            for dataset, policy in sorted(approvals.by_dataset.items())
+        )
+        if declared != recorded:
+            # The approvals decide which rows resolve at all, so they decide what a
+            # query returns. The publication records the ones the build was judged
+            # under, and the reader took its own from a parameter that nothing
+            # compared to them: the standard was persisted and verified, and the
+            # one component that applies a standard at query time ignored it.
+            raise DatasetPublicationError(
+                f"This run approves bound derivations {list(declared)} and "
+                f"{publication.dataset_version} was built and judged under {list(recorded)}. "
+                "An approved bound is what lets a row resolve at all, so two runs approving "
+                "different derivations read different data from one published dataset."
             )
         self._publication = publication
         self._dataset = publication.dataset
@@ -386,7 +498,14 @@ class PointInTimeReader:
         return ExecutionRecorder(
             dataset_version=self._manifest.dataset_version,
             manifest_hash=self._manifest.manifest_hash,
+            build_identity=self._dataset.build_identity,
+            layer=self._manifest.layer.value,
+            resolution_policy_version=self._manifest.resolution_policy_version,
+            resolution_map=self._manifest.resolution_map,
             quality_hash=self._quality.report_hash,
+            quality_blocking_open=len(self._quality.blocking),
+            quality_warnings_open=len(self._quality.warnings),
+            quality_checks_not_run=tuple(item.check_name for item in self._quality.checks_not_run),
         )
 
     # -- accessors ---------------------------------------------------------
@@ -479,14 +598,19 @@ class PointInTimeReader:
     ) -> list[str]:
         """Every reason this snapshot cannot be served whole at ``cutoff``.
 
-        The header carries the fact of the build; the rows carry the decisions.
-        Both have to have been available, because the snapshot is the conjunction
-        of them -- which is exactly what makes serving a subset wrong rather than
-        merely incomplete.
+        **The header decides.** It is a real derived artifact carrying every row
+        the build consumed -- each considered listing state and each membership
+        decision -- so its own ``decision_available_time`` is the instant the
+        snapshot as a whole became usable. Filtering membership rows individually
+        answered a different question and answered it wrongly twice over: a
+        considered security that produced no row could not delay anything, and a
+        snapshot with no rows at all had no availability to speak of, so it looked
+        available from the beginning of time.
 
-        Under ``FORWARD_SYSTEM`` the header's own first-built time binds even when
-        there are no rows: before we ran the rule we did not know it selected
-        nobody, we knew nothing.
+        Membership-row checks remain, and remain **integrity** checks: rows keyed
+        to another definition version contradict their header. They do not turn one
+        stored snapshot into a partially available one, because a snapshot is one
+        artifact and is served whole or not at all.
         """
         problems: list[str] = []
         if not header.is_complete:
@@ -495,33 +619,35 @@ class PointInTimeReader:
             problems.append(
                 f"the header is keyed to {header.resolved_profile.value}, not {resolved.value}"
             )
-        if (
-            resolved is InformationSetProfile.FORWARD_SYSTEM
-            and header.envelope.artifact_first_built_time > cutoff
-        ):
+        if header.evaluation_cutoff > cutoff:
             problems.append(
-                "it was first built at "
-                f"{header.envelope.artifact_first_built_time.isoformat()}, after the cutoff"
+                f"its evaluation cutoff {header.evaluation_cutoff.isoformat()} is after this query"
             )
 
-        ineligible = 0
-        unresolved = 0
-        pending: datetime | None = None
-        for row in rows:
-            if not is_eligible(row, resolved):
-                ineligible += 1
-                continue
-            available = decision_available_time(row, resolved, self._approvals)
+        if not header.inputs:
+            problems.append(
+                "the header records no inputs, so the snapshot has no availability to compute; "
+                "a build that consumed nothing decided nothing"
+            )
+        elif not is_eligible(header, resolved):
+            problems.append(
+                "an input the snapshot consumed has an origin this profile cannot describe, so "
+                "the snapshot is ineligible as a whole -- no amount of arithmetic makes a "
+                "proprietary input public"
+            )
+        else:
+            available = decision_available_time(header, resolved, self._approvals)
             if available is None:
-                unresolved += 1
+                problems.append(
+                    "the snapshot's availability is unresolvable: an input this profile "
+                    "requires has neither an exact time nor an approved bound"
+                )
             elif available > cutoff:
-                pending = available if pending is None else max(pending, available)
-        if ineligible:
-            problems.append(f"{ineligible} membership row(s) are ineligible under this profile")
-        if unresolved:
-            problems.append(f"{unresolved} membership row(s) have unresolvable availability")
-        if pending is not None:
-            problems.append(f"membership decisions were still arriving until {pending.isoformat()}")
+                problems.append(
+                    f"the snapshot became available at {available.isoformat()}, after this "
+                    "query -- one input arriving late delays the whole artifact, because a "
+                    "snapshot is the conjunction of its decisions"
+                )
 
         definitions = {row.universe_definition_version for row in rows}
         if len(definitions) > 1:
@@ -553,18 +679,21 @@ class PointInTimeReader:
         the manifest demand provider-resolution evidence for a table no resolution
         ever produces evidence about.
 
-        The snapshot's own timing basis is recorded from the rows it holds, so a
-        universe result carries how *its* decisions were admitted rather than what
-        the build's dataset-wide evidence happens to say.
+        The **header's** timing basis is what the result carries, because the
+        header is what decided the answer. Recording only the membership rows left
+        a zero-row snapshot with no timing evidence at all -- a served result whose
+        run said nothing about how it had been admitted -- and left a considered
+        security that produced no row invisible even though it delayed the build.
+
+        Approval is derived, never assumed. The hard-coded ``approved=True`` here
+        asserted the thing it was supposed to establish.
         """
         recorder.record_read((), excluded_rows=0)
         recorder.record_artifact(_snapshot_artifact(header))
+        resolved = self.resolved_profile
+        self._record_row(recorder, "universe_snapshot_header", header, resolved)
         for row in rows:
-            recorder.record_served_row(
-                "universe_membership",
-                governing_timing_bases(row, self.resolved_profile, self._approvals),
-                approved=True,
-            )
+            self._record_row(recorder, "universe_membership", row, resolved)
 
         result = UniverseSnapshotResult(
             session_date=session,
@@ -576,20 +705,22 @@ class PointInTimeReader:
             snapshot_content_hash=header.snapshot_content_hash,
             snapshot_artifact_id=header.artifact_id,
         )
+        universe_query = UniverseQuerySpec(
+            as_of=cutoff,
+            requested_profile=requested,
+            resolved_profile=self.resolved_profile,
+            session_date=session,
+            evaluation_cutoff=header.evaluation_cutoff,
+            snapshot_artifact_id=header.artifact_id,
+            snapshot_content_hash=header.snapshot_content_hash,
+            universe_definition_version=header.universe_definition_version,
+            universe_definition_hash=header.universe_definition_hash,
+        )
+        require_query_describes_result(universe_query, result)
         return seal_executed_result(
             result=result,
             result_payload=_universe_result_payload(result),
-            query=UniverseQuerySpec(
-                as_of=cutoff,
-                requested_profile=requested,
-                resolved_profile=self.resolved_profile,
-                session_date=session,
-                evaluation_cutoff=header.evaluation_cutoff,
-                snapshot_artifact_id=header.artifact_id,
-                snapshot_content_hash=header.snapshot_content_hash,
-                universe_definition_version=header.universe_definition_version,
-                universe_definition_hash=header.universe_definition_hash,
-            ),
+            query=universe_query,
             recorder=recorder,
             dataset_version=self._manifest.dataset_version,
             publication_manifest_hash=self._manifest.manifest_hash,
@@ -656,6 +787,12 @@ class PointInTimeReader:
         cutoff = normalize_instant(as_of)
         convention = _validate_adjustment_mode(adjustment_mode)
         view = _validate_revision_view(adjustment_mode, revision_view)
+        # Refused here, not inside the per-action loop below. `select_revision`
+        # was the only runtime enforcement, and a security with no corporate
+        # action rows -- the majority of them -- never entered that loop, so the
+        # documented refusal fired only when the data happened to contain an
+        # action. A safety rule that depends on the data is not a rule.
+        require_point_in_time_view(view)
         datasets = RAW_PRICE_DATASETS if adjustment_mode.is_raw else PRICE_HISTORY_DATASETS
 
         self._guard(profile, cutoff, datasets)
@@ -668,9 +805,20 @@ class PointInTimeReader:
                 "is not the same as a security that simply did not trade."
             )
 
+        resolved = self.resolved_profile
+        recorder = self._recorder()
         held = self._dataset.bars_for(security_id, resolution.value)
         in_range = tuple(bar for bar in held if start <= bar.session_date <= end)
-        expected = self._expected_endpoints(security_id, resolution, start, end, cutoff)
+        # The grid's own evidence, recorded before the bars. A price series is not
+        # only its bars: the endpoints completeness is measured against come from
+        # listing states and calendar rows, and until both were recorded a run's
+        # inventory was silent about two inputs that decide the answer.
+        basis = self._grid_basis(security_id, resolution, start, end, cutoff)
+        expected = basis.endpoints
+        for listing in basis.listings:
+            self._record_row(recorder, "listing", listing, resolved)
+        for session in basis.sessions:
+            self._record_row(recorder, "market_session", session, resolved)
         # Integrity, under both requirements. OPTIONAL is a statement about what
         # this query was entitled to *see*; it says nothing about whether the data
         # underneath is sound, and treating it as permission to skip these made it
@@ -704,8 +852,6 @@ class PointInTimeReader:
             held=in_range,
         )
 
-        resolved = self.resolved_profile
-        recorder = self._recorder()
         excluded: dict[tuple[str, str], int] = {}
         withheld: dict[Endpoint, tuple[_Withheld, str]] = {}
         unresolvable = 0
@@ -724,6 +870,7 @@ class PointInTimeReader:
             if available is None:
                 unresolvable += 1
                 withheld[key] = (_Withheld.UNRESOLVED_AVAILABILITY, "")
+                self._record_unresolvable(recorder, "price_bar", bar, resolved)
                 continue
             if available > cutoff:
                 withheld[key] = (_Withheld.NOT_YET_AVAILABLE, available.isoformat())
@@ -731,11 +878,7 @@ class PointInTimeReader:
             # Recorded per served row, not per dataset. Reading the build's
             # dataset-wide evidence reported a query as having leant on a bound
             # when every row it served carried an exact time.
-            recorder.record_served_row(
-                "price_bar",
-                governing_timing_bases(bar, resolved, self._approvals),
-                approved=_bar_bound_is_approved(bar, resolved, self._approvals),
-            )
+            self._record_row(recorder, "price_bar", bar, resolved)
             bars.append(bar)
 
         if in_range and not bars and (excluded or unresolvable):
@@ -763,15 +906,18 @@ class PointInTimeReader:
 
         actions: list[CorporateAction] = []
         if not adjustment_mode.is_raw:
+            assert adjustment_mode.policy is not None
             actions = self._admissible_action_revisions(
-                security_id, view=view, as_of=cutoff, resolved=resolved
+                security_id,
+                view=view,
+                as_of=cutoff,
+                resolved=resolved,
+                policy=adjustment_mode.policy,
+                start=start,
+                end=end,
             )
             for action in actions:
-                recorder.record_served_row(
-                    "corporate_action",
-                    governing_timing_bases(action, resolved, self._approvals),
-                    approved=_bar_bound_is_approved(action, resolved, self._approvals),
-                )
+                self._record_row(recorder, "corporate_action", action, resolved)
 
         if adjustment_mode.is_raw:
             series = raw_series(bars)
@@ -801,33 +947,46 @@ class PointInTimeReader:
             adjustment_mode=adjustment_mode,
             bars=series,
             provenance=self._provenance(
-                cutoff, profile, view, bool(excluded), resolution, convention, recorder
+                cutoff,
+                profile,
+                # A raw series consulted no revision, so its provenance records
+                # none either. The validator returns a view for the adjustment
+                # path; reporting that value to a caller told them the answer had
+                # honoured something it never read.
+                None if adjustment_mode.is_raw else view,
+                bool(excluded),
+                resolution,
+                convention,
+                recorder,
             ),
             origin_exclusions=_counts(excluded),
             requirement=requirement,
             withheld_endpoints=len(withheld),
         )
+        price_query = PriceQuerySpec(
+            security_id=security_id,
+            start=start,
+            end=end,
+            resolution=resolution,
+            adjustment_mode="RAW" if adjustment_mode.is_raw else "ADJUSTED",
+            adjustment_policy=adjustment_mode.policy,
+            adjustment_convention=convention,
+            requirement=requirement,
+            grid_basis_hash=basis.identity(),
+            # A raw series consulted no revision, so it records none. The
+            # validator returns a view for the adjustment path to use; putting
+            # that value in the spec made a raw query describe itself as having
+            # honoured a view it never read.
+            revision_view=None if adjustment_mode.is_raw else view,
+            as_of=cutoff,
+            requested_profile=profile,
+            resolved_profile=resolved,
+        )
+        require_query_describes_result(price_query, result)
         return seal_executed_result(
             result=result,
             result_payload=_price_result_payload(result),
-            query=PriceQuerySpec(
-                security_id=security_id,
-                start=start,
-                end=end,
-                resolution=resolution,
-                adjustment_mode="RAW" if adjustment_mode.is_raw else "ADJUSTED",
-                adjustment_policy=adjustment_mode.policy,
-                adjustment_convention=convention,
-                requirement=requirement,
-                # A raw series consulted no revision, so it records none. The
-                # validator returns a view for the adjustment path to use; putting
-                # that value in the spec made a raw query describe itself as having
-                # honoured a view it never read.
-                revision_view=None if adjustment_mode.is_raw else view,
-                as_of=cutoff,
-                requested_profile=profile,
-                resolved_profile=resolved,
-            ),
+            query=price_query,
             recorder=recorder,
             dataset_version=self._manifest.dataset_version,
             publication_manifest_hash=self._manifest.manifest_hash,
@@ -842,6 +1001,9 @@ class PointInTimeReader:
         view: RevisionView,
         as_of: datetime,
         resolved: InformationSetProfile,
+        policy: AdjustmentPolicy,
+        start: date,
+        end: date,
     ) -> list[CorporateAction]:
         """One revision per corporate action, chosen under an explicitly named view.
 
@@ -854,6 +1016,14 @@ class PointInTimeReader:
         Actions with no admissible revision at ``as_of`` are simply absent: the
         query was not entitled to know about them, which is the correct answer
         rather than a missing input.
+
+        Only actions that can **affect this series** are returned, because every
+        one of them is recorded as a read and pushes the result's availability to
+        the max over its inputs. A dividend under ``SPLIT_ONLY``, or a split after
+        the requested end, would make the answer less available for a row that
+        changed none of its numbers. A split *before* the start is kept: under
+        ``FORWARD_BASE_NORMALIZED`` every bar is expressed in the original base, so
+        an earlier split scales the whole window.
         """
         by_action: dict[str, list[CorporateAction]] = {}
         for action in self._dataset.actions_for(security_id):
@@ -876,7 +1046,20 @@ class PointInTimeReader:
                     f"{type(selected).__name__}, which is not a corporate action."
                 )
             chosen.append(selected)
-        return chosen
+        # One implementation of "relevant", shared with the materialised artifact
+        # path. Restating the rules here is how the two came to disagree about the
+        # convention's lower bound, and the same bar came back 104.00 from one
+        # route and 52.00 from the other.
+        return list(
+            relevant_actions(
+                chosen,
+                security_id_scope=security_id,
+                policy=policy,
+                valid_time_start=start,
+                valid_time_end=end,
+                securities=(security_id,),
+            )
+        )
 
     def get_classification(
         self,
@@ -959,44 +1142,117 @@ class PointInTimeReader:
                 chosen.append(selected)
         return tuple(chosen)
 
-    def _required_sessions(
-        self, security_id: str, start: date, end: date, as_of: datetime
-    ) -> tuple[MarketSession, ...]:
-        """Sessions the security's own venue traded, on which it was listed.
+    def _record_row(
+        self,
+        recorder: ExecutionRecorder,
+        dataset: str,
+        record: PitRecord,
+        resolved: InformationSetProfile,
+    ) -> None:
+        """Record one served row's timing evidence, both sets, with real approval.
 
-        Per exchange, deliberately. A NASDAQ security is not required to have bars
-        on an NYSE-only session, and pooling calendars would fault it for absences
-        that are not absences.
+        The two basis sets answer different questions -- what the profile needed
+        and what actually set the cutoff -- and a union over them described
+        neither.
+
+        No approval flag: a **served** row cannot have leant on an unapproved
+        bound, because an unapproved bound resolves no axis and the row would not
+        have been served. The reachable case is a row the query could not resolve,
+        recorded by :meth:`_record_unresolvable`.
         """
-        listings = self._listing_venues(security_id, as_of)
-        if not listings:
-            return ()
-        required = [
-            session
-            for session in self._dataset.sessions
-            if not session.is_holiday
-            and start <= session.session_date <= end
-            and any(
-                listing.exchange is session.exchange and listing.is_listed_on(session.session_date)
-                for listing in listings
-            )
-        ]
-        return tuple(sorted(required, key=lambda item: item.session_date))
+        recorder.record_served_row(
+            dataset,
+            required=required_timing_bases(record, resolved, self._approvals),
+            governing=governing_timing_bases(record, resolved, self._approvals),
+        )
 
-    def _expected_endpoints(
+    def _record_unresolvable(
+        self,
+        recorder: ExecutionRecorder,
+        dataset: str,
+        record: PitRecord,
+        resolved: InformationSetProfile,
+    ) -> None:
+        """Record a row this query could not admit because of an unapproved bound.
+
+        The only reachable form of "an unapproved bound affected this result". It
+        did not admit a row -- it prevented one -- and a caller reading a short
+        series is entitled to know that a policy decision, not the data, is why.
+        """
+        if unapproved_bound_blocked(record, resolved, self._approvals):
+            recorder.record_unapproved_bound(dataset)
+
+    def _admissible_sessions(
+        self, start: date, end: date, as_of: datetime
+    ) -> tuple[MarketSession, ...]:
+        """Calendar rows this query was entitled to see, one per exchange-session.
+
+        The calendar was the one grid input never filtered point-in-time. Every
+        session row the build happened to hold decided which endpoints an earlier
+        query expected, so a calendar correction or a backfill published in 2020 --
+        a session added, a holiday reclassified -- retroactively changed what a
+        2019 query considered complete. A grid assembled from facts that did not
+        exist yet is look-ahead deciding what counts as missing.
+
+        Raises:
+            IncompleteCoverageError: if the window holds **any** trading session
+                the query could not see. Refusing only when *none* was visible left
+                the worse half open: a partial calendar silently shrank the grid
+                past a genuine gap, so a query that had been refusing a hole began
+                returning a shorter series that looked complete. That is the same
+                defect as measuring completeness against a calendar edited to agree
+                with the data, arrived at from the other direction.
+        """
+        by_key: dict[tuple[Exchange, date], list[MarketSession]] = {}
+        for session in self._dataset.sessions:
+            if start <= session.session_date <= end:
+                by_key.setdefault((session.exchange, session.session_date), []).append(session)
+
+        admissible: list[MarketSession] = []
+        unseen: list[tuple[Exchange, date]] = []
+        for key, revisions in sorted(by_key.items(), key=lambda item: (item[0][1], item[0][0])):
+            selected = select_revision(
+                revisions,
+                revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
+                as_of=as_of,
+                resolved_profile=self.resolved_profile,
+                approvals=self._approvals,
+            )
+            if isinstance(selected, MarketSession):
+                admissible.append(selected)
+            else:
+                unseen.append(key)
+
+        # Counted per calendar **day**, not per row. A day whose admissible
+        # revision says "holiday" is a complete answer about that day; a day with
+        # no admissible revision at all is a day this query knows nothing about.
+        if unseen:
+            named = [f"{exchange.value} {day.isoformat()}" for exchange, day in unseen[:5]]
+            raise IncompleteCoverageError(
+                f"Dataset {self._dataset.dataset_version} holds no calendar row this query was "
+                f"entitled to see for {len(unseen)} exchange-session(s) between "
+                f"{start.isoformat()} and {end.isoformat()} (first {named}) at "
+                f"{as_of.isoformat()} under {self.resolved_profile.value}. Serving the days that "
+                "happened to be visible would shrink the grid to fit them, so a genuine gap in "
+                "the remainder would stop being a gap -- and an empty grid would report that the "
+                "security traded on no session at all. Both answer a question nobody can state."
+            )
+        return tuple(sorted(admissible, key=lambda item: (item.session_date, item.exchange.value)))
+
+    def _grid_basis(
         self,
         security_id: str,
         resolution: BarResolution,
         start: date,
         end: date,
         as_of: datetime,
-    ) -> tuple[Endpoint, ...]:
-        """Every endpoint a complete series must carry, from the venue's calendar.
+    ) -> _GridBasis:
+        """The exact listing and calendar rows that decide this series' grid.
 
-        Computed **once** and used by both coverage checks, so the physical and
-        the point-in-time question are asked about exactly the same grid. Two
-        separately derived grids would eventually disagree, and the disagreement
-        would look like a data defect.
+        Both are returned rather than only their product, because "which endpoints
+        were expected" is not evidence -- "which rows said so" is. Two runs
+        expecting the same endpoints from different listing revisions asked
+        different questions and could not be told apart.
 
         Per exchange, deliberately: a NASDAQ security is not required to have bars
         on an NYSE-only session, and pooling calendars would fault it for absences
@@ -1004,13 +1260,27 @@ class PointInTimeReader:
         minute follows the dense contract and expects the session's whole endpoint
         grid, so one arbitrary bar cannot pass for an observed session.
         """
-        sessions = self._required_sessions(security_id, start, end, as_of)
+        listings = self._listing_venues(security_id, as_of)
+        sessions = self._admissible_sessions(start, end, as_of)
+        required = tuple(
+            session
+            for session in sessions
+            if not session.is_holiday
+            and any(
+                listing.exchange is session.exchange and listing.is_listed_on(session.session_date)
+                for listing in listings
+            )
+        )
         if resolution is BarResolution.DAILY:
-            return tuple(session.session_date for session in sessions)
-        points: list[Endpoint] = []
-        for session in sessions:
-            points.extend(_minute_endpoints(session))
-        return tuple(points)
+            endpoints: tuple[Endpoint, ...] = tuple(session.session_date for session in required)
+        else:
+            points: list[Endpoint] = []
+            for session in required:
+                points.extend(_minute_endpoints(session))
+            endpoints = tuple(points)
+        return _GridBasis(
+            listings=listings, sessions=sessions, required=required, endpoints=endpoints
+        )
 
     def _require_unique_endpoints(
         self,
@@ -1276,23 +1546,166 @@ class PointInTimeReader:
         )
 
 
-def _bar_bound_is_approved(
+def require_query_describes_result(query: QuerySpec, result: object) -> None:
+    """The spec and the answer must be about the same thing.
+
+    Both are produced by the same accessor call, so a disagreement is a bug rather
+    than a caller's doing -- which is exactly why it needs checking here and
+    nowhere else. A spec that drifts from its result is undetectable downstream:
+    the manifest cross-checks the spec, the spec looks coherent, and it describes
+    a question the numbers beside it do not answer.
+
+    Raises:
+        ExecutionSealError: naming the field that disagrees.
+    """
+    if isinstance(result, BarSeriesResult):
+        _require_price_query_matches(query, result)
+        return
+    if isinstance(result, UniverseSnapshotResult):
+        _require_universe_query_matches(query, result)
+        return
+    raise ExecutionSealError(
+        f"No agreement rule exists for a {type(result).__name__}. Falling off the end and "
+        "returning silently would make this check vacuous for every result type added after "
+        "it was written -- which is how a check quietly stops covering what it names."
+    )
+
+
+def _require_price_query_matches(query: QuerySpec, result: BarSeriesResult) -> None:
+    if not isinstance(query, PriceQuerySpec):
+        raise ExecutionSealError(
+            f"A bar series was sealed to a {query.kind!r} query. The spec is what a run "
+            "records having asked, and it is not about this answer."
+        )
+    provenance = result.provenance
+    for label, asked, answered in (
+        ("security_id", query.security_id, result.security_id),
+        ("resolution", query.resolution.value, result.resolution.value),
+        (
+            "adjustment_mode",
+            query.adjustment_mode,
+            "RAW" if result.adjustment_mode.is_raw else "ADJUSTED",
+        ),
+        ("requirement", query.requirement.value, result.requirement.value),
+        ("as_of", query.as_of.isoformat(), provenance.as_of.isoformat()),
+        ("requested_profile", query.requested_profile.value, provenance.requested_profile.value),
+        ("resolved_profile", query.resolved_profile.value, provenance.resolved_profile.value),
+    ):
+        if asked != answered:
+            raise ExecutionSealError(
+                f"The sealed query says {label}={asked!r} and the result it seals reports "
+                f"{answered!r}. A spec that does not describe its own answer records a "
+                "question nobody asked."
+            )
+    if query.adjustment_mode == "RAW":
+        if query.revision_view is not None or provenance.revision_view is not None:
+            raise ExecutionSealError(
+                "A RAW series reads no corporate actions and chooses no revision, and this "
+                "one records one. Reporting a view the query never consulted claims the "
+                "answer honoured something it never read."
+            )
+        return
+    if query.revision_view is None or provenance.revision_view is None:
+        raise ExecutionSealError(
+            "An adjusted series names no revision view. A restated ratio changes every "
+            "adjusted number after its ex-date, so which revision was in force is part of "
+            "the question."
+        )
+    if query.adjustment_convention is None or provenance.adjustment_convention is None:
+        raise ExecutionSealError(
+            "An adjusted series names no convention. Two conventions produce two different "
+            "numbers for one bar, and the label is what later results cite."
+        )
+
+
+def _require_universe_query_matches(query: QuerySpec, result: UniverseSnapshotResult) -> None:
+    if not isinstance(query, UniverseQuerySpec):
+        raise ExecutionSealError(f"A universe snapshot was sealed to a {query.kind!r} query.")
+    for label, asked, answered in (
+        ("session_date", query.session_date, result.session_date),
+        (
+            "universe_definition_version",
+            query.universe_definition_version,
+            result.universe_definition_version,
+        ),
+        ("snapshot_artifact_id", query.snapshot_artifact_id, result.snapshot_artifact_id),
+        ("snapshot_content_hash", query.snapshot_content_hash, result.snapshot_content_hash),
+        ("as_of", query.as_of, result.provenance.as_of),
+        (
+            "requested_profile",
+            query.requested_profile,
+            result.provenance.requested_profile,
+        ),
+        ("resolved_profile", query.resolved_profile, result.provenance.resolved_profile),
+    ):
+        if asked != answered:
+            raise ExecutionSealError(
+                f"The sealed query says {label}={asked!r} and the snapshot it seals reports "
+                f"{answered!r}."
+            )
+    if query.revision_view is not None:
+        raise ExecutionSealError(
+            "A universe snapshot is not a revisable fact and chooses no revision view."
+        )
+
+
+def unapproved_bound_blocked(
     record: PitRecord,
     resolved_profile: InformationSetProfile,
     approvals: BoundApprovals,
 ) -> bool:
-    """Whether the bound *this row* was admitted on is approved for its dataset.
+    """Whether an **unapproved** bound is why this row could not be admitted.
 
-    Per row, like the basis itself. The dataset-wide question -- "does this
-    dataset have any approved bound?" -- answers something else, and answering it
-    instead reported an unapproved bound wherever a dataset happened to approve a
-    different derivation than the one a row used.
+    The previous derivation could not fail, and it took a careful reading to see
+    why. It asked whether ``PUBLIC_BOUNDED``/``PROVIDER_BOUNDED`` appeared in the
+    row's bases and, if so, whether the derivation was approved -- but a bounded
+    basis only arises because :func:`resolved_public_time` already found the
+    derivation in the approved set. The guard tested a condition its own
+    precondition had excluded, and returned ``True`` for every row that has ever
+    existed. "Derived, never assumed" had become an assumption with arithmetic in
+    front of it.
+
+    A **served** row genuinely cannot have leant on an unapproved bound: an
+    unapproved bound resolves no axis, so the row is either admitted some other
+    way or not admitted at all. The reachable and useful question is the one asked
+    here, about a row the query could **not** resolve: it carries an upper bound
+    on an axis this profile consults, has no exact time on that axis, and the
+    bound's derivation is not approved for its dataset. That is a result shortened
+    by a policy decision, and a caller is entitled to know it.
     """
-    bases = governing_timing_bases(record, resolved_profile, approvals)
-    policy = approvals.for_dataset(record.dataset)
-    if TimingBasisUsed.PUBLIC_BOUNDED in bases and not policy.public:
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return any(
+            unapproved_bound_blocked(item, resolved_profile, approvals)
+            for item in derived_inputs(record)
+        )
+    if not origin_eligible(envelope.information_origin, resolved_profile):
         return False
-    return not (TimingBasisUsed.PROVIDER_BOUNDED in bases and not policy.provider)
+    policy = approvals.for_dataset(record.dataset)
+
+    public_blocked = (
+        envelope.public_available_time is None
+        and envelope.public_available_upper_bound is not None
+        and envelope.public_bound_derivation not in policy.public
+    )
+    provider_blocked = (
+        envelope.provider_available_time is None
+        and envelope.provider_available_upper_bound is not None
+        and envelope.provider_bound_derivation not in policy.provider
+    )
+
+    match resolved_profile:
+        case InformationSetProfile.PUBLIC_PIT:
+            return public_blocked
+        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
+            if envelope.information_origin is InformationOrigin.PROVIDER_DERIVED:
+                return provider_blocked
+            return public_blocked or provider_blocked
+        case _:
+            # FORWARD_SYSTEM takes the max over whichever axes resolve, and
+            # system_first_seen_time always does -- so an unapproved bound narrows
+            # the answer without ever blocking the row.
+            return False
 
 
 def _query_limitations(
@@ -1310,7 +1723,10 @@ def _query_limitations(
     times -- a token with nothing behind it, which is the failure the token rules
     exist to prevent, arrived at from the generous direction.
     """
-    bases = {basis for entry in evidence.timing_evidence for basis in entry.bases}
+    # The **required** set, matching the manifest's own derivation exactly. A
+    # token here and a token there computed from different sets would refuse
+    # every manifest, and the one that is right is the one about admission.
+    bases = {basis for entry in evidence.timing_evidence for basis in entry.required_bases}
     tokens: list[LimitationToken] = []
     if had_exclusions:
         tokens.append(LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED)
@@ -1429,6 +1845,22 @@ def _validate_adjustment_mode(mode: AdjustmentMode) -> AdjustmentConvention | No
     return mode.convention
 
 
+def require_point_in_time_view(revision_view: RevisionView | None) -> None:
+    """Refuse ``LATEST_RESTATED`` wherever a query names one.
+
+    Raises:
+        NonPointInTimeViewError: it ignores ``as_of`` entirely, so it is not a
+            point-in-time view and is unreachable from research and backtest code.
+    """
+    if revision_view is RevisionView.LATEST_RESTATED:
+        raise NonPointInTimeViewError(
+            "LATEST_RESTATED ignores as_of entirely, so it is not a point-in-time view and "
+            "is unreachable from research and backtest code. It exists for accounting-style "
+            "analysis of restatement behaviour, which is a legitimate question that simply "
+            "is not a simulation."
+        )
+
+
 def select_revision(
     revisions: Sequence[PitRecord],
     *,
@@ -1449,13 +1881,7 @@ def select_revision(
             research and backtest paths by static test, and refused here at
             runtime so the two enforcements agree.
     """
-    if revision_view is RevisionView.LATEST_RESTATED:
-        raise NonPointInTimeViewError(
-            "LATEST_RESTATED ignores as_of entirely, so it is not a point-in-time view and "
-            "is unreachable from research and backtest code. It exists for accounting-style "
-            "analysis of restatement behaviour, which is a legitimate question that simply "
-            "is not a simulation."
-        )
+    require_point_in_time_view(revision_view)
 
     cutoff = normalize_instant(as_of)
     admissible = []
@@ -1470,9 +1896,39 @@ def select_revision(
     if not admissible:
         return None
     if revision_view is RevisionView.ORIGINAL_FILING_ONLY:
-        originals = [r for r in admissible if _revision_sequence(r) == 0]
-        return originals[0] if originals else None
-    return max(admissible, key=_revision_sequence)
+        originals = [record for record in admissible if _revision_sequence(record) == 0]
+        return _only_revision(originals, sequence=0) if originals else None
+    highest = max(_revision_sequence(record) for record in admissible)
+    return _only_revision(
+        [record for record in admissible if _revision_sequence(record) == highest],
+        sequence=highest,
+    )
+
+
+def _only_revision(tied: Sequence[PitRecord], *, sequence: int) -> PitRecord:
+    """The one row at this revision, refusing when two different rows claim it.
+
+    ``max`` returns whichever tied row it saw first, so the order rows happened to
+    arrive in chose which revision was in force -- a ratio, an ex-date, a listing
+    status. Two contradictory rows at one revision sequence are a defect in the
+    data: the revision chain says they are the same statement and they are not.
+
+    Identical duplicates are one row and pass through; only a genuine
+    contradiction refuses.
+
+    Raises:
+        ProfileResolutionError: naming the contradicting rows.
+    """
+    first = tied[0]
+    contradictions = [record for record in tied[1:] if record != first]
+    if not contradictions:
+        return first
+    raise ProfileResolutionError(
+        f"{len(contradictions) + 1} different {first.dataset} rows share revision sequence "
+        f"{sequence}. A revision sequence says which statement "
+        "was in force, so two different statements at one sequence leave the question "
+        "unanswerable -- and taking whichever arrived first would let input order decide it."
+    )
 
 
 def _revision_sequence(record: PitRecord) -> int:
@@ -1503,5 +1959,6 @@ __all__ = [
     "ResultProvenance",
     "SeriesRequirement",
     "UniverseSnapshotResult",
+    "require_point_in_time_view",
     "select_revision",
 ]

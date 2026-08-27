@@ -373,7 +373,86 @@ These are boundaries of a deliberately narrow slice, not defects:
     different times -- which is what an incremental pipeline produces, and what this slice does
     not otherwise build.
 
-## 12. Query identity and quality-context closure applied in revision 6
+## 12. Dependency and provenance closure applied in revision 7
+
+Revision 6 bound a result to the question that produced it. This round closes what a run
+**depends on** — the inputs a query actually rests on, the artifact that decides a snapshot, and
+the standard a build was judged by — and removes two assertions that could not fail.
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | Two assertions were tautologies | `assert x in str(y) or True` reads as a check and is not one: `or True` makes the whole expression unconditional, so the interesting half was never evaluated. Both would have passed against a build with no binding at all. They are replaced by perturbation proofs — change one load-bearing row under an unchanged version label and the context hash moves; change `quality_context_hash` and `compute_manifest_hash` moves — and `scripts/test_integrity_audit.py` now scans the parsed tree of the whole `tests/` directory for every spelling of the defect, plus broad `pytest.raises(Exception)`/bare handlers inside tests and unexplained skips. A test runs it, so the property stands rather than being cleaned up once |
+| 2 | `VerifiedPublication` was a copyable dataclass | Two compounding defects: `verified_by` sat in a readable field, so `dataclasses.replace` carried the token onto substituted rows for free, and `verification_seal` was **public**, so a caller who swapped the dataset could recompute the seal over the replacement and restore the agreement the seal existed to prove. A seal its holder can recompute is a checksum, not an authorization. It is now a non-dataclass with no authorization field, a module-private seal, and `require_internally_consistent()` re-deriving eight identities — which `PointInTimeReader` calls at construction rather than reading a flag: "it was verified once" and "it holds now" are different claims |
+| 3 | A price query recorded only its bars | Completeness is measured against an endpoint grid, and the grid comes from the security's listing states and its venue's calendar. `market_session` was the one input never filtered point-in-time, so a calendar correction published in 2026 decided what a 2019 query expected. Both tables are now selected as-known-at-`as_of`, refused when contradictory at one revision, recorded in `direct_source_datasets` with their own timing evidence, and hashed into the query's `grid_basis_hash`. A window with trading sessions but no admissible calendar **refuses**, because an empty grid would report that the security traded on no session — a different finding, and a wrong one |
+| 4 | Snapshot availability was computed by scanning rows | A security the rule considered and excluded produced no row, so it could delay nothing; a snapshot with no rows at all had an empty maximum and looked available from the beginning of time. The header is a real derived artifact carrying every considered listing and every membership decision, so `decision_available_time(header)` **is** the snapshot's decision time. Membership checks remain, as integrity checks: they do not turn one stored artifact into a partially available one |
+| 5 | One function answered two different questions | `governing_timing_bases` returned the union of every axis a profile consulted. Under `PROVIDER_REALISTIC_PIT` an authoritative-public row needs both a public and a provider time and is available at the **later** of the two: both required, one governing. The union therefore reported an exact provider time as having set a cutoff a bounded public time set, and the reverse. `required_timing_bases` and `governing_timing_bases` are now separate and both mirror `decision_available_time` axis for axis; a derived artifact governs through its **slowest** input, and `ARTIFACT_FIRST_BUILT` governs under `FORWARD_SYSTEM` when it is the maximum. The bound-required tokens rest on the required set |
+| 6 | The standard was hashed and not recorded | A hash proves two contexts differ and tells an auditor nothing about either: a published dataset carried sixty-four hex characters where a minimum price, an approved bound derivation and a survivorship window should have been readable. `QualityContextDescriptor` records all of them — plus the resolution map with its reasons, the cutoffs, the runner, the plan and the registry — inside the quality report. Its canonical form enters `report_hash`, the persisted file hash and the dataset manifest, and the read decodes it, recomputes `quality_context_hash` and refuses a mismatch |
+| 7 | Coverage was one bit for three situations | A table traversed and full, a table traversed and empty, and a table nothing opened are three different statements, and only the first two are coverage. `TableCoverage` records which, per published entity, with the governed reason where nothing ran. The adjusted-artifact check compared a series to **its own** stored hash — which detects an edited file and nothing else — and reported the entity covered on that basis; it now runs the full `verify_adjusted_bar_artifact`: lineage resolved to the exact rows in the builds it names, the key rebuilt, the series recomputed from only those rows. `partitions_covered` are partitions an implementation actually traversed, not every configured cutoff |
+| 8 | The manifest restated what the run had established | Both profiles, the window, the cutoff, the revision view, the finding counts and the dataset identity were written beside evidence that already fixed them, with nothing comparing the two halves — and each half reads correctly on its own. Every one is now held to the sealed result. `emit_manifest` takes the bytes the run sealed rather than asking for them again, and the `QuerySpec` is validated against the typed result and its provenance at seal time |
+| 9 | A revision tie was broken by input order | `max` returns whichever tied row it saw first, so the order rows happened to arrive in decided which ratio, ex-date or listing status was in force. Two **different** rows at one revision sequence now refuse; identical duplicates are one row and pass. Adjusted queries reuse `relevant_actions` rather than restating its rules, so the on-demand and materialised paths cannot drift about the convention again |
+
+`MANIFEST_VERSION` stays **5**: this round changed what a run records about its dependencies, not
+the schema it records them in.
+
+**What the point-in-time calendar filter immediately found.** The synthetic calendar's provider
+axis is a `FIRST_SEEN_UPPER_BOUND`, and the resolution step derives that bound from when the row
+was first held — 2026. Under `PROVIDER_REALISTIC_PIT` the calendar was therefore never available
+to a 2019 query, and every provider-realistic price query in the fixture had been measuring
+completeness against sessions it could not have seen. That is the fixture's own declared BOUND
+policy working correctly; the tests that relied on it now either ask after the calendar was
+available or assert the refusal.
+
+**And what the new seal-time check found.** `_validate_revision_view` returns a view for the
+adjustment path to use, and a RAW series was reporting that value in its **provenance** — telling
+a caller the answer had honoured a view it never read. The query spec had been corrected in
+revision 6; the caller-visible result had not.
+
+### What adversarial review of revision 7 then found
+
+Each closure above was handed to an independent reviewer instructed to break it, and every
+reported hole to a second reviewer instructed to refute it. Thirty-four candidates were reported
+and **twenty-five confirmed real**. All are fixed; none is outstanding. Four groups, and the
+pattern is the one every round has had -- a check that measures a claim against something
+*adjacent* to it.
+
+**A guard that could not see its own subject.** The very file this round cleaned still contained
+``assert not any("BOUNDED" in basis for basis in used) or bounded`` -- two spellings of one
+predicate, `not P or P`, unfailable for any dataset and invisible to a syntactic scanner. The
+audit now folds literal comparisons and containers, sees ``from pytest import raises``, and states
+in its own docstring what it cannot do: passing it means no assertion is unconditional **by
+construction**, not that every assertion can fail. Two more tests were compared to derivations of
+themselves -- ``bounds_relied_upon`` against the tuple it is derived from, and "the two adjustment
+paths agree" against a substring of the reader's source -- and both now compare values a revert
+would move. One test's stated premise was the opposite of what the fixture produces.
+
+**Assertions dressed as derivations.** ``_bound_is_approved`` was replaced in this round with
+arithmetic that returned ``True`` for every row that has ever existed: a bounded basis only arises
+because the derivation was *already* found in the approved set, so the guard tested a condition its
+own precondition had excluded. The reachable question -- and the useful one -- is about a row the
+query could **not** admit. ``run_id_inputs`` read the resolution map off the config and handed the
+same config to the check, so both comparisons compared a value to itself; it now reads the build's
+own receipt. ``QualityContext.as_of`` was documented as "the build's own time" and compared to
+nothing, so a caller could move the horizon that ``4.3.9_backfill_admitted_too_early`` measures
+against.
+
+**Half a dependency is not a dependency.** The adjusted price path never had ``listing`` or
+``market_session`` added to its dataset tuple, so only raw queries recorded the grid's inputs. The
+calendar refusal fired only when the *whole* calendar was invisible, leaving the worse half open: a
+partial calendar silently shrank the grid to fit what was visible. The artifact key rebuild took
+scope and interval straight off the artifact -- the two fields the key most exists to protect were
+the two it could not check. And the materialised adjustment path never collapsed revisions, so a
+restated split entered its artifact **twice**; the reader had fixed that, which is exactly how it
+stayed invisible.
+
+**A standard nobody applied.** The descriptor's resolution fields were copied from a
+caller-supplied config that nothing reconciled with the build. ``DatasetReference.content_hash``
+and ``layer`` were compared to nothing and entered ``run_id`` -- every green test in the repository
+emitted a manifest whose dataset content hash was the literal ``"sha256:abc"``. And the reader took
+its ``BoundApprovals`` from a parameter while the publication recorded the ones the build was judged
+under: the standard was persisted and verified, and the one component that applies a standard at
+query time ignored it.
+
+## 13. Query identity and quality-context closure applied in revision 6
 
 Revision 5 made a result whole and made the checks actually run. This round closes the places
 where evidence was still a **claim nobody produced**: a query the manifest described but nothing
@@ -403,7 +482,7 @@ they had been reaching are exercised directly and labelled defence in depth. Bin
 narrative to the query immediately caught the manifest fixture itself, which declared a
 2019-06-24..2021-01-05 backtest window over a query that served five days of June 2019.
 
-## 13. Query and evidence atomicity applied in revision 5
+## 14. Query and evidence atomicity applied in revision 5
 
 Revision 4 bound each artifact to what it was about. This round closes the places where a
 **result** was still assembled from parts that could be substituted, or shortened without
@@ -427,7 +506,7 @@ the stored-shape check was handed whole encoded rows rather than their envelopes
 profile-service check was handed every stored row rather than the servable ones. The third is a
 real gap in the reference fixture, reported as two warnings (limitation 14).
 
-### What adversarial review of this round then found
+### What adversarial review of revision 5 then found
 
 Each closure above was handed to an independent reviewer instructed to break it. Twenty-six
 candidate holes were reported and **seventeen confirmed real**. All are fixed; none is
@@ -453,7 +532,7 @@ sessions the caller did not declare a cutoff for; the manifest compared consumed
 while every field that makes one reproducible went unchecked; and findings whose id no planned
 check owned were silently dropped.
 
-## 14. Evidence closure applied in revision 4
+## 15. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
 it rather than to the claim itself. Each row below is a way the previous code would have said yes.
@@ -472,7 +551,7 @@ it rather than to the claim itself. Each row below is a way the previous code wo
 | 10 | `TimingBasis` said `EXACT` on zero exact rows | An axis with rows applicable and none retained reports `NONE_RETAINED`, which is neither `EXACT` (a basis derived from nothing) nor `NOT_APPLICABLE` (no row on the axis existed). Survivorship takes its horizon from the **build's own** `build_time` -- the manifest's, after a verified read -- rather than a caller-supplied cutoff, counts only `listing_end > S and <= horizon`, and requires deep-history snapshots that actually selected members |
 | 11 | The minute **accepting** path was tested at the grid function | A full regular session (390 endpoints) and a half day (210) are generated from the venue calendar, published, verified on read and served whole -- exact count, first and last endpoint. Omitting one endpoint refuses the series; recording the half day as an ordinary session refuses a genuinely complete one, which is what proves the grid comes from the calendar rather than from the bars |
 
-## 15. Enforcement closure applied in revision 3
+## 16. Enforcement closure applied in revision 3
 
 | # | Gap | Closure |
 |---|---|---|
@@ -493,7 +572,7 @@ provider-derived rows has a different denominator per axis, so the evidence reco
 exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
 axes fail to reconcile on every mixed dataset.
 
-## 16. Corrections applied in revision 2
+## 17. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -512,16 +591,17 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 17. Verification
+## 18. Verification
 
 ```
-pytest                        970 passed   (440 pre-existing, 530 new)
-ruff check .                  clean
-ruff format --check .         clean
-mypy                          clean, strict, 90 files
-scripts/phase1_preflight.py   exit 0
-scripts/phase2_preflight.py   exit 0
-scripts/phase3_docs_audit.py  exit 0
+pytest                          1068 passed   (440 pre-existing, 628 new)
+ruff check .                    clean
+ruff format --check .           clean
+mypy                            clean, strict, 93 files
+scripts/phase1_preflight.py     exit 0
+scripts/phase2_preflight.py     exit 0
+scripts/phase3_docs_audit.py    exit 0
+scripts/test_integrity_audit.py exit 0
 ```
 
 Zero network access. Zero broker interaction. Zero provider credentials.

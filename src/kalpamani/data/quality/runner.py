@@ -75,7 +75,8 @@ from typing import Any, Final
 from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import AdjustedBarArtifact, MarketSession, PriceBar
-from kalpamani.data.contracts.errors import QualityGateError
+from kalpamani.data.contracts.errors import ArtifactIntegrityError, QualityGateError
+from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.profiles import ProfileResolutionConfig
 from kalpamani.data.contracts.resolution import BoundApprovals, PitRecord, is_eligible
 from kalpamani.data.contracts.serde import (
@@ -89,7 +90,7 @@ from kalpamani.data.contracts.serde import (
     encode_universe_membership,
 )
 from kalpamani.data.contracts.vocabulary import ListingFactKind
-from kalpamani.data.curate.adjustment import series_content_hash
+from kalpamani.data.curate.adjustment import series_content_hash, verify_adjusted_bar_artifact
 from kalpamani.data.curate.universe import (
     UniverseBuildInputs,
     UniverseDefinition,
@@ -104,6 +105,7 @@ from kalpamani.data.quality.checks import (
     MarketDataThresholds,
     QualityFinding,
     SurvivorshipPolicy,
+    blocking_finding,
     check_adjusted_artifact_hash,
     check_envelope,
     check_price_bars,
@@ -116,7 +118,13 @@ from kalpamani.data.quality.checks import (
     check_universe_snapshots,
 )
 from kalpamani.data.quality.plan import PHASE3A_QUALITY_PLAN, CheckRequirement, QualityPlan
-from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
+from kalpamani.data.quality.report import (
+    CheckNotRun,
+    QualityContextDescriptor,
+    QualityReport,
+    TableCoverage,
+    report_from_findings,
+)
 
 #: The runner's own version. Part of the seal, so a report produced by a
 #: different runner is not silently accepted as though this one had produced it.
@@ -144,11 +152,50 @@ class QualityContext:
     evaluation_cutoffs: Mapping[date, datetime]
     universe_definition: UniverseDefinition
     #: The cutoff the profile-service check evaluates against: the build's own
-    #: time, so the check asks what this build was entitled to serve.
+    #: time, so the check asks what this build was entitled to serve. **Enforced**,
+    #: not merely documented -- a caller passing a later instant would move the
+    #: horizon the backfill and future-dating checks measure against, switching
+    #: them off from the outside without changing a threshold anyone can see.
     as_of: datetime
     adjusted_artifacts: tuple[AdjustedBarArtifact, ...] = ()
     market_thresholds: MarketDataThresholds = DEFAULT_MARKET_THRESHOLDS
     survivorship_policy: SurvivorshipPolicy = DEFAULT_SURVIVORSHIP_POLICY
+
+    def __post_init__(self) -> None:
+        """Bind the checks' horizon to the build's own time.
+
+        The field was caller-supplied and compared to nothing, so a context could
+        declare any horizon it liked: pushing ``as_of`` past every row's
+        availability makes ``4.3.9_backfill_admitted_too_early`` and
+        ``4.1.9_future_dated_availability`` unable to fire, and the report would
+        record both checks as run.
+        """
+        supplied = normalize_instant(self.as_of)
+        object.__setattr__(self, "as_of", supplied)
+        if supplied != normalize_instant(self.dataset.build_time):
+            raise QualityGateError(
+                f"A quality context declares as_of {supplied.isoformat()} for a build made at "
+                f"{normalize_instant(self.dataset.build_time).isoformat()}. The checks measure "
+                "what this build was entitled to serve, so a horizon chosen from outside the "
+                "build decides how much of the data the checks can see."
+            )
+        # The config is handed in independently of the build, and the descriptor
+        # copies its resolution fields verbatim. Nothing downstream compared the
+        # two, so a persisted standard could name a profile and a policy version
+        # the build was never resolved under -- and every hash over it would agree
+        # with itself.
+        if self.config.resolved_profile is not self.dataset.resolved_profile:
+            raise QualityGateError(
+                f"A quality context resolves to {self.config.resolved_profile.value} and the "
+                f"build was curated under {self.dataset.resolved_profile.value}. A standard "
+                "recorded against one information set is not evidence about another."
+            )
+        if self.config.resolution_policy_version != self.dataset.resolution_policy_version:
+            raise QualityGateError(
+                f"A quality context declares resolution policy "
+                f"{self.config.resolution_policy_version!r} and the build was resolved under "
+                f"{self.dataset.resolution_policy_version!r}."
+            )
 
     def source_records(self) -> tuple[PitRecord, ...]:
         """Every source row the build holds, in canonical entity order."""
@@ -177,94 +224,222 @@ class QualityContext:
         return tuple(rows)
 
     def derived_subjects(self) -> tuple[str, ...]:
-        """Which derived entities were actually available to be examined."""
-        found: set[str] = set()
-        if self.dataset.universe:
-            found.add("universe_membership")
-        if self.dataset.universe_headers:
-            found.add("universe_snapshot_header")
+        """Derived entities an implementation is handed the collection for.
+
+        The **collection**, not its rows. A check that walked an empty snapshot
+        and found nothing did examine that entity, and reporting it uncovered
+        would say nobody looked. What must not happen is claiming rows were
+        examined when there were none, and
+        :class:`~kalpamani.data.quality.report.TableCoverage` records that
+        distinction instead of collapsing it into a list of names.
+
+        ``adjusted_bar_artifact`` stays gated on presence, because its
+        implementation is skipped outright when the build materialised none:
+        nothing is handed anything, and the report says so.
+        """
+        found = {"universe_membership", "universe_snapshot_header"}
         if self.adjusted_artifacts:
             found.add("adjusted_bar_artifact")
         return tuple(sorted(found))
 
     def source_subjects(self) -> tuple[str, ...]:
-        """Which source entities the build actually holds rows for."""
-        return tuple(
-            sorted(
-                name
-                for name, rows in (
-                    ("market_session", self.dataset.sessions),
-                    ("listing", self.dataset.listings),
-                    ("security_attribute", self.dataset.attributes),
-                    ("ticker_history", self.dataset.tickers),
-                    ("price_bar", self.dataset.bars),
-                    ("corporate_action", self.dataset.actions),
-                )
-                if rows
-            )
+        """Source entities an implementation is handed the collection for.
+
+        Fixed, because :meth:`source_records` concatenates all six collections and
+        hands the result to every whole-build check. An empty one is still handed
+        over; whether it held rows is :class:`TableCoverage`'s question.
+        """
+        return (
+            "corporate_action",
+            "listing",
+            "market_session",
+            "price_bar",
+            "security_attribute",
+            "ticker_history",
         )
 
     def context_hash(self) -> str:
-        """Every standard this build was judged against, and the build itself.
+        """Everything **this context** carries, without the runner that read it.
 
-        A report says which checks ran and what they found. It did not say what
-        they were *measured with*: the same plan over the same build with a
-        different minimum price, a different approved bound or a different
-        survivorship threshold produced interchangeable evidence. All of it is
-        caller-supplied, so all of it is bound.
+        Kept separate from :meth:`descriptor` so a perturbation of the standard can
+        be observed on its own: a changed threshold must move this whether or not
+        the plan, runner or registry also changed.
         """
-        return content_hash(
-            {
-                "build_identity": self.dataset.build_identity,
-                "requested_profile": self.config.requested_profile.value,
-                "resolved_profile": self.config.resolved_profile.value,
-                "global_profile_resolution": self.config.global_profile_resolution.value,
-                "resolution_policy_version": self.config.resolution_policy_version,
-                "resolution_map": [list(entry) for entry in self.config.canonical_map()],
-                "approvals": [
-                    [
-                        dataset,
-                        sorted(item.value for item in policy.public),
-                        sorted(item.value for item in policy.provider),
-                        sorted(item.value for item in policy.announcement),
-                    ]
-                    for dataset, policy in sorted(self.approvals.by_dataset.items())
-                ],
-                "evaluation_cutoffs": [
-                    [session.isoformat(), cutoff.isoformat()]
-                    for session, cutoff in sorted(self.evaluation_cutoffs.items())
-                ],
-                "universe_definition": definition_hash(self.universe_definition),
-                "as_of": self.as_of,
-                "market_thresholds": [
-                    self.market_thresholds.version,
-                    str(self.market_thresholds.split_discontinuity_fraction),
-                ],
-                "survivorship_policy": [
-                    self.survivorship_policy.version,
-                    self.survivorship_policy.deep_history_years,
-                    self.survivorship_policy.minimum_eligible_snapshots,
-                ],
-                "adjusted_artifacts": sorted(
-                    artifact.artifact_id for artifact in self.adjusted_artifacts
-                ),
-            }
+        return content_hash(self.descriptor_fields())
+
+    def descriptor_fields(self) -> dict[str, object]:
+        """The caller-supplied half of the standard, canonically."""
+        return {
+            "build_identity": self.dataset.build_identity,
+            "requested_profile": self.config.requested_profile.value,
+            "resolved_profile": self.config.resolved_profile.value,
+            "global_profile_resolution": self.config.global_profile_resolution.value,
+            "resolution_policy_version": self.config.resolution_policy_version,
+            "resolution_map": [list(entry) for entry in self.config.canonical_map()],
+            "approvals": [
+                [dataset, list(public), list(provider), list(announcement)]
+                for dataset, public, provider, announcement in self.approval_rows()
+            ],
+            "evaluation_cutoffs": [list(entry) for entry in self.cutoff_rows()],
+            "universe_definition": definition_hash(self.universe_definition),
+            "universe_definition_parameters": [
+                list(entry) for entry in self.universe_parameter_rows()
+            ],
+            "as_of": self.as_of,
+            "market_thresholds": [list(entry) for entry in self.market_threshold_rows()],
+            "survivorship_policy": [list(entry) for entry in self.survivorship_rows()],
+            "adjusted_artifacts": [list(entry) for entry in self.artifact_rows()],
+        }
+
+    def approval_rows(
+        self,
+    ) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...]:
+        """Approved bound derivations per dataset, in canonical order."""
+        return tuple(
+            (
+                dataset,
+                tuple(sorted(item.value for item in policy.public)),
+                tuple(sorted(item.value for item in policy.provider)),
+                tuple(sorted(item.value for item in policy.announcement)),
+            )
+            for dataset, policy in sorted(self.approvals.by_dataset.items())
+        )
+
+    def cutoff_rows(self) -> tuple[tuple[str, str], ...]:
+        """Each snapshot session and the instant it was evaluated at."""
+        return tuple(
+            (session.isoformat(), normalize_instant(cutoff).isoformat())
+            for session, cutoff in sorted(self.evaluation_cutoffs.items())
+        )
+
+    def universe_parameter_rows(self) -> tuple[tuple[str, str], ...]:
+        """Every threshold of the universe rule, spelled out rather than named."""
+        definition = self.universe_definition
+        return (
+            ("min_close_price", str(definition.min_close_price)),
+            ("min_addv", str(definition.min_addv)),
+            ("min_history_sessions", str(definition.min_history_sessions)),
+            ("addv_window_sessions", str(definition.addv_window_sessions)),
+            (
+                "eligible_exchanges",
+                ",".join(sorted(item.value for item in definition.eligible_exchanges)),
+            ),
+            ("eligible_security_types", ",".join(sorted(definition.eligible_security_types))),
+            (
+                "min_market_cap",
+                "" if definition.min_market_cap is None else str(definition.min_market_cap),
+            ),
+        )
+
+    def market_threshold_rows(self) -> tuple[tuple[str, str], ...]:
+        """The market-data thresholds, by value."""
+        return (
+            (
+                "split_discontinuity_fraction",
+                str(self.market_thresholds.split_discontinuity_fraction),
+            ),
+        )
+
+    def survivorship_rows(self) -> tuple[tuple[str, str], ...]:
+        """The survivorship alarm's scope, by value."""
+        return (
+            ("deep_history_years", str(self.survivorship_policy.deep_history_years)),
+            (
+                "minimum_eligible_snapshots",
+                str(self.survivorship_policy.minimum_eligible_snapshots),
+            ),
+        )
+
+    def row_counts(self) -> dict[str, int]:
+        """How many rows the build actually holds, per published entity."""
+        return {
+            "market_session": len(self.dataset.sessions),
+            "listing": len(self.dataset.listings),
+            "security_attribute": len(self.dataset.attributes),
+            "ticker_history": len(self.dataset.tickers),
+            "price_bar": len(self.dataset.bars),
+            "corporate_action": len(self.dataset.actions),
+            "universe_membership": sum(len(rows) for rows in self.dataset.universe.values()),
+            "universe_snapshot_header": len(self.dataset.universe_headers),
+            "adjusted_bar_artifact": len(self.adjusted_artifacts),
+        }
+
+    def partitions_visited(self) -> tuple[str, ...]:
+        """Snapshot sessions an implementation actually walked.
+
+        Taking every configured evaluation cutoff reported partitions covered
+        that no check had opened: a cutoff is a *setting*, and a build holding no
+        snapshot for it was still counted. These are the sessions the build
+        actually holds headers or rows for, which is what a check can traverse.
+        """
+        sessions = {*self.dataset.universe_headers, *self.dataset.universe}
+        return tuple(
+            session.isoformat()
+            for session in sorted(sessions)
+            if session in self.evaluation_cutoffs
+        )
+
+    def artifact_rows(self) -> tuple[tuple[str, str], ...]:
+        """Each adjusted artifact this run examined, by id and content."""
+        return tuple(
+            sorted(
+                (artifact.artifact_id, artifact.envelope.artifact_content_hash)
+                for artifact in self.adjusted_artifacts
+            )
         )
 
     def run_id_inputs(self) -> dict[str, Any]:
-        """The build's own identity inputs, for the run-identity check.
+        """The **build's** own identity inputs, for the run-identity check.
 
-        Built here rather than accepted from a caller: the check exists to
-        establish that the resolution map and its policy version reach the run's
-        identity, and asking the caller to supply that identity would let them
-        supply one that does.
+        Every value comes from the dataset and its resolution receipt, never from
+        the config. Reading the map and the policy version off ``self.config`` and
+        then handing that same config to the check made both comparisons compare a
+        value to itself: the findings could not fire for any build, and the report
+        recorded the check as run.
         """
         return {
             "dataset_version": self.dataset.dataset_version,
             "resolved_profile": self.dataset.resolved_profile.value,
-            "resolution_policy_version": self.config.resolution_policy_version,
-            "dataset_provider_gap_resolutions": list(self.config.canonical_map()),
+            "resolution_policy_version": self.dataset.resolution_policy_version,
+            "dataset_provider_gap_resolutions": list(self.dataset.resolution_receipt.canonical_map),
         }
+
+    def descriptor(
+        self, *, plan_version: str, runner_version: str, registry_identity: str
+    ) -> QualityContextDescriptor:
+        """The readable standard this build was judged against.
+
+        A hash proves two contexts differ and tells an auditor nothing about
+        either. Every field here is caller-supplied and load-bearing, so a
+        published dataset carries the thresholds, approvals and cutoffs it passed
+        under rather than only the assurance that they did not change.
+        """
+        definition = self.universe_definition
+        return QualityContextDescriptor(
+            requested_profile=self.config.requested_profile.value,
+            resolved_profile=self.config.resolved_profile.value,
+            global_profile_resolution=self.config.global_profile_resolution.value,
+            resolution_policy_version=self.config.resolution_policy_version,
+            resolution_map=tuple(
+                (str(entry[0]), str(entry[1]), str(entry[2]))
+                for entry in self.config.canonical_map()
+            ),
+            approvals=self.approval_rows(),
+            evaluation_cutoffs=self.cutoff_rows(),
+            universe_definition_version=definition.version,
+            universe_definition_hash=definition_hash(definition),
+            universe_definition_parameters=self.universe_parameter_rows(),
+            as_of=normalize_instant(self.as_of).isoformat(),
+            market_thresholds_version=self.market_thresholds.version,
+            market_thresholds=self.market_threshold_rows(),
+            survivorship_policy_version=self.survivorship_policy.version,
+            survivorship_policy=self.survivorship_rows(),
+            adjusted_artifacts=self.artifact_rows(),
+            plan_version=plan_version,
+            runner_version=runner_version,
+            registry_identity=registry_identity,
+            build_identity=self.dataset.build_identity,
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -473,8 +648,40 @@ def _run_price_bars(context: QualityContext) -> list[QualityFinding]:
 
 
 def _run_adjusted_artifacts(context: QualityContext) -> list[QualityFinding]:
+    """Replay each artifact in full, rather than comparing it to itself.
+
+    ``check_adjusted_artifact_hash(artifact, series_content_hash(artifact.series))``
+    asks whether the stored numbers agree with their own stored hash. They always
+    do unless the file was edited: a hash recomputed from the very series it
+    describes cannot detect a wrong lineage, a wrong key, a wrong convention, a
+    wrong interval or arithmetic that never reproduced. The check reported
+    ``adjusted_bar_artifact`` covered on the strength of that.
+
+    :func:`verify_adjusted_bar_artifact` resolves the recorded lineage to the exact
+    rows in the exact builds it names, rebuilds the ``artifact_id`` from them,
+    recomputes the series from **only** those rows, and compares both the
+    recomputed hash and the stored series to the recorded one. Its refusals become
+    findings here rather than exceptions, because a build with a bad cache is a
+    build the gate should refuse -- with the reason recorded.
+    """
     found: list[QualityFinding] = []
     for artifact in context.adjusted_artifacts:
+        try:
+            verify_adjusted_bar_artifact(
+                artifact,
+                context.dataset.bars,
+                context.dataset.actions,
+                approvals=context.approvals,
+            )
+        except ArtifactIntegrityError as refusal:
+            found.append(
+                blocking_finding(
+                    "4.5.1_adjusted_cache_does_not_reproduce",
+                    "adjusted_bar_artifact",
+                    str(refusal),
+                )
+            )
+            continue
         found.extend(check_adjusted_artifact_hash(artifact, series_content_hash(artifact.series)))
     return found
 
@@ -483,8 +690,11 @@ def _adjusted_applicable(context: QualityContext) -> str | None:
     if context.adjusted_artifacts:
         return None
     return (
-        "this build materialised no adjusted bar artifacts, so there is no cache to "
-        "reproduce. The decision is the runner's, computed from the build"
+        "no adjusted bar artifacts were supplied with this build, so there is no cache to "
+        "reproduce. Stated as it is: the artifacts are a field of the quality context, not "
+        "of the GoldDataset, so their absence is a caller's choice and calling it a fact "
+        "the runner computed from the build would put the one decision that switches this "
+        "check off beyond the reader's view"
     )
 
 
@@ -522,6 +732,21 @@ def _run_universe_rebuild(context: QualityContext) -> list[QualityFinding]:
         attributes=dataset.attributes,
         bars=dataset.bars,
     )
+    orphaned = sorted(
+        session for session in dataset.universe if session not in dataset.universe_headers
+    )
+    if orphaned:
+        # The adjacent direction to the guard below, and it was open. A session
+        # holding membership rows with no header is never iterated here, so it
+        # went unrebuilt while ``partitions_covered`` listed it and
+        # 6_identity_and_universe was recorded as run -- the exact failure the
+        # guard below exists to prevent, arrived at from the other side.
+        raise QualityGateError(
+            f"Snapshots {[session.isoformat() for session in orphaned]} hold membership rows "
+            "with no header, so the rebuild check cannot reproduce them. A header is what "
+            "says the build ran and what it considered; rows without one are decisions "
+            "nothing accounts for."
+        )
     uncovered = sorted(
         session for session in dataset.universe_headers if session not in context.evaluation_cutoffs
     )
@@ -856,6 +1081,53 @@ class RunnerOutcome:
         return self._sealed
 
 
+#: Every table a Gold publication writes. Coverage is reported for each of them
+#: by name, so a table nothing examined is visible rather than merely absent.
+PUBLISHED_ENTITIES: Final = (
+    "corporate_action",
+    "listing",
+    "market_session",
+    "price_bar",
+    "security_attribute",
+    "ticker_history",
+    "universe_membership",
+    "universe_snapshot_header",
+)
+
+
+#: Not tables. ``run`` names the run itself, which the run-identity check covers;
+#: reporting a row count for it would describe something it does not have.
+_PSEUDO_ENTITIES: Final = frozenset({"run"})
+
+
+def _entities_of(implementation: CheckImplementation) -> frozenset[str]:
+    """The entities a skipped implementation would have examined had it run.
+
+    A skipped implementation reports no subjects -- it examined nothing -- so its
+    reason has to be attached to the tables it *would* have covered, which is what
+    makes a GOVERNED_NOT_RUN row say why rather than merely that.
+    """
+    return frozenset(_WOULD_EXAMINE.get(implementation.implementation_id, ()))
+
+
+#: Which entity each implementation is the coverage route for, when it does not
+#: run. Declared, because a skipped implementation cannot be asked.
+_WOULD_EXAMINE: Final[dict[str, tuple[str, ...]]] = {
+    "adjusted_artifact_hash": ("adjusted_bar_artifact",),
+    "price_bar_structure": ("price_bar",),
+    "ticker_history": ("ticker_history",),
+    "universe_snapshots": ("universe_membership", "universe_snapshot_header"),
+    "universe_rebuild": ("universe_membership", "universe_snapshot_header"),
+}
+
+#: Every entity any implementation could cover, so an entity nothing ran for is
+#: reported as not-run rather than omitted -- an absent row and a covered one look
+#: the same to a reader scanning names.
+_WOULD_EXAMINE_ALL: Final = frozenset(
+    entity for entities in _WOULD_EXAMINE.values() for entity in entities
+)
+
+
 def registry_identity(registry: Mapping[str, CheckImplementation]) -> str:
     """Canonical identity of a registry: which implementations, emitting what.
 
@@ -897,13 +1169,10 @@ def run_quality_plan(
     _require_registry_agrees(plan, registry)
     sealed = registry is CHECK_REGISTRY or dict(registry) == dict(CHECK_REGISTRY)
     identity = registry_identity(registry)
-    context_hash_value = content_hash(
-        {
-            "context": context.context_hash(),
-            "plan_version": plan.plan_version,
-            "runner_version": QUALITY_RUNNER_VERSION,
-            "registry_identity": identity,
-        }
+    descriptor = context.descriptor(
+        plan_version=plan.plan_version,
+        runner_version=QUALITY_RUNNER_VERSION,
+        registry_identity=identity,
     )
 
     invoked: dict[str, list[QualityFinding]] = {}
@@ -982,6 +1251,42 @@ def run_quality_plan(
             "build was never checked."
         )
 
+    # Only what an implementation actually traversed. A configured cutoff with no
+    # snapshot behind it is a setting, not a partition anybody examined.
+    partitions = context.partitions_visited() if checks_run else ()
+
+    counts = context.row_counts()
+    coverage: list[tuple[str, str, str]] = []
+    # Tables only. ``run`` is the whole-run pseudo-entity the run-identity check
+    # covers, and calling it an empty table would describe a row count it never
+    # had. ``adjusted_bar_artifact`` is a real entity that is simply not published.
+    entities = {*PUBLISHED_ENTITIES, *covered, *_WOULD_EXAMINE_ALL} - _PSEUDO_ENTITIES
+    for entity in sorted(entities):
+        if entity not in covered:
+            coverage.append(
+                (
+                    entity,
+                    TableCoverage.GOVERNED_NOT_RUN.value,
+                    "; ".join(
+                        reason
+                        for implementation, reason in sorted(skipped.items())
+                        if entity in registry[implementation].subjects(context)
+                        or entity in _entities_of(registry[implementation])
+                    )
+                    or "no invoked implementation was handed this entity",
+                )
+            )
+        elif counts.get(entity, 0):
+            coverage.append((entity, TableCoverage.EXAMINED_WITH_ROWS.value, ""))
+        else:
+            coverage.append(
+                (
+                    entity,
+                    TableCoverage.EXAMINED_EMPTY.value,
+                    "an implementation traversed this table and it held no rows",
+                )
+            )
+
     versions = dict(policy_versions or {})
     versions.setdefault("market", context.market_thresholds.version)
     versions.setdefault("survivorship", context.survivorship_policy.version)
@@ -990,17 +1295,16 @@ def run_quality_plan(
         _deduplicate(findings),
         plan_version=plan.plan_version,
         subject_build_identity=context.dataset.build_identity,
-        quality_context_hash=context_hash_value,
+        quality_context=descriptor,
         runner_version=QUALITY_RUNNER_VERSION,
         implementations_invoked=tuple(sorted(invoked)),
         implementations_not_run=tuple(sorted(skipped.items())),
+        table_coverage=tuple(coverage),
         policy_versions=versions,
         checks_run=tuple(checks_run),
         checks_not_run=tuple(checks_not_run),
         datasets_covered=tuple(sorted(covered)),
-        partitions_covered=tuple(
-            session.isoformat() for session in sorted(context.evaluation_cutoffs)
-        ),
+        partitions_covered=partitions,
         produced_at=produced_at if produced_at is not None else context.dataset.build_time,
         produced_by=_RUNNER_TOKEN if sealed else None,
     )
@@ -1010,7 +1314,7 @@ def run_quality_plan(
         skipped=tuple(sorted(skipped.items())),
         plan_version=plan.plan_version,
         runner_version=QUALITY_RUNNER_VERSION,
-        quality_context_hash=context_hash_value,
+        quality_context_hash=descriptor.identity(),
         registry_identity=identity,
         sealed=sealed,
         token=_RUNNER_TOKEN,

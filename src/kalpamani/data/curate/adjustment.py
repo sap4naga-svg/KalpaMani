@@ -212,7 +212,50 @@ def relevant_actions(
         if action.ex_date > valid_time_end:
             continue
         kept.append(action)
-    return tuple(sorted(kept, key=lambda item: (item.ex_date or date.min, item.action_id)))
+    return tuple(
+        sorted(
+            _one_revision_per_action(kept),
+            key=lambda item: (item.ex_date or date.min, item.action_id),
+        )
+    )
+
+
+def _one_revision_per_action(
+    actions: Sequence[CorporateAction],
+) -> tuple[CorporateAction, ...]:
+    """Exactly one revision of each action, refusing a contradictory tie.
+
+    An action is revisable -- a ratio gets corrected, an ex-date moves -- and every
+    revision that reaches the arithmetic multiplies into the factor. The reader
+    collapsed revisions before calling here; the materialised builder did not, so
+    a restated split entered its artifact **twice** and the same bar came back
+    adjusted by the square of the factor.
+
+    Callers pass rows already filtered to what was admissible at their epoch, so
+    the highest revision sequence is the one in force. Two *different* rows at that
+    sequence refuse, for the same reason a tie refuses in the reader: taking
+    whichever arrived first lets input order decide the numbers.
+
+    Raises:
+        ArtifactIntegrityError: naming the action whose revision is ambiguous.
+    """
+    by_action: dict[str, list[CorporateAction]] = {}
+    for action in actions:
+        by_action.setdefault(action.action_id, []).append(action)
+
+    chosen: list[CorporateAction] = []
+    for action_id, revisions in sorted(by_action.items()):
+        highest = max(item.envelope.revision_sequence for item in revisions)
+        tied = [item for item in revisions if item.envelope.revision_sequence == highest]
+        if any(item != tied[0] for item in tied[1:]):
+            raise ArtifactIntegrityError(
+                f"Corporate action {action_id!r} has {len(tied)} different rows at revision "
+                f"sequence {highest}. A revision sequence says which statement was in force, "
+                "so two different statements at one sequence leave the ratio unanswerable -- "
+                "and every revision that reaches the arithmetic multiplies into the factor."
+            )
+        chosen.append(tied[0])
+    return tuple(chosen)
 
 
 def adjustment_factor(
@@ -862,6 +905,33 @@ def verify_adjusted_bar_artifact(
             f"resolves in {list(derived_bars)} and {list(derived_actions)}. The recomputed key "
             "is built from the rows, so a false claim here would otherwise be ignored rather "
             "than refused -- and the claim is what a later result cites."
+        )
+
+    # Scope and interval are derived from the rows the lineage resolved to, not
+    # read off the artifact. Rebuilding the key from the artifact's own claims
+    # compared them to copies of themselves, so the two fields the key exists to
+    # protect were the two it could not check: an artifact could name any scope
+    # and any interval and still rebuild its own id.
+    scoped = sorted({bar.security_id for bar in lineage_bars})
+    if scoped != [artifact.security_id_scope]:
+        raise ArtifactIntegrityError(
+            f"Adjusted artifact {artifact.artifact_id} declares scope "
+            f"{artifact.security_id_scope!r} and its lineage resolves to {scoped}. A scope "
+            "that does not follow from the rows describes a different artifact than the one "
+            "stored."
+        )
+    validity = artifact.envelope.validity
+    start, end = validity.valid_time_start, validity.valid_time_end
+    covered = [bar.session_date for bar in lineage_bars]
+    if start is None or end is None or min(covered) < start or max(covered) > end:
+        declared = (
+            "none" if start is None or end is None else (f"{start.isoformat()}..{end.isoformat()}")
+        )
+        raise ArtifactIntegrityError(
+            f"Adjusted artifact {artifact.artifact_id} declares the interval {declared} and "
+            f"its lineage resolves to bars spanning {min(covered).isoformat()}.."
+            f"{max(covered).isoformat()}. The interval is what the artifact claims to be "
+            "about, and one month of a security is not the same artifact as one year of it."
         )
 
     rebuilt = artifact_id_for(_recomputed_key(artifact, lineage_bars, lineage_actions))

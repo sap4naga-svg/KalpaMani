@@ -36,6 +36,7 @@ from kalpamani.data.contracts.manifest import (
     emit_manifest,
     inventory_for,
     origin_exclusions_for,
+    quality_summary_for,
 )
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
@@ -141,7 +142,11 @@ def _executed() -> ExecutedResult[Any]:
 
 def _manifest(**overrides: object) -> ResearchManifest:
     config = cast(
-        ProfileResolutionConfig, overrides.pop("profile_resolution", phase3a.resolution())
+        ProfileResolutionConfig,
+        overrides.pop(
+            "profile_resolution",
+            phase3a.resolution(requested=_executed().query.requested_profile),
+        ),
     )
     evidence = phase3a.resolution_evidence(
         requested=config.requested_profile,
@@ -158,14 +163,14 @@ def _manifest(**overrides: object) -> ResearchManifest:
         "backtest_start": _executed().query.start,  # type: ignore[union-attr]
         "backtest_end": _executed().query.end,  # type: ignore[union-attr]
         "profile_resolution": config,
-        "revision_view": _executed().query.revision_view,  # type: ignore[union-attr]
+        "revision_view": _executed().query.revision_view,
         "dataset_resolution_evidence": evidence,
         "required_inputs": (_coverage(),),
         "datasets": (
             DatasetReference(
                 dataset_version=phase3a.DATASET_VERSION,
-                layer="GOLD",
-                content_hash="sha256:abc",
+                layer=_executed().evidence.layer,
+                content_hash=_executed().evidence.build_identity,
                 publication_manifest_hash=_executed().publication_manifest_hash,
                 resolved_profile=config.resolved_profile,
             ),
@@ -174,11 +179,7 @@ def _manifest(**overrides: object) -> ResearchManifest:
         "origin_exclusions": origin_exclusions_for(_executed()),
         "definitions": {"universe_definition_version": phase3a.UNIVERSE_DEFINITION_VERSION},
         "limitations": _tokens(config, evidence),
-        "quality": QualitySummary(
-            blocking_issues_open=0,
-            warnings_open=2,
-            quality_report_hash=_executed().quality_report_hash,
-        ),
+        "quality": quality_summary_for(_executed()),
         "random_seed": 20260826,
         "result_artifact_hash": sha256_hex(_result_bytes()),
     }
@@ -761,17 +762,13 @@ def test_a_positive_exclusion_with_its_token_passes() -> None:
         datasets=(
             DatasetReference(
                 dataset_version=phase3a.DATASET_VERSION,
-                layer="GOLD",
-                content_hash="sha256:abc",
+                layer=executed.evidence.layer,
+                content_hash=executed.evidence.build_identity,
                 publication_manifest_hash=executed.publication_manifest_hash,
                 resolved_profile=PUBLIC,
             ),
         ),
-        quality=QualitySummary(
-            blocking_issues_open=0,
-            warnings_open=2,
-            quality_report_hash=executed.quality_report_hash,
-        ),
+        quality=quality_summary_for(executed),
         limitations=(
             *_default_tokens(),
             LimitationToken.ORIGIN_INELIGIBLE_ROWS_EXCLUDED,
@@ -806,14 +803,40 @@ def test_a_bound_resolution_without_its_token_refuses() -> None:
 
 
 def test_a_downgrade_carries_its_token() -> None:
+    """The run is executed downgraded too, not merely described that way.
+
+    A manifest declaring one information set beside a query executed in another is
+    what the cross-check refuses, so the fixture has to downgrade the run rather
+    than only the narrative.
+    """
     config = phase3a.resolution(
         requested=PROVIDER_REALISTIC, downgrade=GlobalProfileResolution.DOWNGRADE
     )
     assert LimitationToken.PROFILE_DOWNGRADED_TO_PUBLIC in _tokens(config, _evidence_for(config))
-    manifest = _manifest(
-        profile_resolution=config, limitations=_tokens(config, _evidence_for(config))
+    directory = tempfile.mkdtemp(prefix="kalpamani-downgrade-")
+    executed = phase3a.sealed_result(
+        LocalTableStore(Path(directory)),
+        requested=PROVIDER_REALISTIC,
+        downgrade=GlobalProfileResolution.DOWNGRADE,
     )
-    assert _emit(manifest) is not None
+    manifest = _manifest(
+        profile_resolution=config,
+        limitations=_tokens(config, _evidence_for(config)),
+        inputs=inventory_for(executed),
+        origin_exclusions=origin_exclusions_for(executed),
+        result_artifact_hash=executed.result_bytes_hash,
+        quality=quality_summary_for(executed),
+        datasets=(
+            DatasetReference(
+                dataset_version=phase3a.DATASET_VERSION,
+                layer=executed.evidence.layer,
+                content_hash=executed.evidence.build_identity,
+                publication_manifest_hash=executed.publication_manifest_hash,
+                resolved_profile=PUBLIC,
+            ),
+        ),
+    )
+    assert emit_manifest(manifest, executed=executed) is not None
     assert manifest.resolved_profile is PUBLIC
     assert manifest.requested_profile is PROVIDER_REALISTIC
 

@@ -45,7 +45,7 @@ from typing import Any, Final, Generic, TypeVar
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ExecutionSealError
-from kalpamani.data.contracts.resolution import TimingBasisUsed
+from kalpamani.data.contracts.resolution import BOUNDED_BASES, TimingBasisUsed
 from kalpamani.data.pit.query import QuerySpec
 
 ResultT = TypeVar("ResultT")
@@ -81,13 +81,35 @@ class RowTimingEvidence:
     """
 
     dataset: str
-    bases: frozenset[TimingBasisUsed]
+    #: Axes without which the profile could not have admitted these rows. This is
+    #: what the bound-required limitation tokens rest on.
+    required_bases: frozenset[TimingBasisUsed]
+    #: Axes that actually set the decision time. A subset of the consulted axes,
+    #: and not generally the same as the required ones: under
+    #: ``PROVIDER_REALISTIC_PIT`` an authoritative-public row needs both a public
+    #: and a provider time, and only the later of the two governs.
+    governing_bases: frozenset[TimingBasisUsed]
     rows: int
 
     @property
+    def bases(self) -> frozenset[TimingBasisUsed]:
+        """Every axis these rows were admitted on, required or governing."""
+        return self.required_bases | self.governing_bases
+
+    @property
+    def used_a_required_bound(self) -> bool:
+        """Whether the profile **needed** a bounded axis to admit one of these rows."""
+        return bool(self.required_bases & BOUNDED_BASES)
+
+    @property
+    def used_a_governing_bound(self) -> bool:
+        """Whether a bounded axis actually **set** one of these rows' decision times."""
+        return bool(self.governing_bases & BOUNDED_BASES)
+
+    @property
     def used_a_bound(self) -> bool:
-        """Whether a row this result actually served was admitted on a bound."""
-        return bool(self.bases & {TimingBasisUsed.PUBLIC_BOUNDED, TimingBasisUsed.PROVIDER_BOUNDED})
+        """Either of the above. A result touched by a bound in any way."""
+        return self.used_a_required_bound or self.used_a_governing_bound
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -102,7 +124,26 @@ class ExecutionEvidence:
 
     dataset_version: str
     publication_manifest_hash: str
+    #: The build's own content identity, over the rows themselves. A manifest
+    #: restates it in a ``DatasetReference``, and until the seal carried it there
+    #: was nothing to compare that restatement to: ``content_hash="sha256:abc"``
+    #: passed every check because no check was about it.
+    build_identity: str
+    layer: str
+    #: The resolution the run actually executed under. Both fields are hashed into
+    #: ``run_id`` from the manifest's side and were compared to nothing the run
+    #: recorded, so a manifest could name a policy version and a gap-resolution map
+    #: the query never applied -- and each read correctly on its own.
+    resolution_policy_version: str
+    resolution_map: tuple[tuple[str, str, str], ...]
     quality_report_hash: str
+    #: What the gating report actually found, carried as counts rather than as a
+    #: reference. A manifest restates them, and a restatement is only useful while
+    #: it agrees with its source: one claiming zero warnings beside a report
+    #: holding two is internally consistent and wrong.
+    quality_blocking_open: int
+    quality_warnings_open: int
+    quality_checks_not_run: tuple[str, ...]
     direct_source_datasets: tuple[str, ...]
     dataset_manifest_hashes: Mapping[str, str]
     revisable_datasets_consumed: tuple[str, ...]
@@ -111,7 +152,12 @@ class ExecutionEvidence:
     consumed_artifacts: tuple[ConsumedArtifactRecord, ...]
     #: How the rows this query served were admitted, per dataset.
     timing_evidence: tuple[RowTimingEvidence, ...]
+    #: Datasets whose served rows the profile **needed** a bound to admit.
     bounds_relied_upon: tuple[str, ...]
+    #: Datasets where a bound actually set the decision time. Recorded separately
+    #: because "the profile needed a bounded axis" and "the bound decided when
+    #: this row became usable" are different claims about a result.
+    governing_bounds: tuple[str, ...]
     #: Bounds relied upon whose derivation was not approved for their dataset.
     #: Recorded by the run rather than declared by the caller.
     unapproved_bounds_relied_upon: tuple[str, ...]
@@ -127,11 +173,25 @@ class ExecutionEvidence:
         )
 
     def bases_for(self, dataset: str) -> frozenset[TimingBasisUsed]:
-        """How ``dataset``'s served rows were admitted, or nothing if it was not read."""
+        """Every axis ``dataset``'s served rows used, or nothing if it was not read."""
+        entry = self._entry(dataset)
+        return entry.bases if entry is not None else frozenset()
+
+    def required_bases_for(self, dataset: str) -> frozenset[TimingBasisUsed]:
+        """The axes without which ``dataset``'s rows could not have been admitted."""
+        entry = self._entry(dataset)
+        return entry.required_bases if entry is not None else frozenset()
+
+    def governing_bases_for(self, dataset: str) -> frozenset[TimingBasisUsed]:
+        """The axes that set ``dataset``'s rows' decision times."""
+        entry = self._entry(dataset)
+        return entry.governing_bases if entry is not None else frozenset()
+
+    def _entry(self, dataset: str) -> RowTimingEvidence | None:
         for entry in self.timing_evidence:
             if entry.dataset == dataset:
-                return entry.bases
-        return frozenset()
+                return entry
+        return None
 
     def identity(self) -> dict[str, object]:
         """The canonical form the run's identity hashes."""
@@ -141,14 +201,27 @@ class ExecutionEvidence:
             "consumed_artifact_ids": list(self.consumed_artifact_ids),
             "revisable_datasets_consumed": list(self.revisable_datasets_consumed),
             "timing_evidence": [
-                [entry.dataset, sorted(basis.value for basis in entry.bases), entry.rows]
+                [
+                    entry.dataset,
+                    sorted(basis.value for basis in entry.required_bases),
+                    sorted(basis.value for basis in entry.governing_bases),
+                    entry.rows,
+                ]
                 for entry in self.timing_evidence
             ],
             "bounds_relied_upon": list(self.bounds_relied_upon),
+            "governing_bounds": list(self.governing_bounds),
             "unapproved_bounds_relied_upon": list(self.unapproved_bounds_relied_upon),
             "hash_mismatches": list(self.hash_mismatches),
             "origin_exclusion_rows": self.origin_exclusion_rows,
+            "build_identity": self.build_identity,
+            "layer": self.layer,
+            "resolution_policy_version": self.resolution_policy_version,
+            "resolution_map": [list(entry) for entry in self.resolution_map],
             "quality_report_hash": self.quality_report_hash,
+            "quality_blocking_open": self.quality_blocking_open,
+            "quality_warnings_open": self.quality_warnings_open,
+            "quality_checks_not_run": list(self.quality_checks_not_run),
         }
 
 
@@ -166,15 +239,36 @@ class ExecutionRecorder:
     change after a manifest hashes it.
     """
 
-    def __init__(self, *, dataset_version: str, manifest_hash: str, quality_hash: str) -> None:
+    def __init__(
+        self,
+        *,
+        dataset_version: str,
+        manifest_hash: str,
+        build_identity: str,
+        layer: str,
+        resolution_policy_version: str,
+        resolution_map: tuple[tuple[str, str, str], ...],
+        quality_hash: str,
+        quality_blocking_open: int = 0,
+        quality_warnings_open: int = 0,
+        quality_checks_not_run: Sequence[str] = (),
+    ) -> None:
         """Bind the recorder to the publication whose reads it will describe."""
         self._dataset_version = dataset_version
         self._manifest_hash = manifest_hash
+        self._build_identity = build_identity
+        self._layer = layer
+        self._resolution_policy_version = resolution_policy_version
+        self._resolution_map = resolution_map
         self._quality_hash = quality_hash
+        self._quality_blocking = quality_blocking_open
+        self._quality_warnings = quality_warnings_open
+        self._quality_not_run = tuple(sorted(quality_checks_not_run))
         self._datasets: set[str] = set()
         self._revisable: set[str] = set()
         self._artifacts: dict[str, ConsumedArtifactRecord] = {}
-        self._bases: dict[str, set[TimingBasisUsed]] = {}
+        self._required: dict[str, set[TimingBasisUsed]] = {}
+        self._governing: dict[str, set[TimingBasisUsed]] = {}
         self._served: dict[str, int] = {}
         self._unapproved_bounds: set[str] = set()
         self._hash_mismatches: set[str] = set()
@@ -202,20 +296,35 @@ class ExecutionRecorder:
             self._exclusions[key] = self._exclusions.get(key, 0) + rows
 
     def record_served_row(
-        self, dataset: str, bases: frozenset[TimingBasisUsed], *, approved: bool
+        self,
+        dataset: str,
+        *,
+        required: frozenset[TimingBasisUsed],
+        governing: frozenset[TimingBasisUsed],
     ) -> None:
         """Record how one row this result actually served was admitted.
 
         Per row, because the alternative -- reading the dataset's build-time
         evidence -- reports a query as having leant on a bound when every row it
         served carried an exact time.
+
+        Both sets, because they answer different questions. The profile may need a
+        bounded axis that decided nothing, and it may be decided by a bounded axis
+        it could have resolved without.
         """
-        self._bases.setdefault(dataset, set()).update(bases)
+        self._required.setdefault(dataset, set()).update(required)
+        self._governing.setdefault(dataset, set()).update(governing)
         self._served[dataset] = self._served.get(dataset, 0) + 1
-        if not approved and (
-            bases & {TimingBasisUsed.PUBLIC_BOUNDED, TimingBasisUsed.PROVIDER_BOUNDED}
-        ):
-            self._unapproved_bounds.add(dataset)
+
+    def record_unapproved_bound(self, dataset: str) -> None:
+        """Record that an unapproved bound kept a row out of this result.
+
+        Not a property of a served row: an unapproved bound resolves no axis, so a
+        row admitted on one is a contradiction. It is a property of a row the
+        query could not admit, and the result is shorter because of a policy
+        decision rather than because of the data.
+        """
+        self._unapproved_bounds.add(dataset)
 
     def record_artifact(self, artifact: ConsumedArtifactRecord) -> None:
         """Record a derived artifact a query consumed, with its full identity.
@@ -249,15 +358,23 @@ class ExecutionRecorder:
         timing = tuple(
             RowTimingEvidence(
                 dataset=dataset,
-                bases=frozenset(bases),
+                required_bases=frozenset(self._required.get(dataset, set())),
+                governing_bases=frozenset(self._governing.get(dataset, set())),
                 rows=self._served.get(dataset, 0),
             )
-            for dataset, bases in sorted(self._bases.items())
+            for dataset in sorted({*self._required, *self._governing})
         )
         return ExecutionEvidence(
             dataset_version=self._dataset_version,
             publication_manifest_hash=self._manifest_hash,
+            build_identity=self._build_identity,
+            layer=self._layer,
+            resolution_policy_version=self._resolution_policy_version,
+            resolution_map=self._resolution_map,
             quality_report_hash=self._quality_hash,
+            quality_blocking_open=self._quality_blocking,
+            quality_warnings_open=self._quality_warnings,
+            quality_checks_not_run=self._quality_not_run,
             direct_source_datasets=tuple(sorted(self._datasets)),
             dataset_manifest_hashes={self._dataset_version: self._manifest_hash},
             revisable_datasets_consumed=tuple(sorted(self._revisable)),
@@ -265,7 +382,10 @@ class ExecutionRecorder:
             consumed_artifacts=tuple(self._artifacts[key] for key in sorted(self._artifacts)),
             timing_evidence=timing,
             bounds_relied_upon=tuple(
-                sorted(entry.dataset for entry in timing if entry.used_a_bound)
+                sorted(entry.dataset for entry in timing if entry.used_a_required_bound)
+            ),
+            governing_bounds=tuple(
+                sorted(entry.dataset for entry in timing if entry.used_a_governing_bound)
             ),
             unapproved_bounds_relied_upon=tuple(sorted(self._unapproved_bounds)),
             hash_mismatches=tuple(sorted(self._hash_mismatches)),

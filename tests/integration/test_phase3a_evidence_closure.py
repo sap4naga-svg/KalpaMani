@@ -27,6 +27,7 @@ from kalpamani.data.contracts.envelope import DerivedEnvelope, LineageRef
 from kalpamani.data.contracts.errors import (
     AcquisitionIncompleteError,
     ArtifactIntegrityError,
+    BronzeIntegrityError,
     BuildBoundaryError,
     DatasetPublicationError,
     EnvelopeError,
@@ -34,6 +35,7 @@ from kalpamani.data.contracts.errors import (
     MissingHistoricalSnapshotError,
     QualityGateError,
     QueryRangeError,
+    RequiredInputUnavailableError,
     UnsafePathComponentError,
 )
 from kalpamani.data.contracts.manifest import InputInventory, emit_manifest, inventory_for
@@ -87,7 +89,6 @@ from kalpamani.data.curate.publication import (
     compute_manifest_hash,
     publish_gold_dataset,
     read_published_dataset,
-    verification_seal,
 )
 from kalpamani.data.curate.resolution_run import resolve_run_inputs
 from kalpamani.data.curate.universe import build_snapshot_header, current_listings
@@ -612,6 +613,33 @@ def test_membership_lineage_never_names_the_gold_version_it_was_written_into() -
 # ---------------------------------------------------------------------------
 
 
+def _forge_publication(publication: VerifiedPublication, **overrides: object) -> object:
+    """Build a tampered publication the way someone with source access would.
+
+    Reaching for the module-private token and seal deliberately. The point of
+    these tests is what the type does when its artifacts are **wrong**, and the
+    point of the boundary is that nothing outside the module reaches here through
+    the public API. If this helper stops working, the boundary got stronger.
+    """
+    from kalpamani.data.curate import publication as module
+
+    fields: dict[str, object] = {
+        "dataset": publication.dataset,
+        "manifest": publication.manifest,
+        "quality_report": publication.quality_report,
+    }
+    fields.update(overrides)
+    return module.VerifiedPublication(
+        **fields,  # type: ignore[arg-type]
+        verification_seal=module._verification_seal(
+            fields["manifest"],  # type: ignore[arg-type]
+            fields["quality_report"],  # type: ignore[arg-type]
+            fields["dataset"],  # type: ignore[arg-type]
+        ),
+        token=module._VERIFIED_READ_TOKEN,
+    )
+
+
 def test_a_hand_assembled_triplet_cannot_become_a_verified_publication(tmp_path: Path) -> None:
     """Its hashes agree with each other, which is not agreeing with storage."""
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
@@ -621,18 +649,110 @@ def test_a_hand_assembled_triplet_cannot_become_a_verified_publication(tmp_path:
             manifest=publication.manifest,
             quality_report=publication.quality_report,
             verification_seal=publication.verification_seal,
-            verified_by=object(),
+            token=object(),
         )
 
 
+def test_there_is_no_authorization_field_to_copy(tmp_path: Path) -> None:
+    """``verified_by`` was a readable dataclass field, and replace copies fields.
+
+    Two compounding defects: ``dataclasses.replace(publication, dataset=other)``
+    carried the token onto substituted rows for free, and ``verification_seal``
+    was public, so the caller could recompute the seal over the replacement and
+    restore the agreement the seal was supposed to prove. A seal its holder can
+    recompute is a checksum, not an authorization.
+    """
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    assert not dataclasses.is_dataclass(publication)
+    assert not hasattr(publication, "verified_by")
+    with pytest.raises(TypeError):
+        dataclasses.replace(publication)  # type: ignore[type-var]
+    with pytest.raises(DatasetPublicationError, match="cannot be edited afterwards"):
+        publication._dataset = publication.dataset
+    import kalpamani.data.curate.publication as module
+
+    assert not hasattr(module, "verification_seal"), (
+        "A caller who can recompute the seal can manufacture agreement."
+    )
+    assert "verification_seal" not in module.__all__
+
+
 def test_the_verified_read_is_the_only_route_to_a_reader(tmp_path: Path) -> None:
-    """And the seal it stamps names the artifacts the verification covered."""
+    """NEGATIVE CONTROL. An untampered publication constructs and revalidates."""
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
     assert isinstance(publication, VerifiedPublication)
-    assert publication.verification_seal == verification_seal(
-        publication.manifest, publication.quality_report, publication.dataset
-    )
+    publication.require_internally_consistent()
     assert publication.dataset_version == phase3a.DATASET_VERSION
+    assert publication.verification_seal
+    phase3a.reader(LocalTableStore(tmp_path / "r"))
+
+
+@pytest.mark.parametrize(
+    ("what", "build", "expected"),
+    [
+        (
+            "a replaced dataset, with the seal recomputed over it",
+            lambda pub: {"dataset": dataclasses.replace(pub.dataset, bars=pub.dataset.bars[:-1])},
+            "was run over build",
+        ),
+        (
+            "a replaced quality report",
+            lambda pub: {
+                "quality_report": dataclasses.replace(
+                    pub.quality_report, quality_context_hash="another-standard"
+                )
+            },
+            "hashes to",
+        ),
+        (
+            "a replaced manifest",
+            lambda pub: {
+                "manifest": dataclasses.replace(
+                    pub.manifest, quality_context_hash="another-standard"
+                )
+            },
+            "does not reconcile with its own hash",
+        ),
+    ],
+)
+def test_a_substituted_artifact_is_refused_even_with_a_recomputed_seal(
+    tmp_path: Path,
+    what: str,
+    build: object,
+    expected: str,
+) -> None:
+    """Recomputing the seal restores internal agreement and nothing else.
+
+    Every identity is re-derived, so a replacement has to survive the comparison
+    it was substituted to avoid: the report must still name this build, the
+    manifest must still reconcile with its own hash, and the report hash the
+    manifest names must still be this report's.
+    """
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    overrides = build(publication)  # type: ignore[operator]
+    with pytest.raises(DatasetPublicationError, match=expected):
+        _forge_publication(publication, **overrides)
+
+
+def test_a_reader_revalidates_rather_than_trusting_the_type(tmp_path: Path) -> None:
+    """ "It was verified once" and "it holds now" are different claims.
+
+    A Boolean or a token can carry the first. Only re-derivation carries the
+    second, and the second is what every query on the reader depends on.
+    """
+    publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
+    with pytest.raises(DatasetPublicationError, match="VerifiedPublication is required"):
+        PointInTimeReader(
+            publication.manifest,  # type: ignore[arg-type]
+            resolution=phase3a.resolution(),
+            approvals=phase3a.approvals(),
+        )
+    import inspect
+
+    source = inspect.getsource(PointInTimeReader.__init__)
+    assert "require_internally_consistent" in source, (
+        "The reader re-derives the identities rather than reading a flag."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +766,7 @@ def test_a_report_running_one_harmless_check_cannot_publish(tmp_path: Path) -> N
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
-        quality_context_hash="hand-authored, not a run",
+        quality_context=phase3a.quality_context_descriptor(),
         runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=("5_market_data",),
@@ -663,7 +783,7 @@ def test_a_required_check_cannot_be_declared_away(tmp_path: Path) -> None:
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
-        quality_context_hash="hand-authored, not a run",
+        quality_context=phase3a.quality_context_descriptor(),
         runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
@@ -689,7 +809,7 @@ def test_a_published_table_nothing_covered_is_refused(tmp_path: Path) -> None:
         (),
         plan_version=PHASE3A_QUALITY_PLAN.plan_version,
         subject_build_identity=_SUBJECT,
-        quality_context_hash="hand-authored, not a run",
+        quality_context=phase3a.quality_context_descriptor(),
         runner_version=QUALITY_RUNNER_VERSION,
         policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
         checks_run=tuple(
@@ -837,7 +957,7 @@ def test_a_zero_row_snapshot_is_not_served_before_it_was_built(tmp_path: Path) -
         resolution=phase3a.resolution(requested=FORWARD),
         approvals=phase3a.approvals(),
     )
-    with pytest.raises(MissingHistoricalSnapshotError, match="first built at"):
+    with pytest.raises(MissingHistoricalSnapshotError, match="became available at"):
         reader.get_security_universe(
             as_of=phase3a.ARTIFACT_FIRST_BUILT - timedelta(minutes=1), profile=FORWARD
         )
@@ -861,7 +981,7 @@ def test_the_same_zero_row_snapshot_is_a_real_answer_once_it_exists(
 
 def test_a_snapshot_with_no_listing_state_evidence_refuses() -> None:
     """ "We saw no listing states" is not the same finding as "nobody was listed"."""
-    with pytest.raises(Exception, match="REQUIRED_INPUT_UNAVAILABLE"):
+    with pytest.raises(RequiredInputUnavailableError, match="REQUIRED_INPUT_UNAVAILABLE"):
         build_snapshot_header(
             (),
             session_date=date(2019, 6, 27),
@@ -1085,7 +1205,7 @@ def test_an_idempotent_rewrite_still_verifies_the_content(tmp_path: Path) -> Non
     artifact = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
     artifact.path.write_bytes(gzip.compress(b'{"bars": []}', 9, mtime=0))
 
-    with pytest.raises(Exception, match="already holds different bytes"):
+    with pytest.raises(BronzeIntegrityError, match="already holds different bytes"):
         store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
 
 
@@ -1173,7 +1293,10 @@ def test_the_input_inventory_is_produced_by_the_query_path(tmp_path: Path) -> No
     )
     universe = reader.get_security_universe(as_of=phase3a.utc(2019, 6, 28, 12, 0), profile=PUBLIC)
 
-    assert priced.evidence.direct_source_datasets == ("price_bar",)
+    assert priced.evidence.direct_source_datasets == ("listing", "market_session", "price_bar"), (
+        "A price series is not only its bars: the grid completeness is measured against "
+        "comes from listing states and calendar rows, and both decide the answer."
+    )
     assert universe.evidence.direct_source_datasets == (), (
         "universe_membership is a derived artifact, not a source dataset. Recording it as one "
         "made the manifest demand provider-resolution evidence for a table nobody publishes "
@@ -1211,7 +1334,8 @@ def test_a_raw_series_does_not_record_corporate_actions(tmp_path: Path) -> None:
         revision_view=None,
     )
     evidence = executed.evidence
-    assert evidence.direct_source_datasets == ("price_bar",)
+    assert evidence.direct_source_datasets == ("listing", "market_session", "price_bar")
+    assert "corporate_action" not in evidence.direct_source_datasets
     assert evidence.revisable_datasets_consumed == ()
 
 
@@ -1232,7 +1356,12 @@ def test_an_adjusted_series_records_corporate_actions_and_a_revision_view(
         revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
     )
     evidence = executed.evidence
-    assert set(evidence.direct_source_datasets) == {"price_bar", "corporate_action"}
+    assert set(evidence.direct_source_datasets) == {
+        "corporate_action",
+        "listing",
+        "market_session",
+        "price_bar",
+    }, "The grid's inputs are read by an adjusted query too, not only by a raw one."
     assert evidence.revisable_datasets_consumed == ("corporate_action",)
     assert executed.result.provenance.revision_view is RevisionView.AS_KNOWN_AT_AS_OF
     query = executed.query
@@ -1514,9 +1643,10 @@ def test_a_verified_publication_cannot_be_edited_after_verification(
 ) -> None:
     """The seal covers the build, not only the hashes that describe it.
 
-    ``dataclasses.replace`` re-runs the seal check but carried the token through,
-    and a seal over the manifest, report and receipt hashes agreed with a dataset
-    whose rows had been removed -- because none of those hashes is about the rows.
+    A seal over the manifest, report and receipt hashes agreed with a dataset
+    whose rows had been removed, because none of those hashes is about the rows.
+    ``build_identity`` is, and it is re-derived here even when the seal itself has
+    been recomputed over the substituted build.
     """
     publication = phase3a.build_verified_synthetic_publication(LocalTableStore(tmp_path))
     dataset = publication.dataset
@@ -1528,6 +1658,6 @@ def test_a_verified_publication_cannot_be_edited_after_verification(
         ("dropped bar", dataclasses.replace(dataset, bars=dataset.bars[:-1])),
         ("dropped listing", dataclasses.replace(dataset, listings=dataset.listings[:-1])),
     ):
-        with pytest.raises(DatasetPublicationError, match="does not describe the artifacts"):
-            dataclasses.replace(publication, dataset=mutated)
         assert mutated.build_identity != dataset.build_identity, label
+        with pytest.raises(DatasetPublicationError, match="was run over build"):
+            _forge_publication(publication, dataset=mutated)

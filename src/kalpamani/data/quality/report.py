@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import StrEnum
 from types import MappingProxyType
 
 from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
@@ -91,6 +92,156 @@ class FindingRecord:
         )
 
 
+class TableCoverage(StrEnum):
+    """What a check actually did with one published table.
+
+    ``datasets_covered`` collapsed three different situations into one bit. A
+    table an implementation traversed and found full, a table it traversed and
+    found empty, and a table nothing opened at all are three different statements
+    about a published dataset, and only the first two are coverage.
+
+    The middle one is the reason this is not a Boolean. A zero-row table is not
+    automatically uncovered -- a check that walked it and found nothing did check
+    it -- but it must not be silently reported as though rows had been examined,
+    because "we looked and there was nothing" and "we looked at everything" read
+    identically in a report that only lists names.
+    """
+
+    EXAMINED_WITH_ROWS = "EXAMINED_WITH_ROWS"
+    EXAMINED_EMPTY = "EXAMINED_EMPTY"
+    GOVERNED_NOT_RUN = "GOVERNED_NOT_RUN"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QualityContextDescriptor:
+    """**What** a build was judged against, in full, not merely a hash of it.
+
+    A hash proves that two contexts differ. It does not tell an auditor what
+    either one was, and an auditor holding a published dataset cannot reconstruct
+    a minimum price, an approved bound derivation or a survivorship window from
+    sixty-four hex characters. Persisting only the hash made the standard
+    tamper-evident and unreadable at the same time -- which answers "was this
+    changed?" while leaving "what was it?" unanswerable.
+
+    Every field is caller-supplied and therefore worth recording: the thresholds
+    the checks measured with, the approvals that decided which bounds could
+    resolve an axis, the cutoffs each snapshot was evaluated at, and the runner,
+    plan and registry that produced the verdict.
+
+    Deep-frozen and canonical, so :meth:`identity` is stable and the value cannot
+    drift after a report has hashed it.
+    """
+
+    requested_profile: str
+    resolved_profile: str
+    global_profile_resolution: str
+    resolution_policy_version: str
+    #: ``(dataset, policy, reason)`` for every dataset, reasons included: two runs
+    #: that bounded one dataset for different stated reasons resolved it
+    #: differently and admitted different rows.
+    resolution_map: tuple[tuple[str, str, str], ...]
+    #: ``(dataset, public derivations, provider derivations, announcement
+    #: derivations)``. An unapproved bound cannot resolve an axis, so this decides
+    #: which rows exist at all.
+    approvals: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...]
+    #: ``(session, evaluation cutoff)``, normalised to UTC.
+    evaluation_cutoffs: tuple[tuple[str, str], ...]
+    universe_definition_version: str
+    universe_definition_hash: str
+    #: Every parameter of the rule, spelled out. The version is a name; these are
+    #: the thresholds, and a name that outlives a threshold change is why the hash
+    #: exists.
+    universe_definition_parameters: tuple[tuple[str, str], ...]
+    as_of: str
+    market_thresholds_version: str
+    market_thresholds: tuple[tuple[str, str], ...]
+    survivorship_policy_version: str
+    survivorship_policy: tuple[tuple[str, str], ...]
+    adjusted_artifacts: tuple[tuple[str, str], ...]
+    plan_version: str
+    runner_version: str
+    registry_identity: str
+    build_identity: str
+
+    def canonical(self) -> dict[str, object]:
+        """The exact form :meth:`identity` hashes and persistence writes."""
+        return {
+            "requested_profile": self.requested_profile,
+            "resolved_profile": self.resolved_profile,
+            "global_profile_resolution": self.global_profile_resolution,
+            "resolution_policy_version": self.resolution_policy_version,
+            "resolution_map": [list(entry) for entry in self.resolution_map],
+            "approvals": [
+                [dataset, list(public), list(provider), list(announcement)]
+                for dataset, public, provider, announcement in self.approvals
+            ],
+            "evaluation_cutoffs": [list(entry) for entry in self.evaluation_cutoffs],
+            "universe_definition_version": self.universe_definition_version,
+            "universe_definition_hash": self.universe_definition_hash,
+            "universe_definition_parameters": [
+                list(entry) for entry in self.universe_definition_parameters
+            ],
+            "as_of": self.as_of,
+            "market_thresholds_version": self.market_thresholds_version,
+            "market_thresholds": [list(entry) for entry in self.market_thresholds],
+            "survivorship_policy_version": self.survivorship_policy_version,
+            "survivorship_policy": [list(entry) for entry in self.survivorship_policy],
+            "adjusted_artifacts": [list(entry) for entry in self.adjusted_artifacts],
+            "plan_version": self.plan_version,
+            "runner_version": self.runner_version,
+            "registry_identity": self.registry_identity,
+            "build_identity": self.build_identity,
+        }
+
+    def identity(self) -> str:
+        """The ``quality_context_hash`` a report and a dataset manifest carry."""
+        return content_hash(self.canonical())
+
+
+def decode_quality_context(body: Mapping[str, object]) -> QualityContextDescriptor:
+    """Decode a persisted descriptor. The caller checks it against its hash."""
+
+    def pairs(key: str) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (str(entry[0]), str(entry[1]))
+            for entry in list(body[key])  # type: ignore[call-overload]
+        )
+
+    return QualityContextDescriptor(
+        requested_profile=str(body["requested_profile"]),
+        resolved_profile=str(body["resolved_profile"]),
+        global_profile_resolution=str(body["global_profile_resolution"]),
+        resolution_policy_version=str(body["resolution_policy_version"]),
+        resolution_map=tuple(
+            (str(entry[0]), str(entry[1]), str(entry[2]))
+            for entry in list(body["resolution_map"])  # type: ignore[call-overload]
+        ),
+        approvals=tuple(
+            (
+                str(entry[0]),
+                tuple(str(item) for item in entry[1]),
+                tuple(str(item) for item in entry[2]),
+                tuple(str(item) for item in entry[3]),
+            )
+            for entry in list(body["approvals"])  # type: ignore[call-overload]
+        ),
+        evaluation_cutoffs=pairs("evaluation_cutoffs"),
+        universe_definition_version=str(body["universe_definition_version"]),
+        universe_definition_hash=str(body["universe_definition_hash"]),
+        universe_definition_parameters=pairs("universe_definition_parameters"),
+        as_of=str(body["as_of"]),
+        market_thresholds_version=str(body["market_thresholds_version"]),
+        market_thresholds=pairs("market_thresholds"),
+        survivorship_policy_version=str(body["survivorship_policy_version"]),
+        survivorship_policy=pairs("survivorship_policy"),
+        adjusted_artifacts=pairs("adjusted_artifacts"),
+        plan_version=str(body["plan_version"]),
+        runner_version=str(body["runner_version"]),
+        registry_identity=str(body["registry_identity"]),
+        build_identity=str(body["build_identity"]),
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class QualityReport:
     """What the checks did, for one build, before it was published.
@@ -118,6 +269,10 @@ class QualityReport:
     #: evidence, and the standard a build passed was unrecoverable from the
     #: evidence that it passed.
     quality_context_hash: str
+    #: The standard itself, readable. ``quality_context_hash`` is its identity, and
+    #: an identity alone cannot be audited: it says a threshold did not change
+    #: without ever saying what the threshold was.
+    quality_context: QualityContextDescriptor
     #: The runner that produced this report.
     runner_version: str
     #: The check implementations actually invoked, and the governed reason each
@@ -126,6 +281,10 @@ class QualityReport:
     #: implementation applied rather than because nothing exists.
     implementations_invoked: tuple[str, ...] = ()
     implementations_not_run: tuple[tuple[str, str], ...] = ()
+    #: ``(entity, TableCoverage)`` for every published table, plus the governed
+    #: reason where nothing ran. ``datasets_covered`` is a list of names and says
+    #: nothing about whether a named table had rows in it.
+    table_coverage: tuple[tuple[str, str, str], ...] = ()
     policy_versions: Mapping[str, str]
     checks_run: tuple[str, ...]
     checks_not_run: tuple[CheckNotRun, ...]
@@ -145,6 +304,23 @@ class QualityReport:
             self, "policy_versions", MappingProxyType(dict(sorted(self.policy_versions.items())))
         )
         object.__setattr__(self, "produced_at", normalize_instant(self.produced_at))
+        examined = {
+            entity
+            for entity, state, _ in self.table_coverage
+            if state != TableCoverage.GOVERNED_NOT_RUN.value
+        }
+        # Compared over the entities the per-table evidence speaks about. The
+        # coverage list also names ``run``, which is the run itself rather than a
+        # table, and a symmetric difference over that would fault every report.
+        described = {entity for entity, _, _ in self.table_coverage}
+        listed = set(self.datasets_covered) & described
+        if self.table_coverage and examined != listed:
+            missing = sorted(listed ^ examined)
+            raise QualityGateError(
+                f"The report's coverage list and its per-table evidence disagree about "
+                f"{missing}. One of them is a summary of the other, so a disagreement means "
+                "the summary is not describing this run."
+            )
         if not self.checks_run:
             raise QualityGateError(
                 "A quality report that ran no checks is not evidence of quality. If nothing "
@@ -182,12 +358,17 @@ class QualityReport:
             {
                 "plan_version": self.plan_version,
                 "subject_build_identity": self.subject_build_identity,
+                # The whole descriptor, not only its identity. Hashing the hash
+                # would bind the standard only as strongly as a value a caller
+                # could have written; hashing the canonical form binds the thing.
+                "quality_context": self.quality_context.canonical(),
                 "quality_context_hash": self.quality_context_hash,
                 "runner_version": self.runner_version,
                 "implementations_invoked": sorted(self.implementations_invoked),
                 "implementations_not_run": sorted(
                     list(entry) for entry in self.implementations_not_run
                 ),
+                "table_coverage": sorted(list(entry) for entry in self.table_coverage),
                 "policy_versions": dict(self.policy_versions),
                 "checks_run": sorted(self.checks_run),
                 "checks_not_run": sorted(
@@ -231,10 +412,11 @@ def report_from_findings(
     *,
     plan_version: str,
     subject_build_identity: str,
-    quality_context_hash: str,
+    quality_context: QualityContextDescriptor,
     runner_version: str,
     implementations_invoked: Sequence[str] = (),
     implementations_not_run: Sequence[tuple[str, str]] = (),
+    table_coverage: Sequence[tuple[str, str, str]] = (),
     policy_versions: Mapping[str, str],
     checks_run: Sequence[str],
     checks_not_run: Sequence[CheckNotRun] = (),
@@ -252,10 +434,12 @@ def report_from_findings(
     return QualityReport(
         plan_version=plan_version,
         subject_build_identity=subject_build_identity,
-        quality_context_hash=quality_context_hash,
+        quality_context=quality_context,
+        quality_context_hash=quality_context.identity(),
         runner_version=runner_version,
         implementations_invoked=tuple(implementations_invoked),
         implementations_not_run=tuple(implementations_not_run),
+        table_coverage=tuple(table_coverage),
         policy_versions=dict(policy_versions),
         checks_run=tuple(sorted(set(checks_run))),
         checks_not_run=tuple(checks_not_run),
@@ -272,10 +456,12 @@ def encode_quality_report(report: QualityReport) -> dict[str, object]:
     return {
         "plan_version": report.plan_version,
         "subject_build_identity": report.subject_build_identity,
+        "quality_context": report.quality_context.canonical(),
         "quality_context_hash": report.quality_context_hash,
         "runner_version": report.runner_version,
         "implementations_invoked": list(report.implementations_invoked),
         "implementations_not_run": [list(entry) for entry in report.implementations_not_run],
+        "table_coverage": [list(entry) for entry in report.table_coverage],
         "policy_versions": dict(report.policy_versions),
         "checks_run": list(report.checks_run),
         "checks_not_run": [
@@ -318,9 +504,18 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
         )
         for row in list(body["findings"])  # type: ignore[call-overload]
     )
+    descriptor = decode_quality_context(dict(body["quality_context"]))  # type: ignore[call-overload]
+    recorded_context = str(body["quality_context_hash"])
+    if descriptor.identity() != recorded_context:
+        raise QualityGateError(
+            f"The persisted quality context does not reconcile with its own hash (recorded "
+            f"{recorded_context}, recomputed {descriptor.identity()}). A standard that can be "
+            "edited after the build was judged against it is not a standard."
+        )
     report = QualityReport(
         plan_version=str(body["plan_version"]),
         subject_build_identity=str(body["subject_build_identity"]),
+        quality_context=descriptor,
         quality_context_hash=str(body["quality_context_hash"]),
         runner_version=str(body["runner_version"]),
         implementations_invoked=tuple(
@@ -330,6 +525,10 @@ def decode_quality_report(body: Mapping[str, object]) -> QualityReport:
         implementations_not_run=tuple(
             (str(entry[0]), str(entry[1]))
             for entry in list(body["implementations_not_run"])  # type: ignore[call-overload]
+        ),
+        table_coverage=tuple(
+            (str(entry[0]), str(entry[1]), str(entry[2]))
+            for entry in list(body["table_coverage"])  # type: ignore[call-overload]
         ),
         policy_versions={
             str(key): str(value)
@@ -369,7 +568,10 @@ def report_file_hash(report: QualityReport) -> str:
 __all__ = [
     "CheckNotRun",
     "FindingRecord",
+    "QualityContextDescriptor",
     "QualityReport",
+    "TableCoverage",
+    "decode_quality_context",
     "decode_quality_report",
     "encode_quality_report",
     "report_file_hash",
