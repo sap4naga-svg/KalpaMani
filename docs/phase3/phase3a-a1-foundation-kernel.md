@@ -397,6 +397,32 @@ the stored-shape check was handed whole encoded rows rather than their envelopes
 profile-service check was handed every stored row rather than the servable ones. The third is a
 real gap in the reference fixture, reported as two warnings (limitation 14).
 
+### What adversarial review of this round then found
+
+Each closure above was handed to an independent reviewer instructed to break it. Twenty-six
+candidate holes were reported and **seventeen confirmed real**. All are fixed; none is
+outstanding. They fall into three groups, and the pattern is worth stating because it is the same
+one every round: a check that measures a claim against something *adjacent* to it.
+
+**Half a question is not a question.** Coverage checked that every expected endpoint had a bar and
+never that every bar was expected, so deleting one calendar row -- or flagging it a holiday --
+shrank the grid past a genuine gap and a refusing query began returning a hole in the middle.
+Listing rows were the one input never filtered point-in-time, so a delisting published in 2020
+decided which sessions a 2019 query expected. And ``withheld_endpoints`` documented an invariant
+the code did not enforce.
+
+**A seal over descriptions is not a seal over the thing.** ``VerifiedPublication`` sealed the
+manifest, report and receipt hashes -- none of which is about the rows -- so ``dataclasses.replace``
+carried a genuine seal onto a dataset whose rows had been removed. The quality report proved the
+checks ran and not what they ran over, so a clean build's report published a defective build.
+``build_identity`` now covers the source and membership rows themselves.
+
+**A gate that takes its own standard from the caller is not a gate.** Publication accepted the
+caller's ``QualityPlan``; the runner accepted a caller's registry; the rebuild check skipped
+sessions the caller did not declare a cutoff for; the manifest compared consumed artifacts by id
+while every field that makes one reproducible went unchecked; and findings whose id no planned
+check owned were silently dropped.
+
 ## 13. Evidence closure applied in revision 4
 
 Revision 3's enforcement was real, but several checks compared a claim to something *adjacent* to
@@ -459,7 +485,7 @@ anyone can mutate after its hash was taken.
 ## 16. Verification
 
 ```
-pytest                        908 passed   (440 pre-existing, 468 new)
+pytest                        932 passed   (440 pre-existing, 492 new)
 ruff check .                  clean
 ruff format --check .         clean
 mypy                          clean, strict, 88 files
