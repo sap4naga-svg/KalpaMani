@@ -1,16 +1,49 @@
 # Phase 3A — A1 point-in-time foundation kernel
 
-## STATUS: **IN REVIEW — NOT ACCEPTED, NOT COMPLETE**
+## STATUS: **ACCEPTED (2026-08-27) — PHASE 3 STILL NOT COMPLETE**
 
 | | |
 |---|---|
-| **Phase 3A A1 foundation implementation** | **IN REVIEW** |
+| **Phase 3A A1 foundation kernel** | **ACCEPTED** — revision 10, PR #7 |
+| **Phase 3 planning** | **ACCEPTED / MERGED** |
 | **Phase 3 overall** | **NOT COMPLETE** |
+| **Phase 3A A2 / A3** | **NOT STARTED / NOT AUTHORIZED** |
+| **Phase 3B / 3C / 3D** | **NOT STARTED / NOT AUTHORIZED** |
 | [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md) | **PROPOSED** |
+| **G1–G5 decision gates** | **OPEN** |
 | Provider purchase / trial / credentials | **NOT AUTHORIZED** |
-| External data acquisition | **NOT STARTED** |
+| Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
-| Phase 3B / 3C / 3D | **NOT AUTHORIZED** |
+| Strategies / Brain / AI / portfolio / risk | **NOT IMPLEMENTED / NOT AUTHORIZED** |
+| Live trading | **HARD-DISABLED** |
+| Blueprint V3.0 | **PROPOSED — untracked, unstaged, not authority** |
+| ADR-0006 | **DOES NOT EXIST** |
+
+### What acceptance does and does not mean
+
+Accepted after ten reviewed revisions, on the accepted implementation commit
+`6d33b11e52a875964c5b78b2f77685f4a73b7f45`. What that acceptance covers, stated so it cannot
+be read wider later:
+
+- A1 proves the **vendor-neutral point-in-time mechanism** using repository-owned **synthetic**
+  data.
+- **A1 is not provider qualification.** Provider tests **P1–P9 remain unrun**, and cannot be run
+  without a provider that has not been selected.
+- **No real provider satisfies the contract merely because A1 passed.** Nothing here is
+  production evidence.
+- **Merging A1 grants no authority for A2, A3, Phase 3B, 3C or 3D.**
+- **Blueprint V3.0 remains PROPOSED and is not repository authority.** The proposed PDF is
+  deliberately untracked and unstaged, and **ADR-0006 does not exist**. V3 adoption requires a
+  separate documentation-only branch, pull request and owner authorization after this merge.
+
+### Non-blocking follow-ups carried forward
+
+Neither blocks acceptance, and neither is authorization to begin work:
+
+- **`TradeRecord.orders` deep immutability** is a separately governed **Phase-2 hardening**
+  matter, outside the A1 data-kernel scope.
+- **Future provider qualification may expose additional contract requirements.** Such a
+  requirement creates a **new reviewed version** rather than rewriting A1's evidence.
 
 This document records what the A1 slice built, and — more usefully — what it did not. The
 boundary in §2–§3 was written *before* the code, so it is a commitment rather than a description

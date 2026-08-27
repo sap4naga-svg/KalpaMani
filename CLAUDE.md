@@ -242,6 +242,8 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 
 **PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
+**PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
+**PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
 
@@ -329,23 +331,32 @@ fundamentals, earnings, estimates or borrow; database schema, dashboard, alertin
 data purchases; production cloud infrastructure; options; leverage; X/social signals. Live
 trading remains **hard-disabled**.
 
-### Next phase
+### Current phase state
 
 **PHASE 3 — POINT-IN-TIME DATA FOUNDATION.**
 
 | | |
 |---|---|
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
-| **PHASE 3A — A1 FOUNDATION KERNEL** | **IN REVIEW — NOT ACCEPTED** |
-| **PHASE 3 IMPLEMENTATION, ALL ELSE** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
+| **PHASE 3 OVERALL** | **NOT COMPLETE** |
+| **PHASE 3A — A2 / A3** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3B** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
 | **ADR-0005** | **PROPOSED** |
+| **G1–G5** | **OPEN** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
+| **Real external-data acquisition** | **NOT STARTED** |
+| **Short research** | **NOT AUTHORIZED** |
+| **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** |
+| **Live trading** | **HARD-DISABLED** |
 
 The planning package is accepted and lives in
 [`docs/phase3/`](docs/phase3/phase3-pit-data-foundation-charter.md), with
 [ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
 
-### A1 — the one authorized implementation slice
+### A1 — accepted, and what acceptance means
 
 [`docs/phase3/phase3a-a1-foundation-kernel.md`](docs/phase3/phase3a-a1-foundation-kernel.md)
 records what it built and what it deliberately did not. It is **vendor-neutral**: the merged
@@ -358,11 +369,13 @@ no provider connected   ·   no production data   ·   no short research
 no Phase 3B / 3C / 3D authority   ·   no G1-G5 resolved   ·   ADR-0005 still PROPOSED
 ```
 
-**No synthetic result in that slice is vendor qualification or production evidence.** Provider
-tests P1–P9 remain unrun, and cannot be run without a provider that has not been selected.
+**A1 proves the vendor-neutral point-in-time mechanism using repository-owned synthetic
+data. It is not provider qualification.** Provider tests P1–P9 remain **unrun**, and cannot be
+run without a provider that has not been selected. **No real provider satisfies the contract
+merely because A1 passed**, and no synthetic result in the slice is production evidence.
 
-**Phase 3 itself is not complete, A1 is not accepted, and merging the plan granted no
-implementation authority.** The proposed architecture and provider selections remain subject to
+**Merging A1 grants no authority for A2, A3, Phase 3B, 3C or 3D.** Phase 3 itself is **not
+complete**. The proposed architecture and provider selections remain subject to
 ADR-0005's five open decision gates —
 
 > G1 provider selection · G2 production information-set profile · G3 vendor licensing ·
@@ -370,3 +383,17 @@ ADR-0005's five open decision gates —
 
 No provider has been purchased, trialled or credentialed. No external data has been acquired.
 Beginning any further implementation requires explicit written authorization, per §8.
+
+**Blueprint V3.0 remains PROPOSED and is not repository authority.** The proposed PDF is
+deliberately **untracked and unstaged**; the authority order in §2 is unchanged, and
+**ADR-0006 does not exist**. Adopting V3 requires a separate documentation-only branch, pull
+request and owner authorization.
+
+### Non-blocking follow-ups carried forward
+
+Neither blocks A1 acceptance, and neither is authorization to begin work:
+
+- `TradeRecord.orders` deep immutability is a separately governed **Phase-2 hardening** matter,
+  outside the A1 data-kernel scope.
+- Future provider qualification may expose additional contract requirements. Such a requirement
+  creates a **new reviewed version** — it does not rewrite A1's evidence.
