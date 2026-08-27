@@ -156,7 +156,7 @@ KalpaMani/
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
 │   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
-│   ├── data/                 Market data + fundamentals ingestion             [empty — Phase 3 planning accepted, implementation not authorized]
+│   ├── data/                 Point-in-time data platform                      [Phase 3 planning accepted; A1 kernel ACCEPTED on synthetic fixtures only]
 │   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
@@ -259,27 +259,60 @@ partial fills, multiple fill accumulation, a stop actually triggering, short lif
 multiple simultaneous positions, pyramiding, strategy generation, alpha or profitability,
 live brokerage execution, real-money operation.
 
-## Next planned phase
+## Current phase
 
 **PHASE 3 — POINT-IN-TIME DATA FOUNDATION**
 
 | | |
 |---|---|
 | Planning | **ACCEPTED / MERGED** |
-| Implementation | **NOT STARTED / NOT AUTHORIZED** |
+| Stage 3A A1 — point-in-time foundation kernel | **ACCEPTED (2026-08-27)** |
+| Phase 3 overall | **NOT COMPLETE** |
+| Stage 3A A2 / A3 | **NOT STARTED / NOT AUTHORIZED** |
+| Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
+| G1–G5 decision gates | **OPEN** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
+| Real external-data acquisition | **NOT STARTED** |
+| Short research | **NOT AUTHORIZED** |
+| Strategies / Brain / AI / portfolio / risk | **NOT IMPLEMENTED / NOT AUTHORIZED** |
+| Live trading | **HARD-DISABLED** |
 
 The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
 [ADR-0005](docs/decisions/ADR-0005-point-in-time-data-architecture.md).
 
-**The planning package is accepted; Phase 3 is not complete.** Its proposed architecture and
-provider decisions remain subject to ADR-0005's five open gates — provider selection, the
-production information-set profile, vendor licensing, the analyst-estimate gap, and
-borrow-history qualification. **No implementation authority follows from merging the plan.** No
-data provider has been purchased, trialled or credentialed, and no ingestion code exists.
+**One implementation slice is accepted: the vendor-neutral A1 foundation kernel** — [docs/phase3/phase3a-a1-foundation-kernel.md](docs/phase3/phase3a-a1-foundation-kernel.md).
+It implements the merged point-in-time contract as executable, type-checked Python and proves it
+against **repository-owned synthetic fixtures**. That is a proof the contract can be *mechanised*,
+which is a different claim from proving that anyone's data satisfies it.
 
-Beginning implementation requires explicit written authorization.
+**A1 is not provider qualification.** Provider tests P1–P9 remain **unrun**, and no real provider
+satisfies the contract merely because A1 passed. **Merging A1 grants no authority for A2, A3,
+Phase 3B, 3C or 3D.**
+
+> **No provider is connected. No production data exists. No short research is authorized.**
+> The A1 slice adds no runtime dependency, makes no network call, and touches no brokerage.
+> Nothing in it is vendor qualification or production evidence.
+
+**Phase 3 planning is accepted; implementation beyond the A1 kernel is NOT AUTHORIZED.**
+
+**Phase 3 is not complete.** The proposed architecture and provider decisions remain subject to
+ADR-0005's five open gates — provider selection, the production information-set profile,
+vendor licensing, the analyst-estimate gap, and borrow-history qualification. None is resolved
+by this slice.
+
+Phase 3B, 3C and 3D carry no authority from it, and beginning any of them requires explicit
+written authorization.
+
+**Blueprint V3.0 remains PROPOSED and is not repository authority.** The proposed PDF is
+untracked and unstaged, the authority order below is unchanged, and **ADR-0006 does not exist**.
+Adopting V3 requires a separate documentation-only branch, pull request and owner
+authorization.
+
+Two non-blocking follow-ups are carried forward, neither of which is authorization to begin
+work: `TradeRecord.orders` deep immutability is a separately governed **Phase-2 hardening**
+matter; and future provider qualification may expose additional contract requirements, which
+would create a **new reviewed version** rather than rewrite A1's evidence.
 
 ---
 

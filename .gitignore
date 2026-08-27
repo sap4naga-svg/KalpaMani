@@ -128,6 +128,22 @@ research_output/
 # committed. Verified with `git check-ignore .runtime`.
 .runtime/
 
+# --- Phase 3 data platform (NEVER tracked) --------------------------------
+# The point-in-time data platform writes only under .runtime/, which is already
+# ignored above. These entries are explicit rather than inherited, because a
+# vendor payload committed to a PUBLIC repository is both a licence breach and,
+# as INC-0002 established, not undone by a force-push.
+#
+# Repository-owned SYNTHETIC fixtures under tests/ are deliberately NOT matched:
+# they are legible, hand-authored, fictitious, and must stay reviewable.
+.runtime/data/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp/
+.runtime/**/*.parquet
+.runtime/**/*.jsonl
+.runtime/**/*.json.gz
+
 # --- Original blueprint source drop ---------------------------------------
 # The authoritative copy is committed at docs/architecture/KalpaMani_Blueprint_V2_1.pdf
 # and is byte-identical (verified by SHA-256). The original drop is preserved on

@@ -1,0 +1,579 @@
+"""The quality plan is executed, not declared.
+
+A versioned plan made the report closed. What it could not do is establish that
+anything happened: ``checks_run`` was a tuple of strings a caller supplied, so a
+caller who wrote out every check id satisfied the plan completely without a
+single check having been invoked. That is the failure the plan itself was built
+to close, one level up.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from fixtures import phase3a
+from kalpamani.data.contracts.dataset import GoldDataset
+from kalpamani.data.contracts.errors import QualityGateError
+from kalpamani.data.contracts.vocabulary import InformationSetProfile, QualitySeverity
+from kalpamani.data.curate.build import build_gold_dataset
+from kalpamani.data.curate.publication import publish_gold_dataset
+from kalpamani.data.curate.resolution_run import resolve_run_inputs
+from kalpamani.data.quality.checks import QualityFinding
+from kalpamani.data.quality.plan import (
+    PHASE3A_QUALITY_PLAN,
+    CheckRequirement,
+    PlannedCheck,
+    QualityPlan,
+)
+from kalpamani.data.quality.report import CheckNotRun, report_from_findings
+from kalpamani.data.quality.runner import (
+    CHECK_REGISTRY,
+    QUALITY_RUNNER_VERSION,
+    QualityContext,
+    RunnerOutcome,
+    run_quality_plan,
+)
+from kalpamani.data.storage import LocalTableStore
+
+pytestmark = pytest.mark.unit
+
+PUBLIC = InformationSetProfile.PUBLIC_PIT
+
+
+def _subject() -> str:
+    """The identity of the reference build a hand-written report claims to describe."""
+    return phase3a.gold_dataset().build_identity
+
+
+_SUBJECT = _subject()
+
+
+def _context(**overrides: object) -> QualityContext:
+    dataset = phase3a.gold_dataset()
+    base = phase3a.quality_context(dataset)
+    return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
+
+
+def _run(**kwargs: object) -> object:
+    return run_quality_plan(
+        _context(),
+        policy_versions={"lag": phase3a.LAG_POLICY_VERSION},
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+# ---------------------------------------------------------------------------
+# checks_run comes from invocation
+# ---------------------------------------------------------------------------
+
+
+def test_the_complete_synthetic_plan_runs_end_to_end() -> None:
+    """NEGATIVE CONTROL. Every REQUIRED check is invoked and the report is publishable."""
+    outcome = _run()
+    report = outcome.report  # type: ignore[attr-defined]
+    required = {
+        check.check_id
+        for check in PHASE3A_QUALITY_PLAN.checks
+        if check.requirement is CheckRequirement.REQUIRED
+    }
+    assert required <= set(report.checks_run)
+    assert report.passed
+    assert report.runner_version == QUALITY_RUNNER_VERSION
+    assert outcome.sealed  # type: ignore[attr-defined]
+
+
+def test_a_registered_check_is_observably_invoked() -> None:
+    """Not "the id appeared in a list" -- the function was called."""
+    calls: list[str] = []
+
+    def counting(context: QualityContext) -> list[object]:
+        calls.append(context.dataset.dataset_version)
+        return []
+
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(
+        registry["ticker_history"],
+        invoke=counting,  # type: ignore[arg-type]
+    )
+    outcome = _run(registry=registry)
+    assert calls == [phase3a.DATASET_VERSION], (
+        "The implementation ran exactly once, and the counter proves it rather than the "
+        "report's own account of itself."
+    )
+    assert "ticker_history" in outcome.invoked  # type: ignore[attr-defined]
+
+
+def test_checks_not_run_come_only_from_a_computed_applicability_decision() -> None:
+    """A skip is the runner's finding about what it was handed, never a request.
+
+    The distinction the reason has to carry: ``adjusted_artifacts`` is a field of
+    the quality **context**, not of the ``GoldDataset``, so its absence is a
+    caller's choice. Calling that "computed from the build" put the one decision
+    that switches the artifact replay off beyond the reader's view.
+    """
+    outcome = _run()
+    report = outcome.report  # type: ignore[attr-defined]
+    skipped = {item.check_name: item.reason for item in report.checks_not_run}
+    assert "4.5_adjusted_artifacts" in skipped
+    assert "no adjusted bar artifacts were supplied" in skipped["4.5_adjusted_artifacts"]
+    assert "a caller's choice" in skipped["4.5_adjusted_artifacts"], (
+        "The reason says whose decision it was, rather than dressing it as the build's."
+    )
+    assert "7_cross_provider_reconciliation" in skipped
+    assert skipped["7_cross_provider_reconciliation"].strip()
+
+
+def test_the_conditional_cross_provider_check_records_a_governed_reason() -> None:
+    """It cannot run: reconciliation needs a second independently licensed source."""
+    outcome = _run()
+    report = outcome.report  # type: ignore[attr-defined]
+    (entry,) = [
+        item
+        for item in report.checks_not_run
+        if item.check_name == "7_cross_provider_reconciliation"
+    ]
+    assert "no implementation exists in this slice" in entry.reason
+    planned = PHASE3A_QUALITY_PLAN.check("7_cross_provider_reconciliation")
+    assert planned is not None
+    assert planned.requirement is CheckRequirement.CONDITIONAL
+
+
+def test_an_adjusted_artifact_makes_its_check_applicable() -> None:
+    """The applicability decision follows the build, not a preference."""
+    without = _run()
+    assert "adjusted_artifact_hash" not in without.invoked  # type: ignore[attr-defined]
+
+    artifact = phase3a.adjusted_artifact()
+    outcome = run_quality_plan(
+        _context(adjusted_artifacts=(artifact,)),
+        policy_versions={"lag": phase3a.LAG_POLICY_VERSION},
+    )
+    assert "adjusted_artifact_hash" in outcome.invoked
+    assert "4.5_adjusted_artifacts" in outcome.report.checks_run
+
+
+# ---------------------------------------------------------------------------
+# a plan that cannot be run is a refusal
+# ---------------------------------------------------------------------------
+
+
+def test_a_required_check_with_no_registered_implementation_refuses() -> None:
+    """Finding that out at publication beats finding out it never ran."""
+    registry = {key: value for key, value in CHECK_REGISTRY.items() if key != "ticker_history"}
+    with pytest.raises(QualityGateError, match="which this runner does not have"):
+        _run(registry=registry)
+
+
+def test_a_plan_marking_a_check_required_with_no_implementation_is_refused() -> None:
+    """A required check nothing implements can only ever be declared."""
+    with pytest.raises(QualityGateError, match="names no implementation"):
+        QualityPlan(
+            plan_version="test/unimplementable.1",
+            required_policy_version_keys=(),
+            checks=(
+                PlannedCheck(
+                    check_id="1_something",
+                    requirement=CheckRequirement.REQUIRED,
+                    applies_to=("price_bar",),
+                    finding_ids=(),
+                    implementations=(),
+                ),
+            ),
+        )
+
+
+def test_a_required_check_whose_implementation_does_not_apply_refuses() -> None:
+    """Recording it as not-run would say, accurately, that the build was unchecked."""
+
+    def never(context: QualityContext) -> str | None:
+        return "declared inapplicable for this test"
+
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(registry["ticker_history"], applicable=never)
+    with pytest.raises(QualityGateError, match="REQUIRED, and the runner could not invoke"):
+        _run(registry=registry)
+
+
+# ---------------------------------------------------------------------------
+# publication accepts only what was run
+# ---------------------------------------------------------------------------
+
+
+def _forge(outcome: object, **overrides: object) -> object:
+    """Build a tampered outcome the way an attacker with source access would.
+
+    Reaching for the module-private token deliberately: the point of these tests
+    is what publication does when an outcome is *wrong*, and the point of the seal
+    is that nothing outside the module can get here. If this stops working, the
+    seal got stronger, not weaker.
+    """
+    from kalpamani.data.quality import runner as runner_module
+
+    fields = {
+        "report": outcome.report,  # type: ignore[attr-defined]
+        "invoked": outcome.invoked,  # type: ignore[attr-defined]
+        "skipped": outcome.skipped,  # type: ignore[attr-defined]
+        "plan_version": outcome.plan_version,  # type: ignore[attr-defined]
+        "runner_version": outcome.runner_version,  # type: ignore[attr-defined]
+        "quality_context_hash": outcome.quality_context_hash,  # type: ignore[attr-defined]
+        "registry_identity": outcome.registry_identity,  # type: ignore[attr-defined]
+        "sealed": outcome.sealed,  # type: ignore[attr-defined]
+    }
+    fields.update(overrides)
+    return RunnerOutcome(**fields, token=runner_module._RUNNER_TOKEN)
+
+
+def _publish(store: LocalTableStore, dataset: object, outcome: object) -> object:
+    return publish_gold_dataset(
+        store,
+        dataset,  # type: ignore[arg-type]
+        quality=outcome,  # type: ignore[arg-type]
+        quality_plan=PHASE3A_QUALITY_PLAN,
+        code_commit_sha=phase3a.CODE_COMMIT_SHA,
+        lag_policy_version=phase3a.LAG_POLICY_VERSION,
+        universe_definition_version=phase3a.UNIVERSE_DEFINITION_VERSION,
+    )
+
+
+def test_a_report_claiming_every_check_ran_cannot_be_offered_at_all(
+    tmp_path: Path,
+) -> None:
+    """The exact evidence the runner exists to make impossible.
+
+    Plan-perfect: every expected check accounted for, nothing duplicated, every
+    table covered, every policy version present, no findings. It satisfies the
+    plan completely, and not one check was invoked.
+
+    It used to be refused at publication by a token in the report. Now it cannot
+    be offered: publication takes a sealed outcome, and there is no route to one
+    that does not run the checks.
+    """
+    claimed = report_from_findings(
+        (),
+        plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
+        quality_context=phase3a.quality_context_descriptor(),
+        runner_version=QUALITY_RUNNER_VERSION,
+        policy_versions={
+            "lag": phase3a.LAG_POLICY_VERSION,
+            "market": "market-checks/a1.1",
+            "survivorship": "survivorship/a1.1",
+        },
+        checks_run=tuple(
+            check.check_id
+            for check in PHASE3A_QUALITY_PLAN.checks
+            if check.requirement is CheckRequirement.REQUIRED
+        ),
+        checks_not_run=tuple(
+            CheckNotRun(check_name=check.check_id, reason="not in this slice")
+            for check in PHASE3A_QUALITY_PLAN.checks
+            if check.requirement is CheckRequirement.CONDITIONAL
+        ),
+        datasets_covered=phase3a.QUALITY_COVERAGE,
+        produced_at=phase3a.BUILD_TIME,
+    )
+    assert (
+        PHASE3A_QUALITY_PLAN.disagreements(claimed, published_tables=phase3a.QUALITY_COVERAGE) == []
+    ), "It satisfies the plan completely, which is exactly the problem."
+
+    with pytest.raises(QualityGateError, match="only be produced by running the quality plan"):
+        RunnerOutcome(
+            report=claimed,
+            invoked=(),
+            skipped=(),
+            plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+            runner_version=QUALITY_RUNNER_VERSION,
+            quality_context_hash="whatever-i-say-it-is",
+            registry_identity="",
+            sealed=True,
+            token=object(),
+        )
+
+    with pytest.raises(QualityGateError, match="where a sealed RunnerOutcome is required"):
+        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), claimed)
+
+
+def test_the_outcomes_seal_is_not_a_copyable_field(tmp_path: Path) -> None:
+    """The provenance token lived in a public dataclass field, and replace copies.
+
+    ``dataclasses.replace(fabricated, produced_by=real.produced_by)`` produced a
+    report indistinguishable from a run. The outcome is not a dataclass and holds
+    no such field, so the same move has nothing to take.
+    """
+    real = phase3a.quality_outcome()
+    assert not dataclasses.is_dataclass(real)
+    with pytest.raises(TypeError):
+        dataclasses.replace(real)  # type: ignore[type-var]
+    with pytest.raises(AttributeError):
+        real._report = phase3a.quality_report()
+
+
+def test_a_report_swapped_into_an_outcome_is_refused(tmp_path: Path) -> None:
+    """The outcome records what the run measured against; the report records it too.
+
+    Two copies of one fact, deliberately: if a report is substituted for another
+    real report, the pair stops agreeing and publication has something to compare.
+    """
+    dataset = phase3a.gold_dataset()
+    real = phase3a.quality_outcome(dataset)
+    foreign = dataclasses.replace(real.report, quality_context_hash="a-different-standard")
+    forged = _forge(real, report=foreign)
+    with pytest.raises(QualityGateError, match="records context"):
+        _publish(LocalTableStore(tmp_path), dataset, forged)
+
+
+def test_a_runner_produced_report_publishes(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL for the refusal above."""
+    dataset = phase3a.gold_dataset()
+    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_outcome(dataset))
+
+
+def test_the_plan_is_checked_before_the_provenance(tmp_path: Path) -> None:
+    """A wrong report fails for being wrong, not for where it came from.
+
+    The type check necessarily comes first -- there is no report to judge until
+    there is an outcome to take one from -- so the ordering claim is made where it
+    still means something: a genuine outcome carrying a report that fails the plan
+    fails on the plan, not on the substitution.
+    """
+    thin = report_from_findings(
+        (),
+        plan_version=PHASE3A_QUALITY_PLAN.plan_version,
+        subject_build_identity=_SUBJECT,
+        quality_context=phase3a.quality_context_descriptor(),
+        runner_version=QUALITY_RUNNER_VERSION,
+        policy_versions={"lag": "x", "market": "y", "survivorship": "z"},
+        checks_run=("5_market_data",),
+        datasets_covered=phase3a.QUALITY_COVERAGE,
+        produced_at=phase3a.BUILD_TIME,
+    )
+    forged = _forge(phase3a.quality_outcome(), report=thin)
+    with pytest.raises(QualityGateError, match="the plan expects checks"):
+        _publish(LocalTableStore(tmp_path), phase3a.gold_dataset(), forged)
+
+
+# ---------------------------------------------------------------------------
+# findings come from the implementations that ran
+# ---------------------------------------------------------------------------
+
+
+def test_a_finding_from_a_check_that_did_not_run_never_reaches_the_report() -> None:
+    """The runner routes findings by id, so an unrun check contributes none.
+
+    A hand-built report could put one there; the plan refuses that. What this
+    establishes is the other direction: the runner cannot produce such a report
+    even if an implementation misbehaves, because a check the runner did not
+    invoke contributes nothing to its own entry.
+    """
+    outcome = _run()
+    report = outcome.report  # type: ignore[attr-defined]
+    ran = set(report.checks_run)
+    for finding in report.findings:
+        owner = PHASE3A_QUALITY_PLAN.owner_of(finding.check_name)
+        assert owner is not None, finding.check_name
+        assert owner.check_id in ran
+
+
+def test_the_runner_finds_a_real_defect_nobody_told_it_about() -> None:
+    """The whole point: evidence produced by looking, not by being informed."""
+    resolved = resolve_run_inputs(
+        phase3a.datasets_with_a_blocking_defect(),
+        config=phase3a.resolution(),
+        approvals=phase3a.approvals(),
+    )
+    dataset = build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )
+    report = phase3a.quality_report(dataset)
+    assert any(
+        finding.check_name == "5.2_non_positive_price_or_negative_volume"
+        for finding in report.blocking
+    )
+    assert not report.passed
+
+
+def test_the_universe_rebuild_check_actually_rebuilds() -> None:
+    """Taking the rebuilt hash from a caller would make drift detection a formality."""
+    outcome = _run()
+    assert "universe_rebuild" in outcome.invoked  # type: ignore[attr-defined]
+    report = outcome.report  # type: ignore[attr-defined]
+    assert not any(
+        finding.check_name == "6.5_universe_rebuild_drift" for finding in report.findings
+    ), "The reference build rebuilds identically, which is what the check is for."
+
+
+def test_every_registered_implementation_is_named_by_the_plan() -> None:
+    """An implementation nothing plans is an implementation nothing runs."""
+    planned = {
+        implementation_id
+        for check in PHASE3A_QUALITY_PLAN.checks
+        for implementation_id in check.implementations
+    }
+    assert set(CHECK_REGISTRY) == planned
+
+
+def test_the_reference_report_carries_the_findings_the_checks_found() -> None:
+    """Two genuine warnings: both securities are listed on the half day and have no bar."""
+    report = phase3a.quality_report()
+    warnings = {
+        (finding.check_name, finding.security_id, finding.session_date)
+        for finding in report.warnings
+    }
+    assert warnings == {
+        ("5.4_missing_bar_in_a_listed_range", phase3a.SEC_CONTINUOUS, date(2019, 7, 3)),
+        ("5.4_missing_bar_in_a_listed_range", phase3a.SEC_RENAMED, date(2019, 7, 3)),
+    }
+    assert report.passed, "A warning labels; it does not block."
+
+
+# ---------------------------------------------------------------------------
+# the report says what it ran over, not only that it ran
+# ---------------------------------------------------------------------------
+
+
+def _defective_build() -> GoldDataset:
+    resolved = resolve_run_inputs(
+        phase3a.datasets_with_a_blocking_defect(),
+        config=phase3a.resolution(),
+        approvals=phase3a.approvals(),
+    )
+    return build_gold_dataset(
+        resolved,
+        dataset_version=phase3a.DATASET_VERSION,
+        build_time=phase3a.BUILD_TIME,
+        coverage_start=phase3a.COVERAGE_START,
+        coverage_end=phase3a.COVERAGE_END,
+        universe_definition=phase3a.universe_definition(),
+        universe_sessions=phase3a.SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        approvals=phase3a.approvals(),
+        artifact_first_built_time=phase3a.ARTIFACT_FIRST_BUILT,
+        ingestion_time=phase3a.INGESTION_TIME,
+    )
+
+
+def test_a_clean_builds_report_cannot_gate_a_defective_build(tmp_path: Path) -> None:
+    """The seal proves the checks ran. It does not say what they ran over.
+
+    Found by trying to break the runner rather than by trusting it. A genuine
+    clean report over build A satisfied the plan, carried a real runner seal, and
+    published build B -- the same shape of failure as a fabricated report, reached
+    from the other direction. Every finding the checks did not make was a finding
+    about a different set of rows.
+    """
+    clean = phase3a.gold_dataset()
+    clean_outcome = phase3a.quality_outcome(clean)
+    assert clean_outcome.sealed, "It really was run."
+    assert clean_outcome.report.passed
+
+    defective = _defective_build()
+    assert phase3a.quality_report(defective).blocking, "And this build really is defective."
+
+    with pytest.raises(QualityGateError, match="was run over build"):
+        _publish(LocalTableStore(tmp_path), defective, clean_outcome)
+
+
+def test_a_report_run_over_the_build_it_gates_publishes(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL for the refusal above."""
+    dataset = phase3a.gold_dataset()
+    _publish(LocalTableStore(tmp_path), dataset, phase3a.quality_outcome(dataset))
+
+
+def test_the_build_identity_covers_the_rows_and_the_snapshots() -> None:
+    """A subject that did not change with the build would bind nothing."""
+    clean = phase3a.gold_dataset()
+    defective = _defective_build()
+    assert clean.build_identity != defective.build_identity
+    assert clean.build_identity == phase3a.gold_dataset().build_identity, (
+        "Derived, not generated: the same build always has the same identity."
+    )
+
+
+# ---------------------------------------------------------------------------
+# nothing an implementation found is dropped on the way to the report
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_is_derived_from_the_checks_that_ran() -> None:
+    """Taking it from the caller left the one claim in the report nothing checked."""
+    report = _run().report  # type: ignore[attr-defined]
+    assert set(phase3a.QUALITY_COVERAGE) <= set(report.datasets_covered)
+    assert set(report.partitions_covered) == {
+        session.isoformat() for session in phase3a.SNAPSHOT_SESSIONS
+    }
+
+
+def test_an_implementation_emitting_an_undeclared_finding_refuses() -> None:
+    """Findings route by id, so an undeclared one has nowhere to go."""
+
+    def rogue(context: QualityContext) -> list[QualityFinding]:
+        return [
+            QualityFinding(
+                check_name="9.9_not_in_any_vocabulary",
+                severity=QualitySeverity.BLOCKING,
+                dataset="price_bar",
+                detail="a defect the plan has never heard of",
+            )
+        ]
+
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(registry["ticker_history"], invoke=rogue)
+    with pytest.raises(QualityGateError, match="does not declare"):
+        _run(registry=registry)
+
+
+def test_an_implementation_declaring_a_finding_no_check_owns_refuses() -> None:
+    """A finding with no owner is routed nowhere, so it would never reach the report."""
+    registry = dict(CHECK_REGISTRY)
+    registry["ticker_history"] = dataclasses.replace(
+        registry["ticker_history"],
+        emits=(*registry["ticker_history"].emits, "9.9_owned_by_nothing"),
+    )
+    with pytest.raises(QualityGateError, match="assigns to no check"):
+        _run(registry=registry)
+
+
+def test_a_declared_finding_outside_its_checks_vocabulary_is_not_dropped() -> None:
+    """The silent-drop path, made loud.
+
+    An implementation declares a finding id the plan assigns to a *different*
+    check -- one this implementation does not serve. Routing by id then leaves the
+    finding unclaimed by every check, and the obvious implementation of that is to
+    skip it: a BLOCKING defect discarded because the registry and the plan
+    disagreed about who reports what. The run refuses instead.
+    """
+    registry = dict(CHECK_REGISTRY)
+
+    def strays(context: QualityContext) -> list[QualityFinding]:
+        return [
+            QualityFinding(
+                check_name="5.1_impossible_ohlc",
+                severity=QualitySeverity.BLOCKING,
+                dataset="price_bar",
+                detail="reported by an implementation the plan ties to another check",
+            )
+        ]
+
+    # ticker_history serves 6_identity_and_universe, whose vocabulary does not
+    # include 5.1; 5_market_data owns 5.1 but is served only by price_bar_structure.
+    registry["ticker_history"] = dataclasses.replace(
+        registry["ticker_history"],
+        emits=(*registry["ticker_history"].emits, "5.1_impossible_ohlc"),
+        invoke=strays,
+    )
+    with pytest.raises(QualityGateError, match="did not reach the report"):
+        _run(registry=registry)

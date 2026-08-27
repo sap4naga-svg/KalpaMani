@@ -21,8 +21,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = PROJECT_ROOT / "src" / "kalpamani"
 
 #: Packages that must contain no implementation modules during bootstrap.
+#:
+#: ``data`` left this list when the Phase-3A A1 foundation kernel was authorized.
+#: It is not unguarded: ``test_phase3a_architecture.py`` asserts that
+#: ``kalpamani.data`` holds exactly the authorized A1 surface and nothing wider,
+#: which is a tighter constraint than "empty" was -- it names what may be there
+#: rather than only forbidding everything.
 EMPTY_BY_DESIGN = (
-    "data",
     "risk",
     "portfolio",
     "research",

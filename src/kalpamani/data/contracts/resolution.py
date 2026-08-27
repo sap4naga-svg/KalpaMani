@@ -1,0 +1,916 @@
+"""Resolved availability times, origin eligibility and the governing decision time.
+
+Pure, deterministic functions over a record and an approved-bound policy. No
+clock, no filesystem, no configuration read from the environment: the same record
+under the same policy always resolves to the same instant.
+
+Three ideas do the work.
+
+**Resolved times.** ``resolved_public_time`` and ``resolved_provider_time`` return
+the exact field, else an **approved** upper bound, else ``None``. "Approved" is
+doing real work: a bound satisfies a profile requirement only when its derivation
+appears in the dataset's configured approved list, which stops an arbitrary
+approximation from silently qualifying a record and keeps the choice governed
+rather than a property of whichever ingestion path happened to run. The helper
+returns a *value*; the exact and bound fields stay exactly where they were, so
+exact-versus-bound provenance survives every downstream use.
+
+**Eligibility is separate from availability.** A record can be ineligible under a
+profile (its origin describes an information set the profile cannot simulate) or
+eligible-but-unresolvable (the profile's required time is missing). Both make
+``decision_available_time`` return ``None``, and they call for opposite
+responses: ineligible rows are **excluded and counted**; unresolvable rows are a
+**refusal**. :func:`is_eligible` is what tells them apart, and callers are
+expected to ask.
+
+**Everything reads ``resolved_profile``, never ``requested_profile``.** A
+``DOWNGRADE`` changes the whole run before any filtering, anchoring or artifact
+construction happens; the requested profile survives only as audit evidence of
+what was asked for.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
+from types import MappingProxyType
+from typing import Any, Final, Protocol, Self, runtime_checkable
+
+from kalpamani.data.contracts.canonical import content_hash
+from kalpamani.data.contracts.envelope import (
+    DerivedEnvelope,
+    Envelope,
+    SourceEnvelope,
+    has_exact_source_vocabulary,
+)
+from kalpamani.data.contracts.errors import ProfileResolutionError
+from kalpamani.data.contracts.vocabulary import (
+    AnnouncementBoundDerivation,
+    InformationOrigin,
+    InformationSetProfile,
+    ProviderBoundDerivation,
+    PublicBoundDerivation,
+)
+
+# ---------------------------------------------------------------------------
+# Records
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class PitRecord(Protocol):
+    """Anything the resolution functions can reason about.
+
+    Deliberately minimal: a dataset name (which selects the approved-bound
+    policy) and one envelope (which selects everything else).
+    """
+
+    @property
+    def dataset(self) -> str: ...
+
+    @property
+    def envelope(self) -> Envelope: ...
+
+
+@runtime_checkable
+class SourceRecord(PitRecord, Protocol):
+    """A record carrying the source envelope, which profile resolution can rewrite.
+
+    ``with_envelope`` returns a **copy**. Rows are never mutated in place, which
+    is what makes silent history rewriting structurally impossible rather than
+    merely discouraged.
+    """
+
+    @property
+    def envelope(self) -> SourceEnvelope: ...
+
+    def with_envelope(self, envelope: SourceEnvelope) -> Self: ...
+
+
+@runtime_checkable
+class DerivedArtifactRecord(PitRecord, Protocol):
+    """A derived artifact, together with the records it actually consumed.
+
+    ``envelope.lineage`` says what a rebuild would read; ``inputs`` are the
+    resolved records themselves, which is what an availability computation needs.
+    Keeping both is not duplication: lineage must survive serialisation and be
+    replayable from storage, and inputs exist only in memory during a build.
+    """
+
+    @property
+    def inputs(self) -> tuple[PitRecord, ...]: ...
+
+
+# ---------------------------------------------------------------------------
+# Approved bounds
+# ---------------------------------------------------------------------------
+
+
+def plain_str(value: object, *, what: str) -> str:
+    """A genuinely plain ``str``, or a refusal.
+
+    ``str(value)`` is not a normaliser. CPython calls ``tp_str`` and accepts any
+    ``str`` **subclass** back, so a class whose ``__str__`` returns ``self``
+    survives it intact -- and with it any ``__eq__``/``__hash__`` it defines. That
+    is enough to make a dataset name answer one lookup and record another.
+
+    ``str.__str__`` returns a fresh plain string for a subclass and the object
+    itself only when it is already exactly ``str``, so it defuses the override.
+    The exact type is then verified rather than assumed, because a non-string
+    whose ``__str__`` misbehaves reaches the second branch.
+
+    Raises:
+        ProfileResolutionError: if the value cannot be reduced to an exact ``str``.
+    """
+    text = str.__str__(value) if isinstance(value, str) else str(value)
+    if type(text) is not str:
+        raise ProfileResolutionError(
+            f"{what} does not reduce to a plain string: {type(value).__name__} returned a "
+            f"{type(text).__name__} from __str__. A name that carries its own equality can "
+            "answer one lookup and record another."
+        )
+    return text
+
+
+def exact_strenum(value: object, enum_type: Any, *, what: str) -> Any:
+    """The exact member of a closed ``StrEnum`` vocabulary, or a governed refusal.
+
+    One normaliser for every closed vocabulary, because the same defect applies to
+    every one of their constructors. ``Enum(value)`` is a ``_value2member_map_``
+    dict lookup, and a dict lookup compares the **stored** key against the
+    supplied object -- delegating ``__eq__`` to the thing being validated. An
+    object with a colliding ``__hash__`` and a permissive ``__eq__`` is therefore
+    *found*, and silently becomes a real member.
+
+    So a non-string is refused **before** the lookup happens. Every vocabulary
+    normalised through here is a ``StrEnum``, so an exact member and a plain
+    spelling both still pass, and a ``str`` subclass is reduced by
+    :func:`plain_str` before it can carry its own equality into the lookup.
+
+    Raises:
+        ProfileResolutionError: for a non-string, or a spelling the enum does not
+            have. Refused where a caller can still act on it.
+    """
+    if type(value) is enum_type:
+        return value
+    if not isinstance(value, str):
+        raise ProfileResolutionError(
+            f"{value!r} is a {type(value).__name__}, and {what} is named by a string. The "
+            f"{enum_type.__name__} lookup asks the supplied object whether it matches, so an "
+            "object that answers for itself is refused before it is asked."
+        )
+    try:
+        return enum_type(plain_str(value, what=what))
+    except (ValueError, KeyError, TypeError) as refusal:
+        raise ProfileResolutionError(
+            f"{value!r} is not a {enum_type.__name__}, and {what} must be one. A value the "
+            "vocabulary does not have is refused at construction rather than wherever it "
+            "would first be read."
+        ) from refusal
+
+
+def _exact_members(supplied: Iterable[object], member: Any, *, field: str) -> frozenset[Any]:
+    """Rebuild a collection as a plain ``frozenset`` of exact enum members.
+
+        The constructor is the validator. ``PublicBoundDerivation(x)`` returns the
+        member for a member or its value and raises ``ValueError`` for anything else,
+        so accepting what it accepts is both the normalisation and the refusal.
+
+    Normalisation goes through :func:`exact_strenum`, which is the one normaliser
+        for every closed vocabulary here.
+
+        ``NONE`` is refused as well, and that is not a technicality. It is the value
+        an envelope carries when it has **no** bound derivation, so approving it
+        approves any bound whose provenance nobody stated -- which is the opposite of
+        what an approval is for. It cannot be approved on any axis, in any spelling.
+
+        Raises:
+            ProfileResolutionError: naming the offending element, or the collection
+                itself if it cannot be iterated. Refused at construction rather than
+                at the first membership test, because by then the object is inside a
+                value the whole system treats as a settled standard.
+    """
+    try:
+        items = list(supplied)
+    except TypeError as refusal:
+        raise ProfileResolutionError(
+            f"Approved {field!r} derivations must be a collection, and a "
+            f"{type(supplied).__name__} is not iterable. Every refusal on this path is a "
+            "governed one, so a caller sees why rather than a bare TypeError from inside a "
+            "constructor."
+        ) from refusal
+
+    out: set[Any] = set()
+    for item in items:
+        resolved = exact_strenum(item, member, what=f"an approved {field!r} derivation")
+        if resolved.value == "NONE":
+            raise ProfileResolutionError(
+                f"{member.__name__}.NONE cannot be approved for {field!r}. It is the value "
+                "an envelope carries when it has no bound derivation at all, so approving it "
+                "would admit any bound whose provenance nobody stated -- which is what an "
+                "approval exists to require."
+            )
+        out.add(resolved)
+    return frozenset(out)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ApprovedBoundPolicy:
+    r"""Which bound derivations are approved for one dataset.
+
+    Empty by default, and that default is a refusal rather than a permission:
+    nothing is approved until someone approves it.
+
+    **The annotations are coerced, not trusted.** ``frozenset[...]`` is a type
+    hint and nothing enforces it at runtime, so ``ApprovedBoundPolicy(public={x})``
+    stored the caller's mutable ``set`` inside a frozen dataclass -- the same
+    defect as a frozen dataclass wrapping a caller's dict, one level down. A
+    ``frozenset`` **subclass** was worse: it could override ``__contains__`` so
+    that ``derivation in policy.public`` answered differently from what
+    :meth:`~BoundApprovals.canonical` iterated, splitting what the resolution
+    reads from what the standard records.
+
+    Rebuilding each field as a plain ``frozenset`` closed the container and left
+    the **elements** as whatever the caller put in it. That is the same gap one
+    level further down, and it matters for the same reason: the resolution asks
+    ``envelope.public_bound_derivation in policy.public``, a membership test, and
+    the descriptor records ``item.value``. An object answering ``__eq__``,
+    ``__hash__`` and ``.value`` however it liked satisfied both and could answer
+    them inconsistently.
+
+    Every element is therefore passed through :func:`exact_strenum`.
+    ``PublicBoundDerivation("SESSION_CLOSE_PLUS_LAG")`` is accepted and becomes
+    the member; an unknown string, or an arbitrary object, is refused at
+    construction, where a caller can still act on it.
+
+    ``NONE`` is refused on **every** axis, in every spelling. It represents the
+    absence of a derivation -- it is the field default an envelope carries when
+    none was derived -- so approving it would approve any bound whose provenance
+    nobody stated. That is the most permissive thing the mechanism can express,
+    spelled with the token that reads as nothing.
+
+    Because these vocabularies are ``StrEnum``\s that share some values, a
+    sibling member whose value the field's own enum also has -- say
+    ``ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND`` for ``public`` -- is
+    accepted and stored as the field's own member. One the field's enum does not
+    have, such as ``ProviderBoundDerivation.DELIVERY_WINDOW``, is refused.
+    """
+
+    public: frozenset[PublicBoundDerivation] = frozenset()
+    provider: frozenset[ProviderBoundDerivation] = frozenset()
+    announcement: frozenset[AnnouncementBoundDerivation] = frozenset()
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. Every guarantee below is an overridable method.
+
+        The immutability is enforced in ``__post_init__`` and read back through
+        ordinary methods, and a subclass supplies its own of both. It would then
+        be a value the reader type-checks nothing about, answering
+        a membership test however it liked while the object still passed every
+        ``isinstance`` in the system -- the same shape as the ``VerifiedPublication``
+        subclass route, on the value that decides which rows resolve.
+        """
+        raise ProfileResolutionError(
+            "ApprovedBoundPolicy may not be subclassed. Its coercion and its accessors are "
+            "both overridable, so a subclass is a route past every guarantee the type makes."
+        )
+
+    def __post_init__(self) -> None:
+        # Unrolled rather than looped: one loop over three enum classes joins
+        # them into a union the type checker cannot call, and the point of this
+        # method is that each field is normalised by its **own** constructor.
+        object.__setattr__(
+            self, "public", _exact_members(self.public, PublicBoundDerivation, field="public")
+        )
+        object.__setattr__(
+            self,
+            "provider",
+            _exact_members(self.provider, ProviderBoundDerivation, field="provider"),
+        )
+        object.__setattr__(
+            self,
+            "announcement",
+            _exact_members(self.announcement, AnnouncementBoundDerivation, field="announcement"),
+        )
+
+
+#: Nothing approved. The fail-closed default for an unconfigured dataset.
+NO_BOUNDS_APPROVED: Final = ApprovedBoundPolicy()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BoundApprovals:
+    r"""Per-dataset approved-bound configuration for a run.
+
+    A dataset absent from the mapping has **nothing** approved. Silently
+    approving an unconfigured dataset would make the approval mechanism
+    decorative.
+
+    **Deep-frozen, because ``frozen=True`` froze the wrong thing.** The dataclass
+    refused reassignment of the attribute while the attribute went on pointing at
+    a dictionary the caller still owned::
+
+        source = {"price_bar": strict}
+        approvals = BoundApprovals(by_dataset=source)
+        reader = PointInTimeReader(..., approvals=approvals)
+        source["price_bar"] = permissive          # the reader now resolves differently
+
+    Nothing in that sequence touches the frozen object, and every check that had
+    already compared these approvals to the publication's persisted standard had
+    already passed. An approved bound is what lets a row resolve at all, so a
+    mutation here changes which rows a later query returns -- after the agreement
+    was established.
+
+    The supplied mapping is therefore **copied** at construction and wrapped in a
+    :class:`~types.MappingProxyType`, in canonical key order. Mutating the source
+    afterwards is a no-op, and ``approvals.by_dataset[...] = ...`` raises
+    ``TypeError``. The nested :class:`ApprovedBoundPolicy` values are frozen
+    dataclasses over ``frozenset``\s of exact enum members -- normalised there
+    too, so a caller cannot smuggle a mutable ``set``, a ``__contains__``-overriding
+    subclass or an enum-shaped object past the annotation. The values themselves
+    must be **exactly** ``ApprovedBoundPolicy``: a policy-shaped object supplies
+    its own fields and can answer the resolution's membership test and the
+    descriptor's iteration differently, so it is refused rather than duck-typed.
+    Keys are normalised before collision detection, because two keys that both
+    normalise to one name would otherwise collapse silently with the later one
+    winning by iteration order. The whole value is immutable to its leaves and
+    :meth:`identity` is stable for the object's lifetime.
+
+    The boundary is API integrity, not a sandbox. The dict behind the proxy stays
+    reachable through ``gc.get_referents`` and the module's own privates stay
+    reachable to code that goes looking; what is closed is every route a caller
+    reaches by accident, by convenience, or by using the public API as documented.
+    """
+
+    by_dataset: Mapping[str, ApprovedBoundPolicy] = field(default_factory=dict)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclasses. Every guarantee below is an overridable method.
+
+        The immutability is enforced in ``__post_init__`` and read back through
+        ordinary methods, and a subclass supplies its own of both. It would then
+        be a value the reader type-checks nothing about, answering
+        ``for_dataset`` and ``canonical`` however it liked while the object still passed every
+        ``isinstance`` in the system -- the same shape as the ``VerifiedPublication``
+        subclass route, on the value that decides which rows resolve.
+        """
+        raise ProfileResolutionError(
+            "BoundApprovals may not be subclassed. Its coercion and its accessors are "
+            "both overridable, so a subclass is a route past every guarantee the type makes."
+        )
+
+    def __post_init__(self) -> None:
+        # Normalise first, then look for collisions, then sort. Sorting the
+        # caller's keys and normalising during the comprehension meant two keys
+        # that both normalise to ``"price_bar"`` silently collapsed, with the
+        # later one winning by iteration order -- so which bounds a dataset
+        # approves would have been decided by dict insertion order.
+        normalised: list[tuple[str, ApprovedBoundPolicy]] = []
+        for dataset, policy in self.by_dataset.items():
+            name = plain_str(dataset, what="An approval's dataset name")
+            if not name:
+                raise ProfileResolutionError(
+                    "An empty dataset name cannot carry an approval. A policy nothing names "
+                    "approves bounds for a dataset nobody can identify."
+                )
+            if type(policy) is not ApprovedBoundPolicy:
+                # Fail closed rather than duck-type. A policy-shaped object
+                # supplies its own ``public``/``provider``/``announcement``, so it
+                # can answer the resolution's membership test and the descriptor's
+                # iteration differently -- and it is the value that decides which
+                # rows resolve at all.
+                raise ProfileResolutionError(
+                    f"Approvals for {name!r} are a {type(policy).__name__}, not an exact "
+                    "ApprovedBoundPolicy. A policy-shaped object supplies its own fields, so "
+                    "what the resolution reads and what the standard records can differ "
+                    "without either being wrong on its own."
+                )
+            normalised.append((name, policy))
+
+        seen = [name for name, _ in normalised]
+        collisions = sorted({name for name in seen if seen.count(name) > 1})
+        if collisions:
+            raise ProfileResolutionError(
+                f"Two approval entries normalise to the same dataset name: {collisions}. "
+                "Each dataset has exactly one policy, and letting the later one win would "
+                "make which bounds it approves a property of iteration order."
+            )
+        object.__setattr__(self, "by_dataset", MappingProxyType(dict(sorted(normalised))))
+
+    def for_dataset(self, dataset: str) -> ApprovedBoundPolicy:
+        """The approved bounds for ``dataset``, defaulting to none approved."""
+        return self.by_dataset.get(dataset, NO_BOUNDS_APPROVED)
+
+    def canonical(
+        self,
+    ) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...]:
+        """``(dataset, public, provider, announcement)`` derivations, canonically.
+
+        One spelling, shared by the quality-context descriptor and by the reader's
+        agreement check. Two derivations of "the approvals" that drifted would
+        report a disagreement that was a formatting difference.
+        """
+        return tuple(
+            (
+                dataset,
+                tuple(sorted(item.value for item in policy.public)),
+                tuple(sorted(item.value for item in policy.provider)),
+                tuple(sorted(item.value for item in policy.announcement)),
+            )
+            for dataset, policy in self.by_dataset.items()
+        )
+
+    def identity(self) -> str:
+        """A stable hash of the approvals. Immutable, so it cannot move."""
+        return content_hash({"approvals": [list(entry) for entry in self.canonical()]})
+
+
+# ---------------------------------------------------------------------------
+# Origin eligibility
+# ---------------------------------------------------------------------------
+
+#: Contract 3.1 as data: which source origins each profile can serve.
+_ELIGIBLE_SOURCE_ORIGINS: Final[dict[InformationSetProfile, frozenset[InformationOrigin]]] = {
+    InformationSetProfile.PUBLIC_PIT: frozenset({InformationOrigin.AUTHORITATIVE_PUBLIC}),
+    InformationSetProfile.PROVIDER_REALISTIC_PIT: frozenset(
+        {InformationOrigin.AUTHORITATIVE_PUBLIC, InformationOrigin.PROVIDER_DERIVED}
+    ),
+    InformationSetProfile.FORWARD_SYSTEM: frozenset(
+        {
+            InformationOrigin.AUTHORITATIVE_PUBLIC,
+            InformationOrigin.PROVIDER_DERIVED,
+            InformationOrigin.SYSTEM_OBSERVED,
+        }
+    ),
+}
+
+
+def origin_eligible(origin: InformationOrigin, profile: InformationSetProfile) -> bool:
+    """Whether a **source** origin can be served under ``profile``.
+
+    ``PUBLIC_PIT`` asks what the market could have known, so a proprietary
+    consensus has no answer under it -- excluding it is correct, not a limitation
+    to declare. ``DERIVED_ARTIFACT`` is not a source origin and always returns
+    ``False`` here; use :func:`is_eligible`, which computes the intersection over
+    a derived artifact's inputs.
+    """
+    return origin in _ELIGIBLE_SOURCE_ORIGINS[profile]
+
+
+def is_eligible(record: PitRecord, resolved_profile: InformationSetProfile) -> bool:
+    """Whether ``record`` may be served under ``resolved_profile`` at all.
+
+    **Fails closed on untyped vocabulary.** A source row whose
+    ``information_origin`` or derivation fields are not exact members is not
+    eligible under any profile -- see :func:`has_exact_source_vocabulary` for why
+    a plain string is not the same thing as the member it spells.
+
+    For a source fact this is origin eligibility. For a derived artifact it is the
+    **intersection** of its inputs' eligibility: no amount of arithmetic makes a
+    proprietary input public. Under ``FORWARD_SYSTEM`` every source origin is
+    eligible, so the intersection is satisfied there by construction.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, SourceEnvelope):
+        if not has_exact_source_vocabulary(envelope):
+            return False
+        return origin_eligible(envelope.information_origin, resolved_profile)
+    inputs = _derived_inputs(record)
+    return all(is_eligible(item, resolved_profile) for item in inputs)
+
+
+# ---------------------------------------------------------------------------
+# Resolved times
+# ---------------------------------------------------------------------------
+
+
+def resolved_public_time(record: PitRecord, approvals: BoundApprovals) -> datetime | None:
+    """Exact public time, else an approved public upper bound, else ``None``.
+
+    A derived artifact has no public axis at all and resolves to ``None``; it
+    never invents one (contract 2.5).
+    """
+    envelope = record.envelope
+    if not isinstance(envelope, SourceEnvelope):
+        return None
+    if not has_exact_source_vocabulary(envelope):
+        return None
+    if envelope.public_available_time is not None:
+        return envelope.public_available_time
+    approved = approvals.for_dataset(record.dataset).public
+    if (
+        envelope.public_available_upper_bound is not None
+        and envelope.public_bound_derivation in approved
+    ):
+        return envelope.public_available_upper_bound
+    return None
+
+
+def resolved_provider_time(record: PitRecord, approvals: BoundApprovals) -> datetime | None:
+    """Exact provider time, else an approved provider upper bound, else ``None``."""
+    envelope = record.envelope
+    if not isinstance(envelope, SourceEnvelope):
+        return None
+    if not has_exact_source_vocabulary(envelope):
+        return None
+    if envelope.provider_available_time is not None:
+        return envelope.provider_available_time
+    approved = approvals.for_dataset(record.dataset).provider
+    bound = envelope.provider_available_upper_bound
+    if bound is not None and envelope.provider_bound_derivation in approved:
+        return bound
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The governing decision time
+# ---------------------------------------------------------------------------
+
+
+def decision_available_time(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> datetime | None:
+    """The instant from which ``record`` may participate in a query under ``resolved_profile``.
+
+    Never stored on a fact row: a record has no single availability time, it has
+    several, and which one governs is a property of the question being asked.
+
+    Returns ``None`` for two different situations, and callers must distinguish
+    them with :func:`is_eligible`:
+
+    - **ineligible by origin** -- the profile cannot describe this kind of fact.
+      Exclude the row and count it.
+    - **eligible but unresolvable** -- the profile's required time is missing and
+      no approved bound stands in. Refuse.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return _derived_decision_time(record, envelope, resolved_profile, approvals)
+    if not has_exact_source_vocabulary(envelope):
+        return None
+    return _source_decision_time(record, envelope, resolved_profile, approvals)
+
+
+def _source_decision_time(
+    record: PitRecord,
+    envelope: SourceEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> datetime | None:
+    origin = envelope.information_origin
+    if not origin_eligible(origin, profile):
+        return None
+
+    public = resolved_public_time(record, approvals)
+    provider = resolved_provider_time(record, approvals)
+    seen = envelope.system_first_seen_time
+
+    match profile:
+        case InformationSetProfile.PUBLIC_PIT:
+            # Only AUTHORITATIVE_PUBLIC reaches here, and it is governed by the
+            # resolved public time -- exact or approved bound, never a substitute.
+            return public
+
+        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
+            if origin is InformationOrigin.PROVIDER_DERIVED:
+                return provider
+            # AUTHORITATIVE_PUBLIC: simulating a subscriber means knowing when the
+            # SUBSCRIBER got the row, so both axes are required. Serving on public
+            # timing alone is the withdrawn DECLARE behaviour.
+            if public is None or provider is None:
+                return None
+            return max(public, provider)
+
+        case InformationSetProfile.FORWARD_SYSTEM:
+            # What did we hold? system_first_seen_time answers it for every origin.
+            # Public and provider times remain provenance and quality inputs, and
+            # participate only where the record actually has them.
+            candidates = [t for t in (public, provider, seen) if t is not None]
+            return max(candidates)
+
+
+def _derived_decision_time(
+    record: PitRecord,
+    envelope: DerivedEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> datetime | None:
+    inputs = _derived_inputs(record)
+    if not inputs:
+        # ``max()`` over nothing raises, and this is not a hypothetical shape: a
+        # header's ``inputs`` are in-memory only, so every decoded one arrives
+        # empty. The reader guards it explicitly and the quality path did not, so
+        # a decoded header reached ``max()`` and came out as a bare ValueError
+        # from inside a check. Unresolvable is the honest answer: an artifact that
+        # consumed nothing has no availability to compute.
+        return None
+    resolved: list[datetime] = []
+    for item in inputs:
+        if not is_eligible(item, profile):
+            return None
+        available = decision_available_time(item, profile, approvals)
+        if available is None:
+            return None
+        resolved.append(available)
+
+    lineage_max = max(resolved)
+    if profile is InformationSetProfile.FORWARD_SYSTEM:
+        # We did not hold a computed value before we computed it.
+        return max(lineage_max, envelope.artifact_first_built_time)
+    # Under the other two the artifact is exactly as available as its slowest
+    # input, which is the honest answer to "when could this have been calculated?".
+    return lineage_max
+
+
+class TimingBasisUsed(StrEnum):
+    """Which timing a *particular row* was actually admitted on.
+
+    Not the same question as :class:`~kalpamani.data.contracts.profiles.TimingBasis`,
+    which describes a whole dataset at build time. A query serves some rows and
+    not others, so "this dataset contains bounded rows" and "this result leant on
+    a bound" are different claims -- and reporting the first as the second put a
+    ``PROVIDER_TIME_BOUNDED`` limitation on results computed entirely from exact
+    times.
+    """
+
+    PUBLIC_EXACT = "PUBLIC_EXACT"
+    PUBLIC_BOUNDED = "PUBLIC_BOUNDED"
+    PROVIDER_EXACT = "PROVIDER_EXACT"
+    PROVIDER_BOUNDED = "PROVIDER_BOUNDED"
+    SYSTEM_FIRST_SEEN = "SYSTEM_FIRST_SEEN"
+    #: A derived artifact carries its inputs' bases, and this alongside them.
+    DERIVED_FROM_INPUTS = "DERIVED_FROM_INPUTS"
+    #: When a computed value first existed. Only ``FORWARD_SYSTEM`` consults it,
+    #: and it governs there whenever it is later than every input.
+    ARTIFACT_FIRST_BUILT = "ARTIFACT_FIRST_BUILT"
+
+
+#: One axis the profile consulted, and the instant it resolved to.
+_Axis = tuple[TimingBasisUsed, datetime]
+
+
+def _source_axes(
+    record: PitRecord,
+    envelope: SourceEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> list[_Axis]:
+    """Exactly the axes :func:`decision_available_time` consults, with their times.
+
+    One function, so the two basis sets below cannot drift from the availability
+    they are supposed to explain. An empty list means the profile cannot resolve
+    this row at all.
+    """
+    public_at = resolved_public_time(record, approvals)
+    provider_at = resolved_provider_time(record, approvals)
+    seen_at = envelope.system_first_seen_time
+    public_basis = _public_basis(record, envelope, approvals)
+    provider_basis = _provider_basis(record, envelope, approvals)
+
+    match profile:
+        case InformationSetProfile.PUBLIC_PIT:
+            if public_at is None or public_basis is None:
+                return []
+            return [(public_basis, public_at)]
+
+        case InformationSetProfile.PROVIDER_REALISTIC_PIT:
+            if envelope.information_origin is InformationOrigin.PROVIDER_DERIVED:
+                if provider_at is None or provider_basis is None:
+                    return []
+                return [(provider_basis, provider_at)]
+            if public_at is None or provider_at is None:
+                return []
+            if public_basis is None or provider_basis is None:  # pragma: no cover - unreachable
+                return []
+            return [(public_basis, public_at), (provider_basis, provider_at)]
+
+        case _:
+            axes: list[_Axis] = []
+            if public_at is not None and public_basis is not None:
+                axes.append((public_basis, public_at))
+            if provider_at is not None and provider_basis is not None:
+                axes.append((provider_basis, provider_at))
+            if seen_at is not None:
+                axes.append((TimingBasisUsed.SYSTEM_FIRST_SEEN, seen_at))
+            return axes
+
+
+def required_timing_bases(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> frozenset[TimingBasisUsed]:
+    """The axes without which this row could not be admitted at all.
+
+    Distinct from :func:`governing_timing_bases`, and the two were previously one
+    function returning their union -- which described neither. Under
+    ``PROVIDER_REALISTIC_PIT`` an authoritative-public row needs **both** a public
+    and a provider time, and its availability is the later of the two: both are
+    required, one governs. Reporting the union as "the governing basis" claimed
+    that an exact provider time had determined a cutoff a bounded public time
+    actually set, and the reverse.
+
+    This is the set the bound-**required** limitation tokens rest on: a profile
+    that needed a bounded axis to admit a row served a result subject to that
+    bound's imprecision, whether or not the bound also set the cutoff.
+
+    Under ``FORWARD_SYSTEM`` the answer is deliberately narrow. That profile takes
+    the maximum over whichever axes the row happens to have, so removing one of
+    three leaves two and changes nothing about resolvability: an axis is required
+    there only when it is the only one.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return _derived_bases(record, envelope, resolved_profile, approvals, governing=False)
+    if not has_exact_source_vocabulary(envelope) or not origin_eligible(
+        envelope.information_origin, resolved_profile
+    ):
+        return frozenset()
+
+    axes = _source_axes(record, envelope, resolved_profile, approvals)
+    if not axes:
+        return frozenset()
+    if resolved_profile is InformationSetProfile.FORWARD_SYSTEM:
+        return frozenset({axes[0][0]}) if len(axes) == 1 else frozenset()
+    return frozenset(basis for basis, _ in axes)
+
+
+def governing_timing_bases(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> frozenset[TimingBasisUsed]:
+    """The axis -- or tied axes -- that actually set this row's decision time.
+
+    Availability is a maximum over the axes the profile consults, so exactly the
+    axes attaining that maximum determined when the row became usable. Everything
+    else the profile required was already satisfied earlier and decided nothing.
+
+    A derived artifact governs through its **slowest** input, not all of them. A
+    union over every input reported a fast exact input as having governed a cutoff
+    a slow bounded one had set.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return _derived_bases(record, envelope, resolved_profile, approvals, governing=True)
+    if not has_exact_source_vocabulary(envelope) or not origin_eligible(
+        envelope.information_origin, resolved_profile
+    ):
+        return frozenset()
+
+    axes = _source_axes(record, envelope, resolved_profile, approvals)
+    if not axes:
+        return frozenset()
+    latest = max(at for _, at in axes)
+    return frozenset(basis for basis, at in axes if at == latest)
+
+
+def _derived_bases(
+    record: PitRecord,
+    envelope: DerivedEnvelope,
+    profile: InformationSetProfile,
+    approvals: BoundApprovals,
+    *,
+    governing: bool,
+) -> frozenset[TimingBasisUsed]:
+    """Both basis sets for a derived artifact, mirroring ``_derived_decision_time``.
+
+    Required evidence follows **every** required input, because an artifact whose
+    input cannot be resolved cannot be resolved either. Governing evidence follows
+    only the slowest input, or -- under ``FORWARD_SYSTEM``, where we did not hold a
+    computed value before computing it -- the build time when that is later.
+    """
+    resolved: list[tuple[PitRecord, datetime]] = []
+    for item in _derived_inputs(record):
+        if not is_eligible(item, profile):
+            return frozenset()
+        available = decision_available_time(item, profile, approvals)
+        if available is None:
+            return frozenset()
+        resolved.append((item, available))
+    if not resolved:
+        return frozenset()
+
+    lineage_max = max(available for _, available in resolved)
+    built = envelope.artifact_first_built_time
+    forward = profile is InformationSetProfile.FORWARD_SYSTEM
+
+    if not governing:
+        required = {TimingBasisUsed.DERIVED_FROM_INPUTS}
+        for item, _ in resolved:
+            required |= required_timing_bases(item, profile, approvals)
+        if forward:
+            required.add(TimingBasisUsed.ARTIFACT_FIRST_BUILT)
+        return frozenset(required)
+
+    if forward and built > lineage_max:
+        return frozenset({TimingBasisUsed.ARTIFACT_FIRST_BUILT})
+    bases = {TimingBasisUsed.DERIVED_FROM_INPUTS}
+    for item, available in resolved:
+        if available == lineage_max:
+            bases |= governing_timing_bases(item, profile, approvals)
+    if forward and built == lineage_max:
+        bases.add(TimingBasisUsed.ARTIFACT_FIRST_BUILT)
+    return frozenset(bases)
+
+
+def _public_basis(
+    record: PitRecord, envelope: SourceEnvelope, approvals: BoundApprovals
+) -> TimingBasisUsed | None:
+    if envelope.public_available_time is not None:
+        return TimingBasisUsed.PUBLIC_EXACT
+    if resolved_public_time(record, approvals) is not None:
+        return TimingBasisUsed.PUBLIC_BOUNDED
+    return None
+
+
+def _provider_basis(
+    record: PitRecord, envelope: SourceEnvelope, approvals: BoundApprovals
+) -> TimingBasisUsed | None:
+    if envelope.provider_available_time is not None:
+        return TimingBasisUsed.PROVIDER_EXACT
+    if resolved_provider_time(record, approvals) is not None:
+        return TimingBasisUsed.PROVIDER_BOUNDED
+    return None
+
+
+#: The two bounded axes. A result that needed either is subject to its imprecision.
+BOUNDED_BASES: Final = frozenset({TimingBasisUsed.PUBLIC_BOUNDED, TimingBasisUsed.PROVIDER_BOUNDED})
+
+
+def derived_inputs(record: PitRecord) -> tuple[PitRecord, ...]:
+    """The resolved rows a derived artifact was computed from.
+
+    Public because availability, eligibility, timing basis and bound approval all
+    have to walk the same inputs, and a private helper meant each caller either
+    reached past the boundary or invented its own traversal.
+    """
+    return _derived_inputs(record)
+
+
+def _derived_inputs(record: PitRecord) -> tuple[PitRecord, ...]:
+    if isinstance(record, DerivedArtifactRecord):
+        return record.inputs
+    raise TypeError(
+        f"{type(record).__name__} carries a derived envelope but exposes no resolved inputs. "
+        "A derived artifact's availability and eligibility are computed from its inputs; "
+        "without them it would have to invent an availability it does not have."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The availability anchor
+# ---------------------------------------------------------------------------
+
+
+def source_anchor(
+    record: PitRecord,
+    resolved_profile: InformationSetProfile,
+    approvals: BoundApprovals,
+) -> datetime | None:
+    """The one origin-aware availability anchor every temporal rule reads.
+
+    Anchoring every class to the public time -- as an earlier revision of the plan
+    did -- silently disabled all three class invariants for ``PROVIDER_DERIVED``
+    and ``SYSTEM_OBSERVED`` rows, where the public time is legitimately null. A
+    consensus snapshot stamped *before* the moment it was sampled would have
+    passed every check.
+    """
+    envelope = record.envelope
+    if isinstance(envelope, DerivedEnvelope):
+        return decision_available_time(record, resolved_profile, approvals)
+
+    match envelope.information_origin:
+        case InformationOrigin.AUTHORITATIVE_PUBLIC:
+            return resolved_public_time(record, approvals)
+        case InformationOrigin.PROVIDER_DERIVED:
+            return resolved_provider_time(record, approvals)
+        case InformationOrigin.SYSTEM_OBSERVED:
+            return envelope.system_first_seen_time
+        case InformationOrigin.DERIVED_ARTIFACT:  # pragma: no cover - refused at construction
+            return None
+
+
+__all__ = [
+    "BOUNDED_BASES",
+    "NO_BOUNDS_APPROVED",
+    "ApprovedBoundPolicy",
+    "BoundApprovals",
+    "DerivedArtifactRecord",
+    "PitRecord",
+    "SourceRecord",
+    "TimingBasisUsed",
+    "decision_available_time",
+    "derived_inputs",
+    "governing_timing_bases",
+    "is_eligible",
+    "origin_eligible",
+    "required_timing_bases",
+    "resolved_provider_time",
+    "resolved_public_time",
+    "source_anchor",
+]

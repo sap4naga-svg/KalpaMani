@@ -1,0 +1,216 @@
+"""Point-in-time data-platform errors.
+
+Every error here is a **refusal**, not a degradation. The distinction the whole
+contract rests on: an empty result and a refusal are different answers, and a
+data layer that returns the first when it means the second produces a backtest
+that looks merely unprofitable rather than broken (contract 10, rule 7).
+
+These inherit from :class:`~kalpamani.common.errors.KalpaManiError` so the
+existing exception hierarchy stays single-rooted. They are deliberately **not**
+:class:`~kalpamani.common.errors.SafetyViolationError` subclasses: that class
+means an operation would have breached a *brokerage* safety rule, and the data
+platform has no brokerage boundary to breach (schema 19 rule 9).
+"""
+
+from __future__ import annotations
+
+from kalpamani.common.errors import KalpaManiError
+
+
+class PointInTimeError(KalpaManiError):
+    """Base class for every point-in-time data-platform refusal."""
+
+
+class EnvelopeError(PointInTimeError):
+    """A record's availability envelope is malformed at construction.
+
+    Raised only for defects the type system can catch outright -- a source
+    envelope declaring ``DERIVED_ARTIFACT``, or a derived envelope with empty
+    lineage. Defects that a legitimate adversarial fixture must be able to
+    *express* so a check can *catch* them are quality findings, not construction
+    errors: a check that can never see the row it exists to reject protects
+    nothing.
+    """
+
+
+class ProfileResolutionError(PointInTimeError):
+    """A profile resolution configuration is incomplete or self-contradictory."""
+
+
+class IneligibleUnderProfileError(PointInTimeError):
+    """A record was requested under a profile its information origin cannot serve."""
+
+
+class MissingHistoricalSnapshotError(PointInTimeError):
+    """A required historical snapshot does not exist for the requested date.
+
+    Refused rather than returned empty. A universe query for a date with no
+    stored membership snapshot is unanswerable, not answerable with nothing
+    (contract 10, rule 9).
+    """
+
+
+class BlockingQualityIssueError(PointInTimeError):
+    """An open BLOCKING quality issue stands against a dataset the query touches.
+
+    Every dependent result is refused, not annotated (data-quality-plan 8).
+    """
+
+
+class DatasetCoverageError(PointInTimeError):
+    """The requested range falls outside a dataset's declared coverage."""
+
+
+class RequiredInputUnavailableError(PointInTimeError):
+    """A REQUIRED input domain emptied, or failed its coverage contract.
+
+    Computing anyway would publish a different quantity under the original name
+    and version, and nothing downstream would say so (contract 13.3).
+    """
+
+
+class NonPointInTimeViewError(PointInTimeError):
+    """``LATEST_RESTATED`` was reached from a research or backtest path."""
+
+
+class ArtifactIntegrityError(PointInTimeError):
+    """A materialised artifact does not reproduce from its key.
+
+    A mismatch is a BLOCKING quality issue, not a cache miss (contract 8).
+    """
+
+
+class BronzeIntegrityError(PointInTimeError):
+    """A Bronze object identity already holds different bytes.
+
+    Bronze is content-addressed and append-only. Two different payloads cannot
+    share one identity, and the write is refused rather than resolved.
+    """
+
+
+class UnresolvedProviderAvailabilityError(ProfileResolutionError):
+    """A dataset's provider timing is unresolvable and its policy does not resolve it.
+
+    Quality check ``4.3.2_unresolved_provider_availability``, raised at the
+    resolution boundary rather than discovered later. Policy ``NONE`` on a dataset
+    with unresolved provider timing under ``PROVIDER_REALISTIC_PIT`` is not a
+    silent pass-through: the rows stay, and the run refuses by name.
+    """
+
+
+class QueryRangeError(PointInTimeError):
+    """A requested range is malformed -- a start after its end, for instance."""
+
+
+class SecurityNotInDatasetError(PointInTimeError):
+    """The dataset holds no evidence of this security at all.
+
+    Distinct from a security that exists and simply did not trade: one is a
+    question the dataset cannot answer, the other is an answer.
+    """
+
+
+class IncompleteCoverageError(PointInTimeError):
+    """The dataset is missing bars the requested range requires.
+
+    Refused rather than silently truncated. A short series and a gap-ridden one
+    look identical downstream, and only one of them is a result.
+    """
+
+
+class DatasetPublicationError(PointInTimeError):
+    """A dataset version is unpublished, partially published, or fails verification.
+
+    A half-written build is not a smaller build. Reading one would produce a
+    result nobody could reproduce, from inputs nobody could name.
+    """
+
+
+class AcquisitionIncompleteError(PointInTimeError):
+    """A Bronze payload exists without its acquisition record, or vice versa.
+
+    Recoverable by repair, never by pretending. Returning success while the
+    acquisition metadata is absent would leave a payload nothing can explain.
+    """
+
+
+class UnsafePathComponentError(PointInTimeError):
+    """An identifier reaching the filesystem is not a safe path component.
+
+    Refused rather than sanitised: rewriting a bad name would map two different
+    identifiers onto one path, and two datasets sharing a directory is a
+    corruption that verifies.
+    """
+
+
+class BuildBoundaryError(PointInTimeError):
+    """A Gold dataset was assembled outside the sanctioned build path.
+
+    Gold is built from :class:`ResolvedRunInputs`, which carry a resolution
+    receipt. A dataset assembled from arbitrary rows has no receipt, so nothing
+    can say which policy admitted them -- and a build nobody can account for is
+    not publishable however correct its rows happen to be.
+    """
+
+
+class QualityGateError(PointInTimeError):
+    """A publication or read was attempted without passing the quality gate.
+
+    A missing quality report is not a clean one. Obtaining a publishable dataset
+    by omitting the evidence is exactly the fail-open shape the gate exists to
+    remove.
+    """
+
+
+class ExecutionSealError(PointInTimeError):
+    """A result was offered without the evidence that produced it.
+
+    A result and an inventory that travel separately can each be substituted for
+    something else. Sealing them together makes the substitution a type error
+    rather than a discrepancy nobody notices.
+    """
+
+
+class ManifestRefusedError(PointInTimeError):
+    """A research manifest could not be emitted, so the result is inadmissible.
+
+    Refusing rather than warning is the same trade ADR-0004 made throughout: an
+    unreproducible result that *looks* reproducible is the unrecoverable one,
+    because it gets cited later by someone who was not in the room.
+    """
+
+
+class PendingContractError(PointInTimeError):
+    """An interface is contractually defined but its Phase-3A data does not exist.
+
+    Distinct from :class:`NotImplementedError`: the contract is settled, the
+    entity is simply outside the A1 fixture scope. Raising a named error keeps
+    the difference between *unbuilt* and *undecided* legible.
+    """
+
+
+__all__ = [
+    "AcquisitionIncompleteError",
+    "ArtifactIntegrityError",
+    "BlockingQualityIssueError",
+    "BronzeIntegrityError",
+    "BuildBoundaryError",
+    "DatasetCoverageError",
+    "DatasetPublicationError",
+    "EnvelopeError",
+    "ExecutionSealError",
+    "IncompleteCoverageError",
+    "IneligibleUnderProfileError",
+    "ManifestRefusedError",
+    "MissingHistoricalSnapshotError",
+    "NonPointInTimeViewError",
+    "PendingContractError",
+    "PointInTimeError",
+    "ProfileResolutionError",
+    "QualityGateError",
+    "QueryRangeError",
+    "RequiredInputUnavailableError",
+    "SecurityNotInDatasetError",
+    "UnresolvedProviderAvailabilityError",
+    "UnsafePathComponentError",
+]
