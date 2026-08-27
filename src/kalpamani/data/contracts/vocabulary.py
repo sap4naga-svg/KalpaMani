@@ -394,15 +394,34 @@ class AdjustmentMode:
     """
 
     policy: AdjustmentPolicy | None
-    convention: AdjustmentConvention | None = None
+    convention: AdjustmentConvention | None
+
+    def __post_init__(self) -> None:
+        if self.policy is None and self.convention is not None:
+            raise ValueError(
+                "RAW names no convention. There is nothing to convene about when the prices "
+                "are the ones that traded, and a convention on a raw series would label it "
+                "with a transformation nobody applied."
+            )
+        if self.policy is not None and self.convention is None:
+            raise ValueError(
+                "An adjusted series must name its convention. Two conventions over the same "
+                "actions produce two different series, so a mode carrying only a policy "
+                "cannot say which one it asked for."
+            )
 
     @classmethod
     def adjusted(
         cls,
         policy: AdjustmentPolicy,
-        convention: AdjustmentConvention = AdjustmentConvention.FORWARD_BASE_NORMALIZED,
+        convention: AdjustmentConvention,
     ) -> AdjustmentMode:
-        """An explicitly policied, explicitly conventioned adjusted series."""
+        """An explicitly policied, explicitly conventioned adjusted series.
+
+        The convention has **no default**, deliberately. A default would let a
+        caller ask for "adjusted" without saying what that means, and the answer
+        would depend on whichever convention the implementation happened to hold.
+        """
         return cls(policy=policy, convention=convention)
 
     @property

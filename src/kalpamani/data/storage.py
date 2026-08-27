@@ -43,6 +43,7 @@ from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_json, sha256_hex
 from kalpamani.data.contracts.errors import ArtifactIntegrityError, DatasetPublicationError
+from kalpamani.data.contracts.paths import safe_component, safe_relative_path
 from kalpamani.data.contracts.vocabulary import StorageLayer
 
 #: Where a deployment's data lives by default. A path value, not a directory:
@@ -88,6 +89,7 @@ class LocalTableStore:
         A dataset version is conventionally a path-like name (``gold/2026.08.26.1``),
         so it becomes nested directories and the leaf is the version itself.
         """
+        safe_relative_path(dataset_version, kind="dataset_version")
         return self._root / layer.value.lower() / Path(dataset_version)
 
     def staging_root(self, *, layer: StorageLayer, dataset_version: str) -> Path:
@@ -103,6 +105,7 @@ class LocalTableStore:
 
     def table_path(self, *, layer: StorageLayer, dataset_version: str, entity: str) -> Path:
         """Where one entity's table lives inside a committed version."""
+        safe_component(entity, kind="entity")
         return self.version_root(layer=layer, dataset_version=dataset_version) / f"{entity}.jsonl"
 
     def is_published(
@@ -124,6 +127,7 @@ class LocalTableStore:
     ) -> TableArtifact:
         """Write one table into this version's staging directory."""
         payload = _render(rows)
+        safe_component(entity, kind="entity")
         staging = self.staging_root(layer=layer, dataset_version=dataset_version)
         destination = staging / f"{entity}.jsonl"
         _atomic_write(destination, payload)
@@ -145,6 +149,10 @@ class LocalTableStore:
         payload: bytes,
     ) -> Path:
         """Write an arbitrary file -- the dataset manifest -- into staging."""
+        # Publication's own reserved files begin with "_" and are named by this
+        # package, not by anything external; everything else is held to the rule.
+        if not name.startswith("_"):
+            safe_component(name, kind="staged file")
         destination = self.staging_root(layer=layer, dataset_version=dataset_version) / name
         _atomic_write(destination, payload)
         return destination
@@ -169,6 +177,7 @@ class LocalTableStore:
                 "are superseded, never rewritten."
             )
         final.parent.mkdir(parents=True, exist_ok=True)
+        _fsync_directory(staging)
         os.replace(staging, final)
         _fsync_directory(final.parent)
         return final

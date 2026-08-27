@@ -34,9 +34,9 @@ fixture that reads one cannot prove determinism.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import cast
 
 from kalpamani.data.contracts.dataset import GoldDataset
 from kalpamani.data.contracts.entities import (
@@ -80,12 +80,22 @@ from kalpamani.data.contracts.vocabulary import (
     PublicTimeDerivation,
     TickerChangeReason,
 )
-from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_inputs
-from kalpamani.data.curate.universe import (
-    UniverseBuildInputs,
-    UniverseDefinition,
-    build_universe_snapshot,
+from kalpamani.data.curate.build import build_gold_dataset
+from kalpamani.data.curate.publication import (
+    DatasetManifest,
+    publish_gold_dataset,
+    read_published_dataset,
 )
+from kalpamani.data.curate.resolution_run import ResolvedRunInputs, resolve_run_inputs
+from kalpamani.data.curate.universe import UniverseBuildInputs, UniverseDefinition
+from kalpamani.data.pit.accessors import PointInTimeReader
+from kalpamani.data.quality.checks import (
+    DEFAULT_MARKET_THRESHOLDS,
+    DEFAULT_SURVIVORSHIP_POLICY,
+    QualityFinding,
+)
+from kalpamani.data.quality.report import CheckNotRun, QualityReport, report_from_findings
+from kalpamani.data.storage import LocalTableStore
 
 # ---------------------------------------------------------------------------
 # Identities and constants
@@ -182,8 +192,16 @@ def _source_envelope(
     )
 
 
+#: Both venues in the fixture keep the same hours. They are separate calendar
+#: rows because coverage is checked per exchange: a NASDAQ security is not
+#: required to have bars on an NYSE-only session, and one shared calendar would
+#: either fault it for absences that are not absences or -- worse -- leave it with
+#: no required sessions at all and silently check nothing.
+_CALENDAR_EXCHANGES = (Exchange.NYSE, Exchange.NASDAQ)
+
+
 def sessions() -> tuple[MarketSession, ...]:
-    """The exchange calendar. Announced forward, with an exact announcement time."""
+    """The exchange calendar, per venue. Announced forward, with an exact time."""
     out: list[MarketSession] = []
     for session_date, (open_h, open_m), (close_h, close_m), half in _SESSION_SPECS:
         regular_open = utc(session_date.year, session_date.month, session_date.day, open_h, open_m)
@@ -191,44 +209,45 @@ def sessions() -> tuple[MarketSession, ...]:
             session_date.year, session_date.month, session_date.day, close_h, close_m
         )
         announced = utc(session_date.year - 1, 9, 15, 12, 0)
-        out.append(
-            MarketSession(
-                exchange=Exchange.NYSE,
-                session_date=session_date,
-                regular_open=regular_open,
-                regular_close=regular_close,
-                extended_open=regular_open - timedelta(hours=5, minutes=30),
-                extended_close=regular_close + timedelta(hours=4),
-                is_half_day=half,
-                is_holiday=False,
-                envelope=_source_envelope(
-                    origin=InformationOrigin.AUTHORITATIVE_PUBLIC,
-                    anchor=FactAnchor.announced_forward(announcement_time=announced),
-                    public_exact=announced,
-                    public_time_derivation=PublicTimeDerivation.AUTHORITATIVE_TIMESTAMP,
-                    # No feed-publication instant: the calendar dataset's declared
-                    # policy is BOUND, and the bound is applied by the resolution
-                    # step rather than written here.
-                    provider_time_derivation=ProviderTimeDerivation.UNKNOWN,
-                    source_id=f"calendar:{Exchange.NYSE.value}:{session_date.isoformat()}",
-                ),
+        for exchange in _CALENDAR_EXCHANGES:
+            out.append(
+                MarketSession(
+                    exchange=exchange,
+                    session_date=session_date,
+                    regular_open=regular_open,
+                    regular_close=regular_close,
+                    extended_open=regular_open - timedelta(hours=5, minutes=30),
+                    extended_close=regular_close + timedelta(hours=4),
+                    is_half_day=half,
+                    is_holiday=False,
+                    envelope=_source_envelope(
+                        origin=InformationOrigin.AUTHORITATIVE_PUBLIC,
+                        anchor=FactAnchor.announced_forward(announcement_time=announced),
+                        public_exact=announced,
+                        public_time_derivation=PublicTimeDerivation.AUTHORITATIVE_TIMESTAMP,
+                        # No feed-publication instant: the calendar dataset's
+                        # declared policy is BOUND, and the bound is applied by
+                        # the resolution step rather than written here.
+                        provider_time_derivation=ProviderTimeDerivation.UNKNOWN,
+                        source_id=f"calendar:{exchange.value}:{session_date.isoformat()}",
+                    ),
+                )
             )
-        )
     return tuple(out)
 
 
-def session_close(session_date: date) -> datetime:
-    """The regular close of one fixture session."""
+def session_close(session_date: date, exchange: Exchange = Exchange.NYSE) -> datetime:
+    """The regular close of one fixture session. Both venues keep the same hours."""
     for session in sessions():
-        if session.session_date == session_date:
+        if session.session_date == session_date and session.exchange is exchange:
             return session.regular_close
     raise KeyError(session_date)
 
 
-def session_open(session_date: date) -> datetime:
+def session_open(session_date: date, exchange: Exchange = Exchange.NYSE) -> datetime:
     """The regular open of one fixture session -- also its universe evaluation cutoff."""
     for session in sessions():
-        if session.session_date == session_date:
+        if session.session_date == session_date and session.exchange is exchange:
             return session.regular_open
     raise KeyError(session_date)
 
@@ -622,6 +641,15 @@ def daily_bars() -> tuple[PriceBar, ...]:
     for security_id, session_date, close_text in _DAILY_CLOSES:
         close = Decimal(close_text)
         end = session_close(session_date)
+        # The ticker-reuser's bars are provider-aggregated, and its listed range
+        # is fully covered. That combination is the one case where a series can
+        # be complete and still entirely ineligible under PUBLIC_PIT -- which is
+        # a refusal, not a short series.
+        construction = (
+            BarConstruction.PROVIDER_AGGREGATED
+            if security_id == SEC_TICKER_REUSER
+            else BarConstruction.OFFICIAL_DISSEMINATED
+        )
         out.append(
             PriceBar(
                 security_id=security_id,
@@ -635,9 +663,9 @@ def daily_bars() -> tuple[PriceBar, ...]:
                 close=close,
                 volume=_DAILY_VOLUME,
                 curation_source="synthetic:daily",
-                bar_construction=BarConstruction.OFFICIAL_DISSEMINATED,
+                bar_construction=construction,
                 envelope=_bar_envelope(
-                    construction=BarConstruction.OFFICIAL_DISSEMINATED,
+                    construction=construction,
                     bar_end_time=end,
                     session_close_time=end,
                     source_id=f"bar:{security_id}:D:{session_date.isoformat()}",
@@ -929,63 +957,104 @@ def gold_dataset(
 ) -> GoldDataset:
     """The complete curated build a point-in-time query is served from.
 
-    Built **from resolved rows**, never from raw ones: the policy that bounds one
-    dataset and excludes another has to have actually run before anything is
-    curated, or the evidence would describe rows the build never saw.
+    Built through :func:`build_gold_dataset` from resolved rows, never assembled
+    by hand: the receipt has to account for every row, and a dataset with no
+    receipt is unpublishable.
     """
     resolved = resolved_inputs(requested=requested, downgrade=downgrade)
-    profile = resolved.resolved_profile
-
-    resolved_listings = tuple(cast("Listing", row) for row in resolved.rows("listing"))
-    resolved_attributes = tuple(
-        cast("SecurityAttribute", row) for row in resolved.rows("security_attribute")
-    )
-    resolved_bars = tuple(cast("PriceBar", row) for row in resolved.rows("price_bar"))
-    resolved_actions = tuple(
-        cast("CorporateAction", row) for row in resolved.rows("corporate_action")
-    )
-    resolved_sessions = tuple(cast("MarketSession", row) for row in resolved.rows("market_session"))
-    resolved_tickers = tuple(cast("TickerHistory", row) for row in resolved.rows("ticker_history"))
-
-    build_inputs = UniverseBuildInputs(
-        listings=resolved_listings,
-        attributes=resolved_attributes,
-        bars=resolved_bars,
-        listing_dataset_version=LISTING_DATASET_VERSION,
-        attribute_dataset_version=ATTRIBUTE_DATASET_VERSION,
-        bar_dataset_version=BAR_DATASET_VERSION,
-    )
-    cutoffs = evaluation_cutoffs()
-    universe = {
-        session: build_universe_snapshot(
-            build_inputs,
-            session_date=session,
-            evaluation_cutoff=cutoffs[session],
-            definition=universe_definition(),
-            resolved_profile=profile,
-            approvals=approvals(),
-            artifact_first_built_time=ARTIFACT_FIRST_BUILT,
-            ingestion_time=INGESTION_TIME,
-            dataset_version=DATASET_VERSION,
-        )
-        for session in SNAPSHOT_SESSIONS
-    }
-
-    return GoldDataset(
+    return build_gold_dataset(
+        resolved,
         dataset_version=DATASET_VERSION,
         build_time=BUILD_TIME,
         coverage_start=COVERAGE_START,
         coverage_end=COVERAGE_END,
-        resolved_profile=profile,
-        resolution_policy_version=RESOLUTION_POLICY_VERSION,
-        resolution_evidence=resolved.evidence,
-        sessions=resolved_sessions,
-        listings=resolved_listings,
-        attributes=resolved_attributes,
-        tickers=resolved_tickers,
-        bars=resolved_bars,
-        actions=resolved_actions,
-        universe=universe,
+        universe_definition=universe_definition(),
+        universe_sessions=SNAPSHOT_SESSIONS,
+        evaluation_cutoffs=evaluation_cutoffs(),
+        approvals=approvals(),
+        artifact_first_built_time=ARTIFACT_FIRST_BUILT,
+        ingestion_time=INGESTION_TIME,
+    )
+
+
+def quality_report(
+    *,
+    findings: Sequence[QualityFinding] = (),
+) -> QualityReport:
+    """A passed quality report for the synthetic build.
+
+    Synthetic tests construct one explicitly, but it goes through the same
+    publication contract as any other: the gate is not bypassed, it is satisfied.
+    """
+    return report_from_findings(
+        findings,
+        policy_versions={
+            "market": DEFAULT_MARKET_THRESHOLDS.version,
+            "survivorship": DEFAULT_SURVIVORSHIP_POLICY.version,
+            "lag": LAG_POLICY_VERSION,
+        },
+        checks_run=(
+            "4.0_envelope_conformance",
+            "4.1_temporal_invariants",
+            "5_market_data",
+            "6_identity_and_universe",
+        ),
+        checks_not_run=(
+            CheckNotRun(
+                check_name="7_cross_provider_reconciliation",
+                reason="only one source is licensed in this slice, so the check cannot run",
+            ),
+        ),
+        datasets_covered=DIRECTLY_READ_DATASETS,
+        partitions_covered=tuple(session.isoformat() for session in SNAPSHOT_SESSIONS),
+        produced_at=BUILD_TIME,
+    )
+
+
+def publish(
+    store: LocalTableStore,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    report: QualityReport | None = None,
+) -> tuple[GoldDataset, DatasetManifest, QualityReport]:
+    """Build, publish and read back -- the whole sanctioned path in one call."""
+    dataset = gold_dataset(requested=requested, downgrade=downgrade)
+    gate = report if report is not None else quality_report()
+    publish_gold_dataset(
+        store,
+        dataset,
+        quality_report=gate,
+        code_commit_sha=CODE_COMMIT_SHA,
+        lag_policy_version=LAG_POLICY_VERSION,
+        universe_definition_version=UNIVERSE_DEFINITION_VERSION,
+        source_ingestion_run_ids=(INGESTION_RUN_ID,),
+    )
+    return read_published_dataset(
+        store,
+        dataset_version=DATASET_VERSION,
+        config=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
+    )
+
+
+def reader(
+    store: LocalTableStore,
+    *,
+    requested: InformationSetProfile = InformationSetProfile.PUBLIC_PIT,
+    downgrade: GlobalProfileResolution = GlobalProfileResolution.NONE,
+    report: QualityReport | None = None,
+) -> PointInTimeReader:
+    """A reader over a verified publication. There is no unverified route."""
+    dataset, manifest, gate = publish(
+        store, requested=requested, downgrade=downgrade, report=report
+    )
+    return PointInTimeReader(
+        dataset,
+        manifest,
+        gate,
+        resolution=resolution(requested=requested, downgrade=downgrade),
+        approvals=approvals(),
     )
 
 
@@ -995,6 +1064,7 @@ def gold_dataset(
 
 
 INGESTION_RUN_ID = "ing-synthetic-a1-0001"
+CODE_COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def bronze_payload() -> bytes:

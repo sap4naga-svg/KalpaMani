@@ -36,11 +36,12 @@ past by construction rather than by vigilance.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Generic, TypeVar
 
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.envelope import SourceEnvelope
 from kalpamani.data.contracts.errors import ProfileResolutionError
 from kalpamani.data.contracts.resolution import (
@@ -146,6 +147,94 @@ class ProfileResolutionConfig:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ResolutionReceipt:
+    """Proof that a specific set of rows went through a specific resolution.
+
+    A build is publishable only if it can say **which policy admitted its rows**.
+    A dataset assembled from arbitrary rows cannot, however correct those rows
+    happen to be -- and "correct rows, unknown provenance" is precisely the shape
+    that looks fine in review and cannot be reproduced afterwards.
+
+    The receipt hash covers the requested and resolved profiles, the global
+    resolution, the **complete canonical policy map including each reason**, the
+    policy version, the per-dataset evidence, and the identity of every resolved
+    row. Reasons are in deliberately: two runs that bounded the same dataset for
+    different stated reasons resolved it differently, and a hash blind to that
+    would call them the same run.
+    """
+
+    requested_profile: InformationSetProfile
+    resolved_profile: InformationSetProfile
+    global_profile_resolution: GlobalProfileResolution
+    resolution_policy_version: str
+    canonical_map: tuple[tuple[str, str, str], ...]
+    evidence_fingerprint: tuple[tuple[str, ...], ...]
+    row_identity_fingerprint: tuple[tuple[str, str], ...]
+
+    @property
+    def receipt_hash(self) -> str:
+        """Derived, not generated. Same resolution, same receipt."""
+        return content_hash(
+            {
+                "requested_profile": self.requested_profile.value,
+                "resolved_profile": self.resolved_profile.value,
+                "global_profile_resolution": self.global_profile_resolution.value,
+                "resolution_policy_version": self.resolution_policy_version,
+                "canonical_map": [list(entry) for entry in self.canonical_map],
+                "evidence_fingerprint": [list(entry) for entry in self.evidence_fingerprint],
+                "row_identity_fingerprint": [
+                    list(entry) for entry in self.row_identity_fingerprint
+                ],
+            }
+        )
+
+    def agrees_with(self, config: ProfileResolutionConfig) -> bool:
+        """Whether this receipt was produced by exactly ``config``.
+
+        Compares the **complete** canonical map, reasons included -- not policy
+        names and a version string. An entry present in one and absent in the
+        other is a disagreement, in either direction.
+        """
+        return (
+            self.requested_profile is config.requested_profile
+            and self.resolved_profile is config.resolved_profile
+            and self.global_profile_resolution is config.global_profile_resolution
+            and self.resolution_policy_version == config.resolution_policy_version
+            and self.canonical_map == config.canonical_map()
+        )
+
+
+def evidence_fingerprint(
+    evidence: Sequence[DatasetResolutionEvidence],
+) -> tuple[tuple[str, ...], ...]:
+    """A canonical rendering of per-dataset evidence, for the receipt hash."""
+    return tuple(
+        sorted(
+            (
+                entry.dataset,
+                entry.policy.value,
+                str(entry.rows_considered),
+                str(entry.public_rows_applicable),
+                entry.public_basis.value,
+                str(entry.public_exact_rows),
+                str(entry.public_bounded_rows),
+                str(entry.public_excluded_rows),
+                str(entry.public_unresolved_rows),
+                str(entry.provider_rows_applicable),
+                entry.provider_basis.value,
+                str(entry.provider_exact_rows),
+                str(entry.provider_bounded_rows),
+                str(entry.provider_excluded_rows),
+                str(entry.provider_unresolved_rows),
+                str(entry.excluded_rows),
+                entry.reason,
+            )
+            for entry in evidence
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class DatasetResolutionEvidence:
     """Per-dataset, per-axis counts. The axes reconcile **independently**.
 
@@ -156,28 +245,49 @@ class DatasetResolutionEvidence:
     dataset: str
     policy: DatasetGapPolicy
     rows_considered: int
+    #: How many of ``rows_considered`` have a public axis at all. A dataset
+    #: holding both authoritative-public and provider-derived rows has a
+    #: different denominator per axis, and one shared count could not describe
+    #: it: the axes would never reconcile, or would reconcile by accident.
+    public_rows_applicable: int
     public_basis: TimingBasis
     public_exact_rows: int
     public_bounded_rows: int
+    public_excluded_rows: int
+    #: Applicable to the axis, but neither exact, bounded nor excluded. Under
+    #: PUBLIC_PIT a provider gap is simply not required, so these are ordinary;
+    #: under PROVIDER_REALISTIC_PIT the resolution boundary has already refused
+    #: them. Counting them is what lets the axis reconcile honestly rather than
+    #: by leaving rows out of the arithmetic.
+    public_unresolved_rows: int
+    provider_rows_applicable: int
     provider_basis: TimingBasis
     provider_exact_rows: int
     provider_bounded_rows: int
+    provider_excluded_rows: int
+    provider_unresolved_rows: int
     excluded_rows: int
     reason: str
 
     def public_axis_reconciles(self) -> bool:
-        """``exact + bounded + excluded == considered`` on the public axis."""
-        if self.public_basis is TimingBasis.NOT_APPLICABLE:
-            return self.public_exact_rows == 0 and self.public_bounded_rows == 0
-        total = self.public_exact_rows + self.public_bounded_rows + self.excluded_rows
-        return total == self.rows_considered
+        """``exact + bounded + excluded + unresolved == applicable``, public axis."""
+        total = (
+            self.public_exact_rows
+            + self.public_bounded_rows
+            + self.public_excluded_rows
+            + self.public_unresolved_rows
+        )
+        return total == self.public_rows_applicable
 
     def provider_axis_reconciles(self) -> bool:
-        """``exact + bounded + excluded == considered`` on the provider axis."""
-        if self.provider_basis is TimingBasis.NOT_APPLICABLE:
-            return self.provider_exact_rows == 0 and self.provider_bounded_rows == 0
-        total = self.provider_exact_rows + self.provider_bounded_rows + self.excluded_rows
-        return total == self.rows_considered
+        """``exact + bounded + excluded + unresolved == applicable``, provider axis."""
+        total = (
+            self.provider_exact_rows
+            + self.provider_bounded_rows
+            + self.provider_excluded_rows
+            + self.provider_unresolved_rows
+        )
+        return total == self.provider_rows_applicable
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -249,7 +359,7 @@ def resolve_dataset_gap(
     policy = config.policy_for(dataset)
     resolved_profile = config.resolved_profile
     kept: list[RecordT] = []
-    excluded = 0
+    excluded: list[RecordT] = []
 
     for record in records:
         envelope = record.envelope
@@ -263,12 +373,13 @@ def resolve_dataset_gap(
             continue
         match policy:
             case DatasetGapPolicy.EXCLUDE:
-                excluded += 1
+                excluded.append(record)
             case DatasetGapPolicy.BOUND:
                 kept.append(record.with_envelope(bound_provider_time(envelope)))
             case DatasetGapPolicy.NONE:
-                # Unresolved and undeclared. Kept so the quality checks can refuse
-                # it by name, rather than disappearing here without evidence.
+                # Unresolved and undeclared. Kept so the resolution boundary can
+                # refuse it by name, rather than disappearing here without
+                # evidence.
                 kept.append(record)
 
     return GapResolutionOutcome(
@@ -276,9 +387,9 @@ def resolve_dataset_gap(
         evidence=_evidence(
             dataset=dataset,
             policy=policy,
-            rows_considered=len(records),
-            excluded_rows=excluded,
+            considered=records,
             kept=kept,
+            excluded=excluded,
             approvals=approvals,
             reason=_reason_for(config, dataset),
         ),
@@ -296,28 +407,36 @@ def _evidence(
     *,
     dataset: str,
     policy: DatasetGapPolicy,
-    rows_considered: int,
-    excluded_rows: int,
-    kept: Iterable[PitRecord],
+    considered: Sequence[PitRecord],
+    kept: Sequence[PitRecord],
+    excluded: Sequence[PitRecord],
     approvals: BoundApprovals,
     reason: str,
 ) -> DatasetResolutionEvidence:
+    """Count each axis against its own applicable rows.
+
+    A dataset holding both authoritative-public and provider-derived rows has a
+    different denominator per axis. One shared ``rows_considered`` would make the
+    axes fail to reconcile on any mixed dataset -- or, worse, reconcile by
+    coincidence on a dataset where they should not.
+    """
+    public_applicable = sum(1 for row in considered if _has_public_axis(row))
+    provider_applicable = sum(1 for row in considered if _has_provider_axis(row))
+    public_excluded = sum(1 for row in excluded if _has_public_axis(row))
+    provider_excluded = sum(1 for row in excluded if _has_provider_axis(row))
+
     public_exact = public_bounded = 0
     provider_exact = provider_bounded = 0
-    public_applicable = provider_applicable = False
-
     for record in kept:
         envelope = record.envelope
         if not isinstance(envelope, SourceEnvelope):
             continue
-        if envelope.information_origin is InformationOrigin.AUTHORITATIVE_PUBLIC:
-            public_applicable = True
+        if _has_public_axis(record):
             if envelope.public_available_time is not None:
                 public_exact += 1
             elif resolved_public_time(record, approvals) is not None:
                 public_bounded += 1
-        if envelope.information_origin is not InformationOrigin.SYSTEM_OBSERVED:
-            provider_applicable = True
+        if _has_provider_axis(record):
             if envelope.provider_available_time is not None:
                 provider_exact += 1
             elif resolved_provider_time(record, approvals) is not None:
@@ -326,16 +445,40 @@ def _evidence(
     return DatasetResolutionEvidence(
         dataset=dataset,
         policy=policy,
-        rows_considered=rows_considered,
-        public_basis=_basis(public_applicable, public_exact, public_bounded),
+        rows_considered=len(considered),
+        public_rows_applicable=public_applicable,
+        public_basis=_basis(bool(public_applicable), public_exact, public_bounded),
         public_exact_rows=public_exact,
         public_bounded_rows=public_bounded,
-        provider_basis=_basis(provider_applicable, provider_exact, provider_bounded),
+        public_excluded_rows=public_excluded,
+        public_unresolved_rows=(
+            public_applicable - public_exact - public_bounded - public_excluded
+        ),
+        provider_rows_applicable=provider_applicable,
+        provider_basis=_basis(bool(provider_applicable), provider_exact, provider_bounded),
         provider_exact_rows=provider_exact,
         provider_bounded_rows=provider_bounded,
-        excluded_rows=excluded_rows,
+        provider_excluded_rows=provider_excluded,
+        provider_unresolved_rows=(
+            provider_applicable - provider_exact - provider_bounded - provider_excluded
+        ),
+        excluded_rows=len(excluded),
         reason=reason,
     )
+
+
+def _has_public_axis(record: PitRecord) -> bool:
+    envelope = record.envelope
+    if not isinstance(envelope, SourceEnvelope):
+        return False
+    return envelope.information_origin is InformationOrigin.AUTHORITATIVE_PUBLIC
+
+
+def _has_provider_axis(record: PitRecord) -> bool:
+    envelope = record.envelope
+    if not isinstance(envelope, SourceEnvelope):
+        return False
+    return envelope.information_origin is not InformationOrigin.SYSTEM_OBSERVED
 
 
 def _basis(applicable: bool, exact: int, bounded: int) -> TimingBasis:
@@ -353,7 +496,9 @@ __all__ = [
     "DatasetResolutionEvidence",
     "GapResolutionOutcome",
     "ProfileResolutionConfig",
+    "ResolutionReceipt",
     "TimingBasis",
     "bound_provider_time",
+    "evidence_fingerprint",
     "resolve_dataset_gap",
 ]

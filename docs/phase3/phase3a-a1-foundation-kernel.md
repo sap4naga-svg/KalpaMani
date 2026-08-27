@@ -16,8 +16,18 @@ This document records what the A1 slice built, and — more usefully — what it
 boundary in §2–§3 was written *before* the code, so it is a commitment rather than a description
 of whatever got written.
 
+> **Revision 3 (2026-08-26).** A second review closed the remaining *enforcement* gaps: the
+> corrections in revision 2 were right, but several could still be walked around. Gold could be
+> assembled from arbitrary rows; `BOUND` could be applied without checking that the bound actually
+> resolved; a reader with no issue list was a clean reader; publication identity did not cover
+> coverage, profile or policy evidence; Bronze filed content under the acquisition date; lineage
+> replay ignored the dataset version; a zero-row universe snapshot vanished on write; minute
+> coverage passed on one arbitrary bar; the manifest trusted caller-supplied input lists; and the
+> survivorship alarm counted announcements as delistings. Section 13 lists each. No architecture
+> changed and no scope widened.
+>
 > **Revision 2 (2026-08-26).** Independent review of the implementation found ten concrete
-> defects. All are corrected; §12 lists each with the change. The substantive ones: an empty
+> defects. All are corrected; §13 lists each with the change. The substantive ones: an empty
 > `FORWARD_SYSTEM` universe was **published** where it should have been **refused**;
 > `ProfileResolutionConfig` was audit-only configuration that never touched the rows; a price
 > query could mix resolutions and silently truncate a partially covered range; universe lineage
@@ -52,7 +62,10 @@ The nine provider tests P1–P9 in [implementation-plan.md](implementation-plan.
 | resolved availability times, origin eligibility, `source_anchor` | `data/contracts/resolution.py` |
 | resolved fact-time anchors and the contract's domain-alias table | `data/contracts/anchors.py` |
 | per-dataset gap resolution and the global downgrade | `data/contracts/profiles.py` |
-| the resolution **execution** boundary | `data/curate/resolution_run.py` |
+| the resolution **execution** boundary and its receipt | `data/curate/resolution_run.py` |
+| the sanctioned Gold build boundary | `data/curate/build.py` |
+| the quality report -- publication and read gate | `data/quality/report.py` |
+| safe path components | `data/contracts/paths.py` |
 | exact per-security lineage selectors and their replay | `data/curate/lineage.py` |
 | atomic dataset publication and verified reads | `data/curate/publication.py` |
 | the single instant normaliser | `data/contracts/instants.py` |
@@ -67,7 +80,7 @@ The nine provider tests P1–P9 in [implementation-plan.md](implementation-plan.
 | point-in-time accessors | `data/pit/accessors.py` |
 | synthetic reference dataset | `tests/fixtures/phase3a.py` |
 
-Roughly 8,600 lines of source and 5,700 lines of tests and fixtures.
+Roughly 10,400 lines of source and 7,400 lines of tests and fixtures.
 
 ## 3. Explicitly NOT authorized, and not done
 
@@ -105,13 +118,27 @@ the same reasoning and because nothing here needs it.
 ## 5. Local storage layout
 
 ```
-<root>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.json.gz
-<root>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.<run_id>.acquisition.json
+<root>/bronze/objects/sha256/<sha256>.json.gz                  content, by digest alone
+<root>/bronze/acquisitions/<provider>/<dataset>/<date>/
+        <sha256>.<run_id>.json                                one record per retrieval
 <root>/silver/<dataset_version>/<entity>.jsonl
 <root>/gold/<dataset_version>/<entity>.jsonl
 <root>/gold/<dataset_version>/_dataset_manifest.json
+<root>/gold/<dataset_version>/_quality_report.json
 <root>/gold/<parent>/_staging-<leaf>/…            uncommitted; invisible to readers
 ```
+
+**Bronze content is globally content-addressed.** The same bytes fetched on two dates, or under
+two runs, are **one** object. Filing content under the acquisition date would store the payload
+twice and make a re-fetch look like new data. Each retrieval writes its own acquisition record;
+a second legitimate acquisition is not a repair, and only completing an *interrupted* acquisition
+identity reports one. Re-writing an acquisition identity with different metadata is refused --
+one retrieval happened once.
+
+**Every identifier reaching the filesystem is validated first.** Provider, dataset, entity,
+ingestion-run id and each segment of a dataset version pass through `safe_component`. Refused
+rather than sanitised: rewriting a bad name would map two identifiers onto one path, and two
+datasets sharing a directory is a corruption that verifies.
 
 **Publication is atomic.** A version is assembled in a staging directory — every table written
 and `fsync`-ed, then the dataset manifest — and committed by a **single directory rename**. The
@@ -119,11 +146,12 @@ rename *is* the commit: before it nothing is visible under the published name, a
 everything is. A reader never sees a manifest describing tables that have not landed, nor tables
 no manifest describes. Versions are superseded, never rewritten.
 
-**Reads verify before they decode.** Build time, coverage and resolved profile come from the
-persisted manifest, never from arguments — authoritative build metadata supplied at read time
-would let a caller restate what a dataset covers without touching the dataset. Every table hash
-is checked before its rows are parsed, so corruption is caught as corruption rather than
-surfacing as a strange value three layers up.
+**Reads verify before they decode.** Build time, coverage, resolved profile, the complete
+resolution map and the quality evidence all come from the persisted manifest, never from
+arguments. Every table hash is checked before its rows are parsed, the decoded row count is
+checked against the declared one, and the manifest body is checked against `manifest_hash` --
+which covers everything except itself. Two manifests differing in coverage, profile or policy
+evidence therefore cannot share a dataset identity.
 
 **Bronze separates two immutable things.** A *content object* keyed by payload digest alone, and
 an *acquisition record* per retrieval keyed by `(digest, ingestion_run_id)`. Fetching the same
@@ -301,7 +329,28 @@ These are boundaries of a deliberately narrow slice, not defects:
 11. **Silver has no published-version machinery yet.** Only Gold is published atomically with a
     manifest; Silver remains a plain table layer, because nothing in A1 reads Silver back.
 
-## 12. Corrections applied in revision 2
+## 12. Enforcement closure applied in revision 3
+
+| # | Gap | Closure |
+|---|---|---|
+| 1 | Gold accepted arbitrarily assembled rows | `resolve_run_inputs` issues a **ResolutionReceipt** hashing the profiles, the complete policy map *with reasons*, the evidence and every resolved row's identity. `build_gold_dataset` is the only sanctioned constructor, and publication refuses a receipt that does not account for the rows. A row filed under the wrong dataset key, or appearing in two groups, is refused at the boundary |
+| 2 | `BOUND` could be declared without resolving | After the policy runs, every surviving row must have a **resolvable** provider time. A bound whose derivation is not approved resolves nothing, and that now refuses with `4.3.2_unresolved_provider_availability` rather than passing because the policy name looked right |
+| 3 | Quality was not a gate | A typed **QualityReport** — policy versions, checks run, checks *not* run, findings with content hashes — is required at publication, bound into the manifest by hash, persisted, and re-verified on read. `open_issues=()` is gone: a reader takes the report the publication was gated on, so there is no evidence to omit |
+| 4 | Publication identity was partial | `manifest_hash` covers format version, identity, coverage, both profiles, the global resolution, the whole resolution map and evidence, the receipt and report hashes, every table record, ingestion runs, commit and policy versions. Reads additionally verify coverage ordering, UTC build time, unique entities and datasets, non-negative and coherent counts, expected table paths, and actual row counts |
+| 5 | Bronze content was filed per acquisition date | Split namespaces: content under `objects/sha256/<digest>`, acquisitions under `acquisitions/<provider>/<dataset>/<date>/`. Identical bytes on different dates share one object; a second acquisition is not a repair; a contradictory acquisition identity is refused; the audit verifies JSON, digest linkage, byte count, partition identity and content existence; writes fsync the containing directory |
+| 6 | Lineage replay ignored the dataset version | Every resolved record's `dataset_version` must equal the one its `LineageRef` names — the same key in a later build can carry a corrected value. Selector shape is validated against an exact key set, duplicate and unordered bar endpoints are refused, and malformed values arrive as `ArtifactIntegrityError` rather than a raw parse error |
+| 7 | Required-input and universe semantics were incomplete | A domain never supplied is as unavailable as one filtered to nothing. Missing security-type evidence is `REQUIRED_INPUT_UNAVAILABLE`, never a `SECURITY_TYPE` exclusion. Overlapping attribute rows and contradictory listing revisions refuse. `CHANGE_ANNOUNCEMENT` is not a listing state. A **UniverseSnapshotHeader** records that a session was built, so a genuinely zero-row snapshot survives write and read |
+| 8 | Price coverage was under-specified | `as_of` is normalised at every accessor boundary. Coverage is per **exchange** (a NASDAQ security is not required to have NYSE sessions) and per **resolution**: daily expects one bar per listed trading session; minute follows the dense contract and requires the session's whole endpoint grid, so one arbitrary bar cannot pass. A required series emptied by ineligibility refuses with `REQUIRED_INPUT_UNAVAILABLE` |
+| 9 | The adjustment convention had a default | `AdjustmentMode` enforces RAW ⇒ no convention and ADJUSTED ⇒ both policy and convention, with no default anywhere. The reader inspects it, refuses an unsupported one, passes it to the implementation and records it in provenance. Artifact lineage names **only** the actions the policy consumes, for the scoped securities, effective inside the declared interval — an ignored action would otherwise narrow the artifact's availability for a row that changed nothing |
+| 10 | The manifest trusted caller-supplied lists | A typed **InputInventory** owned by the manifest replaces `directly_read_datasets=[]` and friends. `emit_manifest` verifies closure against it and against the actual result bytes, and refuses duplicate references, non-canonical artifact times, and a dataset read at a publication other than the one referenced |
+| 11 | Survivorship counted the wrong evidence | Only a `STATE` row whose `listing_end` falls on or before the dataset horizon counts. Announcements and post-horizon endings do not. Year subtraction is leap-day safe, and `SurvivorshipPolicy` now validates its own thresholds — the minimum is **2**, because the documentation says one snapshot is an anecdote |
+
+Per-axis resolution evidence accompanies 1 and 4: a dataset holding both authoritative-public and
+provider-derived rows has a different denominator per axis, so the evidence records applicable,
+exact, bounded, excluded **and unresolved** counts per axis. One shared `rows_considered` made the
+axes fail to reconcile on every mixed dataset.
+
+## 13. Corrections applied in revision 2
 
 | # | Defect found | Correction |
 |---|---|---|
@@ -320,13 +369,13 @@ Deep-frozen mappings accompany 4 and 6: `GoldDataset.universe` and `ResearchMani
 are wrapped in `MappingProxyType` at construction, so `frozen=True` does not merely wrap a dict
 anyone can mutate after its hash was taken.
 
-## 13. Verification
+## 14. Verification
 
 ```
-pytest                        697 passed   (440 pre-existing, 257 new)
+pytest                        737 passed   (440 pre-existing, 297 new)
 ruff check .                  clean
 ruff format --check .         clean
-mypy                          clean, strict, 76 files
+mypy                          clean, strict, 80 files
 scripts/phase1_preflight.py   exit 0
 scripts/phase2_preflight.py   exit 0
 scripts/phase3_docs_audit.py  exit 0

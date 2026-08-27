@@ -37,7 +37,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from types import MappingProxyType
 
-from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
 from kalpamani.data.contracts.errors import ManifestRefusedError
 from kalpamani.data.contracts.instants import is_canonical_instant, normalize_instant
 from kalpamani.data.contracts.profiles import (
@@ -162,6 +162,10 @@ class DatasetReference:
     dataset_version: str
     layer: str
     content_hash: str
+    #: The publication manifest hash. Two builds with the same version string but
+    #: different coverage, profile or policy evidence are different datasets, and
+    #: only this tells them apart.
+    publication_manifest_hash: str
     resolved_profile: InformationSetProfile | None = None
 
 
@@ -178,6 +182,63 @@ class QualitySummary:
     blocking_issues_open: int
     warnings_open: int
     checks_not_run: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InputInventory:
+    """What a run actually read, recorded by the query path rather than declared.
+
+    The shape this replaces took ``directly_read_datasets=[]`` and friends as
+    arguments, which meant a caller obtained a valid manifest by passing empty
+    lists -- the evidence rules were enforced against whatever the caller chose to
+    admit. An inventory the run *produces* cannot be shortened by omission: if the
+    query path did not record a dataset, that is a bug in the query path, not a
+    caller's prerogative.
+
+    Every collection is a tuple and every mapping is frozen, because ``run_id``
+    hashes them and an identity that can change after it is taken is not an
+    identity.
+    """
+
+    direct_source_datasets: tuple[str, ...] = ()
+    dataset_manifest_hashes: Mapping[str, str] = field(default_factory=dict)
+    consumed_artifact_ids: tuple[str, ...] = ()
+    revisable_datasets_consumed: tuple[str, ...] = ()
+    bounds_relied_upon: tuple[str, ...] = ()
+    origin_exclusion_rows: int = 0
+    quality_report_hash: str = ""
+    result_artifact_hash: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "dataset_manifest_hashes",
+            MappingProxyType(dict(sorted(self.dataset_manifest_hashes.items()))),
+        )
+        object.__setattr__(
+            self, "direct_source_datasets", tuple(sorted(set(self.direct_source_datasets)))
+        )
+        object.__setattr__(
+            self, "consumed_artifact_ids", tuple(sorted(set(self.consumed_artifact_ids)))
+        )
+        object.__setattr__(
+            self,
+            "revisable_datasets_consumed",
+            tuple(sorted(set(self.revisable_datasets_consumed))),
+        )
+        object.__setattr__(self, "bounds_relied_upon", tuple(sorted(set(self.bounds_relied_upon))))
+
+    def identity(self) -> dict[str, object]:
+        """The inventory as ``run_id`` inputs. Canonical and complete."""
+        return {
+            "direct_source_datasets": list(self.direct_source_datasets),
+            "dataset_manifest_hashes": dict(self.dataset_manifest_hashes),
+            "consumed_artifact_ids": list(self.consumed_artifact_ids),
+            "revisable_datasets_consumed": list(self.revisable_datasets_consumed),
+            "bounds_relied_upon": list(self.bounds_relied_upon),
+            "origin_exclusion_rows": self.origin_exclusion_rows,
+            "quality_report_hash": self.quality_report_hash,
+        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -201,6 +262,8 @@ class ResearchManifest:
     definitions: Mapping[str, str] = field(default_factory=dict)
     limitations: tuple[LimitationToken, ...] = ()
     quality: QualitySummary
+    #: What the run actually read. Produced by the query path, not declared.
+    inputs: InputInventory
     random_seed: int | None = None
     result_artifact_hash: str = ""
 
@@ -244,7 +307,17 @@ class ResearchManifest:
             "resolution_policy_version": self.profile_resolution.resolution_policy_version,
             "dataset_provider_gap_resolutions": list(self.profile_resolution.canonical_map()),
             "revision_view": None if self.revision_view is None else self.revision_view.value,
-            "datasets": sorted([d.dataset_version, d.content_hash] for d in self.datasets),
+            "datasets": sorted(
+                [
+                    d.dataset_version,
+                    d.layer,
+                    "" if d.resolved_profile is None else d.resolved_profile.value,
+                    d.content_hash,
+                    d.publication_manifest_hash,
+                ]
+                for d in self.datasets
+            ),
+            "inputs": self.inputs.identity(),
             "consumed_artifacts": sorted(
                 _artifact_identity(artifact, self.resolved_profile)
                 for artifact in self.consumed_artifacts
@@ -288,9 +361,7 @@ _TOKEN_EVIDENCE: dict[LimitationToken, str] = {
 def emit_manifest(
     manifest: ResearchManifest,
     *,
-    directly_read_datasets: Sequence[str],
-    consumed_artifact_ids: Sequence[str] = (),
-    revisable_datasets_consumed: Sequence[str] = (),
+    result_bytes: bytes,
     unapproved_bounds_relied_upon: Sequence[str] = (),
     hash_mismatches: Sequence[str] = (),
 ) -> ResearchManifest:
@@ -324,6 +395,47 @@ def emit_manifest(
             "the id is taken"
         )
 
+    inventory = manifest.inputs
+    if not manifest.result_artifact_hash:
+        problems.append(
+            "result_artifact_hash is empty; a result nothing identifies cannot be checked "
+            "against the manifest that claims to describe it"
+        )
+    elif content_hash(result_bytes.decode("utf-8", errors="surrogateescape")) != (
+        manifest.result_artifact_hash
+    ):
+        problems.append(
+            "result_artifact_hash does not match the emitted result bytes; the manifest "
+            "describes a result other than the one produced"
+        )
+    if not inventory.quality_report_hash:
+        problems.append("the input inventory records no quality-report identity")
+
+    duplicate_datasets = sorted(
+        {
+            reference.dataset_version
+            for reference in manifest.datasets
+            if [d.dataset_version for d in manifest.datasets].count(reference.dataset_version) > 1
+        }
+    )
+    if duplicate_datasets:
+        problems.append(f"dataset references {duplicate_datasets} appear more than once")
+    duplicate_artifacts = sorted(
+        {
+            artifact.artifact_id
+            for artifact in manifest.consumed_artifacts
+            if [a.artifact_id for a in manifest.consumed_artifacts].count(artifact.artifact_id) > 1
+        }
+    )
+    if duplicate_artifacts:
+        problems.append(f"consumed artifacts {duplicate_artifacts} appear more than once")
+    for artifact in manifest.consumed_artifacts:
+        if not is_canonical_instant(artifact.artifact_first_built_time):
+            problems.append(
+                f"consumed artifact {artifact.artifact_id!r} records a non-canonical "
+                "artifact_first_built_time"
+            )
+
     seen_datasets: set[str] = set()
     for entry in manifest.dataset_resolution_evidence:
         if entry.dataset in seen_datasets:
@@ -344,20 +456,35 @@ def emit_manifest(
                 f"{manifest.resolved_profile.value}; artifacts follow the resolved profile"
             )
 
-    if revisable_datasets_consumed and manifest.revision_view is None:
+    if inventory.revisable_datasets_consumed and manifest.revision_view is None:
         problems.append(
-            f"revisable sources {sorted(set(revisable_datasets_consumed))} were consumed with "
-            "no revision_view; which revision a query wanted is never an implicit answer"
+            f"revisable sources {list(inventory.revisable_datasets_consumed)} were consumed "
+            "with no revision_view; which revision a query wanted is never an implicit answer"
         )
 
     recorded_artifacts = {artifact.artifact_id for artifact in manifest.consumed_artifacts}
-    missing_artifacts = sorted(set(consumed_artifact_ids) - recorded_artifacts)
+    missing_artifacts = sorted(set(inventory.consumed_artifact_ids) - recorded_artifacts)
     if missing_artifacts:
         problems.append(
             f"derived artifacts {missing_artifacts} were consumed but are absent from "
             "derived_artifacts; dataset versions alone cannot reproduce a result that read "
             "them"
         )
+
+    referenced_versions = {reference.dataset_version for reference in manifest.datasets}
+    unpinned = sorted(set(inventory.dataset_manifest_hashes) - referenced_versions)
+    if unpinned:
+        problems.append(
+            f"datasets {unpinned} were read but have no DatasetReference; a version with no "
+            "publication hash cannot be told apart from another build of the same name"
+        )
+    for reference in manifest.datasets:
+        recorded = inventory.dataset_manifest_hashes.get(reference.dataset_version)
+        if recorded is not None and recorded != reference.publication_manifest_hash:
+            problems.append(
+                f"dataset {reference.dataset_version!r} was read at publication "
+                f"{recorded!r} but is referenced at {reference.publication_manifest_hash!r}"
+            )
 
     if not manifest.code.working_tree_clean:
         problems.append(
@@ -377,7 +504,7 @@ def emit_manifest(
             "not be described as a backtest"
         )
 
-    problems.extend(_check_resolution_evidence(manifest, directly_read_datasets))
+    problems.extend(_check_resolution_evidence(manifest, inventory.direct_source_datasets))
     problems.extend(_check_coverage(manifest))
     problems.extend(_check_tokens(manifest))
 
@@ -509,6 +636,7 @@ __all__ = [
     "ConsumedArtifact",
     "CoverageEvidence",
     "DatasetReference",
+    "InputInventory",
     "OriginExclusion",
     "QualitySummary",
     "ResearchManifest",

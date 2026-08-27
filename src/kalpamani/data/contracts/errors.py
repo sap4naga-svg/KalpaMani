@@ -134,6 +134,34 @@ class AcquisitionIncompleteError(PointInTimeError):
     """
 
 
+class UnsafePathComponentError(PointInTimeError):
+    """An identifier reaching the filesystem is not a safe path component.
+
+    Refused rather than sanitised: rewriting a bad name would map two different
+    identifiers onto one path, and two datasets sharing a directory is a
+    corruption that verifies.
+    """
+
+
+class BuildBoundaryError(PointInTimeError):
+    """A Gold dataset was assembled outside the sanctioned build path.
+
+    Gold is built from :class:`ResolvedRunInputs`, which carry a resolution
+    receipt. A dataset assembled from arbitrary rows has no receipt, so nothing
+    can say which policy admitted them -- and a build nobody can account for is
+    not publishable however correct its rows happen to be.
+    """
+
+
+class QualityGateError(PointInTimeError):
+    """A publication or read was attempted without passing the quality gate.
+
+    A missing quality report is not a clean one. Obtaining a publishable dataset
+    by omitting the evidence is exactly the fail-open shape the gate exists to
+    remove.
+    """
+
+
 class ManifestRefusedError(PointInTimeError):
     """A research manifest could not be emitted, so the result is inadmissible.
 
@@ -157,6 +185,7 @@ __all__ = [
     "ArtifactIntegrityError",
     "BlockingQualityIssueError",
     "BronzeIntegrityError",
+    "BuildBoundaryError",
     "DatasetCoverageError",
     "DatasetPublicationError",
     "EnvelopeError",
@@ -168,8 +197,10 @@ __all__ = [
     "PendingContractError",
     "PointInTimeError",
     "ProfileResolutionError",
+    "QualityGateError",
     "QueryRangeError",
     "RequiredInputUnavailableError",
     "SecurityNotInDatasetError",
     "UnresolvedProviderAvailabilityError",
+    "UnsafePathComponentError",
 ]

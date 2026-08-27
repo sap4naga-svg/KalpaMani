@@ -8,6 +8,7 @@ programme accumulates results it cannot defend.
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from types import MappingProxyType
@@ -16,6 +17,7 @@ from typing import Any, cast
 import pytest
 
 from fixtures import phase3a
+from kalpamani.data.contracts.canonical import content_hash
 from kalpamani.data.contracts.errors import ManifestRefusedError
 from kalpamani.data.contracts.manifest import (
     MANIFEST_VERSION,
@@ -23,6 +25,7 @@ from kalpamani.data.contracts.manifest import (
     ConsumedArtifact,
     CoverageEvidence,
     DatasetReference,
+    InputInventory,
     OriginExclusion,
     QualitySummary,
     ResearchManifest,
@@ -61,12 +64,18 @@ def _evidence(dataset: str, policy: DatasetGapPolicy) -> DatasetResolutionEviden
         dataset=dataset,
         policy=policy,
         rows_considered=10,
+        public_rows_applicable=10,
         public_basis=TimingBasis.EXACT,
         public_exact_rows=10 - excluded,
         public_bounded_rows=0,
+        public_excluded_rows=excluded,
+        public_unresolved_rows=0,
+        provider_rows_applicable=10,
         provider_basis=TimingBasis.BOUND if bounded else TimingBasis.EXACT,
         provider_exact_rows=0 if bounded else 10 - excluded,
         provider_bounded_rows=10 if bounded else 0,
+        provider_excluded_rows=excluded,
+        provider_unresolved_rows=0,
         excluded_rows=excluded,
         reason=f"synthetic {policy.value} evidence",
     )
@@ -125,26 +134,39 @@ def _manifest(**overrides: object) -> ResearchManifest:
                 dataset_version=phase3a.DATASET_VERSION,
                 layer="GOLD",
                 content_hash="sha256:abc",
+                publication_manifest_hash="sha256:publication",
                 resolved_profile=config.resolved_profile,
             ),
         ),
+        "inputs": _inventory(),
         "definitions": {"universe_definition_version": phase3a.UNIVERSE_DEFINITION_VERSION},
         "limitations": _tokens(config, evidence),
         "quality": QualitySummary(blocking_issues_open=0, warnings_open=2),
         "random_seed": 20260826,
-        "result_artifact_hash": "sha256:result",
+        "result_artifact_hash": content_hash(RESULT_BYTES.decode("utf-8")),
     }
     base.update(overrides)
     return ResearchManifest(**base)  # type: ignore[arg-type]
 
 
-def _emit(manifest: ResearchManifest) -> ResearchManifest:
-    return emit_manifest(
-        manifest,
-        directly_read_datasets=[
-            entry.dataset for entry in manifest.profile_resolution.dataset_resolutions
-        ],
-    )
+RESULT_BYTES = b'{"result": "synthetic"}'
+
+
+def _inventory(**overrides: object) -> InputInventory:
+    base: dict[str, object] = {
+        "direct_source_datasets": tuple(
+            entry.dataset for entry in phase3a.resolution().dataset_resolutions
+        ),
+        "dataset_manifest_hashes": {phase3a.DATASET_VERSION: "sha256:publication"},
+        "quality_report_hash": "sha256:quality",
+        "result_artifact_hash": content_hash(RESULT_BYTES.decode("utf-8")),
+    }
+    base.update(overrides)
+    return InputInventory(**base)  # type: ignore[arg-type]
+
+
+def _emit(manifest: ResearchManifest, *, result_bytes: bytes = RESULT_BYTES) -> ResearchManifest:
+    return emit_manifest(manifest, result_bytes=result_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +209,7 @@ def test_a_dataset_reference_keyed_to_another_profile_refuses() -> None:
                 dataset_version=phase3a.DATASET_VERSION,
                 layer="GOLD",
                 content_hash="sha256:abc",
+                publication_manifest_hash="sha256:publication",
                 resolved_profile=FORWARD,
             ),
         )
@@ -197,28 +220,19 @@ def test_a_dataset_reference_keyed_to_another_profile_refuses() -> None:
 
 def test_a_revisable_source_consumed_without_a_revision_view_refuses() -> None:
     """Which revision a query wanted is never an implicit answer."""
-    manifest = _manifest(revision_view=None)
+    manifest = _manifest(
+        revision_view=None,
+        inputs=_inventory(revisable_datasets_consumed=("listing",)),
+    )
     with pytest.raises(ManifestRefusedError, match="no revision_view"):
-        emit_manifest(
-            manifest,
-            directly_read_datasets=[
-                entry.dataset for entry in manifest.profile_resolution.dataset_resolutions
-            ],
-            revisable_datasets_consumed=["listing"],
-        )
+        _emit(manifest)
 
 
 def test_a_consumed_artifact_absent_from_the_manifest_refuses() -> None:
     """Dataset versions alone cannot reproduce a result that read an artifact."""
-    manifest = _manifest()
+    manifest = _manifest(inputs=_inventory(consumed_artifact_ids=("adj-missing",)))
     with pytest.raises(ManifestRefusedError, match="absent from"):
-        emit_manifest(
-            manifest,
-            directly_read_datasets=[
-                entry.dataset for entry in manifest.profile_resolution.dataset_resolutions
-            ],
-            consumed_artifact_ids=["adj-missing"],
-        )
+        _emit(manifest)
 
 
 def test_definitions_are_deep_frozen_so_run_id_cannot_drift() -> None:
@@ -244,12 +258,18 @@ def test_a_provider_availability_token_needs_bounded_or_excluded_rows() -> None:
             dataset=entry.dataset,
             policy=entry.policy,
             rows_considered=10,
+            public_rows_applicable=10,
             public_basis=TimingBasis.EXACT,
             public_exact_rows=10,
             public_bounded_rows=0,
+            public_excluded_rows=0,
+            public_unresolved_rows=0,
+            provider_rows_applicable=10,
             provider_basis=TimingBasis.EXACT,
             provider_exact_rows=10,
             provider_bounded_rows=0,
+            provider_excluded_rows=0,
+            provider_unresolved_rows=0,
             excluded_rows=0,
             reason="nothing was bounded or excluded",
         )
@@ -265,6 +285,91 @@ def test_a_provider_availability_token_needs_bounded_or_excluded_rows() -> None:
                 limitations=(LimitationToken.PROVIDER_AVAILABILITY_UNKNOWN,),
             )
         )
+
+
+def test_a_caller_cannot_shorten_the_input_inventory() -> None:
+    """The evidence rules run against what the run read, not what a caller admits.
+
+    The shape this replaces took the inventory as arguments, so passing empty
+    lists satisfied every closure rule. An inventory the query path produces
+    cannot be shortened by omission.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    signature_fields = {f.name for f in dataclass_fields(ResearchManifest)}
+    assert "inputs" in signature_fields, "The manifest owns its inventory."
+
+    parameters = set(inspect.signature(emit_manifest).parameters)
+    assert not parameters & {
+        "directly_read_datasets",
+        "consumed_artifact_ids",
+        "revisable_datasets_consumed",
+    }, "No side-channel input lists remain on the emission boundary."
+
+
+def test_an_empty_result_hash_refuses() -> None:
+    with pytest.raises(ManifestRefusedError, match="result_artifact_hash is empty"):
+        _emit(_manifest(result_artifact_hash=""))
+
+
+def test_a_result_hash_that_does_not_match_the_bytes_refuses() -> None:
+    """The manifest must describe the result that was produced, not another one."""
+    with pytest.raises(ManifestRefusedError, match="does not match the emitted result bytes"):
+        _emit(_manifest(), result_bytes=b'{"result": "something else"}')
+
+
+def test_a_dataset_read_without_a_reference_refuses() -> None:
+    manifest = _manifest(
+        inputs=_inventory(
+            dataset_manifest_hashes={
+                phase3a.DATASET_VERSION: "sha256:publication",
+                "gold/unreferenced": "sha256:other",
+            }
+        )
+    )
+    with pytest.raises(ManifestRefusedError, match="no DatasetReference"):
+        _emit(manifest)
+
+
+def test_a_dataset_referenced_at_another_publication_refuses() -> None:
+    """Two builds can share a version string and be different datasets."""
+    manifest = _manifest(
+        inputs=_inventory(dataset_manifest_hashes={phase3a.DATASET_VERSION: "sha256:different"})
+    )
+    with pytest.raises(ManifestRefusedError, match="was read at publication"):
+        _emit(manifest)
+
+
+def test_duplicate_dataset_references_refuse() -> None:
+    reference = DatasetReference(
+        dataset_version=phase3a.DATASET_VERSION,
+        layer="GOLD",
+        content_hash="sha256:abc",
+        publication_manifest_hash="sha256:publication",
+        resolved_profile=PUBLIC,
+    )
+    with pytest.raises(ManifestRefusedError, match="appear more than once"):
+        _emit(_manifest(datasets=(reference, reference)))
+
+
+def test_the_publication_hash_enters_run_id() -> None:
+    """A version string is not an identity; the publication it names is."""
+    baseline = _manifest().run_id
+    other = _manifest(
+        datasets=(
+            DatasetReference(
+                dataset_version=phase3a.DATASET_VERSION,
+                layer="GOLD",
+                content_hash="sha256:abc",
+                publication_manifest_hash="sha256:a-different-build",
+                resolved_profile=PUBLIC,
+            ),
+        ),
+        inputs=_inventory(
+            dataset_manifest_hashes={phase3a.DATASET_VERSION: "sha256:a-different-build"}
+        ),
+    ).run_id
+    assert baseline != other
 
 
 def test_run_id_is_deterministic_and_derived_not_generated() -> None:
@@ -430,6 +535,7 @@ def test_a_missing_profile_resolution_cannot_be_constructed() -> None:
             as_of_cutoff=AS_OF,
             revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
             quality=QualitySummary(blocking_issues_open=0, warnings_open=0),
+            inputs=_inventory(),
         )
 
 
@@ -440,6 +546,7 @@ def test_a_missing_as_of_cutoff_cannot_be_constructed() -> None:
             profile_resolution=phase3a.resolution(),
             revision_view=RevisionView.AS_KNOWN_AT_AS_OF,
             quality=QualitySummary(blocking_issues_open=0, warnings_open=0),
+            inputs=_inventory(),
         )
 
 
@@ -457,11 +564,9 @@ def test_a_latest_restated_run_may_not_call_itself_a_backtest() -> None:
 
 def test_a_directly_read_dataset_absent_from_the_evidence_refuses() -> None:
     manifest = _manifest()
+    manifest = _manifest(inputs=_inventory(direct_source_datasets=("fundamental_fact",)))
     with pytest.raises(ManifestRefusedError, match="absent from the per-dataset"):
-        emit_manifest(
-            manifest,
-            directly_read_datasets=["fundamental_fact"],
-        )
+        _emit(manifest)
 
 
 def test_unreconciled_per_axis_counts_refuse() -> None:
@@ -471,12 +576,18 @@ def test_unreconciled_per_axis_counts_refuse() -> None:
         dataset="price_bar",
         policy=DatasetGapPolicy.NONE,
         rows_considered=10,
+        public_rows_applicable=10,
         public_basis=TimingBasis.EXACT,
         public_exact_rows=3,
         public_bounded_rows=0,
+        public_excluded_rows=0,
+        public_unresolved_rows=0,
+        provider_rows_applicable=10,
         provider_basis=TimingBasis.EXACT,
         provider_exact_rows=10,
         provider_bounded_rows=0,
+        provider_excluded_rows=0,
+        provider_unresolved_rows=0,
         excluded_rows=0,
         reason="deliberately unreconciled",
     )
@@ -628,17 +739,13 @@ def test_an_unapproved_bound_or_hash_mismatch_refuses() -> None:
     with pytest.raises(ManifestRefusedError, match="unapproved bound was relied upon"):
         emit_manifest(
             _manifest(),
-            directly_read_datasets=[
-                entry.dataset for entry in phase3a.resolution().dataset_resolutions
-            ],
+            result_bytes=RESULT_BYTES,
             unapproved_bounds_relied_upon=["price_bar:SESSION_CLOSE_PLUS_LAG"],
         )
     with pytest.raises(ManifestRefusedError, match="content hash failed to verify"):
         emit_manifest(
             _manifest(),
-            directly_read_datasets=[
-                entry.dataset for entry in phase3a.resolution().dataset_resolutions
-            ],
+            result_bytes=RESULT_BYTES,
             hash_mismatches=["gold/synthetic.a1.1"],
         )
 

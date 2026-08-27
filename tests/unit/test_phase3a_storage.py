@@ -110,47 +110,6 @@ def test_a_second_retrieval_records_a_second_acquisition(tmp_path: Path) -> None
     )
 
 
-def test_a_payload_without_its_acquisition_record_is_repaired_on_retry(tmp_path: Path) -> None:
-    """CRASH RECOVERY. The one reachable inconsistency, and it completes.
-
-    Content is written first and acquisition second, so a crash between them
-    leaves a payload with no acquisition record. A retry repairs it. The reverse
-    order would leave an acquisition naming a payload that does not exist, which
-    nothing on disk could repair.
-    """
-    store = BronzeStore(tmp_path)
-    payload = phase3a.bronze_payload()
-    artifact = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
-
-    artifact.acquisition_path.unlink()  # simulate the crash
-    assert store.audit_partition(
-        provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
-    ) == (artifact.content_sha256,)
-    with pytest.raises(AcquisitionIncompleteError, match="no acquisition record"):
-        store.require_complete(
-            provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
-        )
-
-    repaired = store.write(payload=payload, retrieval=_retrieval(), ingest_date=INGEST_DATE)
-    assert repaired.repaired is True
-    assert repaired.content_written is False
-    assert repaired.acquisition_written is True
-    assert repaired.acquisition_path.exists()
-    store.require_complete(provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE)
-
-
-def test_a_complete_partition_reports_no_orphans(tmp_path: Path) -> None:
-    """NEGATIVE CONTROL. The audit must not fault a partition that is fine."""
-    store = BronzeStore(tmp_path)
-    store.write(payload=phase3a.bronze_payload(), retrieval=_retrieval(), ingest_date=INGEST_DATE)
-    assert (
-        store.audit_partition(
-            provider=phase3a.PROVIDER, dataset="daily_bars", ingest_date=INGEST_DATE
-        )
-        == ()
-    )
-
-
 def test_an_acquisition_without_an_ingestion_run_id_is_refused() -> None:
     with pytest.raises(AcquisitionIncompleteError, match="needs an ingestion_run_id"):
         RetrievalMetadata(
@@ -202,6 +161,9 @@ def test_identity_is_the_uncompressed_payload_not_the_stored_file(tmp_path: Path
     assert artifact.content_sha256 == sha256_hex(payload)
     assert artifact.content_sha256 != sha256_hex(artifact.path.read_bytes())
     assert artifact.path.name.startswith(artifact.content_sha256)
+    assert artifact.path.parent.name == "sha256", (
+        "The content object lives in the global digest namespace, not under a date."
+    )
 
 
 def test_compression_is_deterministic_so_a_rewrite_is_byte_identical(tmp_path: Path) -> None:

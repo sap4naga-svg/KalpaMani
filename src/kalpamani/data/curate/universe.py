@@ -47,6 +47,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from kalpamani.data.contracts.canonical import content_hash
+from kalpamani.data.contracts.dataset import UniverseSnapshotHeader
 from kalpamani.data.contracts.entities import (
     Listing,
     PriceBar,
@@ -69,6 +70,7 @@ from kalpamani.data.contracts.vocabulary import (
     BarResolution,
     Exchange,
     InformationSetProfile,
+    ListingFactKind,
     UniverseExclusionReason,
 )
 from kalpamani.data.curate.lineage import (
@@ -184,8 +186,21 @@ def current_listings(listings: Sequence[Listing]) -> tuple[Listing, ...]:
     for listing in listings:
         key = (listing.listing_id, listing.listing_fact_kind.value)
         held = latest.get(key)
-        if held is None or listing.envelope.revision_sequence > held.envelope.revision_sequence:
+        if held is None:
             latest[key] = listing
+            continue
+        if listing.envelope.revision_sequence > held.envelope.revision_sequence:
+            latest[key] = listing
+        elif listing.envelope.revision_sequence == held.envelope.revision_sequence and (
+            listing != held
+        ):
+            raise RequiredInputUnavailableError(
+                "REQUIRED_INPUT_UNAVAILABLE: two different rows share listing "
+                f"{listing.listing_id!r} kind {listing.listing_fact_kind.value} at revision "
+                f"{listing.envelope.revision_sequence}. Contradictory evidence at one revision "
+                "has no later revision to supersede it, and choosing between them by "
+                "iteration order would make membership depend on table order."
+            )
     return tuple(sorted(latest.values(), key=lambda item: (item.security_id, item.listing_id)))
 
 
@@ -252,6 +267,11 @@ def build_universe_snapshot(
 
     rows: list[UniverseMembership] = []
     for listing in current_listings(admissible_listings):
+        if listing.listing_fact_kind is not ListingFactKind.STATE:
+            # A CHANGE_ANNOUNCEMENT says a listing is about to change. It is not
+            # a listing state, and treating it as one would let an announced
+            # future delisting decide today's membership.
+            continue
         if not listing.is_listed_on(session_date):
             continue
         decision = _evaluate(
@@ -316,28 +336,38 @@ def _require_inputs(
     supplied: dict[str, int],
     admissible: dict[str, int],
 ) -> None:
-    """Refuse the build when a REQUIRED domain that was supplied emptied.
+    """Refuse the build when a REQUIRED domain has no admissible rows.
+
+    **Both** cases refuse, and the earlier implementation checked only the
+    second: a domain supplied with nothing at all is exactly as unavailable as
+    one filtered down to nothing. Treating "never supplied" as acceptable would
+    make a build over an entirely absent listing table produce a confident
+    zero-security universe.
 
     Publishing an empty snapshot instead would let a profile that cannot reach
     back before we existed answer a historical question with a zero-security
     market -- the substitution the contract forbids, wearing an empty result
     rather than the wrong profile's answer.
     """
-    emptied = [
-        domain
+    unavailable = {
+        domain: (supplied.get(domain, 0), admissible.get(domain, 0))
         for domain in REQUIRED_UNIVERSE_DOMAINS
-        if supplied.get(domain, 0) > 0 and admissible.get(domain, 0) == 0
-    ]
-    if not emptied:
+        if admissible.get(domain, 0) == 0
+    }
+    if not unavailable:
         return
-    counts = {domain: supplied[domain] for domain in emptied}
+    detail = {
+        domain: f"supplied={counts[0]}, admissible={counts[1]}"
+        for domain, counts in unavailable.items()
+    }
     raise RequiredInputUnavailableError(
         "REQUIRED_INPUT_UNAVAILABLE: the universe build for "
         f"{session_date.isoformat()} under {resolved_profile.value} has no admissible rows in "
-        f"{emptied} at the evaluation cutoff {evaluation_cutoff.isoformat()}, although rows "
-        f"were supplied ({counts}). The snapshot is unavailable, not empty: a universe that "
-        "could not be computed and a universe that genuinely selected nobody look identical "
-        "downstream and mean opposite things."
+        f"{sorted(unavailable)} at the evaluation cutoff {evaluation_cutoff.isoformat()} "
+        f"({detail}). A domain never supplied is exactly as unavailable as one filtered to "
+        "nothing. The snapshot is unavailable, not empty: a universe that could not be "
+        "computed and one that genuinely selected nobody look identical downstream and mean "
+        "opposite things."
     )
 
 
@@ -372,7 +402,16 @@ def _evaluate(
     window = history[-definition.addv_window_sessions :] if history else ()
     addv = _average_dollar_volume(window)
     attribute = _attribute_on(attributes, security_id, "security_type", session_date)
-    security_type = None if attribute is None else attribute.value
+    if attribute is None:
+        # Absent evidence is not evidence of the wrong type. Labelling it
+        # SECURITY_TYPE would publish "this is not a common stock" as a finding
+        # when the truth is that nothing said what it is.
+        raise RequiredInputUnavailableError(
+            "REQUIRED_INPUT_UNAVAILABLE: no admissible security_type evidence for "
+            f"{security_id} on {session_date.isoformat()}. A missing attribute is an "
+            "unanswerable question, not a SECURITY_TYPE exclusion."
+        )
+    security_type = attribute.value
     common_eligible = security_type in definition.eligible_security_types
 
     reason: UniverseExclusionReason | None = None
@@ -502,12 +541,58 @@ def _attribute_on(
     attribute: str,
     on: date,
 ) -> SecurityAttribute | None:
-    for row in attributes:
-        if row.security_id != security_id or row.attribute != attribute:
-            continue
-        if row.valid_from <= on and (row.valid_to is None or on <= row.valid_to):
-            return row
-    return None
+    """The one attribute row in force on ``on``, or ``None`` if there is none.
+
+    Raises:
+        RequiredInputUnavailableError: if two rows are in force at once. An
+            overlapping attribute history is contradictory evidence, not a
+            preference to be resolved by iteration order -- picking the first
+            would make membership depend on table order.
+    """
+    matches = [
+        row
+        for row in attributes
+        if row.security_id == security_id
+        and row.attribute == attribute
+        and row.valid_from <= on
+        and (row.valid_to is None or on <= row.valid_to)
+    ]
+    if len(matches) > 1:
+        raise RequiredInputUnavailableError(
+            f"REQUIRED_INPUT_UNAVAILABLE: {len(matches)} {attribute!r} rows are in force for "
+            f"{security_id} on {on.isoformat()} "
+            f"(valid_from {[row.valid_from.isoformat() for row in matches]}). Overlapping "
+            "attribute evidence is contradictory, and resolving it by iteration order would "
+            "make membership depend on table order."
+        )
+    return matches[0] if matches else None
+
+
+def build_snapshot_header(
+    rows: Sequence[UniverseMembership],
+    *,
+    session_date: date,
+    definition: UniverseDefinition,
+    resolved_profile: InformationSetProfile,
+    evaluation_cutoff: datetime,
+) -> UniverseSnapshotHeader:
+    """Record that this session's snapshot was **built**, rows or no rows.
+
+    A snapshot whose rule legitimately selected nobody has zero member rows; a
+    session that was never built has zero rows too. Only the header separates
+    them, and the separation is the difference between "nobody qualified" and
+    "we cannot answer".
+    """
+    return UniverseSnapshotHeader(
+        session_date=session_date,
+        universe_definition_version=definition.version,
+        resolved_profile=resolved_profile,
+        evaluation_cutoff=evaluation_cutoff,
+        row_count=len(rows),
+        snapshot_content_hash=snapshot_content_hash(rows),
+        derivation_spec_version=f"{UNIVERSE_SPEC_VERSION}+{definition.version}",
+        status="COMPLETE",
+    )
 
 
 def snapshot_content_hash(rows: Sequence[UniverseMembership]) -> str:
@@ -520,6 +605,7 @@ __all__ = [
     "UNIVERSE_SPEC_VERSION",
     "UniverseBuildInputs",
     "UniverseDefinition",
+    "build_snapshot_header",
     "build_universe_snapshot",
     "current_listings",
     "membership_content_hash",

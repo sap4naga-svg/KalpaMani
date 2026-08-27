@@ -23,6 +23,7 @@ from kalpamani.data.contracts.vocabulary import (
     BarResolution,
     InformationOrigin,
     InformationSetProfile,
+    ListingFactKind,
     ProviderBoundDerivation,
     ProviderTimeDerivation,
     PublicBoundDerivation,
@@ -41,6 +42,7 @@ from kalpamani.data.quality.checks import (
     check_ticker_history,
     check_universe_rebuild,
     check_universe_snapshots,
+    subsequently_delisted,
 )
 
 pytestmark = pytest.mark.unit
@@ -598,12 +600,27 @@ def test_the_survivorship_policy_is_named_and_versioned() -> None:
     """A threshold that decides whether results are believable carries a version."""
     assert DEFAULT_SURVIVORSHIP_POLICY.version
     assert DEFAULT_SURVIVORSHIP_POLICY.deep_history_years > 0
-    assert DEFAULT_SURVIVORSHIP_POLICY.minimum_eligible_snapshots >= 1
+    assert DEFAULT_SURVIVORSHIP_POLICY.minimum_eligible_snapshots >= 2, (
+        "One snapshot is an anecdote, and the documentation says so; the threshold has to "
+        "agree with it."
+    )
+    with pytest.raises(ValueError, match="at least 2"):
+        SurvivorshipPolicy(
+            version="survivorship/anecdote",
+            deep_history_years=5,
+            minimum_eligible_snapshots=1,
+        )
+    with pytest.raises(ValueError, match="must be positive"):
+        SurvivorshipPolicy(
+            version="survivorship/unscoped",
+            deep_history_years=0,
+            minimum_eligible_snapshots=2,
+        )
 
     lenient = SurvivorshipPolicy(
         version="survivorship/test-lenient",
         deep_history_years=100,
-        minimum_eligible_snapshots=1,
+        minimum_eligible_snapshots=2,
     )
     findings = check_universe_snapshots(
         {
@@ -624,6 +641,50 @@ def test_the_survivorship_policy_is_named_and_versioned() -> None:
         "Under a policy whose deep-history window nothing reaches, the alarm draws no "
         "conclusion at all."
     )
+
+
+def test_survivorship_ignores_an_announcement_only_future_delisting() -> None:
+    """An announcement that a listing will end is not the listing ending.
+
+    Counting it would let a scheduled delisting satisfy the alarm before it
+    happened -- and the alarm exists to catch data that only *looks* historical.
+    """
+    listings = phase3a.listings()
+    announced_only = tuple(
+        listing
+        for listing in listings
+        if listing.listing_fact_kind is ListingFactKind.CHANGE_ANNOUNCEMENT
+        or listing.listing_end is None
+    )
+    assert subsequently_delisted(announced_only, dataset_cutoff=date(2030, 1, 1)) == frozenset()
+
+    assert phase3a.SEC_DELISTED in subsequently_delisted(listings, dataset_cutoff=date(2030, 1, 1))
+
+
+def test_survivorship_ignores_a_delisting_after_the_dataset_horizon() -> None:
+    """The build cannot have observed it, so it is not evidence the build holds."""
+    listings = phase3a.listings()
+    early = subsequently_delisted(listings, dataset_cutoff=date(2019, 1, 1))
+    later = subsequently_delisted(listings, dataset_cutoff=date(2024, 1, 1))
+    assert phase3a.SEC_DELISTED not in early
+    assert phase3a.SEC_DELISTED in later
+    assert phase3a.SEC_RENAMED in later, "Its 2023 delisting is inside the later horizon."
+    assert phase3a.SEC_RENAMED not in subsequently_delisted(
+        listings, dataset_cutoff=date(2022, 1, 1)
+    )
+
+
+def test_the_deep_history_window_is_leap_day_safe() -> None:
+    """29 February minus five years is not a date, and the alarm must not raise."""
+    findings = check_universe_snapshots(
+        phase3a.universe_snapshots(),
+        listings=phase3a.listings(),
+        resolved_profile=PUBLIC,
+        approvals=phase3a.approvals(),
+        evaluation_cutoffs=phase3a.evaluation_cutoffs(),
+        dataset_cutoff=date(2028, 2, 29),
+    )
+    assert _names(findings) == set()
 
 
 def test_a_universe_rebuild_that_drifts_is_blocking() -> None:
@@ -767,7 +828,10 @@ def test_a_downgraded_run_that_still_names_the_requested_profile_is_blocking() -
 
 def test_an_adjusted_artifact_that_does_not_reproduce_is_blocking() -> None:
     from kalpamani.data.contracts.vocabulary import AdjustmentPolicy
-    from kalpamani.data.curate.adjustment import build_adjusted_bar_artifact
+    from kalpamani.data.curate.adjustment import (
+        ADJUSTMENT_CONVENTION,
+        build_adjusted_bar_artifact,
+    )
 
     artifact = build_adjusted_bar_artifact(
         [
@@ -777,6 +841,7 @@ def test_an_adjusted_artifact_that_does_not_reproduce_is_blocking() -> None:
         ],
         phase3a.corporate_actions(),
         adjustment_policy=AdjustmentPolicy.SPLIT_ONLY,
+        adjustment_convention=ADJUSTMENT_CONVENTION,
         resolved_profile=PUBLIC,
         as_of_epoch=phase3a.utc(2019, 6, 28, 21, 0),
         approvals=phase3a.approvals(),

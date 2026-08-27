@@ -67,6 +67,7 @@ from kalpamani.data.contracts.vocabulary import (
     InformationOrigin,
     InformationSetProfile,
     IssueStatus,
+    ListingFactKind,
     PublicTimeDerivation,
     QualitySeverity,
 )
@@ -969,14 +970,67 @@ class SurvivorshipPolicy:
     deep_history_years: int
     minimum_eligible_snapshots: int
 
+    def __post_init__(self) -> None:
+        if self.deep_history_years <= 0:
+            raise ValueError(
+                "deep_history_years must be positive. A zero-year window makes every snapshot "
+                "deep history, which is the unscoped alarm this policy exists to replace."
+            )
+        if self.minimum_eligible_snapshots < 2:
+            raise ValueError(
+                "minimum_eligible_snapshots must be at least 2. One snapshot is an anecdote: "
+                "a single old universe with no subsequent delistings can happen to a small, "
+                "stable, correctly-built sample, and blocking a whole domain on it is how a "
+                "check gets switched off."
+            )
+
 
 #: The policy this slice applies. Changing it changes what the alarm claims, so
 #: it carries a version like any other governed threshold.
 DEFAULT_SURVIVORSHIP_POLICY: Final = SurvivorshipPolicy(
-    version="survivorship/a1.1",
+    version="survivorship/a1.2",
     deep_history_years=5,
-    minimum_eligible_snapshots=1,
+    minimum_eligible_snapshots=2,
 )
+
+
+def _subtract_years(anchor: date, years: int) -> date:
+    """``anchor`` minus ``years``, leap-day safe.
+
+    29 February minus five years is not a date. Clamping to the 28th is the only
+    answer that keeps the window monotonic, and doing it here means the alarm
+    does not raise once every four years.
+    """
+    try:
+        return anchor.replace(year=anchor.year - years)
+    except ValueError:
+        return anchor.replace(year=anchor.year - years, day=28)
+
+
+def subsequently_delisted(
+    listings: Sequence[Listing],
+    *,
+    dataset_cutoff: date,
+) -> frozenset[str]:
+    """Securities whose listing actually ended on or before the dataset horizon.
+
+    Three things deliberately do **not** count:
+
+    - a ``CHANGE_ANNOUNCEMENT`` row. An announcement that a listing will end is
+      not the listing ending, and counting it would let a scheduled delisting
+      satisfy the alarm before it happened.
+    - a listing whose end is after the dataset horizon. The dataset cannot have
+      observed it, so citing it as evidence of survivorship would be citing
+      something the build does not know.
+    - an open-ended listing. It has not ended.
+    """
+    return frozenset(
+        listing.security_id
+        for listing in listings
+        if listing.listing_fact_kind is ListingFactKind.STATE
+        and listing.listing_end is not None
+        and listing.listing_end <= dataset_cutoff
+    )
 
 
 def check_universe_snapshots(
@@ -1002,12 +1056,8 @@ def check_universe_snapshots(
     """
     dataset = "universe_membership"
     found: list[QualityFinding] = []
-    ever_delisted = {listing.security_id for listing in listings if listing.listing_end is not None}
-    deep_before = date(
-        dataset_cutoff.year - survivorship_policy.deep_history_years,
-        dataset_cutoff.month,
-        dataset_cutoff.day,
-    )
+    ever_delisted = subsequently_delisted(listings, dataset_cutoff=dataset_cutoff)
+    deep_before = _subtract_years(dataset_cutoff, survivorship_policy.deep_history_years)
 
     eligible_sessions = [session for session in snapshots if session <= deep_before]
     any_delisted_in_deep_history = False
@@ -1132,4 +1182,5 @@ __all__ = [
     "check_ticker_history",
     "check_universe_rebuild",
     "check_universe_snapshots",
+    "subsequently_delisted",
 ]

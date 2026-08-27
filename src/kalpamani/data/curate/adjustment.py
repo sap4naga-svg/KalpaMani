@@ -72,6 +72,13 @@ from kalpamani.data.contracts.vocabulary import (
 #: produced it, and the point of keying an artifact is that its meaning does not.
 ADJUSTMENT_CONVENTION: Final = AdjustmentConvention.FORWARD_BASE_NORMALIZED
 
+#: Conventions this implementation actually computes. A caller may name only
+#: these: accepting a name the code does not compute would label a series with
+#: something its own numbers contradict.
+SUPPORTED_CONVENTIONS: Final[frozenset[AdjustmentConvention]] = frozenset(
+    {AdjustmentConvention.FORWARD_BASE_NORMALIZED}
+)
+
 #: Version of this computation. Change it -- or the convention -- and every
 #: artifact it produces is a different artifact with a different hash.
 ADJUSTMENT_SPEC_VERSION = f"adj/a1.2+{ADJUSTMENT_CONVENTION.value}"
@@ -85,6 +92,14 @@ _PRICE_QUANTUM = Decimal("0.000001")
 
 #: Action types this slice adjusts for.
 _SPLIT_TYPES = frozenset({CorporateActionType.SPLIT, CorporateActionType.REVERSE_SPLIT})
+
+#: Which action types each policy consumes. A policy that ignores an action type
+#: must not carry it in lineage: an ignored input still narrows the artifact's
+#: availability and eligibility, which would make it less available than its own
+#: numbers.
+_POLICY_ACTION_TYPES: Final[dict[AdjustmentPolicy, frozenset[CorporateActionType]]] = {
+    AdjustmentPolicy.SPLIT_ONLY: _SPLIT_TYPES,
+}
 
 
 def admissible_actions(
@@ -109,6 +124,60 @@ def admissible_actions(
             continue
         admitted.append(action)
     return tuple(sorted(admitted, key=lambda a: (a.ex_date or date.min, a.action_id)))
+
+
+def require_supported_convention(convention: AdjustmentConvention) -> None:
+    """Refuse a convention this implementation does not compute.
+
+    Raises:
+        PendingContractError: naming what is computed instead. A builder that
+            accepted an unsupported convention would produce a series under a
+            label its own arithmetic contradicts, and the label is what later
+            results cite.
+    """
+    if convention not in SUPPORTED_CONVENTIONS:
+        raise PendingContractError(
+            f"Adjustment convention {convention.value} is defined in the contract vocabulary "
+            f"but this implementation computes "
+            f"{sorted(item.value for item in SUPPORTED_CONVENTIONS)}. Refusing to produce a "
+            "series under a convention it does not apply."
+        )
+
+
+def relevant_actions(
+    actions: Sequence[CorporateAction],
+    *,
+    security_id_scope: str,
+    policy: AdjustmentPolicy,
+    valid_time_start: date,
+    valid_time_end: date,
+    securities: Sequence[str],
+) -> tuple[CorporateAction, ...]:
+    """The actions that can actually affect this artifact, and no others.
+
+    Lineage naming an action the computation ignores is worse than lineage naming
+    too few: the artifact's availability is the max over its inputs, so an
+    unrelated action -- another security's, a dividend under ``SPLIT_ONLY``, one
+    effective outside the declared interval -- would push the artifact's
+    availability later and its eligibility narrower for a row that changed
+    nothing. The artifact would then be less available than the numbers it holds.
+    """
+    wanted_types = _POLICY_ACTION_TYPES[policy]
+    scoped = set(securities)
+    kept: list[CorporateAction] = []
+    for action in actions:
+        if action.security_id not in scoped:
+            continue
+        if action.action_type not in wanted_types:
+            continue
+        if action.ex_date is None:
+            continue
+        # An action taking effect after the interval adjusts none of its bars;
+        # one before the interval is already reflected in every bar it holds.
+        if action.ex_date > valid_time_end or action.ex_date <= valid_time_start:
+            continue
+        kept.append(action)
+    return tuple(sorted(kept, key=lambda item: (item.ex_date or date.min, item.action_id)))
 
 
 def adjustment_factor(
@@ -152,11 +221,17 @@ def adjusted_series(
     actions: Sequence[CorporateAction],
     *,
     policy: AdjustmentPolicy,
+    convention: AdjustmentConvention,
     as_of_epoch: datetime,
     resolved_profile: InformationSetProfile,
     approvals: BoundApprovals,
 ) -> tuple[PriceBarValues, ...]:
-    """Compute the adjusted series. Pure: same inputs, same output, every time."""
+    """Compute the adjusted series. Pure: same inputs, same output, every time.
+
+    ``convention`` is required and has no default: the caller names what
+    "adjusted" means, and this refuses any convention it does not compute.
+    """
+    require_supported_convention(convention)
     admitted = admissible_actions(
         actions,
         as_of_epoch=as_of_epoch,
@@ -220,7 +295,7 @@ def series_content_hash(series: Sequence[PriceBarValues]) -> str:
 def artifact_key(
     *,
     adjustment_policy: AdjustmentPolicy,
-    adjustment_convention: AdjustmentConvention = ADJUSTMENT_CONVENTION,
+    adjustment_convention: AdjustmentConvention,
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
     corporate_action_dataset_version: str,
@@ -319,7 +394,7 @@ def build_adjusted_bar_artifact(
     actions: Sequence[CorporateAction],
     *,
     adjustment_policy: AdjustmentPolicy,
-    adjustment_convention: AdjustmentConvention = ADJUSTMENT_CONVENTION,
+    adjustment_convention: AdjustmentConvention,
     resolved_profile: InformationSetProfile,
     as_of_epoch: datetime,
     approvals: BoundApprovals,
@@ -358,16 +433,30 @@ def build_adjusted_bar_artifact(
         valid_time_start=valid_time_start,
         valid_time_end=valid_time_end,
     )
+    require_supported_convention(adjustment_convention)
+    securities = sorted({bar.security_id for bar in bars})
+    # Lineage names only what the computation can actually consume. An ignored
+    # action still pushes the artifact's availability later and its eligibility
+    # narrower, which would make the artifact less available than its own numbers.
+    candidate_actions = relevant_actions(
+        actions,
+        security_id_scope=security_id_scope,
+        policy=adjustment_policy,
+        valid_time_start=valid_time_start,
+        valid_time_end=valid_time_end,
+        securities=securities,
+    )
     series = adjusted_series(
         bars,
-        actions,
+        candidate_actions,
         policy=adjustment_policy,
+        convention=adjustment_convention,
         as_of_epoch=as_of_epoch,
         resolved_profile=resolved_profile,
         approvals=approvals,
     )
     admitted = admissible_actions(
-        actions,
+        candidate_actions,
         as_of_epoch=as_of_epoch,
         resolved_profile=resolved_profile,
         approvals=approvals,
@@ -406,13 +495,13 @@ def build_adjusted_bar_artifact(
                         ),
                     },
                 ),
-                LineageRef.of(
-                    entity="corporate_action",
-                    dataset_version=corporate_action_dataset_version,
-                    selector={
-                        "scope": security_id_scope,
-                        "announced_through": as_of_epoch.isoformat(),
-                    },
+                *(
+                    LineageRef.of(
+                        entity="corporate_action",
+                        dataset_version=corporate_action_dataset_version,
+                        selector={"action_id": action.action_id},
+                    )
+                    for action in admitted
                 ),
             ),
             artifact_first_built_time=artifact_first_built_time,
@@ -429,6 +518,64 @@ def _bar_sort(bar: PriceBar) -> tuple[str, datetime]:
     return (bar.security_id, bar.bar_end_time)
 
 
+def _lineage_actions(
+    artifact: AdjustedBarArtifact,
+    actions: Sequence[CorporateAction],
+) -> tuple[CorporateAction, ...]:
+    """Exactly the actions the artifact's lineage names, in canonical order."""
+    wanted = {
+        dict(ref.selector)["action_id"]
+        for ref in artifact.envelope.lineage
+        if ref.entity == "corporate_action"
+    }
+    return tuple(sorted((a for a in actions if a.action_id in wanted), key=lambda a: a.action_id))
+
+
+def _replay_artifact_lineage(
+    artifact: AdjustedBarArtifact,
+    bars: Sequence[PriceBar],
+    actions: Sequence[CorporateAction],
+) -> None:
+    """Confirm every lineage reference resolves, in the dataset version it names."""
+    by_action = {action.action_id: action for action in actions}
+    for ref in artifact.envelope.lineage:
+        if ref.entity == "corporate_action":
+            action_id = dict(ref.selector).get("action_id")
+            if action_id is None:
+                raise ArtifactIntegrityError(
+                    f"Artifact {artifact.artifact_id} carries a corporate_action lineage "
+                    "reference with no action_id; a predicate cannot say which action was "
+                    "consumed."
+                )
+            action = by_action.get(action_id)
+            if action is None:
+                raise ArtifactIntegrityError(
+                    f"Artifact {artifact.artifact_id} names corporate action {action_id!r}, "
+                    "which is not among the actions supplied for verification."
+                )
+            if action.envelope.dataset_version != ref.dataset_version:
+                raise ArtifactIntegrityError(
+                    f"Corporate action {action_id!r} resolves in dataset version "
+                    f"{action.envelope.dataset_version!r}, not the {ref.dataset_version!r} "
+                    "the artifact's lineage names. A later build can carry a corrected "
+                    "ratio, and verifying against it would prove nothing about what the "
+                    "artifact read."
+                )
+        elif ref.entity == "price_bar":
+            wrong = [
+                bar
+                for bar in bars
+                if bar.security_id in {v.security_id for v in artifact.series}
+                and bar.envelope.dataset_version != ref.dataset_version
+            ]
+            if wrong:
+                raise ArtifactIntegrityError(
+                    f"Artifact {artifact.artifact_id} is being verified against bars from "
+                    f"dataset version {wrong[0].envelope.dataset_version!r}, not the "
+                    f"{ref.dataset_version!r} its lineage names."
+                )
+
+
 def verify_adjusted_bar_artifact(
     artifact: AdjustedBarArtifact,
     bars: Sequence[PriceBar],
@@ -436,13 +583,21 @@ def verify_adjusted_bar_artifact(
     *,
     approvals: BoundApprovals,
 ) -> None:
-    """Recompute the artifact from its key and refuse any divergence.
+    """Replay the recorded lineage, then recompute, and refuse any divergence.
+
+    Verification reads the artifact's **own lineage** rather than whatever the
+    caller happened to pass: an artifact that reproduces from a different input
+    set has not reproduced. The lineage replay also enforces the input dataset
+    versions, so a matching key from a later build cannot stand in for the row
+    the artifact actually read.
 
     Raises:
-        ArtifactIntegrityError: if the recomputed series does not reproduce the
-            recorded hash, or if the stored series itself has been altered. A
-            mismatch is a BLOCKING quality issue, not a cache miss.
+        ArtifactIntegrityError: if the lineage does not replay, if the recomputed
+            series does not reproduce the recorded hash, or if the stored series
+            has been altered. A mismatch is a BLOCKING quality issue, not a cache
+            miss.
     """
+    _replay_artifact_lineage(artifact, bars, actions)
     if artifact.adjustment_convention is not ADJUSTMENT_CONVENTION:
         raise ArtifactIntegrityError(
             f"Artifact {artifact.artifact_id} declares convention "
@@ -452,8 +607,9 @@ def verify_adjusted_bar_artifact(
         )
     recomputed = adjusted_series(
         bars,
-        actions,
+        _lineage_actions(artifact, actions),
         policy=artifact.adjustment_policy,
+        convention=artifact.adjustment_convention,
         as_of_epoch=artifact.as_of_epoch,
         resolved_profile=artifact.resolved_profile,
         approvals=approvals,
@@ -505,6 +661,7 @@ __all__ = [
     "ADJUSTMENT_CONVENTION",
     "ADJUSTMENT_SPEC_VERSION",
     "MULTI_SECURITY_SCOPE_PREFIX",
+    "SUPPORTED_CONVENTIONS",
     "adjusted_series",
     "adjustment_factor",
     "admissible_actions",
@@ -513,6 +670,8 @@ __all__ = [
     "build_adjusted_bar_artifact",
     "encode_artifact_inputs",
     "raw_series",
+    "relevant_actions",
+    "require_supported_convention",
     "series_content_hash",
     "verify_adjusted_bar_artifact",
 ]

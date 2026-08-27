@@ -7,17 +7,20 @@ any artifact is built, and before anything is served:
 ```
 source rows
     -> resolve_run_inputs        per directly consumed source dataset
-    -> resolved rows + evidence  persisted with the build
-    -> Gold build                consumes only the resolved rows
-    -> PointInTimeReader         verifies the persisted resolution against its own config
+    -> ResolvedRunInputs         resolved rows + evidence + a signed receipt
+    -> build_gold_dataset        the only sanctioned Gold constructor
+    -> publish_gold_dataset      verifies the receipt against the rows
+    -> PointInTimeReader         reads only a verified publication
 ```
 
 Each policy does something real, not something recorded:
 
 ``BOUND``
-    actually writes the approved provider upper bound onto the row, **before** it
-    is evaluated. A row bounded after evaluation would have been admitted on
-    timing it did not have.
+    writes the approved provider upper bound onto the row **before** it is
+    evaluated, and then **verifies** that the bound actually resolved. A bound
+    whose derivation is not approved for its dataset resolves nothing, so
+    applying ``BOUND`` and moving on would admit a row on timing the run never
+    established. That case refuses.
 ``EXCLUDE``
     actually removes the rows and records a positive excluded count. A declared
     exclusion with zero rows removed is a claim with nothing behind it.
@@ -29,9 +32,13 @@ Each policy does something real, not something recorded:
     is global and has already changed ``resolved_profile`` before any of the
     above runs, so the whole run is public-PIT from the first filter onward.
 
-There is deliberately no path that skips this step and still yields a valid
-result: the Gold build takes :class:`ResolvedRunInputs`, not raw rows, and the
-reader refuses a dataset whose persisted resolution disagrees with its config.
+**The receipt is what makes this unbypassable.** A run leaves here with a
+deterministic hash over its profiles, its complete canonical policy map
+(reasons included), its evidence and the identity of every resolved row. Gold
+cannot be built without one, and publication verifies it against the rows it is
+about to write. A dataset assembled from arbitrary rows has no receipt, so
+nothing can say which policy admitted them -- and "correct rows, unknown
+provenance" is the shape that passes review and cannot be reproduced afterwards.
 """
 
 from __future__ import annotations
@@ -44,6 +51,8 @@ from kalpamani.data.contracts.errors import UnresolvedProviderAvailabilityError
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
     ProfileResolutionConfig,
+    ResolutionReceipt,
+    evidence_fingerprint,
     resolve_dataset_gap,
 )
 from kalpamani.data.contracts.resolution import (
@@ -58,21 +67,19 @@ from kalpamani.data.contracts.vocabulary import (
     LimitationToken,
 )
 
-#: The named check a `NONE` policy over unresolved provider timing triggers.
+#: The named check an unresolved provider gap triggers, whatever the policy.
 UNRESOLVED_PROVIDER_CHECK = "4.3.2_unresolved_provider_availability"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolvedRunInputs:
-    """The rows a run may build from, and the evidence for what resolution did.
+    """The rows a run may build from, the evidence, and the receipt binding them.
 
     Both mappings are deep-frozen: the evidence must still describe the rows when
     the manifest is emitted, not whatever a later caller substituted.
     """
 
-    resolved_profile: InformationSetProfile
-    requested_profile: InformationSetProfile
-    resolution_policy_version: str
+    receipt: ResolutionReceipt
     by_dataset: Mapping[str, tuple[SourceRecord, ...]]
     evidence: tuple[DatasetResolutionEvidence, ...]
 
@@ -80,6 +87,21 @@ class ResolvedRunInputs:
         object.__setattr__(
             self, "by_dataset", MappingProxyType(dict(sorted(self.by_dataset.items())))
         )
+
+    @property
+    def resolved_profile(self) -> InformationSetProfile:
+        """The profile this run actually executed under."""
+        return self.receipt.resolved_profile
+
+    @property
+    def requested_profile(self) -> InformationSetProfile:
+        """What the caller asked for. Audit evidence only."""
+        return self.receipt.requested_profile
+
+    @property
+    def resolution_policy_version(self) -> str:
+        """Which policy chose these resolutions."""
+        return self.receipt.resolution_policy_version
 
     def rows(self, dataset: str) -> tuple[SourceRecord, ...]:
         """The resolved rows for one dataset.
@@ -143,21 +165,35 @@ def evidence_limitation_tokens(
     return tuple(tokens)
 
 
+def row_identity_fingerprint(
+    by_dataset: Mapping[str, Sequence[SourceRecord]],
+) -> tuple[tuple[str, str], ...]:
+    """A canonical ``(dataset, source_id)`` rendering of every resolved row.
+
+    Enough for the receipt to be about *these* rows rather than about a policy in
+    the abstract: substituting a row after resolution changes the fingerprint and
+    therefore the receipt, and publication compares both.
+    """
+    pairs: list[tuple[str, str]] = []
+    for dataset, rows in by_dataset.items():
+        for row in rows:
+            pairs.append((dataset, row.envelope.source_id))
+    return tuple(sorted(pairs))
+
+
 def resolve_run_inputs(
     datasets: Mapping[str, Sequence[SourceRecord]],
     *,
     config: ProfileResolutionConfig,
     approvals: BoundApprovals,
 ) -> ResolvedRunInputs:
-    """Apply the run's per-dataset resolution to every directly consumed dataset.
+    """Apply the run's per-dataset resolution and issue a receipt.
 
     Raises:
-        ProfileResolutionError: if a dataset is consumed without an entry in the
-            resolution map. The map is a complete inventory of direct source
-            reads, not a list of the problematic ones.
-        UnresolvedProviderAvailabilityError: if a dataset's policy is ``NONE``
-            while rows in it have no resolvable provider time under
-            ``PROVIDER_REALISTIC_PIT``.
+        UnresolvedProviderAvailabilityError: if a dataset is consumed without an
+            entry in the resolution map; if a row's ``dataset`` disagrees with the
+            key it was filed under; if a row appears under two dataset groups; or
+            if any row's provider timing is still unresolved after its policy ran.
     """
     missing = sorted(name for name in datasets if not config.has_entry_for(name))
     if missing:
@@ -166,6 +202,7 @@ def resolve_run_inputs(
             "dataset_provider_gap_resolutions. The map is a complete inventory of direct "
             "source reads, not a list of the problematic ones."
         )
+    _require_consistent_grouping(datasets)
 
     resolved: dict[str, tuple[SourceRecord, ...]] = {}
     evidence: list[DatasetResolutionEvidence] = []
@@ -177,29 +214,75 @@ def resolve_run_inputs(
         resolved[name] = outcome.records
         evidence.append(outcome.evidence)
 
-    _refuse_unresolved(resolved, config=config, approvals=approvals)
+    _require_resolved(resolved, config=config, approvals=approvals)
 
     return ResolvedRunInputs(
-        resolved_profile=config.resolved_profile,
-        requested_profile=config.requested_profile,
-        resolution_policy_version=config.resolution_policy_version,
+        receipt=ResolutionReceipt(
+            requested_profile=config.requested_profile,
+            resolved_profile=config.resolved_profile,
+            global_profile_resolution=config.global_profile_resolution,
+            resolution_policy_version=config.resolution_policy_version,
+            canonical_map=config.canonical_map(),
+            evidence_fingerprint=evidence_fingerprint(evidence),
+            row_identity_fingerprint=row_identity_fingerprint(resolved),
+        ),
         by_dataset=resolved,
         evidence=tuple(evidence),
     )
 
 
-def _refuse_unresolved(
+def _require_consistent_grouping(datasets: Mapping[str, Sequence[SourceRecord]]) -> None:
+    """Every row must belong to the dataset it was filed under, and to only one.
+
+    A row filed under the wrong key is resolved by the wrong policy and evidenced
+    against the wrong counts -- and nothing downstream would notice, because the
+    counts would still reconcile.
+    """
+    misfiled: list[str] = []
+    for name, rows in sorted(datasets.items()):
+        for row in rows:
+            if row.dataset != name:
+                misfiled.append(f"{row.envelope.source_id!r} is {row.dataset!r} under {name!r}")
+    if misfiled:
+        raise UnresolvedProviderAvailabilityError(
+            f"{len(misfiled)} row(s) are filed under a dataset key they do not belong to: "
+            f"{misfiled[:5]}. A misfiled row is resolved by the wrong policy and counted "
+            "against the wrong evidence, and the counts still reconcile."
+        )
+
+    seen: dict[int, str] = {}
+    duplicated: list[str] = []
+    for name, rows in sorted(datasets.items()):
+        for row in rows:
+            previous = seen.get(id(row))
+            if previous is not None and previous != name:
+                duplicated.append(f"{row.envelope.source_id!r} in {previous!r} and {name!r}")
+            seen[id(row)] = name
+    if duplicated:
+        raise UnresolvedProviderAvailabilityError(
+            f"row(s) appear in more than one dataset group: {duplicated[:5]}. One row belongs "
+            "to one dataset; appearing twice would resolve it twice and count it twice."
+        )
+
+
+def _require_resolved(
     resolved: Mapping[str, tuple[SourceRecord, ...]],
     *,
     config: ProfileResolutionConfig,
     approvals: BoundApprovals,
 ) -> None:
+    """Every surviving row must have resolvable provider timing. Including under BOUND.
+
+    ``BOUND`` writes a bound; it does not guarantee the bound *resolves*. A bound
+    whose derivation is not approved for its dataset resolves nothing, so a run
+    that applied ``BOUND`` and moved on would serve rows on timing it never
+    established -- with the policy name in the manifest making it look handled.
+    """
     if config.resolved_profile is not InformationSetProfile.PROVIDER_REALISTIC_PIT:
         return
     offenders: list[str] = []
     for name, rows in sorted(resolved.items()):
-        if config.policy_for(name) is not DatasetGapPolicy.NONE:
-            continue
+        policy = config.policy_for(name)
         unresolved = sum(
             1
             for row in rows
@@ -207,19 +290,33 @@ def _refuse_unresolved(
             and resolved_provider_time(row, approvals) is None
         )
         if unresolved:
-            offenders.append(f"{name} ({unresolved} rows)")
+            offenders.append(f"{name} (policy {policy.value}, {unresolved} rows)")
     if offenders:
         raise UnresolvedProviderAvailabilityError(
             f"{UNRESOLVED_PROVIDER_CHECK}: {', '.join(offenders)} have no resolvable provider "
-            "time under PROVIDER_REALISTIC_PIT while their declared policy is NONE. A gap "
-            "that is neither bounded, excluded nor downgraded is not resolved, and serving "
-            "the rows anyway would admit them on timing the run never established."
+            "time under PROVIDER_REALISTIC_PIT after their policy ran. A declared BOUND whose "
+            "derivation is not approved for its dataset resolves nothing, and a declared NONE "
+            "over a gap resolves nothing either. Serving the rows anyway would admit them on "
+            "timing the run never established."
         )
+
+
+def excluded_datasets(evidence: Sequence[DatasetResolutionEvidence]) -> tuple[str, ...]:
+    """Datasets whose rows were removed entirely by ``EXCLUDE``."""
+    return tuple(
+        sorted(
+            entry.dataset
+            for entry in evidence
+            if entry.policy is DatasetGapPolicy.EXCLUDE and entry.excluded_rows > 0
+        )
+    )
 
 
 __all__ = [
     "UNRESOLVED_PROVIDER_CHECK",
     "ResolvedRunInputs",
     "evidence_limitation_tokens",
+    "excluded_datasets",
     "resolve_run_inputs",
+    "row_identity_fingerprint",
 ]

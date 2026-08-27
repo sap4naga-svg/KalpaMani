@@ -1,30 +1,28 @@
 """A curated Gold dataset: what a point-in-time query is served from.
 
-A plain, immutable container of contract entities. It lives in ``contracts``
-because both the curation layer that writes it and the point-in-time layer that
-reads it need it, and neither should have to import the other.
+An immutable container of contract entities. It lives in ``contracts`` because
+both the curation layer that writes it and the point-in-time layer that reads it
+need it, and neither should have to import the other.
 
-**It carries the resolution it was built under.** ``resolved_profile`` and
+**It carries the receipt that says which policy admitted its rows.** A dataset
+assembled from arbitrary rows has none, and a build nobody can account for is not
+publishable however correct its rows happen to be. ``resolved_profile`` and
 ``resolution_policy_version`` are properties of the build, not of the caller
 reading it: a dataset curated under ``PUBLIC_PIT`` cannot answer a
 ``PROVIDER_REALISTIC_PIT`` question, and a reader configured differently is
-refused rather than served. The per-dataset resolution evidence travels with it
-for the same reason -- a run cannot claim a resolution the build did not apply.
+refused rather than served something relabelled.
 
-**A universe snapshot is stored here, not recomputed.** ``universe`` is a mapping
-from session date to the membership rows recorded for that session. A query for a
-session the mapping has no entry for is a **refusal**, never an empty result: an
-empty universe and an unanswerable question look identical in a result set and
-mean opposite things.
+**A universe snapshot is stored here, not recomputed.** ``universe`` maps a
+session date to the membership rows recorded for it, and ``universe_headers``
+records that the session was *built* -- including when it legitimately produced
+no rows. Without a header a zero-row snapshot vanishes the moment the membership
+table is flattened, and "the rule selected nobody" becomes indistinguishable from
+"no snapshot exists". Those are opposite answers.
 
-**Frozen means frozen.** The mapping is wrapped in a ``MappingProxyType`` at
+**Frozen means frozen.** Mappings are wrapped in ``MappingProxyType`` at
 construction, so ``frozen=True`` does not merely wrap a dict anyone can mutate
 afterwards. An artifact whose contents can change after its hash was taken is not
 an artifact.
-
-``coverage_start`` and ``coverage_end`` are what make "outside our data"
-answerable. Without them a query reaching past what the build holds returns
-nothing and looks like a market with no securities in it.
 """
 
 from __future__ import annotations
@@ -43,13 +41,38 @@ from kalpamani.data.contracts.entities import (
     TickerHistory,
     UniverseMembership,
 )
-from kalpamani.data.contracts.profiles import DatasetResolutionEvidence
+from kalpamani.data.contracts.instants import normalize_instant
+from kalpamani.data.contracts.profiles import DatasetResolutionEvidence, ResolutionReceipt
 from kalpamani.data.contracts.vocabulary import InformationSetProfile
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class UniverseSnapshotHeader:
+    """Evidence that a universe snapshot was **built** for a session.
+
+    Separate from the membership rows on purpose. A snapshot whose rule
+    legitimately selected nobody has zero member rows, and a session that was
+    never built has zero rows too. Only the header distinguishes them, and the
+    distinction is the difference between "nobody qualified" and "we cannot
+    answer".
+    """
+
+    session_date: date
+    universe_definition_version: str
+    resolved_profile: InformationSetProfile
+    evaluation_cutoff: datetime
+    row_count: int
+    snapshot_content_hash: str
+    derivation_spec_version: str
+    status: str = "COMPLETE"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evaluation_cutoff", normalize_instant(self.evaluation_cutoff))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class GoldDataset:
-    """One published, versioned curated build."""
+    """One curated build, carrying the receipt that accounts for its rows."""
 
     dataset_version: str
     build_time: datetime
@@ -60,6 +83,8 @@ class GoldDataset:
     resolved_profile: InformationSetProfile
     #: Which policy resolved this build's provider-timing gaps.
     resolution_policy_version: str
+    #: Proof of which policy admitted these rows. Publication verifies it.
+    resolution_receipt: ResolutionReceipt
     resolution_evidence: tuple[DatasetResolutionEvidence, ...] = ()
     sessions: tuple[MarketSession, ...] = ()
     listings: tuple[Listing, ...] = ()
@@ -68,14 +93,17 @@ class GoldDataset:
     bars: tuple[PriceBar, ...] = ()
     actions: tuple[CorporateAction, ...] = ()
     universe: Mapping[date, tuple[UniverseMembership, ...]] = field(default_factory=dict)
+    universe_headers: Mapping[date, UniverseSnapshotHeader] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Deep-freeze: a frozen dataclass wrapping a mutable dict is not frozen.
+        object.__setattr__(self, "universe", MappingProxyType(dict(sorted(self.universe.items()))))
         object.__setattr__(
             self,
-            "universe",
-            MappingProxyType(dict(sorted(self.universe.items()))),
+            "universe_headers",
+            MappingProxyType(dict(sorted(self.universe_headers.items()))),
         )
+        object.__setattr__(self, "build_time", normalize_instant(self.build_time))
 
     def bars_for(self, security_id: str, resolution: str | None = None) -> tuple[PriceBar, ...]:
         """Raw bars for one security, optionally at one resolution, in canonical order.
@@ -108,13 +136,26 @@ class GoldDataset:
                 return session
         return None
 
-    def trading_sessions_between(self, start: date, end: date) -> tuple[date, ...]:
-        """Session dates on which the venue traded, within an inclusive range."""
+    def trading_sessions_between(
+        self,
+        start: date,
+        end: date,
+        *,
+        exchange: str | None = None,
+    ) -> tuple[date, ...]:
+        """Session dates on which the venue traded, within an inclusive range.
+
+        ``exchange`` matters: a security listed on one venue is not required to
+        have bars on another venue's sessions, and pooling calendars would fault
+        it for absences that are not absences.
+        """
         return tuple(
             sorted(
                 session.session_date
                 for session in self.sessions
-                if not session.is_holiday and start <= session.session_date <= end
+                if not session.is_holiday
+                and start <= session.session_date <= end
+                and (exchange is None or session.exchange.value == exchange)
             )
         )
 
@@ -130,5 +171,13 @@ class GoldDataset:
             return True
         return any(attribute.security_id == security_id for attribute in self.attributes)
 
+    def snapshot_was_built(self, session_date: date) -> bool:
+        """Whether a universe snapshot exists for this session, rows or no rows."""
+        return session_date in self.universe_headers
 
-__all__ = ["GoldDataset"]
+    def built_snapshot_sessions(self) -> tuple[date, ...]:
+        """Every session a snapshot was built for, in order."""
+        return tuple(sorted(self.universe_headers))
+
+
+__all__ = ["GoldDataset", "UniverseSnapshotHeader"]

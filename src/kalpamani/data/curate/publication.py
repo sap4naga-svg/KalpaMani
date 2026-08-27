@@ -6,24 +6,26 @@ produces a result nobody can reproduce, from inputs nobody can name.
 
 Publication sequence, and why each step is where it is:
 
-1. every table is written into a **staging** directory for this version, each
-   fsync-ed as it lands;
-2. the **dataset manifest** -- coverage, resolved profile, resolution policy,
-   every table path, row count and content hash, source ingestion runs, and a
-   dataset-level hash over all of them -- is written and fsync-ed **into the
-   staging directory**;
-3. the staging directory is **atomically renamed** into its final location.
+1. the **resolution receipt** is verified against the rows about to be written --
+   a build whose rows the resolution never saw is refused before anything lands;
+2. the **quality report** is required and must carry no open BLOCKING finding;
+3. every table is written into a **staging** directory, each fsync-ed as it lands;
+4. the **dataset manifest** -- coverage, resolved profile, the complete resolution
+   map and evidence, the quality-report identity, every table's path, row count
+   and content hash, source ingestion runs, and a hash over all of it -- is
+   written and fsync-ed into staging;
+5. staging is **atomically renamed** into its final location.
 
 The rename is the commit. Before it, nothing is visible under the published name;
-after it, everything is. A reader therefore never observes a manifest that
-describes tables that are not there yet, nor tables no manifest describes.
+after it, everything is.
 
-**Readers do not take the caller's word for anything.** Build time, coverage and
-resolved profile come from the persisted manifest, never from arguments -- an ad
-hoc coverage window supplied at read time would let a caller widen a dataset's
-claims without touching the dataset. Every table hash is verified **before** its
-rows are decoded, so corruption is caught as corruption rather than surfacing as
-a strange value three layers up.
+**Readers do not take the caller's word for anything.** Build time, coverage,
+resolved profile, resolution evidence and quality evidence all come from the
+persisted manifest. Every table hash is verified **before** its rows are decoded,
+the decoded row count is checked against the declared one, and the manifest body
+is checked against its own hash. Two manifests that differ in profile, coverage
+or policy evidence cannot share a dataset identity, because all of it is inside
+that hash.
 """
 
 from __future__ import annotations
@@ -32,18 +34,25 @@ import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 
 from kalpamani.data.contracts.canonical import canonical_bytes, content_hash, sha256_hex
-from kalpamani.data.contracts.dataset import GoldDataset
+from kalpamani.data.contracts.dataset import GoldDataset, UniverseSnapshotHeader
 from kalpamani.data.contracts.entities import DatasetVersion, UniverseMembership
-from kalpamani.data.contracts.errors import DatasetPublicationError
-from kalpamani.data.contracts.instants import normalize_instant
+from kalpamani.data.contracts.errors import (
+    BuildBoundaryError,
+    DatasetPublicationError,
+    QualityGateError,
+)
+from kalpamani.data.contracts.instants import is_canonical_instant, normalize_instant
+from kalpamani.data.contracts.paths import safe_component, safe_relative_path
 from kalpamani.data.contracts.profiles import (
     DatasetResolutionEvidence,
     ProfileResolutionConfig,
+    ResolutionReceipt,
     TimingBasis,
 )
-from kalpamani.data.contracts.resolution import BoundApprovals, PitRecord
+from kalpamani.data.contracts.resolution import BoundApprovals
 from kalpamani.data.contracts.serde import (
     decode_corporate_action,
     decode_listing,
@@ -62,11 +71,18 @@ from kalpamani.data.contracts.serde import (
 )
 from kalpamani.data.contracts.vocabulary import (
     DatasetGapPolicy,
+    GlobalProfileResolution,
     InformationSetProfile,
     StorageLayer,
 )
+from kalpamani.data.curate.build import dataset_row_fingerprint
 from kalpamani.data.curate.lineage import resolve_lineage
 from kalpamani.data.curate.universe import membership_hash_of
+from kalpamani.data.quality.report import (
+    QualityReport,
+    decode_quality_report,
+    encode_quality_report,
+)
 from kalpamani.data.storage import LocalTableStore
 
 #: Entity tables a Gold dataset version holds, in canonical order.
@@ -78,13 +94,27 @@ GOLD_ENTITIES = (
     "price_bar",
     "corporate_action",
     "universe_membership",
+    "universe_snapshot_header",
+)
+
+#: Source datasets whose resolution evidence a publication must carry.
+REQUIRED_EVIDENCE_DATASETS = (
+    "corporate_action",
+    "listing",
+    "market_session",
+    "price_bar",
+    "security_attribute",
+    "ticker_history",
 )
 
 #: Filename of the manifest whose arrival commits a version.
 MANIFEST_NAME = "_dataset_manifest.json"
 
+#: Filename of the quality report gating the version.
+QUALITY_REPORT_NAME = "_quality_report.json"
+
 #: Version of the publication format itself.
-PUBLICATION_FORMAT_VERSION = 1
+PUBLICATION_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -99,7 +129,15 @@ class TableRecord:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DatasetManifest:
-    """What a published version claims about itself. Verified on every read."""
+    """What a published version claims about itself. Verified on every read.
+
+    ``manifest_hash`` covers **everything below it** -- the format version, the
+    identity, the coverage, both profiles, the global resolution, the complete
+    resolution map and evidence, the receipt and quality-report identities, every
+    table record, the ingestion runs, the commit and the policy versions. Only
+    the hash field itself is excluded. Two manifests differing in any of that
+    cannot share a dataset identity.
+    """
 
     publication_format_version: int
     dataset_version: str
@@ -108,15 +146,19 @@ class DatasetManifest:
     coverage_start: date
     coverage_end: date
     resolved_profile: InformationSetProfile
+    requested_profile: InformationSetProfile
+    global_profile_resolution: GlobalProfileResolution
     resolution_policy_version: str
+    resolution_map: tuple[tuple[str, str, str], ...]
     resolution_evidence: tuple[DatasetResolutionEvidence, ...]
+    resolution_receipt_hash: str
+    quality_report_hash: str
     tables: tuple[TableRecord, ...]
     source_ingestion_run_ids: tuple[str, ...]
     code_commit_sha: str
     lag_policy_version: str
     universe_definition_version: str | None
-    dataset_content_hash: str
-    is_published: bool
+    manifest_hash: str
 
     def table(self, entity: str) -> TableRecord:
         """The record for one entity's table."""
@@ -130,40 +172,57 @@ class DatasetManifest:
         )
 
 
+# ---------------------------------------------------------------------------
+# Encoding
+# ---------------------------------------------------------------------------
+
+
 def _evidence_row(entry: DatasetResolutionEvidence) -> dict[str, object]:
     return {
         "dataset": entry.dataset,
         "policy": entry.policy.value,
         "rows_considered": entry.rows_considered,
+        "public_rows_applicable": entry.public_rows_applicable,
         "public_basis": entry.public_basis.value,
         "public_exact_rows": entry.public_exact_rows,
         "public_bounded_rows": entry.public_bounded_rows,
+        "public_excluded_rows": entry.public_excluded_rows,
+        "public_unresolved_rows": entry.public_unresolved_rows,
+        "provider_rows_applicable": entry.provider_rows_applicable,
         "provider_basis": entry.provider_basis.value,
         "provider_exact_rows": entry.provider_exact_rows,
         "provider_bounded_rows": entry.provider_bounded_rows,
+        "provider_excluded_rows": entry.provider_excluded_rows,
+        "provider_unresolved_rows": entry.provider_unresolved_rows,
         "excluded_rows": entry.excluded_rows,
         "reason": entry.reason,
     }
 
 
-def _decode_evidence(row: Mapping[str, object]) -> DatasetResolutionEvidence:
+def _decode_evidence(row: Mapping[str, Any]) -> DatasetResolutionEvidence:
     return DatasetResolutionEvidence(
         dataset=str(row["dataset"]),
         policy=DatasetGapPolicy(str(row["policy"])),
-        rows_considered=int(str(row["rows_considered"])),
+        rows_considered=int(row["rows_considered"]),
+        public_rows_applicable=int(row["public_rows_applicable"]),
         public_basis=TimingBasis(str(row["public_basis"])),
-        public_exact_rows=int(str(row["public_exact_rows"])),
-        public_bounded_rows=int(str(row["public_bounded_rows"])),
+        public_exact_rows=int(row["public_exact_rows"]),
+        public_bounded_rows=int(row["public_bounded_rows"]),
+        public_excluded_rows=int(row["public_excluded_rows"]),
+        public_unresolved_rows=int(row["public_unresolved_rows"]),
+        provider_rows_applicable=int(row["provider_rows_applicable"]),
         provider_basis=TimingBasis(str(row["provider_basis"])),
-        provider_exact_rows=int(str(row["provider_exact_rows"])),
-        provider_bounded_rows=int(str(row["provider_bounded_rows"])),
-        excluded_rows=int(str(row["excluded_rows"])),
+        provider_exact_rows=int(row["provider_exact_rows"]),
+        provider_bounded_rows=int(row["provider_bounded_rows"]),
+        provider_excluded_rows=int(row["provider_excluded_rows"]),
+        provider_unresolved_rows=int(row["provider_unresolved_rows"]),
+        excluded_rows=int(row["excluded_rows"]),
         reason=str(row["reason"]),
     )
 
 
-def _manifest_body(manifest: DatasetManifest) -> dict[str, object]:
-    return {
+def _manifest_body(manifest: DatasetManifest, *, include_hash: bool) -> dict[str, object]:
+    body: dict[str, object] = {
         "publication_format_version": manifest.publication_format_version,
         "dataset_version": manifest.dataset_version,
         "layer": manifest.layer.value,
@@ -171,8 +230,13 @@ def _manifest_body(manifest: DatasetManifest) -> dict[str, object]:
         "coverage_start": manifest.coverage_start.isoformat(),
         "coverage_end": manifest.coverage_end.isoformat(),
         "resolved_profile": manifest.resolved_profile.value,
+        "requested_profile": manifest.requested_profile.value,
+        "global_profile_resolution": manifest.global_profile_resolution.value,
         "resolution_policy_version": manifest.resolution_policy_version,
+        "resolution_map": [list(entry) for entry in manifest.resolution_map],
         "resolution_evidence": [_evidence_row(e) for e in manifest.resolution_evidence],
+        "resolution_receipt_hash": manifest.resolution_receipt_hash,
+        "quality_report_hash": manifest.quality_report_hash,
         "tables": [
             {
                 "entity": table.entity,
@@ -186,14 +250,40 @@ def _manifest_body(manifest: DatasetManifest) -> dict[str, object]:
         "code_commit_sha": manifest.code_commit_sha,
         "lag_policy_version": manifest.lag_policy_version,
         "universe_definition_version": manifest.universe_definition_version,
-        "dataset_content_hash": manifest.dataset_content_hash,
-        "is_published": manifest.is_published,
+    }
+    if include_hash:
+        body["manifest_hash"] = manifest.manifest_hash
+    return body
+
+
+def compute_manifest_hash(manifest: DatasetManifest) -> str:
+    """Hash the whole manifest body, excluding only its own hash field."""
+    return content_hash(_manifest_body(manifest, include_hash=False))
+
+
+def _encode_header(header: UniverseSnapshotHeader) -> dict[str, object]:
+    return {
+        "session_date": header.session_date.isoformat(),
+        "universe_definition_version": header.universe_definition_version,
+        "resolved_profile": header.resolved_profile.value,
+        "evaluation_cutoff": header.evaluation_cutoff.isoformat(),
+        "row_count": header.row_count,
+        "snapshot_content_hash": header.snapshot_content_hash,
+        "derivation_spec_version": header.derivation_spec_version,
+        "status": header.status,
     }
 
 
-def _dataset_hash(tables: Sequence[TableRecord]) -> str:
-    return content_hash(
-        sorted([table.entity, table.content_hash, str(table.row_count)] for table in tables)
+def _decode_header(row: Mapping[str, Any]) -> UniverseSnapshotHeader:
+    return UniverseSnapshotHeader(
+        session_date=date.fromisoformat(str(row["session_date"])),
+        universe_definition_version=str(row["universe_definition_version"]),
+        resolved_profile=InformationSetProfile(str(row["resolved_profile"])),
+        evaluation_cutoff=datetime.fromisoformat(str(row["evaluation_cutoff"])),
+        row_count=int(row["row_count"]),
+        snapshot_content_hash=str(row["snapshot_content_hash"]),
+        derivation_spec_version=str(row["derivation_spec_version"]),
+        status=str(row["status"]),
     )
 
 
@@ -209,24 +299,43 @@ def _encode_tables(dataset: GoldDataset) -> dict[str, list[Mapping[str, object]]
         "price_bar": [encode_price_bar(b) for b in dataset.bars],
         "corporate_action": [encode_corporate_action(a) for a in dataset.actions],
         "universe_membership": [encode_universe_membership(u) for u in universe_rows],
+        "universe_snapshot_header": [
+            _encode_header(header) for header in dataset.universe_headers.values()
+        ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Publication
+# ---------------------------------------------------------------------------
 
 
 def publish_gold_dataset(
     store: LocalTableStore,
     dataset: GoldDataset,
     *,
+    quality_report: QualityReport,
     code_commit_sha: str,
     lag_policy_version: str,
     universe_definition_version: str | None,
     source_ingestion_run_ids: Sequence[str] = (),
 ) -> tuple[DatasetVersion, DatasetManifest]:
-    """Build a version in staging, then commit it with one atomic rename.
+    """Verify, stage, then commit a version with one atomic rename.
 
     Raises:
-        DatasetPublicationError: if the version is already published. A published
-            version is superseded, never rewritten.
+        BuildBoundaryError: if the dataset's receipt does not account for its rows.
+        QualityGateError: if a BLOCKING finding stands against the build.
+        DatasetPublicationError: if the version is already published, or a
+            required source dataset has no resolution evidence.
     """
+    safe_relative_path(dataset.dataset_version, kind="dataset_version")
+    for run_id in source_ingestion_run_ids:
+        safe_component(run_id, kind="ingestion_run_id")
+
+    _verify_receipt_covers_rows(dataset)
+    _verify_evidence_complete(dataset)
+    quality_report.require_publishable(dataset_version=dataset.dataset_version)
+
     final = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)
     if (final / MANIFEST_NAME).exists():
         raise DatasetPublicationError(
@@ -244,12 +353,11 @@ def publish_gold_dataset(
     encoded = _encode_tables(dataset)
     tables: list[TableRecord] = []
     for entity in GOLD_ENTITIES:
-        rows = encoded[entity]
         artifact = store.write_staged_table(
             layer=StorageLayer.GOLD,
             dataset_version=dataset.dataset_version,
             entity=entity,
-            rows=rows,
+            rows=encoded[entity],
         )
         tables.append(
             TableRecord(
@@ -260,29 +368,42 @@ def publish_gold_dataset(
             )
         )
 
-    manifest = DatasetManifest(
-        publication_format_version=PUBLICATION_FORMAT_VERSION,
-        dataset_version=dataset.dataset_version,
+    manifest = _with_hash(
+        DatasetManifest(
+            publication_format_version=PUBLICATION_FORMAT_VERSION,
+            dataset_version=dataset.dataset_version,
+            layer=StorageLayer.GOLD,
+            build_time=normalize_instant(dataset.build_time),
+            coverage_start=dataset.coverage_start,
+            coverage_end=dataset.coverage_end,
+            resolved_profile=dataset.resolved_profile,
+            requested_profile=dataset.resolution_receipt.requested_profile,
+            global_profile_resolution=dataset.resolution_receipt.global_profile_resolution,
+            resolution_policy_version=dataset.resolution_policy_version,
+            resolution_map=dataset.resolution_receipt.canonical_map,
+            resolution_evidence=dataset.resolution_evidence,
+            resolution_receipt_hash=dataset.resolution_receipt.receipt_hash,
+            quality_report_hash=quality_report.report_hash,
+            tables=tuple(tables),
+            source_ingestion_run_ids=tuple(sorted(source_ingestion_run_ids)),
+            code_commit_sha=code_commit_sha,
+            lag_policy_version=lag_policy_version,
+            universe_definition_version=universe_definition_version,
+            manifest_hash="",
+        )
+    )
+
+    store.write_staged_bytes(
         layer=StorageLayer.GOLD,
-        build_time=normalize_instant(dataset.build_time),
-        coverage_start=dataset.coverage_start,
-        coverage_end=dataset.coverage_end,
-        resolved_profile=dataset.resolved_profile,
-        resolution_policy_version=dataset.resolution_policy_version,
-        resolution_evidence=dataset.resolution_evidence,
-        tables=tuple(tables),
-        source_ingestion_run_ids=tuple(sorted(source_ingestion_run_ids)),
-        code_commit_sha=code_commit_sha,
-        lag_policy_version=lag_policy_version,
-        universe_definition_version=universe_definition_version,
-        dataset_content_hash=_dataset_hash(tables),
-        is_published=True,
+        dataset_version=dataset.dataset_version,
+        name=QUALITY_REPORT_NAME,
+        payload=canonical_bytes(encode_quality_report(quality_report)),
     )
     store.write_staged_bytes(
         layer=StorageLayer.GOLD,
         dataset_version=dataset.dataset_version,
         name=MANIFEST_NAME,
-        payload=canonical_bytes(_manifest_body(manifest)),
+        payload=canonical_bytes(_manifest_body(manifest, include_hash=True)),
     )
     store.commit_version(layer=StorageLayer.GOLD, dataset_version=dataset.dataset_version)
 
@@ -292,7 +413,7 @@ def publish_gold_dataset(
         built_at=dataset.build_time,
         built_from_run_ids=manifest.source_ingestion_run_ids,
         code_commit_sha=code_commit_sha,
-        content_hash=manifest.dataset_content_hash,
+        content_hash=manifest.manifest_hash,
         lag_policy_version=lag_policy_version,
         resolved_profile=dataset.resolved_profile,
         resolution_policy_version=dataset.resolution_policy_version,
@@ -301,13 +422,74 @@ def publish_gold_dataset(
     return version, manifest
 
 
+def _with_hash(draft: DatasetManifest) -> DatasetManifest:
+    digest = compute_manifest_hash(draft)
+    return DatasetManifest(
+        publication_format_version=draft.publication_format_version,
+        dataset_version=draft.dataset_version,
+        layer=draft.layer,
+        build_time=draft.build_time,
+        coverage_start=draft.coverage_start,
+        coverage_end=draft.coverage_end,
+        resolved_profile=draft.resolved_profile,
+        requested_profile=draft.requested_profile,
+        global_profile_resolution=draft.global_profile_resolution,
+        resolution_policy_version=draft.resolution_policy_version,
+        resolution_map=draft.resolution_map,
+        resolution_evidence=draft.resolution_evidence,
+        resolution_receipt_hash=draft.resolution_receipt_hash,
+        quality_report_hash=draft.quality_report_hash,
+        tables=draft.tables,
+        source_ingestion_run_ids=draft.source_ingestion_run_ids,
+        code_commit_sha=draft.code_commit_sha,
+        lag_policy_version=draft.lag_policy_version,
+        universe_definition_version=draft.universe_definition_version,
+        manifest_hash=digest,
+    )
+
+
+def _verify_receipt_covers_rows(dataset: GoldDataset) -> None:
+    """The receipt must be about *these* rows, not about a policy in the abstract."""
+    actual = dataset_row_fingerprint(dataset)
+    if actual != dataset.resolution_receipt.row_identity_fingerprint:
+        raise BuildBoundaryError(
+            f"The resolution receipt for {dataset.dataset_version} does not account for the "
+            f"rows in the build ({len(actual)} rows present, "
+            f"{len(dataset.resolution_receipt.row_identity_fingerprint)} in the receipt). A "
+            "row substituted after resolution was never resolved, and publishing it would "
+            "record a policy that never saw it."
+        )
+    if dataset.resolution_receipt.resolved_profile is not dataset.resolved_profile:
+        raise BuildBoundaryError(
+            f"{dataset.dataset_version} claims {dataset.resolved_profile.value} while its "
+            f"receipt records {dataset.resolution_receipt.resolved_profile.value}."
+        )
+
+
+def _verify_evidence_complete(dataset: GoldDataset) -> None:
+    evidenced = {entry.dataset for entry in dataset.resolution_evidence}
+    missing = sorted(set(REQUIRED_EVIDENCE_DATASETS) - evidenced)
+    if missing:
+        raise DatasetPublicationError(
+            f"{dataset.dataset_version} has no resolution evidence for {missing}. The evidence "
+            "is a complete inventory of direct source reads, not a list of the problematic "
+            "ones."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------------
+
+
 def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> DatasetManifest:
     """Load a published version's manifest, refusing anything unpublished.
 
     Raises:
-        DatasetPublicationError: if the version is absent or the manifest is
-            missing. Both mean the same thing: this version was never committed.
+        DatasetPublicationError: if the version is absent, the manifest is
+            missing, or the manifest body does not reconcile with its own hash.
     """
+    safe_relative_path(dataset_version, kind="dataset_version")
     root = store.version_root(layer=StorageLayer.GOLD, dataset_version=dataset_version)
     path = root / MANIFEST_NAME
     if not path.exists():
@@ -317,23 +499,30 @@ def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> Da
             "never committed -- not that it is incomplete."
         )
     body = store.read_json(path)
-    return DatasetManifest(
-        publication_format_version=int(str(body["publication_format_version"])),
+    manifest = DatasetManifest(
+        publication_format_version=int(body["publication_format_version"]),
         dataset_version=str(body["dataset_version"]),
         layer=StorageLayer(str(body["layer"])),
-        build_time=normalize_instant(datetime.fromisoformat(str(body["build_time"]))),
+        build_time=datetime.fromisoformat(str(body["build_time"])),
         coverage_start=date.fromisoformat(str(body["coverage_start"])),
         coverage_end=date.fromisoformat(str(body["coverage_end"])),
         resolved_profile=InformationSetProfile(str(body["resolved_profile"])),
+        requested_profile=InformationSetProfile(str(body["requested_profile"])),
+        global_profile_resolution=GlobalProfileResolution(str(body["global_profile_resolution"])),
         resolution_policy_version=str(body["resolution_policy_version"]),
+        resolution_map=tuple(
+            (str(entry[0]), str(entry[1]), str(entry[2])) for entry in body["resolution_map"]
+        ),
         resolution_evidence=tuple(
             _decode_evidence(row) for row in list(body["resolution_evidence"])
         ),
+        resolution_receipt_hash=str(body["resolution_receipt_hash"]),
+        quality_report_hash=str(body["quality_report_hash"]),
         tables=tuple(
             TableRecord(
                 entity=str(row["entity"]),
                 relative_path=str(row["relative_path"]),
-                row_count=int(str(row["row_count"])),
+                row_count=int(row["row_count"]),
                 content_hash=str(row["content_hash"]),
             )
             for row in list(body["tables"])
@@ -348,9 +537,43 @@ def load_dataset_manifest(store: LocalTableStore, *, dataset_version: str) -> Da
             if body["universe_definition_version"] is None
             else str(body["universe_definition_version"])
         ),
-        dataset_content_hash=str(body["dataset_content_hash"]),
-        is_published=bool(body["is_published"]),
+        manifest_hash=str(body["manifest_hash"]),
     )
+    recomputed = compute_manifest_hash(manifest)
+    if recomputed != manifest.manifest_hash:
+        raise DatasetPublicationError(
+            f"Gold version {dataset_version} has a manifest that does not reconcile with its "
+            f"own hash (recorded {manifest.manifest_hash}, recomputed {recomputed}). A "
+            "manifest that can be edited after publication is not evidence of anything."
+        )
+    return manifest
+
+
+def load_quality_report(store: LocalTableStore, manifest: DatasetManifest) -> QualityReport:
+    """Load and verify the quality evidence a published version was gated on.
+
+    Raises:
+        QualityGateError: if the report is absent, does not reconcile with its own
+            hash, or is not the report the manifest names. A missing report is not
+            a clean one.
+    """
+    root = store.version_root(layer=StorageLayer.GOLD, dataset_version=manifest.dataset_version)
+    path = root / QUALITY_REPORT_NAME
+    if not path.exists():
+        raise QualityGateError(
+            f"Gold version {manifest.dataset_version} has no persisted quality report at "
+            f"{path}. A publication with no quality evidence cannot be read: absence of a "
+            "finding and absence of a check are different claims."
+        )
+    report = decode_quality_report(store.read_json(path))
+    if report.report_hash != manifest.quality_report_hash:
+        raise QualityGateError(
+            f"The quality report stored with {manifest.dataset_version} is not the one its "
+            f"manifest names (manifest {manifest.quality_report_hash}, stored "
+            f"{report.report_hash}). Swapping the evidence after the gate is the failure the "
+            "binding exists to prevent."
+        )
+    return report
 
 
 def read_published_dataset(
@@ -359,27 +582,29 @@ def read_published_dataset(
     dataset_version: str,
     config: ProfileResolutionConfig,
     approvals: BoundApprovals,
-) -> GoldDataset:
-    """Load a published version, verifying every table before decoding it.
+) -> tuple[GoldDataset, DatasetManifest, QualityReport]:
+    """Load a published version, verifying everything before decoding anything.
 
-    Build time, coverage and resolved profile come from the **manifest**. They are
-    not parameters, because authoritative build metadata supplied at read time
-    would let a caller restate what a dataset covers without touching the dataset.
+    Returns the dataset, its manifest and its quality report together: a caller
+    that has the data has the evidence, and cannot obtain one without the other.
 
     Raises:
         DatasetPublicationError: on a missing or partial publication, a table
-            whose bytes do not match the hash the manifest records, a
-            dataset-level hash that does not reconcile, or a resolution that
-            disagrees with ``config``.
+            whose bytes or row count disagree with the manifest, an incoherent
+            manifest, or a resolution that disagrees with ``config``.
+        QualityGateError: if the quality evidence is missing, mismatched, or
+            carries an open BLOCKING finding.
         ArtifactIntegrityError: if a stored membership row's lineage does not
-            replay to exactly the rows it names, or its content hash does not
-            reproduce.
+            replay to exactly the rows it names.
     """
     manifest = load_dataset_manifest(store, dataset_version=dataset_version)
-    _verify_publication(store, manifest)
+    _verify_manifest_coherence(manifest)
     _verify_resolution_agrees(manifest, config)
+    report = load_quality_report(store, manifest)
+    _verify_quality_gate(manifest, report)
+    _verify_tables(store, manifest)
 
-    def rows(entity: str) -> Sequence[Mapping[str, object]]:
+    def rows(entity: str) -> Sequence[Mapping[str, Any]]:
         return store.read_table(
             layer=StorageLayer.GOLD, dataset_version=dataset_version, entity=entity
         )
@@ -390,8 +615,12 @@ def read_published_dataset(
     tickers = tuple(decode_ticker_history(r) for r in rows("ticker_history"))
     bars = tuple(decode_price_bar(r) for r in rows("price_bar"))
     actions = tuple(decode_corporate_action(r) for r in rows("corporate_action"))
+    headers = {
+        header.session_date: header
+        for header in (_decode_header(r) for r in rows("universe_snapshot_header"))
+    }
 
-    universe: dict[date, list[UniverseMembership]] = {}
+    universe: dict[date, list[UniverseMembership]] = {session: [] for session in headers}
     for row in rows("universe_membership"):
         stored = decode_universe_membership(row, ())
         replayed = resolve_lineage(
@@ -411,13 +640,24 @@ def read_published_dataset(
             )
         universe.setdefault(member.session_date, []).append(member)
 
-    return GoldDataset(
+    _verify_snapshot_headers(headers, universe, manifest)
+
+    built = GoldDataset(
         dataset_version=manifest.dataset_version,
         build_time=manifest.build_time,
         coverage_start=manifest.coverage_start,
         coverage_end=manifest.coverage_end,
         resolved_profile=manifest.resolved_profile,
         resolution_policy_version=manifest.resolution_policy_version,
+        resolution_receipt=ResolutionReceipt(
+            requested_profile=manifest.requested_profile,
+            resolved_profile=manifest.resolved_profile,
+            global_profile_resolution=manifest.global_profile_resolution,
+            resolution_policy_version=manifest.resolution_policy_version,
+            canonical_map=manifest.resolution_map,
+            evidence_fingerprint=(),
+            row_identity_fingerprint=(),
+        ),
         resolution_evidence=manifest.resolution_evidence,
         sessions=sessions,
         listings=listings,
@@ -429,55 +669,93 @@ def read_published_dataset(
             session: tuple(sorted(members, key=lambda m: m.security_id))
             for session, members in sorted(universe.items())
         },
+        universe_headers=headers,
     )
+    return built, manifest, report
 
 
-def _verify_publication(store: LocalTableStore, manifest: DatasetManifest) -> None:
-    if not manifest.is_published:
-        raise DatasetPublicationError(
-            f"Gold version {manifest.dataset_version} is marked unpublished."
-        )
+def _verify_manifest_coherence(manifest: DatasetManifest) -> None:
+    problems: list[str] = []
     if manifest.publication_format_version != PUBLICATION_FORMAT_VERSION:
-        raise DatasetPublicationError(
-            f"Gold version {manifest.dataset_version} uses publication format "
-            f"{manifest.publication_format_version}; this reader understands "
-            f"{PUBLICATION_FORMAT_VERSION}. An unrecognised format is refused rather than "
-            "read optimistically."
+        problems.append(
+            f"publication format {manifest.publication_format_version} is not the "
+            f"{PUBLICATION_FORMAT_VERSION} this reader understands"
         )
-    declared = {table.entity for table in manifest.tables}
-    if declared != set(GOLD_ENTITIES):
-        raise DatasetPublicationError(
-            f"Gold version {manifest.dataset_version} declares tables {sorted(declared)}; a "
-            f"complete publication declares {sorted(GOLD_ENTITIES)}."
+    if manifest.coverage_start > manifest.coverage_end:
+        problems.append(
+            f"coverage {manifest.coverage_start.isoformat()}.."
+            f"{manifest.coverage_end.isoformat()} is inverted"
+        )
+    if not is_canonical_instant(manifest.build_time):
+        problems.append("build_time is not a canonical UTC instant")
+
+    entities = [table.entity for table in manifest.tables]
+    if len(set(entities)) != len(entities):
+        problems.append("two table records name the same entity")
+    if set(entities) != set(GOLD_ENTITIES):
+        problems.append(
+            f"declares tables {sorted(set(entities))}; a complete publication declares "
+            f"{sorted(GOLD_ENTITIES)}"
         )
     for table in manifest.tables:
-        path = store.table_path(
-            layer=StorageLayer.GOLD,
-            dataset_version=manifest.dataset_version,
-            entity=table.entity,
+        safe_component(table.relative_path, kind="table relative_path")
+        if table.relative_path != f"{table.entity}.jsonl":
+            problems.append(
+                f"table {table.entity!r} declares path {table.relative_path!r}, not the "
+                "committed path its entity implies"
+            )
+        if table.row_count < 0:
+            problems.append(f"table {table.entity!r} declares a negative row count")
+
+    datasets = [entry.dataset for entry in manifest.resolution_evidence]
+    if len(set(datasets)) != len(datasets):
+        problems.append("two resolution-evidence entries name the same dataset")
+    missing_evidence = sorted(set(REQUIRED_EVIDENCE_DATASETS) - set(datasets))
+    if missing_evidence:
+        problems.append(f"required source datasets {missing_evidence} have no resolution evidence")
+    for entry in manifest.resolution_evidence:
+        counts = (
+            entry.rows_considered,
+            entry.public_rows_applicable,
+            entry.public_exact_rows,
+            entry.public_bounded_rows,
+            entry.public_excluded_rows,
+            entry.public_unresolved_rows,
+            entry.provider_rows_applicable,
+            entry.provider_exact_rows,
+            entry.provider_bounded_rows,
+            entry.provider_excluded_rows,
+            entry.provider_unresolved_rows,
+            entry.excluded_rows,
         )
-        if not path.exists():
-            raise DatasetPublicationError(
-                f"Gold version {manifest.dataset_version} declares table {table.entity!r} at "
-                f"{path}, which does not exist. This is a partial publication."
+        if any(count < 0 for count in counts):
+            problems.append(f"dataset {entry.dataset!r} declares a negative count")
+        if not entry.public_axis_reconciles():
+            problems.append(f"dataset {entry.dataset!r} public-axis counts do not reconcile")
+        if not entry.provider_axis_reconciles():
+            problems.append(f"dataset {entry.dataset!r} provider-axis counts do not reconcile")
+        if entry.public_basis is TimingBasis.EXACT and entry.public_bounded_rows:
+            problems.append(
+                f"dataset {entry.dataset!r} claims EXACT public basis with bounded rows"
             )
-        actual = sha256_hex(path.read_bytes())
-        if actual != table.content_hash:
-            raise DatasetPublicationError(
-                f"Table {table.entity!r} in {manifest.dataset_version} hashes to {actual}, "
-                f"not the {table.content_hash} its manifest records. Verification happens "
-                "before decoding, so corruption is caught as corruption."
+        if entry.provider_basis is TimingBasis.EXACT and entry.provider_bounded_rows:
+            problems.append(
+                f"dataset {entry.dataset!r} claims EXACT provider basis with bounded rows"
             )
-    recomputed = _dataset_hash(manifest.tables)
-    if recomputed != manifest.dataset_content_hash:
+
+    map_datasets = [entry[0] for entry in manifest.resolution_map]
+    if len(set(map_datasets)) != len(map_datasets):
+        problems.append("two resolution-map entries name the same dataset")
+
+    if problems:
         raise DatasetPublicationError(
-            f"Gold version {manifest.dataset_version} has a dataset content hash that does "
-            f"not reconcile with its tables (recorded {manifest.dataset_content_hash}, "
-            f"recomputed {recomputed})."
+            f"Gold version {manifest.dataset_version} is incoherent:\n  - "
+            + "\n  - ".join(problems)
         )
 
 
 def _verify_resolution_agrees(manifest: DatasetManifest, config: ProfileResolutionConfig) -> None:
+    """The persisted map must match the run's, entry for entry, reason included."""
     if manifest.resolved_profile is not config.resolved_profile:
         raise DatasetPublicationError(
             f"Gold version {manifest.dataset_version} was curated under "
@@ -490,44 +768,106 @@ def _verify_resolution_agrees(manifest: DatasetManifest, config: ProfileResoluti
         raise DatasetPublicationError(
             f"Gold version {manifest.dataset_version} was resolved under policy "
             f"{manifest.resolution_policy_version!r}; this run declares "
-            f"{config.resolution_policy_version!r}. Two runs that resolved the same gaps "
-            "differently admit different rows."
+            f"{config.resolution_policy_version!r}."
         )
-    published = {entry.dataset: entry.policy for entry in manifest.resolution_evidence}
-    declared = {entry.dataset: entry.policy for entry in config.dataset_resolutions}
-    disagreements = sorted(
-        name for name, policy in published.items() if declared.get(name) is not policy
-    )
-    if disagreements:
+    if manifest.resolution_map != config.canonical_map():
+        published = {entry[0]: entry for entry in manifest.resolution_map}
+        declared = {entry[0]: entry for entry in config.canonical_map()}
+        extra = sorted(set(published) - set(declared))
+        absent = sorted(set(declared) - set(published))
+        differing = sorted(
+            name for name in set(published) & set(declared) if published[name] != declared[name]
+        )
         raise DatasetPublicationError(
-            f"Gold version {manifest.dataset_version} was built with different per-dataset "
-            f"policies than this run declares, for {disagreements}. The evidence has to "
-            "describe the rows that are actually there."
+            f"Gold version {manifest.dataset_version} was built under a different resolution "
+            f"map than this run declares. Only in the publication: {extra}. Only in the run: "
+            f"{absent}. Differing in policy or reason: {differing}. The whole map is compared, "
+            "reasons included: two runs that bounded the same dataset for different stated "
+            "reasons resolved it differently."
         )
 
 
-def resolved_universe_inputs(dataset: GoldDataset, session: date) -> tuple[PitRecord, ...]:
-    """Every input the stored snapshot for ``session`` consumed, deduplicated.
+def _verify_quality_gate(manifest: DatasetManifest, report: QualityReport) -> None:
+    blocking = report.blocking
+    if blocking:
+        names = sorted({finding.check_name for finding in blocking})
+        raise QualityGateError(
+            f"Gold version {manifest.dataset_version} carries {len(blocking)} open BLOCKING "
+            f"quality finding(s) ({names}). Every dependent result is refused, not annotated, "
+            "and the evidence travels with the dataset so a reader cannot obtain a clean "
+            "result by omitting it."
+        )
 
-    Useful for auditing a whole snapshot at once. Individual rows keep their own
-    exact lineage; this is a union over them, not a substitute for it.
-    """
-    seen: list[PitRecord] = []
-    for row in dataset.universe.get(session, ()):
-        for record in row.inputs:
-            if record not in seen:
-                seen.append(record)
-    return tuple(seen)
+
+def _verify_tables(store: LocalTableStore, manifest: DatasetManifest) -> None:
+    for table in manifest.tables:
+        path = store.table_path(
+            layer=StorageLayer.GOLD,
+            dataset_version=manifest.dataset_version,
+            entity=table.entity,
+        )
+        if not path.exists():
+            raise DatasetPublicationError(
+                f"Gold version {manifest.dataset_version} declares table {table.entity!r} at "
+                f"{path}, which does not exist. This is a partial publication."
+            )
+        payload = path.read_bytes()
+        actual = sha256_hex(payload)
+        if actual != table.content_hash:
+            raise DatasetPublicationError(
+                f"Table {table.entity!r} in {manifest.dataset_version} hashes to {actual}, "
+                f"not the {table.content_hash} its manifest records. Verification happens "
+                "before decoding, so corruption is caught as corruption."
+            )
+        observed = sum(1 for line in payload.decode("utf-8").splitlines() if line)
+        if observed != table.row_count:
+            raise DatasetPublicationError(
+                f"Table {table.entity!r} in {manifest.dataset_version} holds {observed} rows "
+                f"but declares {table.row_count}. A count that does not match what is there "
+                "makes every completeness claim built on it unfalsifiable."
+            )
+
+
+def _verify_snapshot_headers(
+    headers: Mapping[date, UniverseSnapshotHeader],
+    universe: Mapping[date, Sequence[UniverseMembership]],
+    manifest: DatasetManifest,
+) -> None:
+    """Every membership row belongs to a built snapshot, and every header matches its rows."""
+    orphaned = sorted(session for session in universe if session not in headers)
+    if orphaned:
+        raise DatasetPublicationError(
+            f"Gold version {manifest.dataset_version} holds membership rows for sessions with "
+            f"no snapshot header: {orphaned}. A header is what says the session was built, and "
+            "rows without one cannot be distinguished from rows left behind by another build."
+        )
+    for session, header in sorted(headers.items()):
+        rows = tuple(universe.get(session, ()))
+        if header.row_count != len(rows):
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} declares {header.row_count} "
+                f"rows and {len(rows)} were stored. A zero-row snapshot is legitimate; a "
+                "header that miscounts is not."
+            )
+        if header.resolved_profile is not manifest.resolved_profile:
+            raise DatasetPublicationError(
+                f"The snapshot header for {session.isoformat()} is keyed to "
+                f"{header.resolved_profile.value} while the build resolved to "
+                f"{manifest.resolved_profile.value}."
+            )
 
 
 __all__ = [
     "GOLD_ENTITIES",
     "MANIFEST_NAME",
     "PUBLICATION_FORMAT_VERSION",
+    "QUALITY_REPORT_NAME",
+    "REQUIRED_EVIDENCE_DATASETS",
     "DatasetManifest",
     "TableRecord",
+    "compute_manifest_hash",
     "load_dataset_manifest",
+    "load_quality_report",
     "publish_gold_dataset",
     "read_published_dataset",
-    "resolved_universe_inputs",
 ]
