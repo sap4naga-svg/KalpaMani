@@ -1,0 +1,302 @@
+# ADR-0010 — Accept Bounded Sharadar Semantics and Authorize Qualification Subscription
+
+**Status:** **Accepted — effective on the merge of the pull request that introduces this ADR.**
+Until that merge it is proposed and carries no authority.
+**Date:** 2026-08-28
+**Deciders:** Project owner (human governance)
+**Supersedes:** the standing description of **Q7 and Q8 as unresolved pre-purchase blockers** in
+[ADR-0009](ADR-0009-sharadar-provider-realistic-implementation.md) §5 and in the
+[cancelled clarification draft](../phase3/provider-licensing-clarification-draft.md). Nothing else.
+It supersedes **no gate status**, no part of [ADR-0005](ADR-0005-point-in-time-data-architecture.md),
+and no authorization boundary.
+**Superseded by:** —
+**Relates to:** [ADR-0005](ADR-0005-point-in-time-data-architecture.md) (the gate model and the
+point-in-time contract), [ADR-0007](ADR-0007-cloud-first-research-data-plane.md) (the private AWS
+location and the deletion-first posture), [ADR-0008](ADR-0008-sharadar-personal-use-license-and-private-qualification.md)
+(the accepted personal-use licence, which G3 closes under), [ADR-0009](ADR-0009-sharadar-provider-realistic-implementation.md)
+(the code-only provider integration this decision does **not** extend)
+**Authority:** Blueprint V3.0 §11, §17, §19 · CLAUDE.md §4.21, §4.22, §4.23, §8
+
+---
+
+## 1. Context
+
+[ADR-0009](ADR-0009-sharadar-provider-realistic-implementation.md) authorized a **code-only**
+provider integration and left two questions standing as **pre-purchase blockers**:
+
+- **Q7** — are the daily bars officially disseminated, or provider-aggregated?
+- **Q8** — what depth does the Full History tier actually deliver, per table?
+
+A public-source pass on 2026-08-28 answered neither. That left a decision rather than a discovery:
+public documentation was not going to resolve Q7 at all, and Q8 could only be bounded from it. The
+owner has now taken that decision.
+
+**This ADR records a governance decision and a completed purchase. It authorizes no access.**
+Everything that would touch the vendor's systems — a credential, an API call, a download, ingestion
+— remains separately unauthorized, and §8 states that exhaustively.
+
+---
+
+## 2. The decision
+
+The owner decided:
+
+> "I accept Q7 as publicly unresolved and require Sharadar price data to remain
+> `PROVIDER_DERIVED` under `PROVIDER_REALISTIC_PIT`. I accept Q8 as sufficiently bounded for
+> qualification, with actual earliest records and PIT behavior to be verified after purchase. I
+> authorize purchase of one month of the Sharadar Personal Use Full History Bundle for up to
+> USD 69 plus applicable tax. This does not close G1 or G2 and does not yet authorize credentials,
+> API calls, Services Data ingestion, or production use."
+
+The owner subsequently confirmed the purchase **completed successfully**: a Sharadar Bundle, Full
+History, monthly, Personal Use — a **qualification subscription, active**.
+
+**No account, billing, receipt, payment, renewal, credential or private licensing detail is
+recorded here, and none was requested, retrieved, inspected or displayed.** The authorization
+ceiling above is part of the decision; what was actually charged is not this document's business.
+
+---
+
+## 3. Q7 — daily price-bar origin
+
+| | |
+|---|---|
+| **Public resolution** | **`PUBLICLY_UNRESOLVED`** |
+| **Governance disposition** | **OWNER-ACCEPTED FOR QUALIFICATION** |
+| **Required classification** | **`PROVIDER_DERIVED`** |
+| **Permitted historical profile** | **`PROVIDER_REALISTIC_PIT`** |
+
+**No reviewed public first-party source establishes any of the following**, and the absence is the
+finding:
+
+- derivation from the CTA/UTP SIP;
+- direct ingestion of an official consolidated tape;
+- construction by Sharadar from raw exchange trades;
+- a named upstream price-feed provider.
+
+The pages read state *what* is delivered and *how it is adjusted*, and are silent on where it comes
+from (`PSR-SHD-098`, `PSR-SHD-110`, `PSR-SHD-122`).
+
+**Descriptive language is not provenance.** "Consolidated", "official exchange close" and
+multi-exchange volume descriptions describe the *shape* of a number, not the *feed* it was built
+from. Reading any of them as an origin claim is how an unverified assumption becomes a
+classification, and a classification becomes a backtest that quietly assumes the market knew
+something.
+
+**Consequences, which are binding:**
+
+- **All Sharadar price data remains `PROVIDER_DERIVED`.**
+- The only permitted historical information-set profile for it is **`PROVIDER_REALISTIC_PIT`**.
+- **Sharadar price data must never be represented as `PUBLIC_PIT`**, and no derived artifact built
+  from it may be either. Under
+  [`BAR_CONSTRUCTION_ORIGIN`](../../src/kalpamani/data/contracts/vocabulary.py), that is what
+  `PROVIDER_AGGREGATED` implies, and this decision fixes the conservative side of it.
+
+**This bounds the uncertainty; it does not resolve it.** The upstream origin is still unknown. What
+has changed is that the unknown now has a documented, conservative disposition instead of an open
+question blocking work.
+
+---
+
+## 4. Q8 — Full History depth
+
+| | |
+|---|---|
+| **Public resolution** | **`PUBLICLY_BOUNDED`** |
+| **Governance disposition** | **OWNER-ACCEPTED FOR QUALIFICATION** |
+| **Empirical verification** | **REQUIRED — after a separate access authorization** |
+
+### Documented planning boundaries
+
+Read from first-party public documentation on 2026-08-28 (`PSR-SHD-122`, `PSR-SHD-123`,
+`PSR-SHD-124`, `PSR-SHD-125`):
+
+| table | documented planning boundary |
+|---|---|
+| `stocks` | **December 1998 onward for planning** — the conservative side of a conflict: the detailed table page states January 1998, the Prices overview states December 1998 |
+| `actions` | January 1998 |
+| `fundamentals` | January 1998 |
+| `daily` | December 1998 |
+| `tickers` | June 1990 |
+
+**These are documented planning boundaries. They are not certified earliest actual records.** The
+distinction is the whole point of recording them this way:
+
+- **actual minimum dates must be measured from the subscribed data**, per table;
+- **active and delisted coverage must be measured**, not inferred from a start date;
+- **completeness must be measured per table and per relevant dimension**, not assumed uniform.
+
+**"Full History" means the purchased full-history tier for the tables the Bundle includes.** It
+does not certify record-level depth. What a tier is called and what it contains are two facts, and
+only the first is public.
+
+---
+
+## 5. Tickers / security-master point-in-time boundary
+
+**The `tickers` table is not assumed to provide historical point-in-time snapshots of every mutable
+metadata attribute**, and one vendor statement makes that concrete rather than cautious. Sharadar
+states publicly that **the exchange field is the latest primary listing venue**, and that historical
+tracking of such changes is not currently provided (`PSR-SHD-124`).
+
+Consequences:
+
+- **Current exchange, category, delisting state, identifier and other mutable attributes must never
+  be silently treated as historically known.** A current value read as a historical one is
+  look-ahead wearing a schema's clothing — and it is the quiet kind, because nothing errors.
+- Historical security identity and universe construction must be built from **approved permanent
+  identifiers** (`permaticker`, documented as "a unique and unchanging identifier for an issuer"),
+  **corporate actions**, **price availability**, **conservative bounds**, and **later empirical
+  qualification** — not from a current-state metadata read.
+- **Any historical attribute that is unavailable requires an explicit disposition**: a declared
+  bound, an exclusion, or a profile downgrade. Never a silent substitution of today's value.
+
+This is the contract's existing rule applied to a specific vendor fact, not a new rule.
+
+---
+
+## 6. Price-field semantics
+
+Sharadar states that OHLCV are split-adjusted, that `closeunadj` is unadjusted and "can be used to
+impute" unadjusted Open/High/Low/Volume, and that `closeadj` is split-, cash-dividend- and
+spinoff-adjusted and "can be used to impute" fully adjusted Open/High/Low (`PSR-SHD-111`,
+`PSR-SHD-120`).
+
+**Native split-adjusted OHLCV must remain distinguishable from `closeunadj` and `closeadj`.**
+
+**Complete unadjusted OHLCV must not be assumed native merely because adjusted variants can be
+reconstructed.** "Can be imputed" is a statement about arithmetic, not about what the vendor sent.
+
+Any imputed unadjusted or fully adjusted OHLCV must be:
+
+- **explicitly derived** — never presented as a provider field;
+- **formula-versioned** — the convention that produced it is part of its identity;
+- **provenance-bearing** — traceable to the exact provider bytes it came from;
+- **reproducible** — the same inputs must give the same output;
+- **distinguishable from exact provider bytes** at every layer.
+
+**A derived field must never be labelled a raw exchange observation.** That mislabelling is exactly
+what the point-in-time contract's origin vocabulary exists to prevent.
+
+---
+
+## 7. Commercial and subscription state
+
+| | |
+|---|---|
+| Sharadar Personal Use **Full History Bundle** | **PURCHASED / ACTIVE FOR QUALIFICATION** |
+| Billing form | **monthly** |
+| Budget | within the Blueprint V3.0 §11 base annual data budget |
+
+**What this purchase is not.** It does not select Sharadar as the production provider, it does not
+close **G1**, and it does not close **G2**. **G3 remains CLOSED** under
+[ADR-0008](ADR-0008-sharadar-personal-use-license-and-private-qualification.md), on the personal-use
+terms recorded there — every one of which still binds, including that Services Data stays inside the
+private boundary and never reaches Git, an AI session or an external LLM API.
+
+Buying access to evaluate a provider and choosing that provider are different acts. This is the
+first.
+
+---
+
+## 8. Authorization matrix
+
+| | |
+|---|---|
+| subscription authorization | **YES** |
+| purchase authorization | **YES** |
+| qualification subscription purchased | **YES** |
+| qualification subscription active | **YES** |
+| production provider selected | **NO** |
+| G1 closed | **NO** |
+| production information-set profile approved | **NO** |
+| G2 closed | **NO** |
+| private credential retrieval / setup authorized | **NO** |
+| Secrets Manager credential setup authorized | **NO** |
+| provider API call authorized | **NO** |
+| public test-token probing authorized | **NO** |
+| Services Data access authorized | **NO** |
+| Services Data ingestion authorized | **NO** |
+| bulk download authorized | **NO** |
+| production backfill authorized | **NO** |
+| real S3 writer implemented | **NO** |
+| production ingestion implemented | **NO** |
+| broker or LEAN activity authorized | **NO** |
+| live trading authorized | **NO** |
+
+**The gap between the first four rows and the rest is the substance of this ADR.** A subscription
+exists; nothing in this repository may yet use it.
+
+---
+
+## 9. Required future qualification
+
+A **separately authorized** qualification phase must verify at minimum:
+
+- table entitlement and manifest;
+- actual earliest and latest records;
+- active and delisted coverage;
+- per-table row counts and minimum dates;
+- fundamentals dimension coverage and point-in-time behaviour;
+- actions coverage and event semantics;
+- ticker / `permaticker` identity behaviour;
+- ticker-change and recycled-symbol behaviour;
+- mutable current-metadata leakage risks;
+- stock-field adjustment semantics;
+- reconstruction / imputation behaviour;
+- table referential integrity;
+- update and availability timing;
+- deterministic bounded failure behaviour;
+- the **P1–P9** provider qualification requirements
+  ([implementation plan](../phase3/implementation-plan.md), ADR-0005 §G1).
+
+**These are recorded, not performed.** None was carried out for this ADR, and none may be until a
+separate written authorization exists — CLAUDE.md §8. Their results, when they exist, are private
+under ADR-0008 §3 and belong in the licensed S3 `qualification/` prefix and git-ignored `.runtime/`,
+never in Git.
+
+---
+
+## 10. Decision-gate map after this ADR
+
+**Unchanged.** This ADR closes no gate and opens none.
+
+| Gate | Subject | Status |
+|---|---|---|
+| **G1** | provider selection / qualification | **OPEN** |
+| **G2** | production information-set profile | **OPEN** |
+| **G3** | vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
+| **G4** | analyst estimates and revisions | **OPEN** |
+| **G5** | historical borrow | **OPEN** |
+| **G6** | options overlay | **OPEN** |
+| **G7** | strategy-taxonomy evidence | **OPEN** |
+
+**ADR-0005 remains PROPOSED.** Phase 3 remains **NOT COMPLETE**. Live trading remains
+**HARD-DISABLED**. INC-0002 remains **OPEN**.
+
+---
+
+## 11. Consequences
+
+**Positive.** Two questions that public sources could not answer stop blocking work, and stop
+blocking it *honestly*: Q7 is recorded as unresolved with the conservative classification made
+binding, rather than quietly assumed away. The subscription that makes empirical qualification
+possible now exists, and the boundary between having access and using it is written down where a
+future session will read it before acting.
+
+**Negative, and stated plainly.** A subscription is now running with nothing in this repository able
+to use it, which is a real cost against a real clock — the qualification phase it exists for is not
+yet authorized. And accepting Q7 as unresolved means the price data's origin may *never* be
+established; if it is not, `PROVIDER_REALISTIC_PIT` is a permanent ceiling for everything built on
+it, not a temporary one.
+
+**A risk worth naming.** The most likely way this decision goes wrong is not a wrong answer but a
+forgotten one: a later session, seeing an active subscription, treats access as authorized. §8
+exists to make that read as the error it would be.
+
+---
+
+## 12. Review
+
+Reviewed with the pull request that introduces it. Accepted on merge; until then it carries no
+authority.

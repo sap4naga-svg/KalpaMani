@@ -304,13 +304,15 @@ live brokerage execution, real-money operation.
 | Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
-| Stage 3A A2 / A3 — subscription / purchase | **NOT STARTED / NOT AUTHORIZED** |
+| Stage 3A A2 / A3 — subscription / purchase | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, for qualification only |
+| Credential setup · provider API access · Services Data ingestion | **NOT AUTHORIZED** |
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | [ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence | **ACCEPTED on merge (2026-08-27)** |
 | [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation | **ACCEPTED on merge of PR #13 — carries no authority before it** |
+| [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
 | G1 provider selection · G2 production information-set profile | **OPEN** |
 | G3 vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | G4 analyst revisions · G5 historical borrow | **OPEN** |
@@ -318,7 +320,8 @@ live brokerage execution, real-money operation.
 | AWS account | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
 | Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
-| Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
+| Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
+| Provider credentialing / API access / Services Data | **NOT AUTHORIZED** |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
 | Strategies / Brain / AI / portfolio / risk | **NOT IMPLEMENTED / NOT AUTHORIZED** |
@@ -459,11 +462,21 @@ implying otherwise. Durable metadata has **no free-text field at all**, and rang
 writer is a separate, later, separately authorized slice, and the project still declares **no
 runtime dependency**.
 
-**Naming an implementation target is not selecting a production provider. G1 remains OPEN.** A
-public-source re-check on 2026-08-28 answered neither Q7 (bar construction and origin) nor Q8
-(Full History depth per table) — `PSR-SHD-122` and `PSR-SHD-123` in
-[provider-source-register.md](docs/phase3/provider-source-register.md) §R4, with the vendor not
-contacted and the API not called. **Both remain pre-purchase blockers.**
+**Naming an implementation target is not selecting a production provider. G1 remains OPEN.**
+
+**Q7 and Q8 were decided rather than answered** ([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28). Q7 — the
+origin of the daily bars — is **publicly unresolved**, so all Sharadar price data stays
+`PROVIDER_DERIVED`, is usable only under `PROVIDER_REALISTIC_PIT`, and is **never represented as**
+`PUBLIC_PIT`. Q8 — Full History depth — is **publicly bounded**: the documented per-table depths
+are planning boundaries, not certified earliest records, and actual minimum dates, coverage and
+completeness must be **measured from the subscribed data** under a separate authorization. The
+vendor was not contacted and the API was not called; the evidence is public documentation recorded
+as `PSR-SHD-122`–`PSR-SHD-125` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5.
+
+**A one-month Full History Bundle qualification subscription is purchased and active.** That is
+access to *evaluate* a provider, not a choice of one: **G1 and G2 remain OPEN**, and credential
+setup, any API call, Services Data access and ingestion each remain **separately unauthorized**.
 
 **Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
 owner authorization through a documentation-only pull request —

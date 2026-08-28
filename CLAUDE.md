@@ -395,7 +395,8 @@ production ingestion are each still **separately unauthorized**.
 | **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
-| **PHASE 3A — A2 / A3 (subscription / purchase)** | **NOT STARTED / NOT AUTHORIZED** |
+| **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
+| **Credential setup · provider API access · Services Data ingestion** | **NOT AUTHORIZED** — a subscription existing is not permission to use it |
 | **PHASE 3B** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
@@ -404,6 +405,7 @@ production ingestion are each still **separately unauthorized**.
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge of PR #13 — carries no authority before it** |
+| **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -411,7 +413,8 @@ production ingestion are each still **separately unauthorized**.
 | **AWS account** | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
-| **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
+| **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
+| **Provider credentialing / API access / Services Data** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
 | **Short research** | **NOT AUTHORIZED** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** |
@@ -544,8 +547,8 @@ statements are historical and superseded for G3 alone.
 License for individual personal research, personal backtesting, programmatic API use, and
 automated trading of the owner's own account where the published documentation permits it. The
 previously drafted Q1–Q8 vendor clarification is **CANCELLED — NOT SENT — historical evidence
-only**, and is retained rather than deleted: **Q7 (bar construction) and Q8 (Full History depth)
-must still be answered before any purchase.**
+only**, and is retained rather than deleted. **Q7 and Q8 were never answered by the vendor; they
+were decided by the owner** — see [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md).
 
 Accepting the licence means accepting these, in every session:
 
@@ -628,12 +631,18 @@ package opens no socket. Static tests prove each of those rather than asserting 
 | **Closed vocabularies are normalised** | at construction, running no code belonging to the value, so a bare string, a sibling enum or a hostile `str` subclass cannot reach `.value` and raise from inside an error |
 | **No caller text reaches a header** | the client takes no `user_agent`; the transport validates header names and values itself, because `Request` stores them unchecked and CR/LF is only rejected at send time |
 
-**Naming an implementation target is not selecting a production provider. G1 stays OPEN**, and it
-cannot close while **Q7** (are the daily bars officially disseminated or provider-aggregated?) and
-**Q8** (what depth does Full History actually deliver, per table?) are unanswered. A public-source
-re-check on **2026-08-28** answered **neither** — recorded as `PSR-SHD-122` and `PSR-SHD-123` in
-[provider-source-register.md](docs/phase3/provider-source-register.md) §R4, with the vendor not
-contacted and the API not called. **Both remain pre-purchase blockers.**
+**Naming an implementation target is not selecting a production provider. G1 stays OPEN.**
+
+**Q7 and Q8 are no longer open pre-purchase blockers — they were decided, not answered**
+([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28):
+
+| | |
+|---|---|
+| **Q7** — daily price-bar origin | **`PUBLICLY_UNRESOLVED`**, owner-accepted for qualification. All Sharadar price data stays **`PROVIDER_DERIVED`**, usable only under **`PROVIDER_REALISTIC_PIT`**, and **never represented as `PUBLIC_PIT`** |
+| **Q8** — Full History depth | **`PUBLICLY_BOUNDED`**, owner-accepted for qualification. The documented per-table depths are **planning boundaries, not certified earliest records**; actual minimum dates, coverage and completeness **must be measured from the subscribed data** under a separate authorization |
+
+The vendor was not contacted and the API was not called for either decision; the evidence is public documentation recorded as `PSR-SHD-122`–`PSR-SHD-125` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5.
 
 ### Non-blocking follow-ups carried forward
 

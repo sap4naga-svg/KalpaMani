@@ -176,6 +176,13 @@ QUALIFICATION_HARNESS = REPO_ROOT / "scripts" / "sharadar_private_qualification.
 #: Section 15 exists because this decision **narrowed** a rule rather than removing one: provider
 #: code is now allowed, and every clause that keeps it code-only has to survive the next edit.
 ADR_IMPLEMENTATION = DECISIONS / "ADR-0009-sharadar-provider-realistic-implementation.md"
+
+#: The bounded-semantics decision and the qualification subscription it authorized (ADR-0010).
+#: Section 16 exists because this ADR is the one a later session is most likely to misread: a
+#: subscription is now active, and nothing in this repository may yet use it.
+ADR_QUALIFICATION = DECISIONS / (
+    "ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md"
+)
 PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
 OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
 PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
@@ -187,10 +194,18 @@ SOURCE_REGISTER = PHASE3 / "provider-source-register.md"
 #:
 #: The pairing matters: each phrase is only a defect when it appears **without** a negation to its
 #: left, because the same words are exactly how a document correctly states the prohibition.
+#:
+#: **Two phrases were removed on 2026-08-28**, and the removal is the interesting part.
+#: "subscription is authorized" and "purchase is authorized" were over-claims until ADR-0010 made
+#: them *true*; a guard that kept refusing them would have forced the status documents to describe
+#: the purchase in circumlocutions, which is how a guard starts degrading the thing it protects.
+#: Every phrase below must still be false, and section 16 checks the ones ADR-0010 could have been
+#: mistaken for authorizing.
 OVERCLAIM_PHRASES = (
     "production ingestion is authorized",
-    "subscription is authorized",
-    "purchase is authorized",
+    "credential setup is authorized",
+    "api access is authorized",
+    "services data ingestion is authorized",
     "provider selection is closed",
     "g1 is closed",
     "g1 closed",
@@ -494,7 +509,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/15] Closed vocabularies are defined where they are used")
+    print("[1/16] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -518,7 +533,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/15] Source and derived envelopes stay disjoint")
+    print("\n[2/16] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -553,7 +568,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/15] Every declared temporal semantics has its required anchor")
+    print("\n[3/16] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -570,7 +585,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/15] Exact and bound derivations name the correct fields")
+    print("\n[4/16] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -597,7 +612,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/15] Normative rules use the current resolved model")
+    print("\n[5/16] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -643,7 +658,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/15] Entities keep source and derived rows apart")
+    print("\n[6/16] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -713,7 +728,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/15] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/16] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -775,7 +790,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/15] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/16] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -880,7 +895,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/15] Resolved-timing wording, closure rules and current status")
+    print("\n[9/16] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -985,7 +1000,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/15] No document refers to a retired field name")
+    print("\n[10/16] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1029,7 +1044,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/15] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/16] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1186,7 +1201,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/15] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/16] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1278,7 +1293,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/15] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/16] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -1916,7 +1931,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/15] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/16] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2150,7 +2165,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/15] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/16] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2537,6 +2552,173 @@ def main() -> int:
             f"{name} still records real-data ingestion as unauthorized",
             re.search(r"real-data ingestion\**\s*\|\s*\**NOT AUTHORIZED", body) is not None,
             "full Stage 3A ingestion is not authorized by ADR-0009",
+        )
+
+    # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
+    print("\n[16/16] The qualification subscription is purchased, and still authorizes no access")
+    f.check(
+        "ADR-0010 exists",
+        ADR_QUALIFICATION.is_file(),
+        f"missing: {ADR_QUALIFICATION}",
+    )
+    if ADR_QUALIFICATION.is_file():
+        adr10 = read(ADR_QUALIFICATION)
+        # Prose wraps. Several claims below span a line break, so they are matched against
+        # a flattened, emphasis-stripped copy rather than the raw text -- otherwise the guard
+        # would be checking the line width rather than the claim.
+        flat10 = " ".join(adr10.replace("**", "").split())
+
+        f.check(
+            "ADR-0010 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr10 and "carries no authority" in adr10,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0010 records Q7 as publicly unresolved and owner-accepted",
+            "PUBLICLY_UNRESOLVED" in adr10 and "OWNER-ACCEPTED FOR QUALIFICATION" in adr10,
+            "a decision is not a discovery, and the document must not blur the two",
+        )
+        f.check(
+            "ADR-0010 binds Sharadar price data to PROVIDER_DERIVED",
+            "PROVIDER_DERIVED" in adr10 and "PROVIDER_REALISTIC_PIT" in adr10,
+            "an unresolved origin has exactly one safe classification",
+        )
+        f.check(
+            "ADR-0010 forbids representing Sharadar price data as PUBLIC_PIT",
+            "must never be represented as `PUBLIC_PIT`" in adr10,
+            "the whole consequence of an unresolved Q7 is this prohibition",
+        )
+        f.check(
+            "ADR-0010 records Q8 as publicly bounded, not resolved",
+            "PUBLICLY_BOUNDED" in adr10
+            and "not certified earliest actual records" in adr10
+            and "must be measured from the subscribed data" in flat10,
+            "documented depth is not measured depth, and the difference is the qualification",
+        )
+        f.check(
+            "ADR-0010 keeps the security-master metadata boundary explicit",
+            "latest primary listing venue" in flat10
+            and "must never be silently treated as historically known" in flat10,
+            "a current value read as a historical one is look-ahead that raises no error",
+        )
+        f.check(
+            "ADR-0010 keeps derived price fields distinguishable from provider bytes",
+            "formula-versioned" in flat10
+            and "must never be labelled a raw exchange observation" in adr10,
+            "an imputed column presented as a provider field is a mislabelled observation",
+        )
+        f.check(
+            "ADR-0010 records the subscription as purchased and active",
+            "PURCHASED / ACTIVE FOR QUALIFICATION" in adr10,
+            "the commercial state is a governance fact and belongs in the record",
+        )
+        # The matrix is the load-bearing part: four YES rows, and everything that
+        # would touch the vendor's systems still NO.
+        for label, needle in (
+            ("subscription authorization", "| subscription authorization | **YES** |"),
+            ("purchase authorization", "| purchase authorization | **YES** |"),
+            ("subscription purchased", "| qualification subscription purchased | **YES** |"),
+            ("subscription active", "| qualification subscription active | **YES** |"),
+            ("provider not selected", "| production provider selected | **NO** |"),
+            ("G1 not closed", "| G1 closed | **NO** |"),
+            ("G2 not closed", "| G2 closed | **NO** |"),
+            (
+                "no credential setup",
+                "| private credential retrieval / setup authorized | **NO** |",
+            ),
+            (
+                "no Secrets Manager setup",
+                "| Secrets Manager credential setup authorized | **NO** |",
+            ),
+            ("no API call", "| provider API call authorized | **NO** |"),
+            ("no test-token probing", "| public test-token probing authorized | **NO** |"),
+            ("no Services Data access", "| Services Data access authorized | **NO** |"),
+            ("no Services Data ingestion", "| Services Data ingestion authorized | **NO** |"),
+            ("no bulk download", "| bulk download authorized | **NO** |"),
+            ("no production backfill", "| production backfill authorized | **NO** |"),
+            ("no S3 writer", "| real S3 writer implemented | **NO** |"),
+            ("no production ingestion", "| production ingestion implemented | **NO** |"),
+            ("no broker or LEAN", "| broker or LEAN activity authorized | **NO** |"),
+            ("no live trading", "| live trading authorized | **NO** |"),
+        ):
+            f.check(
+                f"ADR-0010 authorization matrix records {label}",
+                needle in adr10,
+                f"missing matrix row: {needle}",
+            )
+        f.check(
+            "ADR-0010 defers every qualification measurement",
+            "These are recorded, not performed." in adr10,
+            "recording an obligation is not discharging it",
+        )
+        f.check(
+            "ADR-0010 records no account, billing or credential detail",
+            "No account, billing, receipt, payment, renewal, credential or private licensing "
+            "detail is recorded here" in flat10,
+            "purchase confirmation is a governance fact; the receipt is not",
+        )
+        f.check(
+            "ADR-0010 closes no gate",
+            re.search(r"\*\*G1\*\*[^|\n]*\|[^|\n]*\|\s*\*\*OPEN", adr10) is not None
+            and re.search(r"\*\*G2\*\*[^|\n]*\|[^|\n]*\|\s*\*\*OPEN", adr10) is not None
+            and re.search(r"\*\*G3\*\*[^|\n]*\|[^|\n]*\|\s*\*\*CLOSED", adr10) is not None,
+            "buying access to evaluate a provider is not choosing one",
+        )
+        f.check(
+            "ADR-0010 leaves ADR-0005 proposed and live trading disabled",
+            "ADR-0005 remains PROPOSED" in adr10 and "HARD-DISABLED" in adr10,
+            "no other governance state moves with this decision",
+        )
+        f.check(
+            "ADR-0010 publishes no empirical provider result",
+            not re.search(
+                r"\bP[1-9]\b\s*[:=]\s*(TESTED|PARTIALLY_TESTED|INCONCLUSIVE|DEFERRED)", adr10
+            ),
+            "Terms s.8 keeps empirical conclusions out of a public repository",
+        )
+
+    # -- the source register carries the rows ADR-0010's claims rest on ---------
+    if SOURCE_REGISTER.is_file():
+        register = read(SOURCE_REGISTER)
+        for claim in ("PSR-SHD-124", "PSR-SHD-125"):
+            f.check(
+                f"the source register carries {claim}",
+                claim in register,
+                "an ADR's provider claims must resolve to a traceable row",
+            )
+        f.check(
+            "the R5 pass records that no account page or API was touched",
+            "No account page, subscribe-flow page, API-key page, receipt or" in register,
+            "a live subscription raises the stakes on what a research pass may open",
+        )
+
+    # -- the status documents separate having access from being allowed to use it
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        f.check(
+            f"{name} records the qualification subscription as purchased",
+            "ADR-0010" in body and "PURCHASED / ACTIVE" in body,
+            "the commercial state must be discoverable where a reader looks first",
+        )
+        f.check(
+            f"{name} keeps credentialing, API access and Services Data unauthorized",
+            re.search(
+                r"credential(ing|s)?[^|\n]*(API|Services Data)[^|\n]*\|\s*\*\*NOT AUTHORIZED",
+                body,
+                re.I,
+            )
+            is not None,
+            "a subscription existing is not permission to use it",
+        )
+        f.check(
+            f"{name} no longer calls Q7 and Q8 open pre-purchase blockers",
+            "remain pre-purchase blockers" not in body,
+            "ADR-0010 decided both; leaving the old wording would contradict the record",
         )
 
     # ---------------------------------------------------------------- verdict
