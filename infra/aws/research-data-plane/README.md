@@ -24,7 +24,7 @@ foundation and nothing else. The full record, with no identifiers, is
 purchase, no credential and no implementation. Provider access, image builds, task execution and
 any further cloud spend each require their own written authorization, separate from and later
 than [ADR-0007](../../../docs/decisions/ADR-0007-cloud-first-research-data-plane.md).
-**G1–G7 remain OPEN** and ADR-0005 **remains PROPOSED**.
+**G1 OPEN · G2 OPEN · G3 CLOSED (Sharadar personal use, ADR-0008) · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN**. ADR-0005 **remains PROPOSED**.
 
 **Authority:** [ADR-0007](../../../docs/decisions/ADR-0007-cloud-first-research-data-plane.md) ·
 [ADR-0005](../../../docs/decisions/ADR-0005-point-in-time-data-architecture.md) ·

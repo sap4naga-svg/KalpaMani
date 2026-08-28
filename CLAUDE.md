@@ -395,7 +395,10 @@ trading remains **hard-disabled**.
 | **ADR-0005** | **PROPOSED** |
 | **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
-| **G1–G5** | **OPEN** |
+| **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
+| **G1** provider selection · **G2** production information-set profile | **OPEN** |
+| **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
+| **G4** analyst revisions · **G5** historical borrow | **OPEN** |
 | **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
 | **AWS account** | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
@@ -420,7 +423,7 @@ point-in-time contract as executable, type-checked Python, proven against reposi
 
 ```
 no provider connected   ·   no production data   ·   no short research
-no Phase 3B / 3C / 3D authority   ·   no G1-G7 resolved   ·   ADR-0005 still PROPOSED
+no Phase 3B / 3C / 3D authority   ·   no gate resolved by A1   ·   ADR-0005 still PROPOSED
 ```
 
 **A1 proves the vendor-neutral point-in-time mechanism using repository-owned synthetic
@@ -448,7 +451,8 @@ owner authorization through a documentation-only pull request, and the authority
 authority for A2, A3, Phase 3B/3C/3D, the Phase-4 Brain, strategies, AI agents, provider
 access, Paper expansion, live trading, capital or leverage — each still requires its own
 written authorization, per §8. Phase 3 remains **NOT COMPLETE**, ADR-0005 remains
-**PROPOSED**, and G1–G7 remain **OPEN**.
+**PROPOSED**, and **V3 adoption resolved no decision gate** — the current gate map is in
+*Decision gates* below.
 
 The adopted PDF is byte-identical to the document the owner reviewed (SHA-256
 `2726b96dd69c8982788b1c2bd646ce7a52879c649994a31858dc41666761996d`). Because a Blueprint PDF
@@ -487,8 +491,9 @@ provider NONE   ·   provider credentials NONE   ·   vendor data NONE
 
 **Provisioning a platform is not permission to use it.** Provider purchase, provider
 credentialing, ingestion, image builds, task execution and any further cloud spend are each a
-**separate written authorization** (§4.21). **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**,
-no provider is selected, and Phase 3 remains **NOT COMPLETE**.
+**separate written authorization** (§4.21). ADR-0005 **remains PROPOSED**, no provider is
+selected, and Phase 3 remains **NOT COMPLETE**. The gate map is in *Decision gates* below;
+provisioning the foundation resolved none of them.
 
 Deletion authority stayed separated through provisioning. The routine research role cannot
 delete. The deletion role can delete licensed objects but cannot read or write them and cannot
@@ -503,6 +508,77 @@ account, not merely declared.
 
 The termination procedure exists in advance and has **never been run**:
 [docs/runbooks/vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).
+
+### Decision gates — the exact map
+
+**No blanket "G1–G7 are all OPEN" statement is correct any more.** [ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) closed
+**G3** and nothing else.
+
+| Gate | Subject | Status |
+|---|---|---|
+| **G1** | provider selection / qualification | **OPEN** |
+| **G2** | production information-set profile | **OPEN** |
+| **G3** | vendor licensing — Sharadar personal use | **CLOSED (2026-08-27)** |
+| **G4** | analyst estimates and revisions | **OPEN** |
+| **G5** | historical borrow | **OPEN** |
+| **G6** | options overlay | **OPEN** |
+| **G7** | strategy-taxonomy evidence | **OPEN** |
+
+ADR-0006 and ADR-0007 each state that all seven were open. **That was true when each was
+accepted; neither is edited**, on the same rule that keeps a Blueprint PDF unedited. Their gate
+statements are historical and superseded for G3 alone.
+
+**If the provider changes away from Sharadar, G3 reopens for the replacement provider.**
+
+### Sharadar personal-use licence — accepted, and what it constrains
+
+[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) records the owner's acceptance of the **published** Sharadar Personal Use
+License for individual personal research, personal backtesting, programmatic API use, and
+automated trading of the owner's own account where the published documentation permits it. The
+previously drafted Q1–Q8 vendor clarification is **CANCELLED — NOT SENT — historical evidence
+only**, and is retained rather than deleted: **Q7 (bar construction) and Q8 (Full History depth)
+must still be answered before any purchase.**
+
+Accepting the licence means accepting these, in every session:
+
+| | |
+|---|---|
+| **Personal use only** | owner as a natural person. No employer, client, entity, fund or institutional use. No redistribution. An LLC or trust would void it |
+| **Services Data stays private** | deterministic KalpaMani code inside the private boundary may process vendor rows. Git, an AI chat, a Claude context, an external LLM API and shared SaaS may not receive them |
+| **Empirical evaluation is private** | Terms §8 bars disclosing fitness conclusions. P1–P9 results, sampled rows, provider-quality conclusions and the private recommendation live **only** in the licensed S3 `qualification/` prefix and git-ignored `.runtime/` — never in Git, a PR, an issue, a commit message or an AI session |
+| **Public documentation may describe** | methodology, public vendor documentation, architecture, and limitations already apparent from public documentation |
+| **Termination** | qualification material is licensed and sits inside the 30-day deletion surface of [the deletion runbook](docs/runbooks/vendor-data-cloud-deletion.md) |
+| **Third-party AI** | vendor *documentation* may be read by an AI assistant. **Services Data and private evaluation results may not.** |
+
+**What ADR-0008 does not do:** it selects no provider, closes no other gate, purchases nothing,
+creates no vendor account, holds no private credential, and authorizes no production ingestion,
+no A2/A3 implementation and no further cloud spend.
+
+### Private Sharadar qualification harness — built, never run by an AI
+
+[`scripts/sharadar_private_qualification.py`](scripts/sharadar_private_qualification.py) is a
+standalone P1–P9 harness. It is **not** a production provider adapter: it adds no runtime
+dependency, imports no cloud SDK, writes nothing under `src/`, and does not widen the A1 package
+surface.
+
+```
+credential   vendor-PUBLISHED public test key only   ·   subscription NONE   ·   account NONE
+network      OFF by default -- --private-live-run required, plus the AWS identity gate
+refuses      pytest, CI, import, preflight, docs audit
+stdout       an allowlist -- no P-status, no recommendation, no bucket, no URL, no vendor row
+exit code    harness success/failure ONLY -- never a provider verdict
+storage      raw + private report to the LICENSED bucket under qualification/sharadar/<run-id>/
+report       .runtime/phase3/sharadar/ -- git-ignored, owner-readable, never committed
+```
+
+**The owner runs it manually.** No AI session may run it, and no AI session may receive its
+output. `PROCEED` / `HOLD` / `REJECT` is computed inside the private report and is never printed,
+never returned and never encoded in the exit status.
+
+**Research-bucket emptiness is no longer a standing invariant.** Both research-data buckets were
+empty *at AWS-foundation closeout*, and that record stands as evidence of that day. Once
+qualification begins, the licensed bucket may legitimately hold private material. Object counts,
+row counts and pass/fail results are private and are never published.
 
 ### Non-blocking follow-ups carried forward
 

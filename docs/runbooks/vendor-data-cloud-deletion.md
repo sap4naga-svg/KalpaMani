@@ -17,7 +17,7 @@ that has never been read is not a procedure.
 
 > **Nothing in this document authorizes anything.** It does not authorize a purchase, a
 > credential, an ingestion, an AWS resource, a `terraform apply`, or its own execution. Gates
-> **G1–G7 are OPEN**, ADR-0005 **remains PROPOSED**, and live trading remains **HARD-DISABLED**.
+> **G1 OPEN · G2 OPEN · G3 CLOSED (Sharadar personal use, ADR-0008) · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN**. ADR-0005 **remains PROPOSED**, and live trading remains **HARD-DISABLED**.
 
 **Authority:** [ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md) §3–§4 ·
 [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md) §13–§14 ·
