@@ -201,11 +201,22 @@ Any issuer *or* security relationship requires **independent evidence, an explic
 or later empirical qualification** — and **the subscription does not authorize that qualification
 yet** (§8).
 
-Both failure directions are real, which is why the rule refuses both. Reading a security key as an
-issuer key would silently **understate** concentration — the kind of error a risk limit exists to
-catch and would not. Reading an issuer key as a security key would silently **split** one exposure
-into several, or merge distinct securities that happen to share an issuer. Neither error announces
-itself.
+**Both failure directions are real, and they fail in opposite ways.** That is why the rule refuses
+to assume either granularity rather than picking the safer-sounding one — there isn't one.
+
+*If `permaticker` is actually **security-level** and we treat it as **issuer-level**.* Several
+securities or share classes of one issuer would carry **different** identifiers. Grouping by those
+identifiers as though each named an issuer **fragments that issuer's exposure across several
+groups**, and so can **understate issuer-level concentration** — the kind of error an issuer
+exposure limit exists to catch and, computed this way, would not.
+
+*If `permaticker` is actually **issuer-level** and we treat it as **security-level**.* Several
+securities or share classes of one issuer would **share** one identifier. Using it as security
+identity **collapses or conflates distinct securities**, corrupting security-level histories,
+positions, returns, corporate-action handling and any join keyed on it.
+
+**Neither error announces itself.** Both produce a table that reconciles, sums and renders exactly
+as a correct one would.
 
 This is the contract's existing rule applied to a specific vendor fact, not a new rule.
 
@@ -334,17 +345,34 @@ never in Git.
 
 ## 11. Consequences
 
-**Positive.** Two questions that public sources could not answer stop blocking work, and stop
-blocking it *honestly*: Q7 is recorded as unresolved with the conservative classification made
-binding, rather than quietly assumed away. The subscription that makes empirical qualification
-possible now exists, and the boundary between having access and using it is written down where a
-future session will read it before acting.
+**Positive.** Two questions stop blocking work, and stop blocking it *honestly* — each recorded in
+the state the evidence actually supports rather than flattened into one:
+
+- **Q7 is publicly unresolved**, owner-accepted for qualification, with the conservative
+  classification made binding rather than quietly assumed away;
+- **Q8 is publicly bounded but not empirically verified**, owner-accepted for qualification, with
+  the documented depths recorded as planning boundaries and the measurement obligation recorded
+  rather than skipped.
+
+They ceased to be pre-purchase blockers for **different reasons**, and §3 and §4 keep that
+difference visible. The subscription that makes empirical qualification possible now exists, and the
+boundary between having access and using it is written down where a future session will read it
+before acting.
 
 **Negative, and stated plainly.** A subscription is now running with nothing in this repository able
 to use it, which is a real cost against a real clock — the qualification phase it exists for is not
-yet authorized. And accepting Q7 as unresolved means the price data's origin may *never* be
-established; if it is not, `PROVIDER_REALISTIC_PIT` is a permanent ceiling for everything built on
-it, not a temporary one.
+yet authorized.
+
+Accepting Q7 as unresolved also means the price data's origin may *never* be established. The
+consequence of that is **scoped, not global**, and §3 states the scope: if Q7 stays unresolved, the
+**Sharadar price data itself** remains `PROVIDER_DERIVED`, its permitted historical profile remains
+`PROVIDER_REALISTIC_PIT`, and **an artifact whose classification rests solely on that price data
+cannot be `PUBLIC_PIT`**. An artifact supported by *independent* qualifying public evidence needs its
+own lineage and its own classification, which **this ADR neither establishes nor prohibits**.
+
+Stating that consequence as an unconditional, indefinite ceiling over every artifact that merely
+touches this data would have been the easier sentence and the wrong one: it would refuse, in
+advance, a future artifact whose public standing rests on evidence this decision never examined.
 
 **A risk worth naming.** The most likely way this decision goes wrong is not a wrong answer but a
 forgotten one: a later session, seeing an active subscription, treats access as authorized. §8

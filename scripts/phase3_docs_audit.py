@@ -2681,6 +2681,60 @@ def main() -> int:
             and "the subscription does not authorize that qualification" in flat10,
             "an issuer or security relationship is a mapping, not an inference from an opaque key",
         )
+        # -- the two identity-failure directions, assigned to the right direction --
+        #
+        # An earlier revision put "split one exposure into several" on the
+        # issuer-key-read-as-security-key direction. That is backwards, and
+        # backwards in the direction that reads plausibly: a shared issuer key
+        # used as security identity COLLAPSES securities, it does not split them.
+        # Splitting is what happens the other way round, and it is why that
+        # direction understates issuer concentration.
+        f.check(
+            "ADR-0010 assigns the security-key-as-issuer-key failure correctly",
+            "carry **different** identifiers" in adr10
+            and "fragments that issuer's exposure across several" in flat10
+            and "understate issuer-level concentration" in flat10,
+            "distinct per-security keys grouped as issuers fragment one issuer across groups, "
+            "which understates issuer concentration",
+        )
+        f.check(
+            "ADR-0010 assigns the issuer-key-as-security-key failure correctly",
+            "**share** one identifier" in adr10
+            and "collapses or conflates distinct securities" in flat10
+            and "corrupting security-level histories" in flat10,
+            "one shared issuer key used as security identity collapses securities; it does not "
+            "split an exposure",
+        )
+        f.check(
+            "ADR-0010 no longer reverses the two identity-failure directions",
+            "split** one exposure" not in adr10 and "split one exposure into several" not in flat10,
+            "the reversed consequence must not return; it reads plausibly and is wrong",
+        )
+
+        # -- the PIT consequence is scoped to Sharadar data alone -----------------
+        f.check(
+            "ADR-0010 states no permanent ceiling on everything built with Sharadar data",
+            "permanent ceiling for everything built on" not in flat10
+            and "permanent ceiling on everything built" not in flat10,
+            "that wording would refuse in advance an artifact resting on evidence this ADR never "
+            "examined, and contradicts the narrower rule in §3",
+        )
+        f.check(
+            "ADR-0010 keeps the consequences section scoped to Sharadar data alone",
+            "an artifact whose classification rests solely on that price data cannot be "
+            "`PUBLIC_PIT`"
+            in flat10
+            and "this ADR neither establishes nor prohibits" in flat10,
+            "the ceiling applies to the data itself and to artifacts resting solely on it",
+        )
+        f.check(
+            "ADR-0010 keeps Q7 and Q8 distinct in its consequences",
+            "Q7 is publicly unresolved" in flat10
+            and "Q8 is publicly bounded but not empirically verified" in flat10
+            and "ceased to be pre-purchase blockers for **different reasons**" in adr10,
+            "the consequences section must not re-flatten two different evidence states",
+        )
+
         f.check(
             "ADR-0010 keeps the mutable-metadata rule intact",
             "must never\nbe silently treated as historically known" in adr10
