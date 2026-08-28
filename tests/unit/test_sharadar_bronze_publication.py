@@ -30,6 +30,7 @@ never a vendor response.
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -41,7 +42,11 @@ from kalpamani.data.contracts.errors import (
     ObjectPayloadTypeError,
     ProviderMetadataDisclosureError,
 )
-from kalpamani.data.contracts.vocabulary import DataClassification, IngestionStatus
+from kalpamani.data.contracts.vocabulary import (
+    AcquisitionMode,
+    DataClassification,
+    IngestionStatus,
+)
 from kalpamani.data.ingest.bronze import RetrievalMetadata, build_ingestion_run
 from kalpamani.data.ingest.publication import (
     ACQUISITION_RECORD_FIELDS,
@@ -72,7 +77,7 @@ def publish(
     *,
     payload: bytes = syn.SYNTHETIC_PAYLOAD,
     run_id: str = syn.INGESTION_RUN_ID,
-    is_backfill: bool = False,
+    acquisition_mode: AcquisitionMode = AcquisitionMode.QUALIFICATION,
 ) -> BronzePublication:
     """Publish one synthetic Sharadar payload through the provider bridge."""
     return publish_sharadar_payload(
@@ -82,7 +87,7 @@ def publish(
         retrieved_at=syn.RETRIEVED_AT,
         ingestion_run_id=run_id,
         source_schema_version=syn.SOURCE_SCHEMA_VERSION,
-        is_backfill=is_backfill,
+        acquisition_mode=acquisition_mode,
     )
 
 
@@ -101,6 +106,7 @@ def retrieval(
         retrieved_at=syn.RETRIEVED_AT,
         source_schema_version=syn.SOURCE_SCHEMA_VERSION,
         ingestion_run_id=run_id,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
         notes=notes,
     )
 
@@ -163,12 +169,46 @@ def test_a_second_run_over_unchanged_bytes_is_a_new_acquisition_not_a_new_payloa
     assert len(store.snapshot()) == OBJECTS_PER_ACQUISITION + 2
 
 
-def test_restating_one_retrieval_with_different_metadata_is_refused() -> None:
-    """One retrieval happened once; a later restatement would describe a non-event."""
+def test_restating_one_retrieval_with_a_different_mode_is_refused() -> None:
+    """One retrieval happened once, and it was one kind of act.
+
+    The mode is the metadata most likely to be restated -- a later run deciding
+    the same fetch was "really" a backfill -- so it is the one this test uses. A
+    restatement describes a non-event, and append-only storage refuses it.
+    """
     store = InMemoryResearchObjectStore()
-    publish(store, is_backfill=False)
+    publish(store, acquisition_mode=AcquisitionMode.QUALIFICATION)
     with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
-        publish(store, is_backfill=True)
+        publish(store, acquisition_mode=AcquisitionMode.BACKFILL)
+
+
+def test_restating_one_retrieval_with_the_same_mode_is_idempotent() -> None:
+    """The control for the test above: identical metadata is an ordinary repeat."""
+    store = InMemoryResearchObjectStore()
+    first = publish(store, acquisition_mode=AcquisitionMode.UPDATE)
+    second = publish(store, acquisition_mode=AcquisitionMode.UPDATE)
+    assert first.acquisition_written is True
+    assert (second.claim_written, second.payload_written, second.acquisition_written) == (
+        False,
+        False,
+        False,
+    )
+
+
+@pytest.mark.parametrize("mode", list(AcquisitionMode))
+def test_every_mode_publishes_under_licensed_and_records_its_own_token(
+    mode: AcquisitionMode,
+) -> None:
+    """All three modes are constructible by a neutral synthetic caller, and each
+    records exactly its own token."""
+    store = InMemoryResearchObjectStore()
+    published = publish(store, acquisition_mode=mode, run_id=f"synthetic-run-{mode.value.lower()}")
+    record = json.loads(store.read(published.acquisition_key).decode("utf-8"))
+    assert record["acquisition_mode"] == mode.value
+    assert record["classification"] == DataClassification.LICENSED.value
+    assert published.retrieval.acquisition_mode is mode
+    for key in (published.claim_key, published.payload_key, published.acquisition_key):
+        assert key.classification is DataClassification.LICENSED
 
 
 def test_a_payload_is_never_parsed_before_publication() -> None:
@@ -188,7 +228,6 @@ def test_the_acquisition_record_names_a_payload_that_exists() -> None:
             retrieval=published.retrieval,
             content_sha256=published.content_sha256,
             byte_count=published.byte_count,
-            is_backfill=False,
         )
     )
     assert store.read(published.acquisition_key) == expected
@@ -224,12 +263,8 @@ def test_the_claim_namespace_is_provider_independent() -> None:
 def test_an_identical_claim_is_idempotent() -> None:
     store = InMemoryResearchObjectStore()
     metadata = retrieval()
-    first = publish_bronze_payload(
-        store=store, payload=syn.SYNTHETIC_PAYLOAD, retrieval=metadata, is_backfill=False
-    )
-    second = publish_bronze_payload(
-        store=store, payload=syn.SYNTHETIC_PAYLOAD, retrieval=metadata, is_backfill=False
-    )
+    first = publish_bronze_payload(store=store, payload=syn.SYNTHETIC_PAYLOAD, retrieval=metadata)
+    second = publish_bronze_payload(store=store, payload=syn.SYNTHETIC_PAYLOAD, retrieval=metadata)
     assert first.claim_written is True
     assert second.claim_written is False
 
@@ -241,14 +276,12 @@ def test_the_same_digest_and_run_under_a_different_provider_is_refused() -> None
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(provider="sharadar"),
-        is_backfill=False,
     )
     with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
         publish_bronze_payload(
             store=store,
             payload=syn.SYNTHETIC_PAYLOAD,
             retrieval=retrieval(provider="othervendor"),
-            is_backfill=False,
         )
 
 
@@ -258,14 +291,12 @@ def test_the_same_digest_and_run_under_a_different_dataset_is_refused() -> None:
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(dataset="stocks"),
-        is_backfill=False,
     )
     with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
         publish_bronze_payload(
             store=store,
             payload=syn.SYNTHETIC_PAYLOAD,
             retrieval=retrieval(dataset="actions"),
-            is_backfill=False,
         )
 
 
@@ -276,13 +307,11 @@ def test_a_different_run_over_the_same_digest_is_a_permitted_new_acquisition() -
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(run_id="synthetic-run-0001"),
-        is_backfill=False,
     )
     second = publish_bronze_payload(
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(run_id="synthetic-run-0002"),
-        is_backfill=False,
     )
     assert second.claim_written is True
     assert second.payload_written is False
@@ -316,7 +345,6 @@ def test_the_claim_is_written_before_the_payload() -> None:
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(provider="sharadar"),
-        is_backfill=False,
     )
     before = dict(store.snapshot())
     with pytest.raises(ObjectAlreadyExistsError):
@@ -324,7 +352,6 @@ def test_the_claim_is_written_before_the_payload() -> None:
             store=store,
             payload=syn.SYNTHETIC_PAYLOAD,
             retrieval=retrieval(provider="othervendor"),
-            is_backfill=False,
         )
     assert store.snapshot() == before, "the refused run must leave nothing behind"
     assert not any("othervendor" in name for name in store.snapshot())
@@ -352,9 +379,7 @@ def test_the_publication_path_has_no_argument_that_reaches_the_control_store() -
 
 
 def test_the_record_declares_its_own_classification() -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     assert record["classification"] == DataClassification.LICENSED.value
 
 
@@ -364,15 +389,16 @@ def test_the_record_declares_its_own_classification() -> None:
 
 
 def test_the_recorded_field_set_is_exactly_the_allowlist_and_excludes_notes() -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=7, is_backfill=True
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=7)
     assert set(record) == ACQUISITION_RECORD_FIELDS
     assert "notes" not in record
     assert record["provider"] == PROVIDER
     assert record["dataset"] == "stocks"
     assert record["requested_range"] == "2021-08-28/2026-08-27"
-    assert record["is_backfill"] is True
+    assert record["acquisition_mode"] == "QUALIFICATION"
+    assert type(record["acquisition_mode"]) is str, (
+        "a StrEnum member is not what a reader gets back"
+    )
 
 
 def test_the_provider_bridge_offers_no_notes_parameter() -> None:
@@ -389,7 +415,6 @@ def test_a_note_on_the_retrieval_never_reaches_the_durable_record() -> None:
         store=store,
         payload=syn.SYNTHETIC_PAYLOAD,
         retrieval=retrieval(notes=smuggled),
-        is_backfill=False,
     )
     for key in (published.claim_key, published.acquisition_key):
         stored = store.read(key).decode("utf-8")
@@ -416,9 +441,7 @@ def test_a_note_on_the_retrieval_never_reaches_the_durable_record() -> None:
 )
 def test_a_durable_field_outside_its_grammar_is_refused(field: str, value: str) -> None:
     """Each field is checked against its own contract, not against a blocklist."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record[field] = value
     with pytest.raises(ProviderMetadataDisclosureError):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -427,21 +450,58 @@ def test_a_durable_field_outside_its_grammar_is_refused(field: str, value: str) 
 @pytest.mark.parametrize("value", [True, -1, "7", 1.0])
 def test_a_byte_count_that_is_not_a_non_negative_int_is_refused(value: object) -> None:
     """``True`` is an ``int`` in Python, and a byte count of ``True`` is nobody's intent."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["byte_count"] = value
     with pytest.raises(ProviderMetadataDisclosureError, match="byte_count"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
 
-@pytest.mark.parametrize("value", [1, 0, "true", None])
-def test_an_is_backfill_that_is_not_an_exact_bool_is_refused(value: object) -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
-    record["is_backfill"] = value
-    with pytest.raises(ProviderMetadataDisclosureError, match="is_backfill"):
+@pytest.mark.parametrize(
+    "value",
+    [
+        True,
+        False,
+        1,
+        0,
+        None,
+        "qualification",
+        "Qualification",
+        "BACKFILL ",
+        "HISTORICAL",
+        "",
+        AcquisitionMode.QUALIFICATION,
+    ],
+)
+def test_an_acquisition_mode_that_is_not_an_exact_permitted_token_is_refused(
+    value: object,
+) -> None:
+    """Booleans are named first, because the retired representation was one and a
+    conversion from it is exactly what must not exist (ADR-0013). The enum member
+    is refused too: a record is bytes on a disk, and a ``StrEnum`` is a ``str``
+    *subclass* whose identity is not what a later reader gets back."""
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
+    record["acquisition_mode"] = value
+    with pytest.raises(ProviderMetadataDisclosureError, match="acquisition_mode"):
+        require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+def test_the_retired_boolean_key_is_refused_outright() -> None:
+    """No compatibility reader, and no conversion. The key is simply not in the
+    allowlist, so a record carrying it cannot be written."""
+    assert "is_backfill" not in ACQUISITION_RECORD_FIELDS
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
+    record["is_backfill"] = False
+    with pytest.raises(ProviderMetadataDisclosureError):
+        require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+def test_a_record_carrying_both_representations_is_refused() -> None:
+    """The dual-write case, refused by the allowlist rather than by a rule that
+    would have to notice the pairing."""
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
+    assert record["acquisition_mode"] == "QUALIFICATION"
+    record["is_backfill"] = False
+    with pytest.raises(ProviderMetadataDisclosureError):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
 
@@ -455,27 +515,21 @@ def test_a_str_subclass_cannot_pass_as_a_durable_string_field() -> None:
         def __hash__(self) -> int:
             return hash(str(self))
 
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["provider"] = Sneaky("sharadar")
     with pytest.raises(ProviderMetadataDisclosureError, match="provider"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
 
 def test_an_extra_field_is_refused() -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["request_url"] = "anything"
     with pytest.raises(ProviderMetadataDisclosureError, match="Unexpected field"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
 
 def test_a_missing_field_is_refused() -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     del record["requested_range"]
     with pytest.raises(ProviderMetadataDisclosureError, match="missing field"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -483,9 +537,7 @@ def test_a_missing_field_is_refused() -> None:
 
 def test_the_refusal_names_the_field_and_never_quotes_the_value() -> None:
     """An error that republished the disclosure would defeat its own purpose."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["source_schema_version"] = "api_key=synthetic-fake-secret-value-here"
     with pytest.raises(ProviderMetadataDisclosureError) as caught:
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -499,12 +551,11 @@ def test_a_snapshot_dataset_records_a_named_range_rather_than_an_empty_one() -> 
         request=syn.tickers_request(),
         retrieved_at=syn.RETRIEVED_AT,
         ingestion_run_id=syn.INGESTION_RUN_ID,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
         source_schema_version=syn.SOURCE_SCHEMA_VERSION,
     )
     assert metadata.requested_range == SNAPSHOT_RANGE
-    record = acquisition_record(
-        retrieval=metadata, content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=metadata, content_sha256="0" * 64, byte_count=1)
     require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
 
@@ -523,9 +574,7 @@ def test_a_snapshot_dataset_records_a_named_range_rather_than_an_empty_one() -> 
 )
 def test_a_requested_range_is_parsed_rather_than_pattern_matched(value: str, why: str) -> None:
     """A pattern that counts digits admits 2026-13-45 and every inverted range."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["requested_range"] = value
     with pytest.raises(ProviderMetadataDisclosureError, match="requested_range"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -534,9 +583,7 @@ def test_a_requested_range_is_parsed_rather_than_pattern_matched(value: str, why
 @pytest.mark.parametrize("value", ["2021-08-28/2026-08-27", "2026-08-27/2026-08-27", "SNAPSHOT"])
 def test_a_valid_requested_range_still_passes(value: str) -> None:
     """The negative control: the parser must not refuse what it exists to admit."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["requested_range"] = value
     require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
@@ -557,9 +604,7 @@ def test_a_retrieval_instant_is_parsed_and_required_to_be_canonical_utc(
 ) -> None:
     """A naive or offset instant recorded as UTC moves an acquisition in time, and a
     second spelling of one instant is a second content hash."""
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["retrieved_at"] = value
     with pytest.raises(ProviderMetadataDisclosureError, match="retrieved_at"):
         require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -567,9 +612,7 @@ def test_a_retrieval_instant_is_parsed_and_required_to_be_canonical_utc(
 
 @pytest.mark.parametrize("value", ["2026-08-28T13:45:00+00:00", "2026-08-28T13:45:00.123456+00:00"])
 def test_a_canonical_utc_instant_still_passes(value: str) -> None:
-    record = acquisition_record(
-        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-    )
+    record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
     record["retrieved_at"] = value
     require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
 
@@ -585,9 +628,7 @@ def test_the_classification_must_be_an_exact_string_not_something_equal_to_one()
             return hash("LICENSED")
 
     for value in (DataClassification.LICENSED, AlwaysEqual("LICENSED"), "CONTROL", None):
-        record = acquisition_record(
-            retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
-        )
+        record = acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
         record["classification"] = value
         with pytest.raises(ProviderMetadataDisclosureError, match="classification"):
             require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
@@ -602,7 +643,6 @@ def test_publication_requires_exact_immutable_payload_bytes(payload: object) -> 
             store=store,
             payload=payload,  # type: ignore[arg-type]
             retrieval=retrieval(),
-            is_backfill=False,
         )
     assert store.snapshot() == {}
 
@@ -627,7 +667,7 @@ def test_the_stored_record_carries_no_credential_url_or_cloud_identifier() -> No
 def test_an_ingestion_run_reuses_the_repository_vocabulary_and_stays_clean() -> None:
     """The run record already exists in the A1 contract; a parallel one would drift."""
     store = InMemoryResearchObjectStore()
-    published = publish(store, is_backfill=True)
+    published = publish(store)
     run = build_ingestion_run(
         retrieval=published.retrieval,
         started_at=datetime(2026, 8, 28, 13, 44, tzinfo=UTC),
@@ -635,13 +675,12 @@ def test_an_ingestion_run_reuses_the_repository_vocabulary_and_stays_clean() -> 
         artifacts=(),
         record_count=0,
         new_record_count=0,
-        is_backfill=True,
         code_commit_sha="synthetic-commit",
         config_version="synthetic-config-v0",
     )
     assert run.provider == PROVIDER
     assert run.dataset == "stocks"
-    assert run.is_backfill is True
+    assert run.acquisition_mode is AcquisitionMode.QUALIFICATION
     assert run.status is IngestionStatus.SUCCESS
     rendered = canonical_bytes(
         {

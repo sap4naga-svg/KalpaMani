@@ -895,8 +895,8 @@ Makes every curated row traceable to the act that fetched it, and is where
 | `started_at` / `completed_at` | instant | |
 | `status` | enum | `SUCCESS` · `PARTIAL` · `FAILED` |
 | `requested_range` | string | |
-| `record_count` / `new_record_count` | int | New-record count is what distinguishes a backfill from an update |
-| `is_backfill` | bool | Set by the origin-aware rule in [data-quality-plan.md](data-quality-plan.md) §4.2.4: the run delivered rows whose **valid-time coverage** (`observation_time` / `effective_date` / `sample_time`) extends earlier than the prior run's minimum, **or** whose `source_anchor` predates it. Revision 4 keyed this on `public_available_time` alone, so a backfill of proprietary or system-observed rows — the ones whose timing is least trustworthy — was invisible |
+| `record_count` / `new_record_count` | int | **Counts only.** Neither determines `acquisition_mode` — a run that returned many new rows is not thereby a `BACKFILL`, and one that returned few is not thereby an `UPDATE`. What arrived is an observation; what was asked for is a declaration |
+| `acquisition_mode` | enum | `QUALIFICATION` (bounded provider-validation retrieval) · `BACKFILL` (historical production loading) · `UPDATE` (incremental production refresh). **Declared, never inferred**: not from dates, ranges, counts, payload contents, first-seen times, prior coverage, provider or dataset. It states the governed intent of the operation and **proves nothing on its own** — `BACKFILL` grants no earlier PIT availability, `UPDATE` does not establish that the rows carry no historical revisions, and `QUALIFICATION` neither selects a provider nor qualifies the data. It replaced a boolean `is_backfill` ([ADR-0013](../decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)), which could express only two of the three. The historical-coverage observation in [data-quality-plan.md](data-quality-plan.md) §4.2.4 is **separate** and does not set it |
 | `bronze_artifact_hashes` | list[string] | SHA-256 of every raw payload written |
 | `code_commit_sha` / `config_version` | string | |
 

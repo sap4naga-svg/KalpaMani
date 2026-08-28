@@ -28,7 +28,7 @@ import pytest
 from fixtures import sharadar_provider as syn
 from fixtures.fake_s3 import SYNTHETIC_BUCKET, FakeS3Client
 from kalpamani.data.contracts.canonical import sha256_hex
-from kalpamani.data.contracts.vocabulary import DataClassification
+from kalpamani.data.contracts.vocabulary import AcquisitionMode, DataClassification
 from kalpamani.data.ingest.publication import BRONZE_NAMESPACE, CLAIM_NAMESPACE, BronzePublication
 from kalpamani.data.ingest.sharadar.bronze import publish_sharadar_payload
 from kalpamani.data.storage.s3 import S3ResearchObjectStore
@@ -41,7 +41,7 @@ def publish(
     *,
     payload: bytes = syn.SYNTHETIC_PAYLOAD,
     run_id: str = syn.INGESTION_RUN_ID,
-    is_backfill: bool = False,
+    acquisition_mode: AcquisitionMode = AcquisitionMode.QUALIFICATION,
 ) -> BronzePublication:
     """One synthetic Sharadar acquisition, published through the S3 adapter."""
     return publish_sharadar_payload(
@@ -51,7 +51,7 @@ def publish(
         retrieved_at=syn.RETRIEVED_AT,
         ingestion_run_id=run_id,
         source_schema_version=syn.SOURCE_SCHEMA_VERSION,
-        is_backfill=is_backfill,
+        acquisition_mode=acquisition_mode,
     )
 
 

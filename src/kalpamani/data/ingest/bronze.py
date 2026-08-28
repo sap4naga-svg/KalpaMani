@@ -79,7 +79,7 @@ from kalpamani.data.contracts.entities import IngestionRun
 from kalpamani.data.contracts.errors import AcquisitionIncompleteError, BronzeIntegrityError
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.paths import safe_component
-from kalpamani.data.contracts.vocabulary import IngestionStatus
+from kalpamani.data.contracts.vocabulary import AcquisitionMode, IngestionStatus
 
 #: Fixed gzip modification time. Without it the compressed bytes embed a clock,
 #: and two identical payloads produce two different files.
@@ -99,7 +99,18 @@ ACQUISITION_COMPLETE = "COMPLETE"
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetrievalMetadata:
-    """How a payload was acquired. Recorded beside the payload, never inside it."""
+    """How a payload was acquired. Recorded beside the payload, never inside it.
+
+    **The single source of the acquisition mode.** Every durable record and every
+    run record reads ``acquisition_mode`` from here rather than taking its own
+    copy, so there is no second field for a caller to set differently and no
+    reconciliation to get wrong. ADR-0013 removed the second copies that existed
+    when the field was a boolean.
+
+    ``acquisition_mode`` has **no default**. A retrieval whose intent nobody
+    stated is a retrieval nobody governed, and defaulting it would let the most
+    consequential field on the record be filled in by omission.
+    """
 
     provider: str
     dataset: str
@@ -107,10 +118,20 @@ class RetrievalMetadata:
     retrieved_at: datetime
     source_schema_version: str
     ingestion_run_id: str
+    acquisition_mode: AcquisitionMode
     notes: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "retrieved_at", normalize_instant(self.retrieved_at))
+        # An exact member, not a value that normalises to one. A bare
+        # ``"BACKFILL"`` reaching a durable record would be a second spelling of
+        # one mode, and ``closed_member`` would happily produce it.
+        if type(self.acquisition_mode) is not AcquisitionMode:
+            raise AcquisitionIncompleteError(
+                "acquisition_mode must be an exact AcquisitionMode member. It states the "
+                "governed intent of the retrieval, and a value that merely compares equal "
+                "to one is not a statement anybody made."
+            )
         if not self.ingestion_run_id:
             raise AcquisitionIncompleteError(
                 "An acquisition needs an ingestion_run_id. It is the identity of the act that "
@@ -576,7 +597,6 @@ def build_ingestion_run(
     artifacts: tuple[BronzeArtifact, ...],
     record_count: int,
     new_record_count: int,
-    is_backfill: bool,
     code_commit_sha: str,
     config_version: str,
     status: IngestionStatus = IngestionStatus.SUCCESS,
@@ -587,6 +607,12 @@ def build_ingestion_run(
     the ADR-0004 s.2 spirit: no ``uuid4()``, no timestamps in an identity. A
     derived id means two runs claiming to be the same run can be checked against
     each other rather than merely asserted to match.
+
+    **The acquisition mode comes from ``retrieval`` too, and there is no
+    parameter for it.** Accepting a second mode here would create two places to
+    state one fact, and the interesting case is the one where they disagree --
+    which no validation can resolve, because neither copy is more authoritative
+    than the other.
     """
     return IngestionRun(
         ingestion_run_id=retrieval.ingestion_run_id,
@@ -598,7 +624,7 @@ def build_ingestion_run(
         requested_range=retrieval.requested_range,
         record_count=record_count,
         new_record_count=new_record_count,
-        is_backfill=is_backfill,
+        acquisition_mode=retrieval.acquisition_mode,
         bronze_artifact_hashes=tuple(sorted(a.content_sha256 for a in artifacts)),
         code_commit_sha=code_commit_sha,
         config_version=config_version,

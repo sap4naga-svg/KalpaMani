@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import BronzePublication, publish_bronze_payload
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER, SharadarRequest
@@ -39,6 +40,7 @@ def sharadar_retrieval_metadata(
     retrieved_at: datetime,
     ingestion_run_id: str,
     source_schema_version: str,
+    acquisition_mode: AcquisitionMode,
 ) -> RetrievalMetadata:
     """Describe one Sharadar retrieval in the repository's own vocabulary.
 
@@ -52,6 +54,11 @@ def sharadar_retrieval_metadata(
     exists for the A1 filesystem writer and is never read by the object-store
     publisher, so a free-text note has no durable destination on this path. Not
     offering the parameter is better than accepting one and dropping it.
+
+    **``acquisition_mode`` is required and has no default.** A provider bridge is
+    the last place that could invent one, and a default here would mean the most
+    consequential field on a durable record was filled in by omission rather than
+    decided (ADR-0013).
     """
     return RetrievalMetadata(
         provider=PROVIDER,
@@ -60,6 +67,7 @@ def sharadar_retrieval_metadata(
         retrieved_at=retrieved_at,
         source_schema_version=source_schema_version,
         ingestion_run_id=ingestion_run_id,
+        acquisition_mode=acquisition_mode,
     )
 
 
@@ -71,7 +79,7 @@ def publish_sharadar_payload(
     retrieved_at: datetime,
     ingestion_run_id: str,
     source_schema_version: str,
-    is_backfill: bool,
+    acquisition_mode: AcquisitionMode,
 ) -> BronzePublication:
     """Publish one Sharadar payload byte for byte, with its acquisition record.
 
@@ -91,10 +99,9 @@ def publish_sharadar_payload(
         retrieved_at=retrieved_at,
         ingestion_run_id=ingestion_run_id,
         source_schema_version=source_schema_version,
+        acquisition_mode=acquisition_mode,
     )
-    return publish_bronze_payload(
-        store=store, payload=payload, retrieval=retrieval, is_backfill=is_backfill
-    )
+    return publish_bronze_payload(store=store, payload=payload, retrieval=retrieval)
 
 
 __all__ = ["publish_sharadar_payload", "sharadar_retrieval_metadata"]

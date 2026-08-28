@@ -16,6 +16,7 @@ response appears here or is reachable from here.
 
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -67,7 +68,6 @@ from kalpamani.data.ingest.sharadar.qualification import (
     acquisition_id,
 )
 from kalpamani.data.ingest.sharadar.runtime import (
-    QUALIFICATION_IS_BACKFILL,
     AcquisitionDisposition,
     QualificationFailure,
     QualificationOutcome,
@@ -1067,10 +1067,32 @@ def test_a_second_run_after_an_interrupted_publication_completes_the_remainder()
     assert result.outcomes[0].acquisition_written is True
 
 
-def test_the_backfill_flag_is_fixed_and_not_a_callers_choice() -> None:
-    """A raw boolean on the plan would have let a caller label qualification
-    evidence as a production backfill."""
-    assert QUALIFICATION_IS_BACKFILL is False
+def test_every_retrieval_is_recorded_as_a_qualification() -> None:
+    """ADR-0013 gave a bounded provider-validation retrieval its own name, so the
+    runtime no longer has to claim to be a backfill or an update."""
+    engine, store, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C])
+    engine.execute(three_dataset_plan(SUBJECT_A))
+    records = [
+        json.loads(store.body_of(key).decode("utf-8"))
+        for key in store.put_keys
+        if "/acquisitions/" in key
+    ]
+    assert records, "the run must have written acquisition records"
+    for record in records:
+        assert record["acquisition_mode"] == "QUALIFICATION"
+        assert "is_backfill" not in record
+
+
+def test_the_acquisition_mode_is_not_reachable_from_a_plan_or_a_caller() -> None:
+    """There is one kind of retrieval here, so there is nothing to choose."""
+    import dataclasses
+    import inspect
+
+    from kalpamani.data.ingest.sharadar.qualification import QualificationPlan
+
+    assert "acquisition_mode" not in {f.name for f in dataclasses.fields(QualificationPlan)}
+    for method in (QualificationRuntime.__init__, QualificationRuntime.execute):
+        assert "acquisition_mode" not in inspect.signature(method).parameters
 
 
 def test_a_refused_result_reports_zero_of_everything() -> None:

@@ -88,7 +88,7 @@ from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ProviderMetadataDisclosureError
-from kalpamani.data.contracts.vocabulary import DataClassification
+from kalpamani.data.contracts.vocabulary import AcquisitionMode, DataClassification
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.objectstore import (
     ObjectKey,
@@ -127,14 +127,23 @@ ACQUISITION_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
         "byte_count",
         "classification",
         "content_sha256",
+        "acquisition_mode",
         "dataset",
         "ingestion_run_id",
-        "is_backfill",
         "provider",
         "requested_range",
         "retrieved_at",
         "source_schema_version",
     }
+)
+
+#: The three permitted durable acquisition-mode tokens, as plain strings.
+#:
+#: Derived from the vocabulary rather than restated, so a fourth member could not
+#: appear in one place and not the other -- and so this list cannot silently
+#: admit a token the enum does not define.
+_ACQUISITION_MODE_TOKENS: Final[frozenset[str]] = frozenset(
+    str(member.value) for member in AcquisitionMode
 )
 
 #: The field set a global acquisition claim may carry. Narrower still: a claim
@@ -248,6 +257,10 @@ class BronzePublication:
     arriving twice -- and it is reported separately from ``claim_written`` and
     ``acquisition_written`` so a caller can tell "already had these bytes" from
     "already recorded this exact retrieval".
+
+    **The acquisition mode is not repeated here.** It is on ``retrieval``, which
+    this already carries, and a second copy would be a second place to state one
+    fact -- with no way to resolve the case where they disagree (ADR-0013).
     """
 
     claim_key: ObjectKey
@@ -259,7 +272,6 @@ class BronzePublication:
     payload_written: bool
     acquisition_written: bool
     retrieval: RetrievalMetadata
-    is_backfill: bool
 
 
 def acquisition_claim_key(*, payload_digest: str, run_id: str, claim: bytes) -> ObjectKey:
@@ -354,13 +366,19 @@ def acquisition_record(
     retrieval: RetrievalMetadata,
     content_sha256: str,
     byte_count: int,
-    is_backfill: bool,
 ) -> dict[str, Any]:
     """The recorded account of one retrieval. A closed field set, nothing free-form.
 
-    ``is_backfill`` is what distinguishes a vendor backfill from an update, and
-    the distinction is what the profile model exists to act on -- so it is
-    recorded beside the payload rather than only on the run that produced it.
+    ``acquisition_mode`` states what the retrieval **was** -- a bounded provider
+    validation, a historical production load, or an incremental refresh -- and it
+    is recorded beside the payload rather than only on the run that produced it.
+    It is read from ``retrieval`` and there is **no parameter for it**, because a
+    record whose mode could differ from its retrieval's would be two claims about
+    one act.
+
+    The value serialised is the member's plain ``str`` token, not the member: a
+    record is bytes on a disk, and a ``StrEnum`` is a ``str`` *subclass* whose
+    identity is not what a later reader would get back.
 
     ``RetrievalMetadata.notes`` is **not** read. It belongs to the A1 filesystem
     writer; on this path there is no field for human text, which is why no filter
@@ -375,7 +393,7 @@ def acquisition_record(
         "ingestion_run_id": retrieval.ingestion_run_id,
         "content_sha256": content_sha256,
         "byte_count": byte_count,
-        "is_backfill": is_backfill,
+        "acquisition_mode": str(retrieval.acquisition_mode.value),
         "classification": DataClassification.LICENSED.value,
     }
 
@@ -436,10 +454,20 @@ def require_recordable(record: dict[str, Any], *, allowed: frozenset[str]) -> No
                 raise ProviderMetadataDisclosureError(
                     "Durable field 'byte_count' must be a non-negative int."
                 )
-        elif field_name == "is_backfill":
-            if type(value) is not bool:
+        elif field_name == "acquisition_mode":
+            # Exact plain ``str`` against the three permitted tokens. A
+            # ``StrEnum`` member is a ``str`` subclass and is refused for the
+            # same reason ``classification`` refuses one: what is written must be
+            # the value, not something that currently compares equal to it.
+            #
+            # There is no boolean branch here and no conversion from one. The
+            # retired ``is_backfill`` key is not in the allowlist, so a record
+            # carrying it -- alone or beside this field -- is refused before this
+            # point (ADR-0013).
+            if type(value) is not str or value not in _ACQUISITION_MODE_TOKENS:
                 raise ProviderMetadataDisclosureError(
-                    "Durable field 'is_backfill' must be an exact bool."
+                    "Durable field 'acquisition_mode' must be exactly one of "
+                    "QUALIFICATION, BACKFILL or UPDATE, as a plain str."
                 )
         elif field_name == "classification":
             # Exact plain str, so a StrEnum member -- itself a str subclass -- and a
@@ -474,7 +502,6 @@ def publish_bronze_payload(
     store: ResearchObjectStore,
     payload: bytes,
     retrieval: RetrievalMetadata,
-    is_backfill: bool,
 ) -> BronzePublication:
     """Claim the acquisition identity, publish ``payload``, then record it.
 
@@ -501,12 +528,7 @@ def publish_bronze_payload(
         payload_digest=digest, run_id=retrieval.ingestion_run_id, claim=claim_bytes
     )
 
-    record = acquisition_record(
-        retrieval=retrieval,
-        content_sha256=digest,
-        byte_count=len(payload),
-        is_backfill=is_backfill,
-    )
+    record = acquisition_record(retrieval=retrieval, content_sha256=digest, byte_count=len(payload))
     require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
     record_bytes = canonical_bytes(record)
 
@@ -529,7 +551,6 @@ def publish_bronze_payload(
         payload_written=payload_outcome.stored,
         acquisition_written=acquisition_outcome.stored,
         retrieval=retrieval,
-        is_backfill=is_backfill,
     )
 
 
