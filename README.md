@@ -301,7 +301,7 @@ live brokerage execution, real-money operation.
 |---|---|
 | Planning | **ACCEPTED / MERGED** |
 | Stage 3A A1 — point-in-time foundation kernel | **ACCEPTED (2026-08-27)** |
-| Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
+| Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
 | Stage 3A A2 / A3 — subscription / purchase | **NOT STARTED / NOT AUTHORIZED** |
