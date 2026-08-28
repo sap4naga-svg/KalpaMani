@@ -15,7 +15,12 @@ Layout, and who may import what:
 ``live``
     current accessors, ``as_of`` forbidden. **Unimplemented in this slice.**
 ``ingest``
-    bronze writers. No network client exists yet.
+    bronze writers, and the one provider package. Vendor knowledge lives inside
+    ``ingest.sharadar`` and nowhere else; the neutral writers never import it.
+``objectstore``
+    the provider-neutral logical object contract Bronze publishes through.
+    Classification is part of an object's identity, and LICENSED is what you get
+    by writing the ordinary thing.
 ``normalize``
     silver transforms: bronze bytes to normalised source facts.
 ``curate``

@@ -10,16 +10,19 @@ risk and selective, bounded AI research.
 > longer in the authority order. The V2.1→V3 delta is indexed in
 > [BLUEPRINT_V3_ADOPTION.md](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
 >
-> **Status: Phase 3A A1 ACCEPTED (2026-08-27). Phase 3 overall NOT COMPLETE.**
+> **Status: Phase 3A A1 ACCEPTED (2026-08-27). Sharadar provider-integration Slice 1
+> IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13. Phase 3 overall NOT COMPLETE.**
 > Phase 1 (Paper connectivity) and Phase 2 (a narrowly certified one-share SPY Paper order
 > lifecycle) are complete and accepted; the vendor-neutral point-in-time foundation kernel
 > is accepted **on synthetic fixtures only**. Adopting V3 is a governance change — it is
 > **not** Phase 3 completion and authorizes no implementation.
 >
-> **Next governed work: provider and licensing decisions, and the remainder of Phase 3A.**
-> **No provider is connected. No real production data exists. Short research is not
-> authorized. No strategy or Brain implementation is authorized. Live trading is
-> hard-disabled.**
+> **Next governed work: the remainder of Phase 3A, and the still-open provider decisions.**
+> **No provider is connected — the adapter authorized by
+> [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) has never
+> sent a request.** No subscription, no vendor account, no private credential, no Services Data,
+> no production ingestion. No real production data exists. Short research is not authorized. No
+> strategy or Brain implementation is authorized. Live trading is hard-disabled.
 
 ---
 
@@ -84,8 +87,9 @@ whether Breakout and Pullback are economically distinct is open gate **G7**.
 **Universe:** ~1,200 liquid U.S. common stocks.
 **Engine:** QuantConnect LEAN. **Broker:** IBKR Pro behind a `BrokerAdapter`.
 **Database:** PostgreSQL (planned).
-**Preferred historical PIT stack:** Sharadar + SEC EDGAR — *preferred, not selected*, and
-subject to gates G1 and G3.
+**Preferred historical PIT stack:** Sharadar + SEC EDGAR. Sharadar is the **implementation
+target** for provider-realistic Phase-3A work (ADR-0009) and is **still not the selected
+production provider** — gate **G1** is open, and G3 is closed for personal use only (ADR-0008).
 
 ---
 
@@ -183,6 +187,8 @@ KalpaMani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
 │   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
 │   ├── data/                 Point-in-time data platform                      [Phase 3 planning accepted; A1 kernel ACCEPTED on synthetic fixtures only]
+│   │   ├── objectstore.py    Provider-neutral logical object contract         [ADR-0009 — in-memory implementation only; no cloud writer]
+│   │   └── ingest/sharadar/  The one provider package                         [ADR-0009 — CODE ONLY; has never sent a request]
 │   ├── execution/            Orders, fill protection, reconciliation          [IMPLEMENTED — Phase 2 certified scope only]
 │   ├── risk/                 Deterministic risk engine                        [empty by design]
 │   ├── portfolio/            Allocation and exposure limits                   [empty by design]
@@ -295,13 +301,16 @@ live brokerage execution, real-money operation.
 |---|---|
 | Planning | **ACCEPTED / MERGED** |
 | Stage 3A A1 — point-in-time foundation kernel | **ACCEPTED (2026-08-27)** |
+| Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
 | Phase 3 overall | **NOT COMPLETE** |
-| Stage 3A A2 / A3 | **NOT STARTED / NOT AUTHORIZED** |
+| Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
+| Stage 3A A2 / A3 — subscription / purchase | **NOT STARTED / NOT AUTHORIZED** |
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | [ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence | **ACCEPTED on merge (2026-08-27)** |
+| [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation | **ACCEPTED on merge of PR #13 — carries no authority before it** |
 | G1 provider selection · G2 production information-set profile | **OPEN** |
 | G3 vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | G4 analyst revisions · G5 historical borrow | **OPEN** |
@@ -399,6 +408,62 @@ passed and the AWS identity gate passes; it refuses to run under pytest or CI; s
 allowlist; and the exit code reports harness success or failure only, never a provider verdict.
 Results live in the licensed S3 bucket and in git-ignored `.runtime/`, and never in this
 repository. It is **not** a production provider adapter and adds no dependency.
+
+### Sharadar provider-integration Slice 1 — implemented, code only, never run
+
+[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) records the
+owner's authorization of the first provider-realistic Phase-3A slice, and its exact boundary. The
+implementation is complete and **awaiting acceptance**: ADR-0009 is accepted *on merge of PR #13*
+and carries no authority before it.
+
+**Authorized:** provider-specific code, provider-neutral interfaces, deterministic request
+construction from public documentation, credential-**injection** interfaces, redaction, pacing,
+bounded retries, Bronze publication mechanics, content addressing, synthetic-only tests.
+
+**Not authorized:** a subscription, a purchase, a trial, a vendor account, billing details, a
+private credential, **any API call**, Services Data, production ingestion, Silver or Gold
+real-data work, the real S3 writer, ECR or ECS, `terraform apply`, any AWS mutation, broker or
+LEAN activity, Paper expansion, live trading.
+
+`src/kalpamani/data/ingest/sharadar/` is the one place vendor knowledge lives; the A1 kernel and
+every vendor-neutral package stay vendor-neutral, and no other production module names the
+provider. **No API key value exists anywhere under `src/`** — not a private one, and not the
+vendor's published test token, which stays in the manual harness. **The package has never sent a
+request**: one module is network-capable, no production module, script or runner constructs it,
+and importing the package opens no socket. Static tests prove each of those.
+
+The transport is **pinned to one origin by parsing** the URL — scheme, host, port, empty userinfo,
+empty fragment and the documented path prefix — because `startswith("https://")` admits both a
+lookalike host and a userinfo prefix. Redirects are refused rather than followed (a 3xx would hand
+the query string, and so the key, to the `Location` host), ambient proxy discovery is off, no
+opener is installed globally, and a successful body is bounded. A dedicated synthetic test builds
+the transport with a **fake opener** and proves each of those without opening a socket: *dormant*
+is not allowed to mean *untested*.
+
+Storage goes through a provider-neutral `ResearchObjectStore` contract offering **immutable
+logical names with a content-integrity binding**: a key is a name *and* the digest the object must
+hold, so a forged key cannot read another object's bytes. Keys are **deeply frozen** — segments are
+copied into a fresh plain tuple of plain strings and subclassing is refused — and payloads must be
+exact immutable `bytes`, because a caller-held list or buffer could otherwise change a key or its
+content after it had been validated and filed.
+
+**`LICENSED` is the only classification this slice publishes.** `ObjectKey.control` was withdrawn:
+a free-text attestation accepted whenever it was merely non-blank is not auditable clearance, and
+there is no permitted-output artifact to publish yet. Acquisition identity — `(digest, run id)` —
+is claimed under the reserved `bronze/_acquisition_claims/`, so two providers cannot claim one
+retrieval; the leading underscore is refused by the path grammar, so no provider can collide with
+it, and the deletion runbook's existing `bronze/` step already covers it. Payloads and acquisition
+records stay separable by provider prefix; **claims are not**, and the design says so rather than
+implying otherwise. Durable metadata has **no free-text field at all**, and ranges and instants are
+*parsed* rather than pattern-matched. Only an in-memory store implementation exists — the real S3
+writer is a separate, later, separately authorized slice, and the project still declares **no
+runtime dependency**.
+
+**Naming an implementation target is not selecting a production provider. G1 remains OPEN.** A
+public-source re-check on 2026-08-28 answered neither Q7 (bar construction and origin) nor Q8
+(Full History depth per table) — `PSR-SHD-122` and `PSR-SHD-123` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4, with the vendor not
+contacted and the API not called. **Both remain pre-purchase blockers.**
 
 **Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
 owner authorization through a documentation-only pull request —

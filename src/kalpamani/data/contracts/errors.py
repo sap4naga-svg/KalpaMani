@@ -134,6 +134,76 @@ class AcquisitionIncompleteError(PointInTimeError):
     """
 
 
+class ObjectStoreError(PointInTimeError):
+    """A research object-store refusal.
+
+    Storage-shaped rather than query-shaped, and still a refusal: a publisher that
+    degraded here would leave the store holding something other than what the
+    caller believes it holds.
+    """
+
+
+class ObjectContentMismatchError(ObjectStoreError):
+    """A payload does not hash to the content address its key claims.
+
+    Refused rather than corrected. Correcting it would mean minting a second
+    identity for bytes a caller has already named, and every downstream reference
+    to the first would then point at nothing.
+    """
+
+
+class ObjectAlreadyExistsError(ObjectStoreError):
+    """Different bytes are already stored under this logical key.
+
+    The research object store is append-only, so this is either a hash collision
+    or a corrupted store. Neither is resolved by overwriting.
+    """
+
+
+class ObjectPayloadTypeError(ObjectStoreError):
+    """A payload was not exact, immutable :class:`bytes`.
+
+    A ``bytearray`` or ``memoryview`` can be changed by whoever still holds it
+    after the store has hashed it and filed it under that hash, leaving an object
+    whose content address no longer describes its content. Refused rather than
+    copied, so the caller's mistake surfaces instead of being papered over.
+    """
+
+
+class ObjectClassificationError(ObjectStoreError):
+    """A research object's classification, shape or routing was refused.
+
+    Three families of defect, all of which would put an object somewhere nobody
+    chose:
+
+    - **an unrecognised classification** -- a value that names no member of
+      :class:`~kalpamani.data.contracts.vocabulary.DataClassification`, which
+      cannot be resolved to a store and must not be guessed at;
+    - **a classification this slice cannot publish.** ``CONTROL`` publication is
+      **withdrawn**, not merely gated: there is no constructor for it, and
+      supplying an attestation would not make it valid. A control-plane object
+      survives a vendor deletion, so clearing one needs a structured, durably
+      bound attestation that does not exist yet -- a free-text string was never
+      auditable clearance;
+    - **a malformed or unusable key** -- no segments, an over-long logical key, a
+      non-string segment, or a key handed to the store that is not an exact
+      :class:`~kalpamani.data.objectstore.ObjectKey`.
+
+    ADR-0007 classifies by one question -- *can vendor rows be recovered from this
+    artifact?* -- under which uncertain resolves to LICENSED. With no CONTROL
+    constructor, uncertain is the only answer expressible.
+    """
+
+
+class ProviderMetadataDisclosureError(PointInTimeError):
+    """Ingestion metadata carried something that must never be recorded.
+
+    A credential, a request URL, a query string, a bucket or a cloud identifier.
+    Recorded metadata outlives the process that wrote it, so the check is a
+    refusal at write time rather than a redaction afterwards.
+    """
+
+
 class UnsafePathComponentError(PointInTimeError):
     """An identifier reaching the filesystem is not a safe path component.
 

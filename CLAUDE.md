@@ -291,6 +291,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
+**PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -374,10 +375,14 @@ edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 
 Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger
 agents; the portfolio/risk engine; the scanner and factor pipeline; **any point-in-time data
-platform beyond the vendor-neutral A1 kernel** — no ingestion from a real provider, no filings,
-fundamentals, earnings, estimates or borrow; database schema, dashboard, alerting, kill switch;
-data purchases; production cloud infrastructure; options; leverage; X/social signals. Live
-trading remains **hard-disabled**.
+platform beyond the vendor-neutral A1 kernel and the code-only Sharadar integration slice** —
+**no ingestion from a real provider**, no filings, fundamentals, earnings, estimates or borrow;
+database schema, dashboard, alerting, kill switch; data purchases; production cloud
+infrastructure; options; leverage; X/social signals. Live trading remains **hard-disabled**.
+
+The provider adapter authorized by ADR-0009 is **code that has never run against a vendor**. A
+subscription, a private credential, any API call, Services Data retrieval, the real S3 writer and
+production ingestion are each still **separately unauthorized**.
 
 ### Current phase state
 
@@ -387,8 +392,10 @@ trading remains **hard-disabled**.
 |---|---|
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
+| **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
-| **PHASE 3A — A2 / A3** | **NOT STARTED / NOT AUTHORIZED** |
+| **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
+| **PHASE 3A — A2 / A3 (subscription / purchase)** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3B** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
@@ -396,6 +403,7 @@ trading remains **hard-disabled**.
 | **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
+| **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge of PR #13 — carries no authority before it** |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -579,6 +587,53 @@ never returned and never encoded in the exit status.
 empty *at AWS-foundation closeout*, and that record stands as evidence of that day. Once
 qualification begins, the licensed bucket may legitimately hold private material. Object counts,
 row counts and pass/fail results are private and are never published.
+
+### Sharadar provider-integration Slice 1 — implemented, code only, never run
+
+[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) records the
+owner's instruction — *"Authorize the next Sharadar implementation phase"* — and its exact
+boundary. It supersedes one repository rule and nothing else: **"no production module may name a
+provider"**, which was correct while no provider-specific implementation was authorized.
+
+**The branch implementation is complete and awaiting acceptance.** ADR-0009 is *accepted on merge
+of PR #13* and **carries no authority before it**; nothing below is in force until that merge.
+
+```
+AUTHORIZED     provider-specific code · provider-neutral interfaces · request construction
+               credential-INJECTION interfaces · redaction · pacing · bounded retries
+               Bronze mechanics · content addressing · synthetic tests · docs
+
+NOT AUTHORIZED subscription · purchase · trial · vendor account · billing · private credential
+               ANY API call · Services Data · production ingestion · Silver/Gold real data
+               the real S3 writer · ECR/ECS · terraform apply · ANY AWS mutation
+               broker/LEAN activity · Paper expansion · live trading
+```
+
+**The adapter has never sent a request, and cannot send one by accident.** Only one module is
+network-capable, **nothing in the repository constructs it**, no runner exists, and importing the
+package opens no socket. Static tests prove each of those rather than asserting them.
+
+| | |
+|---|---|
+| **Vendor knowledge is confined** | `src/kalpamani/data/ingest/sharadar/` only. The A1 kernel and every neutral package stay vendor-neutral, and no other production module names the provider |
+| **No key value exists under `src/`** | not a private one, and **not the vendor's published test token either** — that stays in the manual harness. A credential is injected, renders as a placeholder everywhere, and is reachable only through `reveal()` |
+| **Errors disclose nothing** | assembled from closed vocabularies, so a URL, a query string and a response body have **no parameter to arrive through**. The key travels in the query string (`PSR-SHD-109`), so a request URL *is* a credential |
+| **Requests are explicit** | HTTPS, stated format, stated pagination, explicit date window — **no implicit one-year default** (`PSR-SHD-121`), no window on the snapshot table (`PSR-SHD-119`), and **no constructible table-wide bulk download** |
+| **The transport is origin-pinned** | the URL is **parsed**, not prefix-matched: scheme, host, port, empty userinfo, empty fragment and the documented path prefix must all match. Redirects are refused rather than followed, ambient proxy discovery is off, no opener is installed globally, and a successful body is bounded (64 MiB default, 256 MiB hard cap) |
+| **LICENSED is the only publishable class** | `ObjectKey.licensed(...)` is the sole constructor and takes no classification parameter; `CONTROL` is refused outright. The free-text attestation was withdrawn -- `"x"` would have passed it, and nothing bound it to the object it cleared |
+| **Object identity is name + digest** | `exists` is `False` when a name holds different content, and a forged key cannot read another object's bytes |
+| **Keys and payloads are deeply frozen** | segments are copied into a fresh plain tuple of plain `str`, subclassing is refused, and a payload must be exact immutable `bytes` -- a caller-held `list` or `bytearray` could otherwise change a key or its content after it was validated |
+| **Acquisition identity is global** | `(digest, run id)` is claimed under the reserved `bronze/_acquisition_claims/`, so two providers cannot claim one retrieval. The leading underscore is refused by `safe_component`, so no provider can collide with it, and the deletion runbook's `bronze/` step already covers it. Payloads and records stay provider-separable; **claims are not**, and that is stated rather than implied |
+| **Durable metadata has no free-text field** | not a filtered one — an absent one. Every recorded field is validated against its own grammar, and the provider bridge offers no `notes` parameter |
+| **Closed vocabularies are normalised** | at construction, running no code belonging to the value, so a bare string, a sibling enum or a hostile `str` subclass cannot reach `.value` and raise from inside an error |
+| **No caller text reaches a header** | the client takes no `user_agent`; the transport validates header names and values itself, because `Request` stores them unchecked and CR/LF is only rejected at send time |
+
+**Naming an implementation target is not selecting a production provider. G1 stays OPEN**, and it
+cannot close while **Q7** (are the daily bars officially disseminated or provider-aggregated?) and
+**Q8** (what depth does Full History actually deliver, per table?) are unanswered. A public-source
+re-check on **2026-08-28** answered **neither** — recorded as `PSR-SHD-122` and `PSR-SHD-123` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4, with the vendor not
+contacted and the API not called. **Both remain pre-purchase blockers.**
 
 ### Non-blocking follow-ups carried forward
 

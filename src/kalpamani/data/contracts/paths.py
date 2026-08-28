@@ -57,6 +57,17 @@ INTERNAL_FILENAMES: Final[frozenset[str]] = frozenset(
     {"_dataset_manifest.json", "_quality_report.json"}
 )
 
+#: Path *segments* this package reserves for itself inside a store layout. An exact
+#: allowlist, on the same reasoning as :data:`INTERNAL_FILENAMES`.
+#:
+#: **Every one begins with an underscore, and that is the whole guarantee.**
+#: :func:`safe_component` requires an external identifier to start with a letter or
+#: a digit, so a provider, dataset or run id arriving from outside the system can
+#: never spell one of these -- the collision is refused by grammar rather than by a
+#: check somebody has to remember to write. A reserved segment is therefore a name
+#: only this package can occupy.
+RESERVED_SEGMENTS: Final[frozenset[str]] = frozenset({"_acquisition_claims"})
+
 #: Maximum length of one component. Not a security boundary -- a legibility one,
 #: and a guard against a name that would break a filesystem somewhere.
 MAX_COMPONENT_LENGTH: Final = 128
@@ -124,6 +135,22 @@ def safe_relative_path(value: str, *, kind: str) -> str:
     return value
 
 
+def path_segment(value: str, *, kind: str) -> str:
+    """A safe external component, or one of this package's reserved segments.
+
+    The single entry point for validating a segment of a store layout, so a caller
+    does not have to decide which rule applies. A reserved segment is compared
+    against :data:`RESERVED_SEGMENTS` exactly; everything else goes to
+    :func:`safe_component` unchanged.
+
+    Raises:
+        UnsafePathComponentError: for anything that is neither.
+    """
+    if value in RESERVED_SEGMENTS:
+        return value
+    return safe_component(value, kind=kind)
+
+
 def internal_filename(value: str, *, kind: str = "internal file") -> str:
     """Allow only a filename this package itself writes.
 
@@ -145,8 +172,10 @@ __all__ = [
     "MAX_COMPONENT_LENGTH",
     "RESERVED_NAMES",
     "RESERVED_PREFIXES",
+    "RESERVED_SEGMENTS",
     "WINDOWS_DEVICE_NAMES",
     "internal_filename",
+    "path_segment",
     "safe_component",
     "safe_relative_path",
 ]

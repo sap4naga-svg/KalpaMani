@@ -28,7 +28,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import Final, TypeVar
+
+VocabularyMember = TypeVar("VocabularyMember", bound=StrEnum)
+
+
+def closed_member(vocabulary: type[VocabularyMember], value: object) -> VocabularyMember | None:
+    """The exact member ``value`` names, or ``None`` if it names none.
+
+    The normalising counterpart to
+    :func:`~kalpamani.data.contracts.envelope.source_vocabulary_defects`. That
+    function *detects* an inexact vocabulary where a row has to stay
+    constructible; this one *normalises* at a boundary where it does not, so a
+    value either becomes the exact member or is refused by the caller.
+
+    Both exist for the same reason. These are ``StrEnum``\\ s, so a bare
+    ``"LICENSED"`` compares equal to the member, passes an ``in`` test, and
+    differs only where something reads ``.value`` -- which is how an untyped
+    value gets through an approval check and then raises ``AttributeError`` in
+    the code that would have refused it.
+
+    **No code belonging to ``value`` is executed, and this function never
+    raises.** Lookup goes through a table keyed by exact ``str`` data obtained
+    with ``str.__str__``, so an object with an overridden ``__eq__``, ``__hash__``
+    or ``__str__`` cannot make itself match a member it is not, and a ``str``
+    subclass is resolved by the data it actually holds rather than by what it
+    claims to be. Anything that is not a string is refused outright.
+
+    The ``str.__str__`` call is guarded because ``isinstance`` is not proof: an
+    object can spoof ``__class__`` to satisfy the check and then make the
+    descriptor raise. Not raising matters because callers include an exception
+    constructor, and an exception that fails while being built discards the
+    failure it was reporting.
+    """
+    if type(value) is not str:
+        if not isinstance(value, str):
+            return None
+        try:
+            value = str(str.__str__(value))
+        except Exception:
+            return None
+    table = {str.__str__(member): member for member in vocabulary}
+    return table.get(value)
+
 
 # ---------------------------------------------------------------------------
 # Origin, profile and view
@@ -488,6 +530,33 @@ class IngestionStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class DataClassification(StrEnum):
+    """Which private research store an object belongs in (ADR-0007).
+
+    One question decides it -- *can vendor rows be recovered from this artifact?*
+    -- and **uncertain resolves to LICENSED**, because the cost of the two
+    mistakes is not symmetric. A control-plane artifact misfiled as licensed is
+    merely deleted early; a reconstructable artifact misfiled as control survives
+    a vendor termination the licence required us to honour.
+
+    Exactly two members, deliberately. A third would become the place an artifact
+    goes when nobody wanted to answer the question.
+
+    ``LICENSED``
+        Vendor data, and anything from which vendor rows could be reconstructed.
+        Inside the 30-day deletion surface of the vendor-data deletion runbook,
+        and therefore carrying no versioning, no Object Lock, no replication and
+        no backup (CLAUDE.md §4.23).
+    ``CONTROL``
+        Manifests, lineage and receipts that provably cannot reconstruct a vendor
+        row. **Never reached by default**: an object is classified ``CONTROL``
+        only on an explicit written attestation, never by omission.
+    """
+
+    LICENSED = "LICENSED"
+    CONTROL = "CONTROL"
+
+
 __all__ = [
     "BAR_CONSTRUCTION_ORIGIN",
     "EXACT_PROVIDER_DERIVATIONS",
@@ -502,6 +571,7 @@ __all__ = [
     "BarResolution",
     "CorporateActionType",
     "CoverageScope",
+    "DataClassification",
     "DatasetGapPolicy",
     "DelistingReason",
     "Exchange",
@@ -525,4 +595,6 @@ __all__ = [
     "TemporalFactClass",
     "TickerChangeReason",
     "UniverseExclusionReason",
+    "VocabularyMember",
+    "closed_member",
 ]
