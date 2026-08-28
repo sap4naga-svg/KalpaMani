@@ -204,26 +204,66 @@ to enter through: every failure is one member of a closed `StrEnum`, and excepti
 reachable without reading a private attribute. Without it the retry budget could only be
 *declared* — a bound that is correct in review and unenforced in production.
 
-### The backfill flag is fixed, and the fit is imperfect — a finding, not a decision
+### The run-byte ceiling is literal, and says exactly what it bounds
+
+``max_run_bytes`` bounds **successful provider payload bytes returned by the injected client to this
+runtime** — the bodies the client actually hands back, added the moment they arrive and **before**
+publication, so a payload that was fetched and then failed to publish still counts against it.
+
+It is **not** a bound on HTTP framing, on headers, on the bodies of failed or retried responses, or
+on total network traffic. The client exposes none of those, and a ceiling that claimed to cover them
+would be describing something nobody here can measure.
+
+It is enforced as **headroom, before each request is sent**:
+
+```
+fetched_payload_bytes + client.max_response_bytes  <=  plan.limits.max_run_bytes
+```
+
+If that does not hold, the run stops **without sending the request** — no provider call, no store
+call, `publication_state_unknown` false — because a ceiling enforced after the bytes have arrived is
+not a ceiling. `client.max_response_bytes` is read from the bound transport rather than restated as
+a constant, so the two cannot drift apart; a transport that declares none is assumed to be able to
+return the most any transport may, which is the conservative direction.
+
+If a single response could exhaust the whole run budget — `client.max_response_bytes >
+max_run_bytes` — the run is **refused during validation**, before the first provider or store call,
+because it could never send even its first request within the ceiling it declares.
+
+**Two byte totals, because they answer different questions.** `fetched_payload_bytes` is what the
+provider handed back and is what the ceiling bounds; `published_payload_bytes` is derived only from
+completed outcomes. A single total could not report a run that fetched three payloads and published
+two, which is exactly the run a reader most needs described.
+
+### `is_backfill = False` is a placeholder, and a **pre-execution blocker**
 
 An earlier draft took a raw ``is_backfill`` boolean on the public plan. A caller could therefore
 label qualification evidence as a **production backfill** by passing ``True``, turning a metadata
 field into an authorization claim nobody made. The field is removed from the plan, and the bridge
-receives the fixed value :data:`~kalpamani.data.ingest.sharadar.runtime.QUALIFICATION_IS_BACKFILL`
-(``False``). **This authorizes and implements no production backfill**, and no second acquisition
-mode, production mode or backfill route is added.
+receives the fixed value
+:data:`~kalpamani.data.ingest.sharadar.runtime.QUALIFICATION_IS_BACKFILL` (``False``). **This
+authorizes and implements no production backfill**, and no second acquisition mode, production mode
+or backfill route is added.
 
-**The fixed value is not a perfect fit, and pretending otherwise would be the wrong kind of tidy.**
-The neutral contract describes ``is_backfill`` as distinguishing "a vendor backfill from an update".
-A qualification retrieval is neither: it extends no prior state, so it is not an update; and it is
-not an authoritative historical load, so calling it a backfill would overstate what the evidence is.
-``False`` is chosen as the value that **cannot be mistaken for authoritative historical loading**,
-which is the failure that would matter downstream.
+**``False`` is a conservative placeholder, not a semantic classification.** It is retained for this
+dormant, synthetic, code-only slice on exactly one ground: it prevents qualification data from being
+represented as an authoritative historical backfill. It carries **no affirmative evidence that the
+retrieval is an update** — the neutral contract describes the field as distinguishing "a vendor
+backfill from an update", and a qualification retrieval extends no prior state, so it is neither.
 
-**Owner decision required before this metadata is relied on.** A design that fits exactly — a
-per-dataset value, or a third token in the neutral vocabulary — is available and is deliberately
-**not** chosen here, because inventing one would be a change to the neutral contract that this
-correction was not authorized to make.
+**The blocker, stated as a blocker:**
+
+> **No real Sharadar qualification and no Services Data publication may be authorized or executed
+> until the neutral acquisition contract can represent a qualification retrieval accurately, through
+> a separately governed decision.**
+
+**Consumers must not interpret this field as evidence about the retrieval's nature.** A downstream
+reader that treats a qualification acquisition record's ``is_backfill`` as a fact about how the data
+was obtained is reading a placeholder as a finding.
+
+**The three-state neutral vocabulary that would fit exactly is deliberately not introduced here.**
+It would change an already-accepted neutral contract, and that needs its own reviewed decision
+rather than a correction round on a provider slice.
 
 ### An offline plan-check command
 
@@ -285,9 +325,18 @@ store. **The narrower and still-true statement is that no composition root exist
 no client, no bucket, no runner and no caller outside the runtime's own tests, each verified by a
 static test. That correction is made in `CLAUDE.md` and `README.md` in the same change.
 
-**A finding carried forward.** The ``is_backfill`` fit above is imperfect and is recorded rather
-than smoothed over. Until it is decided, no consumer should read a qualification acquisition
-record's ``is_backfill`` as evidence about the retrieval's nature.
+**A blocker carried forward.** The ``is_backfill`` placeholder above is a **pre-execution blocker**:
+no real Sharadar qualification and no Services Data publication may be authorized or executed until
+the neutral acquisition contract can represent a qualification retrieval accurately, through a
+separately governed decision. Until then no consumer may read a qualification acquisition record's
+``is_backfill`` as evidence about the retrieval's nature.
+
+**Result integrity is enforced, not assumed.** A result must describe **one valid execution**:
+acquisition identities are unique, request coordinates
+``(dataset, subject, page limit, page offset)`` are unique, every derived counter and both byte
+totals are re-derived from the outcomes, ``COMPLETED`` requires every planned request completed, and
+``HALTED`` requires **strictly fewer** — a halted run that finished its whole plan is a completed run
+wearing a failure code.
 
 **Not gained — stated exhaustively.** This ADR authorizes **code, tests, documentation and
 synthetic validation only.** It does not authorize, and merging it does not enable:
@@ -352,6 +401,14 @@ Enforced by test, not by review:
 | a replay on a **real** clock is refused, not reported as a resume | a stepping clock, five minutes later |
 | a new execution id records a second retrieval, reusing the payload | payload reuse and acquisition recording asserted separately |
 | a failure at each of the three publication writes halts and reports unknown state | fault injected at write 1, 2 and 3 |
+| the run stops **before** a request whose largest possible answer it cannot afford | headroom check; recorded transport call count |
+| a client response ceiling above the run ceiling is refused during validation | zero provider and zero store calls |
+| a fetched payload is counted even when its publication fails | fetched and published totals asserted separately |
+| fetched bytes never exceed the run ceiling | asserted against the plan's own ceiling |
+| duplicate acquisition identities are refused | two outcomes sharing one identity |
+| duplicate request coordinates are refused even with distinct identities | two outcomes sharing one coordinate |
+| a HALTED result with completed >= planned is refused | both the over- and the equal-count cases |
+| a page offset off the generated grid is refused | reuses the plan's own page ceilings |
 | an interrupted publication completes on a later run as `COMPLETED_PRIOR_PARTIAL` | staged failure, then a clean run |
 | every result field is validated at construction | adversarial constructors: string subclasses, negative counts, malformed digests, wrong profile, wrong classification, list-for-tuple, contradictory states |
 | a result summary that disagrees with its outcomes is refused | every derived count re-checked |

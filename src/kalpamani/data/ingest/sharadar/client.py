@@ -58,6 +58,7 @@ from kalpamani.data.ingest.sharadar.redaction import (
     classify_http_status,
 )
 from kalpamani.data.ingest.sharadar.transport import (
+    MAX_RESPONSE_BYTES_CEILING,
     MAX_TIMEOUT_SECONDS,
     SharadarTransport,
     TransportResponse,
@@ -271,6 +272,27 @@ class SharadarClient:
         without reading a private attribute.
         """
         return self._retry_policy.max_attempts
+
+    @property
+    def max_response_bytes(self) -> int:
+        """The largest body one request can return, read from the bound transport.
+
+        **Derived, not duplicated.** The number belongs to the transport, which is
+        the thing that actually stops reading; restating it here as a constant
+        would create two ceilings that a later edit could move apart.
+
+        Falls back to
+        :data:`~kalpamani.data.ingest.sharadar.transport.MAX_RESPONSE_BYTES_CEILING`
+        when an injected transport does not declare one, or declares something
+        outside the permitted range. That is the **conservative** direction: a
+        transport that will not say how much it may return is assumed to be able
+        to return the most any transport may, so a caller budgeting against this
+        number cannot under-count.
+        """
+        declared = getattr(self._transport, "max_response_bytes", None)
+        if type(declared) is int and 0 < declared <= MAX_RESPONSE_BYTES_CEILING:
+            return declared
+        return MAX_RESPONSE_BYTES_CEILING
 
     def headers(self) -> Mapping[str, str]:
         """The fixed request headers. Constant, and carrying no credential.

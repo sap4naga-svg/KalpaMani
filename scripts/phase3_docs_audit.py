@@ -4009,11 +4009,67 @@ def main() -> int:
             "a denylist admits every name nobody has heard of yet",
         )
         f.check(
-            "ADR-0012 records the backfill flag as fixed, with the fit stated honestly",
-            "not a perfect fit" in flat12
-            and "Owner decision required" in flat12
+            "ADR-0012 records the backfill flag as a conservative placeholder",
+            "conservative placeholder, not a semantic classification" in flat12
             and "authorizes and implements no production backfill" in flat12,
             "a metadata value that does not fit should be reported, not smoothed over",
+        )
+        f.check(
+            "ADR-0012 states the backfill placeholder as a pre-execution blocker",
+            "pre-execution blocker" in flat12
+            and "may be authorized or executed until the neutral acquisition contract" in flat12,
+            "a placeholder with no stated consequence is a placeholder that gets relied on",
+        )
+        f.check(
+            "ADR-0012 denies that the placeholder is evidence of an update",
+            "no affirmative evidence that the retrieval is an update" in flat12,
+            "False must not be read as a positive claim about the retrieval",
+        )
+        f.check(
+            "ADR-0012 forbids consumers reading the field as evidence",
+            "must not interpret this field as evidence" in flat12,
+            "a downstream reader treating a placeholder as a finding is the failure mode",
+        )
+        f.check(
+            "ADR-0012 declines to change the neutral vocabulary in this PR",
+            "deliberately not introduced here" in flat12
+            and "needs its own reviewed decision" in flat12,
+            "a three-state vocabulary would change an already-accepted neutral contract",
+        )
+        f.check(
+            "ADR-0012 says exactly what the run-byte ceiling bounds",
+            "successful provider payload bytes returned by the injected client" in flat12
+            and "before" in flat12,
+            "a ceiling that does not say what it counts is a number, not a bound",
+        )
+        f.check(
+            "ADR-0012 denies that the ceiling covers wire traffic",
+            "not a bound on HTTP framing" in flat12 and "nobody here can measure" in flat12,
+            "claiming to bound what the client does not expose would be a false guarantee",
+        )
+        f.check(
+            "ADR-0012 records the ceiling as headroom checked before each request",
+            "headroom, before each request is sent" in flat12
+            and "without sending the request" in flat12,
+            "a ceiling enforced after the bytes have arrived is not a ceiling",
+        )
+        f.check(
+            "ADR-0012 records the validate-first refusal for an oversized client ceiling",
+            "refused during validation" in flat12
+            and "before the first provider or store call" in flat12,
+            "a run that could never send its first request should not send it",
+        )
+        f.check(
+            "ADR-0012 distinguishes fetched bytes from published bytes",
+            "Two byte totals" in flat12 and "fetched three payloads and published two" in flat12,
+            "one total cannot report a run that fetched more than it published",
+        )
+        f.check(
+            "ADR-0012 records the result-integrity invariants",
+            "must describe" in flat12
+            and "one valid execution" in flat12
+            and "strictly fewer" in flat12,
+            "a halted run that finished its plan is a completed run wearing a failure code",
         )
         f.check(
             "ADR-0012 makes no claim to know which objects exist after a failure",
@@ -4059,6 +4115,40 @@ def main() -> int:
             "the runtime passes the fixed qualification backfill value",
             "is_backfill=QUALIFICATION_IS_BACKFILL" in runtime_source,
             "the value must not be reachable from a plan",
+        )
+        f.check(
+            "the runtime checks byte headroom before sending a request",
+            "self._client.max_response_bytes > plan.limits.max_run_bytes" in runtime_source
+            and "RUN_BYTE_HEADROOM_EXHAUSTED" in runtime_source,
+            "a ceiling enforced after the bytes have arrived is not a ceiling",
+        )
+        f.check(
+            "the runtime refuses a client ceiling larger than the whole run ceiling",
+            "RUN_BYTE_CEILING_UNSATISFIABLE" in runtime_source,
+            "such a run could never send even its first request within its own ceiling",
+        )
+        f.check(
+            "the runtime reports fetched and published bytes separately",
+            "fetched_payload_bytes" in runtime_source
+            and "published_payload_bytes" in runtime_source
+            and "total_bytes" not in _executable_python(QUALIFICATION_RUNTIME),
+            "one total cannot report a run that fetched more than it published",
+        )
+        f.check(
+            "the runtime derives the client ceiling rather than duplicating it",
+            "max_response_bytes" in read(PROVIDER_PACKAGE / "client.py"),
+            "two ceilings for one limit are two numbers a later edit can move apart",
+        )
+        f.check(
+            "the result refuses duplicate identities and duplicate coordinates",
+            "acquisition_id for outcome in self.outcomes" in runtime_source
+            and "outcome.page_limit, outcome.page_skip" in runtime_source,
+            "durable evidence that shares an identity or a coordinate cannot exist",
+        )
+        f.check(
+            "a halted result requires strictly fewer completed than planned",
+            "self.completed_requests >= self.planned_requests" in runtime_source,
+            "otherwise a completed run can wear a failure code",
         )
         f.check(
             "the runtime reports all three publication dispositions",
@@ -4131,6 +4221,24 @@ def main() -> int:
             f"{name} records that a failed publication leaves unknown durable state",
             "publication_state_unknown" in body and "claims to know nothing more" in flat,
             "the result must not appear to know what an interrupted publication left",
+        )
+        f.check(
+            f"{name} says what the run-byte ceiling actually bounds",
+            "successful provider payload bytes handed to the runtime" in flat
+            and "not HTTP framing" in flat,
+            "a ceiling that does not say what it counts is a number, not a bound",
+        )
+        f.check(
+            f"{name} records the backfill value as a placeholder and a blocker",
+            "is_backfill` is a placeholder" in body
+            and "pre-execution blocker" in flat
+            and "no evidence that the retrieval is an update" in flat.lower(),
+            "a placeholder read as a finding is the failure this guard exists for",
+        )
+        f.check(
+            f"{name} records the result-integrity invariants",
+            "Result integrity" in body and "strictly fewer completed than planned" in flat,
+            "a result that cannot describe one valid execution is not evidence",
         )
 
     # ---------------------------------------------------------------- verdict

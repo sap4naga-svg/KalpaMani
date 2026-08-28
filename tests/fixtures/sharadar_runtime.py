@@ -30,7 +30,11 @@ from kalpamani.data.ingest.sharadar.qualification import (
     QualificationPlan,
     QualificationSubject,
 )
-from kalpamani.data.ingest.sharadar.transport import TransportResponse, TransportUnavailableError
+from kalpamani.data.ingest.sharadar.transport import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    TransportResponse,
+    TransportUnavailableError,
+)
 from kalpamani.data.objectstore import (
     InMemoryResearchObjectStore,
     ObjectKey,
@@ -165,13 +169,14 @@ def client(
     outcomes: Sequence[TransportResponse | TransportUnavailableError],
     *,
     max_attempts: int = 1,
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> tuple[SharadarClient, ScriptedTransport]:
     """A real client wired to a scripted transport and a manual clock.
 
     The client is genuine -- pacing, retries, redaction and the exact-type checks
     are the shipped ones. Only the transport is synthetic, and it opens no socket.
     """
-    transport = ScriptedTransport(outcomes)
+    transport = ScriptedTransport(outcomes, max_response_bytes=max_response_bytes)
     manual = ManualClock()
     policy = RetryPolicy(
         max_attempts=max_attempts, backoff_seconds=tuple(1.0 for _ in range(max_attempts - 1))

@@ -225,7 +225,8 @@ def test_exact_bytes_and_digests_are_preserved() -> None:
     outcome = result.outcomes[0]
     assert outcome.content_sha256 == sha256_hex(malformed)
     assert outcome.byte_count == len(malformed)
-    assert result.total_bytes == len(malformed)
+    assert result.fetched_payload_bytes == len(malformed)
+    assert result.published_payload_bytes == len(malformed)
 
 
 def test_every_outcome_is_licensed_and_provider_realistic() -> None:
@@ -509,7 +510,10 @@ def test_a_partial_run_states_that_it_is_partial_rather_than_implying_a_rollback
     assert result.partial is True
     assert result.acquisitions_recorded == 1
     assert len(result.outcomes) == 1
-    assert result.total_bytes == len(PAYLOAD_A)
+    assert result.published_payload_bytes == len(PAYLOAD_A)
+    assert result.fetched_payload_bytes == len(PAYLOAD_A), (
+        "the second request failed before returning a payload"
+    )
     assert result.publication_state_unknown is False, "the fetch failed, not a publication"
 
 
@@ -568,17 +572,116 @@ def test_a_response_over_the_plans_ceiling_halts_before_publication() -> None:
     assert store.call_count == 0, "nothing may be stored once the ceiling is exceeded"
 
 
-def test_the_run_byte_ceiling_is_checked_before_publishing_not_after() -> None:
-    """The ceiling bounds what is stored, not what was already stored."""
-    engine, store, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C])
+# ---------------------------------------------------------------------------
+# The run-byte ceiling is a bound on successful payload bytes, checked as headroom
+# ---------------------------------------------------------------------------
+
+
+def test_the_run_stops_before_a_request_it_could_not_afford_the_answer_to() -> None:
+    """Headroom, not hindsight. A ceiling enforced after the bytes have arrived is
+    not a ceiling, so the run refuses to *ask* once the largest possible answer no
+    longer fits."""
+    built, transport = client([ok(PAYLOAD_A), ok(PAYLOAD_B), ok(PAYLOAD_C)], max_response_bytes=64)
+    store = RecordingStore()
+    engine = QualificationRuntime(client=built, store=store, clock=FixedClock())
     result = engine.execute(
-        three_dataset_plan(SUBJECT_A, limits=QualificationLimits(max_run_bytes=len(PAYLOAD_A) + 1))
+        three_dataset_plan(SUBJECT_A, limits=QualificationLimits(max_run_bytes=100))
     )
-    assert result.failure is QualificationFailure.RUN_BYTE_CEILING_EXCEEDED
+
+    assert result.failure is QualificationFailure.RUN_BYTE_HEADROOM_EXHAUSTED
     assert result.completed_requests == 1
-    assert result.total_bytes == len(PAYLOAD_A)
-    assert result.publication_state_unknown is False, "no publication was attempted"
+    assert transport.call_count == 1, "the second request is never sent"
     assert store.call_count == 3, "only the first publication's three writes"
+    assert result.publication_state_unknown is False, "no publication was attempted"
+    assert result.fetched_payload_bytes == len(PAYLOAD_A)
+
+
+def test_a_client_ceiling_larger_than_the_run_ceiling_is_refused_before_anything() -> None:
+    """One answer could exhaust the whole budget, so the run could never send even
+    its first request within the ceiling it declares."""
+    built, transport = client([ok(PAYLOAD_A)], max_response_bytes=1024)
+    store = RecordingStore()
+    engine = QualificationRuntime(client=built, store=store, clock=FixedClock())
+    with pytest.raises(QualificationRuntimeError) as caught:
+        engine.execute(snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_run_bytes=512)))
+
+    assert caught.value.failure is QualificationFailure.RUN_BYTE_CEILING_UNSATISFIABLE
+    assert transport.call_count == 0 and store.call_count == 0
+
+
+def test_a_fetched_payload_is_counted_even_when_its_publication_fails() -> None:
+    """A payload that arrived and then failed to publish was still delivered, and
+    erasing it would make a failed run look cheaper than it was."""
+    store = RefusingStore(
+        ObjectStoreBackendError(
+            operation=ObjectStoreOperation.PUT, failure=ObjectStoreFailure.TRANSIENT
+        )
+    )
+    engine, _, _ = runtime([PAYLOAD_A], store=store)
+    result = engine.execute(snapshot_plan(SUBJECT_A))
+
+    assert result.failure is QualificationFailure.STORAGE_REFUSED
+    assert result.completed_requests == 0
+    assert result.published_payload_bytes == 0
+    assert result.fetched_payload_bytes == len(PAYLOAD_A)
+    assert result.publication_state_unknown is True
+
+
+def test_fetched_bytes_never_exceed_the_run_ceiling() -> None:
+    built, _ = client([ok(PAYLOAD_A), ok(PAYLOAD_B), ok(PAYLOAD_C)], max_response_bytes=64)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    ceiling = 200
+    result = engine.execute(
+        three_dataset_plan(SUBJECT_A, limits=QualificationLimits(max_run_bytes=ceiling))
+    )
+    assert result.fetched_payload_bytes <= ceiling
+    assert result.run_byte_ceiling == ceiling
+
+
+def test_published_bytes_are_derived_only_from_completed_outcomes() -> None:
+    engine, _, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C])
+    result = engine.execute(three_dataset_plan(SUBJECT_A))
+    assert result.published_payload_bytes == sum(o.byte_count for o in result.outcomes)
+    assert result.fetched_payload_bytes == result.published_payload_bytes
+
+
+def test_a_headroom_refusal_discloses_nothing() -> None:
+    built, _ = client([ok(PAYLOAD_A), ok(PAYLOAD_B)], max_response_bytes=64)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    result = engine.execute(
+        three_dataset_plan(SUBJECT_A, limits=QualificationLimits(max_run_bytes=100))
+    )
+    rendered = repr(result)
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+
+
+def test_the_client_ceiling_is_read_from_its_transport_not_duplicated() -> None:
+    built, transport = client([], max_response_bytes=4096)
+    assert built.max_response_bytes == transport.max_response_bytes == 4096
+
+
+def test_a_transport_that_declares_no_ceiling_is_assumed_to_be_the_largest() -> None:
+    """The conservative direction: a transport that will not say how much it may
+    return is assumed to be able to return the most any transport may."""
+    from kalpamani.data.ingest.sharadar.transport import MAX_RESPONSE_BYTES_CEILING
+
+    class Silent:
+        def get(self, *, url: str, headers: Any, timeout_seconds: float) -> Any:
+            raise AssertionError("never called")
+
+    from fixtures.sharadar_provider import credential
+    from kalpamani.data.ingest.sharadar.client import Pacer, SharadarClient
+
+    # The missing `max_response_bytes` is the subject of this test, so the type
+    # checker is right to object and the ignore is the point rather than a
+    # workaround: an incomplete transport is exactly what the fallback exists for.
+    built = SharadarClient(
+        credential=credential(),
+        transport=Silent(),  # type: ignore[arg-type]
+        pacer=Pacer(min_interval=0.0),
+    )
+    assert built.max_response_bytes == MAX_RESPONSE_BYTES_CEILING
 
 
 def test_a_payload_that_is_not_exact_bytes_halts_the_run(
@@ -721,11 +824,12 @@ def test_the_backfill_flag_is_fixed_and_not_a_callers_choice() -> None:
 def test_a_refused_result_reports_zero_of_everything() -> None:
     result = refused_result(4)
     assert result.outcome is QualificationOutcome.REFUSED
-    assert (result.completed_requests, result.acquisitions_recorded, result.total_bytes) == (
-        0,
-        0,
-        0,
-    )
+    assert (
+        result.completed_requests,
+        result.acquisitions_recorded,
+        result.fetched_payload_bytes,
+        result.published_payload_bytes,
+    ) == (0, 0, 0, 0)
     assert result.outcomes == ()
     assert result.partial is False
     assert result.planned_requests == 4

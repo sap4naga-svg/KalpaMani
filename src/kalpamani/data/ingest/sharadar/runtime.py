@@ -38,6 +38,19 @@ outcomes that did complete. **A partial run is stated as partial** rather than
 implied to be transactional -- because it is not, and cannot be: several immutable
 objects across several requests have no rollback.
 
+**The run-byte ceiling is a bound on successful payload bytes, and nothing else.**
+It counts exactly what the injected client hands back: the bodies of successful
+responses, added the moment they arrive and **before** publication, so a payload
+that was fetched and then failed to publish still counts. It is checked as
+*headroom* before each request -- ``fetched + client.max_response_bytes <=
+ceiling`` -- so the run stops **before** sending a request whose answer it could
+not afford, rather than discovering the overrun after the bytes are already here.
+
+It is **not** a bound on HTTP framing, on headers, on the bodies of failed or
+retried responses, or on total network traffic. The client does not expose any of
+those, and a ceiling that claimed to cover them would be describing something
+nobody here can measure.
+
 **A publication that raises leaves durable state this module cannot describe.**
 The three writes are separate appends. A failure on the second or third may have
 committed the first; an ambiguous backend failure may not prove whether *any* of
@@ -88,8 +101,14 @@ from kalpamani.data.contracts.vocabulary import (
 )
 from kalpamani.data.ingest.sharadar.bronze import publish_sharadar_payload
 from kalpamani.data.ingest.sharadar.client import SharadarClient
-from kalpamani.data.ingest.sharadar.datasets import SharadarDataset, SharadarRequest
+from kalpamani.data.ingest.sharadar.datasets import (
+    MAX_PAGE_LIMIT,
+    SharadarDataset,
+    SharadarRequest,
+)
 from kalpamani.data.ingest.sharadar.qualification import (
+    MAX_PAGES_PER_REQUEST,
+    MAX_RUN_BYTES,
     PERMITTED_PROFILE,
     QualificationDefect,
     QualificationPlan,
@@ -156,7 +175,8 @@ class QualificationFailure(StrEnum):
 
     PROVIDER_REQUEST_FAILED = "PROVIDER_REQUEST_FAILED"
     RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
-    RUN_BYTE_CEILING_EXCEEDED = "RUN_BYTE_CEILING_EXCEEDED"
+    RUN_BYTE_HEADROOM_EXHAUSTED = "RUN_BYTE_HEADROOM_EXHAUSTED"
+    RUN_BYTE_CEILING_UNSATISFIABLE = "RUN_BYTE_CEILING_UNSATISFIABLE"
     PAYLOAD_NOT_EXACT_BYTES = "PAYLOAD_NOT_EXACT_BYTES"
     CONTENT_CONFLICT = "CONTENT_CONFLICT"
     STORAGE_REFUSED = "STORAGE_REFUSED"
@@ -310,7 +330,15 @@ class RequestOutcome:
         if type(self.subject) is not str or not _SUBJECT.match(self.subject):
             raise _refuse_result() from None
         _exact_count(self.page_skip)
-        if _exact_count(self.page_limit) < 1:
+        if not 1 <= _exact_count(self.page_limit) <= MAX_PAGE_LIMIT:
+            raise _refuse_result() from None
+        # The generated-offset rule, reusing the plan's own ceilings rather than a
+        # second set: pages walk `skip = index * limit` for `index` below
+        # `MAX_PAGES_PER_REQUEST`. An offset off that grid was never produced by a
+        # plan, so a record carrying one describes a request that did not happen.
+        if self.page_skip % self.page_limit:
+            raise _refuse_result() from None
+        if self.page_skip // self.page_limit >= MAX_PAGES_PER_REQUEST:
             raise _refuse_result() from None
         if type(self.acquisition_id) is not str or not _ACQUISITION_ID.match(self.acquisition_id):
             raise _refuse_result() from None
@@ -346,6 +374,14 @@ class QualificationRunResult:
     caller deriving them from arithmetic would be deriving the two most important
     facts about a failed run from counts that a bug could make agree.
 
+    **Two byte totals, because they answer different questions.**
+    ``fetched_payload_bytes`` is what the provider actually handed back -- the
+    number the run ceiling bounds -- and it includes a payload that arrived and
+    then failed to publish. ``published_payload_bytes`` is what reached the store,
+    derived only from completed outcomes. A single total could not report a run
+    that fetched three payloads and published two, which is exactly the run a
+    reader most needs described.
+
     :meth:`__post_init__` re-derives every count from ``outcomes`` and refuses a
     result whose summary and detail disagree, because a summary nobody checked is
     the part of a report that goes wrong quietly.
@@ -358,7 +394,9 @@ class QualificationRunResult:
     acquisitions_recorded: int
     payloads_reused: int
     already_complete: int
-    total_bytes: int
+    fetched_payload_bytes: int
+    published_payload_bytes: int
+    run_byte_ceiling: int
     outcomes: tuple[RequestOutcome, ...]
     partial: bool
     publication_state_unknown: bool
@@ -387,16 +425,43 @@ class QualificationRunResult:
             self.acquisitions_recorded,
             self.payloads_reused,
             self.already_complete,
-            self.total_bytes,
+            self.fetched_payload_bytes,
+            self.published_payload_bytes,
         ):
             _exact_count(count)
+        if not 1 <= _exact_count(self.run_byte_ceiling) <= MAX_RUN_BYTES:
+            raise _refuse_result() from None
 
         # -- the summary must be the detail, recomputed ----------------------
         if self.completed_requests != len(self.outcomes):
             raise _refuse_result() from None
         if self.completed_requests > self.planned_requests:
             raise _refuse_result() from None
-        if self.total_bytes != sum(outcome.byte_count for outcome in self.outcomes):
+
+        # Two retrievals cannot share one acquisition identity: that is the whole
+        # point of deriving one per request, and a result carrying a duplicate
+        # describes durable evidence that cannot exist.
+        if len({outcome.acquisition_id for outcome in self.outcomes}) != len(self.outcomes):
+            raise _refuse_result() from None
+        # Nor can two outcomes describe the same request. Checked separately from
+        # the identity above, because a bug in the derivation would produce two
+        # different identities for one coordinate -- and a result that only
+        # compared identities would report it as two retrievals.
+        coordinates = {
+            (outcome.dataset, outcome.subject, outcome.page_limit, outcome.page_skip)
+            for outcome in self.outcomes
+        }
+        if len(coordinates) != len(self.outcomes):
+            raise _refuse_result() from None
+
+        published = sum(outcome.byte_count for outcome in self.outcomes)
+        if self.published_payload_bytes != published:
+            raise _refuse_result() from None
+        if self.fetched_payload_bytes < self.published_payload_bytes:
+            # Everything published was fetched first, so the reverse is impossible
+            # and a result asserting it is not describing a run.
+            raise _refuse_result() from None
+        if self.fetched_payload_bytes > self.run_byte_ceiling:
             raise _refuse_result() from None
         dispositions = [outcome.disposition for outcome in self.outcomes]
         if self.acquisitions_recorded != sum(
@@ -425,7 +490,15 @@ class QualificationRunResult:
             ):
                 raise _refuse_result() from None
         elif self.outcome is QualificationOutcome.HALTED:
-            if self.failure is None or not self.partial:
+            # Strictly fewer, and checked here rather than left to the COMPLETED
+            # branch: a halted run that completed everything it planned is a
+            # completed run wearing a failure code, and nothing in the earlier
+            # invariants forbade it.
+            if (
+                self.failure is None
+                or not self.partial
+                or self.completed_requests >= self.planned_requests
+            ):
                 raise _refuse_result() from None
         else:  # REFUSED
             if (
@@ -434,7 +507,8 @@ class QualificationRunResult:
                 or self.publication_state_unknown
                 or self.outcomes
                 or self.completed_requests
-                or self.total_bytes
+                or self.fetched_payload_bytes
+                or self.published_payload_bytes
             ):
                 raise _refuse_result() from None
         if self.publication_state_unknown and self.outcome is not QualificationOutcome.HALTED:
@@ -525,6 +599,14 @@ class QualificationRuntime:
             # two retrievals sharing one durable record -- is exactly the defect
             # this identity model exists to remove.
             raise QualificationPlanError(QualificationDefect.IDENTITY_MALFORMED) from None
+        if self._client.max_response_bytes > plan.limits.max_run_bytes:
+            # A single answer could exhaust the whole run's budget, so the run
+            # could never send even its first request within the ceiling it
+            # declares. Refused before anything, rather than discovered as a
+            # headroom failure on request one.
+            raise QualificationRuntimeError(
+                QualificationFailure.RUN_BYTE_CEILING_UNSATISFIABLE
+            ) from None
         # Probe the clock here, where a fault costs nothing. A clock that cannot
         # answer is a dependency defect exactly like a store that cannot publish,
         # and discovering it after the first fetch would spend a provider request
@@ -563,9 +645,20 @@ class QualificationRuntime:
         requests = self.validate(plan)
 
         outcomes: list[RequestOutcome] = []
-        total_bytes = 0
+        fetched_bytes = 0
 
         for request in requests:
+            if fetched_bytes + self._client.max_response_bytes > plan.limits.max_run_bytes:
+                # **Headroom, checked before the request is sent.** The run cannot
+                # afford the largest answer this client can return, so it does not
+                # ask. Checking after the fact would mean the bytes are already
+                # here -- and a ceiling enforced after the cost is incurred is not
+                # a ceiling. No provider call, no store call, and nothing durable
+                # in doubt.
+                return self._halted(
+                    QualificationFailure.RUN_BYTE_HEADROOM_EXHAUSTED, plan, outcomes, fetched_bytes
+                )
+
             try:
                 payload = self._client.fetch(request)
             except SharadarRequestError:
@@ -573,28 +666,31 @@ class QualificationRuntime:
                 # its own repr is safe, but a chained traceback would also print
                 # every frame between here and the transport.
                 return self._halted(
-                    QualificationFailure.PROVIDER_REQUEST_FAILED, plan, outcomes, total_bytes
+                    QualificationFailure.PROVIDER_REQUEST_FAILED, plan, outcomes, fetched_bytes
                 )
             except Exception:
                 # An injected client is code this module did not write. Whatever
                 # it raises may carry the URL, and the URL carries the key.
-                return self._halted(QualificationFailure.UNCLASSIFIED, plan, outcomes, total_bytes)
+                return self._halted(
+                    QualificationFailure.UNCLASSIFIED, plan, outcomes, fetched_bytes
+                )
 
             if type(payload) is not bytes:
                 # A `bytearray` would let the bytes change after they were hashed;
-                # anything else was never a payload.
+                # anything else was never a payload -- and was never counted.
                 return self._halted(
-                    QualificationFailure.PAYLOAD_NOT_EXACT_BYTES, plan, outcomes, total_bytes
+                    QualificationFailure.PAYLOAD_NOT_EXACT_BYTES, plan, outcomes, fetched_bytes
                 )
+
+            # Counted here: **as soon as the bytes exist, and before anything can
+            # fail afterwards.** A payload that arrived and then failed to publish
+            # was still delivered, and a report that erased it would understate
+            # what the run actually cost.
+            fetched_bytes += len(payload)
+
             if len(payload) > plan.limits.max_response_bytes:
                 return self._halted(
-                    QualificationFailure.RESPONSE_TOO_LARGE, plan, outcomes, total_bytes
-                )
-            if total_bytes + len(payload) > plan.limits.max_run_bytes:
-                # Checked before publishing, so the ceiling bounds what is stored
-                # rather than what was already stored.
-                return self._halted(
-                    QualificationFailure.RUN_BYTE_CEILING_EXCEEDED, plan, outcomes, total_bytes
+                    QualificationFailure.RESPONSE_TOO_LARGE, plan, outcomes, fetched_bytes
                 )
 
             try:
@@ -606,7 +702,7 @@ class QualificationRuntime:
                 # at the bucket. Nothing was published for this request, so the
                 # durable state is not unknown.
                 return self._halted(
-                    QualificationFailure.DEPENDENCY_MALFORMED, plan, outcomes, total_bytes
+                    QualificationFailure.DEPENDENCY_MALFORMED, plan, outcomes, fetched_bytes
                 )
 
             identity = acquisition_id(execution_id=plan.execution_id, request=request)
@@ -630,7 +726,7 @@ class QualificationRuntime:
                     QualificationFailure.CONTENT_CONFLICT,
                     plan,
                     outcomes,
-                    total_bytes,
+                    fetched_bytes,
                     publication_state_unknown=True,
                 )
             except ObjectStoreError:
@@ -638,7 +734,7 @@ class QualificationRuntime:
                     QualificationFailure.STORAGE_REFUSED,
                     plan,
                     outcomes,
-                    total_bytes,
+                    fetched_bytes,
                     publication_state_unknown=True,
                 )
             except Exception:
@@ -646,11 +742,10 @@ class QualificationRuntime:
                     QualificationFailure.UNCLASSIFIED,
                     plan,
                     outcomes,
-                    total_bytes,
+                    fetched_bytes,
                     publication_state_unknown=True,
                 )
 
-            total_bytes += published.byte_count
             outcomes.append(
                 RequestOutcome(
                     dataset=request.dataset,
@@ -682,7 +777,9 @@ class QualificationRuntime:
             acquisitions_recorded=_recorded(outcomes),
             payloads_reused=_reused(outcomes),
             already_complete=_already(outcomes),
-            total_bytes=total_bytes,
+            fetched_payload_bytes=fetched_bytes,
+            published_payload_bytes=sum(outcome.byte_count for outcome in outcomes),
+            run_byte_ceiling=plan.limits.max_run_bytes,
             outcomes=tuple(outcomes),
             partial=False,
             publication_state_unknown=False,
@@ -714,7 +811,7 @@ class QualificationRuntime:
         failure: QualificationFailure,
         plan: QualificationPlan,
         outcomes: Sequence[RequestOutcome],
-        total_bytes: int,
+        fetched_bytes: int,
         *,
         publication_state_unknown: bool = False,
     ) -> QualificationRunResult:
@@ -722,9 +819,13 @@ class QualificationRuntime:
 
         ``partial`` is stated, not derived. ``publication_state_unknown`` is set
         only where a publication was actually attempted and raised -- a fetch
-        failure or a ceiling refusal leaves nothing in doubt, and flagging those
+        failure or a headroom refusal leaves nothing in doubt, and flagging those
         would make the flag mean "something went wrong" instead of "this run
         cannot tell you what is durable".
+
+        ``fetched_payload_bytes`` carries forward whatever arrived, including a
+        payload whose publication then failed. Erasing it would make a failed run
+        look cheaper than it was.
         """
         listed = list(outcomes)
         return QualificationRunResult(
@@ -735,7 +836,9 @@ class QualificationRuntime:
             acquisitions_recorded=_recorded(listed),
             payloads_reused=_reused(listed),
             already_complete=_already(listed),
-            total_bytes=total_bytes,
+            fetched_payload_bytes=fetched_bytes,
+            published_payload_bytes=sum(outcome.byte_count for outcome in listed),
+            run_byte_ceiling=plan.limits.max_run_bytes,
             outcomes=tuple(listed),
             partial=True,
             publication_state_unknown=publication_state_unknown,
@@ -765,13 +868,20 @@ def _already(outcomes: Sequence[RequestOutcome]) -> int:
     )
 
 
-def refused_result(plan_requests: int) -> QualificationRunResult:
+def refused_result(
+    plan_requests: int, *, run_byte_ceiling: int = MAX_RUN_BYTES
+) -> QualificationRunResult:
     """The result shape a caller may record when a plan was refused before running.
 
     Offered so a caller reporting a refusal does not have to invent a result with
     counts that might not be zero. Nothing was fetched and nothing was stored, and
     every count says so.
     """
+    ceiling = (
+        run_byte_ceiling
+        if type(run_byte_ceiling) is int and 1 <= run_byte_ceiling <= MAX_RUN_BYTES
+        else MAX_RUN_BYTES
+    )
     return QualificationRunResult(
         outcome=QualificationOutcome.REFUSED,
         failure=None,
@@ -780,7 +890,9 @@ def refused_result(plan_requests: int) -> QualificationRunResult:
         acquisitions_recorded=0,
         payloads_reused=0,
         already_complete=0,
-        total_bytes=0,
+        fetched_payload_bytes=0,
+        published_payload_bytes=0,
+        run_byte_ceiling=ceiling,
         outcomes=(),
         partial=False,
         publication_state_unknown=False,

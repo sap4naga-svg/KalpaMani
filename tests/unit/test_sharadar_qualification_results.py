@@ -26,7 +26,11 @@ from fixtures.sharadar_runtime import RUN_INSTANT, SUBJECT_A
 from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.vocabulary import DataClassification, InformationSetProfile
 from kalpamani.data.ingest.sharadar.datasets import SharadarDataset
-from kalpamani.data.ingest.sharadar.qualification import PERMITTED_PROFILE
+from kalpamani.data.ingest.sharadar.qualification import (
+    MAX_PAGES_PER_REQUEST,
+    MAX_RUN_BYTES,
+    PERMITTED_PROFILE,
+)
 from kalpamani.data.ingest.sharadar.runtime import (
     AcquisitionDisposition,
     QualificationFailure,
@@ -74,7 +78,9 @@ def result(**overrides: Any) -> QualificationRunResult:
         "acquisitions_recorded": 1,
         "payloads_reused": 0,
         "already_complete": 0,
-        "total_bytes": one.byte_count,
+        "fetched_payload_bytes": one.byte_count,
+        "published_payload_bytes": one.byte_count,
+        "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (one,),
         "partial": False,
         "publication_state_unknown": False,
@@ -246,7 +252,11 @@ def test_an_outcome_is_frozen() -> None:
         ("planned_requests", True),
         ("completed_requests", "1"),
         ("acquisitions_recorded", -2),
-        ("total_bytes", -1),
+        ("fetched_payload_bytes", -1),
+        ("published_payload_bytes", -1),
+        ("run_byte_ceiling", 0),
+        ("run_byte_ceiling", MAX_RUN_BYTES + 1),
+        ("run_byte_ceiling", "many"),
     ],
 )
 def test_a_malformed_result_field_is_refused(field: str, value: Any) -> None:
@@ -265,9 +275,45 @@ def test_more_completed_than_planned_is_refused() -> None:
         result(planned_requests=0, completed_requests=1)
 
 
-def test_a_total_that_disagrees_with_the_outcomes_is_refused() -> None:
+def test_published_bytes_must_equal_the_completed_outcomes() -> None:
     with pytest.raises(QualificationRuntimeError):
-        result(total_bytes=999)
+        result(published_payload_bytes=999, fetched_payload_bytes=999)
+
+
+def test_fetched_bytes_may_exceed_published_bytes() -> None:
+    """A payload that arrived and then failed to publish was still delivered."""
+    one = outcome()
+    built = QualificationRunResult(
+        outcome=QualificationOutcome.HALTED,
+        failure=QualificationFailure.STORAGE_REFUSED,
+        planned_requests=3,
+        completed_requests=1,
+        acquisitions_recorded=1,
+        payloads_reused=0,
+        already_complete=0,
+        fetched_payload_bytes=one.byte_count * 2,
+        published_payload_bytes=one.byte_count,
+        run_byte_ceiling=MAX_RUN_BYTES,
+        outcomes=(one,),
+        partial=True,
+        publication_state_unknown=True,
+    )
+    assert built.fetched_payload_bytes > built.published_payload_bytes
+
+
+def test_fetched_bytes_below_published_bytes_is_refused() -> None:
+    """Everything published was fetched first, so the reverse is impossible."""
+    with pytest.raises(QualificationRuntimeError):
+        result(fetched_payload_bytes=1)
+
+
+def test_fetched_bytes_above_the_run_ceiling_are_refused() -> None:
+    with pytest.raises(QualificationRuntimeError):
+        result(
+            fetched_payload_bytes=100,
+            published_payload_bytes=42,
+            run_byte_ceiling=50,
+        )
 
 
 @pytest.mark.parametrize("field", ["acquisitions_recorded", "payloads_reused", "already_complete"])
@@ -311,6 +357,85 @@ def test_halted_must_name_a_failure_and_be_partial() -> None:
         QualificationRunResult(**{**_baseline(), **halted, "partial": False})
 
 
+def test_a_halted_result_with_more_completed_than_planned_is_refused() -> None:
+    """Checked in the HALTED branch specifically, not inherited from COMPLETED."""
+    with pytest.raises(QualificationRuntimeError):
+        QualificationRunResult(**{**_baseline(), "planned_requests": 0})
+
+
+def test_a_halted_result_that_completed_everything_it_planned_is_refused() -> None:
+    """A halted run that finished its whole plan is a completed run wearing a
+    failure code. Nothing in the earlier invariants forbade it."""
+    with pytest.raises(QualificationRuntimeError):
+        QualificationRunResult(**{**_baseline(), "planned_requests": 1})
+
+
+def test_duplicated_acquisition_identities_are_refused() -> None:
+    """Two retrievals cannot share one identity: that is the point of deriving
+    one per request, and durable evidence like this cannot exist."""
+    first = outcome()
+    second = outcome(page_skip=500)
+    assert first.acquisition_id == second.acquisition_id
+    with pytest.raises(QualificationRuntimeError):
+        QualificationRunResult(
+            **{
+                **_baseline(),
+                "planned_requests": 3,
+                "completed_requests": 2,
+                "acquisitions_recorded": 2,
+                "outcomes": (first, second),
+                "fetched_payload_bytes": first.byte_count * 2,
+                "published_payload_bytes": first.byte_count * 2,
+            }
+        )
+
+
+def test_duplicated_request_coordinates_are_refused_even_with_distinct_ids() -> None:
+    """Checked separately from the identity: a bug in the derivation would give
+    one coordinate two identities, and an identity-only check would report that
+    as two retrievals."""
+    first = outcome()
+    second = outcome(acquisition_id="synthetic-exec-0001.ffffffffffffffffffffffff")
+    assert first.acquisition_id != second.acquisition_id
+    coordinate = (first.dataset, first.subject, first.page_limit, first.page_skip)
+    assert coordinate == (second.dataset, second.subject, second.page_limit, second.page_skip)
+    with pytest.raises(QualificationRuntimeError):
+        QualificationRunResult(
+            **{
+                **_baseline(),
+                "planned_requests": 3,
+                "completed_requests": 2,
+                "acquisitions_recorded": 2,
+                "outcomes": (first, second),
+                "fetched_payload_bytes": first.byte_count * 2,
+                "published_payload_bytes": first.byte_count * 2,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "skip,limit",
+    [
+        (1, 500),  # off the generated grid
+        (250, 500),
+        (500 * MAX_PAGES_PER_REQUEST, 500),  # beyond the page ceiling
+        (500 * (MAX_PAGES_PER_REQUEST + 3), 500),
+    ],
+)
+def test_a_page_offset_off_the_generated_grid_is_refused(skip: int, limit: int) -> None:
+    """Pages walk `skip = index * limit` below the page ceiling. An offset off
+    that grid describes a request no plan produced."""
+    with pytest.raises(QualificationRuntimeError):
+        outcome(page_skip=skip, page_limit=limit)
+
+
+def test_a_page_limit_above_the_vendors_documented_maximum_is_refused() -> None:
+    from kalpamani.data.ingest.sharadar.datasets import MAX_PAGE_LIMIT
+
+    with pytest.raises(QualificationRuntimeError):
+        outcome(page_limit=MAX_PAGE_LIMIT + 1)
+
+
 def test_refused_must_be_empty() -> None:
     empty: dict[str, Any] = {
         "outcome": QualificationOutcome.REFUSED,
@@ -320,7 +445,9 @@ def test_refused_must_be_empty() -> None:
         "acquisitions_recorded": 0,
         "payloads_reused": 0,
         "already_complete": 0,
-        "total_bytes": 0,
+        "fetched_payload_bytes": 0,
+        "published_payload_bytes": 0,
+        "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (),
         "partial": False,
         "publication_state_unknown": False,
@@ -330,7 +457,13 @@ def test_refused_must_be_empty() -> None:
         {"failure": QualificationFailure.STORAGE_REFUSED},
         {"partial": True},
         {"publication_state_unknown": True},
-        {"outcomes": (outcome(),), "completed_requests": 1},
+        {
+            "outcomes": (outcome(),),
+            "completed_requests": 1,
+            "acquisitions_recorded": 1,
+            "fetched_payload_bytes": outcome().byte_count,
+            "published_payload_bytes": outcome().byte_count,
+        },
     ):
         with pytest.raises(QualificationRuntimeError):
             QualificationRunResult(**{**empty, **contradiction})
@@ -366,7 +499,9 @@ def _baseline() -> dict[str, Any]:
         "acquisitions_recorded": 1,
         "payloads_reused": 0,
         "already_complete": 0,
-        "total_bytes": one.byte_count,
+        "fetched_payload_bytes": one.byte_count,
+        "published_payload_bytes": one.byte_count,
+        "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (one,),
         "partial": True,
         "publication_state_unknown": False,

@@ -202,6 +202,17 @@ class SharadarTransport(Protocol):
     that outlives a request is where a credential ends up being cached.
     """
 
+    @property
+    def max_response_bytes(self) -> int:
+        """The largest body this transport will return, in bytes.
+
+        Declared on the protocol so a caller can reason about a run's worst case
+        *before* sending anything, rather than discovering it from a response.
+        The qualification runtime uses it to refuse a request it could not afford
+        the answer to.
+        """
+        ...
+
     def get(
         self, *, url: str, headers: Mapping[str, str], timeout_seconds: float
     ) -> TransportResponse:
