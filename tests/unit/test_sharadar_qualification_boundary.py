@@ -458,18 +458,44 @@ def test_the_project_still_declares_no_runtime_dependency() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_no_production_module_mentions_the_provider() -> None:
-    """G1 is open. Until a provider is selected, no production module names one."""
+#: The one place ADR-0009 authorized vendor knowledge to live, plus the two package
+#: docstrings that describe the layout containing it.
+PROVIDER_PACKAGE = SRC / "kalpamani" / "data" / "ingest" / "sharadar"
+PROVIDER_DESCRIBED = (
+    SRC / "kalpamani" / "data" / "__init__.py",
+    SRC / "kalpamani" / "data" / "ingest" / "__init__.py",
+)
+
+
+def test_the_provider_is_named_only_inside_the_authorized_package() -> None:
+    """ADR-0009 widened this rule; it did not remove it.
+
+    The earlier rule was "no production module names a provider", which was correct
+    while none was authorized. ADR-0009 authorized **one** integration in **one**
+    place, so the rule that replaces it has to be narrower rather than absent:
+    vendor knowledge lives in the provider package, and a second integration cannot
+    appear beside it without failing here.
+
+    Naming the implementation target is still not selecting a production provider.
+    **G1 remains OPEN**, and the checks below hold the repository to that.
+    """
     offenders = [
         str(path.relative_to(PROJECT_ROOT))
         for path in _python_files(SRC)
-        if "sharadar" in path.read_text(encoding="utf-8").lower()
+        if not path.is_relative_to(PROVIDER_PACKAGE)
+        and path not in PROVIDER_DESCRIBED
+        and "sharadar" in path.read_text(encoding="utf-8").lower()
     ]
-    assert offenders == [], f"production code names the provider: {offenders}"
+    assert offenders == [], f"production code outside the provider package names it: {offenders}"
 
 
-def test_no_production_provider_adapter_exists() -> None:
-    assert not (SRC / "kalpamani" / "data" / "ingest" / "sharadar").exists()
+def test_the_authorized_provider_package_carries_no_credential_and_no_live_runner() -> None:
+    """The adapter may exist. A key, a fetch script and an ingestion entry point may not."""
+    assert PROVIDER_PACKAGE.is_dir(), "ADR-0009 authorized this package; it should exist"
+    for path in _python_files(PROVIDER_PACKAGE):
+        content = path.read_text(encoding="utf-8")
+        assert "test-api-key" not in content, f"{path.name} carries the published test token"
+        assert "__main__" not in content, f"{path.name} is executable; no runner is authorized"
 
 
 def test_no_production_module_imports_the_qualification_harness() -> None:
