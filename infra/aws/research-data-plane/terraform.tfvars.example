@@ -36,10 +36,16 @@ bucket_suffix = "REPLACE-ME-random-suffix"
 # Region. Any region works; this is the generic default.
 aws_region = "us-east-1"
 
-# STRONGLY RECOMMENDED. Refuses to apply against any other account, so a stale
-# AWS_PROFILE cannot silently build this in the wrong place. An account id is an
-# identifier: put the real value only in the uncommitted `terraform.tfvars`.
-# allowed_account_ids = ["REPLACE-ME-12-digit-account-id"]
+# REQUIRED, AND IT FAILS CLOSED. There is no default: Terraform refuses to run at
+# all until this is supplied, and each entry must be exactly 12 decimal digits.
+# The placeholder below is deliberately NOT a valid value -- this `.example` file
+# is never loaded by Terraform, so a value that would fail validation is exactly
+# what belongs here. Copying it across unchanged fails immediately and loudly.
+#
+# It refuses to apply against any other account, so a stale AWS_PROFILE cannot
+# silently build this in the wrong place. An account id is an identifier: put the
+# real value only in the git-ignored `terraform.tfvars`.
+allowed_account_ids = ["REPLACE-WITH-12-DIGIT-AWS-ACCOUNT-ID"]
 
 # Networking. Private address space; adjust only if it collides with something.
 vpc_cidr            = "10.20.0.0/16"

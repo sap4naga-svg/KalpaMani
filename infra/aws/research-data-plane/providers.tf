@@ -5,11 +5,15 @@
 # the same failure mode exists for AWS: a stale `AWS_PROFILE` in a shell applies
 # this configuration to whatever account that profile points at.
 #
-# Supplying the id makes the provider refuse rather than proceed. The value is an
-# account identifier and is therefore NEVER committed -- it belongs in an
-# uncommitted `.tfvars` or an environment variable, alongside the credentials it
-# guards. The default is empty, which disables the check; setting it is strongly
-# recommended before any apply is authorized.
+# IT FAILS CLOSED. `allowed_account_ids` has no default, so the binding must be
+# supplied explicitly and must be twelve digits. Terraform refuses before any
+# provider call if it is absent, and the provider refuses if the credentials
+# resolve to a different account. An earlier revision defaulted to `[]`, which the
+# provider reads as "no restriction" -- the guard was in the file and inactive.
+#
+# The value is an account identifier and is therefore NEVER committed: it belongs
+# in the git-ignored `terraform.tfvars` or in `TF_VAR_allowed_account_ids`,
+# alongside the credentials it guards.
 
 provider "aws" {
   region              = var.aws_region

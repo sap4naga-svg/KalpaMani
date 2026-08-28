@@ -44,13 +44,36 @@ variable "aws_region" {
 
 variable "allowed_account_ids" {
   description = <<-EOT
-    Account ids this configuration may be applied to. Empty disables the check.
+    Account ids this configuration may be applied to.
 
-    Supply this at apply time from an uncommitted `.tfvars`. An account id is an
-    identifier and is never committed. See providers.tf for why it matters.
+    NO DEFAULT, AND THAT IS THE CONTROL. An earlier revision defaulted to `[]`,
+    which the AWS provider reads as "no restriction" -- so the guard against
+    building KalpaMani in the wrong account was present in the file and inactive
+    in practice. A safety control that is off unless someone remembers to switch
+    it on is not a safety control; CLAUDE.md §3 already applies exactly this
+    reasoning to GitHub accounts, and ADR-0003 to broker-side order controls.
+
+    With no default, omitting it is a hard error before any provider call. The
+    failure modes are therefore:
+
+        no binding supplied  -> cannot plan or apply
+        wrong account        -> the provider refuses
+        intended account     -> eligible to continue
+
+    The real value is an account identifier and is NEVER committed: it goes in
+    the git-ignored `terraform.tfvars`, or `TF_VAR_allowed_account_ids`.
   EOT
   type        = list(string)
-  default     = []
+
+  validation {
+    condition     = length(var.allowed_account_ids) >= 1
+    error_message = "At least one AWS account id must be supplied. An empty list disables wrong-account protection, which is not permitted."
+  }
+
+  validation {
+    condition     = alltrue([for id in var.allowed_account_ids : can(regex("^[0-9]{12}$", id))])
+    error_message = "Each entry must be exactly 12 decimal digits. A placeholder or malformed id would silently disable the check."
+  }
 }
 
 variable "vpc_cidr" {

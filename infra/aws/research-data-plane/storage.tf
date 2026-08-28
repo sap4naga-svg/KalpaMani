@@ -59,11 +59,20 @@ resource "aws_s3_bucket_ownership_controls" "licensed" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "licensed" {
   bucket = aws_s3_bucket.licensed.id
 
+  # SSE-S3 (AES256): encrypted at rest, no key to manage, no per-request charge.
+  #
+  # Deliberately NOT SSE-KMS. A customer-managed key would add a per-request KMS
+  # charge and a second thing that can deny access to the data, and it buys
+  # nothing here -- this bucket has no cross-account reader to constrain and no
+  # separate key-custody requirement. Adopting KMS would be a governed change.
+  #
+  # `bucket_key_enabled` is deliberately absent. S3 Bucket Keys reduce KMS API
+  # calls and therefore apply to SSE-KMS only; setting it alongside AES256 states
+  # an optimization for a service this bucket never calls.
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
 }
 
@@ -178,11 +187,12 @@ resource "aws_s3_bucket_ownership_controls" "control" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "control" {
   bucket = aws_s3_bucket.control.id
 
+  # SSE-S3, matching the licensed bucket. No `bucket_key_enabled`: Bucket Keys are
+  # an SSE-KMS optimization and mean nothing under AES256.
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
 }
 
