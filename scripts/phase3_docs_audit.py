@@ -135,6 +135,10 @@ FORBIDDEN_TERRAFORM = {
     "aws_ecs_service": "compute is ephemeral; a service is an always-on workload",
     "GLACIER": "an archival transition makes provable deletion slow and expensive",
     'sse_algorithm = "aws:kms"': "not wrong, but a KMS key is a governed change, not a default",
+    # S3 Bucket Keys reduce KMS API calls, so they apply to SSE-KMS only. Setting one
+    # alongside AES256 declares an optimization for a service the bucket never calls:
+    # harmless at runtime, and a false statement about how the data is encrypted.
+    "bucket_key_enabled": "Bucket Keys are an SSE-KMS feature; under SSE-S3 they mean nothing",
 }
 
 #: Secret-shaped material that must never be committed under infra/. The account-id pattern is the
@@ -1345,6 +1349,47 @@ def main() -> int:
             re.search(r'actions\s*=\s*\[\s*"\*"', tf_text) is None and '"*:*"' not in tf_text,
             "a wildcard action appeared in an IAM policy",
         )
+        # -- wrong-account protection must fail closed ----------------------------
+        #
+        # This is the check with the most history behind it. The variable originally
+        # defaulted to `[]`, which the AWS provider reads as "no restriction" -- so the
+        # guard against building KalpaMani in the wrong AWS account was present in the
+        # file and inactive in practice. That is the same shape of defect ADR-0003
+        # records for broker-side order controls: a safety claim resting on something
+        # that is off unless someone remembers to switch it on.
+        #
+        # Both halves matter. Without the no-default rule, omission silently disables
+        # the check; without the digit rule, a placeholder copied out of the `.example`
+        # would be accepted and would match no account.
+        account_var = re.search(
+            r'variable\s+"allowed_account_ids"\s*\{(.*?)\n\}', read(INFRA / "variables.tf"), re.S
+        )
+        account_body = account_var.group(1) if account_var else ""
+        f.check(
+            "allowed_account_ids has no default, so omitting it fails closed",
+            bool(account_body) and not re.search(r"^\s*default\s*=", account_body, re.M),
+            "a default makes wrong-account protection optional",
+        )
+        f.check(
+            "allowed_account_ids rejects an empty list",
+            "length(var.allowed_account_ids) >= 1" in account_body,
+            "an empty list would disable the provider's account check",
+        )
+        f.check(
+            "allowed_account_ids requires exactly 12 decimal digits per entry",
+            r"^[0-9]{12}$" in account_body,
+            "a placeholder or malformed id would silently disable the check",
+        )
+        f.check(
+            "the example tfvars placeholder cannot pass account-id validation",
+            not re.search(
+                r"^\s*allowed_account_ids\s*=\s*\[\s*\"[0-9]{12}\"",
+                read(INFRA / "terraform.tfvars.example"),
+                re.M,
+            ),
+            "the example carries something shaped like a real account id",
+        )
+
         f.check(
             "log retention is bounded",
             "retention_in_days" in tf_text and "retention_in_days = 0" not in tf_text,
@@ -1365,15 +1410,23 @@ def main() -> int:
                         hits.append(f"{path.name}:{lineno}")
             f.check(f"no {label} is committed under infra/", not hits, ", ".join(hits[:6]))
 
+        # Only files, and only committable ones. `.terraform/` is a directory that
+        # `terraform init` legitimately creates locally and `.gitignore` excludes; an
+        # earlier version of this check tested for its ABSENCE ON DISK and therefore
+        # started failing the moment anyone actually ran init. Presence on disk was
+        # never the property worth guarding -- what must be true is that nothing of
+        # this kind can be committed, which the ignore rules below establish.
         stray = sorted(
             p.name
             for p in INFRA.iterdir()
-            if p.name.endswith((".tfstate", ".tfplan"))
-            or (p.name.endswith(".tfvars") and p.name != "terraform.tfvars.example")
-            or p.name == ".terraform"
+            if p.is_file()
+            and (
+                p.name.endswith((".tfstate", ".tfplan"))
+                or (p.name.endswith(".tfvars") and p.name != "terraform.tfvars.example")
+            )
         )
         f.check(
-            "no Terraform state, plan or real tfvars file is present",
+            "no Terraform state, plan or real tfvars file sits in the scaffold",
             not stray,
             ", ".join(stray),
         )
@@ -1382,6 +1435,62 @@ def main() -> int:
             "REPLACE-ME" in all_infra_text,
             "terraform.tfvars.example has no placeholder marker",
         )
+
+        # -- the dependency lock file is committed; state and caches are not -------
+        #
+        # `.terraform.lock.hcl` is repository metadata, not state: it records which
+        # provider build was actually selected and the checksums of its packages, so a
+        # later `init` resolves to the same provider instead of whatever is newest that
+        # day. Committing it is what makes a supply-chain substitution show up as a
+        # diff. It is the one Terraform-generated file that must be tracked, which is
+        # exactly why it is easy to sweep into a blanket ignore rule by accident.
+        lock = INFRA / ".terraform.lock.hcl"
+        gitignore = read(REPO_ROOT / ".gitignore")
+        ignore_rules = {
+            line.strip() for line in gitignore.splitlines() if not line.strip().startswith("#")
+        }
+
+        f.check(
+            "the provider dependency lock file is committed",
+            lock.is_file(),
+            "run `terraform init -backend=false` to generate .terraform.lock.hcl",
+        )
+        f.check(
+            ".gitignore does not exclude the dependency lock file",
+            not any("terraform.lock.hcl" in rule for rule in ignore_rules),
+            "an ignore rule would keep the lock file out of version control",
+        )
+        for rule in ("**/.terraform/", "*.tfstate", "*.tfvars", "*.tfplan"):
+            f.check(
+                f".gitignore still excludes {rule}",
+                rule in ignore_rules,
+                f"{rule} is no longer ignored",
+            )
+        f.check(
+            ".gitignore keeps the example tfvars committable",
+            "!*.tfvars.example" in ignore_rules,
+            "the placeholder tfvars would be ignored along with real ones",
+        )
+
+        if lock.is_file():
+            lock_text = read(lock)
+            declared = re.findall(r'^provider\s+"([^"]+)"', lock_text, re.M)
+            f.check(
+                "the lock file declares only the expected AWS provider",
+                declared == ["registry.terraform.io/hashicorp/aws"],
+                f"declares {declared}",
+            )
+            m = re.search(r'version\s*=\s*"(\d+)\.', lock_text)
+            f.check(
+                "the locked AWS provider is the major this root targets",
+                m is not None and m.group(1) == "6",
+                f"locked major is {m.group(1) if m else 'absent'}",
+            )
+            f.check(
+                "the lock file carries package checksums",
+                "hashes = [" in lock_text and lock_text.count("zh:") >= 5,
+                "no checksum block; a lock file without hashes pins nothing",
+            )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
