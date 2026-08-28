@@ -24,6 +24,17 @@ handed to the transport in the same expression. It is never logged, never stored
 never attached to an exception and never returned. The client's ``repr`` names its
 configuration and not its credential.
 
+**Nothing injected is trusted at runtime.** The credential must be an exact
+:class:`~kalpamani.data.ingest.sharadar.credentials.SharadarCredential`, the
+request an exact
+:class:`~kalpamani.data.ingest.sharadar.datasets.SharadarRequest`, and whatever
+the transport returns an exact
+:class:`~kalpamani.data.ingest.sharadar.transport.TransportResponse` -- which in
+turn guarantees an exact ``int`` status and exact ``bytes`` body. A ``Protocol``
+annotation is a static claim, not a runtime one, and a transport that returned
+``None``, a duck-typed object or a ``bytearray`` body would otherwise have handed
+that straight back to the caller as a payload.
+
 **It cannot reach a network by itself.** The transport has no default; a client
 constructed without one is a ``TypeError``. **No runner exists in this slice, and
 none is authorized.**
@@ -49,6 +60,7 @@ from kalpamani.data.ingest.sharadar.redaction import (
 from kalpamani.data.ingest.sharadar.transport import (
     MAX_TIMEOUT_SECONDS,
     SharadarTransport,
+    TransportResponse,
     TransportUnavailableError,
 )
 
@@ -219,6 +231,14 @@ class SharadarClient:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
+        # An exact credential, not a credential-shaped object. Subclassing is
+        # refused at class creation; this is the boundary half of the same rule,
+        # so a stand-in cannot override a rendering method or `reveal()` and put a
+        # real key into a log line or a request.
+        if type(credential) is not SharadarCredential:
+            raise SharadarRequestError(
+                stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
         self._credential = credential
         self._transport = transport
         self._pacer = pacer if pacer is not None else Pacer()
@@ -258,6 +278,10 @@ class SharadarClient:
             SharadarRequestError: naming the stage, a sanitized code and the
                 dataset. Never a URL, never a query string, never a body.
         """
+        if type(request) is not SharadarRequest:
+            raise SharadarRequestError(
+                stage=SharadarStage.FETCH, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
         url = build_request_url(request, credential=self._credential)
         code = SharadarErrorCode.REQUEST_MALFORMED
         for attempt in range(self._retry_policy.max_attempts):
@@ -268,10 +292,24 @@ class SharadarClient:
                 )
             except TransportUnavailableError as exc:
                 code = exc.code
+            except Exception:
+                # A transport is injected code. It may be a fake, a future
+                # implementation, or something that got the Protocol wrong -- and
+                # whatever it raises may carry the URL, and therefore the key.
+                # A Protocol annotation is not a runtime guarantee.
+                code = SharadarErrorCode.RESPONSE_READ_FAILED
             else:
-                if response.status == 200:
+                if type(response) is not TransportResponse:
+                    # None, a duck-typed object, or a subclass that skipped the
+                    # field validation. `TransportResponse.__post_init__` already
+                    # guarantees an exact int status and exact bytes body for a
+                    # genuine instance, so this one check covers every malformed
+                    # shape without repeating those.
+                    code = SharadarErrorCode.RESPONSE_READ_FAILED
+                elif response.status == 200:
                     return response.body
-                code = classify_http_status(response.status)
+                else:
+                    code = classify_http_status(response.status)
             if code not in RETRYABLE_CODES:
                 break
             if attempt == self._retry_policy.max_attempts - 1:

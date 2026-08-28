@@ -42,11 +42,14 @@ from kalpamani.data.ingest.sharadar.transport import (
     MAX_RESPONSE_BYTES_CEILING,
     MAX_TIMEOUT_SECONDS,
     RefuseRedirects,
+    TransportResponse,
     TransportUnavailableError,
     UrllibTransport,
     build_pinned_opener,
     build_pinned_opener_director,
+    headers_are_safe,
     origin_refusal,
+    usable_timeout,
 )
 
 pytestmark = pytest.mark.unit
@@ -565,6 +568,260 @@ def test_the_fixed_user_agent_still_reaches_the_opener() -> None:
     """The negative control for every refusal above: the valid header does arrive."""
     opener = RecordingOpener(FakeResponse(body=b"synthetic-ok"))
     UrllibTransport(opener=opener).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert opener.opened == [APPROVED_URL]
+
+
+# ---------------------------------------------------------------------------
+# The response contract is enforced, not annotated
+# ---------------------------------------------------------------------------
+
+
+def test_a_well_formed_response_is_accepted() -> None:
+    response = TransportResponse(status=200, body=b"synthetic")
+    assert response.status == 200
+    assert type(response.body) is bytes
+
+
+@pytest.mark.parametrize("status", [True, False, "200", 200.0, None, 99, 600, -1])
+def test_a_malformed_status_is_refused(status: object) -> None:
+    """``True`` is an ``int`` in Python and is nobody's HTTP status."""
+    with pytest.raises(TransportUnavailableError) as caught:
+        TransportResponse(status=status, body=b"")  # type: ignore[arg-type]
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+
+
+@pytest.mark.parametrize(
+    "body", [bytearray(b"synthetic"), memoryview(b"synthetic"), "synthetic", None, 7]
+)
+def test_a_body_that_is_not_exact_bytes_is_refused(body: object) -> None:
+    """A mutable body would travel out of ``fetch()`` as a payload nobody can rely on."""
+    with pytest.raises(TransportUnavailableError) as caught:
+        TransportResponse(status=200, body=body)  # type: ignore[arg-type]
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+
+
+def test_a_bytes_subclass_body_is_refused() -> None:
+    class SneakyBytes(bytes):
+        pass
+
+    with pytest.raises(TransportUnavailableError):
+        TransportResponse(status=200, body=SneakyBytes(b"synthetic"))
+
+
+def test_a_transport_response_cannot_be_subclassed() -> None:
+    """A subclass could bypass the validation, making it advisory."""
+    with pytest.raises(TypeError, match="may not be subclassed"):
+
+        class Forged(TransportResponse):
+            pass
+
+
+def test_a_source_buffer_cannot_alter_a_retained_body() -> None:
+    """The retained body is the exact bytes handed in, and bytes do not change."""
+    buffer = bytearray(b"synthetic-payload")
+    response = TransportResponse(status=200, body=bytes(buffer))
+    buffer[0] = 0
+    assert response.body == b"synthetic-payload"
+
+
+def test_a_transport_cannot_return_a_mutable_body_through_get() -> None:
+    """End to end: the fake tries, and the contract refuses before the client sees it."""
+
+    class MutableBody(FakeResponse):
+        def read(self, amount: int, /) -> bytes:
+            self.read_calls.append(amount)
+            return bytearray(b"synthetic-mutable")  # type: ignore[return-value]
+
+    with pytest.raises(TransportUnavailableError) as caught:
+        transport(MutableBody()).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Direct arguments fail closed
+# ---------------------------------------------------------------------------
+
+
+class _HostileNumber:
+    """Claims to be a float and raises when anyone asks."""
+
+    def __float__(self) -> float:
+        raise RuntimeError("float() failed for https://api.sharadar.com/?api_key=synthetic-canary")
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    ["10", None, _HostileNumber(), object(), True, False, [10], float("nan"), float("inf")],
+)
+def test_a_malformed_timeout_is_refused_without_being_evaluated(timeout: object) -> None:
+    """The type check comes first.
+
+    An earlier revision called ``math.isfinite`` on whatever it was handed, so a
+    string or a hostile ``__float__`` raised a ``TypeError`` out of a boundary
+    whose whole job is converting failures into codes.
+    """
+    opener = RecordingOpener(FakeResponse())
+    with pytest.raises(TransportUnavailableError) as caught:
+        UrllibTransport(opener=opener).get(
+            url=APPROVED_URL,
+            headers=HEADERS,
+            timeout_seconds=timeout,  # type: ignore[arg-type]
+        )
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert "canary" not in str(caught.value)
+    assert opener.opened == []
+
+
+class _HostileMapping:
+    """A mapping whose ``items()`` raises with something disclosing in it."""
+
+    def items(self) -> object:
+        raise RuntimeError("items() failed for ?api_key=synthetic-canary")
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        None,
+        7,
+        "User-Agent: agent",
+        _HostileMapping(),
+        {"User-Agent": 7},
+        {7: "agent"},
+        {"User-Agent": None},
+    ],
+)
+def test_malformed_headers_are_refused_without_leaking(headers: Any) -> None:
+    opener = RecordingOpener(FakeResponse())
+    with pytest.raises(TransportUnavailableError) as caught:
+        UrllibTransport(opener=opener).get(url=APPROVED_URL, headers=headers, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert "canary" not in str(caught.value)
+    assert opener.opened == []
+
+
+def test_headers_are_safe_never_raises_on_a_hostile_mapping() -> None:
+    assert headers_are_safe(_HostileMapping()) is False
+    assert headers_are_safe(None) is False
+    assert headers_are_safe({"User-Agent": "agent"}) is True
+
+
+@pytest.mark.parametrize("url", [None, 7, b"https://api.sharadar.com/v1.0/data/stocks", object()])
+def test_a_non_string_url_is_refused(url: Any) -> None:
+    opener = RecordingOpener(FakeResponse())
+    with pytest.raises(TransportUnavailableError) as caught:
+        UrllibTransport(opener=opener).get(url=url, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert opener.opened == []
+
+
+def test_a_url_subclass_is_judged_on_the_data_it_actually_holds() -> None:
+    """A lying ``__str__`` must not smuggle a different origin past the pin."""
+
+    class SneakyUrl(str):
+        def __str__(self) -> str:
+            return APPROVED_URL
+
+    opener = RecordingOpener(FakeResponse())
+    hostile = SneakyUrl("https://elsewhere.invalid/v1.0/data/stocks?api_key=synthetic-canary")
+    with pytest.raises(TransportUnavailableError) as caught:
+        UrllibTransport(opener=opener).get(url=hostile, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.REQUEST_ORIGIN_REFUSED
+    assert "canary" not in str(caught.value)
+    assert opener.opened == []
+
+
+def test_usable_timeout_accepts_only_finite_numbers_in_range() -> None:
+    assert usable_timeout(10) is True
+    assert usable_timeout(10.5) is True
+    assert usable_timeout(MAX_TIMEOUT_SECONDS) is True
+    for bad in (0, -1, MAX_TIMEOUT_SECONDS + 1, True, "10", None, float("nan")):
+        assert usable_timeout(bad) is False
+
+
+# ---------------------------------------------------------------------------
+# HTTPError and close paths
+# ---------------------------------------------------------------------------
+
+
+#: Sentinel asking the fake error to raise from its own ``code`` accessor.
+_RAISES = object()
+
+
+class _ExplodingHttpError(urllib.error.HTTPError):
+    """An HTTPError whose accessors misbehave the way a malformed one would.
+
+    ``code`` is a property with a swallowing setter, because
+    ``HTTPError.__init__`` assigns ``self.code`` and would otherwise fail against
+    a read-only property.
+    """
+
+    def __init__(self, *, code: object = 500, fail_close: bool = False) -> None:
+        self._forced = code
+        self._fail_close = fail_close
+        super().__init__(
+            url="https://elsewhere.invalid/leak?api_key=synthetic-leak-canary",
+            code=500,
+            msg="synthetic vendor error page body",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=None,
+        )
+
+    @property  # type: ignore[override]
+    def code(self) -> object:
+        if self._forced is _RAISES:
+            raise RuntimeError(
+                "code failed for https://elsewhere.invalid/?api_key=synthetic-canary"
+            )
+        return self._forced
+
+    @code.setter
+    def code(self, value: object) -> None:
+        """Swallow ``HTTPError.__init__``'s assignment; ``_forced`` is the source."""
+
+    def close(self) -> None:
+        if self._fail_close:
+            raise OSError("connection reset while closing api.sharadar.com")
+
+
+def test_a_failing_close_on_an_http_error_does_not_replace_the_outcome() -> None:
+    response = transport(_ExplodingHttpError(code=503, fail_close=True)).get(
+        url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0
+    )
+    assert response.status == 503
+    assert response.body == b""
+
+
+@pytest.mark.parametrize("code", ["500", None, 99, 700, True, _RAISES])
+def test_a_malformed_http_error_code_becomes_a_read_failure(code: object) -> None:
+    """A response nothing can classify is a read failure, not a status of zero."""
+    with pytest.raises(TransportUnavailableError) as caught:
+        transport(_ExplodingHttpError(code=code)).get(
+            url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0
+        )
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+    for leak in ("api_key", "https://", "sharadar.com", "canary", "vendor error page"):
+        assert leak not in str(caught.value)
+
+
+def test_a_redirect_http_error_surfaces_no_location_and_no_url() -> None:
+    error = urllib.error.HTTPError(
+        url="https://elsewhere.invalid/redirected?api_key=synthetic-leak-canary",
+        code=302,
+        msg="Found",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
+    opener = RecordingOpener(error)
+    response = UrllibTransport(opener=opener).get(
+        url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0
+    )
+    assert response.status == 302
+    assert response.body == b""
+    rendered = repr(response)
+    for leak in ("Location", "elsewhere.invalid", "synthetic-leak-canary", "redirected"):
+        assert leak not in rendered
+    # The redirect target is never opened: only the original URL was.
     assert opener.opened == [APPROVED_URL]
 
 

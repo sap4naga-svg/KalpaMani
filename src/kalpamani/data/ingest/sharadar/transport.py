@@ -103,18 +103,6 @@ ALLOWED_PORTS: Final[frozenset[int | None]] = frozenset({None, 443})
 ALLOWED_PATH_PREFIX: Final = f"{_ALLOWED.path}/"
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TransportResponse:
-    """One HTTP response, reduced to the two things the client may look at.
-
-    ``body`` is empty for any failing status: the transport does not read a
-    vendor error page, so there is nothing to carry.
-    """
-
-    status: int
-    body: bytes
-
-
 class TransportUnavailableError(Exception):
     """A network-level failure, carrying a closed code and nothing else.
 
@@ -132,6 +120,50 @@ class TransportUnavailableError(Exception):
         """Carry ``code``. There is no field for a URL, a host or a message."""
         self.code = safe_code(code)
         super().__init__(self.code.value)
+
+
+#: The HTTP status range this boundary will admit. Anything outside it is not a
+#: status a server produced; it is a value something else put in a field.
+MIN_HTTP_STATUS: Final = 100
+MAX_HTTP_STATUS: Final = 599
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransportResponse:
+    """One HTTP response, reduced to the two things the client may look at.
+
+    ``body`` is empty for any failing status: the transport does not read a
+    vendor error page, so there is nothing to carry.
+
+    **The annotations are enforced, not decorative.** An earlier revision relied
+    on them, so a transport -- injected code, in a test or in a future runner --
+    could return ``status=200`` with a ``bytearray`` body and have it travel all
+    the way out of ``fetch()`` as a payload the caller believed was immutable
+    bytes. Both fields are checked at construction, and subclassing is refused so
+    the checks cannot be skipped by inheriting past them.
+    """
+
+    status: int
+    body: bytes
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing.
+
+        A subclass could bypass ``__post_init__`` or re-expose the fields as
+        properties, which would make the validation below advisory.
+        """
+        raise TypeError(
+            "TransportResponse may not be subclassed. A subclass could bypass the field "
+            "validation, which is the only reason this type is worth anything."
+        )
+
+    def __post_init__(self) -> None:
+        # `type(...) is int` also excludes bool, which is an int in Python and is
+        # nobody's HTTP status.
+        if type(self.status) is not int or not MIN_HTTP_STATUS <= self.status <= MAX_HTTP_STATUS:
+            raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED)
+        if type(self.body) is not bytes:
+            raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED)
 
 
 class HttpResponseLike(Protocol):
@@ -277,8 +309,43 @@ _HEADER_NAME: Final = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$")
 _HEADER_VALUE: Final = re.compile(r"^[\x21-\x7e]([\x20-\x7e]{0,254}[\x21-\x7e])?$")
 
 
-def headers_are_safe(headers: Mapping[str, str]) -> bool:
-    """Whether every header name and value is an exact, well-formed ASCII token.
+def exact_text(value: object) -> str | None:
+    """``value`` as an exact plain :class:`str`, or ``None``. Never raises.
+
+    Guarded for the same reason as everywhere else this pattern appears:
+    ``isinstance`` can be satisfied by a spoofed ``__class__``, and ``str.__str__``
+    then raises rather than returning.
+    """
+    if type(value) is str:
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(str.__str__(value))
+    except Exception:
+        return None
+
+
+def usable_timeout(value: object) -> bool:
+    """Whether ``value`` is a finite number inside the permitted timeout range.
+
+    The type check comes **first**, deliberately. An earlier revision called
+    ``math.isfinite`` on whatever it was handed, so an object with a hostile
+    ``__float__`` -- or simply a string -- raised a ``TypeError`` out of a boundary
+    whose whole job is to convert failures into codes. ``type(...) is int``
+    excludes ``bool``, because ``True`` seconds is a caller mistake.
+    """
+    if type(value) is int:
+        numeric = float(value)
+    elif type(value) is float:
+        numeric = value
+    else:
+        return False
+    return math.isfinite(numeric) and 0 < numeric <= MAX_TIMEOUT_SECONDS
+
+
+def headers_are_safe(headers: object) -> bool:
+    """Whether ``headers`` is a mapping of exact, well-formed ASCII header tokens.
 
     **Checked here rather than left to urllib**, which was the assumption an
     earlier revision made and it was wrong: :class:`urllib.request.Request` stores
@@ -286,13 +353,63 @@ def headers_are_safe(headers: Mapping[str, str]) -> bool:
     much later, at send time, by :mod:`http.client`. Between those two points the
     request looks well formed. Validating at the boundary means a split-request
     attempt never reaches an opener at all.
+
+    Takes an arbitrary object and **never raises**: ``items()``, iteration and the
+    pair unpacking are all guarded, because a hostile or simply broken mapping
+    would otherwise throw from inside a boundary that exists to convert failures
+    into codes.
     """
-    for name, value in headers.items():
+    try:
+        items = list(headers.items())  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    for pair in items:
+        try:
+            name, value = pair
+        except Exception:
+            return False
         if type(name) is not str or type(value) is not str:
             return False
         if not _HEADER_NAME.match(name) or not _HEADER_VALUE.match(value):
             return False
     return True
+
+
+def _close_quietly(closeable: object) -> None:
+    """Close something, and never let the attempt become the outcome.
+
+    A ``close()`` on a live socket raises with a message naming the host, which is
+    both useless to the caller and a disclosure. It is also never the failure the
+    caller needs to hear about.
+    """
+    try:
+        closeable.close()  # type: ignore[attr-defined]
+    except Exception:  # noqa: S110 - a close failure is never the caller's problem
+        pass
+
+
+def _http_error_response(exc: urllib.error.HTTPError) -> TransportResponse:
+    """Turn a failing response into a status, reading nothing and disclosing nothing.
+
+    The order matters. The status is taken **before** the close, because closing
+    can invalidate the object; the close is guarded, because it raises with a
+    message naming the host; and the status is validated **after**, because a
+    malformed ``code`` is not something to pass on as if a server had produced it.
+    ``Location``, the URL, the message and the body are never touched.
+
+    Raises:
+        TransportUnavailableError: if the error object cannot yield a usable
+            status. A response nothing can classify is a read failure, not a
+            status of zero.
+    """
+    try:
+        code: object = exc.code
+    except Exception:
+        code = None
+    _close_quietly(exc)
+    if type(code) is not int or not MIN_HTTP_STATUS <= code <= MAX_HTTP_STATUS:
+        raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED)
+    return TransportResponse(status=code, body=b"")
 
 
 def _content_length_over(response: HttpResponseLike, limit: int) -> bool:
@@ -354,20 +471,31 @@ class UrllibTransport:
     def get(
         self, *, url: str, headers: Mapping[str, str], timeout_seconds: float
     ) -> TransportResponse:
-        """Perform one GET against the pinned origin, disclosing nothing on failure."""
-        refusal = origin_refusal(url)
+        """Perform one GET against the pinned origin, disclosing nothing on failure.
+
+        **Every argument is validated before anything that could raise runs.**
+        This is a public boundary even though no runner calls it today, and its
+        contract is that a caller gets a
+        :class:`TransportUnavailableError` carrying a closed code -- never a raw
+        ``TypeError``, ``ValueError`` or ``AttributeError`` whose message quotes
+        what it choked on.
+        """
+        exact_url = exact_text(url)
+        if exact_url is None:
+            raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED)
+        refusal = origin_refusal(exact_url)
         if refusal is not None:
             raise TransportUnavailableError(refusal)
-        if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
+        if not usable_timeout(timeout_seconds):
             raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED)
         if not headers_are_safe(headers):
             raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED)
 
         try:
             request = urllib.request.Request(  # noqa: S310 - origin pinned above
-                url, headers=dict(headers), method="GET"
+                exact_url, headers=dict(headers), method="GET"
             )
-        except (ValueError, TypeError, http.client.HTTPException):
+        except Exception:
             # Header and URL construction raise ValueError carrying the offending
             # value -- a header line, or the URL with the key in it. Converted
             # here rather than allowed to propagate, because the message is the
@@ -381,8 +509,7 @@ class UrllibTransport:
             # response object, so reading it is one attribute away -- and a vendor
             # error page, or a redirect's Location, is exactly what must never
             # reach a log or a Bronze object. A refused 3xx arrives here too.
-            exc.close()
-            return TransportResponse(status=int(exc.code), body=b"")
+            return _http_error_response(exc)
         except TimeoutError:
             raise TransportUnavailableError(SharadarErrorCode.NETWORK_TIMEOUT) from None
         except urllib.error.URLError:
@@ -420,12 +547,7 @@ class UrllibTransport:
                 )
             return TransportResponse(status=status, body=body)
         finally:
-            # A close() that raises must not replace the outcome, and must not
-            # surface a socket message naming the host.
-            try:
-                response.close()
-            except Exception:  # noqa: S110 - a close failure is never the caller's problem
-                pass
+            _close_quietly(response)
 
 
 __all__ = [
@@ -434,8 +556,10 @@ __all__ = [
     "ALLOWED_PORTS",
     "ALLOWED_SCHEME",
     "DEFAULT_MAX_RESPONSE_BYTES",
+    "MAX_HTTP_STATUS",
     "MAX_RESPONSE_BYTES_CEILING",
     "MAX_TIMEOUT_SECONDS",
+    "MIN_HTTP_STATUS",
     "HttpResponseLike",
     "OpenerCall",
     "RefuseRedirects",
@@ -445,6 +569,8 @@ __all__ = [
     "UrllibTransport",
     "build_pinned_opener",
     "build_pinned_opener_director",
+    "exact_text",
     "headers_are_safe",
     "origin_refusal",
+    "usable_timeout",
 ]

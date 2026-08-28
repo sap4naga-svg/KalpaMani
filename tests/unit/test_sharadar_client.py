@@ -28,6 +28,7 @@ from __future__ import annotations
 import inspect
 import re
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,7 @@ from kalpamani.data.ingest.sharadar.client import (
 )
 from kalpamani.data.ingest.sharadar.credentials import (
     CREDENTIAL_PLACEHOLDER,
+    MAX_CREDENTIAL_LENGTH,
     SharadarCredential,
     credential_from_env,
 )
@@ -72,6 +74,8 @@ from kalpamani.data.ingest.sharadar.transport import (
 )
 
 pytestmark = pytest.mark.unit
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def client(
@@ -241,6 +245,78 @@ def test_a_credential_renders_as_a_placeholder_through_every_route() -> None:
     assert secret.reveal() == syn.SYNTHETIC_CREDENTIAL_VALUE
 
 
+def test_the_retained_secret_is_an_exact_plain_string() -> None:
+    """A caller's ``str`` subclass would otherwise run its own code inside the
+    query builder, on the value that matters most."""
+
+    class SneakySecret(str):
+        def __str__(self) -> str:
+            return "synthetic-fake-substituted-value"
+
+    secret = SharadarCredential(SneakySecret(syn.SYNTHETIC_CREDENTIAL_VALUE))
+    assert type(secret.reveal()) is str
+    assert secret.reveal() == syn.SYNTHETIC_CREDENTIAL_VALUE
+    assert repr(secret) == CREDENTIAL_PLACEHOLDER
+
+
+def test_a_credential_cannot_be_subclassed() -> None:
+    """A subclass could override every rendering method and ``reveal`` at once."""
+    with pytest.raises(TypeError, match="may not be subclassed"):
+
+        class Leaky(SharadarCredential):
+            def __repr__(self) -> str:
+                return self.reveal()
+
+
+def test_the_client_requires_an_exact_credential_not_a_look_alike() -> None:
+    """The boundary half of the subclass rule: a stand-in is refused too."""
+
+    class NotACredential:
+        def reveal(self) -> str:
+            return "synthetic-fake-stand-in"
+
+    with pytest.raises(SharadarRequestError) as caught:
+        SharadarClient(
+            credential=NotACredential(),  # type: ignore[arg-type]
+            transport=syn.ScriptedTransport([]),
+        )
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        7,
+        b"synthetic-bytes",
+        ["synthetic"],
+        object(),
+        "synthetic fake with a space",
+        "synthetic-fake" + chr(10) + "injected",
+        "synthetic-fake" + chr(0),
+        "synthetic-fake" + chr(9),
+        "s" * 513,
+    ],
+)
+def test_an_unusable_credential_value_is_refused_without_being_quoted(value: object) -> None:
+    """Whitespace and control characters would corrupt the query string they travel in.
+
+    No vendor alphabet is inferred: public documentation states no key format, so
+    refusing legal punctuation would refuse a real key on the day it is first used.
+    """
+    with pytest.raises(SharadarRequestError) as caught:
+        SharadarCredential(value)  # type: ignore[arg-type]
+    rendered = str(caught.value)
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert "synthetic" not in rendered
+    assert rendered == "sharadar build: REQUEST_MALFORMED"
+
+
+def test_a_credential_at_the_length_ceiling_is_still_accepted() -> None:
+    """The negative control: the bound refuses what is over it, not what is at it."""
+    assert len(SharadarCredential("s" * MAX_CREDENTIAL_LENGTH).reveal()) == MAX_CREDENTIAL_LENGTH
+
+
 def test_a_credential_is_not_a_dataclass_with_a_generated_repr() -> None:
     """A generated ``__repr__`` would print the field, and nobody would notice."""
     assert not hasattr(SharadarCredential, "__dataclass_fields__")
@@ -257,8 +333,66 @@ def test_a_credential_is_read_from_an_explicitly_supplied_mapping_only() -> None
     """The mapping is a parameter, so this module has no route to the real environment."""
     built = credential_from_env({"KALPAMANI_SHARADAR_API_KEY": syn.SYNTHETIC_CREDENTIAL_VALUE})
     assert built.reveal() == syn.SYNTHETIC_CREDENTIAL_VALUE
+    assert type(built) is SharadarCredential
     with pytest.raises(SharadarRequestError):
         credential_from_env({})
+
+
+class _HostileMapping(dict[str, str]):
+    """A mapping whose lookup raises, as a broken or hostile one would."""
+
+    def get(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("lookup failed for https://elsewhere.invalid/?api_key=synthetic-canary")
+
+
+@pytest.mark.parametrize(
+    "env,variable",
+    [
+        ({}, "KALPAMANI_SHARADAR_API_KEY"),
+        ({"KALPAMANI_SHARADAR_API_KEY": ""}, "KALPAMANI_SHARADAR_API_KEY"),
+        ({"KALPAMANI_SHARADAR_API_KEY": "   "}, "KALPAMANI_SHARADAR_API_KEY"),
+        ({"KALPAMANI_SHARADAR_API_KEY": 7}, "KALPAMANI_SHARADAR_API_KEY"),
+        ({"KALPAMANI_SHARADAR_API_KEY": None}, "KALPAMANI_SHARADAR_API_KEY"),
+        ({"x": "synthetic-fake"}, "not a variable name"),
+        ({"x": "synthetic-fake"}, 7),
+        (_HostileMapping(), "KALPAMANI_SHARADAR_API_KEY"),
+        (None, "KALPAMANI_SHARADAR_API_KEY"),
+    ],
+)
+def test_credential_from_env_fails_closed_without_echoing_anything(
+    env: object, variable: object
+) -> None:
+    """A broken mapping raises from inside ``get``; that exception must not propagate."""
+    with pytest.raises(SharadarRequestError) as caught:
+        credential_from_env(env, variable=variable)  # type: ignore[arg-type]
+    assert str(caught.value) == "sharadar build: REQUEST_MALFORMED"
+    assert "canary" not in str(caught.value)
+
+
+def test_credential_from_env_never_touches_the_real_environment() -> None:
+    """``os.environ`` has no route into this module at all.
+
+    Parsed rather than text-searched: the module docstring legitimately explains
+    *why* the mapping is a parameter and names ``os.environ`` doing so, and a
+    guard that failed on its own explanation would train the next person to delete
+    the explanation.
+    """
+    import ast
+
+    source = (
+        PROJECT_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar" / "credentials.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert "os" not in imported
+    attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    assert "environ" not in attributes
+    assert "getenv" not in attributes
 
 
 @pytest.mark.parametrize(
@@ -544,6 +678,162 @@ def test_an_empty_body_is_preserved_rather_than_refused() -> None:
     """Emptiness is a fact about the range. Bronze preserves what arrived."""
     transport = syn.ScriptedTransport([syn.ok(b"")])
     assert client(transport, syn.ManualClock()).fetch(syn.stocks_request()) == b""
+
+
+# ---------------------------------------------------------------------------
+# Nothing injected is trusted at runtime
+# ---------------------------------------------------------------------------
+
+
+class _ReturningTransport:
+    """A transport that returns whatever it was told to. A Protocol is not a guarantee."""
+
+    def __init__(self, outcome: object) -> None:
+        self._outcome = outcome
+        self.calls = 0
+
+    def get(self, *, url: str, headers: object, timeout_seconds: float) -> object:
+        self.calls += 1
+        if isinstance(self._outcome, BaseException):
+            raise self._outcome
+        return self._outcome
+
+
+class _DuckTypedResponse:
+    """Right attributes, wrong type -- and a body nobody can rely on."""
+
+    status = 200
+    body = bytearray(b"synthetic-mutable")
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        None,
+        _DuckTypedResponse(),
+        "synthetic-str",
+        7,
+        RuntimeError("failed for https://api.sharadar.com/?api_key=synthetic-canary"),
+        AttributeError("no attribute 'status'"),
+    ],
+)
+def test_a_malformed_transport_return_becomes_a_sanitized_refusal(outcome: object) -> None:
+    """A duck-typed response would otherwise hand a mutable body back as a payload."""
+    fetcher = SharadarClient(
+        credential=syn.credential(),
+        transport=_ReturningTransport(outcome),  # type: ignore[arg-type]
+        pacer=Pacer(min_interval=0.0, clock=syn.ManualClock().time, sleeper=lambda _: None),
+        retry_policy=RetryPolicy(max_attempts=1, backoff_seconds=()),
+    )
+    with pytest.raises(SharadarRequestError) as caught:
+        fetcher.fetch(syn.stocks_request())
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+    rendered = str(caught.value)
+    for leak in ("api_key", "https://", "sharadar.com", "synthetic-canary", "status"):
+        assert leak not in rendered
+
+
+def test_the_legitimate_transports_still_work_unchanged() -> None:
+    """The negative control for every refusal above."""
+    transport = syn.ScriptedTransport([syn.ok()])
+    assert client(transport, syn.ManualClock()).fetch(syn.stocks_request()) == (
+        syn.SYNTHETIC_PAYLOAD
+    )
+
+
+@pytest.mark.parametrize("request_value", [None, 7, "stocks", object(), syn.page()])
+def test_fetch_requires_an_exact_request(request_value: object) -> None:
+    transport = syn.ScriptedTransport([])
+    with pytest.raises(SharadarRequestError) as caught:
+        client(transport, syn.ManualClock()).fetch(request_value)  # type: ignore[arg-type]
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert transport.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# An error can always be constructed
+# ---------------------------------------------------------------------------
+
+
+class _HostileLabel:
+    """Claims equality with anything and lies about its string form."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return hash("stocks")
+
+    def __str__(self) -> str:
+        return "stocks"
+
+
+class _SpoofedString(str):
+    """A ``str`` subclass whose ``__str__`` reports something it does not hold."""
+
+    def __str__(self) -> str:
+        return "stocks"
+
+
+@pytest.mark.parametrize(
+    "dataset",
+    [
+        7,
+        None,
+        object(),
+        _HostileLabel(),
+        _SpoofedString("api_key=synthetic-canary"),
+        "ticker,date,open,high,close\nZZQA,2026-01-02,1,2,3",
+        "https://elsewhere.invalid/?api_key=synthetic-canary",
+        b"stocks",
+        ["stocks"],
+    ],
+)
+def test_an_error_can_be_built_from_any_object_without_echoing_it(dataset: object) -> None:
+    """An exception that raises while being built discards the failure it was reporting.
+
+    An earlier revision annotated the parameter ``str | None`` and then trusted
+    the annotation, so an integer or a hostile object would have raised from
+    inside the constructor.
+    """
+    error = SharadarRequestError(
+        stage=SharadarStage.FETCH,
+        code=SharadarErrorCode.HTTP_SERVER_ERROR,
+        dataset=dataset,
+    )
+    rendered = str(error)
+    assert error.dataset in (None, "<unnamed>")
+    for leak in ("api_key", "synthetic-canary", "https://", "ZZQA", "2026-01-02", "elsewhere"):
+        assert leak not in rendered
+
+
+def test_a_spoofed_string_is_judged_on_the_data_it_holds() -> None:
+    """A lying ``__str__`` must not let a disclosing label through as a valid one."""
+    error = SharadarRequestError(
+        stage=SharadarStage.FETCH,
+        code=SharadarErrorCode.HTTP_SERVER_ERROR,
+        dataset=_SpoofedString("api_key=synthetic-canary"),
+    )
+    assert error.dataset == "<unnamed>"
+
+
+def test_a_valid_dataset_label_still_survives() -> None:
+    """The negative control: the guard must not refuse what it exists to admit."""
+    error = SharadarRequestError(
+        stage=SharadarStage.FETCH, code=SharadarErrorCode.HTTP_SERVER_ERROR, dataset="stocks"
+    )
+    assert error.dataset == "stocks"
+    assert str(error) == "sharadar fetch [stocks]: HTTP_SERVER_ERROR"
+
+
+@pytest.mark.parametrize("stage,code", [(7, "nonsense"), (None, None), (object(), object())])
+def test_a_hostile_stage_or_code_falls_back_rather_than_raising(
+    stage: object, code: object
+) -> None:
+    error = SharadarRequestError(stage=stage, code=code)  # type: ignore[arg-type]
+    assert error.stage is SharadarStage.UNKNOWN
+    assert error.code is SharadarErrorCode.UNCLASSIFIED
+    assert error.retryable is False
 
 
 def test_the_bytes_returned_are_the_bytes_received() -> None:
