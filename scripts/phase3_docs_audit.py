@@ -199,7 +199,8 @@ PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharad
 #: most is an absence: no alias, no converter, no default, no dual-write.
 ADR_ACQUISITION_MODE = DECISIONS / "ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md"
 VOCABULARY = REPO_ROOT / "src" / "kalpamani" / "data" / "contracts" / "vocabulary.py"
-PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
+#: the *filesystem* Bronze writer -- the store the first revision of ADR-0013 left behind.
+LOCAL_BRONZE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "bronze.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -4423,10 +4424,15 @@ def main() -> int:
                 "a vocabulary whose members are not defined is three spellings of nothing",
             )
         f.check(
-            "ADR-0013 says why the boolean was inadequate",
-            "neither an update" in flat13.lower()
-            or "It extends no prior state, so it is not an update" in flat13,
-            "qualification is neither a production backfill nor an incremental update",
+            "ADR-0013 gives the production-scoped reason a qualification run is not an UPDATE",
+            "not an `UPDATE` because it is not an incremental production refresh" in flat13
+            and "does not advance an approved production dataset" in flat13,
+            "the distinction is whether an approved production dataset advances",
+        )
+        f.check(
+            "ADR-0013 does not rest that reason on the retrieval extending no prior state",
+            "It extends no prior state, so it is not an update" not in flat13,
+            "a qualification run may write evidence, and a first UPDATE extends nothing either",
         )
         f.check(
             "ADR-0013 records this as a breaking pre-data correction",
@@ -4500,6 +4506,43 @@ def main() -> int:
             "historical ADR text is evidence and is never edited",
         )
         f.check(
+            "ADR-0013 claims agreement on the shared acquisition fields, not whole records",
+            "agree on the shared acquisition fields" in flat13 and "field for field" not in flat13,
+            "the two envelopes differ on purpose, so whole-record equality would be false",
+        )
+        f.check(
+            "ADR-0013 names the envelope difference instead of hiding it",
+            "Their envelopes are deliberately not identical" in flat13
+            and all(
+                token in flat13
+                for token in ("`status`, `ingest_date` and `notes`", "carries `classification`")
+            ),
+            "a difference that is stated can be reviewed; one that is implied cannot",
+        )
+        f.check(
+            "ADR-0013 records that the filesystem record is read back from a real store",
+            "not from the builder that wrote it" in flat13,
+            "comparing a builder against itself is what missed the omission in the first place",
+        )
+        f.check(
+            "ADR-0013 records the changed-mode refusal as proven on both storage paths",
+            "fails closed on both storage paths, proven against each" in flat13,
+            "one path holding the property says nothing about the other",
+        )
+        f.check(
+            "ADR-0013 scopes the unreachable-mode claim to the qualification runtime",
+            "the qualification runtime's mode is unreachable from `QualificationPlan` and from "
+            "the runtime's execute caller" in flat13,
+            "a neutral caller must be able to state a mode; only this runtime may not",
+        )
+        f.check(
+            "ADR-0013 discloses the defect its own first revision contained",
+            "recorded no mode at all" in flat13
+            and "accepted rather than refused" in flat13
+            and "a test's *name* is not evidence of its subject" in flat13,
+            "a correction that conceals what it corrected teaches a later reader nothing",
+        )
+        f.check(
             "ADR-0013 records the durable before and after",
             '"acquisition_mode": "QUALIFICATION"' in adr13 and '"is_backfill": false' in adr13,
             "the shape change is the part a later reader most needs stated",
@@ -4553,6 +4596,12 @@ def main() -> int:
         "a second source would be a second place to state one fact",
     )
     f.check(
+        "the filesystem acquisition record carries the mode, from the retrieval",
+        LOCAL_BRONZE.is_file()
+        and '"acquisition_mode": str(retrieval.acquisition_mode.value),' in read(LOCAL_BRONZE),
+        "the first revision updated the object-store record and left this store behind",
+    )
+    f.check(
         "no acquisition mode is assigned conditionally anywhere under src/",
         not _conditional_mode_sites(),
         "deriving the mode from the data is the conflation this correction removed",
@@ -4603,6 +4652,38 @@ def main() -> int:
             f"{name} authorizes neither production mode",
             "neither production operation is authorized" in flat,
             "naming BACKFILL and UPDATE is not permission to perform either",
+        )
+
+    plan_path = PHASE3 / "implementation-plan.md"
+    if plan_path.is_file():
+        plan_body = read(plan_path)
+        f.check(
+            "the implementation plan describes the ingestion run's declared mode",
+            "declared `acquisition_mode`" in plan_body
+            and "never inferred from what arrived" in plan_body,
+            "the plan is where the durable ingestion_run shape is described",
+        )
+        f.check(
+            "the implementation plan no longer says the run records whether it was a backfill",
+            "whether the run was a backfill" not in plan_body,
+            "a two-valued description of a three-member field is the retired contract",
+        )
+
+    quality_path = PHASE3 / "data-quality-plan.md"
+    if quality_path.is_file():
+        quality_flat = " ".join(read(quality_path).replace("**", "").split())
+        f.check(
+            "the data-quality plan does not call an unsatisfied condition a finding",
+            "both are findings" not in quality_flat,
+            "4.2.4 emits a finding only when its coverage-extension condition holds",
+        )
+        f.check(
+            "the data-quality plan states when 4.2.4 actually emits a finding",
+            "emits a finding only when its historical-coverage-extension condition is satisfied"
+            in quality_flat
+            and "Neither observation rewrites or contradicts the declared acquisition mode"
+            in quality_flat,
+            "an observation that sits oddly beside the mode does not overrule it",
         )
 
     for label, path in (

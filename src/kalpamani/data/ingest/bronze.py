@@ -528,6 +528,19 @@ def _acquisition_body(
     *,
     status: str,
 ) -> dict[str, object]:
+    """The durable body of one filesystem acquisition record.
+
+    ``acquisition_mode`` is written on **both** the PENDING and the COMPLETE
+    body, from ``retrieval`` and nowhere else. The first revision of ADR-0013
+    updated the object-store record and left this one behind, so the local store
+    recorded no mode at all -- and, because :func:`_require_same_retrieval`
+    compares every field except ``status``, a second call under the same identity
+    with a *different* mode was accepted rather than refused.
+
+    The value is the member's plain ``str`` token, never the ``StrEnum`` member: a
+    record is bytes on a disk, and a ``StrEnum`` is a ``str`` *subclass* whose
+    identity is not what a later reader gets back.
+    """
     return {
         "status": status,
         "content_sha256": digest,
@@ -539,6 +552,7 @@ def _acquisition_body(
         "retrieved_at": retrieval.retrieved_at.isoformat(),
         "source_schema_version": retrieval.source_schema_version,
         "ingestion_run_id": retrieval.ingestion_run_id,
+        "acquisition_mode": str(retrieval.acquisition_mode.value),
         "notes": retrieval.notes,
     }
 

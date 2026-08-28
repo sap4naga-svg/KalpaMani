@@ -21,19 +21,29 @@ import ast
 import dataclasses
 import inspect
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from kalpamani.data.contracts.entities import IngestionRun
-from kalpamani.data.contracts.errors import AcquisitionIncompleteError
+from kalpamani.data.contracts.errors import (
+    AcquisitionIncompleteError,
+    ObjectAlreadyExistsError,
+)
 from kalpamani.data.contracts.vocabulary import (
     AcquisitionMode,
     IngestionStatus,
 )
-from kalpamani.data.ingest.bronze import RetrievalMetadata, build_ingestion_run
+from kalpamani.data.ingest.bronze import (
+    ACQUISITION_COMPLETE,
+    ACQUISITION_PENDING,
+    BronzeStore,
+    RetrievalMetadata,
+    _acquisition_body,
+    build_ingestion_run,
+)
 from kalpamani.data.ingest.publication import (
     ACQUISITION_RECORD_FIELDS,
     BronzePublication,
@@ -52,6 +62,8 @@ pytestmark = pytest.mark.unit
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC = PROJECT_ROOT / "src"
 INSTANT = datetime(2026, 8, 28, 13, 45, 0, tzinfo=UTC)
+INGEST_DATE = date(2026, 8, 28)
+SYNTHETIC_PAYLOAD = b"synthetic-opaque-payload"
 
 
 def retrieval(
@@ -303,25 +315,214 @@ def test_the_retired_key_is_not_in_the_allowlist() -> None:
 
 
 @pytest.mark.parametrize("mode", list(AcquisitionMode))
-def test_the_object_store_record_matches_the_local_one_for_each_mode(
-    mode: AcquisitionMode,
-) -> None:
-    """Local Bronze and object-store Bronze must agree on the durable shape."""
+def test_the_object_store_record_is_what_the_builder_produced(mode: AcquisitionMode) -> None:
+    """What the store holds is exactly what the record builder emitted.
+
+    Named for what it checks. An earlier revision called this a local/object-store
+    comparison, which it was not: both sides came from ``acquisition_record``, the
+    object-store builder. The genuine cross-store comparison is
+    ``test_the_two_stores_agree_on_the_shared_acquisition_fields`` below.
+    """
     store = InMemoryResearchObjectStore()
     published = publish_bronze_payload(
         store=store,
-        payload=b"synthetic-opaque-payload",
+        payload=SYNTHETIC_PAYLOAD,
         retrieval=retrieval(mode, ingestion_run_id=f"synthetic-run-{mode.value.lower()}"),
     )
     stored = json.loads(store.read(published.acquisition_key).decode("utf-8"))
-    expected = acquisition_record(
+    assert stored == acquisition_record(
         retrieval=published.retrieval,
         content_sha256=published.content_sha256,
         byte_count=published.byte_count,
     )
-    assert stored == expected
     assert stored["acquisition_mode"] == mode.value
     assert "is_backfill" not in stored
+
+
+# ---------------------------------------------------------------------------
+# The filesystem store, which the first revision of this migration missed
+# ---------------------------------------------------------------------------
+#
+# `RetrievalMetadata` carried the mode and the object-store record emitted it,
+# but `_acquisition_body` still returned the pre-migration local shape. The local
+# store therefore recorded no mode at all -- and because `_require_same_retrieval`
+# compares every field except `status`, restating one acquisition under a
+# *different* mode was accepted instead of refused. Nothing caught it, because no
+# test constructed a filesystem record.
+
+
+def local_write(
+    root: Path,
+    mode: AcquisitionMode,
+    *,
+    run_id: str = "synthetic-run-0001",
+) -> tuple[BronzeStore, Path]:
+    """One synthetic acquisition, written through a real filesystem store."""
+    store = BronzeStore(root)
+    artifact = store.write(
+        payload=SYNTHETIC_PAYLOAD,
+        retrieval=retrieval(mode, ingestion_run_id=run_id),
+        ingest_date=INGEST_DATE,
+    )
+    return store, artifact.acquisition_path
+
+
+@pytest.mark.parametrize("mode", list(AcquisitionMode))
+def test_the_filesystem_record_carries_the_exact_mode_token(
+    mode: AcquisitionMode, tmp_path: Path
+) -> None:
+    """Read back from disk, not from the builder that wrote it."""
+    _, path = local_write(tmp_path, mode)
+    record = json.loads(path.read_text(encoding="utf-8"))
+
+    assert "acquisition_mode" in record
+    assert type(record["acquisition_mode"]) is str
+    assert record["acquisition_mode"] == mode.value
+    assert "is_backfill" not in record
+    assert record["status"] == ACQUISITION_COMPLETE
+
+
+@pytest.mark.parametrize("status", [ACQUISITION_PENDING, ACQUISITION_COMPLETE])
+def test_both_record_states_carry_the_same_mode(status: str) -> None:
+    """A PENDING record that omitted the mode would let a repair complete an
+    acquisition whose declared intent was never written down."""
+    body = _acquisition_body(
+        retrieval(AcquisitionMode.BACKFILL),
+        "0" * 64,
+        7,
+        INGEST_DATE,
+        status=status,
+    )
+    assert body["acquisition_mode"] == "BACKFILL"
+    assert type(body["acquisition_mode"]) is str
+    assert "is_backfill" not in body
+
+
+def test_the_filesystem_body_reads_the_mode_only_from_the_retrieval() -> None:
+    """No second parameter, so there is no second source to disagree."""
+    parameters = set(inspect.signature(_acquisition_body).parameters)
+    assert "acquisition_mode" not in parameters
+    assert "is_backfill" not in parameters
+
+
+@pytest.mark.parametrize("mode", list(AcquisitionMode))
+def test_the_same_local_identity_with_the_same_mode_is_idempotent(
+    mode: AcquisitionMode, tmp_path: Path
+) -> None:
+    store, path = local_write(tmp_path, mode)
+    before = path.read_bytes()
+    again = store.write(
+        payload=SYNTHETIC_PAYLOAD,
+        retrieval=retrieval(mode, ingestion_run_id="synthetic-run-0001"),
+        ingest_date=INGEST_DATE,
+    )
+    assert again.content_written is False
+    assert path.read_bytes() == before
+
+
+def test_the_same_local_identity_with_a_different_mode_is_refused(tmp_path: Path) -> None:
+    """The contradiction the first revision could not detect.
+
+    ``_require_same_retrieval`` compares every field except ``status``, so once
+    the mode is in the body a restatement under a different one is caught by
+    machinery that already existed -- which is why the fix is one field rather
+    than a new rule.
+    """
+    store, path = local_write(tmp_path, AcquisitionMode.QUALIFICATION)
+    before = path.read_bytes()
+
+    with pytest.raises(AcquisitionIncompleteError, match="acquisition_mode"):
+        store.write(
+            payload=SYNTHETIC_PAYLOAD,
+            retrieval=retrieval(AcquisitionMode.BACKFILL, ingestion_run_id="synthetic-run-0001"),
+            ingest_date=INGEST_DATE,
+        )
+
+    assert path.read_bytes() == before, "the refused attempt must leave the record untouched"
+
+
+def test_the_object_store_refuses_the_same_change(tmp_path: Path) -> None:
+    """The same property on the other storage path, so neither is the only one
+    that holds it."""
+    store = InMemoryResearchObjectStore()
+    publish_bronze_payload(
+        store=store,
+        payload=SYNTHETIC_PAYLOAD,
+        retrieval=retrieval(AcquisitionMode.QUALIFICATION),
+    )
+    with pytest.raises(ObjectAlreadyExistsError):
+        publish_bronze_payload(
+            store=store,
+            payload=SYNTHETIC_PAYLOAD,
+            retrieval=retrieval(AcquisitionMode.BACKFILL),
+        )
+
+
+#: What both stores must agree on. Everything else is envelope.
+SHARED_ACQUISITION_FIELDS = (
+    "provider",
+    "dataset",
+    "requested_range",
+    "retrieved_at",
+    "source_schema_version",
+    "ingestion_run_id",
+    "content_sha256",
+    "byte_count",
+    "acquisition_mode",
+)
+
+
+@pytest.mark.parametrize("mode", list(AcquisitionMode))
+def test_the_two_stores_agree_on_the_shared_acquisition_fields(
+    mode: AcquisitionMode, tmp_path: Path
+) -> None:
+    """A real filesystem record against a real object-store record.
+
+    **Not** a whole-record equality: the two envelopes differ on purpose, and
+    asserting they are identical would either be false or force one store to
+    carry the other's fields. What must agree is the acquisition metadata they
+    both describe.
+    """
+    _, path = local_write(tmp_path, mode, run_id=f"synthetic-run-{mode.value.lower()}")
+    local = json.loads(path.read_text(encoding="utf-8"))
+
+    remote_store = InMemoryResearchObjectStore()
+    published = publish_bronze_payload(
+        store=remote_store,
+        payload=SYNTHETIC_PAYLOAD,
+        retrieval=retrieval(mode, ingestion_run_id=f"synthetic-run-{mode.value.lower()}"),
+    )
+    remote = json.loads(remote_store.read(published.acquisition_key).decode("utf-8"))
+
+    for field in SHARED_ACQUISITION_FIELDS:
+        assert local[field] == remote[field], f"{field} disagrees between the two stores"
+    assert local["acquisition_mode"] == remote["acquisition_mode"] == mode.value
+    assert "is_backfill" not in local and "is_backfill" not in remote
+
+
+def test_the_two_envelopes_differ_deliberately_and_the_difference_is_named() -> None:
+    """Documented rather than hidden.
+
+    The filesystem record carries ``status``, ``ingest_date`` and ``notes``: it
+    completes in two steps and is repaired in place, and ``notes`` belongs to the
+    A1 writer. The object-store record carries ``classification`` and
+    deliberately has **no** free-text field, because durable metadata on that path
+    has no place for human text.
+    """
+    local_only = {"status", "ingest_date", "notes"}
+    remote_only = {"classification"}
+
+    local_fields = set(
+        _acquisition_body(retrieval(), "0" * 64, 1, INGEST_DATE, status=ACQUISITION_COMPLETE)
+    )
+    remote_fields = set(
+        acquisition_record(retrieval=retrieval(), content_sha256="0" * 64, byte_count=1)
+    )
+
+    assert local_fields - remote_fields == local_only
+    assert remote_fields - local_fields == remote_only
+    assert set(SHARED_ACQUISITION_FIELDS) == local_fields & remote_fields
+    assert "notes" not in remote_fields, "the object-store record has no free-text field"
 
 
 def test_the_three_write_order_is_unchanged() -> None:

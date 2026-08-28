@@ -31,9 +31,16 @@ neutral layer as distinguishing *"a vendor backfill from an update"*.
 
 That is a complete description of production ingestion and an incomplete description of what this
 system does. A **qualification** retrieval — a bounded fetch whose purpose is to judge whether a
-provider's data behaves as documented — is neither. It extends no prior state, so it is not an
-update. It is not an authoritative historical load, so calling it a backfill overstates what the
-evidence is. A two-valued field forced it to claim to be one of them.
+provider's data behaves as documented — is neither. **A qualification retrieval is not an
+`UPDATE` because it is not an incremental production refresh. It may add qualification evidence,
+but it does not advance an approved production dataset.** It is not an authoritative historical
+load either, so calling it a backfill overstates what the evidence is. A two-valued field forced
+it to claim to be one of them.
+
+The distinction is about *production state*, not about emptiness. "Extends no prior state" would
+have been the wrong reason: a qualification run may well write evidence, and the first production
+`UPDATE` against an empty dataset extends nothing either. What separates them is whether the
+operation advances an approved production dataset.
 
 ADR-0012 recorded this as a **pre-execution blocker** and chose `False` as the value that could not
 be mistaken for authoritative historical loading, while stating plainly that the fit was wrong and
@@ -129,9 +136,18 @@ authoritative than the other.
   gets back;
 * validation admits exactly `QUALIFICATION`, `BACKFILL` or `UPDATE`, and refuses booleans, integers,
   `None`, wrong case, trailing whitespace, unknown tokens and the enum member itself;
-* local Bronze and object-store Bronze records agree, and a test compares them field for field;
+* the filesystem Bronze record and the object-store Bronze record **agree on the shared
+  acquisition fields** — provider, dataset, requested range, retrieved-at, source schema version,
+  ingestion run id, content digest, byte count and `acquisition_mode` — with identical exact mode
+  semantics on both. **Their envelopes are deliberately not identical** and no test asserts that
+  they are: the filesystem record additionally carries `status`, `ingest_date` and `notes`
+  because it completes in two steps and is repaired in place, and the object-store record
+  additionally carries `classification` and has no free-text field at all. Both records are
+  actually constructed and read back in tests — the filesystem one from a real store on disk,
+  not from the builder that wrote it;
 * the same acquisition identity with a **different** mode is a metadata contradiction and fails
-  closed; with the **same** mode and identical metadata it stays idempotent;
+  closed **on both storage paths**, proven against each; with the **same** mode and identical
+  metadata it stays idempotent, and a refused attempt leaves the stored record byte-identical;
 * claim → payload → acquisition-record ordering, append-only behaviour, payload bytes,
   classification, object-store security and CONTROL deferral are all untouched.
 
@@ -216,7 +232,9 @@ Enforced by test, not by review:
 | no default on any mode-bearing constructor or publication API | `dataclasses.MISSING` and `inspect.Parameter.empty` |
 | the run's mode is derived, not passed | `build_ingestion_run` has no such parameter |
 | the publication result does not duplicate it | field-set assertion |
-| exact durable JSON for each of the three modes | whole-record equality, local and object-store, compared field for field |
+| exact durable JSON for each of the three modes | whole-record pinning per store, plus an explicit comparison of the nine shared acquisition fields between a real filesystem record and an object-store record |
+| the two envelopes differ only as intended | the filesystem-only and object-store-only field sets are named and asserted, not assumed equal |
+| the filesystem record carries the mode in both states | `PENDING` and `COMPLETE` bodies, read back from disk |
 | the serialised value is a plain `str` | `type(...) is str` plus a JSON round-trip |
 | the retired key is refused, alone and alongside the new one | allowlist assertions |
 | no executable module names the retired identifier | AST scan over `src/`, docstrings stripped |
@@ -224,10 +242,33 @@ Enforced by test, not by review:
 | the mode is never derived conditionally | AST scan for conditional expressions assigned to it |
 | counts, ranges, payloads, datasets and timestamps do not change it | one retrieval built with three wildly different shapes |
 | the qualification runtime emits only `QUALIFICATION` | published records inspected; `BACKFILL`/`UPDATE` absent from its code |
-| the mode is unreachable from a plan or a caller | dataclass fields and constructor signatures |
+| the qualification runtime's mode is unreachable from `QualificationPlan` and from the runtime's execute caller | dataclass fields and constructor signatures |
 | a neutral synthetic caller can construct all three | parametrised publication |
-| same identity, changed mode → refused; same mode → idempotent | append-only store, both directions |
+| same identity, changed mode → refused; same mode → idempotent | both storage paths, both directions, with the refused attempt leaving the record byte-identical |
 | write ordering, `LICENSED` classification and PIT rules survive | unchanged assertions, re-run for every mode |
 
 **Every test is synthetic and offline. Nothing here contacts a provider, AWS or a network, and no
 credential, bucket, endpoint or real-data path becomes constructible.**
+
+### 5.1 A defect this ADR's first revision contained
+
+Recorded because it is the reason several rows above exist, and because a correction that hides
+what it corrected teaches a later reader nothing.
+
+**The first revision of this change updated the object-store acquisition record and left the
+filesystem one behind.** `RetrievalMetadata` carried the mode and `acquisition_record` emitted it,
+but `_acquisition_body` still returned the pre-migration shape, so the filesystem Bronze store
+recorded **no mode at all**. Worse, because `_require_same_retrieval` compares every recorded field
+except `status`, restating one acquisition identity under a **different** mode was **accepted rather
+than refused** on that path — the exact contradiction this ADR claims fails closed.
+
+**Nothing caught it, and the reason is instructive.** The test named as the local/object-store
+comparison compared `acquisition_record` against the store that `acquisition_record` had just
+written: both sides came from the object-store builder, and no test in the suite constructed a
+filesystem record at all. A whole suite can pass while a storage path is entirely unexercised, and a
+test's *name* is not evidence of its subject.
+
+The fix is one field, because the machinery that refuses the contradiction already existed and only
+needed the mode to be present to compare. The tests are the substantive part: a real `BronzeStore`
+on disk, records read back as bytes rather than as builder output, the shared fields compared across
+the two stores, the envelope difference named, and the changed-mode refusal proven on both paths.

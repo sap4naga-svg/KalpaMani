@@ -223,9 +223,10 @@ which conflated two different things: what a run delivered, and what the run was
 declared operation is `acquisition_mode` — `QUALIFICATION`, `BACKFILL` or `UPDATE` — stated by
 whoever governs the retrieval and **never inferred from the data**. This check records that
 late-arriving or newly-covered historical data appeared, which is worth knowing whatever the run
-was called, and is equally worth knowing when the two disagree. A `BACKFILL` that extends no
-coverage and an `UPDATE` that extends a lot are both real, and both are findings rather than
-contradictions to be resolved by rewriting one of them.
+was called, and is equally worth knowing when it sits oddly beside the declared mode. A
+`BACKFILL` may extend no coverage, and an `UPDATE` may extend substantial historical coverage.
+Neither observation rewrites or contradicts the declared acquisition mode; §4.2.4 emits a finding
+only when its historical-coverage-extension condition is satisfied.
 
 ### 4.3 Information-set profile
 
