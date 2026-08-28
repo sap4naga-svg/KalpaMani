@@ -39,7 +39,6 @@ def sharadar_retrieval_metadata(
     retrieved_at: datetime,
     ingestion_run_id: str,
     source_schema_version: str,
-    notes: str = "",
 ) -> RetrievalMetadata:
     """Describe one Sharadar retrieval in the repository's own vocabulary.
 
@@ -48,6 +47,11 @@ def sharadar_retrieval_metadata(
     ``SNAPSHOT`` is recorded for ``tickers``, which the vendor states has no time
     axis (`PSR-SHD-119`) -- an empty range there would read as an unknown window
     rather than an absent one.
+
+    **There is no ``notes`` parameter, deliberately.** ``RetrievalMetadata.notes``
+    exists for the A1 filesystem writer and is never read by the object-store
+    publisher, so a free-text note has no durable destination on this path. Not
+    offering the parameter is better than accepting one and dropping it.
     """
     return RetrievalMetadata(
         provider=PROVIDER,
@@ -56,7 +60,6 @@ def sharadar_retrieval_metadata(
         retrieved_at=retrieved_at,
         source_schema_version=source_schema_version,
         ingestion_run_id=ingestion_run_id,
-        notes=notes,
     )
 
 
@@ -69,7 +72,6 @@ def publish_sharadar_payload(
     ingestion_run_id: str,
     source_schema_version: str,
     is_backfill: bool,
-    notes: str = "",
 ) -> BronzePublication:
     """Publish one Sharadar payload byte for byte, with its acquisition record.
 
@@ -78,17 +80,17 @@ def publish_sharadar_payload(
     preserved as evidence, which is precisely the case where evidence matters.
 
     Raises:
-        ObjectAlreadyExistsError: if this acquisition identity is already recorded
-            with different metadata.
-        ProviderMetadataDisclosureError: if ``notes`` carries a credential, a URL,
-            a query string or a cloud identifier.
+        ObjectAlreadyExistsError: if this ``(digest, run id)`` is already claimed
+            by a different provider or dataset, or if this acquisition identity is
+            already recorded with different metadata.
+        ProviderMetadataDisclosureError: if a durable field falls outside its
+            declared grammar.
     """
     retrieval = sharadar_retrieval_metadata(
         request=request,
         retrieved_at=retrieved_at,
         ingestion_run_id=ingestion_run_id,
         source_schema_version=source_schema_version,
-        notes=notes,
     )
     return publish_bronze_payload(
         store=store, payload=payload, retrieval=retrieval, is_backfill=is_backfill
