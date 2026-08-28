@@ -79,7 +79,7 @@ def result(**overrides: Any) -> QualificationRunResult:
         "payloads_reused": 0,
         "already_complete": 0,
         "fetched_payload_bytes": one.byte_count,
-        "published_payload_bytes": one.byte_count,
+        "completed_payload_bytes": one.byte_count,
         "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (one,),
         "partial": False,
@@ -253,7 +253,7 @@ def test_an_outcome_is_frozen() -> None:
         ("completed_requests", "1"),
         ("acquisitions_recorded", -2),
         ("fetched_payload_bytes", -1),
-        ("published_payload_bytes", -1),
+        ("completed_payload_bytes", -1),
         ("run_byte_ceiling", 0),
         ("run_byte_ceiling", MAX_RUN_BYTES + 1),
         ("run_byte_ceiling", "many"),
@@ -275,12 +275,12 @@ def test_more_completed_than_planned_is_refused() -> None:
         result(planned_requests=0, completed_requests=1)
 
 
-def test_published_bytes_must_equal_the_completed_outcomes() -> None:
+def test_completed_bytes_must_equal_the_completed_outcomes() -> None:
     with pytest.raises(QualificationRuntimeError):
-        result(published_payload_bytes=999, fetched_payload_bytes=999)
+        result(completed_payload_bytes=999, fetched_payload_bytes=999)
 
 
-def test_fetched_bytes_may_exceed_published_bytes() -> None:
+def test_fetched_bytes_may_exceed_completed_bytes() -> None:
     """A payload that arrived and then failed to publish was still delivered."""
     one = outcome()
     built = QualificationRunResult(
@@ -292,17 +292,18 @@ def test_fetched_bytes_may_exceed_published_bytes() -> None:
         payloads_reused=0,
         already_complete=0,
         fetched_payload_bytes=one.byte_count * 2,
-        published_payload_bytes=one.byte_count,
+        completed_payload_bytes=one.byte_count,
         run_byte_ceiling=MAX_RUN_BYTES,
         outcomes=(one,),
         partial=True,
         publication_state_unknown=True,
     )
-    assert built.fetched_payload_bytes > built.published_payload_bytes
+    assert built.fetched_payload_bytes > built.completed_payload_bytes
 
 
-def test_fetched_bytes_below_published_bytes_is_refused() -> None:
-    """Everything published was fetched first, so the reverse is impossible."""
+def test_fetched_bytes_below_completed_bytes_is_refused() -> None:
+    """Every completed acquisition's payload was fetched first, so the reverse is
+    impossible."""
     with pytest.raises(QualificationRuntimeError):
         result(fetched_payload_bytes=1)
 
@@ -311,7 +312,7 @@ def test_fetched_bytes_above_the_run_ceiling_are_refused() -> None:
     with pytest.raises(QualificationRuntimeError):
         result(
             fetched_payload_bytes=100,
-            published_payload_bytes=42,
+            completed_payload_bytes=42,
             run_byte_ceiling=50,
         )
 
@@ -385,7 +386,7 @@ def test_duplicated_acquisition_identities_are_refused() -> None:
                 "acquisitions_recorded": 2,
                 "outcomes": (first, second),
                 "fetched_payload_bytes": first.byte_count * 2,
-                "published_payload_bytes": first.byte_count * 2,
+                "completed_payload_bytes": first.byte_count * 2,
             }
         )
 
@@ -408,7 +409,7 @@ def test_duplicated_request_coordinates_are_refused_even_with_distinct_ids() -> 
                 "acquisitions_recorded": 2,
                 "outcomes": (first, second),
                 "fetched_payload_bytes": first.byte_count * 2,
-                "published_payload_bytes": first.byte_count * 2,
+                "completed_payload_bytes": first.byte_count * 2,
             }
         )
 
@@ -446,7 +447,7 @@ def test_refused_must_be_empty() -> None:
         "payloads_reused": 0,
         "already_complete": 0,
         "fetched_payload_bytes": 0,
-        "published_payload_bytes": 0,
+        "completed_payload_bytes": 0,
         "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (),
         "partial": False,
@@ -462,7 +463,7 @@ def test_refused_must_be_empty() -> None:
             "completed_requests": 1,
             "acquisitions_recorded": 1,
             "fetched_payload_bytes": outcome().byte_count,
-            "published_payload_bytes": outcome().byte_count,
+            "completed_payload_bytes": outcome().byte_count,
         },
     ):
         with pytest.raises(QualificationRuntimeError):
@@ -500,7 +501,7 @@ def _baseline() -> dict[str, Any]:
         "payloads_reused": 0,
         "already_complete": 0,
         "fetched_payload_bytes": one.byte_count,
-        "published_payload_bytes": one.byte_count,
+        "completed_payload_bytes": one.byte_count,
         "run_byte_ceiling": MAX_RUN_BYTES,
         "outcomes": (one,),
         "partial": True,

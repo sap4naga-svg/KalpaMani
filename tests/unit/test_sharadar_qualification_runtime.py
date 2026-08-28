@@ -226,7 +226,7 @@ def test_exact_bytes_and_digests_are_preserved() -> None:
     assert outcome.content_sha256 == sha256_hex(malformed)
     assert outcome.byte_count == len(malformed)
     assert result.fetched_payload_bytes == len(malformed)
-    assert result.published_payload_bytes == len(malformed)
+    assert result.completed_payload_bytes == len(malformed)
 
 
 def test_every_outcome_is_licensed_and_provider_realistic() -> None:
@@ -510,7 +510,7 @@ def test_a_partial_run_states_that_it_is_partial_rather_than_implying_a_rollback
     assert result.partial is True
     assert result.acquisitions_recorded == 1
     assert len(result.outcomes) == 1
-    assert result.published_payload_bytes == len(PAYLOAD_A)
+    assert result.completed_payload_bytes == len(PAYLOAD_A)
     assert result.fetched_payload_bytes == len(PAYLOAD_A), (
         "the second request failed before returning a payload"
     )
@@ -563,13 +563,106 @@ def test_a_raising_clock_is_refused_without_disclosing_its_message() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_response_over_the_plans_ceiling_halts_before_publication() -> None:
-    engine, store, _ = runtime([b"x" * 64])
+# ---------------------------------------------------------------------------
+# The per-response ceiling binds before a body is read
+# ---------------------------------------------------------------------------
+
+
+def test_a_client_that_could_exceed_the_plans_response_ceiling_is_refused_first() -> None:
+    """**A ceiling has to bind before the response exists.**
+
+    An earlier revision checked the plan's ceiling only after ``fetch()``
+    returned, so a plan asking for 32-byte responses had already *received* a
+    larger body before refusing it. That is a post-access complaint, not a
+    ceiling.
+    """
+    built, transport = client([ok(PAYLOAD_A)], max_response_bytes=64)
+    store = RecordingStore()
+    engine = QualificationRuntime(client=built, store=store, clock=FixedClock())
+
+    with pytest.raises(QualificationRuntimeError) as caught:
+        engine.execute(snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=32)))
+
+    assert caught.value.failure is QualificationFailure.RESPONSE_BYTE_CEILING_UNSATISFIABLE
+    assert transport.call_count == 0, "no provider call"
+    assert store.call_count == 0, "no store call"
+
+
+def test_an_equal_client_and_plan_response_ceiling_is_permitted() -> None:
+    built, transport = client([ok(b"x" * 30)], max_response_bytes=32)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
     result = engine.execute(
         snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=32))
     )
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert transport.call_count == 1
+
+
+def test_a_stricter_client_ceiling_is_permitted_and_stays_effective() -> None:
+    """The transport is the thing that stops reading, so the stricter of the two
+    is the one that actually binds."""
+    built, transport = client([ok(b"x" * 30)], max_response_bytes=32)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    result = engine.execute(
+        snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=64))
+    )
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert built.max_response_bytes == 32 == transport.max_response_bytes
+
+
+def test_neither_ceiling_is_silently_clamped() -> None:
+    built, _ = client([], max_response_bytes=64)
+    plan = snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=32))
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    with pytest.raises(QualificationRuntimeError):
+        engine.validate(plan)
+    assert built.max_response_bytes == 64, "the client's ceiling is untouched"
+    assert plan.limits.max_response_bytes == 32, "the plan's ceiling is untouched"
+
+
+def test_a_transport_that_breaks_its_declared_ceiling_is_stopped_before_publication() -> None:
+    """**Defence in depth, and its limit stated.**
+
+    The pre-access guarantee rests on the transport honouring what it declares.
+    The accepted ``UrllibTransport`` does -- it reads ``max_response_bytes + 1``
+    and refuses anything longer. This synthetic one declares 32 and returns 64,
+    which is a broken contract rather than a policy breach, and the post-fetch
+    length check catches it before anything is stored.
+    """
+    oversized = b"x" * 64
+    built, transport = client([ok(oversized)], max_response_bytes=32)
+    store = RecordingStore()
+    engine = QualificationRuntime(client=built, store=store, clock=FixedClock())
+
+    result = engine.execute(
+        snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=32))
+    )
+
     assert result.failure is QualificationFailure.RESPONSE_TOO_LARGE
+    assert transport.call_count == 1
     assert store.call_count == 0, "nothing may be stored once the ceiling is exceeded"
+    # The bytes were delivered, so they are counted even though nothing completed.
+    assert result.fetched_payload_bytes == len(oversized)
+    assert result.completed_payload_bytes == 0
+    assert result.publication_state_unknown is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        QualificationFailure.RESPONSE_BYTE_CEILING_UNSATISFIABLE,
+        QualificationFailure.RUN_BYTE_CEILING_UNSATISFIABLE,
+    ],
+)
+def test_a_ceiling_refusal_discloses_no_dependency_text(
+    failure: QualificationFailure,
+) -> None:
+    error = QualificationRuntimeError(failure)
+    rendered = f"{error!r} {error!s}"
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+    assert rendered.count(failure.value) >= 1
+    assert error.__cause__ is None
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +715,7 @@ def test_a_fetched_payload_is_counted_even_when_its_publication_fails() -> None:
 
     assert result.failure is QualificationFailure.STORAGE_REFUSED
     assert result.completed_requests == 0
-    assert result.published_payload_bytes == 0
+    assert result.completed_payload_bytes == 0
     assert result.fetched_payload_bytes == len(PAYLOAD_A)
     assert result.publication_state_unknown is True
 
@@ -638,11 +731,101 @@ def test_fetched_bytes_never_exceed_the_run_ceiling() -> None:
     assert result.run_byte_ceiling == ceiling
 
 
-def test_published_bytes_are_derived_only_from_completed_outcomes() -> None:
+def test_completed_bytes_are_derived_only_from_completed_outcomes() -> None:
     engine, _, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C])
     result = engine.execute(three_dataset_plan(SUBJECT_A))
-    assert result.published_payload_bytes == sum(o.byte_count for o in result.outcomes)
-    assert result.fetched_payload_bytes == result.published_payload_bytes
+    assert result.completed_payload_bytes == sum(o.byte_count for o in result.outcomes)
+    assert result.fetched_payload_bytes == result.completed_payload_bytes
+
+
+# ---------------------------------------------------------------------------
+# `completed_payload_bytes` measures acquisition completion, not storage writes
+# ---------------------------------------------------------------------------
+
+
+def test_completed_bytes_count_a_fully_new_acquisition() -> None:
+    engine, _, _ = runtime([PAYLOAD_A])
+    result = engine.execute(snapshot_plan(SUBJECT_A))
+    assert result.outcomes[0].disposition is AcquisitionDisposition.FULLY_NEW
+    assert result.completed_payload_bytes == len(PAYLOAD_A)
+
+
+def test_completed_bytes_count_a_reused_payload() -> None:
+    """`PAYLOAD_REUSED` wrote no payload object, and its bytes still count.
+
+    This is the case the old name got wrong: nothing was *published* here, but an
+    acquisition completed, and that is what the number measures.
+    """
+    engine, _, _ = runtime([PAYLOAD_A, PAYLOAD_A])
+    result = engine.execute(snapshot_plan(SUBJECT_A, SUBJECT_B))
+    reused = [o for o in result.outcomes if o.disposition is AcquisitionDisposition.PAYLOAD_REUSED]
+    assert len(reused) == 1
+    assert reused[0].payload_written is False
+    assert result.completed_payload_bytes == len(PAYLOAD_A) * 2
+
+
+def test_completed_bytes_count_an_already_complete_acquisition() -> None:
+    """`ALREADY_COMPLETE` wrote *nothing at all*, and its bytes still count.
+
+    The strongest form of the same point: this execution stored zero bytes and
+    the number is not zero, because it measures completion rather than writes.
+    """
+    store = RecordingStore()
+    first, _, _ = runtime([PAYLOAD_A], store=store)
+    first.execute(snapshot_plan(SUBJECT_A))
+
+    second, _, _ = runtime([PAYLOAD_A], store=store)
+    result = second.execute(snapshot_plan(SUBJECT_A))
+
+    assert result.outcomes[0].disposition is AcquisitionDisposition.ALREADY_COMPLETE
+    assert (
+        result.outcomes[0].claim_written,
+        result.outcomes[0].payload_written,
+        result.outcomes[0].acquisition_written,
+    ) == (False, False, False)
+    assert result.completed_payload_bytes == len(PAYLOAD_A)
+
+
+def test_completed_bytes_count_a_completion_of_a_prior_partial() -> None:
+    """`COMPLETED_PRIOR_PARTIAL` wrote some objects and found others present."""
+    store = StagedFailureStore(
+        fail_on_write=2,
+        error=ObjectStoreBackendError(
+            operation=ObjectStoreOperation.PUT, failure=ObjectStoreFailure.TRANSIENT
+        ),
+    )
+    engine, _, _ = runtime([PAYLOAD_A], store=store)
+    interrupted = engine.execute(snapshot_plan(SUBJECT_A))
+    assert interrupted.completed_payload_bytes == 0, "nothing completed"
+    assert interrupted.fetched_payload_bytes == len(PAYLOAD_A), "the bytes still arrived"
+
+    store.fail_on_write = 0
+    resumed, _, _ = runtime([PAYLOAD_A], store=store)
+    result = resumed.execute(snapshot_plan(SUBJECT_A))
+
+    assert result.outcomes[0].disposition is AcquisitionDisposition.COMPLETED_PRIOR_PARTIAL
+    assert result.completed_payload_bytes == len(PAYLOAD_A)
+
+
+def test_completed_bytes_are_not_a_count_of_bytes_written() -> None:
+    """The whole distinction, in one assertion: a run that wrote nothing reports a
+    non-zero completed total."""
+    store = RecordingStore()
+    first, _, _ = runtime([PAYLOAD_A], store=store)
+    first.execute(snapshot_plan(SUBJECT_A))
+    writes_before = store.call_count
+
+    second, _, _ = runtime([PAYLOAD_A], store=store)
+    result = second.execute(snapshot_plan(SUBJECT_A))
+
+    newly_written = sum(
+        1
+        for outcome in result.outcomes
+        if outcome.claim_written or outcome.payload_written or outcome.acquisition_written
+    )
+    assert newly_written == 0, "this execution wrote nothing"
+    assert store.call_count > writes_before, "it did attempt the three conditional writes"
+    assert result.completed_payload_bytes == len(PAYLOAD_A)
 
 
 def test_a_headroom_refusal_discloses_nothing() -> None:
@@ -828,7 +1011,7 @@ def test_a_refused_result_reports_zero_of_everything() -> None:
         result.completed_requests,
         result.acquisitions_recorded,
         result.fetched_payload_bytes,
-        result.published_payload_bytes,
+        result.completed_payload_bytes,
     ) == (0, 0, 0, 0)
     assert result.outcomes == ()
     assert result.partial is False

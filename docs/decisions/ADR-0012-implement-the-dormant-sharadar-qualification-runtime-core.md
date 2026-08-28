@@ -114,8 +114,8 @@ Nine properties, each with a test behind it:
 | datasets | 3 | There are three Stage-3A tables. Present so the table is complete, and so a fourth appearing in the enum does not silently widen a plan |
 | pages per request | 4 | Pagination is how a bounded request becomes unbounded. Four pages is a sample; forty is a download, and a run needing more is asking Q8's empirical question, which is not authorized |
 | requests | 96 | The product of the three above, stated as its own constant so the number a reviewer checks is the number the code enforces |
-| per-response bytes | inherited from the transport's own default | Tied rather than restated, so the plan cannot authorize a response the transport would refuse and the two cannot drift |
-| run bytes | 512 MiB | A per-response ceiling bounds one answer; without this, ninety-six maximum-size answers are still authorized. Enforced as bytes are published, not estimated |
+| per-response bytes | inherited from the transport's own default | Tied rather than restated, so the two cannot drift. Checked **before the first request**: a client whose declared ceiling exceeds the plan's is refused during validation, because a ceiling that only complains after the body arrives is not a ceiling |
+| run bytes | 512 MiB | A per-response ceiling bounds one answer; without this, ninety-six maximum-size answers are still authorized. Budgeted as **pre-request headroom** against successful provider payload bytes, counted the moment they are returned and **before** publication — a publication failure does not erase them. It makes no claim about HTTP framing, failed retry bodies or wire traffic |
 | retry budget | 32 | The vendor publishes no rate limit (`PSR-SHD-109`), and *no documented limit is not an absent limit*. Checked against the **injected client's own attempt policy**, so it bounds what will happen rather than describing an intention |
 
 ### One request is one acquisition
@@ -214,7 +214,22 @@ It is **not** a bound on HTTP framing, on headers, on the bodies of failed or re
 on total network traffic. The client exposes none of those, and a ceiling that claimed to cover them
 would be describing something nobody here can measure.
 
-It is enforced as **headroom, before each request is sent**:
+**The per-response ceiling binds before a body is read.** A client whose declared
+`max_response_bytes` exceeds `plan.limits.max_response_bytes` is refused during validation, with
+zero provider and zero store calls. An earlier revision checked the plan's ceiling only *after*
+`fetch()` returned, so a plan asking for 32-byte responses had already received a larger body before
+refusing it — a post-access complaint, not a ceiling.
+
+**Neither value is clamped.** The transport is the thing that stops reading, so a caller wanting a
+lower ceiling must construct the transport with one. Silently lowering either number would leave the
+run behaving differently from what its plan says.
+
+**That guarantee rests on the transport honouring what it declares.** The accepted `UrllibTransport`
+does — it reads `max_response_bytes + 1` and refuses anything longer. The post-fetch length check is
+retained as defence against an injected transport that does not, and is defence in depth rather than
+the ceiling itself.
+
+The run ceiling is enforced separately, as **headroom, before each request is sent**:
 
 ```
 fetched_payload_bytes + client.max_response_bytes  <=  plan.limits.max_run_bytes
@@ -231,9 +246,18 @@ max_run_bytes` — the run is **refused during validation**, before the first pr
 because it could never send even its first request within the ceiling it declares.
 
 **Two byte totals, because they answer different questions.** `fetched_payload_bytes` is what the
-provider handed back and is what the ceiling bounds; `published_payload_bytes` is derived only from
-completed outcomes. A single total could not report a run that fetched three payloads and published
-two, which is exactly the run a reader most needs described.
+provider handed back and is what the run ceiling bounds. `completed_payload_bytes` is *the sum of
+payload byte counts for requests whose acquisition publication completed during this execution,
+regardless of whether the payload object was newly written, reused, or already complete.*
+
+**It is deliberately not named for storage**, and must never be described as bytes written, stored,
+transferred or newly published. An earlier revision named it for publication, which was wrong for two
+of the four dispositions: `PAYLOAD_REUSED` counts bytes that were already stored, and
+`ALREADY_COMPLETE` counts bytes where this execution wrote nothing at all. It measures **acquisition
+completion**, not new storage.
+
+A single total could not report a run that fetched three payloads and completed two, which is
+exactly the run a reader most needs described.
 
 ### `is_backfill = False` is a placeholder, and a **pre-execution blocker**
 
@@ -403,6 +427,10 @@ Enforced by test, not by review:
 | a failure at each of the three publication writes halts and reports unknown state | fault injected at write 1, 2 and 3 |
 | the run stops **before** a request whose largest possible answer it cannot afford | headroom check; recorded transport call count |
 | a client response ceiling above the run ceiling is refused during validation | zero provider and zero store calls |
+| a client response ceiling above the **plan's response** ceiling is refused during validation | zero provider and zero store calls; neither value clamped |
+| an equal ceiling is permitted, and a stricter client ceiling stays effective | both cases run to completion |
+| a transport that returns more than it declares is stopped before publication | synthetic transport declaring 32 and returning 64 |
+| `completed_payload_bytes` counts a reused payload and an already-complete acquisition | all four dispositions, including one execution that wrote nothing and still reports a non-zero total |
 | a fetched payload is counted even when its publication fails | fetched and published totals asserted separately |
 | fetched bytes never exceed the run ceiling | asserted against the plan's own ceiling |
 | duplicate acquisition identities are refused | two outcomes sharing one identity |

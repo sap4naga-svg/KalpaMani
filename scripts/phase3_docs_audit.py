@@ -4060,9 +4060,9 @@ def main() -> int:
             "a run that could never send its first request should not send it",
         )
         f.check(
-            "ADR-0012 distinguishes fetched bytes from published bytes",
-            "Two byte totals" in flat12 and "fetched three payloads and published two" in flat12,
-            "one total cannot report a run that fetched more than it published",
+            "ADR-0012 distinguishes fetched bytes from completed bytes",
+            "Two byte totals" in flat12 and "fetched three payloads and completed two" in flat12,
+            "one total cannot report a run that fetched more than it completed",
         )
         f.check(
             "ADR-0012 records the result-integrity invariants",
@@ -4130,7 +4130,7 @@ def main() -> int:
         f.check(
             "the runtime reports fetched and published bytes separately",
             "fetched_payload_bytes" in runtime_source
-            and "published_payload_bytes" in runtime_source
+            and "completed_payload_bytes" in runtime_source
             and "total_bytes" not in _executable_python(QUALIFICATION_RUNTIME),
             "one total cannot report a run that fetched more than it published",
         )
@@ -4239,6 +4239,82 @@ def main() -> int:
             f"{name} records the result-integrity invariants",
             "Result integrity" in body and "strictly fewer completed than planned" in flat,
             "a result that cannot describe one valid execution is not evidence",
+        )
+
+    # -- correction round 3: pre-access ceiling and byte-evidence naming -------
+    if ADR_RUNTIME.is_file():
+        f.check(
+            "ADR-0012 no longer says the run ceiling is enforced as bytes are published",
+            "Enforced as bytes are published" not in adr12,
+            "the ceiling is budgeted as pre-request headroom, and the old sentence contradicts it",
+        )
+        f.check(
+            "ADR-0012 makes no claim that the run ceiling is enforced through publication",
+            "enforced through publication" not in flat12.lower()
+            and "enforced at publication" not in flat12.lower(),
+            "bytes are counted when they arrive, before anything is published",
+        )
+        f.check(
+            "ADR-0012 records the per-response ceiling as binding before a body is read",
+            "binds before a body is read" in flat12
+            and "post-access complaint, not a ceiling" in flat12,
+            "a ceiling that only complains after the body arrives is not a ceiling",
+        )
+        f.check(
+            "ADR-0012 records that neither ceiling is clamped",
+            "Neither value is clamped" in flat12,
+            "silently lowering either would make the run behave unlike its plan",
+        )
+        f.check(
+            "ADR-0012 states that the guarantee rests on the transport's declaration",
+            "rests on the transport honouring what it declares" in flat12
+            and "defence in depth rather than the ceiling itself" in flat12,
+            "a guarantee whose dependency is unstated is a guarantee nobody can check",
+        )
+        f.check(
+            "ADR-0012 defines completed payload bytes as acquisition completion",
+            "regardless of whether the payload object was newly written, reused, or already"
+            in flat12,
+            "the number measures completion, not new storage",
+        )
+        f.check(
+            "ADR-0012 forbids describing completed bytes as bytes written or stored",
+            "never be described as bytes written, stored, transferred or newly published" in flat12,
+            "the old name read as 'bytes this run wrote' and was wrong for two dispositions",
+        )
+
+    if QUALIFICATION_RUNTIME.is_file():
+        round3_source = read(QUALIFICATION_RUNTIME)
+        f.check(
+            "the runtime refuses a client response ceiling above the plan's",
+            "self._client.max_response_bytes > plan.limits.max_response_bytes" in round3_source
+            and "RESPONSE_BYTE_CEILING_UNSATISFIABLE" in round3_source,
+            "the ceiling has to bind before the response exists",
+        )
+        f.check(
+            "the runtime keeps the post-fetch length check as defence in depth",
+            "len(payload) > plan.limits.max_response_bytes" in round3_source
+            and "Defence in depth, not the ceiling" in round3_source,
+            "an injected transport may break the contract it declares",
+        )
+        f.check(
+            "no source, test or audit still names a published-payload total",
+            not any(
+                "published_payload" in read(path)
+                for path in (
+                    QUALIFICATION_RUNTIME,
+                    QUALIFICATION_PLAN,
+                    ADR_RUNTIME,
+                    REPO_ROOT / "CLAUDE.md",
+                    REPO_ROOT / "README.md",
+                )
+            ),
+            "the name read as 'bytes this run wrote', which two dispositions contradict",
+        )
+        f.check(
+            "the runtime names the total for completion rather than storage",
+            "completed_payload_bytes" in round3_source,
+            "it counts acquisitions that completed, including ones that wrote nothing",
         )
 
     # ---------------------------------------------------------------- verdict

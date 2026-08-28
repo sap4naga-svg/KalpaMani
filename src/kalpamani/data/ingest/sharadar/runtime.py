@@ -51,6 +51,18 @@ retried responses, or on total network traffic. The client does not expose any o
 those, and a ceiling that claimed to cover them would be describing something
 nobody here can measure.
 
+**The per-response ceiling binds before a body is read, not after.**
+:meth:`QualificationRuntime.validate` refuses a client whose declared ceiling
+exceeds the plan's, so a plan asking for 32-byte responses cannot be handed a
+transport that would return more. Neither value is clamped: the transport is the
+thing that stops reading, so a caller wanting a lower ceiling must build the
+transport with one.
+
+**That guarantee rests on the transport honouring what it declares.** The accepted
+:class:`~kalpamani.data.ingest.sharadar.transport.UrllibTransport` does -- it reads
+``max_response_bytes + 1`` and refuses anything longer -- and the post-fetch length
+check here remains as defence against an injected transport that does not.
+
 **A publication that raises leaves durable state this module cannot describe.**
 The three writes are separate appends. A failure on the second or third may have
 committed the first; an ambiguous backend failure may not prove whether *any* of
@@ -177,6 +189,7 @@ class QualificationFailure(StrEnum):
     RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
     RUN_BYTE_HEADROOM_EXHAUSTED = "RUN_BYTE_HEADROOM_EXHAUSTED"
     RUN_BYTE_CEILING_UNSATISFIABLE = "RUN_BYTE_CEILING_UNSATISFIABLE"
+    RESPONSE_BYTE_CEILING_UNSATISFIABLE = "RESPONSE_BYTE_CEILING_UNSATISFIABLE"
     PAYLOAD_NOT_EXACT_BYTES = "PAYLOAD_NOT_EXACT_BYTES"
     CONTENT_CONFLICT = "CONTENT_CONFLICT"
     STORAGE_REFUSED = "STORAGE_REFUSED"
@@ -375,12 +388,25 @@ class QualificationRunResult:
     facts about a failed run from counts that a bug could make agree.
 
     **Two byte totals, because they answer different questions.**
-    ``fetched_payload_bytes`` is what the provider actually handed back -- the
-    number the run ceiling bounds -- and it includes a payload that arrived and
-    then failed to publish. ``published_payload_bytes`` is what reached the store,
-    derived only from completed outcomes. A single total could not report a run
-    that fetched three payloads and published two, which is exactly the run a
-    reader most needs described.
+
+    ``fetched_payload_bytes``
+        What the provider actually handed back -- the number the run ceiling
+        bounds. It includes a payload that arrived and then failed to publish.
+    ``completed_payload_bytes``
+        The sum of payload byte counts for requests whose acquisition
+        publication **completed** during this execution, **regardless of whether
+        the payload object was newly written, reused, or already complete**.
+
+    ``completed_payload_bytes`` is deliberately *not* named for storage. An
+    earlier revision named it for publication, which read as "bytes this run
+    wrote" and was wrong for two of the four dispositions: ``PAYLOAD_REUSED``
+    counts bytes that were already stored, and ``ALREADY_COMPLETE`` counts bytes
+    where this execution wrote nothing at all. It measures **acquisition
+    completion**, not new storage, and must never be described as bytes written,
+    stored, transferred or newly published.
+
+    A single total could not report a run that fetched three payloads and
+    completed two, which is exactly the run a reader most needs described.
 
     :meth:`__post_init__` re-derives every count from ``outcomes`` and refuses a
     result whose summary and detail disagree, because a summary nobody checked is
@@ -395,7 +421,7 @@ class QualificationRunResult:
     payloads_reused: int
     already_complete: int
     fetched_payload_bytes: int
-    published_payload_bytes: int
+    completed_payload_bytes: int
     run_byte_ceiling: int
     outcomes: tuple[RequestOutcome, ...]
     partial: bool
@@ -426,7 +452,7 @@ class QualificationRunResult:
             self.payloads_reused,
             self.already_complete,
             self.fetched_payload_bytes,
-            self.published_payload_bytes,
+            self.completed_payload_bytes,
         ):
             _exact_count(count)
         if not 1 <= _exact_count(self.run_byte_ceiling) <= MAX_RUN_BYTES:
@@ -454,12 +480,13 @@ class QualificationRunResult:
         if len(coordinates) != len(self.outcomes):
             raise _refuse_result() from None
 
-        published = sum(outcome.byte_count for outcome in self.outcomes)
-        if self.published_payload_bytes != published:
+        completed = sum(outcome.byte_count for outcome in self.outcomes)
+        if self.completed_payload_bytes != completed:
             raise _refuse_result() from None
-        if self.fetched_payload_bytes < self.published_payload_bytes:
-            # Everything published was fetched first, so the reverse is impossible
-            # and a result asserting it is not describing a run.
+        if self.fetched_payload_bytes < self.completed_payload_bytes:
+            # Every completed acquisition's payload was fetched first, so the
+            # reverse is impossible and a result asserting it is not describing a
+            # run.
             raise _refuse_result() from None
         if self.fetched_payload_bytes > self.run_byte_ceiling:
             raise _refuse_result() from None
@@ -508,7 +535,7 @@ class QualificationRunResult:
                 or self.outcomes
                 or self.completed_requests
                 or self.fetched_payload_bytes
-                or self.published_payload_bytes
+                or self.completed_payload_bytes
             ):
                 raise _refuse_result() from None
         if self.publication_state_unknown and self.outcome is not QualificationOutcome.HALTED:
@@ -565,7 +592,8 @@ class QualificationRuntime:
         checked without a run. Everything checkable is checked here: the plan's
         own rules at construction, the retry budget against the *injected
         client's* attempt policy, the request count against the plan's ceiling,
-        and that every request derives a distinct acquisition identity.
+        that every request derives a distinct acquisition identity, and that the
+        client's own per-response ceiling is no larger than the plan's.
 
         Raises:
             QualificationPlanError: for any plan defect, including a retry budget
@@ -573,7 +601,11 @@ class QualificationRuntime:
                 does not separate two requests.
             QualificationRuntimeError: ``DEPENDENCY_MALFORMED`` if ``plan`` is not
                 an exact :class:`QualificationPlan`, or if the injected clock
-                cannot answer with an aware ``datetime``.
+                cannot answer with an aware ``datetime``;
+                ``RESPONSE_BYTE_CEILING_UNSATISFIABLE`` if the client could return
+                a body larger than the plan permits;
+                ``RUN_BYTE_CEILING_UNSATISFIABLE`` if one response could exhaust
+                the whole run budget.
         """
         if type(plan) is not QualificationPlan:
             raise QualificationRuntimeError(QualificationFailure.DEPENDENCY_MALFORMED) from None
@@ -599,6 +631,21 @@ class QualificationRuntime:
             # two retrievals sharing one durable record -- is exactly the defect
             # this identity model exists to remove.
             raise QualificationPlanError(QualificationDefect.IDENTITY_MALFORMED) from None
+        if self._client.max_response_bytes > plan.limits.max_response_bytes:
+            # **A per-response ceiling has to bind before the response exists.**
+            # An earlier revision checked the plan's ceiling only after
+            # `fetch()` returned, so a plan lowering it to 32 bytes while its
+            # transport could still return megabytes had already *received* the
+            # larger body before refusing it. That is a post-access complaint,
+            # not a ceiling.
+            #
+            # Neither value is clamped. A caller that wants a lower ceiling must
+            # build the transport with one: the transport is the thing that
+            # stops reading, so it is the only place the limit can actually take
+            # effect.
+            raise QualificationRuntimeError(
+                QualificationFailure.RESPONSE_BYTE_CEILING_UNSATISFIABLE
+            ) from None
         if self._client.max_response_bytes > plan.limits.max_run_bytes:
             # A single answer could exhaust the whole run's budget, so the run
             # could never send even its first request within the ceiling it
@@ -689,6 +736,11 @@ class QualificationRuntime:
             fetched_bytes += len(payload)
 
             if len(payload) > plan.limits.max_response_bytes:
+                # **Defence in depth, not the ceiling.** The ceiling is enforced
+                # in `validate()`, before any body is read. This catches an
+                # injected transport that returned more than it declared -- a
+                # broken contract rather than a policy breach -- and the bytes
+                # are already counted above, because they were already delivered.
                 return self._halted(
                     QualificationFailure.RESPONSE_TOO_LARGE, plan, outcomes, fetched_bytes
                 )
@@ -778,7 +830,7 @@ class QualificationRuntime:
             payloads_reused=_reused(outcomes),
             already_complete=_already(outcomes),
             fetched_payload_bytes=fetched_bytes,
-            published_payload_bytes=sum(outcome.byte_count for outcome in outcomes),
+            completed_payload_bytes=sum(outcome.byte_count for outcome in outcomes),
             run_byte_ceiling=plan.limits.max_run_bytes,
             outcomes=tuple(outcomes),
             partial=False,
@@ -837,7 +889,7 @@ class QualificationRuntime:
             payloads_reused=_reused(listed),
             already_complete=_already(listed),
             fetched_payload_bytes=fetched_bytes,
-            published_payload_bytes=sum(outcome.byte_count for outcome in listed),
+            completed_payload_bytes=sum(outcome.byte_count for outcome in listed),
             run_byte_ceiling=plan.limits.max_run_bytes,
             outcomes=tuple(listed),
             partial=True,
@@ -891,7 +943,7 @@ def refused_result(
         payloads_reused=0,
         already_complete=0,
         fetched_payload_bytes=0,
-        published_payload_bytes=0,
+        completed_payload_bytes=0,
         run_byte_ceiling=ceiling,
         outcomes=(),
         partial=False,
