@@ -1,8 +1,39 @@
 # Phase 3 — Provider and Licensing Decision Packet (G1 / G3)
 
-**Status: EVIDENCE AND RECOMMENDATION. NO DECISION IS TAKEN HERE.**
+> ## SUPERSEDED IN PART — 2026-08-27
+>
+> **The recommendation in §1 — *B, need written licensing clarification first* — is
+> SUPERSEDED by the owner's decision recorded in
+> [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md).**
+>
+> The owner has **accepted the published Sharadar Personal Use License** for individual personal
+> research, personal backtesting, programmatic API use, and automated trading of the owner's own
+> account where the published documentation permits it. **A vendor licensing email is not
+> required.** The Q1–Q8 clarification draft is **CANCELLED — NOT SENT — historical evidence
+> only**; it is retained, not deleted, because Q7 (bar origin) and Q8 (Full History depth) must
+> still be answered before any purchase.
+>
+> | | |
+> |---|---|
+> | **G3** — vendor licensing, Sharadar personal use | **CLOSED** by ADR-0008 |
+> | **G1** — provider selection / qualification | **OPEN** |
+> | **G2 · G4 · G5 · G6 · G7** | **OPEN** |
+> | Sharadar | **a qualification candidate — NOT SELECTED** |
+> | ADR-0005 | **PROPOSED** |
+> | Purchase · subscription · trial · vendor account · private API key | **NONE — not authorized** |
+>
+> **Everything else in this document stands.** The evidence, the licence findings, the P1–P9
+> matrix, the cost comparison and the alternative-provider analysis are unchanged and were not
+> rewritten to agree with the decision. In particular the three findings that produced
+> recommendation B — the §10 deletion surface, the §8 disclosure limb, and an FAQ-sourced core
+> permission under §18 amendable terms — **survive as accepted constraints**, recorded in
+> ADR-0008 §3 and §7. A decision to proceed is not a finding that the concerns were wrong.
 
-**G1 remains OPEN. G3 remains OPEN. ADR-0005 remains PROPOSED.**
+**Status: EVIDENCE AND RECOMMENDATION. NO DECISION IS TAKEN HERE** — the decision was taken
+separately, in [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md).
+
+**G1 remains OPEN. ADR-0005 remains PROPOSED. G3 is CLOSED by ADR-0008 for Sharadar personal
+use** — and reopens for any replacement provider.
 **Nothing has been purchased, trialled or credentialed. No vendor account exists. No API key
 has been requested, generated, entered or stored. No vendor data has been retrieved.**
 
@@ -24,6 +55,11 @@ government documentation. Every provider claim carries a claim id resolving to
 ## 1. Executive recommendation
 
 ### **B — NEED WRITTEN LICENSING CLARIFICATION FIRST**
+
+> **SUPERSEDED by [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md).** The owner accepted the published terms instead and
+> cancelled the clarification message. The analysis below is retained unaltered as the evidence
+> the decision was taken against; its three findings are carried forward as accepted constraints,
+> not as resolved doubts.
 
 Sharadar Direct plus SEC EDGAR **remains the right candidate stack** and no alternative
 displaces it (§8). The obstacle is not fitness. It is that two clauses of the governing licence,
@@ -127,7 +163,7 @@ unchanged by this document.
 | ADR-0006 | ACCEPTED (2026-08-27) |
 | **G1** provider selection | **OPEN** |
 | **G2** production information-set profile | **OPEN** |
-| **G3** vendor licensing | **OPEN** |
+| **G3** vendor licensing | **CLOSED** for Sharadar personal use — [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md), 2026-08-27. **OPEN as recorded below**, which is the state this packet's evidence was gathered in |
 | **G4** analyst-estimate gap | **OPEN** |
 | **G5** borrow-history qualification | **OPEN** |
 | **G6** options overlay | **OPEN** |
@@ -936,8 +972,11 @@ Nothing here authorizes, and nothing here has performed:
 > implementation · Phase 3B, 3C or 3D implementation · closing G1 or G3 · accepting ADR-0005 ·
 > strategy, Brain, scanner or factor work · broker or LEAN activity of any kind
 
-**Gate status, unchanged by this document: G1 OPEN · G2 OPEN · G3 OPEN · G4 OPEN · G5 OPEN ·
-G6 OPEN · G7 OPEN.**
+**Gate status, unchanged by this document.** This packet closed nothing. The current map,
+after [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md):
+
+**G1 OPEN · G2 OPEN · G3 CLOSED (Sharadar personal use) · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN.**
+
 **ADR-0005 remains PROPOSED. Live trading remains HARD-DISABLED.**
 
 **Activity record for this round:**

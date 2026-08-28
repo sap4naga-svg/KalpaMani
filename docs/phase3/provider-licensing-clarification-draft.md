@@ -1,6 +1,25 @@
-# Phase 3 — Provider Licensing Clarification (DRAFT — NOT SENT)
+# Phase 3 — Provider Licensing Clarification (CANCELLED — NOT SENT)
 
-## STATUS: **DRAFT ONLY. NOT SENT. NO PROVIDER HAS BEEN CONTACTED.**
+> # CANCELLED — NOT SENT — HISTORICAL EVIDENCE ONLY
+>
+> **This message was never sent, and it will not be sent.** On 2026-08-27 the owner decided to
+> accept the published Sharadar Personal Use License as it stands, without vendor correspondence.
+> That decision is recorded in
+> [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md), which closes **G3** for Sharadar personal use.
+>
+> **The draft is retained, not deleted.** It is the record of what public research could not
+> settle, and two of its questions remain live for a different decision:
+>
+> | | |
+> |---|---|
+> | **Q1–Q6** — licensing questions | **cancelled**; superseded by the owner's acceptance of the published terms |
+> | **Q7** — are the daily bars officially disseminated or provider-aggregated? | **still unanswered.** Not a licensing question. **Must be answered before any purchase** — a provider-aggregated answer makes prices, and the universe built on them, ineligible under `PUBLIC_PIT` |
+> | **Q8** — what start date does the Full History tier actually provide, per table? | **still unanswered.** Two vendor statements disagree. **Must be answered before any purchase** |
+>
+> Nothing below has been sent, and nothing below is authorization to send it. Reviving any part of
+> this message is a new owner decision.
+
+## STATUS: **CANCELLED. NOT SENT. NO PROVIDER HAS BEEN CONTACTED.**
 
 **No email has been sent. No support ticket has been opened. No contact form has been
 submitted. No vendor account exists. Nothing has been purchased, trialled or credentialed.**
@@ -238,4 +257,5 @@ Producing this draft does not authorize sending it, contacting any provider by a
 purchasing, trialling, creating an account, entering billing information, generating or storing
 an API key, fetching vendor data, or closing any gate.
 
-**G1–G7 remain OPEN. ADR-0005 remains PROPOSED. Live trading remains HARD-DISABLED.**
+**G1 OPEN · G2 OPEN · G3 CLOSED (Sharadar personal use, ADR-0008) · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN.**
+**ADR-0005 remains PROPOSED. Live trading remains HARD-DISABLED.**
