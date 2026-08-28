@@ -27,7 +27,7 @@ Layout, and who may import what:
     (ADR-0011) -- **code only, and it has never run against AWS.** ``s3`` is
     deliberately *not* re-exported from the package, so importing the data
     platform pulls in no AWS SDK, opens no socket and discovers no credential.
-    It is also the only module in the repository permitted to name that SDK.
+    It is also the only module under ``src/`` permitted to name that SDK.
 ``normalize``
     silver transforms: bronze bytes to normalised source facts.
 ``curate``

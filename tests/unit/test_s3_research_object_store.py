@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from fixtures.fake_s3 import (
+    FULL_OBJECT,
     LEAK_CANARIES,
     SYNTHETIC_BUCKET,
     FakeS3Client,
@@ -50,6 +51,7 @@ from kalpamani.data.objectstore import ObjectKey, ResearchObjectStore, physical_
 from kalpamani.data.storage.s3 import (
     CHECKSUM_ALGORITHM,
     CONTENT_TYPE,
+    FULL_OBJECT_CHECKSUM,
     SERVER_SIDE_ENCRYPTION,
     S3ResearchObjectStore,
     checksum_of,
@@ -314,19 +316,30 @@ def test_no_overwrite_request_follows_a_collision() -> None:
     assert all(call.get("IfNoneMatch") == "*" for call in fake.put_calls)
 
 
+#: Every case below carries a valid ``ChecksumType``, so each one isolates the
+#: single defect it names. Checksum-type defects have their own parametrisation.
 @pytest.mark.parametrize(
     "response",
     [
-        {"ContentLength": len(PAYLOAD)},  # no checksum at all
-        {"ChecksumSHA256": "", "ContentLength": len(PAYLOAD)},
-        {"ChecksumSHA256": "not-base64!!", "ContentLength": len(PAYLOAD)},
-        {"ChecksumSHA256": base64.b64encode(b"short").decode(), "ContentLength": len(PAYLOAD)},
-        {"ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode()},  # no length
+        {"ChecksumType": FULL_OBJECT, "ContentLength": len(PAYLOAD)},  # no checksum at all
+        {"ChecksumType": FULL_OBJECT, "ChecksumSHA256": "", "ContentLength": len(PAYLOAD)},
+        {"ChecksumType": FULL_OBJECT, "ChecksumSHA256": "not-base64!!", "ContentLength": 38},
         {
+            "ChecksumType": FULL_OBJECT,
+            "ChecksumSHA256": base64.b64encode(b"short").decode(),
+            "ContentLength": len(PAYLOAD),
+        },
+        {
+            "ChecksumType": FULL_OBJECT,
+            "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode(),
+        },  # no length
+        {
+            "ChecksumType": FULL_OBJECT,
             "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode(),
             "ContentLength": -1,
         },
         {
+            "ChecksumType": FULL_OBJECT,
             "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode(),
             "ContentLength": "38",
         },
@@ -365,6 +378,7 @@ def test_a_length_mismatch_on_an_occupied_name_is_a_collision_not_an_idempotent_
     backing.put_if_absent(key=published, payload=PAYLOAD)
     fake.head_override.append(
         {
+            "ChecksumType": FULL_OBJECT,
             "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode("ascii"),
             "ContentLength": len(PAYLOAD) + 1,
         }
@@ -450,10 +464,14 @@ def test_exists_refuses_rather_than_reporting_absence(
 @pytest.mark.parametrize(
     "response",
     [
-        {"ContentLength": 38},
-        {"ChecksumSHA256": "not-base64!!", "ContentLength": 38},
-        {"ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode()},
+        {"ChecksumType": FULL_OBJECT, "ContentLength": 38},
+        {"ChecksumType": FULL_OBJECT, "ChecksumSHA256": "not-base64!!", "ContentLength": 38},
         {
+            "ChecksumType": FULL_OBJECT,
+            "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode(),
+        },
+        {
+            "ChecksumType": FULL_OBJECT,
             "ChecksumSHA256": base64.b64encode(sha256(PAYLOAD).digest()).decode(),
             "ContentLength": "38",
         },
@@ -476,6 +494,7 @@ def test_exists_never_uses_an_etag_for_identity() -> None:
     fake.head_override.append(
         {
             "ETag": '"synthetic-fake-etag"',
+            "ChecksumType": FULL_OBJECT,
             "ChecksumSHA256": base64.b64encode(sha256(OTHER).digest()).decode("ascii"),
             "ContentLength": len(OTHER),
         }
@@ -488,6 +507,250 @@ def test_exists_refuses_a_key_that_is_not_exact() -> None:
     with pytest.raises(ObjectClassificationError, match="exact ObjectKey"):
         backing.exists(key="not-a-key")  # type: ignore[arg-type]
     assert fake.head_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 412 is occupancy. 409 is not.
+# ---------------------------------------------------------------------------
+
+
+def test_a_precondition_failure_performs_exactly_one_metadata_only_resolution() -> None:
+    """A 412 *did* resolve the condition, so one HeadObject is the right answer.
+
+    Metadata only: the bytes are never fetched, and the outcome is decided from
+    the checksum and the length alone.
+    """
+    backing, fake = store()
+    published = key()
+    backing.put_if_absent(key=published, payload=PAYLOAD)
+    fake.head_calls.clear()
+
+    outcome = backing.put_if_absent(key=published, payload=PAYLOAD)
+
+    assert outcome.stored is False
+    assert len(fake.head_calls) == 1
+    assert fake.head_calls[0]["ChecksumMode"] == "ENABLED"
+    assert "Range" not in fake.head_calls[0] and "PartNumber" not in fake.head_calls[0]
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409"])
+def test_a_conflict_is_transient_and_never_an_occupied_name(code: str) -> None:
+    """S3 answers 409 when a conflicting operation was in flight and the upload is
+    retryable. The condition was never resolved, so it proves nothing about what
+    is stored -- reading it as occupancy would be a fail-open."""
+    backing, fake = store()
+    fake.fail_put.append(SyntheticClientError(code))
+
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.put_if_absent(key=key(), payload=PAYLOAD)
+
+    assert caught.value.operation is ObjectStoreOperation.PUT
+    assert caught.value.failure is ObjectStoreFailure.TRANSIENT
+    assert str(caught.value) == "research object store PUT: TRANSIENT"
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409"])
+def test_a_conflict_sends_no_head_object(code: str) -> None:
+    """The occupancy resolution must not be reached: issuing a HeadObject on the
+    strength of a 409 would turn a non-answer into a collision verdict, or into a
+    phantom "the write said occupied but the object is absent" contradiction."""
+    backing, fake = store()
+    fake.fail_put.append(SyntheticClientError(code))
+
+    with pytest.raises(ObjectStoreBackendError):
+        backing.put_if_absent(key=key(), payload=PAYLOAD)
+
+    assert fake.head_calls == []
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409"])
+def test_a_conflict_yields_no_outcome_and_no_collision(code: str) -> None:
+    """Neither ``stored=False`` nor ObjectAlreadyExistsError is reachable from a 409,
+    and nothing is stored by the attempt.
+
+    ``ObjectAlreadyExistsError`` is a *sibling* of ``ObjectStoreBackendError``, not a
+    subclass, so a collision verdict would escape this ``pytest.raises`` and fail the
+    test rather than be silently accepted by it. The exact-type assertion closes the
+    other direction.
+    """
+    backing, fake = store()
+    fake.fail_put.append(SyntheticClientError(code))
+
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.put_if_absent(key=key(), payload=PAYLOAD)
+
+    assert type(caught.value) is ObjectStoreBackendError
+    assert not issubclass(ObjectAlreadyExistsError, ObjectStoreBackendError)
+    assert fake.objects == {}
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409"])
+def test_a_conflict_discloses_nothing(code: str) -> None:
+    """Redaction is not weakened by the new classification."""
+    backing, fake = store()
+    fake.fail_put.append(SyntheticClientError(code))
+
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.put_if_absent(key=key(), payload=PAYLOAD)
+
+    rendered = f"{caught.value!r} {caught.value!s}"
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("code", ["PreconditionFailed", "412"])
+def test_only_a_precondition_failure_classifies_as_occupied(code: str) -> None:
+    assert (
+        classify_backend_failure(SyntheticClientError(code))
+        is ObjectStoreFailure.PRECONDITION_FAILED
+    )
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409"])
+def test_a_conflict_classifies_as_transient(code: str) -> None:
+    assert classify_backend_failure(SyntheticClientError(code)) is ObjectStoreFailure.TRANSIENT
+
+
+def test_a_retry_after_a_conflict_stays_conditional() -> None:
+    """This slice adds no retry loop; a caller may retry the whole publication.
+
+    That is safe only because every attempt is still conditional -- a retry can
+    never become an overwrite.
+    """
+    backing, fake = store()
+    published = key()
+    fake.fail_put.append(SyntheticClientError("ConditionalRequestConflict"))
+
+    with pytest.raises(ObjectStoreBackendError):
+        backing.put_if_absent(key=published, payload=PAYLOAD)
+    outcome = backing.put_if_absent(key=published, payload=PAYLOAD)
+
+    assert outcome.stored is True
+    assert [call["IfNoneMatch"] for call in fake.put_calls] == ["*", "*"]
+
+
+# ---------------------------------------------------------------------------
+# A SHA-256 is an identity only if S3 says it covers the whole object
+# ---------------------------------------------------------------------------
+
+
+def _identity_response(payload: bytes = PAYLOAD, **overrides: Any) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "ChecksumType": FULL_OBJECT,
+        "ChecksumSHA256": base64.b64encode(sha256(payload).digest()).decode("ascii"),
+        "ContentLength": len(payload),
+    }
+    response.update(overrides)
+    return response
+
+
+#: Every one of these carries a *correct* full-object SHA-256 of the payload and a
+#: correct length. The only thing wrong is the type, which is the whole point:
+#: without it, a composite digest would be accepted as a content address.
+UNPROVEN_CHECKSUM_TYPES: list[dict[str, Any]] = [
+    {},  # ChecksumType absent entirely
+    {"ChecksumType": "COMPOSITE"},
+    {"ChecksumType": "full_object"},  # right word, wrong spelling
+    {"ChecksumType": "FULL_OBJECT "},  # trailing space
+    {"ChecksumType": "SOMETHING_NEW"},  # a type this code has never heard of
+    {"ChecksumType": ""},
+    {"ChecksumType": None},
+    {"ChecksumType": 1},
+    {"ChecksumType": ["FULL_OBJECT"]},
+]
+
+
+@pytest.mark.parametrize("override", UNPROVEN_CHECKSUM_TYPES)
+def test_exists_refuses_a_checksum_whose_type_is_not_proven_full_object(
+    override: dict[str, Any],
+) -> None:
+    """A COMPOSITE SHA-256 is a digest of a multipart upload's *part digests*: it
+    depends on the part size as well as the bytes, so it has the ETag's defect
+    wearing the right algorithm's name. An absent type is not full-object either;
+    it is unproven, and unproven fails closed."""
+    backing, fake = store()
+    response = _identity_response()
+    if override:
+        response.update(override)
+    else:
+        response.pop("ChecksumType")
+    fake.head_override.append(response)
+
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.exists(key=key())
+    assert caught.value.failure is ObjectStoreFailure.INVALID_RESPONSE
+    assert caught.value.operation is ObjectStoreOperation.HEAD
+
+
+@pytest.mark.parametrize("override", UNPROVEN_CHECKSUM_TYPES)
+def test_an_occupied_name_with_an_unproven_checksum_type_fails_closed(
+    override: dict[str, Any],
+) -> None:
+    """The digest matches and the length matches. It is still not an idempotent
+    re-publication, because nothing proved the digest describes the object."""
+    backing, fake = store()
+    published = key()
+    backing.put_if_absent(key=published, payload=PAYLOAD)
+    response = _identity_response()
+    if override:
+        response.update(override)
+    else:
+        response.pop("ChecksumType")
+    fake.head_override.append(response)
+
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.put_if_absent(key=published, payload=PAYLOAD)
+    assert caught.value.failure is ObjectStoreFailure.INVALID_RESPONSE
+    assert not isinstance(caught.value, ObjectAlreadyExistsError)
+
+
+def test_a_composite_checksum_refusal_discloses_nothing() -> None:
+    backing, fake = store()
+    fake.head_override.append(_identity_response(ChecksumType="COMPOSITE"))
+    with pytest.raises(ObjectStoreBackendError) as caught:
+        backing.exists(key=key())
+    rendered = f"{caught.value!r} {caught.value!s}"
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+    assert "COMPOSITE" not in rendered
+    assert caught.value.__cause__ is None
+
+
+def test_a_matching_etag_does_not_rescue_an_unproven_checksum_type() -> None:
+    """Neither an ETag nor a bare 32-byte SHA-256 is proof on its own."""
+    backing, fake = store()
+    published = key()
+    backing.put_if_absent(key=published, payload=PAYLOAD)
+    fake.head_override.append(
+        _identity_response(ChecksumType="COMPOSITE", ETag='"synthetic-fake-etag"')
+    )
+    with pytest.raises(ObjectStoreBackendError):
+        backing.exists(key=published)
+
+
+def test_the_synthetic_client_reports_full_object_for_what_it_stores() -> None:
+    """The fake has no multipart path, so everything it stores is single-part.
+
+    Stated as a test rather than assumed: if the fixture ever answered
+    ``COMPOSITE``, every publication test above would fail for the wrong reason.
+    """
+    backing, fake = store()
+    published = key()
+    backing.put_if_absent(key=published, payload=PAYLOAD)
+    head = fake.head_object(Bucket=SYNTHETIC_BUCKET, Key=physical_key(published))
+    assert head["ChecksumType"] == FULL_OBJECT
+    assert head["ChecksumSHA256"] == base64.b64encode(sha256(PAYLOAD).digest()).decode("ascii")
+
+
+def test_the_store_names_exactly_one_acceptable_checksum_type() -> None:
+    """An allowlist of one, matched exactly -- not a denylist of known-bad types.
+
+    A denylist would admit every checksum type AWS has not invented yet, which is
+    the case that must fail closed rather than the case that must pass.
+    """
+    assert FULL_OBJECT_CHECKSUM == "FULL_OBJECT"
+    assert FULL_OBJECT == FULL_OBJECT_CHECKSUM
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,15 @@
 """The licensed S3 :class:`~kalpamani.data.objectstore.ResearchObjectStore`.
 
-**Code only. This has never been invoked against AWS.** No credential exists, no
-bucket is bound, no client is constructed anywhere in this repository, and no
-runner or composition root is authorized to build one (ADR-0011). What is here is
-the adapter a future authorized runner would inject a client into -- reviewed
-calmly, before a credential exists and before a bill is running.
+**Code only. This has never been invoked against AWS.** Nothing in this
+repository binds a credential or a bucket identifier to this store, constructs a
+client, or calls it, and no runner or composition root is authorized to build one
+(ADR-0011). What is here is the adapter a future authorized runner would inject a
+client into -- reviewed calmly, while there is still nothing bound to it.
+
+That is a claim about this repository, not about the world: the AWS research
+foundation and its buckets exist. What is checkable here is that the adapter has
+sent **zero** AWS requests and can send none, because it has nothing to send them
+with.
 
 **The whole module is one seam.** Everything above it -- the neutral Bronze
 publisher, every provider adapter -- depends on the ``ResearchObjectStore``
@@ -35,10 +40,15 @@ an overwrite for us, so *conditional publication in software is the immutability
 boundary*. Between a HEAD and a PUT another writer can land an object, and the
 PUT would then destroy evidence that verified a moment earlier.
 
-**Integrity is SHA-256, never ETag.** An ETag is a multipart-dependent opaque
-token, not a content hash; treating it as one would make every identity claim in
-this system conditional on how the object happened to be uploaded. Every write
-carries a full-object SHA-256 checksum, and every read-back verifies one.
+**Integrity is a full-object SHA-256, never an ETag.** An ETag is a
+multipart-dependent opaque token, not a content hash; treating it as one would
+make every identity claim in this system conditional on how the object happened
+to be uploaded. Every write carries a SHA-256 checksum, and every read-back
+verifies one -- **and requires S3 to state that it is a ``FULL_OBJECT``
+checksum**. S3's other kind, ``COMPOSITE``, is a digest of a multipart upload's
+part digests: it depends on the part size as well as the bytes, so it has exactly
+the ETag's defect wearing the right algorithm's name. An unstated type is not a
+full-object checksum either; it is an unproven one, and this store refuses it.
 
 **A collision is resolved by metadata, never by downloading.** When the
 conditional write reports the name occupied, the stored object's checksum and
@@ -46,6 +56,15 @@ length are fetched with ``HeadObject`` and compared. The bytes are never
 retrieved: this store has no read surface, a producer has no reason to read the
 store back, and downloading vendor payloads to compare them would put licensed
 rows into a process that has no business holding them.
+
+**Only a 412 means occupied.** A conditional ``PutObject`` answers
+``412 PreconditionFailed`` when the key exists -- the condition was evaluated and
+it failed. ``409 ConditionalRequestConflict`` means a conflicting operation was
+in flight and the upload is retryable; the condition was never resolved, so it
+proves nothing about what is stored. Only a 412 reaches the occupancy
+resolution. A 409 sends no ``HeadObject``, returns no outcome, and makes no
+idempotency or collision determination -- it is a ``TRANSIENT`` refusal, and a
+caller may retry the whole publication because every attempt stays conditional.
 
 **Fail closed, everywhere.** An occupied name that cannot be *proven* identical is
 a refusal, not an assumption -- not "probably the same", not "treat as absent",
@@ -87,9 +106,24 @@ SERVER_SIDE_ENCRYPTION: Final = "AES256"
 #: them, and Bronze exists precisely so nothing has to.
 CONTENT_TYPE: Final = "application/octet-stream"
 
-#: The checksum algorithm. Full-object SHA-256, which is the same digest the
+#: The checksum algorithm. SHA-256, which is the same digest the
 #: :class:`~kalpamani.data.objectstore.ObjectKey` is named by.
 CHECKSUM_ALGORITHM: Final = "SHA256"
+
+#: The **only** checksum type this store will accept as an identity.
+#:
+#: S3 reports two kinds of SHA-256. A ``FULL_OBJECT`` checksum is the digest of
+#: the object's bytes -- the thing an ``ObjectKey`` is named by. A ``COMPOSITE``
+#: checksum is a digest *of the part digests* of a multipart upload: it is a
+#: function of how the object was uploaded as well as what it contains, so two
+#: identical objects uploaded with different part sizes carry different composite
+#: values, and one composite value says nothing about the bytes.
+#:
+#: Accepting a composite checksum as a content address would make every identity
+#: claim in this system conditional on an upload detail, which is the same defect
+#: that disqualifies the ETag. The algorithm being SHA-256 is not sufficient; the
+#: **type** has to be proven, and an absent type proves nothing.
+FULL_OBJECT_CHECKSUM: Final = "FULL_OBJECT"
 
 #: S3 bucket naming: 3-63 characters, lowercase letters, digits, dots and hyphens,
 #: starting and ending alphanumeric. Deliberately *not* an exhaustive AWS
@@ -97,12 +131,28 @@ CHECKSUM_ALGORITHM: Final = "SHA256"
 #: before any of them reaches a request.
 _BUCKET_NAME: Final = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
 
-#: Backend error codes that mean the name is already taken. ``PreconditionFailed``
-#: is what a conditional ``PutObject`` returns; ``ConditionalRequestConflict``
-#: appears when a concurrent write is in flight against the same key.
-_OCCUPIED_CODES: Final[frozenset[str]] = frozenset(
-    {"PreconditionFailed", "ConditionalRequestConflict"}
-)
+#: The **only** code that proves the name is already taken. A conditional
+#: ``PutObject`` that finds the key present answers ``412 PreconditionFailed``:
+#: the condition was evaluated, and it failed because an object is there.
+#:
+#: ``409 ConditionalRequestConflict`` is deliberately **not** here -- see
+#: :data:`_CONFLICT_CODES`.
+_OCCUPIED_CODES: Final[frozenset[str]] = frozenset({"PreconditionFailed", "412"})
+
+#: A conflicting concurrent operation, which is **not** evidence of occupancy.
+#:
+#: S3 answers ``409 ConditionalRequestConflict`` when another request is in
+#: flight against the same key, and documents the upload as *retryable*. The
+#: condition was never resolved, so nothing was learned about what -- if anything
+#: -- is stored under that name.
+#:
+#: Reading a 409 as "occupied" would be a fail-open: the store would follow it
+#: with a ``HeadObject``, and a 404 there would then look like a contradiction
+#: while an unrelated object would look like a collision. Both are conclusions
+#: drawn from an answer that carried none. It is classified ``TRANSIENT`` and
+#: surfaced as a refusal, and the caller may retry the whole publication --
+#: every attempt stays conditional, so a retry can never overwrite.
+_CONFLICT_CODES: Final[frozenset[str]] = frozenset({"ConditionalRequestConflict", "409"})
 
 _NOT_FOUND_CODES: Final[frozenset[str]] = frozenset({"404", "NoSuchKey", "NotFound"})
 _DENIED_CODES: Final[frozenset[str]] = frozenset(
@@ -112,7 +162,7 @@ _THROTTLED_CODES: Final[frozenset[str]] = frozenset(
     {"SlowDown", "Throttling", "ThrottlingException", "RequestLimitExceeded", "503"}
 )
 _TRANSIENT_CODES: Final[frozenset[str]] = frozenset(
-    {"InternalError", "ServiceUnavailable", "RequestTimeout", "500"}
+    {"InternalError", "ServiceUnavailable", "RequestTimeout", "500"} | _CONFLICT_CODES
 )
 
 
@@ -166,6 +216,10 @@ def classify_backend_failure(exception: BaseException) -> ObjectStoreFailure:
     code = _error_code(exception)
     if code in _OCCUPIED_CODES:
         return ObjectStoreFailure.PRECONDITION_FAILED
+    if code in _CONFLICT_CODES:
+        # Checked before the general transient set purely so the intent is
+        # readable here: a 409 is retryable, and it is *not* an occupied name.
+        return ObjectStoreFailure.TRANSIENT
     if code in _NOT_FOUND_CODES:
         return ObjectStoreFailure.NOT_FOUND
     if code in _DENIED_CODES:
@@ -195,17 +249,32 @@ def checksum_of(digest_hex: str) -> str:
 
 
 def _verified_stored_identity(response: object, operation: ObjectStoreOperation) -> tuple[str, int]:
-    """The ``(sha256 hex, byte count)`` a ``HeadObject`` response proves.
+    """The ``(sha256 hex, byte count)`` a ``HeadObject`` response **proves**.
+
+    Five things must hold together, and a failure of any one is the same answer:
+    the response is a mapping; ``ChecksumType`` is exactly ``FULL_OBJECT``;
+    ``ChecksumSHA256`` is canonical base64; it decodes to exactly 32 bytes; and
+    ``ContentLength`` is an exact non-negative :class:`int`.
 
     Raises:
-        ObjectStoreBackendError: ``INVALID_RESPONSE`` if the response is not a
-            mapping, carries no full-object SHA-256, carries one that is not
-            canonical base64 of 32 bytes, or carries no usable length. **An
-            object whose stored identity cannot be verified is never treated as
-            identical and never treated as absent** -- both guesses would be
-            wrong in the direction that loses evidence.
+        ObjectStoreBackendError: ``INVALID_RESPONSE`` if any of those is unmet --
+            including an **absent**, non-string, ``COMPOSITE`` or unrecognised
+            ``ChecksumType``. A composite SHA-256 is a digest of part digests,
+            not of the object, so it is not the content address an
+            :class:`~kalpamani.data.objectstore.ObjectKey` names; an unstated
+            type is simply unproven, and unproven fails closed here like
+            everything else. **An object whose stored identity cannot be verified
+            is never treated as identical and never treated as absent** -- both
+            guesses would be wrong in the direction that loses evidence.
     """
     if not isinstance(response, Mapping):
+        raise _refuse(operation, ObjectStoreFailure.INVALID_RESPONSE)
+
+    checksum_type = response.get("ChecksumType")
+    if type(checksum_type) is not str or checksum_type != FULL_OBJECT_CHECKSUM:
+        # Exact match against one permitted spelling. Not a membership test
+        # against a set of "acceptable" types: a type this code has never heard
+        # of is precisely the case that must not be waved through.
         raise _refuse(operation, ObjectStoreFailure.INVALID_RESPONSE)
 
     encoded = response.get("ChecksumSHA256")
@@ -285,7 +354,11 @@ class S3ResearchObjectStore:
                 content. Append-only: never overwritten, never renamed, never
                 silently reported as an idempotent no-op.
             ObjectStoreBackendError: for any backend refusal, and for an occupied
-                name whose content cannot be verified.
+                name whose content cannot be verified. A ``409`` conflict arrives
+                here as ``PUT: TRANSIENT`` -- **not** as an occupied name, and
+                with no ``HeadObject`` sent. Retrying is the caller's decision;
+                this slice adds no retry loop, and a retry is safe only because
+                every attempt is still conditional.
         """
         exact = require_publishable(key, payload)
         location = physical_key(key)
@@ -304,6 +377,10 @@ class S3ResearchObjectStore:
         except Exception as exception:
             failure = classify_backend_failure(exception)
             if failure is not ObjectStoreFailure.PRECONDITION_FAILED:
+                # Everything that is not a 412 leaves here, a 409 included: a
+                # conflict is retryable and proves nothing, so it must not reach
+                # the occupancy resolution below.
+                #
                 # `from None`: the SDK exception carries the bucket, the key, the
                 # endpoint and the request id, and a chained traceback would
                 # print all of it.
@@ -313,6 +390,11 @@ class S3ResearchObjectStore:
 
     def _resolve_occupied(self, *, key: ObjectKey, location: str, byte_count: int) -> PutOutcome:
         """Decide what an occupied name means, from metadata alone.
+
+        **Reached only after a 412.** A 409 conflict never arrives here: it did
+        not establish occupancy, so there is nothing to resolve, and a
+        ``HeadObject`` issued on the strength of one would turn a non-answer into
+        a collision verdict or a phantom contradiction.
 
         Identical content is an ordinary idempotent re-publication. Different
         content is a refusal. Content that cannot be *proven* either way is also
@@ -376,6 +458,7 @@ class S3ResearchObjectStore:
 __all__ = [
     "CHECKSUM_ALGORITHM",
     "CONTENT_TYPE",
+    "FULL_OBJECT_CHECKSUM",
     "SERVER_SIDE_ENCRYPTION",
     "S3Client",
     "S3ResearchObjectStore",

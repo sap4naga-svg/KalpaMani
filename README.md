@@ -12,7 +12,7 @@ risk and selective, bounded AI research.
 >
 > **Status: Phase 3A A1 ACCEPTED (2026-08-27). Sharadar provider-integration Slice 1
 > IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13. Licensed S3 research object store
-> IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS.
+> IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS.
 > Phase 3 overall NOT COMPLETE.**
 > Phase 1 (Paper connectivity) and Phase 2 (a narrowly certified one-share SPY Paper order
 > lifecycle) are complete and accepted; the vendor-neutral point-in-time foundation kernel
@@ -22,10 +22,12 @@ risk and selective, bounded AI research.
 > **Next governed work: the remainder of Phase 3A, and the still-open provider decisions.**
 > **No provider is connected — the adapter authorized by
 > [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) has never
-> sent a request.** A qualification subscription exists (ADR-0010); there is no vendor account
-> page opened, no private credential, no Services Data, no production ingestion. **The licensed S3
-> object store has never run against AWS** — no credential, no bucket, no client, no caller. No real production data exists. Short research is not authorized. No
-> strategy or Brain implementation is authorized. Live trading is hard-disabled.
+> sent a request.** A qualification subscription exists (ADR-0010), and its clock is running; no
+> private credential, Services Data or production ingestion has entered this repository. **The
+> licensed S3 object store has never run against AWS** — the adapter has no bucket identifier and
+> no credential bound to it, and has sent zero AWS requests. No real production data exists. Short
+> research is not authorized. No strategy or Brain implementation is authorized. Live trading is
+> hard-disabled.
 
 ---
 
@@ -271,9 +273,10 @@ Nothing below exists yet, and none of it is authorized:
 - Scanner, factor pipeline, point-in-time data platform
 - Database schema, dashboard, alerting, kill switch
 - Purchased market data
-- **Any use of the AWS research foundation.** It is provisioned and idle. The licensed S3 object
-  store exists as reviewed code and has **never run against AWS**: no credential, no bucket, no
-  client, no caller, and no request has ever been sent
+- **Any use of the AWS research foundation by this repository.** It is provisioned and idle. The
+  licensed S3 object store exists as reviewed code and has **never run against AWS**: nothing binds
+  a bucket identifier or a credential to the adapter, nothing constructs a client or calls the
+  store, and the adapter has sent zero AWS requests
 
 ---
 
@@ -307,7 +310,7 @@ live brokerage execution, real-money operation.
 | Planning | **ACCEPTED / MERGED** |
 | Stage 3A A1 — point-in-time foundation kernel | **ACCEPTED (2026-08-27)** |
 | Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
-| Stage 3A — licensed S3 research object store | **IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS** |
+| Stage 3A — licensed S3 research object store | **IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS** |
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
 | Stage 3A A2 / A3 — subscription / purchase | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, for qualification only |
@@ -517,15 +520,17 @@ would create a **new reviewed version** rather than rewrite A1's evidence.
 
 [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) authorized
 one thing: the **LICENSED-only S3 backend** of the provider-neutral `ResearchObjectStore`, written
-and reviewed **before** a credential exists, **before** a bucket is bound, and **before** a bill is
-running. Race conditions, checksum semantics and error sanitisation are exactly the work that goes
-badly when it is in the way of something else.
+and reviewed **while the store still has nothing bound to it** — no bucket identifier, no
+credential, no client — and therefore before any of those has to be got right in a hurry. Race
+conditions, checksum semantics and error sanitisation are exactly the work that goes badly when it
+is in the way of something else.
 
 ```
 adapter EXISTS   ·   client INJECTED   ·   no client is constructed anywhere
-bucket NONE   ·   credential NONE   ·   profile NONE   ·   endpoint NONE
-runner NONE   ·   __main__ NONE   ·   caller NONE
-requests sent to AWS: ZERO   ·   objects written: ZERO   ·   buckets touched: ZERO
+adapter bucket binding: NONE   ·   adapter credential binding: NONE
+no profile, endpoint or region is named   ·   runner NONE   ·   __main__ NONE   ·   caller NONE
+AWS requests sent by the adapter: ZERO
+adapter-attributable request or object-storage activity: NONE
 ```
 
 **Append-only is one conditional request, not a look-first.** Publication is a single `PutObject`
@@ -535,10 +540,22 @@ destroy evidence that verified a moment earlier. The licensed bucket carries **n
 design — a vendor termination arriving without notice must be honourable inside 30 days — so
 conditional publication in software is the immutability boundary, with nothing behind it.
 
-**Integrity is full-object SHA-256, never an ETag.** An ETag is a multipart-dependent opaque token,
-not a content hash; treating it as one would make every identity claim conditional on how an object
-happened to be uploaded. SSE-S3 is requested explicitly on every write rather than inherited from a
-bucket default, so an object is encrypted because this code asked.
+**Only a 412 means occupied.** A conditional `PutObject` answers `412 PreconditionFailed` when the
+key exists — the condition was evaluated and it failed. `409 ConditionalRequestConflict` means a
+conflicting operation was in flight and the upload is retryable; the condition was never resolved,
+so it proves nothing about what is stored. Only a 412 reaches the occupancy resolution. A 409 sends
+no `HeadObject`, returns no outcome and makes no idempotency or collision determination — it is a
+`TRANSIENT` refusal. This slice adds **no retry loop**; a caller may retry the whole publication,
+and that is safe only because every attempt stays conditional.
+
+**Integrity is a full-object SHA-256, never an ETag and never a composite.** An ETag is a
+multipart-dependent opaque token, not a content hash. S3's `COMPOSITE` SHA-256 has the same defect
+wearing the right algorithm's name: it is a digest of a multipart upload's *part digests*, so it
+varies with the part size. Every read-back therefore requires S3 to state
+`ChecksumType="FULL_OBJECT"`, and an absent, misspelled, composite or unrecognised type is refused —
+an allowlist of one, matched exactly, because a denylist would admit every checksum type AWS has not
+invented yet. SSE-S3 is requested explicitly on every write rather than inherited from a bucket
+default, so an object is encrypted because this code asked.
 
 **A collision is resolved by metadata, never by downloading.** When the conditional write reports
 the name occupied, `HeadObject` supplies the stored checksum and length. Identical digest *and*
@@ -546,8 +563,9 @@ length means the publication is a no-op; anything else is a refusal. The bytes a
 this store has no read surface, and pulling vendor payloads back to compare them would put licensed
 rows into a process with no business holding them.
 
-**Ambiguity fails closed.** An unverifiable response — not a mapping, a missing or non-canonical
-checksum, a missing or negative length — is a typed refusal, never a guess in either direction. A
+**Ambiguity fails closed.** An unverifiable response — not a mapping, an unproven checksum type, a
+missing or non-canonical checksum, a missing or negative length — is a typed refusal, never a guess
+in either direction. A
 permission failure is never read as absence. Every backend failure is sanitized into closed
 `StrEnum` vocabularies and raised `from None`, so no bucket, key, endpoint, request id, host id or
 credential-shaped text can reach a log or a traceback.
@@ -558,18 +576,33 @@ credential-shaped text can reach a log or a traceback.
 at admission and remains **deferred**.
 
 **One runtime dependency, and nothing imports it.** `boto3>=1.36.0,<2.0` is declared because a real
-deployment must *construct* a signed client, and request signing, credential resolution and retry
-behaviour must be the official SDK's rather than anything written here. **No module under `src/`
+deployment must *construct* a signed client. The floor is substantiated rather than guessed: the S3
+service model bundled with `boto3==1.36.0` and `botocore==1.36.0` — the lowest `botocore` that
+release permits — carries every member this store uses, including `IfNoneMatch` on `PutObject` and
+`ChecksumType` on the `HeadObject` response, whose enum there is exactly
+`["COMPOSITE", "FULL_OBJECT"]`. It was read from the installed model in a throwaway environment,
+offline with respect to AWS. Request signing, credential resolution and retry behaviour must be the
+official SDK's rather than anything written here. **No module under `src/`
 imports it**: the client is injected and backend errors are classified structurally, so importing
 the data platform pulls in no AWS code, opens no socket and performs no ambient credential
-discovery. A static test permits only `data/storage/s3.py` to name the SDK at all, and asserts that
-even it imports none of it today. `moto` and LocalStack were rejected — an emulator is a second
+discovery. A static test permits only `data/storage/s3.py` — the only application module under
+`src/` permitted to do so — to name the SDK at all, and asserts that even it imports none of it
+today. `moto` and LocalStack were rejected — an emulator is a second
 implementation of S3's semantics to be wrong about; the synthetic client instead makes its
 conditional put genuinely atomic, so a check-then-write adapter would *fail* the concurrency tests
 rather than pass them by luck.
 
-**The control is absence, not care.** There is no credential, no bucket, no client and no caller
-anywhere in this repository — each verified by a static test rather than asserted here.
+**The control is absence, not care.** This slice retrieved, inspected, created, configured and
+bound **no credential**; no bucket identifier is bound to the adapter or recorded in this pull
+request; and no module constructs a client or calls the store. Each is verified by a static test
+rather than asserted here.
+
+**What that does and does not claim.** It is a statement about this repository and this slice, not
+about the world: the AWS research foundation and its buckets already exist and were provisioned in
+August 2026, and what exists outside this repository is not something this slice examined or may
+infer. The adapter has sent **zero AWS requests** and incurred **no adapter-attributable request or
+object-storage activity** — which is a claim about the adapter, not a claim that nothing anywhere
+is billable.
 
 **Writing this backend authorized nothing else.** Every AWS action, Terraform command, verifier
 run, bucket binding, credential, client construction, ingestion runner, ECS task and CONTROL

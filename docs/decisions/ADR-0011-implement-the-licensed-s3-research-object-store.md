@@ -36,9 +36,16 @@ and both research-data buckets are empty. A qualification subscription is now ac
 ([ADR-0010](ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md)).
 The next thing that will be asked of this repository is to put bytes somewhere durable.
 
-The decision this ADR records is **when** to write that code: **before** a credential exists,
-**before** a bucket is bound, and **before** a bill is running — so the parts that are easy to get
+The decision this ADR records is **when** to write that code: **while the store still has nothing
+bound to it** — no bucket identifier, no credential, no client — so the parts that are easy to get
 subtly wrong are reviewed calmly rather than under the pressure of a half-finished ingestion.
+
+That is a statement about this repository, not about the world. The AWS foundation and its buckets
+were provisioned in August 2026 and exist now; a Sharadar qualification subscription is purchased
+and its clock is running (ADR-0010). What this slice establishes is narrower and checkable: **it
+retrieved, inspected, created, configured and bound no credential; it binds no bucket identifier to
+the adapter and records none here; and the adapter has sent zero AWS requests and incurred no
+adapter-attributable request or object-storage activity.**
 
 ### The specific things that are easy to get wrong
 
@@ -47,6 +54,8 @@ subtly wrong are reviewed calmly rather than under the pressure of a half-finish
 | **Check-then-write** | A `HEAD`, then a `PUT`, is a time-of-check/time-of-use race. Between the two, another writer can land an object, and the `PUT` then destroys evidence that verified a moment earlier |
 | **ETag as identity** | An ETag is a multipart-dependent opaque token, **not** a content hash. Treating it as one makes every identity claim in the system conditional on how an object happened to be uploaded |
 | **Ambiguity read as success** | An occupied name whose contents cannot be *proven* identical is not "probably fine". A permission failure is not absence |
+| **A conflict read as occupancy** | S3 answers `412 PreconditionFailed` when the conditional write found the key present, and `409 ConditionalRequestConflict` when a concurrent operation was in flight and the upload is *retryable*. Only the 412 resolved the condition. Treating a 409 as occupancy invents a verdict from an answer that carried none |
+| **A composite checksum read as a content address** | S3 reports SHA-256 in two kinds. `FULL_OBJECT` is the digest of the bytes; `COMPOSITE` is a digest of a multipart upload's *part digests*, so it varies with the part size. The algorithm being SHA-256 is not enough — the **type** has to be proven, and an unstated type proves nothing |
 | **Backend errors as messages** | A raw `ClientError` string carries the bucket, the key, an endpoint host, a request id and sometimes credential-shaped text. Logged or raised verbatim, it publishes exactly what CLAUDE.md §3 forbids committing |
 | **Overwrite protection that is not there** | The licensed bucket carries **no versioning** by design. S3 cannot protect an overwrite for us here |
 
@@ -57,35 +66,52 @@ subtly wrong are reviewed calmly rather than under the pressure of a half-finish
 **Implement `S3ResearchObjectStore`, the LICENSED-only S3 backend of the neutral
 `ResearchObjectStore` protocol, as reviewed code that has never been run against AWS.**
 
-Seven properties, each enforced by a test rather than by intention:
+**Status wording is merge-stable by construction.** The slice is recorded as *IMPLEMENTED —
+ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS*. Before that merge the
+condition is unsatisfied and this ADR carries no authority; after it, the same sentence is still
+true. A *pending* status would have to be edited the moment it stopped being pending, which is the
+documentation defect PR #13 already demonstrated.
+
+Eight properties, each enforced by a test rather than by intention:
 
 1. **Append-only is one conditional request.** Publication is a single `PutObject` carrying
    `IfNoneMatch="*"`. There is **no preflight `HEAD`**. Because the licensed bucket has no
    versioning (ADR-0007, CLAUDE.md §4.23), *conditional publication in software is the immutability
    boundary* — there is no second line behind it.
-2. **Integrity is full-object SHA-256, never ETag.** Every write sends
-   `ChecksumAlgorithm="SHA256"` and the expected `ChecksumSHA256`. Every read-back requires one and
-   verifies it.
-3. **A collision is resolved by metadata, never by downloading.** When the conditional write
+2. **Only a `412` means occupied.** `412 PreconditionFailed` is the answer in which the condition
+   was evaluated and failed because an object is there; it, and only it, reaches the occupancy
+   resolution. `409 ConditionalRequestConflict` means a conflicting operation was in flight and the
+   upload is retryable — the condition was never resolved. A 409 is classified `TRANSIENT`, sends
+   **no `HeadObject`**, returns no outcome, and makes no idempotency or collision determination.
+   This slice adds **no retry loop**; a future authorized caller may retry the whole
+   `put_if_absent`, and that is safe only because every attempt stays conditional.
+3. **Integrity is a full-object SHA-256, never an ETag, and never a composite.** Every write sends
+   `ChecksumAlgorithm="SHA256"` and the expected `ChecksumSHA256`. Every read-back requires a
+   checksum **and** requires S3 to state `ChecksumType="FULL_OBJECT"`. A `COMPOSITE` SHA-256 is a
+   digest of part digests: it depends on the upload's part size as well as the object's bytes, so it
+   has the ETag's defect wearing the right algorithm's name. An absent, non-string, composite or
+   unrecognised type is refused — an allowlist of one, matched exactly, because a denylist would
+   admit every checksum type AWS has not invented yet.
+4. **A collision is resolved by metadata, never by downloading.** When the conditional write
    reports the name occupied, `HeadObject` supplies the stored checksum and length. Identical
    digest **and** length → the publication is a no-op and reports `stored=False`. Anything else →
    `ObjectAlreadyExistsError`. The bytes are never retrieved: this store has no read surface, and
    downloading vendor payloads to compare them would put licensed rows into a process with no
    business holding them.
-4. **Unverifiable is a refusal.** A `HeadObject` response that is not a mapping, or whose
-   `ChecksumSHA256` is absent, non-canonical base64 or not 32 bytes, or whose `ContentLength` is
-   absent, non-integer or negative, produces `INVALID_RESPONSE` — never a guess in either
-   direction.
-5. **Backend errors are sanitized into a closed vocabulary.** Every failure becomes an
+5. **Unverifiable is a refusal.** A `HeadObject` response is accepted only when all five hold: it
+   is a mapping; `ChecksumType` is exactly `FULL_OBJECT`; `ChecksumSHA256` is canonical base64; it
+   decodes to exactly 32 bytes; and `ContentLength` is an exact non-negative integer. Anything else
+   produces `INVALID_RESPONSE` — never a guess in either direction.
+6. **Backend errors are sanitized into a closed vocabulary.** Every failure becomes an
    `ObjectStoreBackendError` carrying one `ObjectStoreOperation` and one `ObjectStoreFailure`, both
    `StrEnum` members. The original exception is suppressed with `from None`, so no bucket, key,
    endpoint, request id, host id or credential-shaped text can reach a traceback, a log or a
    message. The store's `__repr__` is the constant `S3ResearchObjectStore(classification=LICENSED)`.
-6. **The write surface is the whole surface.** The injected client protocol declares `put_object`
+7. **The write surface is the whole surface.** The injected client protocol declares `put_object`
    and `head_object` and nothing else — no `get_object`, `delete_object`, `list_objects_v2` or
    `copy_object`. Deletion belongs to the separately roled path under ADR-0007, and a routine
    research writer must never receive it.
-7. **CONTROL is not publishable.** `DataClassification.CONTROL` is refused at admission, in this
+8. **CONTROL is not publishable.** `DataClassification.CONTROL` is refused at admission, in this
    slice, on the same footing as in the in-memory backend. CONTROL publication remains deferred.
 
 ### The SDK is a dependency, and is imported by nothing
@@ -96,12 +122,24 @@ resolution and retry behaviour must be the official SDK's rather than anything w
 hand-rolled signer would be a security-critical component with no review surface and no upstream
 fixes.
 
+**The floor is substantiated, not guessed.** It was checked by reading the S3 service model bundled
+with `boto3==1.36.0` and `botocore==1.36.0` — the lowest `botocore` that release permits — in a
+throwaway environment, offline with respect to AWS. Every member this store depends on is present
+at that floor: `PutObject` accepts `Bucket`, `Key`, `Body`, `ContentLength`, `ContentType`,
+`ChecksumAlgorithm`, `ChecksumSHA256`, `ServerSideEncryption` and `IfNoneMatch`; `HeadObject`
+accepts `ChecksumMode` and returns `ChecksumSHA256`, `ChecksumType` and `ContentLength`; and the
+model's `ChecksumType` shape is exactly the enum `["COMPOSITE", "FULL_OBJECT"]`, which is where the
+two spellings in this document come from. The ceiling keeps a major-version change a reviewed
+decision.
+
 **No module under `src/` imports it.** The client is injected, so importing the data platform pulls
 in no AWS code, opens no socket and performs no ambient credential discovery. Backend exceptions are
 classified **structurally**, by the shape a `ClientError` actually has, so a stub, a real error and
 a subclass are all handled without an SDK type. A static test permits only
-`src/kalpamani/data/storage/s3.py` to name the SDK at all, and a second test asserts that even that
-module imports none of it today.
+`src/kalpamani/data/storage/s3.py` — the sole application module under `src/` permitted to do so —
+to name the SDK at all, and a second test asserts that even that module imports none of it today.
+The scan covers `src/`; the tests and this ADR necessarily name the SDK, and are not application
+code.
 
 ### Storage becomes a package
 
@@ -134,7 +172,7 @@ refuses to guess at, which is the part that has to be right. Where an emulator w
 holds a lock across the occupancy check and the store, so a check-then-write adapter would **fail**
 the concurrency tests rather than pass them by luck.
 
-**Wait until a credential exists and write it during ingestion.** Rejected — the reason this ADR
+**Wait until a credential is bound and write it during ingestion.** Rejected — the reason this ADR
 exists. Race conditions, checksum semantics and error sanitisation are exactly the work that goes
 badly when it is in the way of something else.
 
@@ -179,16 +217,20 @@ synthetic validation only.** It does not authorize, and merging it does not enab
 G5 OPEN · G6 OPEN · G7 OPEN.** ADR-0005 remains **PROPOSED**. Phase 3 remains **NOT COMPLETE**.
 No provider is selected. `LIVE_TRADING_HARD_DISABLED` remains **True**.
 
-**The separation that makes this safe is not that the code is careful.** It is that the code has no
-credential, no bucket, no client, no runner and no caller — each verified by a static test, not
-asserted here.
+**The separation that makes this safe is not that the code is careful.** It is that nothing in this
+repository binds a credential or a bucket identifier to the store, constructs a client, or calls it
+— each verified by a static test, not asserted here.
 
-| Exists in this repository | Does not exist |
+| Exists in this repository | Absent from this repository |
 |---|---|
 | the adapter | any construction of it |
 | the injected client protocol | any client |
-| a synthetic in-process client | a bucket name, an ARN, an account id, an endpoint |
-| tests that never open a socket | a credential, a profile, a runner, a `__main__` |
+| a synthetic in-process client | any bucket name, ARN, account id or endpoint |
+| tests that never open a socket | any credential, profile, runner or `__main__` |
+
+The right-hand column is scoped to this repository and this slice. It says nothing about what
+exists in the owner's AWS account or vendor account, which this slice did not examine and must not
+infer.
 
 ---
 
@@ -200,11 +242,18 @@ Enforced by test, not by review:
 |---|---|
 | no preflight `HEAD` before a first publication | recorded call log on the synthetic client |
 | exactly one conditional `PutObject` per object | `IfNoneMatch="*"` asserted on every call |
+| a `412` performs exactly one metadata-only occupancy resolution | recorded `HeadObject` call log |
+| a `409` (both spellings) is `PUT: TRANSIENT` | parametrised classification and end-to-end tests |
+| a `409` sends no `HeadObject`, yields no outcome and no collision | recorded call log; exception-type assertion |
+| a retry after a `409` is still conditional | both recorded `PutObject` calls carry `IfNoneMatch="*"` |
 | SSE-S3 requested explicitly, never inherited | `ServerSideEncryption="AES256"` on every call |
 | SHA-256 sent and verified; ETag never consulted | checksum encoding tests; `ETag` absent from the adapter's executable code |
 | identical replay is a no-op reporting `stored=False` | idempotency and concurrency tests |
 | a differing object at an occupied name is refused | collision tests |
 | an unverifiable `HeadObject` response fails closed | nine parametrised malformed responses |
+| an absent, `COMPOSITE`, misspelled, unknown or non-string `ChecksumType` is refused | nine parametrised types, on both `exists` and the occupancy path |
+| a matching ETag does not rescue an unproven checksum type | dedicated test |
+| the declared SDK floor exposes every member used | local inspection of the model bundled with `boto3==1.36.0` / `botocore==1.36.0` |
 | two concurrent writers of different bytes → one object, one refusal | threaded concurrency test |
 | no bucket, key, endpoint, request id, host id or credential text escapes | leak canaries planted in the synthetic error, plus `__cause__ is None` |
 | only `data/storage/s3.py` may name the AWS SDK | AST scan over `src/` |
@@ -215,3 +264,4 @@ Enforced by test, not by review:
 
 **Every test is synthetic and offline. No test in this repository contacts AWS, and none can:
 there is nothing to contact it with.**
+

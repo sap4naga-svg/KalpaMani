@@ -9,8 +9,12 @@ adapter depends on:
   A fake that checked and then stored would hide exactly the race the adapter's
   conditional write exists to close, and the concurrency tests would pass against
   a broken implementation.
-* ``HeadObject`` returns the stored full-object SHA-256 and length, and nothing
-  else the adapter is allowed to read.
+* ``HeadObject`` returns the stored SHA-256, its ``ChecksumType`` and the
+  length, and nothing else the adapter is allowed to read. Objects written
+  through this client are single-part, so their checksum type is
+  ``FULL_OBJECT`` -- the only type the adapter accepts as an identity. A
+  ``COMPOSITE`` answer is reachable through ``head_override``, because a
+  multipart object is exactly the case that must be refused.
 
 Every recorded call is kept so a test can assert on what was *sent* -- the
 conditional header, the checksum, the encryption -- rather than only on what came
@@ -69,12 +73,18 @@ class SyntheticClientError(Exception):
         )
 
 
+#: What S3 calls a checksum computed over the whole object's bytes, as opposed
+#: to ``COMPOSITE`` -- a digest of a multipart upload's part digests.
+FULL_OBJECT = "FULL_OBJECT"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StoredObject:
     """What the fake keeps per key. Bytes plus the checksum it was admitted under."""
 
     body: bytes
     checksum_sha256: str
+    checksum_type: str = FULL_OBJECT
 
 
 @dataclass
@@ -114,6 +124,9 @@ class FakeS3Client:
             self.objects[key] = StoredObject(
                 body=body,
                 checksum_sha256=base64.b64encode(sha256(body).digest()).decode("ascii"),
+                # Single-part writes only -- this client has no multipart path,
+                # so everything it stores has a full-object checksum.
+                checksum_type=FULL_OBJECT,
             )
             return {"ETag": '"synthetic-fake-etag"'}
 
@@ -130,6 +143,7 @@ class FakeS3Client:
                 raise SyntheticClientError("404", operation="HeadObject")
             return {
                 "ChecksumSHA256": stored.checksum_sha256,
+                "ChecksumType": stored.checksum_type,
                 "ContentLength": len(stored.body),
                 "ETag": '"synthetic-fake-etag"',
             }
@@ -163,6 +177,7 @@ LEAK_CANARIES = (
 
 
 __all__ = [
+    "FULL_OBJECT",
     "LEAK_CANARIES",
     "SYNTHETIC_BUCKET",
     "FakeS3Client",

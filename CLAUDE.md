@@ -292,7 +292,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
 **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13.**
-**PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS.**
+**PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -398,7 +398,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
 | **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
-| **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE** | **IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS** |
+| **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE** | **IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
@@ -606,14 +606,15 @@ row counts and pass/fail results are private and are never published.
 
 [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) authorized
 one thing: the **LICENSED-only S3 backend** of the provider-neutral `ResearchObjectStore`, written
-and reviewed **before** a credential exists, **before** a bucket is bound, and **before** a bill is
-running. `src/kalpamani/data/storage/s3.py` is the whole of it.
+and reviewed **while the store still has nothing bound to it** — no bucket identifier, no
+credential, no client. `src/kalpamani/data/storage/s3.py` is the whole of it.
 
 ```
 adapter EXISTS   ·   client INJECTED   ·   no client is constructed anywhere
-bucket NONE   ·   credential NONE   ·   profile NONE   ·   endpoint NONE
-runner NONE   ·   __main__ NONE   ·   caller NONE
-requests sent to AWS: ZERO   ·   objects written: ZERO   ·   buckets touched: ZERO
+adapter bucket binding: NONE   ·   adapter credential binding: NONE
+no profile, endpoint or region is named   ·   runner NONE   ·   __main__ NONE   ·   caller NONE
+AWS requests sent by the adapter: ZERO
+adapter-attributable request or object-storage activity: NONE
 ```
 
 What it guarantees, each with a test behind it rather than an intention:
@@ -621,10 +622,11 @@ What it guarantees, each with a test behind it rather than an intention:
 | | |
 |---|---|
 | **Append-only** | one `PutObject` with `IfNoneMatch="*"`. **No preflight `HEAD`** — a check-then-write is a race, and the bucket carries no versioning to absorb it (§4.23) |
-| **Integrity** | full-object **SHA-256**, sent and verified. **Never an ETag** — an ETag is a multipart-dependent opaque token, not a content hash |
+| **412 vs 409** | only `412 PreconditionFailed` means occupied. `409 ConditionalRequestConflict` is a retryable conflict in which the condition was never resolved: it is `TRANSIENT`, sends no `HeadObject`, and yields no idempotency or collision verdict |
+| **Integrity** | full-object **SHA-256**, sent and verified, and S3 must state `ChecksumType="FULL_OBJECT"`. **Never an ETag, and never a `COMPOSITE` checksum** — both depend on how the object was uploaded rather than on its bytes |
 | **Encryption** | SSE-S3 requested explicitly on every write, never inherited from a bucket default |
 | **Collisions** | resolved by `HeadObject` metadata. **The bytes are never downloaded** — this store has no read surface, and pulling vendor payloads back would spread licensed rows |
-| **Ambiguity** | an unverifiable response is `INVALID_RESPONSE`, a refusal. A permission failure is never absence |
+| **Ambiguity** | an unverifiable response is `INVALID_RESPONSE`, a refusal — including an absent or unrecognised checksum type. A permission failure is never absence |
 | **Errors** | sanitized into closed `StrEnum` vocabularies and raised `from None`. No bucket, key, endpoint, request id, host id or credential-shaped text can reach a log or a traceback |
 | **Surface** | `put_object` and `head_object` only. No read, list, delete, copy or multipart path exists to reach. **Deletion stays with the separately roled path** under ADR-0007 |
 | **CONTROL** | refused at admission. CONTROL publication remains **deferred** |
@@ -634,10 +636,20 @@ deployment must *construct* a signed client, and request signing, credential res
 behaviour must be the official SDK's. **No module under `src/` imports it**: the client is injected
 and backend errors are classified structurally, so importing the data platform pulls in no AWS
 code, opens no socket and performs no ambient credential discovery. A static test permits only
-`data/storage/s3.py` to name the SDK at all, and asserts that even it imports none of it today.
+`data/storage/s3.py` — the only application module under `src/` permitted to do so — to name the
+SDK at all, and asserts that even it imports none of it today.
 
-**The control is absence, not care.** There is no credential, no bucket, no client and no caller
-anywhere in this repository — each verified by a static test rather than asserted here.
+**The control is absence, not care.** This slice retrieved, inspected, created, configured and
+bound **no credential**; no bucket identifier is bound to the adapter or recorded in this pull
+request; and no module constructs a client or calls the store. Each is verified by a static test
+rather than asserted here.
+
+**What that does and does not claim.** It is a statement about this repository and this slice, not
+about the world: the AWS research foundation and its buckets already exist and were provisioned in
+August 2026, and what exists outside this repository is not something this slice examined or may
+infer. The adapter has sent **zero AWS requests** and incurred **no adapter-attributable request or
+object-storage activity** — which is a claim about the adapter, not a claim that nothing anywhere
+is billable.
 
 **Writing this backend authorized nothing else.** Every AWS action, Terraform command, verifier
 run, bucket binding, credential, client construction, ingestion runner, ECS task and CONTROL

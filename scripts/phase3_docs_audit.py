@@ -459,6 +459,41 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+#: Ways a document could assert the very thing corrected on 2026-08-28: that a
+#: conflict answer establishes occupancy. A targeted denylist of the defect,
+#: matching this file's existing idiom, rather than a heuristic sentence scan --
+#: a scan that had to be tuned until the prose passed would be measuring the
+#: prose, not the claim.
+CONFLICT_AS_OCCUPANCY = (
+    "409 means occupied",
+    "409 means the name is occupied",
+    "409 preconditionfailed",
+    "conditionalrequestconflict means occupied",
+    "conditionalrequestconflict is an occupied",
+    "a 409 is an occupied name",
+    "409 or 412",
+    "412 or 409",
+    "preconditionfailed or conditionalrequestconflict",
+    "conditionalrequestconflict, both",
+)
+
+
+def _asserts_conflict_is_occupancy(text: str) -> list[str]:
+    """Every defective phrasing a document contains, or an empty list."""
+    flat = " ".join(" ".join(line.lstrip("> ") for line in text.splitlines()).split()).lower()
+    return [phrase for phrase in CONFLICT_AS_OCCUPANCY if phrase in flat]
+
+
+def _has_a_loop(path: Path) -> bool:
+    """Whether a module contains any loop statement at all.
+
+    Comprehensions are not loops for this purpose: they cannot retry a request,
+    which is the thing being ruled out.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    return any(isinstance(node, ast.While | ast.For | ast.AsyncFor) for node in ast.walk(tree))
+
+
 def _executable_python(path: Path) -> str:
     """A Python module's code with every docstring removed.
 
@@ -2981,9 +3016,66 @@ def main() -> int:
             "no versioning means software is the only immutability boundary there is",
         )
         f.check(
+            "ADR-0011 distinguishes a 412 from a 409",
+            "Only a `412` means occupied" in flat11
+            and "409 ConditionalRequestConflict" in adr11
+            and "the condition was never resolved" in flat11.lower(),
+            "a conflict is retryable and proves nothing; occupancy is a 412 and only a 412",
+        )
+        f.check(
+            "ADR-0011 records that a 409 sends no HeadObject and yields no verdict",
+            "sends no `HeadObject`" in flat11
+            and "no idempotency or collision determination" in flat11,
+            "a HeadObject issued on a non-answer would invent a collision or a contradiction",
+        )
+        f.check(
+            "ADR-0011 adds no retry loop and says why a caller's retry is safe",
+            "no retry loop" in flat11 and "every attempt stays conditional" in flat11,
+            "retry policy is the caller's; safety comes from the write staying conditional",
+        )
+        f.check(
+            "no document asserts that a conflict answer establishes occupancy",
+            not any(
+                _asserts_conflict_is_occupancy(text)
+                for text in (adr11, read(REPO_ROOT / "CLAUDE.md"), read(REPO_ROOT / "README.md"))
+            ),
+            "the whole correction is that a 409 is not occupancy; pairing the two codes as "
+            "one meaning is how the defect was written in the first place",
+        )
+        f.check(
             "ADR-0011 refuses the ETag as an identity",
-            "never ETag" in adr11 and "multipart-dependent opaque token" in flat11,
+            "never an ETag" in flat11 and "multipart-dependent opaque token" in flat11,
             "an ETag is not a content hash, and treating it as one voids every identity claim",
+        )
+        f.check(
+            "ADR-0011 requires a proven FULL_OBJECT checksum type",
+            "FULL_OBJECT" in adr11 and "COMPOSITE" in adr11,
+            "the algorithm being SHA-256 is not enough; the type has to be proven",
+        )
+        f.check(
+            "ADR-0011 explains why a composite checksum is not a content address",
+            "digest of part digests" in flat11 or "digest of a multipart upload" in flat11,
+            "a composite value varies with the part size, so it does not name the bytes",
+        )
+        f.check(
+            "ADR-0011 refuses an unstated checksum type as well as a composite one",
+            "an allowlist of one, matched exactly" in flat11,
+            "a denylist would admit every checksum type AWS has not invented yet",
+        )
+        f.check(
+            "ADR-0011 substantiates the declared SDK floor rather than asserting it",
+            "boto3==1.36.0" in adr11
+            and "botocore==1.36.0" in adr11
+            and "the lowest `botocore` that release permits" in flat11,
+            "a version floor nobody checked is a guess wearing a bound",
+        )
+        f.check(
+            "ADR-0011 names the model members the floor was checked for",
+            all(
+                member in adr11
+                for member in ("IfNoneMatch", "ChecksumMode", "ChecksumType", "ChecksumSHA256")
+            ),
+            "the claim has to say what was verified, or it cannot be re-checked",
         )
         f.check(
             "ADR-0011 resolves a collision by metadata rather than by download",
@@ -3064,6 +3156,34 @@ def main() -> int:
             "a reader must not have to infer what merging this does not enable",
         )
         f.check(
+            "ADR-0011 uses merge-stable status wording",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in adr11
+            and "PENDING MERGE ACCEPTANCE" not in adr11,
+            "a status that has to be edited on merge is a status that will be wrong",
+        )
+        f.check(
+            "ADR-0011 scopes its absence claims to this slice",
+            "retrieved, inspected, created, configured and bound no credential" in flat11
+            and "binds no bucket identifier" in flat11,
+            "what this slice did is checkable; what exists elsewhere is not its claim",
+        )
+        f.check(
+            "ADR-0011 acknowledges what already exists outside this slice",
+            "provisioned in August 2026 and exist now" in flat11
+            and "its clock is running" in flat11,
+            "the foundation and the subscription are real; the ADR must not imply otherwise",
+        )
+        f.check(
+            "ADR-0011 makes no claim that no bill is running",
+            "before a bill is running" not in adr11 and "no bill is running" not in adr11,
+            "cost is not something this slice established",
+        )
+        f.check(
+            "ADR-0011 infers nothing about owner account activity",
+            "vendor account page" not in adr11 and "did not examine and must not" in flat11,
+            "assistant activity is not evidence about what the owner did",
+        )
+        f.check(
             "ADR-0011 rests its safety on absence rather than on care",
             "not that the code is careful" in flat11,
             '"the code is careful" is not a control; having no credential and no caller is',
@@ -3091,6 +3211,33 @@ def main() -> int:
             "the S3 store sends and verifies a full-object SHA-256",
             "ChecksumSHA256" in s3_source and "ChecksumAlgorithm" in s3_source,
             "identity is the digest the ObjectKey is named by",
+        )
+        f.check(
+            "the S3 store requires a proven FULL_OBJECT checksum type",
+            'FULL_OBJECT_CHECKSUM: Final = "FULL_OBJECT"' in s3_source
+            and "checksum_type != FULL_OBJECT_CHECKSUM" in s3_source,
+            "a COMPOSITE SHA-256 depends on the upload, not only on the bytes",
+        )
+        f.check(
+            "the S3 store treats only a 412 as occupancy",
+            '_OCCUPIED_CODES: Final[frozenset[str]] = frozenset({"PreconditionFailed", "412"})'
+            in s3_source,
+            "409 is a retryable conflict, and reading it as occupancy would be a fail-open",
+        )
+        f.check(
+            "the S3 store classifies a conflict as transient",
+            "_CONFLICT_CODES: Final[frozenset[str]] = frozenset("
+            '{"ConditionalRequestConflict", "409"})'
+            in s3_source
+            and "_TRANSIENT_CODES" in s3_source,
+            "the condition was never resolved, so nothing was learned about the name",
+        )
+        f.check(
+            "the S3 store adds no retry loop in this slice",
+            not _has_a_loop(S3_STORE),
+            "retry policy belongs to an authorized caller, not to the store. Checked as an "
+            "absence of loop *nodes*, because a substring probe for `while True` would miss "
+            "every other spelling of a retry",
         )
         f.check(
             "the S3 store exposes no read, list, delete or copy operation",
@@ -3149,6 +3296,41 @@ def main() -> int:
             "a reader must not mistake a written backend for a used one",
         )
         f.check(
+            f"{name} uses merge-stable status wording for this slice",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in body,
+            "the same sentence must stay true on both sides of the merge",
+        )
+        f.check(
+            f"{name} does not describe the slice as pending merge acceptance",
+            "PENDING MERGE ACCEPTANCE" not in body,
+            "a pending status is stale the moment it stops being pending -- the PR #13 defect",
+        )
+        f.check(
+            f"{name} scopes its absence claims to this slice and this repository",
+            "adapter bucket binding: NONE" in body and "adapter credential binding: NONE" in body,
+            "an unscoped 'bucket NONE' claims something this slice cannot establish",
+        )
+        f.check(
+            f"{name} makes no claim that nothing is billable",
+            "before a bill is running" not in body and "no bill is running" not in body,
+            "the AWS foundation exists and a vendor subscription clock is running",
+        )
+        f.check(
+            f"{name} claims zero requests for the adapter, not for the account",
+            "AWS requests sent by the adapter: ZERO" in body and "adapter-attributable" in body,
+            "what is checkable here is the adapter's behaviour, not the account's",
+        )
+        f.check(
+            f"{name} states no unscoped 'bucket NONE' or 'credential NONE'",
+            "bucket NONE   " not in body and "credential NONE   " not in body,
+            "the corrected wording names what is bound to the adapter",
+        )
+        f.check(
+            f"{name} narrows the SDK-boundary claim to application modules under src/",
+            "only application module under" in body or "only module under" in body,
+            "tests and this documentation name the SDK; the enforced boundary is src/",
+        )
+        f.check(
             f"{name} records the single runtime dependency and that nothing imports it",
             "boto3" in body and "imports it" in flat,
             "the dependency posture changed; the status documents must say how far",
@@ -3159,12 +3341,12 @@ def main() -> int:
             "provisioning a platform was never permission to use it, and neither is this",
         )
         f.check(
-            f"{name} states that the control is absence rather than care",
-            all(
-                phrase in flat.lower()
-                for phrase in ("no credential", "no bucket", "no client", "no caller")
-            ),
-            "the store is safe because it has nothing to reach AWS with, and that has to be read",
+            f"{name} states that the control is absence rather than care, and scopes it",
+            "retrieved, inspected, created, configured and" in flat
+            and "no bucket identifier is bound to the adapter" in flat
+            and "no module constructs a client or calls the store" in flat,
+            "the store is safe because nothing binds it to AWS -- said as a claim about this "
+            "slice, not as a claim about the owner's account",
         )
 
     # ---------------------------------------------------------------- verdict

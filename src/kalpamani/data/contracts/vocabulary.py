@@ -558,13 +558,18 @@ class ObjectStoreFailure(StrEnum):
         permission failure that returned "not there" would let a misconfigured
         role silently re-publish objects that already exist.
     ``PRECONDITION_FAILED``
-        The name is already occupied. The conditional write did its job.
+        The name is already occupied. The conditional write did its job, and
+        this is the **only** category that means it. A backend's conflict answer
+        -- S3's ``409 ConditionalRequestConflict``, where the condition was never
+        resolved because a concurrent operation was in flight -- is ``TRANSIENT``,
+        because it proves nothing about what is stored.
     ``NOT_FOUND``
         The backend answered, and the object genuinely is not there.
     ``THROTTLED``
         Rate-limited. Retryable by a caller that wants to.
     ``TRANSIENT``
-        A backend-side failure that may not recur.
+        A backend-side failure that may not recur, including a conditional-write
+        **conflict**: retryable, and never to be read as occupancy.
     ``INVALID_RESPONSE``
         The backend answered with something that cannot be verified -- a missing
         checksum, a malformed length, a contradictory result. Fails closed.
