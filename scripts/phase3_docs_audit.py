@@ -2052,8 +2052,29 @@ def main() -> int:
             ("writes its report under .runtime", '".runtime" / "phase3" / "sharadar"'),
             ("redacts URLs and query strings", "def redact("),
             ("keeps the verdict out of the exit code", "def operational_exit_code("),
+            # Live-run correctness. Each of these was a way the run could have meant
+            # something other than what the methodology said it meant.
+            ("sends an explicit five-year window", "def five_year_window("),
+            ("takes the ratio base from the action date", "def action_date_base("),
+            ("refuses an unusable actions table", "ACTIONS_NOT_USABLE"),
+            ("counts only splits that adjust a compared row", "splits_exercised"),
+            ("treats a split-like unmodelled action as confounding", "stock_dividend_literals"),
+            ("makes the caller state retrieval completeness", "retrieval_complete: bool"),
         ):
             f.check(f"the harness {label}", needle in harness, f"missing: {needle!r}")
+
+        f.check(
+            "the harness never requests a table-wide bulk download",
+            '("years"' not in harness and '"years":' not in harness,
+            "`years=` fetches every security, not the authorized single-ticker probe",
+        )
+        f.check(
+            "the harness windows every temporal table and no snapshot",
+            "WINDOWED_TABLES: tuple[str, ...] = tuple(t for t, windowed in REQUEST_INVENTORY"
+            in harness
+            and '("tickers", False)' in harness,
+            "tickers is a snapshot and must not carry a date range; the rest must",
+        )
         f.check(
             "the harness declares the test key as a vendor-published public token",
             "PUBLIC TEST TOKEN" in harness,
