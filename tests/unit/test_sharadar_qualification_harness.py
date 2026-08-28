@@ -15,8 +15,13 @@ each is a *disclosure* control rather than a correctness one:
    exit code is derived from an object that has no verdict field, and error text is
    assembled from stage/table/code rather than redacted after the fact.
 3. **Optimism is refused structurally.** P2 cannot pass, P7 and P8 cannot pass, P9 cannot
-   reach ``PUBLIC_PIT``, P1 cannot reach ``TESTED``, and P5 cannot reach ``TESTED``
-   because the vendor's dividend and spinoff formula is unpublished.
+   reach ``PUBLIC_PIT``, P1 cannot reach ``TESTED``, P4 is documentation-resolved and can
+   never shed ``CLASSIFICATION_STATIC``, and P5 cannot reach ``TESTED`` because its spinoff
+   limb cannot be exercised from this surface at all.
+5. **Pessimism is refused too.** The vendor published its adjustment methodology on
+   2026-07-29, so a limb that *can* now be reconciled must be, and a fixture that reaches a
+   favourable outcome exists precisely so the conservative assertions cannot pass against a
+   function that always says "no".
 4. **Licensed evidence is never lost and never misfiled.** Raw payloads go to the
    licensed bucket and are deleted locally only once they are there; a failed upload
    keeps them.
@@ -529,7 +534,7 @@ def test_p2_can_never_pass_on_the_public_sample() -> None:
     assert H.STATUS_CEILING["P2"] == frozenset({H.NOT_TESTABLE_WITH_PUBLIC_SAMPLE})
 
 
-@pytest.mark.parametrize("test_id", ["P2", "P6", "P9"])
+@pytest.mark.parametrize("test_id", ["P2", "P4", "P6", "P9"])
 def test_the_undecidable_tests_take_no_sample_argument(test_id: str) -> None:
     """A function with no data parameter cannot be talked into a pass by a fixture."""
     evaluator = getattr(H, f"evaluate_{test_id.lower()}")
@@ -650,27 +655,70 @@ def test_p3_stays_documentation_resolved_and_keeps_the_approximation_token() -> 
     assert "CORPORATE_ACTION_ANNOUNCE_APPROXIMATED" in finding.limitations
 
 
-def test_p4_preserves_the_static_classification_limitation_on_a_current_only_table() -> None:
-    finding = H.evaluate_p4(_samples({"tickers": fx.TICKERS_CSV}))
-    assert "CLASSIFICATION_STATIC" in finding.limitations
+def test_p4_is_documentation_resolved_and_takes_no_sample() -> None:
+    """The tickers table is a documented snapshot, so no sample can settle P4 either way."""
+    finding = H.evaluate_p4()
+    assert finding.status == H.DOCUMENTATION_RESOLVED
+    assert finding.attributes["source_shape"] == "SNAPSHOT"
+    assert H.evaluate_p4.__code__.co_argcount == 0
 
 
-def test_several_rows_per_issuer_are_not_mistaken_for_classification_history() -> None:
-    """One row per source table is not a dated series, and must not drop the limitation."""
-    finding = H.evaluate_p4(_samples({"tickers": fx.TICKERS_MULTI_TABLE_CSV}))
-    assert "CLASSIFICATION_STATIC" in finding.limitations
+def test_p4_always_carries_the_static_classification_limitation() -> None:
+    assert "CLASSIFICATION_STATIC" in H.evaluate_p4().limitations
+    assert H.STATUS_CEILING["P4"] == frozenset({H.DOCUMENTATION_RESOLVED})
 
 
-def test_a_genuine_classification_change_is_detected() -> None:
-    """Without this the previous test could pass on a function that always says STATIC."""
-    finding = H.evaluate_p4(_samples({"tickers": fx.TICKERS_RECLASSIFIED_CSV}))
-    assert "CLASSIFICATION_STATIC" not in finding.limitations
+@pytest.mark.parametrize(
+    "tickers",
+    [fx.TICKERS_CSV, fx.TICKERS_MULTI_TABLE_CSV, fx.TICKERS_RECLASSIFIED_CSV],
+)
+def test_no_arrangement_of_snapshot_rows_removes_the_static_limitation(tickers: str) -> None:
+    """The correction this pins.
+
+    An earlier version read *differing* sector/industry values across snapshot rows as a
+    dated series and dropped ``CLASSIFICATION_STATIC``. Differing values in a snapshot mean
+    the snapshot disagrees with itself; they carry no date and cannot say when anything
+    changed. ``TICKERS_RECLASSIFIED_CSV`` is exactly that shape, and it must change nothing.
+    """
+    findings = H.evaluate_all(_samples({"tickers": tickers}))
+    p4 = next(f for f in findings if f.test_id == "P4")
+    assert "CLASSIFICATION_STATIC" in p4.limitations
+    assert p4.status == H.DOCUMENTATION_RESOLVED
 
 
-def test_p4_is_inconclusive_and_still_conservative_when_the_table_is_missing() -> None:
-    finding = H.evaluate_p4({})
-    assert finding.status == H.INCONCLUSIVE
-    assert "CLASSIFICATION_STATIC" in finding.limitations
+def test_no_sample_can_promote_p4_to_tested() -> None:
+    for payloads in ({}, fx.COHERENT_SAMPLE, {"tickers": fx.TICKERS_RECLASSIFIED_CSV}):
+        findings = H.evaluate_all(_samples(payloads))
+        p4 = next(f for f in findings if f.test_id == "P4")
+        assert p4.status != H.TESTED
+
+
+def test_a_forged_p4_pass_is_refused() -> None:
+    findings = list(H.evaluate_all(_samples(fx.COHERENT_SAMPLE)))
+    index = next(i for i, f in enumerate(findings) if f.test_id == "P4")
+    findings[index] = H.Finding(
+        test_id="P4",
+        title="Classification history",
+        status=H.TESTED,
+        limitations=("CLASSIFICATION_STATIC",),
+    )
+    with pytest.raises(H.SafeHarnessError) as excinfo:
+        H.validate_findings(findings)
+    assert "STATUS_ABOVE_CEILING_P4" in str(excinfo.value)
+
+
+def test_a_p4_that_drops_the_static_limitation_is_refused() -> None:
+    findings = list(H.evaluate_all(_samples(fx.COHERENT_SAMPLE)))
+    index = next(i for i, f in enumerate(findings) if f.test_id == "P4")
+    findings[index] = H.Finding(
+        test_id="P4",
+        title="Classification history",
+        status=H.DOCUMENTATION_RESOLVED,
+        limitations=(),
+    )
+    with pytest.raises(H.SafeHarnessError) as excinfo:
+        H.validate_findings(findings)
+    assert "P4_MUST_RETAIN_CLASSIFICATION_STATIC" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -721,17 +769,188 @@ def test_dividends_are_not_folded_into_the_split_factor() -> None:
     assert splits == [("2020-06-01", 2.0)]
 
 
-def test_p5_cannot_reach_tested_because_the_full_formula_is_unpublished() -> None:
-    finding = H.evaluate_p5(_samples(fx.COHERENT_SAMPLE))
-    assert finding.status == H.PARTIALLY_TESTED
-    assert finding.attributes["split_limb"] == H.TESTED
-    assert finding.attributes["full_adjustment_limb"] == H.INCONCLUSIVE
-    assert "FULL_ADJUSTMENT_FORMULA_UNPUBLISHED" in finding.limitations
-
-
 def test_p5_is_inconclusive_when_the_split_limb_fails() -> None:
     samples = _samples({"stocks": fx.STOCKS_IRRECONCILABLE_CSV, "actions": fx.ACTIONS_CSV})
     assert H.evaluate_p5(samples).status == H.INCONCLUSIVE
+
+
+# ---------------------------------------------------------------------------
+# P5 -- the cash-dividend limb, against the vendor's published ratio
+# ---------------------------------------------------------------------------
+
+
+def test_the_action_vocabulary_is_observed_not_assumed() -> None:
+    actions = _samples({"actions": fx.ACTIONS_COHERENT_CSV})["actions"]
+    assert H.observed_action_vocabulary(actions) == ("dividend", "split")
+
+
+def test_an_unambiguous_dividend_literal_is_identified() -> None:
+    vocabulary = ("dividend", "split")
+    assert H.infer_action_literal(vocabulary, "dividend", exclude="stock") == "dividend"
+
+
+def test_a_stock_dividend_does_not_make_the_cash_literal_ambiguous() -> None:
+    vocabulary = ("dividend", "split", "stockdividend")
+    assert H.infer_action_literal(vocabulary, "dividend", exclude="stock") == "dividend"
+
+
+def test_an_ambiguous_vocabulary_refuses_to_pick_a_favourite() -> None:
+    vocabulary = ("dividend", "specialdividend", "split")
+    assert H.infer_action_literal(vocabulary, "dividend", exclude="stock") is None
+
+
+def test_an_absent_literal_is_not_invented() -> None:
+    assert H.infer_action_literal(("split",), "dividend") is None
+
+
+def test_an_absent_literal_is_distinguished_from_an_ambiguous_one() -> None:
+    """Collapsing these two would turn a quiet sample into a provider finding.
+
+    No dividend action in the window means the limb was never exercised. Several
+    dividend-like literals mean the harness must not choose. Only the second is a reason to
+    report INCONCLUSIVE, and an earlier revision reported both that way.
+    """
+    _, absent = H.classify_action_literal(("split",), "dividend")
+    _, ambiguous = H.classify_action_literal(("dividend", "specialdividend"), "dividend")
+    _, identified = H.classify_action_literal(("dividend", "split"), "dividend")
+
+    assert absent == H.LITERAL_ABSENT
+    assert ambiguous == H.LITERAL_AMBIGUOUS
+    assert identified == H.LITERAL_IDENTIFIED
+    assert len({absent, ambiguous, identified}) == 3
+
+
+def test_the_dividend_limb_pins_both_the_convention_and_the_denomination() -> None:
+    """The fixture discriminates all four candidate models, so the answer is observed.
+
+    The vendor publishes the ratio but states neither which price series the dividend is
+    denominated in nor whether an action dated D applies at D itself. Naming a single model
+    is therefore a measurement, not an assumption.
+    """
+    finding = H.evaluate_p5(_samples(fx.COHERENT_SAMPLE))
+    assert finding.attributes["dividend_limb"] == H.TESTED
+    assert finding.attributes["dividend_model"] == "EXCLUSIVE_UNADJUSTED"
+
+
+def test_the_dividend_limb_is_inconclusive_when_the_vocabulary_is_ambiguous() -> None:
+    samples = _samples(
+        {
+            "stocks": fx.STOCKS_COHERENT_CSV,
+            "actions": fx.ACTIONS_AMBIGUOUS_DIVIDEND_CSV,
+        }
+    )
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["dividend_limb"] == H.INCONCLUSIVE
+    assert finding.status == H.INCONCLUSIVE
+
+
+def test_the_dividend_limb_is_inconclusive_when_nothing_reconciles() -> None:
+    samples = _samples(
+        {
+            "stocks": fx.STOCKS_DIVIDEND_IRRECONCILABLE_CSV,
+            "actions": fx.ACTIONS_COHERENT_CSV,
+        }
+    )
+    assert H.evaluate_p5(samples).attributes["dividend_limb"] == H.INCONCLUSIVE
+
+
+def test_a_range_with_no_dividend_is_not_a_dividend_pass() -> None:
+    """Trivial agreement proves nothing about the mechanism."""
+    samples = _samples({"stocks": fx.STOCKS_NO_DIVIDEND_CSV, "actions": fx.ACTIONS_SPLIT_ONLY_CSV})
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["dividend_limb"] == H.PARTIALLY_TESTED
+    assert finding.status == H.PARTIALLY_TESTED
+
+
+def test_an_unexplained_divergence_is_inconclusive_not_absent() -> None:
+    """close and closeadj differ with no event that could explain it. That is a finding."""
+    samples = _samples(
+        {
+            "stocks": fx.STOCKS_UNEXPLAINED_DIVERGENCE_CSV,
+            "actions": fx.ACTIONS_SPLIT_ONLY_CSV,
+        }
+    )
+    assert H.evaluate_p5(samples).attributes["dividend_limb"] == H.INCONCLUSIVE
+
+
+# ---------------------------------------------------------------------------
+# P5 -- the spinoff limb, which can never be exercised here
+# ---------------------------------------------------------------------------
+
+
+def test_the_spinoff_limb_does_not_run_when_no_spinoff_is_present() -> None:
+    finding = H.evaluate_p5(_samples(fx.COHERENT_SAMPLE))
+    assert finding.attributes["spinoff_limb"] == H.NOT_EXERCISED
+    assert "SPINOFF_ADJUSTMENT_UNEXERCISED" in finding.limitations
+
+
+def test_a_spinoff_in_range_makes_the_limb_inconclusive() -> None:
+    """Its ratio needs the spun-off entity's opening price, which this sample cannot hold."""
+    samples = _samples({"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_WITH_SPINOFF_CSV})
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["spinoff_limb"] == H.INCONCLUSIVE
+    assert finding.status == H.INCONCLUSIVE
+    assert "SPINOFF_ADJUSTMENT_INPUTS_UNAVAILABLE" in finding.limitations
+
+
+def test_the_spinoff_limb_is_never_tested_whatever_the_sample() -> None:
+    for payloads in (
+        {},
+        fx.COHERENT_SAMPLE,
+        {"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_WITH_SPINOFF_CSV},
+        {"stocks": fx.STOCKS_NO_DIVIDEND_CSV, "actions": fx.ACTIONS_SPLIT_ONLY_CSV},
+    ):
+        finding = H.evaluate_p5(_samples(payloads))
+        assert finding.attributes["spinoff_limb"] != H.TESTED
+
+
+def test_a_forged_tested_spinoff_limb_is_refused() -> None:
+    findings = list(H.evaluate_all(_samples(fx.COHERENT_SAMPLE)))
+    index = next(i for i, f in enumerate(findings) if f.test_id == "P5")
+    findings[index] = H.Finding(
+        test_id="P5",
+        title="Adjusted/raw reconciliation",
+        status=H.PARTIALLY_TESTED,
+        attributes={
+            "split_limb": H.TESTED,
+            "dividend_limb": H.TESTED,
+            "spinoff_limb": H.TESTED,
+        },
+    )
+    with pytest.raises(H.SafeHarnessError) as excinfo:
+        H.validate_findings(findings)
+    assert "P5_SPINOFF_LIMB_CANNOT_BE_TESTED" in str(excinfo.value)
+
+
+def test_a_p5_missing_a_limb_status_is_refused() -> None:
+    findings = list(H.evaluate_all(_samples(fx.COHERENT_SAMPLE)))
+    index = next(i for i, f in enumerate(findings) if f.test_id == "P5")
+    findings[index] = H.Finding(
+        test_id="P5",
+        title="Adjusted/raw reconciliation",
+        status=H.PARTIALLY_TESTED,
+        attributes={"split_limb": H.TESTED, "dividend_limb": H.TESTED},
+    )
+    with pytest.raises(H.SafeHarnessError) as excinfo:
+        H.validate_findings(findings)
+    assert "P5_LIMB_STATUS_MISSING" in str(excinfo.value)
+
+
+def test_p5_never_reaches_tested_even_when_every_runnable_limb_passes() -> None:
+    """The whole point of the ceiling: a mechanism never exercised end to end is not proven."""
+    finding = H.evaluate_p5(_samples(fx.COHERENT_SAMPLE))
+    assert finding.attributes["split_limb"] == H.TESTED
+    assert finding.attributes["dividend_limb"] == H.TESTED
+    assert finding.status == H.PARTIALLY_TESTED
+    assert H.TESTED not in H.STATUS_CEILING["P5"]
+
+
+def test_not_exercised_is_a_limb_status_and_never_a_finding_status() -> None:
+    """A limb the sample never ran must not be expressible as a provider-test result."""
+    assert H.NOT_EXERCISED in H.LIMB_STATUSES
+    assert H.NOT_EXERCISED not in H.STATUSES
+    for ceiling in H.STATUS_CEILING.values():
+        assert H.NOT_EXERCISED not in ceiling
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +990,26 @@ def test_a_vendor_series_that_does_not_reconcile_produces_a_reject() -> None:
 
 def test_missing_evidence_holds_rather_than_proceeding() -> None:
     assert H.private_recommendation(H.evaluate_all({})) == H.HOLD
+
+
+def test_missing_evidence_never_rejects_the_provider() -> None:
+    """A table we could not retrieve says nothing about the vendor's data.
+
+    REJECT is reserved for the vendor's own two price series contradicting each other, which
+    requires having compared them. An earlier revision reached REJECT from an empty sample,
+    because "not retrieved" and "failed to reconcile" shared one limb status.
+    """
+    findings = H.evaluate_all({})
+    p5 = next(f for f in findings if f.test_id == "P5")
+    assert p5.attributes["split_limb"] == H.NOT_EXERCISED
+    assert p5.attributes["evidence"] == "STOCKS_NOT_RETRIEVED"
+    assert H.private_recommendation(findings) == H.HOLD
+
+
+def test_a_genuine_reconciliation_failure_still_rejects() -> None:
+    """Without this, the test above could pass on a function that never rejects at all."""
+    samples = _samples({"stocks": fx.STOCKS_IRRECONCILABLE_CSV, "actions": fx.ACTIONS_CSV})
+    assert H.private_recommendation(H.evaluate_all(samples)) == H.REJECT
 
 
 def test_a_coherent_sample_can_reach_proceed() -> None:
@@ -848,6 +1087,34 @@ def test_the_report_holds_the_recommendation_that_the_console_withholds(tmp_path
     console = "\n".join(H.console_lines(outcome))
     private = next(r for r in H.RECOMMENDATIONS if r in html)
     assert private not in console
+
+
+def test_the_report_does_not_claim_full_history_resolves_p6(tmp_path: Path) -> None:
+    """P6 is a modelling limitation, not a coverage one, and no tier fixes it.
+
+    As-reported excludes restatements and most-recent-reported is updated in place, so no
+    revision chronology exists at any depth. A report that bundled P6 with P2 as "both need
+    Full History" would encourage a purchase on a false premise.
+    """
+    outcome, _ = _run(tmp_path, dict(fx.COHERENT_SAMPLE))
+    html = outcome.report_path.read_text(encoding="utf-8")
+
+    assert "Full History does NOT solve this" in html
+    assert "EDGAR / Phase 3B is the required route" in html
+    assert "P2 and P6 remain the two structural unknowns" not in html
+
+    # No sentence may pair P6 with Full History as a solution.
+    for line in html.splitlines():
+        if "P6" in line and "Full History" in line:
+            assert "NOT" in line, f"P6 and Full History paired without a refusal: {line}"
+
+
+def test_the_report_still_tells_the_owner_p2_needs_paid_depth(tmp_path: Path) -> None:
+    """The corrected wording must not lose P2's real requirement while fixing P6's."""
+    outcome, _ = _run(tmp_path, dict(fx.COHERENT_SAMPLE))
+    html = outcome.report_path.read_text(encoding="utf-8")
+    assert "delisted coverage" in html.lower()
+    assert "Full History depth" in html
 
 
 def test_a_failed_upload_keeps_the_raw_payload_and_reports_an_operational_failure(

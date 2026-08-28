@@ -19,8 +19,11 @@ a split whose effective date has a price row  the inclusive/exclusive convention
 ``STOCKS_EXCLUSIVE`` / ``STOCKS_INCLUSIVE``   the two conventions are distinguished, not assumed
 ``STOCKS_IRRECONCILABLE``                     a broken adjusted series reports INCONCLUSIVE
 ``STOCKS_NO_SPLIT``                           a trivially-agreeing range is not a pass
-``TICKERS_MULTI_TABLE``                       several rows per issuer is not classification history
-``TICKERS_RECLASSIFIED``                      a genuine classification change *is* detected
+``TICKERS_RECLASSIFIED``                      differing snapshot rows are still not history
+``STOCKS_COHERENT`` + ``ACTIONS_COHERENT``    the dividend denomination and convention are pinned
+``ACTIONS_AMBIGUOUS_DIVIDEND``                an ambiguous vocabulary refuses to pick a favourite
+``ACTIONS_WITH_SPINOFF``                      a spinoff makes the limb inconclusive, not absent
+``STOCKS_UNEXPLAINED_DIVERGENCE``             an unexplained gap is inconclusive, not "no event"
 ===========================================  ==============================================
 """
 
@@ -163,11 +166,109 @@ FAKE,2020-05-04,16:30:00,11
 #: Not CSV at all. A malformed payload must degrade to INCONCLUSIVE, never to a pass.
 MALFORMED_PAYLOAD = b"\xff\xfe\x00not a csv payload at all"
 
-#: A complete, internally consistent sample under the EXCLUSIVE convention.
+# ---------------------------------------------------------------------------
+# The cash-dividend limb
+# ---------------------------------------------------------------------------
+#
+# The identity under test: close / closeadj == the product of cash-dividend ratios falling
+# after the row's date, where each ratio is (C_prev + D) / C_prev on the close BEFORE the
+# ex-date (the vendor's published formula).
+#
+# Two things are deliberately arranged so the fixture DISCRIMINATES rather than merely
+# agrees, because the vendor states neither:
+#
+#   * the dividend sits BEFORE the split, so the pre-event unadjusted close (200.0) and
+#     split-adjusted close (100.0) differ -- which separates the two denominations;
+#   * a price row sits ON the ex-date, which separates the inclusive convention from the
+#     exclusive one.
+#
+# Arithmetic, all exact:
+#   dividend 50.0 on 2020-03-02, prior row 2020-01-02
+#     unadjusted base 200.0 -> ratio 250/200 = 1.25   -> closeadj 100.0/1.25 = 80.0
+#     split-adjusted base 100.0 -> ratio 150/100 = 1.5 -> would give 66.67, far outside
+#   rows on/after the ex-date carry no later dividend, so close == closeadj
+
+ACTIONS_COHERENT_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+STOCKS_COHERENT_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-01-02,99.0,101.0,98.0,100.0,1000,80.0,200.0,2024-06-03
+FAKE,2020-03-02,89.0,91.0,88.0,90.0,1100,90.0,180.0,2024-06-03
+FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,120.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+FAKE,2020-09-01,64.0,66.0,63.0,65.0,1400,65.0,65.0,2024-06-03
+"""
+)
+
+#: Two dividend-like literals. `infer_action_literal` must return None rather than pick a
+#: favourite, and the limb must be INCONCLUSIVE rather than silently choose one.
+ACTIONS_AMBIGUOUS_DIVIDEND_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,specialdividend,FAKE,Fictitious Inc,10.0,,
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+#: A stock dividend alongside a cash dividend. The stock-dividend literal must be excluded
+#: so the cash-dividend literal stays unambiguous -- otherwise the exclusion rule is untested.
+ACTIONS_STOCK_AND_CASH_DIVIDEND_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,stockdividend,FAKE,Fictitious Inc,1.005,,
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+#: A spinoff in range. Its ratio needs the spun-off entity's opening price, which no sample
+#: of the parent contains, so the limb must be INCONCLUSIVE and every earlier row dropped.
+ACTIONS_WITH_SPINOFF_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,spinoff,FAKE,Fictitious Inc,0.25,SPUN,Spun Out Inc
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+#: A series whose fully adjusted close matches no combination of convention and
+#: denomination. A broken dividend adjustment must report INCONCLUSIVE, never a pass.
+STOCKS_DIVIDEND_IRRECONCILABLE_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-01-02,99.0,101.0,98.0,100.0,1000,37.0,200.0,2024-06-03
+FAKE,2020-03-02,89.0,91.0,88.0,90.0,1100,90.0,180.0,2024-06-03
+FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,120.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+"""
+)
+
+#: No cash dividend anywhere. close and closeadj agree trivially, which exercises nothing:
+#: the limb must be PARTIALLY_TESTED, never TESTED.
+ACTIONS_SPLIT_ONLY_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+STOCKS_NO_DIVIDEND_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,120.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+FAKE,2020-09-01,64.0,66.0,63.0,65.0,1400,65.0,65.0,2024-06-03
+"""
+)
+
+#: close and closeadj diverge with no dividend and no spinoff recorded that could explain
+#: it. That is an inconsistency, and it must read as INCONCLUSIVE rather than as absence.
+STOCKS_UNEXPLAINED_DIVERGENCE_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,50.0,120.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+"""
+)
+
+#: A complete, internally consistent sample: the split limb reconciles under the exclusive
+#: convention, and the cash-dividend limb reconciles under the exclusive/unadjusted model.
+#: It is the fixture that lets a *favourable* outcome be reached at all -- without one, every
+#: conservative assertion elsewhere would pass against a function that always says "no".
 COHERENT_SAMPLE: dict[str, str] = {
     "tickers": TICKERS_CSV,
-    "stocks": STOCKS_EXCLUSIVE_CSV,
-    "actions": ACTIONS_CSV,
+    "stocks": STOCKS_COHERENT_CSV,
+    "actions": ACTIONS_COHERENT_CSV,
     "fundamentals": FUNDAMENTALS_CSV,
     "events": EVENTS_CSV,
 }
