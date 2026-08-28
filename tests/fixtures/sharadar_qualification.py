@@ -330,6 +330,70 @@ FAKE,2020-09-01,64.0,66.0,63.0,65.0,1400,65.0,65.0,2024-06-03
 """
 )
 
+# ---------------------------------------------------------------------------
+# A split whose direction the sample cannot distinguish
+# ---------------------------------------------------------------------------
+
+#: A split in range, but no price row ON the split date. Both conventions then fit, and
+#: agreement by absence of a discriminating row is not a measurement of the direction.
+STOCKS_NO_ACTION_DATE_ROW_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-01-02,49.0,51.0,48.0,50.0,1000,50.0,100.0,2024-06-03
+FAKE,2020-09-01,64.0,66.0,63.0,65.0,1300,65.0,65.0,2024-06-03
+"""
+)
+
+# ---------------------------------------------------------------------------
+# Action vocabularies that must fail closed
+# ---------------------------------------------------------------------------
+
+#: Two spin-like literals. Reading that as "no spinoff" would collapse AMBIGUOUS into
+#: ABSENT -- the same conflation the dividend limb was already corrected for.
+ACTIONS_AMBIGUOUS_SPINOFF_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,spinoff,FAKE,Fictitious Inc,0.25,SPUN,Spun Out Inc
+2020-05-02,spinoffdistribution,FAKE,Fictitious Inc,0.25,SPUN,Spun Out Inc
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+#: An ADR ratio change rescales shares exactly as a split does, and the vendor publishes no
+#: action-type list, so the literal cannot be interpreted. It must confound the split limb.
+ACTIONS_UNKNOWN_LITERAL_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,adrratiochange,FAKE,Fictitious Inc,2.0,,
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+#: A ticker change is an identity event the vendor's own prose names, and cannot move a
+#: price. Without this the confounding rule could be one that confounds on everything.
+ACTIONS_WITH_TICKER_CHANGE_CSV = """date,action,ticker,name,value,contraticker,contraname
+2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
+2020-05-01,tickerchange,FAKE,Fictitious Inc,,OLDF,Fictitious Inc
+2020-06-01,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+# ---------------------------------------------------------------------------
+# HTTP success carrying something unusable
+# ---------------------------------------------------------------------------
+#
+# Each of these would arrive with status 200 and appear in no fetch-error list.
+
+#: Documented columns, no rows.
+FUNDAMENTALS_HEADER_ONLY_CSV = (
+    "ticker,dimension,calendardate,datekey,reportperiod,lastupdated,revenue\n"
+)
+
+#: A different schema entirely -- no ticker, permaticker or name.
+TICKERS_WRONG_SCHEMA_CSV = """symbol,venue,delisted
+FAKE,XFAK,N
+"""
+
+#: Prices without any adjusted or unadjusted close, so nothing is comparable.
+STOCKS_WRONG_SCHEMA_CSV = """ticker,date,open,high,low,close,volume
+FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300
+"""
+
 #: A complete, internally consistent sample: the split limb reconciles under the exclusive
 #: convention, and the cash-dividend limb reconciles under the exclusive/unadjusted model.
 #: It is the fixture that lets a *favourable* outcome be reached at all -- without one, every

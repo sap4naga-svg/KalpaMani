@@ -536,3 +536,73 @@ def test_the_harness_stores_qualification_material_only_under_the_licensed_prefi
     source = HARNESS.read_text(encoding="utf-8")
     assert 'return f"qualification/sharadar/{run_id}"' in source
     assert "assert_licensed_destination" in source
+
+
+# ---------------------------------------------------------------------------
+# Corrected wording, and corrected semantics, must not drift back
+# ---------------------------------------------------------------------------
+
+#: Phrases that were true of an earlier draft and are now wrong. Each described the probe or
+#: its method inaccurately in a way that flattered it, which is why they are pinned rather
+#: than merely fixed.
+RETIRED_PHRASES = {
+    "30-name": "the probe is a SINGLE security, not the 30-name sample subscription",
+    "pre-event close": "the ratio base is the close ON the action date, not before it",
+    "preceding close": "the ratio base is the close ON the action date",
+}
+
+#: "30 DJIA" is deliberately NOT retired. The harness names that subscription in order to
+#: distinguish it from the no-account test-key surface, and the distinction is the point --
+#: banning the words would delete the correction rather than protect it.
+
+#: Files that describe the harness and its method. The register and the decision packet are
+#: excluded on purpose: they legitimately describe the *sample subscription*, which really
+#: is 30 DJIA names, and conflating the two surfaces is the error being guarded against.
+#:
+#: This module is absent from the list on purpose: it *declares* the retired phrases, so
+#: scanning itself would make the guard flag its own definition. That is the same
+#: self-reference the empirical-verdict guard already had to avoid.
+METHOD_FILES = (
+    HARNESS,
+    FIXTURES,
+    PROJECT_ROOT / "tests" / "unit" / "test_sharadar_qualification_harness.py",
+)
+
+
+@pytest.mark.parametrize("phrase", sorted(RETIRED_PHRASES))
+def test_no_retired_methodology_phrase_returns(phrase: str) -> None:
+    offenders = [
+        str(path.relative_to(PROJECT_ROOT))
+        for path in METHOD_FILES
+        if phrase in (_text(path) or "")
+    ]
+    assert offenders == [], f"{phrase!r} is retired -- {RETIRED_PHRASES[phrase]}. In: {offenders}"
+
+
+def test_the_harness_describes_the_probe_as_single_name() -> None:
+    """The positive half: the corrected wording must actually be present."""
+    source = HARNESS.read_text(encoding="utf-8")
+    assert "single-name, five-year" in source
+    assert "action-date" in source
+    # The contrast between the two free surfaces must survive, or a later reader can
+    # conflate them again exactly as this correction had to un-conflate them.
+    assert "sample subscription" in source
+    assert "single security" in source
+
+
+def test_the_harness_cannot_return_a_reject() -> None:
+    """REJECT stays in the vocabulary for stronger future evidence and is earned by none here.
+
+    The split comparison rests on reading ``actions.value`` as the adjustment ratio, which
+    the vendor documents only as *numeric*. A failed reconciliation is therefore consistent
+    with our interpretation being wrong, so no free single-name probe may convict a provider.
+    """
+    tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
+    returns_reject = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "REJECT"
+    ]
+    assert returns_reject == [], f"the harness can still convict a provider: {returns_reject}"

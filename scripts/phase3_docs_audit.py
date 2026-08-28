@@ -2060,9 +2060,37 @@ def main() -> int:
             ("counts only splits that adjust a compared row", "splits_exercised"),
             ("treats a split-like unmodelled action as confounding", "stock_dividend_literals"),
             ("makes the caller state retrieval completeness", "retrieval_complete: bool"),
+            (
+                "validates that responses are usable, not merely returned",
+                "def validate_retrieved_inventory(",
+            ),
+            ("confounds on any unmodelled action literal", "def unmodelled_action_literals("),
+            (
+                "refuses to file a documented-method contradiction as a pass",
+                "DOCUMENTATION_DATA_CONTRADICTION",
+            ),
+            (
+                "refuses agreement by absence of a discriminating row",
+                "CONVENTION_NOT_DISCRIMINATED",
+            ),
         ):
             f.check(f"the harness {label}", needle in harness, f"missing: {needle!r}")
 
+        f.check(
+            "the harness cannot convict the provider from this free probe",
+            "return REJECT" not in harness,
+            "the split comparison rests on an undocumented reading of actions.value",
+        )
+        f.check(
+            "the harness requires both runnable P5 limbs before proceeding",
+            'for limb in ("split_limb", "dividend_limb"):' in harness,
+            "a trivially-agreeing limb must not reach PROCEED",
+        )
+        f.check(
+            "the harness describes the probe as single-name",
+            "single-name, five-year" in harness and "30-name" not in harness,
+            "the 30-name sample subscription is a different surface",
+        )
         f.check(
             "the harness never requests a table-wide bulk download",
             '("years"' not in harness and '"years":' not in harness,
