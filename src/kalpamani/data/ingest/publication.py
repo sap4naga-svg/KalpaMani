@@ -15,7 +15,7 @@ named by the SHA-256 of its contents, and never overwritten.
 
 .. code-block:: text
 
-    licensed/acquisition-claims/<digest>/<run-id>.json      <- GLOBAL, provider-independent
+    licensed/bronze/_acquisition_claims/<digest>/<run-id>.json   <- GLOBAL, provider-independent
     licensed/bronze/<provider>/<dataset>/objects/sha256/<digest>
     licensed/bronze/<provider>/<dataset>/acquisitions/<digest>/<run-id>.json
 
@@ -45,23 +45,33 @@ detectable and inert, but it can never leave a record naming a payload that does
 not exist. Re-running the same identity finishes it, because every write on the
 path is idempotent for identical content.
 
-**Everything published here is LICENSED, and there is no argument that changes
-it.** The key builders call :meth:`~kalpamani.data.objectstore.ObjectKey.licensed`,
-which takes no classification parameter. The claim and the acquisition record are
-licensed too -- not because either could reconstruct a vendor row, but because
-promoting a receipt to the control store is a decision that needs an explicit
-attestation, and this slice does not make it. Deferring costs nothing: they sit
-inside the vendor deletion surface, which is the conservative side.
+**Everything published here is LICENSED, and nothing else is publishable at all.**
+:meth:`~kalpamani.data.objectstore.ObjectKey.licensed` is the store's only
+constructor in this slice. The claim and the acquisition record are licensed too
+-- not because either could reconstruct a vendor row, but because clearing an
+artifact to a store that *survives* a vendor deletion needs a structured,
+durably-bound attestation, and this slice builds none. Deferring costs nothing:
+they sit inside the deletion surface, which is the conservative side.
 
-**Durable metadata carries no free text, and that is a structural property rather
-than a filter.** :func:`acquisition_record` emits a closed field set, and every
-field is validated against *its own* format -- a lowercase provider token, a
-closed range grammar, a UTC instant, a 64-hex digest, an exact ``bool``. A
-substring blocklist cannot prove the absence of an arbitrary credential, query
-string, bucket or cloud identifier; a grammar that admits neither spaces nor
-punctuation can. ``RetrievalMetadata.notes`` belongs to the A1 filesystem writer
-and **is never read on this path**, so there is no field here for human text to
-travel in.
+**Durable metadata carries no free text, and every field is checked against its
+own contract rather than a shape.** :func:`acquisition_record` emits a closed
+field set. Tokens and identifiers are matched by grammar; the two fields that
+carry meaning beyond their shape are **parsed**. A requested range must name real
+calendar dates that do not run backwards, or be one of :data:`NAMED_RANGES`; a
+retrieval instant must parse, be offset-aware UTC, and be the canonical spelling
+of itself. A pattern that counts digits admits ``2026-13-45`` and every inverted
+range there is, and would then have recorded either as a description of what was
+fetched.
+
+Types are checked with ``type(...) is``, so a ``bool`` cannot pass as an ``int``
+and a ``StrEnum`` member -- itself a ``str`` subclass -- cannot pass as the
+classification string. What is written is bytes on a disk: it must *be* the
+value, not something that currently compares equal to it.
+
+A substring blocklist cannot prove the absence of an arbitrary credential, query
+string, bucket or cloud identifier; a closed field set whose members are parsed
+can. ``RetrievalMetadata.notes`` belongs to the A1 filesystem writer and **is
+never read on this path**, so there is no field here for human text to travel in.
 
 **No provider row is parsed before publication.** A payload is opaque bytes. A
 future provider response that is malformed, truncated or in an unexpected format
@@ -73,19 +83,37 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import ProviderMetadataDisclosureError
 from kalpamani.data.contracts.vocabulary import DataClassification
 from kalpamani.data.ingest.bronze import RetrievalMetadata
-from kalpamani.data.objectstore import ObjectKey, PutOutcome, ResearchObjectStore
+from kalpamani.data.objectstore import (
+    ObjectKey,
+    PutOutcome,
+    ResearchObjectStore,
+    immutable_payload,
+)
 
-#: The top-level namespace holding the global acquisition claims. A **sibling** of
-#: ``bronze`` rather than a child of it, so no provider name can ever collide with
-#: it: providers live under ``bronze/<provider>/``, and nothing else is written
-#: directly under the classification prefix.
-CLAIM_NAMESPACE: Final = "acquisition-claims"
+#: The namespace holding the global acquisition claims. A **reserved segment
+#: inside** ``bronze/``, not a sibling of it, for two reasons that pull the same
+#: way.
+#:
+#: **Collision is refused by grammar.** It begins with an underscore, and
+#: :func:`~kalpamani.data.contracts.paths.safe_component` requires an externally
+#: supplied identifier to start with a letter or a digit -- so no provider can
+#: ever be named ``_acquisition_claims``. The reservation holds without anyone
+#: having to remember it.
+#:
+#: **Deletion already covers it.** The vendor-data deletion runbook deletes every
+#: object under ``bronze/``, so claims are inside the 30-day surface with no
+#: change to the runbook, ADR-0007's layout or the deletion role's permissions.
+#: A new top-level prefix would have been an "unexpected prefix" finding in that
+#: runbook's Step 3, and reconciling it would have meant editing the deletion
+#: procedure to accommodate a storage detail -- the wrong direction of travel.
+CLAIM_NAMESPACE: Final = "_acquisition_claims"
 
 #: The Bronze namespace. Provider-scoped, so each vendor's deletion surface stays
 #: separable.
@@ -120,31 +148,72 @@ CLAIM_FIELDS: Final[frozenset[str]] = frozenset(
 #: a sentence.
 _TOKEN: Final = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
-#: A requested range: either an explicit inclusive date range, or a single named
-#: token for a dataset with no time axis. Nothing else, so "range" cannot become
-#: a place to write a note.
-_RANGE: Final = re.compile(r"^(?:\d{4}-\d{2}-\d{2}/\d{4}-\d{2}-\d{2}|[A-Z][A-Z0-9_]{0,31})$")
-
-#: A UTC instant as :meth:`datetime.datetime.isoformat` renders it after
-#: normalisation. The offset is required and must be ``+00:00``.
-_INSTANT: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\+00:00$")
-
 #: A schema version or ingestion-run identifier.
 _IDENTIFIER: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 #: A content address. 64 lowercase hex characters, and nothing else.
 _DIGEST: Final = re.compile(r"^[0-9a-f]{64}$")
 
-#: Every recordable string field and the grammar it must satisfy.
+#: The shape of a range that names dates, checked before either date is parsed.
+_DATE_RANGE: Final = re.compile(r"^(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})$")
+
+#: Range tokens admitted for a dataset that has no time axis. A closed vocabulary
+#: of one, held here in the neutral layer so a provider cannot invent a second.
+#: An empty range would read as an *unknown* window rather than an absent one.
+NAMED_RANGES: Final[frozenset[str]] = frozenset({"SNAPSHOT"})
+
+#: Fields validated by pattern alone. Everything else below gets parsed, because a
+#: pattern that admits ``2026-13-45`` is a pattern that has not checked the value.
 _FIELD_GRAMMAR: Final[dict[str, re.Pattern[str]]] = {
     "provider": _TOKEN,
     "dataset": _TOKEN,
-    "requested_range": _RANGE,
-    "retrieved_at": _INSTANT,
     "source_schema_version": _IDENTIFIER,
     "ingestion_run_id": _IDENTIFIER,
     "content_sha256": _DIGEST,
 }
+
+
+def _requested_range_defect(value: str) -> str | None:
+    """Why ``value`` is not a usable requested range, or ``None``.
+
+    Parsed, not merely matched. ``2026-13-45/2026-02-30`` satisfies any pattern
+    that counts digits, and an inverted range satisfies every pattern there is --
+    both would then be recorded as a description of what was fetched.
+    """
+    if value in NAMED_RANGES:
+        return None
+    matched = _DATE_RANGE.match(value)
+    if matched is None:
+        return "is neither an explicit YYYY-MM-DD/YYYY-MM-DD range nor a named range token"
+    try:
+        start = date.fromisoformat(matched.group(1))
+        end = date.fromisoformat(matched.group(2))
+    except ValueError:
+        return "names a date that does not exist on the calendar"
+    if start > end:
+        return "starts after it ends"
+    return None
+
+
+def _retrieved_at_defect(value: str) -> str | None:
+    """Why ``value`` is not a canonical UTC instant, or ``None``.
+
+    Three separate requirements, and each has been a real defect somewhere: it
+    must *parse*; it must be timezone-aware **and** UTC, because a naive or
+    offset instant recorded as UTC moves an acquisition in time; and it must be
+    the canonical spelling, so one instant has one rendering and therefore one
+    content hash.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return "is not a parseable ISO-8601 instant"
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return "is not an offset-aware UTC instant"
+    if parsed.isoformat() != value:
+        return "is not the canonical spelling of the instant it names"
+    return None
+
 
 #: Substrings that must never appear in a recorded acquisition.
 #:
@@ -199,8 +268,20 @@ def acquisition_claim_key(*, payload_digest: str, run_id: str, claim: bytes) -> 
     Provider-independent by construction: nothing about the provider or the
     dataset appears in the name, so two providers claiming one
     ``(digest, run id)`` land on the same name and the second is refused.
+
+    **Provider attribution is inside the object, not in the name, and the
+    consequence is stated rather than glossed.** The deletion role can list and
+    delete by name; it cannot ``GetObject``. So claims are deletable **wholesale**
+    with the rest of ``bronze/`` -- which is what a termination requires -- but they
+    are **not** independently attributable to one provider by that role. A
+    hypothetical single-provider purge could delete ``bronze/<provider>/`` by
+    prefix and would have to treat the claim namespace as all-or-nothing. This
+    slice does not claim provider-separated deletion for claims, because the
+    layout does not provide it.
     """
-    return ObjectKey.licensed(CLAIM_NAMESPACE, payload_digest, f"{run_id}.json", payload=claim)
+    return ObjectKey.licensed(
+        BRONZE_NAMESPACE, CLAIM_NAMESPACE, payload_digest, f"{run_id}.json", payload=claim
+    )
 
 
 def acquisition_claim(*, retrieval: RetrievalMetadata, content_sha256: str) -> dict[str, Any]:
@@ -334,6 +415,22 @@ def require_recordable(record: dict[str, Any], *, allowed: frozenset[str]) -> No
                     "format is not structurally constrained is a place a credential, a URL or "
                     "a query string can be written, and no blocklist can prove otherwise."
                 )
+        elif field_name == "requested_range":
+            if type(value) is not str:
+                raise ProviderMetadataDisclosureError(
+                    "Durable field 'requested_range' must be an exact str."
+                )
+            defect = _requested_range_defect(value)
+            if defect is not None:
+                raise ProviderMetadataDisclosureError(f"Durable field 'requested_range' {defect}.")
+        elif field_name == "retrieved_at":
+            if type(value) is not str:
+                raise ProviderMetadataDisclosureError(
+                    "Durable field 'retrieved_at' must be an exact str."
+                )
+            defect = _retrieved_at_defect(value)
+            if defect is not None:
+                raise ProviderMetadataDisclosureError(f"Durable field 'retrieved_at' {defect}.")
         elif field_name == "byte_count":
             if type(value) is not int or value < 0:
                 raise ProviderMetadataDisclosureError(
@@ -345,9 +442,14 @@ def require_recordable(record: dict[str, Any], *, allowed: frozenset[str]) -> No
                     "Durable field 'is_backfill' must be an exact bool."
                 )
         elif field_name == "classification":
-            if value != DataClassification.LICENSED.value:
+            # Exact plain str, so a StrEnum member -- itself a str subclass -- and a
+            # custom equality object are both refused. A record is bytes on a
+            # disk: what is written must be the value, not something that
+            # currently compares equal to it.
+            if type(value) is not str or value != DataClassification.LICENSED.value:
                 raise ProviderMetadataDisclosureError(
-                    "Durable field 'classification' must be LICENSED on this path."
+                    "Durable field 'classification' must be the exact string "
+                    f"{DataClassification.LICENSED.value!r} on this path."
                 )
         else:  # pragma: no cover - unreachable while the allowlists are covered above
             raise ProviderMetadataDisclosureError(
@@ -389,6 +491,7 @@ def publish_bronze_payload(
         ProviderMetadataDisclosureError: if the claim or the record would carry a
             field outside its allowlist, or a value outside its grammar.
     """
+    payload = immutable_payload(payload)
     digest = sha256_hex(payload)
 
     claim = acquisition_claim(retrieval=retrieval, content_sha256=digest)
@@ -436,6 +539,7 @@ __all__ = [
     "CLAIM_FIELDS",
     "CLAIM_NAMESPACE",
     "FORBIDDEN_RECORD_SUBSTRINGS",
+    "NAMED_RANGES",
     "BronzePublication",
     "acquisition_claim",
     "acquisition_claim_key",

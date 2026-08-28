@@ -38,6 +38,7 @@ from fixtures import sharadar_provider as syn
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.errors import (
     ObjectAlreadyExistsError,
+    ObjectPayloadTypeError,
     ProviderMetadataDisclosureError,
 )
 from kalpamani.data.contracts.vocabulary import DataClassification, IngestionStatus
@@ -200,7 +201,7 @@ def test_the_logical_layout_separates_the_claim_the_payload_and_the_record() -> 
     digest = published.content_sha256
     run = syn.INGESTION_RUN_ID
     assert sorted(store.snapshot()) == [
-        f"licensed/{CLAIM_NAMESPACE}/{digest}/{run}.json",
+        f"licensed/bronze/{CLAIM_NAMESPACE}/{digest}/{run}.json",
         f"licensed/bronze/sharadar/stocks/acquisitions/{digest}/{run}.json",
         f"licensed/bronze/sharadar/stocks/objects/sha256/{digest}",
     ]
@@ -215,7 +216,7 @@ def test_the_claim_namespace_is_provider_independent() -> None:
     """Nothing about the provider or the dataset appears in the claim's name."""
     store = InMemoryResearchObjectStore()
     published = publish(store)
-    assert published.claim_key.logical_key.startswith(f"licensed/{CLAIM_NAMESPACE}/")
+    assert published.claim_key.logical_key.startswith(f"licensed/bronze/{CLAIM_NAMESPACE}/")
     assert "sharadar" not in published.claim_key.logical_key
     assert "stocks" not in published.claim_key.logical_key
 
@@ -505,6 +506,112 @@ def test_a_snapshot_dataset_records_a_named_range_rather_than_an_empty_one() -> 
         retrieval=metadata, content_sha256="0" * 64, byte_count=1, is_backfill=False
     )
     require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+@pytest.mark.parametrize(
+    "value,why",
+    [
+        ("2026-13-01/2026-12-31", "impossible month"),
+        ("2026-02-30/2026-03-01", "impossible day"),
+        ("2026-08-27/2021-08-28", "inverted range"),
+        ("2026-08-27", "a single date is not a range"),
+        ("SNAPSHOTS", "not the named token"),
+        ("snapshot", "the named token is not case-folded"),
+        ("2026-8-27/2026-08-28", "not zero-padded"),
+        ("", "empty"),
+    ],
+)
+def test_a_requested_range_is_parsed_rather_than_pattern_matched(value: str, why: str) -> None:
+    """A pattern that counts digits admits 2026-13-45 and every inverted range."""
+    record = acquisition_record(
+        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
+    )
+    record["requested_range"] = value
+    with pytest.raises(ProviderMetadataDisclosureError, match="requested_range"):
+        require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+@pytest.mark.parametrize("value", ["2021-08-28/2026-08-27", "2026-08-27/2026-08-27", "SNAPSHOT"])
+def test_a_valid_requested_range_still_passes(value: str) -> None:
+    """The negative control: the parser must not refuse what it exists to admit."""
+    record = acquisition_record(
+        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
+    )
+    record["requested_range"] = value
+    require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+@pytest.mark.parametrize(
+    "value,why",
+    [
+        ("2026-08-28T13:45:00", "naive: no offset at all"),
+        ("2026-08-28T13:45:00-05:00", "offset-aware but not UTC"),
+        ("2026-08-28T13:45:00Z", "not the canonical spelling isoformat produces"),
+        ("2026-08-28T25:00:00+00:00", "impossible hour"),
+        ("2026-02-30T00:00:00+00:00", "impossible day"),
+        ("not an instant", "unparseable"),
+    ],
+)
+def test_a_retrieval_instant_is_parsed_and_required_to_be_canonical_utc(
+    value: str, why: str
+) -> None:
+    """A naive or offset instant recorded as UTC moves an acquisition in time, and a
+    second spelling of one instant is a second content hash."""
+    record = acquisition_record(
+        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
+    )
+    record["retrieved_at"] = value
+    with pytest.raises(ProviderMetadataDisclosureError, match="retrieved_at"):
+        require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+@pytest.mark.parametrize("value", ["2026-08-28T13:45:00+00:00", "2026-08-28T13:45:00.123456+00:00"])
+def test_a_canonical_utc_instant_still_passes(value: str) -> None:
+    record = acquisition_record(
+        retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
+    )
+    record["retrieved_at"] = value
+    require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+def test_the_classification_must_be_an_exact_string_not_something_equal_to_one() -> None:
+    """A ``StrEnum`` member is a ``str`` subclass, and a record is bytes on a disk."""
+
+    class AlwaysEqual(str):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        def __hash__(self) -> int:
+            return hash("LICENSED")
+
+    for value in (DataClassification.LICENSED, AlwaysEqual("LICENSED"), "CONTROL", None):
+        record = acquisition_record(
+            retrieval=retrieval(), content_sha256="0" * 64, byte_count=1, is_backfill=False
+        )
+        record["classification"] = value
+        with pytest.raises(ProviderMetadataDisclosureError, match="classification"):
+            require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+
+
+@pytest.mark.parametrize("payload", [bytearray(b"synthetic"), memoryview(b"synthetic"), "s"])
+def test_publication_requires_exact_immutable_payload_bytes(payload: object) -> None:
+    """A buffer the caller keeps could change after it was hashed and filed."""
+    store = InMemoryResearchObjectStore()
+    with pytest.raises(ObjectPayloadTypeError, match="exact bytes"):
+        publish_bronze_payload(
+            store=store,
+            payload=payload,  # type: ignore[arg-type]
+            retrieval=retrieval(),
+            is_backfill=False,
+        )
+    assert store.snapshot() == {}
+
+
+def test_the_provider_bridge_also_requires_exact_bytes() -> None:
+    store = InMemoryResearchObjectStore()
+    with pytest.raises(ObjectPayloadTypeError):
+        publish(store, payload=bytearray(syn.SYNTHETIC_PAYLOAD))  # type: ignore[arg-type]
+    assert store.snapshot() == {}
 
 
 def test_the_stored_record_carries_no_credential_url_or_cloud_identifier() -> None:

@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlencode
 
 from kalpamani.data.contracts.vocabulary import closed_member
+from kalpamani.data.ingest.publication import NAMED_RANGES
 from kalpamani.data.ingest.sharadar.redaction import (
     SharadarErrorCode,
     SharadarRequestError,
@@ -107,8 +108,11 @@ FORBIDDEN_QUERY_PARAMETERS: Final[frozenset[str]] = frozenset(
 #: What a US equity symbol is allowed to look like on the wire.
 _TICKER: Final = re.compile(r"^[A-Z][A-Z0-9.\-]{0,15}$")
 
-#: The range recorded when a dataset has no time axis.
+#: The range recorded when a dataset has no time axis. Taken from the neutral
+#: layer's closed vocabulary rather than spelled again here, so the token the
+#: provider writes and the token durable validation admits cannot drift apart.
 SNAPSHOT_RANGE: Final = "SNAPSHOT"
+assert SNAPSHOT_RANGE in NAMED_RANGES  # a one-line guard against the two drifting
 
 
 def _refuse(code: SharadarErrorCode, dataset: str | None = None) -> SharadarRequestError:
