@@ -303,8 +303,9 @@ live brokerage execution, real-money operation.
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | G1–G5 decision gates | **OPEN** |
 | G6 options overlay · G7 strategy-taxonomy evidence | **OPEN (added by V3.0)** |
-| AWS account | **NOT CREATED** |
-| AWS resources · `terraform apply` · cloud spend | **NONE / NOT AUTHORIZED** |
+| AWS account | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
+| AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
+| Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
@@ -361,12 +362,17 @@ them: it comes from content-addressed names and append-only publication, which t
 already implements. The termination procedure exists in advance and has never been run —
 [vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).
 
-> **Nothing exists.** [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) is a
-> Terraform description that has **never been applied**. No AWS account has been created, no
-> resource provisioned, no money spent, no provider credential issued and no vendor data
-> retrieved. Cloud spend, `terraform apply`, AWS account creation and provider credentials are
-> each a **separate written authorization**. **G1–G7 remain OPEN**, ADR-0005 **remains
-> PROPOSED**, no provider is selected, and Phase 3 remains **NOT COMPLETE**.
+> **The foundation exists; nothing uses it.**
+> [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) was applied on 2026-08-27 —
+> 36 resources, verified 66/66 against the live account
+> ([status](docs/operations/aws-foundation-status.md)). It is an empty, idle platform: both
+> buckets hold nothing, the image registry is empty, no task definition exists and nothing runs.
+>
+> Provisioning a platform is not permission to use it. **No provider is selected, no provider
+> credential exists, no vendor data has been retrieved and no ingestion has run.** Provider
+> purchase, credentialing, ingestion and any further cloud spend each remain a **separate written
+> authorization**. **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**, and Phase 3 remains
+> **NOT COMPLETE**.
 
 **Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
 owner authorization through a documentation-only pull request —

@@ -3,8 +3,13 @@
 ## STATUS: **DESIGN ONLY — NOT EXECUTED, AND NOT EXECUTABLE**
 
 This runbook describes a procedure for a situation that **does not exist**. No provider has been
-selected, no subscription has been purchased, no credential has been issued, no vendor data has
-been retrieved, and no AWS resource has been created. There is nothing to delete.
+selected, no subscription has been purchased, no credential has been issued, and no vendor data
+has been retrieved. **There is nothing to delete.**
+
+The AWS foundation itself was provisioned on 2026-08-27
+([aws-foundation-status.md](../operations/aws-foundation-status.md)), so the buckets this
+procedure targets now exist — and are **empty**. That changes the precondition, not the verdict:
+an empty licensed bucket is still nothing to delete.
 
 It is written **before** the data exists, on purpose. A deletion obligation with a 30-day clock
 that can start without notice is not something to design under time pressure, and a procedure
@@ -304,6 +309,21 @@ Stated plainly, because a procedure that oversells itself is worse than one that
 Once AWS resources exist and *before* any licensed data is ingested, this procedure should be
 rehearsed end to end against **synthetic** objects: write fixtures into the licensed prefixes,
 start and abandon a multipart upload, then run every step and produce a receipt.
+
+> **Precondition status (2026-08-27).** AWS resources now exist — the foundation was provisioned
+> ([aws-foundation-status.md](../operations/aws-foundation-status.md)) — and the licensed bucket
+> is still empty, so this is the ideal window. **The rehearsal has still NOT been run.**
+>
+> Provisioning included a five-step synthetic *storage* smoke test (put, get, checksum, delete,
+> confirm-absent). That is **not** this rehearsal and must not be recorded as one: it used the
+> operator's federated session rather than the deletion role, touched one object rather than the
+> licensed prefixes, started no multipart upload, and produced no receipt.
+>
+> The deletion role was not used because **no current path can run anything as it**: its trust
+> policy admits `ecs-tasks.amazonaws.com` only, so no human can directly assume it; no deletion
+> task definition exists; no deletion workflow exists; and no authorized principal holds
+> `iam:PassRole` for it. A real rehearsal therefore needs the deletion workflow that is **not
+> authorized**.
 
 A rehearsal costs cents and finds the steps that do not work. Discovering them inside a 30-day
 window that started without notice costs considerably more. **Rehearsal requires the same

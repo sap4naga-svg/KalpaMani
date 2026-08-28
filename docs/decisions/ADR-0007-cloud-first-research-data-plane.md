@@ -19,6 +19,30 @@ rest on a control the deployment path can silently reset),
 
 ---
 
+## Implementation status — added 2026-08-27, after the decision
+
+**The foundation described by this ADR was provisioned on 2026-08-27** under a *separate* written
+authorization covering the foundation and nothing else. Record:
+[docs/operations/aws-foundation-status.md](../operations/aws-foundation-status.md).
+
+```
+AWS account EXISTING (pre-dates this work)   ·   36 resources applied   ·   0 changed, 0 destroyed
+verification 66/66 PASS   ·   remote S3 state, versioned, S3 native locking
+budget + cost-anomaly alerts configured
+licensed EMPTY   ·   control EMPTY   ·   ECR EMPTY   ·   nothing running
+provider NONE   ·   provider credentials NONE   ·   vendor data NONE
+```
+
+**The decision below is unchanged and is not rewritten.** It is read as of its own date: when it
+was accepted, no AWS resource existed and it authorized nothing. Two items in the §12 list — using
+an AWS account for KalpaMani, and `terraform apply` — were subsequently authorized on their own,
+exactly as §12 required them to be. **No AWS account was created by this work**: the account
+already existed and was configured for the foundation on 2026-08-27. Everything else in that list still stands and is still refused: **no provider
+is selected, no credential exists, no vendor data has been retrieved, G1–G7 remain OPEN, ADR-0005
+remains PROPOSED, Phase 3 remains NOT COMPLETE, and live trading remains HARD-DISABLED.**
+
+---
+
 ## Context
 
 The Phase-3 planning package placed the point-in-time research store on the development
@@ -122,8 +146,9 @@ compute is a **private AWS account**.
 The laptop is explicitly **not**: the authoritative long-term licensed-data store; a machine that
 must remain powered on for ingestion to proceed; or a machine required for heavy backtests.
 
-**No AWS resource exists.** This ADR selects an intended target platform and commits an
-infrastructure description. It provisions nothing — see §12.
+**At the time of this decision, no AWS resource exists.** This ADR selects an intended target
+platform and commits an infrastructure description. It provisions nothing — see §12. The
+foundation was provisioned later, under its own authorization; see *Implementation status* above.
 
 ### 2. The quantitative stack does not change
 
@@ -534,8 +559,11 @@ infrastructure *description*. Explicitly, it does **not**:
 - authorize live trading, which remains **HARD-DISABLED**.
 
 **Gates G1–G7 are all OPEN.** Nothing has been purchased, trialled or credentialed. No vendor data
-has been retrieved. No AWS resource has been created and no AWS spend has been incurred. Phase 3
-remains **NOT COMPLETE**.
+has been retrieved. Phase 3 remains **NOT COMPLETE**.
+
+As of this decision, no AWS resource had been created and no AWS spend had been incurred. The
+foundation was provisioned on 2026-08-27 under a separate authorization — see *Implementation
+status* above. **That changed where the platform stands, and nothing else in this list.**
 
 ---
 
@@ -544,12 +572,13 @@ remains **NOT COMPLETE**.
 Listed by topic. Numbers are taken when an ADR is written, from the next unused number in
 `docs/decisions/`.
 
-- **AWS account creation, budget alarm and `terraform apply` authorization** — required before any
-  resource exists. The budget alarm needs a notification destination, which is personal
-  information and is therefore not committed here.
-- **Remote Terraform state backend** — an encrypted, versioned state bucket with locking, decided
-  when apply is authorized. State may reference bucket and account identifiers, and is never
-  committed.
+- **AWS account creation, budget alarm and `terraform apply` authorization** — **DONE
+  (2026-08-27).** Authorized separately, as required. The budget notification destination is
+  personal information and was entered directly in the AWS console; it is not committed here.
+- **Remote Terraform state backend** — **DONE (2026-08-27).** A private, encrypted, versioned S3
+  state bucket with S3 native lockfile locking; no DynamoDB table. State references bucket and
+  account identifiers and is never committed; the backend values live in an uncommitted file and
+  the tracked declaration is an empty `backend "s3" {}`.
 - **Provider client redaction implementation** — the §8 acceptance criteria, when a client is
   authorized.
 - **`ResearchObjectStore` implementation** — an A2 decision.
