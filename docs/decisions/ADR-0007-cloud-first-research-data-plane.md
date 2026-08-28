@@ -91,6 +91,17 @@ no longer hashes to its own name.
 **Object versioning would be a second, weaker mechanism for a property the first already
 guarantees, bought at the price of the deletion obligation.** It is therefore off.
 
+**Stated precisely, because the two properties are easy to run together: no immutability or
+content-identity guarantee is lost. Recoverability is deliberately traded away.** Turning these
+features off does cost something real, and *Consequences* below records it — an erroneous
+deletion destroys the exact historical payload with nothing to restore from, and re-fetching
+from the provider is not restoration: it returns the vendor's data as it stands today, which
+after a correction or backfill is a **new artifact with a new hash** rather than the original.
+The mechanism that makes a vendor backfill visible instead of silent is precisely what stops a
+re-fetch from reconstituting history. That trade is accepted on the judgement that an
+unsatisfiable deletion obligation is a worse failure than an unavailable restore, for data that
+is rented rather than owned.
+
 ---
 
 ## Decision
@@ -397,11 +408,22 @@ for unauthorized work would be the wrong trade.
 
 ### 12. What is committed is a description, not infrastructure
 
-`infra/aws/research-data-plane/` contains Terraform describing the above. **It has not been
-applied, no state exists, no AWS account has been created, and no resource has been provisioned.**
+`infra/aws/research-data-plane/` contains Terraform describing the above. It has been formatted,
+initialized offline and validated against the real AWS provider schema (`hashicorp/aws` v6, pinned
+by a committed `.terraform.lock.hcl`). **It has not been applied, no state exists, no AWS account
+has been created, no credentials were used, and no resource has been provisioned.**
 
-`terraform apply` requires its own explicit written authorization, separate from and later than
-this ADR.
+**Validating is not planning.** `terraform validate` checks syntax, provider schema conformance
+and internal references without contacting AWS — and it does not evaluate input-variable rules, so
+a passing validate is not evidence that the wrong-account binding works. `terraform plan`,
+`apply`, `refresh` and `import` each require their own explicit written authorization, separate
+from and later than this ADR.
+
+**The AWS account binding fails closed.** `allowed_account_ids` has no default and must be a
+non-empty list of twelve-digit ids, so an omitted binding is a hard error before any provider call
+rather than a silently disabled check. This is the same rule CLAUDE.md §3 applies to GitHub
+accounts and ADR-0003 applies to broker-side controls: **a control that is off unless someone
+remembers to switch it on is not a control.**
 
 ---
 
@@ -420,10 +442,13 @@ this ADR.
 **Negative / accepted costs**
 
 - **Reduced durability on the licensed bucket, on purpose.** No versioning, no replication and no
-  backup means an erroneous delete or overwrite is not recoverable from AWS. The mitigation is
-  that Bronze is re-fetchable from the provider while the subscription is live, and that content
-  addressing makes an overwrite-in-place fail rather than corrupt silently. This is a real trade,
-  accepted deliberately rather than overlooked.
+  backup means an erroneous delete or overwrite is not recoverable from AWS. Content addressing
+  makes an overwrite-in-place fail rather than corrupt silently, so the exposure is deletion
+  rather than corruption — but **a re-fetch is not a restore**. It returns the vendor's data as it
+  stands today; after a correction or backfill that is a new artifact with a new hash, and the
+  original payload is simply gone. It is also possible only while the subscription is live. The
+  practical protection is operational care around deletion, not a durability feature. A real
+  trade, accepted deliberately rather than overlooked.
 - **A public-subnet egress design that is correct only while nothing listens.** It is cheap and
   safe under a zero-inbound security group, and it becomes wrong the moment that premise changes.
 - **A second deletion surface remains.** Cloud-first does not remove the laptop from *"all
