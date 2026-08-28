@@ -174,7 +174,11 @@ KalpaMani/
 │   │                         BLUEPRINT_V3_ADOPTION.md  (V2.1->V3 delta + doc control)
 │   │                         BLUEPRINT_ERRATA.md  (V2.1 empirical corrections index)
 │   ├── decisions/            Architecture Decision Records
+│   ├── phase3/               Point-in-time data foundation plan
 │   └── runbooks/             Operational procedures
+├── infra/
+│   └── aws/research-data-plane/   Terraform DESCRIPTION of the private research
+│                                  data plane. NEVER APPLIED; no AWS resource exists
 ├── src/kalpamani/
 │   ├── common/               Environment, strategy capital, settings, errors  [IMPLEMENTED]
 │   ├── broker/               BrokerAdapter abstraction                        [IMPLEMENTED — read-only + bounded orders]
@@ -256,7 +260,9 @@ Nothing below exists yet, and none of it is authorized:
 - The portfolio and deterministic risk engine (only the *parameters* exist)
 - Scanner, factor pipeline, point-in-time data platform
 - Database schema, dashboard, alerting, kill switch
-- Purchased market data; production cloud infrastructure
+- Purchased market data
+- **Any AWS resource.** The research data plane is a Terraform *description* that has never
+  been applied — no AWS account exists, nothing is provisioned, and nothing has been spent
 
 ---
 
@@ -294,8 +300,11 @@ live brokerage execution, real-money operation.
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
+| ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | G1–G5 decision gates | **OPEN** |
 | G6 options overlay · G7 strategy-taxonomy evidence | **OPEN (added by V3.0)** |
+| AWS account | **NOT CREATED** |
+| AWS resources · `terraform apply` · cloud spend | **NONE / NOT AUTHORIZED** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
@@ -327,6 +336,37 @@ by this slice.
 
 Phase 3B, 3C and 3D carry no authority from it, and beginning any of them requires explicit
 written authorization.
+
+### Research data plane — private AWS cloud-first, and nothing built
+
+[ADR-0007](docs/decisions/ADR-0007-cloud-first-research-data-plane.md) makes a **private AWS
+account the intended authoritative location** for licensed research data and heavy deterministic
+research compute, replacing the laptop-authoritative store proposed in ADR-0005 §11. Parquet,
+DuckDB and Python are unchanged; only the location moves, and PostgreSQL's operational role under
+ADR-0001 is untouched. The **laptop remains the development and control workstation** — an
+optional cache, never the authority.
+
+Two private buckets, split by one question — *can vendor rows be recovered from this artifact?*
+Yes, **or uncertain**, means licensed:
+
+| | |
+|---|---|
+| **Licensed** bucket | bronze / silver / gold / qualification. **Deletion-first:** no versioning, no Object Lock, no replication, no archival lifecycle, no backup |
+| **Control** bucket | manifests, lineage, receipts, approved non-reconstructable outputs |
+
+The licensed bucket runs *against* conventional cloud durability practice on purpose. A vendor
+licence may require destroying every copy within 30 days of a termination that arrives without
+notice, and every one of those features would defeat that. Bronze immutability does not depend on
+them: it comes from content-addressed names and append-only publication, which the A1 kernel
+already implements. The termination procedure exists in advance and has never been run —
+[vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).
+
+> **Nothing exists.** [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) is a
+> Terraform description that has **never been applied**. No AWS account has been created, no
+> resource provisioned, no money spent, no provider credential issued and no vendor data
+> retrieved. Cloud spend, `terraform apply`, AWS account creation and provider credentials are
+> each a **separate written authorization**. **G1–G7 remain OPEN**, ADR-0005 **remains
+> PROPOSED**, no provider is selected, and Phase 3 remains **NOT COMPLETE**.
 
 **Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
 owner authorization through a documentation-only pull request —

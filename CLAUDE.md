@@ -78,7 +78,10 @@ mistake is immediately world-readable and cannot be recalled.
 > brokerage account identifiers · account-binding digests · broker-native order ids
 > (BrokerIds) · IBKR or LEAN vendor logs containing identifiers · credentials · API tokens ·
 > passwords · 2FA or passkey material · `.env` files · anything under `.runtime/` ·
-> brokerage configuration
+> brokerage configuration · **AWS account ids, access keys, secret keys, session tokens,
+> ARNs containing a real account id, real bucket names, `terraform.tfstate`, `*.tfvars`,
+> `.terraform/`, plan files** · **licensed vendor data of any layer, and any artifact from
+> which vendor rows could be reconstructed**
 
 `.runtime/` is git-ignored and holds every sensitive operational artifact. It stays that way.
 
@@ -148,6 +151,18 @@ Do **not** modify global Git identity. If KalpaMani needs a distinct identity, s
 20. **Humans govern:** models; capital scaling; parameter releases; exceptions;
     broker-required authentication/session maintenance; the kill switch. Humans should
     **not** routinely approve individual trades in mature production.
+21. **Cloud spending requires explicit written authorization.** `terraform apply`, creating
+    AWS resources, creating an AWS account and changing billing are each separately
+    authorized. Describing infrastructure is not authorization to build it.
+22. **Licensed vendor data never leaves the private deployment boundary.** Deterministic code
+    may process it inside the private AWS account. It may not be committed to Git, placed in
+    third-party SaaS, or sent to any external LLM API — **including by an AI assistant
+    session reading such a file into its context**. No raw vendor row enters an external AI
+    prompt (§7, [ADR-0007](docs/decisions/ADR-0007-cloud-first-research-data-plane.md) §9).
+23. **Licensed data must remain deletable, and provably so.** A vendor licence may require
+    destroying every copy within 30 days of a termination that arrives without notice, so the
+    licensed store carries no versioning, Object Lock, replication, archival lifecycle or
+    backup. Enabling any of them is an ADR-level change, not a durability improvement.
 
 ---
 
@@ -357,8 +372,11 @@ trading remains **hard-disabled**.
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
 | **ADR-0005** | **PROPOSED** |
 | **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
+| **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **G1–G5** | **OPEN** |
 | **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
+| **AWS account** | **NOT CREATED** |
+| **AWS resources / `terraform apply` / cloud spend** | **NONE / NOT AUTHORIZED** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
 | **Short research** | **NOT AUTHORIZED** |
@@ -413,6 +431,40 @@ The adopted PDF is byte-identical to the document the owner reviewed (SHA-256
 `2726b96dd69c8982788b1c2bd646ce7a52879c649994a31858dc41666761996d`). Because a Blueprint PDF
 is never edited, its Document Control page still reads as drafted for review; those fields
 are **superseded** by the override table in `BLUEPRINT_V3_ADOPTION.md`.
+
+### Research data plane — private AWS cloud-first, and nothing built
+
+**[ADR-0007](docs/decisions/ADR-0007-cloud-first-research-data-plane.md) makes a private AWS
+account the *intended* authoritative location** for licensed research data and heavy
+deterministic research compute, replacing the laptop-authoritative store proposed in ADR-0005
+§11. Parquet, DuckDB and Python are unchanged; only the location moves. PostgreSQL's operational
+role under ADR-0001 is untouched.
+
+| | |
+|---|---|
+| Laptop | **development and control workstation**; optional cache, staging, synthetic fixtures, local testing |
+| Laptop | **not** the authoritative licensed-data store, not required to stay powered on for ingestion, not required for heavy backtests |
+| Licensed-data bucket | bronze / silver / gold / qualification — **deletion-first**: no versioning, no Object Lock, no replication, no archival lifecycle, no backup |
+| Control bucket | manifests, lineage, receipts, approved non-reconstructable outputs |
+| Classification rule | *can vendor rows be recovered from this artifact?* Yes **or uncertain** → licensed |
+| Compute | **ephemeral** — one-off tasks. No always-on server |
+| Network | **zero inbound rules**, outbound HTTPS only, no listener, no load balancer |
+
+**Nothing exists.** [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) holds a
+Terraform *description* that has **never been applied**:
+
+```
+AWS account NOT CREATED   ·   AWS resources NONE   ·   AWS spend NONE
+terraform apply NOT AUTHORIZED   ·   provider credentials NONE   ·   vendor data NONE
+```
+
+Cloud spend, `terraform apply`, AWS account creation and provider credentials are each a
+**separate written authorization** (§4.21). **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**,
+no provider is selected, and Phase 3 remains **NOT COMPLETE**. Adopting a deployment platform
+authorizes no ingestion, no purchase and no implementation.
+
+The termination procedure exists in advance and has **never been run**:
+[docs/runbooks/vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).
 
 ### Non-blocking follow-ups carried forward
 

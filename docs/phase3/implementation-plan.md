@@ -5,6 +5,15 @@
 This is a plan to be executed later, if approved. **No stage below has begun.** No
 infrastructure has been created, no provider contacted, no credential requested.
 
+> **Revision 6 (2026-08-27).** **Storage moves from laptop-authoritative to private-AWS
+> cloud-first** ([ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md)). §1.2 and
+> §1.3 are rewritten: the authoritative Bronze/Silver/Gold location becomes a private,
+> deletion-first S3 bucket, provenance and permitted outputs move to a separate control bucket,
+> and `.runtime/data/` becomes an optional development cache. **Nothing else changes** — the
+> point-in-time semantics, hashes, manifests, profiles, information-set model, coverage
+> contracts and evidence requirements are untouched, because identity is a content hash and a
+> hash does not know where its bytes live. No AWS resource exists.
+>
 > **Revision 5 (2026-08-26).** Deliverables follow the further schema splits; eight adversarial
 > fixtures and four negative controls cover envelope exclusivity, resolved bounds, per-dataset
 > policies and coverage contracts; and a **documentation-consistency audit**
@@ -72,39 +81,102 @@ through the provenance envelope carried for audit.
 
 | Option | Fit | Verdict |
 |---|---|---|
-| **Parquet on local disk** | columnar, compressed, partitioned, no server | **recommended** for silver and gold |
-| **DuckDB** | reads Parquet natively, zero-install, single file, strong analytical SQL | **recommended** as the research query engine |
+| **Parquet** | columnar, compressed, partitioned, no server | **recommended** for silver and gold |
+| **DuckDB** | reads Parquet natively — including over S3 — zero-install, single file, strong analytical SQL | **recommended** as the research query engine |
 | **PostgreSQL** | ADR-0001 and Blueprint §17 name it as the system database; correct for concurrent transactional state | **retained for operational state; not required by Phase 3** |
-| **Object storage (S3-compatible)** | correct destination for bronze at scale | **deferred** — local disk now, path layout kept compatible |
+| **Private object storage (AWS S3)** | durable, always-available, independent of any one workstation, and — critically — **deletable on demand and provably so** | **selected** as the authoritative location ([ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md)) |
+| Local disk (`.runtime/data/`) | fast, free, and tied to one machine's uptime and one machine's disk | **development cache and staging only**; not the research authority |
 | **LEAN-compatible export** | required for 3D | **yes** — an export step, not a storage layer |
 | TimescaleDB | ADR-0001 lists as optional | not needed; the workload is analytical, not time-series ingest |
 
-**Recommendation for the current Windows/Docker environment: Parquet files + DuckDB.**
+**Recommendation: Parquet + DuckDB, on private AWS object storage.**
 
-Phase 3 is a single-node, single-writer, read-heavy analytical workload. DuckDB needs no
-server, no container, no port, no credentials and no operational surface — which matters in a
-repository whose safety argument rests on there being fewer moving parts than there could be.
-Parquet keeps the data portable, so migrating to PostgreSQL or object storage later is a loader
-change, not a rewrite.
+The *engine* choice is unchanged from revision 5 and its reasoning still holds. Phase 3 is a
+single-writer, read-heavy analytical workload; DuckDB needs no server, no port, no credentials
+and no operational surface, and it reads Parquet in S3 directly. What changed in revision 6 is
+only **where the Parquet lives**.
+
+Three things forced that, and none of them is visible while the data is synthetic:
+
+1. **Ingestion cannot depend on a laptop being awake.** Daily and backfill fetches are a
+   background obligation, not an interactive task.
+2. **A full-universe, multi-year, profile-keyed rebuild is a batch job**, and running it on the
+   machine that also edits code and drives IB Gateway couples two things that should not be.
+3. **`.runtime/` is the one part of this system with no version-controlled copy** — necessarily,
+   since it must never be committed. A disk failure loses every ingested artifact and every
+   manifest that names one.
+
+**The decisive reason is licensing, not convenience.** The candidate provider's §10 requires
+deleting every copy of the data, from *"all computer systems you own or operate"*, within 30
+days of a termination that may arrive without notice
+([packet §3.C](provider-licensing-decision-packet.md)). A dedicated, deletion-first bucket makes
+that a procedure over known prefixes; data scattered across a working laptop makes it a search.
+See [ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md) for why this means the
+licensed bucket deliberately runs **without** versioning, Object Lock, replication or archival
+lifecycle — conventional durability features that each defeat the deletion obligation.
 
 **This is not a replacement for PostgreSQL and does not contradict ADR-0001**, which selects
 PostgreSQL for *"features, signals, trades, audit state"* — operational, transactional,
 concurrently-written state. DuckDB here is a query engine over immutable research files, a
-different job. If experience later shows the research layer belongs in PostgreSQL, that is an
-ADR, not a quiet substitution.
+different job, and object storage is where those files sit. If experience later shows the
+research layer belongs in PostgreSQL, that is an ADR, not a quiet substitution.
 
-### 1.3 Where it lives on disk
+### 1.3 Where it lives
+
+**Authoritative — private AWS, two buckets.** The split is
+[ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md) §3: anything from which
+vendor rows could be recovered is *licensed*; only artifacts that provably cannot reproduce
+them are *control*.
 
 ```
-.runtime/data/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.json.gz
-.runtime/data/silver/<entity>/<partition>/*.parquet
-.runtime/data/gold/<dataset_version>/<entity>/*.parquet
-.runtime/data/gold/<dataset_version>/adjusted/<artifact_id>.parquet
-.runtime/data/catalog.duckdb
+LICENSED-DATA BUCKET  -- vendor-terminable; deleted on licence termination
+s3://<licensed>/bronze/<provider>/<dataset>/<ingest_date>/<sha256>.json.gz
+s3://<licensed>/silver/<entity>/<partition>/*.parquet
+s3://<licensed>/gold/<dataset_version>/<entity>/*.parquet
+s3://<licensed>/gold/<dataset_version>/adjusted/<artifact_id>.parquet
+s3://<licensed>/qualification/<provider_test>/...
+
+CONTROL / PERMITTED-OUTPUT BUCKET  -- survives termination
+s3://<control>/manifests/<run_id>.json
+s3://<control>/lineage/...
+s3://<control>/receipts/...          missing-input receipts, deletion receipts
+s3://<control>/outputs/...           approved non-reconstructable outputs
 ```
 
-Under `.runtime/`, already git-ignored (`.gitignore:129`) and already the home for everything
-that must never be committed.
+**The default is LICENSED.** An artifact nobody has classified is licensed until someone
+classifies it. Over-classifying costs a deletion that was not required; under-classifying leaves
+a copy in the one bucket the deletion procedure deliberately does not empty.
+
+**The DuckDB catalog is derived, not authoritative.** It is rebuilt from the objects it indexes
+and is treated as licensed wherever it materialises vendor rows.
+
+**Local — `.runtime/data/`, and only ever these four roles:**
+
+| Role | |
+|---|---|
+| optional development cache | a working copy, discardable at any time |
+| temporary staging | before publication to the authoritative bucket |
+| synthetic fixtures | repository-owned, fictitious, legible |
+| local testing | including everything the A1 kernel does today |
+
+Still git-ignored, and still the home for everything that must never be committed. **It is no
+longer the production research authority.**
+
+> **Cloud-first does not remove the laptop from the deletion obligation.** §10 reaches *"all
+> computer systems you own or operate"*, so any local cache of licensed data is in scope and the
+> [deletion runbook](../runbooks/vendor-data-cloud-deletion.md) covers it explicitly (step 13).
+> Cloud-first narrows the surface; it does not eliminate it.
+
+**Object identity does not move with the bytes.** A manifest names **content hashes**, never
+bucket names or `s3://` URIs: a URI is a resolvable *location*, a hash is the *identity*. The
+same artifact therefore has the same identity in the local cache, in the licensed bucket, and in
+any future bucket or region, and renaming a bucket cannot invalidate a manifest. Everything the
+point-in-time contract asserts about hashes, manifests, profiles, coverage and provenance is
+unchanged by this relocation — see [ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md) §10.
+
+**No AWS resource exists.** [`infra/aws/research-data-plane/`](../../infra/aws/research-data-plane/)
+holds a Terraform *description* that has never been applied. `terraform apply`, AWS spending and
+provider credentials each require their own separate written authorization.
 
 **Vendor data must never be committed, and the reason is licensing as much as secrecy.** Every
 low-cost provider examined forbids redistribution, and several restrict publishing derived
