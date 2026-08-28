@@ -31,6 +31,7 @@ from kalpamani.data.ingest.sharadar.datasets import (
     SharadarRequest,
 )
 from kalpamani.data.ingest.sharadar.transport import (
+    DEFAULT_MAX_RESPONSE_BYTES,
     TransportResponse,
     TransportUnavailableError,
 )
@@ -144,12 +145,24 @@ class ScriptedTransport:
     effect is appending to its own lists.
     """
 
-    def __init__(self, outcomes: Sequence[TransportResponse | TransportUnavailableError]) -> None:
-        """Queue ``outcomes``, oldest first."""
+    def __init__(
+        self,
+        outcomes: Sequence[TransportResponse | TransportUnavailableError],
+        *,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> None:
+        """Queue ``outcomes``, oldest first, and declare a per-response ceiling."""
         self._outcomes = list(outcomes)
+        self._max_response_bytes = max_response_bytes
         self.urls: list[str] = []
         self.headers: list[Mapping[str, str]] = []
         self.timeouts: list[float] = []
+
+    @property
+    def max_response_bytes(self) -> int:
+        """What a real transport declares, so a client bound to this one budgets
+        the same way it would against a real one."""
+        return self._max_response_bytes
 
     @property
     def call_count(self) -> int:

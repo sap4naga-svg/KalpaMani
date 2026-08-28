@@ -292,7 +292,8 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
 **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED / ACCEPTED — PR #13 MERGED — CODE ONLY.**
-**PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS.**
+**PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / ACCEPTED — PR #16 MERGED — CODE ONLY, NEVER RUN AGAINST AWS.**
+**PHASE 3A — SHARADAR QUALIFICATION RUNTIME CORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #17 — CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -398,7 +399,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
 | **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
-| **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE** | **IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS** |
+| **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE** | **IMPLEMENTED / ACCEPTED — PR #16 MERGED — CODE ONLY, NEVER RUN AGAINST AWS** |
+| **PHASE 3A — SHARADAR QUALIFICATION RUNTIME CORE** | **IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #17 — CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
@@ -412,7 +414,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED / IN FORCE** — PR #13 merged |
 | **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED / IN FORCE (2026-08-28)** — PR #15 merged |
-| **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED EFFECTIVE ON MERGE OF PR #16** — carries no authority before it |
+| **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED / IN FORCE** — PR #16 merged |
+| **[ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md) — dormant Sharadar qualification runtime core** | **ACCEPTED EFFECTIVE ON MERGE OF PR #17** — carries no authority before it |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -421,7 +424,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
-| **Bucket binding · client construction · ingestion runner · ECS task or image** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
+| **Bucket binding · client construction · credential source · composition root** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
+| **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
 | **Provider credentialing / API access / Services Data** | **NOT AUTHORIZED** |
@@ -627,7 +631,9 @@ credential, no client. `src/kalpamani/data/storage/s3.py` is the whole of it.
 ```
 adapter EXISTS   ·   client INJECTED   ·   no client is constructed anywhere
 adapter bucket binding: NONE   ·   adapter credential binding: NONE
-no profile, endpoint or region is named   ·   runner NONE   ·   __main__ NONE   ·   caller NONE
+no profile, endpoint or region is named   ·   runner NONE   ·   __main__ NONE
+callers: the dormant qualification runtime ONLY, on an INJECTED store
+composition root: NONE
 AWS requests sent by the adapter: ZERO
 adapter-attributable request or object-storage activity: NONE
 ```
@@ -654,9 +660,11 @@ code, opens no socket and performs no ambient credential discovery. A static tes
 `data/storage/s3.py` — the only application module under `src/` permitted to do so — to name the
 SDK at all, and asserts that even it imports none of it today.
 
-**The control is absence, not care.** This slice retrieved, inspected, created, configured and
-bound **no credential**; no bucket identifier is bound to the adapter or recorded in this pull
-request; and no module constructs a client or calls the store. Each is verified by a static test
+**The control is absence, not care.** No credential is retrieved, inspected, created, configured
+or bound anywhere in this repository; no bucket identifier is bound to the adapter or recorded
+here; and no module constructs a client. The store **is** called now — by the dormant qualification
+runtime (ADR-0012), on an injected store — and what remains absent is the composition root that
+would give that runtime a real one. Each is verified by a static test
 rather than asserted here.
 
 **What that does and does not claim.** It is a statement about this repository and this slice, not
@@ -670,6 +678,68 @@ is billable.
 run, bucket binding, credential, client construction, ingestion runner, ECS task and CONTROL
 publication remains **separately unauthorized** (§4.21, §4.24). **G1 and G2 stay OPEN**, ADR-0005
 stays **PROPOSED**, and Phase 3 stays **NOT COMPLETE**.
+
+### The Sharadar qualification runtime core — dormant, and what that means exactly
+
+[ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md)
+authorized the piece that joins the five existing slices: a **bounded qualification plan** and an
+**executor that acts only on dependencies a caller hands it**. Two modules,
+`data/ingest/sharadar/qualification.py` and `data/ingest/sharadar/runtime.py`, and no third.
+
+**This narrowed one standing claim, and the narrower one is what now holds.** Until this slice,
+nothing in this repository called the object store. That is no longer true — the runtime calls it,
+through the neutral Bronze bridge, with an **injected** store. What is still true, and checkable:
+
+```
+plan model EXISTS   ·   executor EXISTS   ·   dependencies INJECTED
+composition root: NONE   ·   credential source: NONE   ·   client construction: NONE
+bucket binding: NONE   ·   runner: NONE   ·   __main__ in either module: NONE
+constructed outside its own tests: NEVER
+Sharadar requests sent: ZERO   ·   AWS requests sent: ZERO
+```
+
+The distance between this and a live run is exactly one composition root, and none exists. A
+future, separately authorized slice would supply the real private bindings — a credential source, a
+constructed client, a bound bucket, a constructed `S3ResearchObjectStore` — and authorize one
+bounded run. **Each of those is a separate decision.**
+
+**Seven ceilings, compiled in, lowerable and never raisable:** 8 subjects · 3 datasets · 4 pages per
+request · 96 requests · the transport's own per-response byte ceiling · 512 MiB per run · 32
+retries, checked against the *injected client's own attempt policy* so the budget bounds what will
+happen rather than describing an intention. A limit above its constant is **refused**, not clamped:
+clamping would let a plan claim a budget it does not have and then behave differently from what it
+says.
+
+| | |
+|---|---|
+| **Three datasets** | `tickers`, `stocks`, `actions`. `fundamentals`, `daily`, the `SF*` tables, events, metrics, holdings and funds are refused **by name** — real vendor tables owned by a later phase. Everything else is refused as unknown |
+| **No default subject** | every request names an explicitly supplied one, and **no real ticker is compiled into the module** |
+| **No implicit window** | required on a windowed dataset, forbidden on the snapshot one. The vendor defaults `from` to a year ago and `to` to the prior day (`PSR-SHD-121`) |
+| **No bulk route** | `years`, `fields`, `sort`, `columns`, `order` and `lastupdated` are refused a step before the request builder would refuse them |
+| **One canonical order** | dataset, then subject, then page offset — independent of input order, so two plans holding the same content derive the same acquisition identities and reconcile with the same durable evidence |
+| **One request, one acquisition** | each request derives its own identity from the execution, provider, dataset, subject, range, format and both page values — so byte-identical responses from two datasets, two subjects or two pages are three retrievals, not a collision and not a collapse |
+| **Validation is complete and first** | a partly-wrong plan is refused whole; a refused plan issues **zero** provider and **zero** store calls |
+| **Failures report, not raise** | published objects are immutable and have no rollback, so a halted run returns the outcomes that completed and states `partial` rather than leaving it to arithmetic |
+| **Three writes, three dispositions** | a publication appends a claim, a payload and an acquisition record. All three are reported separately, because *the payload was already there* and *this acquisition was already recorded* are different facts |
+| **No resume** | re-running a halted execution is **not** a resume: a second execution reads a new instant, so the acquisition record differs and the store refuses it. Review the halt and refetch under a **new explicit execution id**. Durable checkpointing is deferred |
+| **Unknown durable state** | a publication that raises may have committed some of its three appends, and an ambiguous backend failure may not prove whether any committed. The result carries `publication_state_unknown` and **claims to know nothing more** |
+| **Run-byte ceiling** | bounds **successful provider payload bytes handed to the runtime**, counted the moment they arrive and before publication — not HTTP framing, failed-response bodies or wire traffic, none of which the client exposes. Enforced as *headroom* before each request, so the run never asks for an answer it cannot afford |
+| **Result integrity** | a result must describe one valid execution: unique acquisition identities, unique request coordinates, every counter and both byte totals re-derived from the outcomes, and `HALTED` requiring strictly fewer completed than planned |
+| **`is_backfill` is a placeholder** | fixed `False` for this dormant slice, to stop qualification data being represented as an authoritative historical backfill. It is **no evidence that the retrieval is an update**, and it is a **pre-execution blocker**: no real qualification or Services Data publication may be authorized until the neutral acquisition contract can represent a qualification retrieval accurately, under its own governed decision |
+| **Nothing leaks** | every failure is one closed `StrEnum` member, raised `from None`. A response body, a URL carrying the key, a bucket name and a backend error string have no parameter to arrive through |
+| **PIT is in the type** | `PROVIDER_REALISTIC_PIT` is the only admitted profile; `PUBLIC_PIT` is refused and is not named in the runtime at all |
+| **`permaticker` is untouched** | never named, never derived from. Payloads are opaque bytes and are never parsed |
+
+**An offline plan-check command exists and cannot run a plan.**
+[`scripts/sharadar_plan_check.py`](scripts/sharadar_plan_check.py) validates a plan and prints a
+fixed-schema summary. It imports no client, no transport, no store and no executor, so the absence
+of an execution mode is **structural rather than a policy**; `--execute`, `--live`, `--api-key`,
+`--secret`, `--bucket`, `--aws-profile`, `--endpoint` and `--token` are refused by name. No subject
+symbol is printed. It is **not** the private qualification harness, which is untouched, unimported
+and still unauthorized to execute.
+
+**Q7, Q8 and `permaticker` are unchanged and unresolved by this slice**, and **G1 and G2 stay
+OPEN**, ADR-0005 stays **PROPOSED**, INC-0002 stays **OPEN**, and Phase 3 stays **NOT COMPLETE**.
 
 ### Sharadar provider-integration Slice 1 — implemented, code only, never run
 
@@ -700,19 +770,23 @@ infer or deny it.
 ```
 IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                ADR-0010 bounded semantics + qualification subscription PURCHASED / ACTIVE
-               ADR-0011 licensed S3 object store -- ACCEPTED EFFECTIVE ON MERGE OF PR #16,
-                        CODE ONLY, NEVER RUN AGAINST AWS
+               ADR-0011 licensed S3 object store (PR #16 merged) -- CODE ONLY,
+                        NEVER RUN AGAINST AWS
+               ADR-0012 dormant qualification runtime core -- ACCEPTED EFFECTIVE ON
+                        MERGE OF PR #17, CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
+               a credential source · a composition root · client construction · bucket binding
                ANY provider API call · the published test token · Services Data · bulk download
                empirical qualification · production backfill · production ingestion
                Silver/Gold real data · production-provider SELECTION
                ANY AWS mutation, read, verifier run or terraform command · ECR/ECS · image builds
-               bucket binding · client construction · ingestion runner · CONTROL publication
+               an ingestion runner · an authenticated qualification run · CONTROL publication
                broker/LEAN activity · Paper expansion · live trading
 
 UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN
-               ADR-0005 PROPOSED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED
+               ADR-0005 PROPOSED · INC-0002 OPEN · Phase 3 NOT COMPLETE
+               CONTROL publication DEFERRED · live trading HARD-DISABLED
 ```
 
 **The published test token stays unauthorized deliberately.** The manual qualification harness is
@@ -720,8 +794,10 @@ UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN 
 session may.
 
 **The adapter has never sent a request, and cannot send one by accident.** Only one module is
-network-capable, **nothing in the repository constructs it**, no runner exists, and importing the
-package opens no socket. Static tests prove each of those rather than asserting them.
+network-capable, **nothing in the repository constructs it**, and importing the package opens no
+socket. The dormant qualification runtime (ADR-0012) *uses* a client, but never builds one: no
+credential source and no composition root exists to give it a real one. Static tests prove each of
+those rather than asserting them.
 
 | | |
 |---|---|
