@@ -2625,19 +2625,67 @@ def main() -> int:
             and "must never be silently treated as historically known" in flat10,
             "a current value read as a historical one is look-ahead that raises no error",
         )
+        # -- permaticker: the vendor's own pages disagree, and the record says so --
+        #
+        # This block replaced a check that asserted security-level semantics as
+        # settled. It was not: /docs/tickers says "issuer" in its query-parameter
+        # description and /docs/faqs says "security" in its ticker-change answer,
+        # both current and both first-party. The earlier check would have locked
+        # a wrong reading into the audit, which is the worst place to put one --
+        # a guard that enforces a mistake makes the mistake harder to find.
         f.check(
-            "ADR-0010 treats permaticker as a security-level identifier",
-            "identifier for a **security**" in adr10
-            and "security-level anchor" in flat10
-            and "must not be read as issuer identity" in flat10,
-            "the vendor's FAQ says security, not issuer; reading a security identifier as an "
-            "issuer identifier would silently understate concentration",
+            "ADR-0010 records the permaticker granularity as publicly unresolved",
+            "PUBLICLY_UNRESOLVED` — CONFLICTING FIRST-PARTY DOCUMENTATION" in adr10,
+            "two current first-party pages disagree; neither overrides the other",
         )
         f.check(
-            "ADR-0010 requires separate evidence for issuer-level relationships",
-            "requires separately supported evidence or an explicit mapping" in flat10
-            and "never be inferred from `permaticker`" in flat10,
-            "an issuer relationship is a mapping, not an inference from a security key",
+            "ADR-0010 records both conflicting first-party statements",
+            "identifier for an **issuer**" in adr10
+            and "identifier for a **security**" in adr10
+            and "https://sharadar.com/docs/tickers" in adr10
+            and "https://sharadar.com/docs/faqs" in adr10,
+            "recording the contradiction requires carrying both statements, not one",
+        )
+        f.check(
+            "ADR-0010 classifies permaticker as neither issuer-level nor security-level",
+            "does not classify `permaticker` as either an issuer-level or a security-level "
+            "identifier" in flat10,
+            "the public record supports neither classification, so the ADR must assert neither",
+        )
+        f.check(
+            "ADR-0010 makes no definitive security-level claim",
+            "security-level anchor" not in flat10
+            and "stable per security" not in flat10
+            and "settles the level" not in flat10,
+            "a definitive claim here would restate the error this correction removes",
+        )
+        f.check(
+            "ADR-0010 states the conservative no-inference rule in full",
+            all(
+                phrase in flat10
+                for phrase in (
+                    "opaque, vendor-stable identifier",
+                    "do not infer issuer identity",
+                    "do not infer security or share-class granularity",
+                    "do not collapse share classes or securities",
+                    "do not infer issuer-level concentration or exposure groupings",
+                    "do not use it alone to establish cross-table entity identity",
+                )
+            ),
+            "an unresolved granularity is safe only while nothing infers one from it",
+        )
+        f.check(
+            "ADR-0010 requires independent evidence or a governed mapping, not yet authorized",
+            "independent evidence, an explicit governed mapping, or later empirical qualification"
+            in flat10
+            and "the subscription does not authorize that qualification" in flat10,
+            "an issuer or security relationship is a mapping, not an inference from an opaque key",
+        )
+        f.check(
+            "ADR-0010 keeps the mutable-metadata rule intact",
+            "must never\nbe silently treated as historically known" in adr10
+            or "must never be silently treated as historically known" in flat10,
+            "the permaticker correction must not weaken the separate, valid metadata rule",
         )
         f.check(
             "ADR-0010 keeps derived price fields distinguishable from provider bytes",
@@ -2750,6 +2798,34 @@ def main() -> int:
                 bool(row) and url in row,
                 f"{claim} must resolve to a row whose source is {url}",
             )
+        f.check(
+            "PSR-SHD-113 retains the /docs/tickers issuer claim",
+            any(
+                line.startswith("| `PSR-SHD-113`")
+                and "identifier for an issuer" in line
+                and "https://sharadar.com/docs/tickers" in line
+                for line in register.splitlines()
+            ),
+            "that page still says issuer today, so the row is current evidence rather than a "
+            "stale paraphrase, and must not be rewritten or invalidated",
+        )
+        f.check(
+            "PSR-SHD-124 retains the /docs/faqs security claim and marks the conflict",
+            any(
+                line.startswith("| `PSR-SHD-124`")
+                and "identifier for a **security**" in line
+                and "https://sharadar.com/docs/faqs" in line
+                and "directly conflicts with `PSR-SHD-113`" in line
+                for line in register.splitlines()
+            ),
+            "both first-party statements must be carried, cross-referenced as a conflict",
+        )
+        f.check(
+            "no register row claims the permaticker conflict was resolved",
+            "supersedes the identifier wording in `PSR-SHD-113`" not in register
+            and "settles the level `permaticker` identifies" not in register,
+            "neither current first-party page overrides the other",
+        )
         f.check(
             "the R5 pass records that no account page or API was touched",
             "No account page, subscribe-flow page, API-key page, receipt or" in register

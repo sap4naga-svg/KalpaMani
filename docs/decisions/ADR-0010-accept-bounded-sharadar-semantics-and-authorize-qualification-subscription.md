@@ -157,20 +157,55 @@ Consequences:
   be silently treated as historically known.** A current value read as a historical one is
   look-ahead wearing a schema's clothing — and it is the quiet kind, because nothing errors.
 - Historical security identity and universe construction must be built from **approved permanent
-  identifiers** — `permaticker`, which the vendor documents as its *"unchanging and unique
-  identifier for a **security**"* (`PSR-SHD-124`) —
-  **corporate actions**, **price availability**, **conservative bounds**, and **later empirical
-  qualification** — not from a current-state metadata read.
+  identifiers**, **corporate actions**, **price availability**, **conservative bounds** and **later
+  empirical qualification** — not from a current-state metadata read.
 - **Any historical attribute that is unavailable requires an explicit disposition**: a declared
   bound, an exclusion, or a profile downgrade. Never a silent substitution of today's value.
 
-**`permaticker` is a security-level anchor, and must not be read as issuer identity.** It is stable
-per security, so it does **not** collapse multiple securities or share classes of one company into a
-single entity. Any issuer-level relationship — a share-class grouping, a corporate parent, an
-issuer-level exposure limit — requires separately supported evidence or an explicit mapping, and may
-**never be inferred from `permaticker`**. Treating a security identifier as an issuer identifier would
-silently understate concentration, which is the kind of error a risk limit is supposed to catch and
-would not.
+### `permaticker` — entity granularity is unresolved, and for an unusual reason
+
+| | |
+|---|---|
+| **Public resolution** | **`PUBLICLY_UNRESOLVED` — CONFLICTING FIRST-PARTY DOCUMENTATION** |
+| **Governance disposition** | conservative operational bounds below, pending independent resolution |
+
+Two **current** first-party Sharadar pages describe `permaticker` at two different entity levels,
+and they contradict each other directly:
+
+| page | section | wording |
+|---|---|---|
+| [`/docs/tickers`](https://sharadar.com/docs/tickers) | query parameters | *"a unique and unchanging identifier for an **issuer**"* (`PSR-SHD-113`) |
+| [`/docs/faqs`](https://sharadar.com/docs/faqs) | *How are ticker changes handled?* | *"Sharadar's own unchanging and unique identifier for a **security**"* (`PSR-SHD-124`) |
+
+**Neither page overrides the other.** Both are current, both are first-party, and nothing published
+adjudicates between them. **This ADR does not classify `permaticker` as either an issuer-level or a
+security-level identifier**, because the public record does not support either classification.
+
+Note how this differs from Q7. Q7 is unresolved because **no page speaks**; this is unresolved
+because **two pages speak and disagree** — which is the more dangerous shape, since either statement
+read alone looks like a settled answer. An earlier revision of this ADR read the FAQ alone and
+recorded security-level semantics as settled. That was wrong, and the error is instructive: the
+evidence for the other reading was already in the register.
+
+**Conservative operational rule, binding until independently resolved.** Treat
+`permaticker` as an **opaque, vendor-stable identifier** and nothing more:
+
+- **preserve it exactly** as the vendor supplies it;
+- **do not infer issuer identity** from it;
+- **do not infer security or share-class granularity** from it;
+- **do not collapse share classes or securities** using it alone;
+- **do not infer issuer-level concentration or exposure groupings** from it;
+- **do not use it alone to establish cross-table entity identity**.
+
+Any issuer *or* security relationship requires **independent evidence, an explicit governed mapping,
+or later empirical qualification** — and **the subscription does not authorize that qualification
+yet** (§8).
+
+Both failure directions are real, which is why the rule refuses both. Reading a security key as an
+issuer key would silently **understate** concentration — the kind of error a risk limit exists to
+catch and would not. Reading an issuer key as a security key would silently **split** one exposure
+into several, or merge distinct securities that happen to share an issuer. Neither error announces
+itself.
 
 This is the contract's existing rule applied to a specific vendor fact, not a new rule.
 
