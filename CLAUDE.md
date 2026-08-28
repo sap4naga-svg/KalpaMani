@@ -547,8 +547,9 @@ statements are historical and superseded for G3 alone.
 License for individual personal research, personal backtesting, programmatic API use, and
 automated trading of the owner's own account where the published documentation permits it. The
 previously drafted Q1–Q8 vendor clarification is **CANCELLED — NOT SENT — historical evidence
-only**, and is retained rather than deleted. **Q7 and Q8 were never answered by the vendor; they
-were decided by the owner** — see [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md).
+only**, and is retained rather than deleted. **Q7 remained publicly unresolved; Q8 was publicly
+bounded but not empirically verified. The owner accepted both dispositions for qualification** —
+see [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md).
 
 Accepting the licence means accepting these, in every session:
 
@@ -633,16 +634,16 @@ package opens no socket. Static tests prove each of those rather than asserting 
 
 **Naming an implementation target is not selecting a production provider. G1 stays OPEN.**
 
-**Q7 and Q8 are no longer open pre-purchase blockers — they were decided, not answered**
-([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28):
+**Neither Q7 nor Q8 is a remaining pre-purchase blocker, and their evidence states differ**
+([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28). **Q7 remained publicly unresolved; Q8 was publicly bounded but not empirically verified. The owner accepted both dispositions for qualification.**
 
 | | |
 |---|---|
 | **Q7** — daily price-bar origin | **`PUBLICLY_UNRESOLVED`**, owner-accepted for qualification. All Sharadar price data stays **`PROVIDER_DERIVED`**, usable only under **`PROVIDER_REALISTIC_PIT`**, and **never represented as `PUBLIC_PIT`** |
 | **Q8** — Full History depth | **`PUBLICLY_BOUNDED`**, owner-accepted for qualification. The documented per-table depths are **planning boundaries, not certified earliest records**; actual minimum dates, coverage and completeness **must be measured from the subscribed data** under a separate authorization |
 
-The vendor was not contacted and the API was not called for either decision; the evidence is public documentation recorded as `PSR-SHD-122`–`PSR-SHD-125` in
-[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5.
+The vendor was not contacted and the API was not called for either decision; the evidence is public documentation recorded as `PSR-SHD-122`–`PSR-SHD-128` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5, each table's depth cited to that table's own page.
 
 ### Non-blocking follow-ups carried forward
 

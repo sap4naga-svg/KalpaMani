@@ -27,9 +27,12 @@ provider integration and left two questions standing as **pre-purchase blockers*
 - **Q7** — are the daily bars officially disseminated, or provider-aggregated?
 - **Q8** — what depth does the Full History tier actually deliver, per table?
 
-A public-source pass on 2026-08-28 answered neither. That left a decision rather than a discovery:
-public documentation was not going to resolve Q7 at all, and Q8 could only be bounded from it. The
-owner has now taken that decision.
+A public-source pass on 2026-08-28 left the two in **different** states, and the difference matters:
+**Q7 remained publicly unresolved** — no first-party page answers the provenance question at all.
+**Q8 was publicly bounded but not empirically verified** — the documentation does establish per-table
+planning boundaries; what it cannot establish is the actual earliest records, completeness or
+point-in-time behaviour of the delivered data. **The owner accepted both dispositions for
+qualification.**
 
 **This ADR records a governance decision and a completed purchase. It authorizes no access.**
 Everything that would touch the vendor's systems — a credential, an API call, a download, ingestion
@@ -48,12 +51,15 @@ The owner decided:
 > USD 69 plus applicable tax. This does not close G1 or G2 and does not yet authorize credentials,
 > API calls, Services Data ingestion, or production use."
 
-The owner subsequently confirmed the purchase **completed successfully**: a Sharadar Bundle, Full
-History, monthly, Personal Use — a **qualification subscription, active**.
+**The owner confirmed that the qualification subscription was purchased and active**: a Sharadar
+Bundle, Full History, monthly, Personal Use.
 
-**No account, billing, receipt, payment, renewal, credential or private licensing detail is
-recorded here, and none was requested, retrieved, inspected or displayed.** The authorization
-ceiling above is part of the decision; what was actually charged is not this document's business.
+**No purchase screenshot, account identifier, account email, billing information, receipt, payment
+information, credential, API key, or private licensing evidence is stored or committed in this
+repository.** No private account page or API-key page was opened by the assistant preparing this
+record, and no credential was retrieved or inspected. What this repository holds is the **owner-confirmed
+commercial state** and nothing else — the authorization ceiling above is part of the decision; what
+was actually charged is not this document's business.
 
 ---
 
@@ -87,10 +93,15 @@ something.
 
 - **All Sharadar price data remains `PROVIDER_DERIVED`.**
 - The only permitted historical information-set profile for it is **`PROVIDER_REALISTIC_PIT`**.
-- **Sharadar price data must never be represented as `PUBLIC_PIT`**, and no derived artifact built
-  from it may be either. Under
+- **Sharadar price data must never be represented as `PUBLIC_PIT`.** Under
   [`BAR_CONSTRUCTION_ORIGIN`](../../src/kalpamani/data/contracts/vocabulary.py), that is what
   `PROVIDER_AGGREGATED` implies, and this decision fixes the conservative side of it.
+- **No artifact may be classified `PUBLIC_PIT` solely on the basis of Sharadar price data.** An
+  artifact whose public classification is supported by an *independent* qualifying public source
+  requires its own lineage and evidence, and **is not established by this ADR**. The rule is about
+  what Sharadar data alone can support, not a permanent ceiling on every artifact that ever touches
+  it — writing it the other way would block a future artifact whose public standing rests on evidence
+  this decision never examined.
 
 **This bounds the uncertainty; it does not resolve it.** The upstream origin is still unknown. What
 has changed is that the unknown now has a documented, conservative disposition instead of an open
@@ -108,16 +119,17 @@ question blocking work.
 
 ### Documented planning boundaries
 
-Read from first-party public documentation on 2026-08-28 (`PSR-SHD-122`, `PSR-SHD-123`,
-`PSR-SHD-124`, `PSR-SHD-125`):
+Read from first-party public documentation on 2026-08-28. **Each table's depth is cited to that
+table's own page** (`PSR-SHD-125` tickers, `PSR-SHD-126` actions, `PSR-SHD-127` fundamentals,
+`PSR-SHD-128` daily fundamentals), with the `stocks` conflict at `PSR-SHD-122`/`PSR-SHD-123`:
 
 | table | documented planning boundary |
 |---|---|
 | `stocks` | **December 1998 onward for planning** — the conservative side of a conflict: the detailed table page states January 1998, the Prices overview states December 1998 |
-| `actions` | January 1998 |
-| `fundamentals` | January 1998 |
-| `daily` | December 1998 |
-| `tickers` | June 1990 |
+| `actions` | January 1998 (`PSR-SHD-126`) |
+| `fundamentals` | January 1998 (`PSR-SHD-127`) |
+| `daily` | December 1998 (`PSR-SHD-128`) |
+| `tickers` | June 1990 (`PSR-SHD-125`) |
 
 **These are documented planning boundaries. They are not certified earliest actual records.** The
 distinction is the whole point of recording them this way:
@@ -145,11 +157,20 @@ Consequences:
   be silently treated as historically known.** A current value read as a historical one is
   look-ahead wearing a schema's clothing — and it is the quiet kind, because nothing errors.
 - Historical security identity and universe construction must be built from **approved permanent
-  identifiers** (`permaticker`, documented as "a unique and unchanging identifier for an issuer"),
+  identifiers** — `permaticker`, which the vendor documents as its *"unchanging and unique
+  identifier for a **security**"* (`PSR-SHD-124`) —
   **corporate actions**, **price availability**, **conservative bounds**, and **later empirical
   qualification** — not from a current-state metadata read.
 - **Any historical attribute that is unavailable requires an explicit disposition**: a declared
   bound, an exclusion, or a profile downgrade. Never a silent substitution of today's value.
+
+**`permaticker` is a security-level anchor, and must not be read as issuer identity.** It is stable
+per security, so it does **not** collapse multiple securities or share classes of one company into a
+single entity. Any issuer-level relationship — a share-class grouping, a corporate parent, an
+issuer-level exposure limit — requires separately supported evidence or an explicit mapping, and may
+**never be inferred from `permaticker`**. Treating a security identifier as an issuer identifier would
+silently understate concentration, which is the kind of error a risk limit is supposed to catch and
+would not.
 
 This is the contract's existing rule applied to a specific vendor fact, not a new rule.
 

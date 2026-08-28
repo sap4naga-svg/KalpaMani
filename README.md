@@ -464,15 +464,23 @@ runtime dependency**.
 
 **Naming an implementation target is not selecting a production provider. G1 remains OPEN.**
 
-**Q7 and Q8 were decided rather than answered** ([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28). Q7 — the
-origin of the daily bars — is **publicly unresolved**, so all Sharadar price data stays
-`PROVIDER_DERIVED`, is usable only under `PROVIDER_REALISTIC_PIT`, and is **never represented as**
-`PUBLIC_PIT`. Q8 — Full History depth — is **publicly bounded**: the documented per-table depths
-are planning boundaries, not certified earliest records, and actual minimum dates, coverage and
-completeness must be **measured from the subscribed data** under a separate authorization. The
-vendor was not contacted and the API was not called; the evidence is public documentation recorded
-as `PSR-SHD-122`–`PSR-SHD-125` in
-[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5.
+**Q7 and Q8 reached different evidence states, and the owner accepted both for qualification**
+([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md), 2026-08-28).
+
+**Q7 — the origin of the daily bars — remained publicly unresolved.** No first-party page answers the
+provenance question, so all Sharadar price data stays `PROVIDER_DERIVED`, is usable only under
+`PROVIDER_REALISTIC_PIT`, and is **never represented as** `PUBLIC_PIT`. No artifact may be classified
+`PUBLIC_PIT` **solely on the basis of** Sharadar price data.
+
+**Q8 — Full History depth — was publicly bounded but not empirically verified.** The documentation
+does establish per-table planning boundaries; it cannot establish actual earliest records,
+completeness or point-in-time behaviour, and those must be **measured from the subscribed data**
+under a separate authorization.
+
+The vendor was not contacted and the API was not called; the evidence is public documentation
+recorded as `PSR-SHD-122`–`PSR-SHD-128` in
+[provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5, with each table's
+depth cited to that table's own page.
 
 **A one-month Full History Bundle qualification subscription is purchased and active.** That is
 access to *evaluate* a provider, not a choice of one: **G1 and G2 remain OPEN**, and credential

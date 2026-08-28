@@ -195,14 +195,21 @@ SOURCE_REGISTER = PHASE3 / "provider-source-register.md"
 #: The pairing matters: each phrase is only a defect when it appears **without** a negation to its
 #: left, because the same words are exactly how a document correctly states the prohibition.
 #:
-#: **Two phrases were removed on 2026-08-28**, and the removal is the interesting part.
-#: "subscription is authorized" and "purchase is authorized" were over-claims until ADR-0010 made
-#: them *true*; a guard that kept refusing them would have forced the status documents to describe
-#: the purchase in circumlocutions, which is how a guard starts degrading the thing it protects.
-#: Every phrase below must still be false, and section 16 checks the ones ADR-0010 could have been
-#: mistaken for authorizing.
+#: **This list stays global, and three phrases were added on 2026-08-28.**
+#:
+#: A draft of that day's change removed *"subscription is authorized"* and *"purchase is
+#: authorized"* on the grounds that ADR-0010 had made them true. That was the wrong shape of fix.
+#: ADR-0010 authorizes **one scoped qualification subscription**, not subscriptions and purchases in
+#: general -- and a repository-wide guard must not be weakened to accommodate a scoped decision,
+#: because the next provider, the next purchase and the next renewal would inherit the hole. Both
+#: phrases are restored, and neither appears in any document: the status tables state the specific
+#: authorization instead of the general one, which is what they should have said anyway. Section 16
+#: checks ADR-0010's exact authorization matrix, so the narrow permission is enforced by naming it
+#: rather than by relaxing this list.
 OVERCLAIM_PHRASES = (
     "production ingestion is authorized",
+    "subscription is authorized",
+    "purchase is authorized",
     "credential setup is authorized",
     "api access is authorized",
     "services data ingestion is authorized",
@@ -2589,6 +2596,23 @@ def main() -> int:
             "the whole consequence of an unresolved Q7 is this prohibition",
         )
         f.check(
+            "ADR-0010 scopes the derived-artifact rule to Sharadar data alone",
+            "No artifact may be classified `PUBLIC_PIT` solely on the basis of Sharadar price data"
+            in flat10
+            and "is not established by this ADR" in flat10,
+            "the direct data is never PUBLIC_PIT, but a future artifact standing on an "
+            "independent public source is a question this ADR did not examine and must not "
+            "pre-emptively refuse",
+        )
+        f.check(
+            "ADR-0010 distinguishes Q7's evidence state from Q8's",
+            "Q7 remained publicly unresolved" in flat10
+            and "Q8 was publicly bounded but not empirically verified" in flat10
+            and "The owner accepted both dispositions for qualification" in flat10,
+            "the two did not reach the same evidence state, and collapsing them into 'neither was "
+            "answered' overstates what is unknown about Q8 and understates it about Q7",
+        )
+        f.check(
             "ADR-0010 records Q8 as publicly bounded, not resolved",
             "PUBLICLY_BOUNDED" in adr10
             and "not certified earliest actual records" in adr10
@@ -2600,6 +2624,20 @@ def main() -> int:
             "latest primary listing venue" in flat10
             and "must never be silently treated as historically known" in flat10,
             "a current value read as a historical one is look-ahead that raises no error",
+        )
+        f.check(
+            "ADR-0010 treats permaticker as a security-level identifier",
+            "identifier for a **security**" in adr10
+            and "security-level anchor" in flat10
+            and "must not be read as issuer identity" in flat10,
+            "the vendor's FAQ says security, not issuer; reading a security identifier as an "
+            "issuer identifier would silently understate concentration",
+        )
+        f.check(
+            "ADR-0010 requires separate evidence for issuer-level relationships",
+            "requires separately supported evidence or an explicit mapping" in flat10
+            and "never be inferred from `permaticker`" in flat10,
+            "an issuer relationship is a mapping, not an inference from a security key",
         )
         f.check(
             "ADR-0010 keeps derived price fields distinguishable from provider bytes",
@@ -2652,10 +2690,23 @@ def main() -> int:
             "recording an obligation is not discharging it",
         )
         f.check(
-            "ADR-0010 records no account, billing or credential detail",
-            "No account, billing, receipt, payment, renewal, credential or private licensing "
-            "detail is recorded here" in flat10,
+            "ADR-0010 scopes its privacy claim to this repository",
+            "No purchase screenshot, account identifier, account email, billing information, "
+            "receipt, payment information, credential, API key, or private licensing evidence is "
+            "stored or committed in this repository." in flat10,
             "purchase confirmation is a governance fact; the receipt is not",
+        )
+        f.check(
+            "ADR-0010 claims only what this repository can vouch for",
+            "displayed" not in flat10,
+            "the assistant cannot speak for what the owner saw on their own screen; the honest "
+            "claim is about what is stored and committed here",
+        )
+        f.check(
+            "ADR-0010 records that no private page was opened and no credential inspected",
+            "No private account page or API-key page was opened" in flat10
+            and "no credential was retrieved or inspected" in flat10,
+            "what the assistant did and did not open is a checkable fact and belongs in the record",
         )
         f.check(
             "ADR-0010 closes no gate",
@@ -2680,15 +2731,29 @@ def main() -> int:
     # -- the source register carries the rows ADR-0010's claims rest on ---------
     if SOURCE_REGISTER.is_file():
         register = read(SOURCE_REGISTER)
-        for claim in ("PSR-SHD-124", "PSR-SHD-125"):
+        for claim, url in (
+            ("PSR-SHD-124", "https://sharadar.com/docs/faqs"),
+            ("PSR-SHD-125", "https://sharadar.com/docs/tickers"),
+            ("PSR-SHD-126", "https://sharadar.com/docs/actions"),
+            ("PSR-SHD-127", "https://sharadar.com/docs/fundamentals"),
+            ("PSR-SHD-128", "https://sharadar.com/docs/daily"),
+        ):
+            # The row must exist AND cite the page that actually states its claim.
+            # A combined row citing one URL for four tables is not traceability: a
+            # reviewer opening the link would find one claim in four.
+            row = next(
+                (line for line in register.splitlines() if line.startswith(f"| `{claim}`")),
+                "",
+            )
             f.check(
-                f"the source register carries {claim}",
-                claim in register,
-                "an ADR's provider claims must resolve to a traceable row",
+                f"the source register carries {claim}, cited to its own page",
+                bool(row) and url in row,
+                f"{claim} must resolve to a row whose source is {url}",
             )
         f.check(
             "the R5 pass records that no account page or API was touched",
-            "No account page, subscribe-flow page, API-key page, receipt or" in register,
+            "No account page, subscribe-flow page, API-key page, receipt or" in register
+            and "No purchase screenshot, account identifier, account email" in register,
             "a live subscription raises the stakes on what a research pass may open",
         )
 
