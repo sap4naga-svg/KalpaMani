@@ -438,7 +438,12 @@ def test_a_collision_from_the_store_is_reported_as_a_content_conflict() -> None:
 
 
 def test_an_unexpected_store_exception_is_classified_not_propagated() -> None:
-    store = RefusingStore(RuntimeError("api_key=leak https://api.sharadar.com"))
+    # The value is marked synthetic in the value itself: the repository's
+    # key-literal guard admits `synthetic...` and refuses anything that merely
+    # looks like a key, which is exactly the rule that should catch a real one.
+    store = RefusingStore(
+        RuntimeError("api_key=synthetic-fake-leak-canary https://api.sharadar.com")
+    )
     engine, _, _ = runtime([PAYLOAD_A], store=store)
     result = engine.execute(snapshot_plan(SUBJECT_A))
     assert result.failure is QualificationFailure.UNCLASSIFIED
