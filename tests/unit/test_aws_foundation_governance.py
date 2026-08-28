@@ -38,6 +38,26 @@ INFRA = PROJECT_ROOT / "infra" / "aws" / "research-data-plane"
 STATUS_DOC = PROJECT_ROOT / "docs" / "operations" / "aws-foundation-status.md"
 VERIFY_SCRIPT = PROJECT_ROOT / "scripts" / "aws_foundation_verify.py"
 
+#: The Phase-3 documentation audit. Loaded for ONE thing: its
+#: ``claims_account_created`` helper, so this test and the audit cannot drift apart on the
+#: pattern they both depend on. Importing it has no side effects -- its ``main`` is guarded.
+DOCS_AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
+_AUDIT_MODULE = "kalpamani_phase3_docs_audit"
+
+
+def _audit() -> Any:
+    """Load the documentation audit as a module. It is a script, not a package."""
+    cached = sys.modules.get(_AUDIT_MODULE)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(_AUDIT_MODULE, DOCS_AUDIT)
+    assert spec is not None and spec.loader is not None, "could not load the documentation audit"
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_AUDIT_MODULE] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 #: Identifier-shaped material that must never reach a committed file. The 12-digit
 #: pattern is the one most likely to arrive by accident, pasted from a console URL.
 IDENTIFIER_PATTERNS = {
@@ -154,7 +174,7 @@ def test_the_status_documents_do_not_claim_the_account_was_created(name: str) ->
     facts and the repository must not collapse them.
     """
     text = _read(PROJECT_ROOT / name)
-    assert re.search(r"AWS account.*CREATED", text) is None, (
+    assert not _audit().claims_account_created(text), (
         f"{name} states an AWS account creation that did not happen"
     )
     assert re.search(r"AWS account.*EXISTING", text) is not None, (
@@ -418,3 +438,92 @@ def test_the_identity_gate_runs_before_remote_state_is_read() -> None:
     assert main_body.index("identity_gate(") < main_body.index("tf_outputs("), (
         "remote state is read before the identity gate refuses"
     )
+
+
+# ---------------------------------------------------------------------------
+# The account-creation pattern itself
+# ---------------------------------------------------------------------------
+#
+# Three copies of this regex once carried literal ASCII backspace bytes where `\b` was
+# intended, so every guard built on it passed against every possible input. The tests below
+# exercise the pattern's BEHAVIOUR rather than its spelling, because a spelling check is
+# what a control character defeats.
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "AWS account CREATED",
+        "AWS account | CREATED",
+        "| AWS account | CREATED by this work |",
+        "The AWS account was CREATED",
+    ],
+)
+def test_the_account_creation_pattern_matches_a_creation_claim(claim: str) -> None:
+    assert _audit().claims_account_created(claim), f"pattern failed to match: {claim!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "AWS account EXISTING",
+        "| AWS account | EXISTING -- pre-dates this work |",
+        "AWS account | no account was created here",
+        "CREATED",
+        "the foundation was PROVISIONED",
+    ],
+)
+def test_the_account_creation_pattern_does_not_match_a_correct_record(text: str) -> None:
+    assert not _audit().claims_account_created(text), f"pattern matched wrongly: {text!r}"
+
+
+def test_the_repaired_pattern_fires_where_the_broken_one_never_could() -> None:
+    """The exact defect, pinned by reconstructing it.
+
+    Asserting that the repaired pattern matches a creation claim is not enough on its own:
+    the useful comparison is against the pattern that shipped. Built from backspace bytes it
+    required a control character, so it matched nothing any document contains and the guard
+    it fed passed against every possible input. That is the property this test kills.
+    """
+    audit = _audit()
+    broken = re.compile("AWS account.*\x08CREATED\x08")
+    claim = "| AWS account | CREATED by this work |"
+
+    assert broken.search(claim) is None, "the broken pattern is being reconstructed wrongly"
+    assert audit.claims_account_created(claim), "the repaired pattern must fire on this claim"
+    assert "\x08" not in audit.ACCOUNT_CREATED_CLAIM.pattern
+
+
+#: Files whose regexes carried the defect. The scan is not limited to them -- a control
+#: character is invisible wherever it lands -- but these are named so the regression is
+#: explicit about what it is guarding against.
+REPAIRED_FILES = (
+    PROJECT_ROOT / "scripts" / "phase3_docs_audit.py",
+    PROJECT_ROOT / "tests" / "unit" / "test_aws_foundation_governance.py",
+)
+
+
+@pytest.mark.parametrize("path", REPAIRED_FILES, ids=lambda p: p.name)
+def test_the_repaired_files_carry_no_backspace_byte(path: Path) -> None:
+    assert path.read_bytes().count(b"\x08") == 0, (
+        f"{path.name} carries an ASCII backspace byte; a regex written \\b in a non-raw "
+        "string compiles to a control character and matches nothing"
+    )
+
+
+def test_no_tracked_python_file_carries_a_backspace_byte() -> None:
+    """The general form. An invisible control byte is a defect wherever it lands."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "-C", str(PROJECT_ROOT), "ls-files", "--", "*.py"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail("git ls-files failed; the control-byte scan cannot be verified")
+    offenders = [
+        line
+        for line in result.stdout.splitlines()
+        if line and (PROJECT_ROOT / line).read_bytes().count(b"\x08")
+    ]
+    assert offenders == [], f"ASCII backspace bytes found in: {offenders}"

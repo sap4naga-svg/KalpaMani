@@ -171,6 +171,27 @@ DELETION_RUNBOOK = REPO_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion
 #: closes exactly one gate; the harness is code and methodology only, never a result.
 ADR_LICENCE = DECISIONS / ("ADR-0008-sharadar-personal-use-license-and-private-qualification.md")
 QUALIFICATION_HARNESS = REPO_ROOT / "scripts" / "sharadar_private_qualification.py"
+
+#: A document claiming that **this work** created the AWS account. The account pre-dated
+#: the work and was configured for the foundation on 2026-08-27, so "CREATED" invents a
+#: history -- and "NOT CREATED" is equally wrong, because account existence and foundation
+#: provisioning are different facts that must not be collapsed.
+#:
+#: **Written with explicit word boundaries, and that is the point.** Three earlier copies of
+#: this pattern carried literal ASCII backspace bytes (0x08) where `\b` was intended -- which
+#: is exactly what `\b` means inside a NON-raw Python string. The compiled pattern then
+#: required a control character no document contains, so every guard built on it passed
+#: unconditionally, and passed invisibly: the defect renders as ordinary text in a terminal,
+#: a diff and a review. One definition now, exercised by a behavioural regression test, with
+#: a byte scan refusing 0x08 from returning.
+ACCOUNT_CREATED_CLAIM = re.compile(r"AWS account.*\bCREATED\b")
+
+
+def claims_account_created(text: str) -> bool:
+    """True if ``text`` states that an AWS account was created by this work."""
+    return ACCOUNT_CREATED_CLAIM.search(text) is not None
+
+
 #: The provision record. It is the one document that describes real, deployed infrastructure,
 #: which makes it the likeliest place for an account id, bucket name or ARN to arrive.
 FOUNDATION_STATUS = REPO_ROOT / "docs" / "operations" / "aws-foundation-status.md"
@@ -1398,7 +1419,7 @@ def main() -> int:
         for name, doc in (("CLAUDE.md", claude_md), ("README.md", readme)):
             f.check(
                 f"{name} does not claim an AWS account was created",
-                re.search(r"AWS account.*CREATED", doc) is None
+                not claims_account_created(doc)
                 and re.search(r"AWS account.*EXISTING", doc) is not None,
                 "account existence and foundation provisioning must not be collapsed",
             )
@@ -1439,7 +1460,7 @@ def main() -> int:
 
             f.check(
                 "the status document records the account as pre-existing",
-                "EXISTING" in status_doc and re.search(r"AWS account.*CREATED", status_doc) is None,
+                "EXISTING" in status_doc and not claims_account_created(status_doc),
                 "account existence and foundation provisioning must not be collapsed",
             )
             f.check(
