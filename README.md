@@ -11,7 +11,7 @@ risk and selective, bounded AI research.
 > [BLUEPRINT_V3_ADOPTION.md](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
 >
 > **Status: Phase 3A A1 ACCEPTED (2026-08-27). Sharadar provider-integration Slice 1
-> IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13. Licensed S3 research object store
+> IMPLEMENTED / ACCEPTED — PR #13 MERGED — CODE ONLY. Licensed S3 research object store
 > IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS.
 > Phase 3 overall NOT COMPLETE.**
 > Phase 1 (Paper connectivity) and Phase 2 (a narrowly certified one-share SPY Paper order
@@ -452,16 +452,19 @@ CODE ONLY**: reviewed, merged code that has never sent a request to a vendor.
 construction from public documentation, credential-**injection** interfaces, redaction, pacing,
 bounded retries, Bronze publication mechanics, content addressing, synthetic-only tests.
 
-**ADR-0009 did not authorize, as written on 2026-08-27** — a historical boundary, retained as the
-record of that decision: a subscription, a purchase, a trial, a vendor account, billing details, a
-private credential, any API call, Services Data, production ingestion, Silver or Gold real-data
-work, the real S3 writer, ECR or ECS, `terraform apply`, any AWS mutation, broker or LEAN activity,
-Paper expansion, live trading.
+**The original Slice-1 boundary lives in
+[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md)** and is not
+reproduced here: a verbatim copy of a superseded list, sitting in a current-status document, is a
+second matrix a reader can mistake for the live one.
+[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md)
+and [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md)
+subsequently added their own narrowly defined authorities — the bounded qualification subscription,
+and the licensed S3 writer. **The list below is what governs today.**
 
-**Two lines of that historical boundary were superseded, and only two.** The bounded qualification
-**subscription and purchase** were authorized and completed on 2026-08-28 (ADR-0010), and the
-**real S3 writer** became its own slice (ADR-0011) — implemented, code only, never run against AWS.
-Everything else on that list is still forbidden.
+That older list also described what an *implementation slice* could do; it never described the
+owner's private affairs. A purchase the owner was authorized to make necessarily involved
+owner-side account and billing activity, which this repository neither governs nor records — and
+therefore neither forbids nor denies.
 
 **Currently NOT AUTHORIZED**, and this is the list that governs a session now: credential retrieval,
 setup, configuration or binding · Secrets Manager use · any provider API call · the published test
@@ -470,6 +473,9 @@ ingestion · Silver or Gold real data · production-provider selection · any AW
 verifier run or Terraform command · ECR or ECS · image builds · bucket binding · client construction
 · an ingestion runner · CONTROL publication · broker or LEAN activity · Paper expansion · live
 trading. **G1 and G2 stay OPEN**, ADR-0005 stays **PROPOSED**, and Phase 3 stays **NOT COMPLETE**.
+
+**The published test token stays unauthorized deliberately.** The manual qualification harness is
+*able* to read it; that is not permission to run the harness, which only the owner runs.
 
 `src/kalpamani/data/ingest/sharadar/` is the one place vendor knowledge lives; the A1 kernel and
 every vendor-neutral package stay vendor-neutral, and no other production module names the

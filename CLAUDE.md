@@ -291,7 +291,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
-**PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13.**
+**PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED / ACCEPTED — PR #13 MERGED — CODE ONLY.**
 **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #16 — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
@@ -682,32 +682,20 @@ provider"**, which was correct while no provider-specific implementation was aut
 **IMPLEMENTED / ACCEPTED — CODE ONLY**: the adapter is reviewed, merged code that has never sent a
 request to a vendor.
 
-The block below is **ADR-0009's boundary as written on 2026-08-27**. It is retained as the record
-of what that authorization did and did not cover, on the same rule that keeps an ADR unedited.
-**It is history, not the current authorization matrix** — two of its lines have since been
-superseded by later owner decisions, and reading it as current would understate what is authorized
-*and* overstate what is forbidden.
+**ADR-0009 holds the historical scope of Slice 1**, including what that decision did not cover on
+2026-08-27. It is not reproduced here. Later owner decisions moved the boundary — the qualification
+subscription was authorized and completed under
+[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md),
+and the licensed S3 writer was authorized under
+[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — so a
+verbatim copy of the older list in a *current-status* document would be a second, stale matrix
+sitting beside the real one. **The matrix below is the only one that governs a session now.**
 
-```
-ADR-0009, as written on 2026-08-27 -- HISTORICAL
-
-AUTHORIZED     provider-specific code · provider-neutral interfaces · request construction
-               credential-INJECTION interfaces · redaction · pacing · bounded retries
-               Bronze mechanics · content addressing · synthetic tests · docs
-
-NOT AUTHORIZED subscription · purchase · trial · vendor account · billing · private credential
-               ANY API call · Services Data · production ingestion · Silver/Gold real data
-               the real S3 writer · ECR/ECS · terraform apply · ANY AWS mutation
-               broker/LEAN activity · Paper expansion · live trading
-```
-
-**Two lines of it were superseded, and only two.** The qualification **subscription and purchase**
-were authorized and completed on 2026-08-28 ([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md)), and **the real S3 writer** was authorized as its own slice
-([ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md)) — it is
-implemented, code only, and has never run against AWS. Everything else on that line is still
-forbidden.
-
-**The current matrix, which is what governs a session now:**
+It is also narrower than a historical list can be. An older prohibition on *a vendor account* or
+*billing* described what an implementation slice was permitted to do; it never described the owner's
+private affairs, and this repository neither governs nor records them. Completing an authorized
+purchase necessarily involved owner-side account and billing activity, and nothing here may forbid,
+infer or deny it.
 
 ```
 IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
@@ -726,6 +714,10 @@ NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets 
 UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN
                ADR-0005 PROPOSED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED
 ```
+
+**The published test token stays unauthorized deliberately.** The manual qualification harness is
+*able* to read it; that is not permission to run the harness, which only the owner runs and no AI
+session may.
 
 **The adapter has never sent a request, and cannot send one by accident.** Only one module is
 network-capable, **nothing in the repository constructs it**, no runner exists, and importing the

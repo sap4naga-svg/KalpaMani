@@ -479,10 +479,13 @@ CONFLICT_AS_OCCUPANCY = (
 
 
 #: Dash spellings folded together before matching, so a guard cannot be evaded by
-#: retyping one character. Written as escapes: a literal dash in source is itself
-#: ambiguous, which is the problem being solved.
+#: retyping one character. The middle dot is here because the negative control
+#: proved a legacy block separated by it slipped past a guard written with
+#: hyphens. Written as escapes: a literal dash in source is itself ambiguous,
+#: which is the problem being solved.
 EM_DASH = "\u2014"
 EN_DASH = "\u2013"
+MIDDLE_DOT = "\u00b7"
 
 #: Formulations that were true once and are false now. Each names a specific
 #: superseded claim rather than a topic, because a topic-shaped guard would
@@ -492,6 +495,65 @@ EN_DASH = "\u2013"
 #: authorize a purchase, as written on 2026-08-27". It may not say a purchase
 #: is unauthorized, because on 2026-08-28 the owner authorized one and it
 #: completed.
+#: Verbatim fragments of ADR-0009's obsolete matrix, and the conclusions drawn
+#: from reproducing it. A current-status document must not carry any of them.
+#:
+#: The two prohibition forms at the end are separate from the block itself: a
+#: document could drop the copy and still assert, in prose, that a vendor account
+#: or billing is forbidden. Neither was ever this repository's to forbid.
+REPRODUCED_LEGACY_MATRIX: list[tuple[str, str]] = [
+    (
+        "NOT AUTHORIZED subscription",
+        "the obsolete matrix, reproduced; a labelled copy is still a second matrix",
+    ),
+    (
+        "trial - vendor account - billing",
+        "the obsolete matrix's prohibition line, which described a slice, not the owner",
+    ),
+    (
+        "ADR-0009, as written on 2026-08-27 -- HISTORICAL",
+        "the reproduced block's own header",
+    ),
+    (
+        "Two lines of it were superseded, and only two",
+        "a conclusion that only holds if the obsolete list is read as current",
+    ),
+    (
+        "Two lines of that historical boundary were superseded, and only two",
+        "same conclusion, README phrasing",
+    ),
+    (
+        "Everything else on that line is still forbidden",
+        "false: the line also named a vendor account and billing, which are not forbidden here",
+    ),
+    (
+        "Everything else on that list is still forbidden",
+        "same, README phrasing",
+    ),
+    (
+        "a vendor account is not authorized",
+        "the owner's account is not this repository's to authorize or forbid",
+    ),
+    (
+        "vendor account is forbidden",
+        "the owner's account is not this repository's to authorize or forbid",
+    ),
+    (
+        "billing is not authorized",
+        "an authorized purchase necessarily involved billing; forbidding it in the abstract "
+        "contradicts a completed, authorized action",
+    ),
+    (
+        "billing is forbidden",
+        "same",
+    ),
+    (
+        "ACCEPTED ON MERGE OF PR #13",
+        "PR #13 merged; an event-conditional status is no longer a status",
+    ),
+]
+
+
 SUPERSEDED_CLAIMS: list[tuple[str, str]] = [
     (
         "must still be answered before any purchase",
@@ -3416,15 +3478,20 @@ def main() -> int:
         if not path.is_file():
             continue
         whole = read(path)
-        # The WHOLE document, flattened, with every dash spelling folded to one.
+        # The WHOLE document, flattened, with every separator folded to one.
         #
         # A guard that inspected only the section it expected the claim in would
         # pass while a stale narrative sat three screens further down -- which is
         # exactly how this defect survived two rounds of review. And a guard that
-        # matched one dash character would miss the same sentence typed with a
-        # hyphen; the negative control found precisely that hole in this check.
+        # matched one separator character would miss the same sentence typed with
+        # another; the negative control found that hole twice here, once for a
+        # hyphen against an em dash and once for a middle-dot-separated list.
         flat_whole = " ".join(
-            whole.replace("**", "").replace(EM_DASH, "-").replace(EN_DASH, "-").split()
+            whole.replace("**", "")
+            .replace(EM_DASH, "-")
+            .replace(EN_DASH, "-")
+            .replace(MIDDLE_DOT, "-")
+            .split()
         )
 
         for phrase, why in SUPERSEDED_CLAIMS:
@@ -3434,16 +3501,41 @@ def main() -> int:
                 why,
             )
 
-        # -- the historical boundary must be labelled as historical -----------
+        # -- the obsolete matrix must not be reproduced here at all -----------
+        #
+        # Round 2 allowed a verbatim copy provided it was labelled historical.
+        # That was not enough. A labelled copy is still a second authorization
+        # matrix in a current-status document, and its contents were narrower
+        # than the label admitted: the old list forbade "vendor account" and
+        # "billing", which described what an implementation slice could do and
+        # never described the owner's private affairs. An accepted ADR already
+        # preserves its own boundary; a status document should link to it.
+        for phrase, why in REPRODUCED_LEGACY_MATRIX:
+            f.check(
+                f"{name} does not reproduce {phrase!r}",
+                phrase.lower() not in flat_whole.lower(),
+                why,
+            )
         f.check(
-            f"{name} labels the ADR-0009 boundary as historical where it lists it",
-            "as written on 2026-08-27" in flat_whole,
-            "ADR-0009's list is retained as a record; unlabelled, it reads as the current matrix",
+            f"{name} points at ADR-0009 for the historical boundary instead of copying it",
+            "ADR-0009" in whole
+            and (
+                "holds the historical scope" in flat_whole
+                or "original Slice-1 boundary lives in" in flat_whole
+            ),
+            "the history has to remain findable; it just must not be restated as a matrix",
         )
         f.check(
-            f"{name} says which parts of that boundary were superseded, and by what",
-            "ADR-0010" in whole and "ADR-0011" in whole and "superseded" in flat_whole.lower(),
-            "a historical list beside a current one has to say where they differ",
+            f"{name} says the current matrix is the only one governing a session",
+            "only one that governs a session now" in flat_whole
+            or "the list below is what governs today" in flat_whole.lower(),
+            "two matrices in one document is the defect; one of them has to be named as live",
+        )
+        f.check(
+            f"{name} declines to govern owner-side account or billing activity",
+            "neither governs nor records" in flat_whole,
+            "an authorized purchase involved owner-side activity this repository must not "
+            "forbid, infer or deny",
         )
 
         # -- the positive current state ---------------------------------------
@@ -3451,6 +3543,17 @@ def main() -> int:
             f"{name} records ADR-0009 and Slice 1 as accepted and in force",
             "ACCEPTED / IN FORCE" in whole and "PR #13 merged" in whole,
             "the merged state must be readable where a session looks first",
+        )
+        f.check(
+            f"{name} states the top-level Slice-1 status as current, not event-conditional",
+            "IMPLEMENTED / ACCEPTED - PR #13 MERGED - CODE ONLY" in flat_whole,
+            "'accepted on merge' stopped being a status the moment the merge happened",
+        )
+        f.check(
+            f"{name} keeps the published test token unauthorized, and says why that is not odd",
+            "the published test token" in flat_whole
+            and "not permission to run the harness" in flat_whole,
+            "the harness being able to read it is not authorization to run it",
         )
         f.check(
             f"{name} records the qualification subscription as purchased and active",
