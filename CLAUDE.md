@@ -392,7 +392,7 @@ production ingestion are each still **separately unauthorized**.
 |---|---|
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
-| **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
+| **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 (subscription / purchase)** | **NOT STARTED / NOT AUTHORIZED** |
