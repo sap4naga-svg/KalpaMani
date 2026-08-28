@@ -308,6 +308,19 @@ or attached to an exception. `credential_from_env` takes an **explicit mapping**
 has no route to the process environment and creates and reads no real secret. The URL
 builders that carry the key are **off the package surface**: only the client needs them.
 
+The credential is also **deeply frozen**. The secret is rebuilt as an exact plain `str` from the
+character data the value actually holds, so a caller's `str` subclass cannot run its own code
+inside the query builder; whitespace and non-printable characters are refused, because they would
+corrupt the query string the key travels in; and a generous finite length ceiling bounds it. **No
+vendor alphabet is inferred** — public documentation states no key format, so refusing legal
+punctuation would refuse a real key on the day it is first used, and URL encoding remains
+responsible for it. Subclassing is refused at class creation, because a subclass could override
+`__repr__`, `__str__`, `__format__` **and** `reveal` at once and put a real key into a log line;
+the client separately requires an exact `SharadarCredential` rather than a credential-shaped
+object. Every refusal is built from the closed error vocabulary, so **the attempted value is never
+quoted**, and `credential_from_env` validates the variable name and converts a raising or broken
+mapping into that same typed refusal.
+
 **The client takes no `user_agent`, and no caller text reaches a header.** An earlier revision
 accepted one and put it straight into a request header and into `repr`. A header value is not free
 text: a caller-supplied `CR LF` splits the request, a key-shaped string turns the User-Agent into
@@ -395,6 +408,32 @@ URL, key, host or body in any exception. **No socket is opened.** The architectu
 narrowed to match: production code, scripts and unattended runners still may not construct the
 transport, and that one test may. The earlier "nowhere" rule made a guarantee nobody could check
 — an unconstructed class cannot be shown to pin an origin or bound a body.
+
+**Nothing injected is trusted at runtime.** A `Protocol` annotation is a static claim. `fetch()`
+requires an exact `SharadarRequest`, and validates that the transport returned an exact
+`TransportResponse` — which itself enforces an exact `int` status in `100..599` and an exact
+`bytes` body at construction, and refuses subclassing so those checks cannot be inherited past.
+Without that, an injected transport could return `status=200` with a `bytearray` body and it would
+have travelled out of `fetch()` as a payload the caller believed was immutable. Anything else a
+transport returns or raises — `None`, a duck-typed object, an arbitrary exception whose message may
+carry the URL — becomes a sanitized `RESPONSE_READ_FAILED`.
+
+**The transport's own arguments fail closed too.** `UrllibTransport.get` is a public boundary even
+though no runner calls it, so `url`, `headers` and `timeout_seconds` are all type-checked *before*
+anything that can raise. The ordering matters: an earlier revision called `math.isfinite` on
+whatever it was handed, so a string or a hostile `__float__` raised a `TypeError` out of a boundary
+whose whole job is converting failures into codes. `headers_are_safe` guards `items()`, the
+iteration and the pair unpacking for the same reason. The failing-response path takes the status
+*before* closing, guards the close, and validates the status *after* — a `close()` on a live socket
+raises with a message naming the host, and a malformed `code` is not something to pass on as if a
+server had produced it. `Location`, the URL, the message and the body are never touched.
+
+**An error can always be constructed.** `safe_dataset_label` takes an arbitrary object and never
+raises: an integer, a hostile `__eq__`/`__hash__` object, a `str` subclass with a spoofed
+`__class__` and a CSV-shaped string all become `<unnamed>`. An earlier revision annotated the
+parameter and then trusted the annotation, so a bad value would have raised *from inside the
+exception constructor* — discarding the failure it was reporting and replacing it with a less
+informative one.
 
 **Pacing and retries.** No public rate limit exists (`PSR-SHD-109`), and *no documented limit is
 not an absent limit* — so the default is one request per second, with the clock and the sleep

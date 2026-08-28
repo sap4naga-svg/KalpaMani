@@ -11,7 +11,7 @@ risk and selective, bounded AI research.
 > [BLUEPRINT_V3_ADOPTION.md](docs/architecture/BLUEPRINT_V3_ADOPTION.md).
 >
 > **Status: Phase 3A A1 ACCEPTED (2026-08-27). Sharadar provider-integration Slice 1
-> AUTHORIZED, CODE ONLY (2026-08-28). Phase 3 overall NOT COMPLETE.**
+> IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13. Phase 3 overall NOT COMPLETE.**
 > Phase 1 (Paper connectivity) and Phase 2 (a narrowly certified one-share SPY Paper order
 > lifecycle) are complete and accepted; the vendor-neutral point-in-time foundation kernel
 > is accepted **on synthetic fixtures only**. Adopting V3 is a governance change — it is
@@ -301,7 +301,7 @@ live brokerage execution, real-money operation.
 |---|---|
 | Planning | **ACCEPTED / MERGED** |
 | Stage 3A A1 — point-in-time foundation kernel | **ACCEPTED (2026-08-27)** |
-| Stage 3A — Sharadar provider-integration Slice 1 | **AUTHORIZED / IN IMPLEMENTATION (2026-08-28, ADR-0009) — CODE ONLY** |
+| Stage 3A — Sharadar provider-integration Slice 1 | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
 | Stage 3A A2 / A3 — subscription / purchase | **NOT STARTED / NOT AUTHORIZED** |
@@ -310,7 +310,7 @@ live brokerage execution, real-money operation.
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | [ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence | **ACCEPTED on merge (2026-08-27)** |
-| [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation | **ACCEPTED on merge (2026-08-28)** |
+| [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation | **ACCEPTED on merge of PR #13 — carries no authority before it** |
 | G1 provider selection · G2 production information-set profile | **OPEN** |
 | G3 vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | G4 analyst revisions · G5 historical borrow | **OPEN** |
@@ -409,10 +409,12 @@ allowlist; and the exit code reports harness success or failure only, never a pr
 Results live in the licensed S3 bucket and in git-ignored `.runtime/`, and never in this
 repository. It is **not** a production provider adapter and adds no dependency.
 
-### Sharadar provider-integration Slice 1 — authorized, code only, never run
+### Sharadar provider-integration Slice 1 — implemented, code only, never run
 
 [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) records the
-owner's authorization of the first provider-realistic Phase-3A slice, and its exact boundary.
+owner's authorization of the first provider-realistic Phase-3A slice, and its exact boundary. The
+implementation is complete and **awaiting acceptance**: ADR-0009 is accepted *on merge of PR #13*
+and carries no authority before it.
 
 **Authorized:** provider-specific code, provider-neutral interfaces, deterministic request
 construction from public documentation, credential-**injection** interfaces, redaction, pacing,

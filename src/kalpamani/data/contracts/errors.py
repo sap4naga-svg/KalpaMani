@@ -171,12 +171,27 @@ class ObjectPayloadTypeError(ObjectStoreError):
 
 
 class ObjectClassificationError(ObjectStoreError):
-    """An object was routed to CONTROL without an explicit written attestation.
+    """A research object's classification, shape or routing was refused.
+
+    Three families of defect, all of which would put an object somewhere nobody
+    chose:
+
+    - **an unrecognised classification** -- a value that names no member of
+      :class:`~kalpamani.data.contracts.vocabulary.DataClassification`, which
+      cannot be resolved to a store and must not be guessed at;
+    - **a classification this slice cannot publish.** ``CONTROL`` publication is
+      **withdrawn**, not merely gated: there is no constructor for it, and
+      supplying an attestation would not make it valid. A control-plane object
+      survives a vendor deletion, so clearing one needs a structured, durably
+      bound attestation that does not exist yet -- a free-text string was never
+      auditable clearance;
+    - **a malformed or unusable key** -- no segments, an over-long logical key, a
+      non-string segment, or a key handed to the store that is not an exact
+      :class:`~kalpamani.data.objectstore.ObjectKey`.
 
     ADR-0007 classifies by one question -- *can vendor rows be recovered from this
-    artifact?* -- under which uncertain resolves to LICENSED. A CONTROL object
-    survives a vendor deletion, so reaching that store by omission rather than by
-    decision is the failure this refuses.
+    artifact?* -- under which uncertain resolves to LICENSED. With no CONTROL
+    constructor, uncertain is the only answer expressible.
     """
 
 

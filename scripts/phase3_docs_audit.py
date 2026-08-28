@@ -2400,6 +2400,59 @@ def main() -> int:
         "Request stores a header unvalidated; CR/LF is only rejected at send time",
     )
     f.check(
+        "the credential is deeply frozen and cannot be subclassed",
+        "__init_subclass__" in read(PROVIDER_PACKAGE / "credentials.py")
+        and "MAX_CREDENTIAL_LENGTH" in read(PROVIDER_PACKAGE / "credentials.py"),
+        "a subclass could override every rendering method and reveal() at once",
+    )
+    f.check(
+        "the credential module imports no os module",
+        not any(
+            line.strip() in ("import os", "import os.path") or line.strip().startswith("from os ")
+            for line in read(PROVIDER_PACKAGE / "credentials.py").splitlines()
+        ),
+        "credential_from_env takes an explicit mapping; this slice reads no real secret",
+    )
+    f.check(
+        "the transport response contract is enforced rather than annotated",
+        "MIN_HTTP_STATUS" in read(PROVIDER_PACKAGE / "transport.py")
+        and "may not be subclassed" in read(PROVIDER_PACKAGE / "transport.py"),
+        "a bytearray body would otherwise leave fetch() as a payload",
+    )
+    f.check(
+        "the client validates what an injected transport returns",
+        "type(response) is not TransportResponse" in read(PROVIDER_PACKAGE / "client.py")
+        and "type(request) is not SharadarRequest" in read(PROVIDER_PACKAGE / "client.py"),
+        "a Protocol annotation is a static claim, not a runtime one",
+    )
+    f.check(
+        "the client requires an exact credential",
+        "type(credential) is not SharadarCredential" in read(PROVIDER_PACKAGE / "client.py"),
+        "a credential-shaped stand-in could override reveal() or a rendering method",
+    )
+    f.check(
+        "direct transport arguments are type-checked before anything can raise",
+        "def usable_timeout(" in read(PROVIDER_PACKAGE / "transport.py")
+        and "def exact_text(" in read(PROVIDER_PACKAGE / "transport.py"),
+        "math.isfinite on an arbitrary object raises out of a sanitizing boundary",
+    )
+    f.check(
+        "the failing-response path never reads, and its close is guarded",
+        "_http_error_response" in read(PROVIDER_PACKAGE / "transport.py")
+        and "_close_quietly" in read(PROVIDER_PACKAGE / "transport.py"),
+        "a close() failure names the host and must not become the outcome",
+    )
+    f.check(
+        "error construction accepts an arbitrary object without raising",
+        "def safe_dataset_label(label: object)" in read(PROVIDER_PACKAGE / "redaction.py"),
+        "an exception that fails while being built discards the failure it reported",
+    )
+    f.check(
+        "the classification error documents the withdrawn CONTROL surface",
+        "withdrawn" in read(REPO_ROOT / "src" / "kalpamani" / "data" / "contracts" / "errors.py"),
+        "an attestation would not currently make CONTROL valid, and the docs must say so",
+    )
+    f.check(
         "the object store binds the content address to the logical name",
         OBJECT_STORE.is_file()
         and "stored.content_sha256 == key.content_sha256" in read(OBJECT_STORE),

@@ -291,7 +291,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 1 — IBKR PAPER CONNECTIVITY: COMPLETE AND ACCEPTED (2026-08-25).**
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
-**PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: AUTHORIZED, CODE ONLY (2026-08-28).**
+**PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -392,7 +392,7 @@ production ingestion are each still **separately unauthorized**.
 |---|---|
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
-| **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **AUTHORIZED / IN IMPLEMENTATION (2026-08-28, ADR-0009) — CODE ONLY** |
+| **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / PENDING MERGE ACCEPTANCE (ADR-0009, PR #13) — CODE ONLY** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 (subscription / purchase)** | **NOT STARTED / NOT AUTHORIZED** |
@@ -403,7 +403,7 @@ production ingestion are each still **separately unauthorized**.
 | **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
-| **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge (2026-08-28)** |
+| **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge of PR #13 — carries no authority before it** |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -588,12 +588,15 @@ empty *at AWS-foundation closeout*, and that record stands as evidence of that d
 qualification begins, the licensed bucket may legitimately hold private material. Object counts,
 row counts and pass/fail results are private and are never published.
 
-### Sharadar provider-integration Slice 1 — authorized, code only, never run
+### Sharadar provider-integration Slice 1 — implemented, code only, never run
 
 [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) records the
 owner's instruction — *"Authorize the next Sharadar implementation phase"* — and its exact
 boundary. It supersedes one repository rule and nothing else: **"no production module may name a
 provider"**, which was correct while no provider-specific implementation was authorized.
+
+**The branch implementation is complete and awaiting acceptance.** ADR-0009 is *accepted on merge
+of PR #13* and **carries no authority before it**; nothing below is in force until that merge.
 
 ```
 AUTHORIZED     provider-specific code · provider-neutral interfaces · request construction
