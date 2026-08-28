@@ -1464,6 +1464,28 @@ def main() -> int:
             "a PassRole grant makes the deletion role assumable; that is a separate authorization",
         )
 
+        # The runbook must not over-claim what the deletion role does. A role scoped
+        # tightly enough to be safe is necessarily too narrow to run the whole
+        # procedure: it cannot stop a schedule, revoke a credential, delete a container
+        # image, touch a log group, clear a laptop, or write the receipt to the control
+        # bucket. An earlier revision said "every deletion step runs as the dedicated
+        # deletion role", which contradicted the role's own policy in the same PR.
+        f.check(
+            "the runbook does not claim the deletion role performs every step",
+            not re.search(r"(?i)every (?:deletion )?step (?:below )?runs as", runbook),
+            "the deletion role cannot perform the non-S3 steps; saying so contradicts iam.tf",
+        )
+        f.check(
+            "the runbook assigns the licensed-S3 steps to the deletion role explicitly",
+            "steps 3\u20139" in runbook or "steps 3-9" in runbook,
+            "no explicit step range is assigned to the dedicated deletion role",
+        )
+        f.check(
+            "the runbook names a separate operator path for the surrounding steps",
+            "operator path" in runbook,
+            "no operator/orchestration path is named for the non-S3 steps",
+        )
+
         # -- wrong-account protection must fail closed ----------------------------
         #
         # This is the check with the most history behind it. The variable originally

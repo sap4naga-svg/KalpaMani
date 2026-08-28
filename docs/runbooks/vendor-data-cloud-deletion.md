@@ -59,16 +59,26 @@ maintained, this runbook does not work, and no amount of care on the day recover
 | 4 | The licensed/control boundary has been maintained ([§7](#7-pre-flight-verification-that-the-boundary-held)). If it has not, that is established **before** deleting anything, because a misfiled artifact in the control bucket will otherwise survive. |
 | 5 | A deletion task or operator path has been **separately authorized and created**, and an identity has been granted `iam:PassRole` for the deletion role. **Neither exists today**, so this runbook is currently unexecutable by construction — see below. |
 
-### Which identity performs the deletion
+### Which identity performs which step
 
-**Every deletion step below runs as the dedicated `licensed_data_deletion` role, never as the
-routine research task role.**
+**Licensed-S3 destruction and verification — steps 3–9 — run under the dedicated
+`licensed_data_deletion` role. The separately authorized operator / orchestration path performs
+the surrounding shutdown, credential, compute, container, log, local-copy and receipt steps.**
 
-The routine research role deliberately holds **no** `s3:DeleteObject`. The licensed bucket has no
-versioning, no replication and no backup, so a delete cannot be undone; giving standing
-destructive authority to the role that also runs daily ingestion would let an ordinary bug in
-research code destroy unrecoverable history. Deleting therefore requires deliberately assuming a
-different identity, which is the point.
+The split follows directly from the role's scope. `licensed_data_deletion` holds *only*
+licensed-bucket S3 inspection and deletion authority, so it is incapable of stopping a schedule,
+revoking a provider credential, deleting a container image, touching a log group, clearing a
+laptop, or writing a receipt to the control bucket. Those are not oversights in the role — they
+are what keeps it narrow, and they mean the role cannot be the whole procedure.
+
+| Steps | Identity | Why |
+|---|---|---|
+| **1** stop ingestion · **2** revoke and destroy the provider credential | **operator path** | ECS/EventBridge and Secrets Manager / SSM — outside S3 entirely |
+| **3** enumerate the licensed surface · **4** abort incomplete multipart uploads · **5** delete Bronze · **6** delete Silver · **7** delete Gold, qualification and reconstructable derivatives · **8** prove the bucket empty including versions and delete markers · **9** inspect versioning, replication and lifecycle state | **`licensed_data_deletion` role** | exactly the authority it holds, and nothing else holds it |
+| **10** verify compute retained nothing · **11** inspect/delete contaminated container images, if ever required · **12** inspect/delete contaminated logs, if ever required · **13** clear laptop and local copies · **14** write the deletion receipt to CONTROL · **15** verify permitted retained artifacts | **operator path** | ECS, EBS/EFS, ECR, CloudWatch Logs, local filesystems and the control bucket — none reachable by the deletion role |
+
+The operator path **may invoke the deletion role for steps 3–9** once a future specific workflow
+and a scoped `iam:PassRole` authorization exist. Neither exists today.
 
 | | `licensed_data_deletion` |
 |---|---|
@@ -79,17 +89,20 @@ That shape is deliberate. Deletion does not require reading the data, so it does
 object counts and sizes for the receipt come from listing, not from contents. And because the role
 has no access to the control bucket, it cannot destroy the manifests, lineage or deletion receipts
 that must survive — **the evidence that a deletion happened is outside the reach of the identity
-performing it.**
+performing it.** The receipt in step 14 is therefore written by the operator path, never by the
+deletion role.
 
-> **The role is committed but currently unusable, and that is intentional.** No ECS task
+The routine research task role holds **no** `s3:DeleteObject` and appears nowhere in this
+procedure. The licensed bucket has no versioning, no replication and no backup, so a delete cannot
+be undone; giving standing destructive authority to the role that also runs daily ingestion would
+let an ordinary bug in research code destroy unrecoverable history.
+
+> **The deletion role is committed but currently unusable, and that is intentional.** No ECS task
 > definition exists, no deletion task or workflow exists, no image exists, and no identity has
 > `iam:PassRole` for it — so nothing can launch anything that runs as this role. Creating that
-> task and granting `PassRole` is a **separate authorization that has not been given**. The role
-> is defined in advance for the same reason this runbook is written in advance: so the deletion
-> path is reviewable before it is ever needed, not improvised inside a 30-day window.
-
-The receipt in step 14 is written to the control bucket by the **operator path**, not by the
-deletion role.
+> task and granting a scoped `PassRole` is a **separate authorization that has not been given**.
+> The role is defined in advance for the same reason this runbook is written in advance: so the
+> destructive path is reviewable before it is ever needed, not improvised inside a 30-day window.
 
 **This procedure is irreversible by design.** The licensed bucket has no versioning, no
 replication and no backup precisely so that deletion is complete — which also means there is no
@@ -101,7 +114,7 @@ undo. That is the intended trade, and it is why step 2 exists.
 
 Every step records evidence. A step that "was done" without evidence did not happen.
 
-### Step 1 — Stop ingestion
+### Step 1 — Stop ingestion  *(operator path)*
 
 1. Disable every scheduled or triggered ingestion task.
 2. Confirm no ECS task, Batch job or local process is running against the provider.
@@ -110,7 +123,7 @@ Every step records evidence. A step that "was done" without evidence did not hap
 
 *Deleting while a writer is running produces a bucket that is empty and then is not.*
 
-### Step 2 — Revoke and destroy the provider credential
+### Step 2 — Revoke and destroy the provider credential  *(operator path)*
 
 1. Revoke or rotate the API key **at the provider** first, so a missed process cannot fetch more.
 2. Delete the secret from Secrets Manager / SSM Parameter Store, including any prior versions —
@@ -121,14 +134,14 @@ Every step records evidence. A step that "was done" without evidence did not hap
 *The credential goes before the data, because a live key plus a retrying job re-creates what
 step 3 deletes.*
 
-### Step 3 — Enumerate the licensed surface before deleting it
+### Step 3 — Enumerate the licensed surface before deleting it  *(`licensed_data_deletion` role)*
 
 1. Identify the licensed-data bucket by name from Terraform outputs or the console.
 2. List its prefixes: `bronze/`, `silver/`, `gold/`, `qualification/`, and anything else present —
    **an unexpected prefix is a finding**, and is deleted, not skipped.
 3. Record object counts and total bytes per prefix. This is the "before" side of the receipt.
 
-### Step 4 — Abort every incomplete multipart upload
+### Step 4 — Abort every incomplete multipart upload  *(`licensed_data_deletion` role)*
 
 Do this **before** the object deletion, not after.
 
@@ -141,18 +154,18 @@ Do this **before** the object deletion, not after.
 listing. A delete-everything-you-can-list loop reports success and leaves vendor bytes behind.
 This is the single most likely way this runbook silently fails.*
 
-### Step 5 — Delete Bronze
+### Step 5 — Delete Bronze  *(`licensed_data_deletion` role)*
 
 Delete every object under `bronze/`. Re-list. Confirm zero objects.
 
-### Step 6 — Delete Silver
+### Step 6 — Delete Silver  *(`licensed_data_deletion` role)*
 
 Delete every object under `silver/`. Re-list. Confirm zero objects.
 
 *Silver is a normalization of vendor rows and is squarely inside "substantially copy" — it is not
 a derived work under the carve-out (packet §3.C).*
 
-### Step 7 — Delete Gold and every reconstructable derivative
+### Step 7 — Delete Gold and every reconstructable derivative  *(`licensed_data_deletion` role)*
 
 Delete every object under `gold/` and `qualification/`, including the adjusted-bar cache
 artifacts, historical universe snapshots, factor panels and any provider qualification evidence
@@ -163,7 +176,7 @@ defaults ambiguity to LICENSED. If Q4 is ever answered in a way that permits ret
 is a documented decision that changes the classification — never an on-the-day judgement call
 made while deleting.*
 
-### Step 8 — Confirm the whole bucket is empty
+### Step 8 — Confirm the whole bucket is empty  *(`licensed_data_deletion` role)*
 
 1. List the entire licensed bucket with no prefix filter. Confirm zero objects.
 2. `ListMultipartUploads` again. Confirm zero.
@@ -172,7 +185,7 @@ made while deleting.*
    lists as empty and still holds the data.
 4. Record the final empty listings.
 
-### Step 9 — Verify no replication and no archival copy
+### Step 9 — Verify no replication and no archival copy  *(`licensed_data_deletion` role)*
 
 1. Confirm no replication configuration on the licensed bucket, and no destination bucket exists.
 2. Confirm no Glacier or archival lifecycle transition ever moved objects into a restore-required
@@ -183,7 +196,7 @@ made while deleting.*
 *ADR-0007 §4 turns all three off precisely so this step is a confirmation rather than an
 investigation.*
 
-### Step 10 — Verify ephemeral compute retained nothing
+### Step 10 — Verify ephemeral compute retained nothing  *(operator path)*
 
 1. Confirm no ECS task is running.
 2. Fargate ephemeral storage is destroyed with the task; confirm no task persisted data anywhere
@@ -191,7 +204,7 @@ investigation.*
 3. Confirm no EBS volume, snapshot or EFS filesystem holds vendor data.
 4. Record the confirmations.
 
-### Step 11 — Verify container layers hold no data
+### Step 11 — Verify container layers hold no data  *(operator path)*
 
 1. Confirm no ECR image contains licensed data. Per ADR-0007 §7, no image may ever be built with
    data in it; this step verifies the rule held rather than assuming it.
@@ -199,7 +212,7 @@ investigation.*
    shared and survives deletion of one tag.
 3. Record the image inventory.
 
-### Step 12 — Verify logs contain no data and no key
+### Step 12 — Verify logs contain no data and no key  *(operator path)*
 
 1. Search CloudWatch log groups for vendor payload content, for full provider request URLs, and
    for the API key value.
@@ -211,7 +224,7 @@ investigation.*
 *Do not paste any found value into the receipt, an issue, a commit message or an AI session. The
 finding is that something was present, not what it was.*
 
-### Step 13 — Delete the laptop cache and every local copy
+### Step 13 — Delete the laptop cache and every local copy  *(operator path)*
 
 **Cloud-first does not exempt the workstation.** §10 reaches every system the owner operates.
 
@@ -224,7 +237,7 @@ finding is that something was present, not what it was.*
 *Repository-owned **synthetic** fixtures under `tests/` are explicitly out of scope. They are
 hand-authored and fictitious, contain no vendor data, and must not be deleted.*
 
-### Step 14 — Produce the deletion receipt
+### Step 14 — Produce the deletion receipt  *(operator path)*
 
 Write a receipt to the **control** bucket under `receipts/` and, where it contains no vendor
 material, retain a copy in the repository as governance evidence. It records:
@@ -247,7 +260,7 @@ material, retain a copy in the repository as governance evidence. It records:
 identifies the owner.** A receipt proving deletion is worthless if producing it reintroduces the
 thing deleted.
 
-### Step 15 — Confirm what legitimately remains
+### Step 15 — Confirm what legitimately remains  *(operator path)*
 
 After completion, the **control** bucket still holds, and should still hold:
 

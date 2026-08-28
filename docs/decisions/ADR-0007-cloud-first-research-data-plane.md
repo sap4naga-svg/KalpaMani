@@ -254,11 +254,22 @@ contents, write anything, reach the control bucket, or read a provider secret. K
 the control bucket means the manifests and deletion receipts proving a deletion happened lie
 outside the reach of the identity that performed it.
 
+**The narrowness means the role is not the whole procedure, and the runbook says so.**
+Licensed-S3 destruction and verification — [runbook](../runbooks/vendor-data-cloud-deletion.md)
+steps **3–9** — run under this role. The separately authorized **operator / orchestration path**
+performs the surrounding steps, because the role is deliberately incapable of them: stopping
+schedules and revoking the provider credential (1–2), and verifying compute, container images and
+logs, clearing local copies, writing the receipt to the control bucket and confirming permitted
+retained artifacts (10–15). Those are ECS, Secrets Manager, ECR, CloudWatch, local filesystem and
+control-bucket operations, none of which this role can reach. A role scoped tightly enough to be
+safe is necessarily too narrow to run the whole procedure, and that is the intended shape.
+
 **The deletion role is unusable as committed.** No task definition, no deletion workflow, no
-image, and no `iam:PassRole` grant exists, so nothing can run as it. Creating that path is a
-separate authorization that has not been given. It is defined now for the same reason the deletion
-runbook is written now: so the destructive path is reviewable before it is needed, rather than
-improvised inside a 30-day window.
+image, and no `iam:PassRole` grant exists, so nothing can run as it. Creating that path — and
+scoping the `PassRole` grant to one operator identity and this one role — is a separate
+authorization that has not been given. It is defined now for the same reason the deletion runbook
+is written now: so the destructive path is reviewable before it is needed, rather than improvised
+inside a 30-day window.
 
 ### 5. Storage persists; compute is ephemeral
 
