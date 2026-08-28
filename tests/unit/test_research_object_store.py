@@ -195,14 +195,75 @@ def test_different_bytes_under_one_key_are_refused_rather_than_replacing() -> No
     backing = InMemoryResearchObjectStore()
     key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
     backing.put_if_absent(key=key, payload=PAYLOAD)
-    forged = ObjectKey(
+    with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
+        backing.put_if_absent(key=forged_key(key, OTHER_PAYLOAD), payload=OTHER_PAYLOAD)
+    assert backing.read(key) == PAYLOAD
+
+
+# ---------------------------------------------------------------------------
+# The whole key is the identity -- name AND content address
+# ---------------------------------------------------------------------------
+
+
+def forged_key(key: ObjectKey, other: bytes) -> ObjectKey:
+    """``key``'s exact path, carrying a different payload's content address."""
+    return ObjectKey(
         classification=key.classification,
         segments=key.segments,
-        content_sha256=sha256_hex(OTHER_PAYLOAD),
+        content_sha256=sha256_hex(other),
     )
-    with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
+
+
+def test_exists_is_true_only_for_the_digest_the_key_names() -> None:
+    """A store keyed on the logical name alone would report ``True`` here."""
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
+    backing.put_if_absent(key=key, payload=PAYLOAD)
+    assert backing.exists(key=key) is True
+    assert backing.exists(key=forged_key(key, OTHER_PAYLOAD)) is False
+
+
+def test_a_forged_key_cannot_read_another_objects_bytes() -> None:
+    """Right path, wrong digest. Serving the bytes would make the address decorative."""
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
+    backing.put_if_absent(key=key, payload=PAYLOAD)
+    with pytest.raises(ObjectContentMismatchError, match="but the key claims"):
+        backing.read(forged_key(key, OTHER_PAYLOAD))
+
+
+def test_reading_an_absent_name_refuses_rather_than_raising_a_key_error() -> None:
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
+    with pytest.raises(ObjectContentMismatchError, match="nothing is stored"):
+        backing.read(key)
+
+
+def test_a_name_reported_absent_is_still_not_free() -> None:
+    """The pairing that looks odd and is the honest one.
+
+    ``exists`` answers about the object you named; ``put_if_absent`` answers about
+    the name. When a name is occupied by different content, the first is ``False``
+    and the second still refuses -- and reporting anything else would either hide
+    the occupant or invite an overwrite.
+    """
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
+    backing.put_if_absent(key=key, payload=PAYLOAD)
+    forged = forged_key(key, OTHER_PAYLOAD)
+    assert backing.exists(key=forged) is False
+    with pytest.raises(ObjectAlreadyExistsError):
         backing.put_if_absent(key=forged, payload=OTHER_PAYLOAD)
-    assert backing.read(key) == PAYLOAD
+
+
+def test_the_stored_digest_is_recorded_rather_than_recomputed_on_read() -> None:
+    """An integrity check that rehashes the current bytes checks them against
+    themselves, which is true by construction and therefore worth nothing."""
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", "provider", "dataset", payload=PAYLOAD)
+    backing.put_if_absent(key=key, payload=PAYLOAD)
+    assert backing.stored_digest(key.logical_key) == sha256_hex(PAYLOAD)
+    assert backing.stored_digest("licensed/nothing/here") is None
 
 
 def test_a_payload_that_does_not_hash_to_its_key_is_refused() -> None:
@@ -226,6 +287,80 @@ def test_the_contract_exposes_only_put_if_absent_and_exists() -> None:
     could enumerate what a vendor sent, and deletion is a separately-roled operation."""
     surface = {name for name in vars(ResearchObjectStore) if not name.startswith("_")}
     assert surface == {"put_if_absent", "exists"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "LICENSED",
+        DataClassification.LICENSED,
+    ],
+)
+def test_a_valid_classification_spelling_is_normalised_to_the_exact_member(
+    value: object,
+) -> None:
+    """A bare string compares equal to the member everywhere except at ``.value``,
+    which is precisely where the logical key is built."""
+    key = ObjectKey(
+        classification=value,  # type: ignore[arg-type]
+        segments=("bronze",),
+        content_sha256=sha256_hex(PAYLOAD),
+    )
+    assert type(key.classification) is DataClassification
+    assert key.logical_key.startswith("licensed/")
+
+
+class _HostileEquality:
+    """Claims to be anything it is compared against, and is not a string."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return hash("LICENSED")
+
+    def __str__(self) -> str:
+        return "LICENSED"
+
+
+class _SneakyClassification(str):
+    """A ``str`` subclass whose ``__str__`` lies about the data it holds."""
+
+    def __str__(self) -> str:
+        return "LICENSED"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "licensed",
+        "PUBLIC_PIT",
+        "",
+        None,
+        7,
+        _HostileEquality(),
+        _SneakyClassification("NOT_A_CLASSIFICATION"),
+    ],
+)
+def test_an_unrecognised_classification_is_refused_rather_than_guessed(value: object) -> None:
+    """Including a sibling vocabulary, a hostile equality object and a lying subclass."""
+    with pytest.raises(ObjectClassificationError, match="DataClassification"):
+        ObjectKey(
+            classification=value,  # type: ignore[arg-type]
+            segments=("bronze",),
+            content_sha256=sha256_hex(PAYLOAD),
+        )
+
+
+def test_a_str_subclass_is_resolved_by_the_data_it_actually_holds() -> None:
+    """Not by what ``__str__`` claims -- otherwise a lie would pick the member."""
+    key = ObjectKey(
+        classification=_SneakyClassification("CONTROL"),  # type: ignore[arg-type]
+        segments=("control",),
+        content_sha256=sha256_hex(PAYLOAD),
+        control_attestation="hashes only",
+    )
+    assert key.classification is DataClassification.CONTROL
 
 
 def test_the_in_memory_store_satisfies_the_protocol_at_runtime() -> None:

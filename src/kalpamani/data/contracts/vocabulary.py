@@ -28,7 +28,38 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import Final, TypeVar
+
+VocabularyMember = TypeVar("VocabularyMember", bound=StrEnum)
+
+
+def closed_member(vocabulary: type[VocabularyMember], value: object) -> VocabularyMember | None:
+    """The exact member ``value`` names, or ``None`` if it names none.
+
+    The normalising counterpart to
+    :func:`~kalpamani.data.contracts.envelope.source_vocabulary_defects`. That
+    function *detects* an inexact vocabulary where a row has to stay
+    constructible; this one *normalises* at a boundary where it does not, so a
+    value either becomes the exact member or is refused by the caller.
+
+    Both exist for the same reason. These are ``StrEnum``\\ s, so a bare
+    ``"LICENSED"`` compares equal to the member, passes an ``in`` test, and
+    differs only where something reads ``.value`` -- which is how an untyped
+    value gets through an approval check and then raises ``AttributeError`` in
+    the code that would have refused it.
+
+    **No code belonging to ``value`` is executed.** Lookup goes through a table
+    keyed by exact ``str`` data obtained with ``str.__str__``, so an object with
+    an overridden ``__eq__``, ``__hash__`` or ``__str__`` cannot make itself
+    match a member it is not, and a ``str`` subclass is resolved by the bytes it
+    actually holds rather than by what it claims to be. Anything that is not a
+    string at all is refused outright.
+    """
+    if not isinstance(value, str):
+        return None
+    table = {str.__str__(member): member for member in vocabulary}
+    return table.get(str.__str__(value))
+
 
 # ---------------------------------------------------------------------------
 # Origin, profile and view
@@ -553,4 +584,6 @@ __all__ = [
     "TemporalFactClass",
     "TickerChangeReason",
     "UniverseExclusionReason",
+    "VocabularyMember",
+    "closed_member",
 ]
