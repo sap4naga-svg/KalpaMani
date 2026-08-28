@@ -221,17 +221,78 @@ def test_only_the_transport_module_names_a_network_module() -> None:
     assert offenders == [], f"network capability outside the transport: {offenders}"
 
 
-def test_the_transport_performs_no_call_at_module_scope() -> None:
-    """A connection made at import time would happen before anyone decided to make one."""
+#: Calls that could reach a network, or install something process-wide that
+#: silently changes how a later one behaves.
+NETWORK_PRIMITIVES = frozenset(
+    {
+        "urlopen",
+        "build_opener",
+        "install_opener",
+        "Request",
+        "socket",
+        "create_connection",
+        "getaddrinfo",
+        "connect",
+        "HTTPConnection",
+        "HTTPSConnection",
+    }
+)
+
+
+def test_the_transport_opens_nothing_and_installs_nothing_at_module_scope() -> None:
+    """A connection made at import time happens before anyone decided to make one.
+
+    Deliberately scoped to network primitives rather than to *any* call. The
+    module legitimately parses its own allowed origin at import -- that is pure
+    string work over a constant, and forbidding it would push the origin
+    constants into hand-copied literals, which is the drift the derivation exists
+    to prevent.
+
+    ``install_opener`` is included because installing an opener is a process-wide
+    side effect: it would change the behaviour of unrelated code, and would do so
+    from an import.
+    """
     tree = ast.parse((PROVIDER_PACKAGE / "transport.py").read_text(encoding="utf-8"))
-    module_level_calls = [
-        ast.unparse(node)[:60]
-        for statement in tree.body
-        if not isinstance(statement, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
-        for node in ast.walk(statement)
-        if isinstance(node, ast.Call) and not isinstance(node.func, ast.Attribute)
+    offenders: list[str] = []
+    for statement in tree.body:
+        if isinstance(statement, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for node in ast.walk(statement):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if name in NETWORK_PRIMITIVES:
+                offenders.append(f"line {node.lineno}: {name}")
+    assert offenders == [], f"network primitives at module scope: {offenders}"
+
+
+def test_no_module_installs_a_global_url_opener() -> None:
+    """A globally installed opener would let unrelated code decide how a
+    credential-bearing request is routed, and vice versa."""
+    offenders = [
+        f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}"
+        for path in python_files(PACKAGE_ROOT)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "install_opener")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "install_opener")
+        )
     ]
-    assert module_level_calls == [], f"module-scope calls in the transport: {module_level_calls}"
+    assert offenders == [], f"a global opener is installed at: {offenders}"
+
+
+def test_the_transport_pins_an_exact_origin_rather_than_a_string_prefix() -> None:
+    """``startswith("https://")`` admits a lookalike host and a userinfo prefix."""
+    source = (PROVIDER_PACKAGE / "transport.py").read_text(encoding="utf-8")
+    for needle in ("urlsplit", "parts.hostname", "parts.username", "parts.fragment", "parts.port"):
+        assert needle in source, f"the origin check does not examine {needle}"
 
 
 def test_importing_the_provider_package_opens_no_socket() -> None:
@@ -257,11 +318,26 @@ def test_importing_the_provider_package_opens_no_socket() -> None:
         sys.modules.update(saved)
 
 
-def test_nothing_in_the_repository_constructs_the_concrete_transport() -> None:
-    """Dormancy, checked. No runner is authorized in this slice, so none exists."""
+#: The one module allowed to construct the concrete transport. It injects a fake
+#: opener and performs no I/O, which is what lets *dormant* stop meaning
+#: *untested* without letting a real network transport into the runtime.
+TRANSPORT_TEST = TESTS / "unit" / "test_sharadar_transport.py"
+
+
+def test_no_production_module_or_script_constructs_the_concrete_transport() -> None:
+    """Dormancy where it matters. No runner is authorized in this slice, so none exists.
+
+    The rule is narrower than "nowhere", because the earlier version of it made a
+    guarantee nobody could check: an unconstructed class cannot be proven to pin
+    an origin, refuse a redirect or bound a body. Production code, scripts and
+    unattended runners still may not build one; the dedicated synthetic unit test
+    may, with a fake opener.
+    """
     offenders: list[str] = []
     for root in (PACKAGE_ROOT, SCRIPTS, TESTS):
         for path in python_files(root):
+            if path == TRANSPORT_TEST:
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
@@ -276,6 +352,22 @@ def test_nothing_in_the_repository_constructs_the_concrete_transport() -> None:
                 if name == "UrllibTransport":
                     offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
     assert offenders == [], f"the concrete transport is constructed at: {offenders}"
+
+
+def test_the_one_module_that_may_build_a_transport_injects_a_fake_opener() -> None:
+    """The allowlist is only safe while the allowlisted file opens nothing."""
+    source = TRANSPORT_TEST.read_text(encoding="utf-8")
+    assert "opener=" in source, "the transport test must inject an opener"
+    tree = ast.parse(source, filename=str(TRANSPORT_TEST))
+    offenders = [
+        f"line {node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "UrllibTransport"
+        and not any(keyword.arg == "opener" for keyword in node.keywords)
+    ]
+    assert offenders == [], f"a transport is built without a fake opener at: {offenders}"
 
 
 def test_the_client_has_no_default_transport() -> None:

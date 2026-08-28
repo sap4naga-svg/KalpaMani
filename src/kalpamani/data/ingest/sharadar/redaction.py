@@ -31,14 +31,22 @@ from enum import StrEnum
 from typing import Final
 
 from kalpamani.data.contracts.errors import PointInTimeError
+from kalpamani.data.contracts.vocabulary import closed_member
 
 
 class SharadarStage(StrEnum):
-    """Where a failure happened. Part of the error's closed vocabulary."""
+    """Where a failure happened. Part of the error's closed vocabulary.
+
+    ``UNKNOWN`` exists so a hostile or mistaken stage argument has somewhere
+    defined to land. An error constructor that raised on a bad stage would
+    replace the original failure with a second one and lose the first, which is
+    strictly worse than reporting a failure whose stage could not be established.
+    """
 
     BUILD = "build"
     FETCH = "fetch"
     PUBLISH = "publish"
+    UNKNOWN = "unknown"
 
 
 class SharadarErrorCode(StrEnum):
@@ -47,19 +55,28 @@ class SharadarErrorCode(StrEnum):
     The categories are deliberately coarse. A finer vocabulary would have to be
     derived from something the vendor said, and the only place the vendor says
     anything is the response body -- which is exactly what must not reach a log.
+
+    ``UNCLASSIFIED`` is the landing place for a code that is not a member, for the
+    same reason ``SharadarStage.UNKNOWN`` exists. It is never retryable: nothing
+    is known about it, and retrying an unknown failure is how one refusal becomes
+    several.
     """
 
     HTTP_AUTHORIZATION_REFUSED = "HTTP_AUTHORIZATION_REFUSED"
     HTTP_ENDPOINT_NOT_FOUND = "HTTP_ENDPOINT_NOT_FOUND"
     HTTP_RATE_LIMITED = "HTTP_RATE_LIMITED"
+    HTTP_REDIRECT_REFUSED = "HTTP_REDIRECT_REFUSED"
     HTTP_CLIENT_ERROR = "HTTP_CLIENT_ERROR"
     HTTP_SERVER_ERROR = "HTTP_SERVER_ERROR"
     HTTP_UNEXPECTED_STATUS = "HTTP_UNEXPECTED_STATUS"
     NETWORK_TIMEOUT = "NETWORK_TIMEOUT"
     NETWORK_UNREACHABLE = "NETWORK_UNREACHABLE"
     RESPONSE_READ_FAILED = "RESPONSE_READ_FAILED"
+    RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
+    REQUEST_ORIGIN_REFUSED = "REQUEST_ORIGIN_REFUSED"
     REQUEST_SCHEME_REFUSED = "REQUEST_SCHEME_REFUSED"
     REQUEST_MALFORMED = "REQUEST_MALFORMED"
+    UNCLASSIFIED = "UNCLASSIFIED"
 
 
 #: Conditions a bounded retry may legitimately attempt again.
@@ -118,11 +135,33 @@ def classify_http_status(status: int) -> SharadarErrorCode:
         return SharadarErrorCode.HTTP_ENDPOINT_NOT_FOUND
     if status == 429:
         return SharadarErrorCode.HTTP_RATE_LIMITED
+    if 300 <= status < 400:
+        # A redirect is refused rather than followed. The credential is in the
+        # query string, so following one would hand the key to whatever host the
+        # Location header names -- and the header is attacker-influenced whenever
+        # the response is not the one we expected.
+        return SharadarErrorCode.HTTP_REDIRECT_REFUSED
     if 400 <= status < 500:
         return SharadarErrorCode.HTTP_CLIENT_ERROR
     if 500 <= status < 600:
         return SharadarErrorCode.HTTP_SERVER_ERROR
     return SharadarErrorCode.HTTP_UNEXPECTED_STATUS
+
+
+def safe_stage(stage: object) -> SharadarStage:
+    """``stage`` as an exact member, or :data:`SharadarStage.UNKNOWN`.
+
+    Normalises rather than raises. This runs inside an exception constructor, and
+    an exception that raised while being built would discard the failure it was
+    reporting -- so an unrecognised stage becomes a defined "we could not say"
+    instead of a second, less informative error.
+    """
+    return closed_member(SharadarStage, stage) or SharadarStage.UNKNOWN
+
+
+def safe_code(code: object) -> SharadarErrorCode:
+    """``code`` as an exact member, or :data:`SharadarErrorCode.UNCLASSIFIED`."""
+    return closed_member(SharadarErrorCode, code) or SharadarErrorCode.UNCLASSIFIED
 
 
 class SharadarRequestError(PointInTimeError):
@@ -143,13 +182,20 @@ class SharadarRequestError(PointInTimeError):
         code: SharadarErrorCode,
         dataset: str | None = None,
     ) -> None:
-        """Build the error from a stage, a code and an optional dataset label."""
-        self.stage = stage
-        self.code = code
+        """Build the error from a stage, a code and an optional dataset label.
+
+        Every field is normalised to an exact member or a defined fallback, so a
+        bare string, a sibling enum, a ``str`` subclass with a hostile ``__eq__``
+        or a non-string object cannot reach ``.value`` and raise ``AttributeError``
+        from inside an exception. The annotations say what callers should pass;
+        this says what happens when they do not.
+        """
+        self.stage = safe_stage(stage)
+        self.code = safe_code(code)
         self.dataset = safe_dataset_label(dataset)
-        self.retryable = code in RETRYABLE_CODES
-        located = f"{stage.value} [{self.dataset}]" if self.dataset else stage.value
-        super().__init__(redact(f"sharadar {located}: {code.value}"))
+        self.retryable = self.code in RETRYABLE_CODES
+        located = f"{self.stage.value} [{self.dataset}]" if self.dataset else self.stage.value
+        super().__init__(redact(f"sharadar {located}: {self.code.value}"))
 
 
 __all__ = [
@@ -160,5 +206,7 @@ __all__ = [
     "SharadarStage",
     "classify_http_status",
     "redact",
+    "safe_code",
     "safe_dataset_label",
+    "safe_stage",
 ]

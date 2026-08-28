@@ -31,6 +31,7 @@ none is authorized.**
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -65,6 +66,22 @@ DEFAULT_TIMEOUT_SECONDS: Final = 60.0
 MAX_ATTEMPTS_CEILING: Final = 5
 
 
+def _finite(value: object) -> bool:
+    """Whether ``value`` is a real, finite number this boundary may act on.
+
+    ``bool`` is excluded even though it is an ``int``: ``True`` seconds is a
+    caller mistake, not a one-second interval. NaN and infinity are excluded
+    because every ordinary bounds check silently *accepts* NaN -- ``nan < 0``,
+    ``nan > 0`` and ``nan <= 0`` are all ``False`` -- so a comparison-based guard
+    lets it through and then disables the behaviour it was guarding.
+    """
+    if type(value) is int:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    return False
+
+
 class Pacer:
     """At most one request per ``min_interval`` seconds, on an injected clock.
 
@@ -81,8 +98,16 @@ class Pacer:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
-        """Bind the interval and the injected clock and sleep."""
-        if min_interval < 0:
+        """Bind the interval and the injected clock and sleep.
+
+        Raises:
+            SharadarRequestError: if ``min_interval`` is not a finite,
+                non-negative number. NaN is the case worth naming: ``nan < 0`` is
+                ``False``, so a bare comparison *accepts* it, and every later
+                arithmetic comparison in :meth:`wait` is also ``False`` -- which
+                silently disables pacing rather than failing.
+        """
+        if not _finite(min_interval) or min_interval < 0:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
@@ -132,7 +157,11 @@ class RetryPolicy:
     backoff_seconds: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        if not 1 <= self.max_attempts <= MAX_ATTEMPTS_CEILING:
+        if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= MAX_ATTEMPTS_CEILING:
+            raise SharadarRequestError(
+                stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
+        if type(self.backoff_seconds) is not tuple:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
@@ -140,7 +169,10 @@ class RetryPolicy:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
-        if any(delay <= 0 for delay in self.backoff_seconds):
+        # `not (delay > 0)` rather than `delay <= 0`: NaN fails both comparisons,
+        # so the negated form is what actually refuses it. An infinite backoff is
+        # refused for the plainer reason that it never returns.
+        if any(not _finite(delay) or not delay > 0 for delay in self.backoff_seconds):
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
@@ -171,7 +203,11 @@ class SharadarClient:
         network without one being handed in is a client a forgetful test can point
         at the vendor.
         """
-        if not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
+        if not _finite(timeout_seconds) or not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
+            raise SharadarRequestError(
+                stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
+        if type(retry_policy) is not RetryPolicy:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )

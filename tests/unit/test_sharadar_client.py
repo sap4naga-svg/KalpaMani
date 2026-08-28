@@ -327,7 +327,11 @@ def test_the_client_repr_names_configuration_and_not_the_credential() -> None:
         (400, SharadarErrorCode.HTTP_CLIENT_ERROR),
         (500, SharadarErrorCode.HTTP_SERVER_ERROR),
         (503, SharadarErrorCode.HTTP_SERVER_ERROR),
-        (302, SharadarErrorCode.HTTP_UNEXPECTED_STATUS),
+        (301, SharadarErrorCode.HTTP_REDIRECT_REFUSED),
+        (302, SharadarErrorCode.HTTP_REDIRECT_REFUSED),
+        (307, SharadarErrorCode.HTTP_REDIRECT_REFUSED),
+        (200, SharadarErrorCode.HTTP_UNEXPECTED_STATUS),
+        (600, SharadarErrorCode.HTTP_UNEXPECTED_STATUS),
     ],
 )
 def test_a_status_becomes_a_category_never_a_body(status: int, expected: SharadarErrorCode) -> None:

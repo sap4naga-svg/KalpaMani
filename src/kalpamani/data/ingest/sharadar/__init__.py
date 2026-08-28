@@ -34,8 +34,10 @@ purchase.
     Three Stage-3A tables, explicit windows, explicit pagination, and no
     constructible table-wide bulk download.
 ``transport``
-    The only network-capable code here, and dormant: nothing in the repository
-    constructs it. Importing this package opens no socket.
+    The only network-capable code here. Pinned by parsing to exactly one origin,
+    with redirects refused, ambient proxy discovery off, and a bounded response
+    body. Nothing in the repository constructs it outside its own synthetic unit
+    test, and importing this package opens no socket.
 ``bronze``
     Translation into the vendor-neutral publisher, which owns every storage rule.
 
@@ -85,19 +87,24 @@ from kalpamani.data.ingest.sharadar.redaction import (
     redact,
 )
 from kalpamani.data.ingest.sharadar.transport import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_BYTES_CEILING,
     SharadarTransport,
     TransportResponse,
     TransportUnavailableError,
     UrllibTransport,
+    origin_refusal,
 )
 
 __all__ = [
     "API_BASE_URL",
     "CREDENTIAL_ENV_VAR",
     "CREDENTIAL_PLACEHOLDER",
+    "DEFAULT_MAX_RESPONSE_BYTES",
     "DEFAULT_RETRY_POLICY",
     "DEFAULT_USER_AGENT",
     "FORBIDDEN_QUERY_PARAMETERS",
+    "MAX_RESPONSE_BYTES_CEILING",
     "PROVIDER",
     "QUERY_PARAMETER_ALLOWLIST",
     "RETRYABLE_CODES",
@@ -123,6 +130,7 @@ __all__ = [
     "classify_http_status",
     "credential_from_env",
     "describe_request",
+    "origin_refusal",
     "publish_sharadar_payload",
     "redact",
     "sharadar_retrieval_metadata",

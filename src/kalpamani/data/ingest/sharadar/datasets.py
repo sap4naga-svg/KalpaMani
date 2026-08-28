@@ -45,6 +45,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlencode
 
+from kalpamani.data.contracts.vocabulary import closed_member
 from kalpamani.data.ingest.sharadar.redaction import (
     SharadarErrorCode,
     SharadarRequestError,
@@ -122,6 +123,10 @@ class DateWindow:
     end: date
 
     def __post_init__(self) -> None:
+        # Exact date, so a datetime does not slip in and render an instant where
+        # the vendor documents a YYYY-MM-DD filter.
+        if type(self.start) is not date or type(self.end) is not date:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
         if self.start > self.end:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
 
@@ -144,9 +149,10 @@ class Page:
     skip: int
 
     def __post_init__(self) -> None:
-        if not 1 <= self.limit <= MAX_PAGE_LIMIT:
+        # Exact int, so True does not silently become a limit of 1.
+        if type(self.limit) is not int or not 1 <= self.limit <= MAX_PAGE_LIMIT:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
-        if self.skip < 0:
+        if type(self.skip) is not int or self.skip < 0:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
 
     def advanced(self) -> Page:
@@ -165,13 +171,30 @@ class SharadarRequest:
     window: DateWindow | None
 
     def __post_init__(self) -> None:
-        if not _TICKER.match(self.ticker):
-            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, self.dataset.value)
-        windowed = self.dataset in WINDOWED_DATASETS
+        # Normalised before anything reads `.value`. These are StrEnums, so a bare
+        # "stocks" compares equal to the member, satisfies `in WINDOWED_DATASETS`
+        # and only differs where the query is built -- which is the one place that
+        # matters. An annotation is not a check.
+        dataset = closed_member(SharadarDataset, self.dataset)
+        if dataset is None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
+        object.__setattr__(self, "dataset", dataset)
+        response_format = closed_member(ResponseFormat, self.response_format)
+        if response_format is None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        object.__setattr__(self, "response_format", response_format)
+
+        if type(self.ticker) is not str or not _TICKER.match(self.ticker):
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        if type(self.page) is not Page:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        if self.window is not None and type(self.window) is not DateWindow:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        windowed = dataset in WINDOWED_DATASETS
         if windowed and self.window is None:
-            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, self.dataset.value)
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
         if not windowed and self.window is not None:
-            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, self.dataset.value)
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
 
     @property
     def requested_range(self) -> str:
