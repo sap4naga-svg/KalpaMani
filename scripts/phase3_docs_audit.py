@@ -45,6 +45,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+class GitUnavailableError(RuntimeError):
+    """git could not enumerate tracked files, so no committed-file claim can be made."""
+
+
 def tracked_files(directory: Path) -> list[Path]:
     """Files under `directory` that git ACTUALLY TRACKS.
 
@@ -64,7 +68,11 @@ def tracked_files(directory: Path) -> list[Path]:
         check=False,
     )
     if result.returncode != 0:
-        return sorted(q for q in directory.iterdir() if q.is_file())
+        # NO WORKING-TREE FALLBACK. Walking the directory is exactly what this function
+        # exists to avoid: `infra/` holds a real, git-ignored `terraform.tfvars` carrying
+        # the account id, so a fallback would scan the file the ignore rule protects and
+        # report the control working as a failure. If git cannot answer, the audit fails.
+        raise GitUnavailableError("git ls-files could not enumerate tracked files")
     return sorted((REPO_ROOT / line).resolve() for line in result.stdout.split() if line)
 
 
@@ -1350,10 +1358,10 @@ def main() -> int:
 
         for name, doc in (("CLAUDE.md", claude_md), ("README.md", readme)):
             f.check(
-                f"{name} records the AWS account as created",
-                re.search(r"AWS account.*CREATED", doc) is not None
-                and re.search(r"AWS account.*NOT CREATED", doc) is None,
-                "the AWS account status row is missing or still says NOT CREATED",
+                f"{name} does not claim an AWS account was created",
+                re.search(r"AWS account.*CREATED", doc) is None
+                and re.search(r"AWS account.*EXISTING", doc) is not None,
+                "account existence and foundation provisioning must not be collapsed",
             )
             f.check(
                 f"{name} records the foundation as provisioned",
@@ -1381,7 +1389,7 @@ def main() -> int:
                 ("records remote state as active", "ACTIVE"),
                 ("records a configured budget", "budget"),
                 ("records a cost anomaly alert", "anomaly"),
-                ("records the verification result", "54"),
+                ("records the verification result", "66"),
                 ("records that no vendor data exists", "vendor data"),
                 ("records that no provider credential exists", "provider credential"),
                 ("keeps live trading hard-disabled", "HARD-DISABLED"),
@@ -1390,6 +1398,44 @@ def main() -> int:
                     f"the status document {label}", needle in status_doc, f"missing: {needle!r}"
                 )
 
+            f.check(
+                "the status document records the account as pre-existing",
+                "EXISTING" in status_doc and re.search(r"AWS account.*CREATED", status_doc) is None,
+                "account existence and foundation provisioning must not be collapsed",
+            )
+            f.check(
+                "the status document records the Terraform state backend verification",
+                "State bucket" in status_doc or "state bucket" in status_doc,
+                "the state bucket is part of the foundation and must be verified",
+            )
+            f.check(
+                "the status document records fail-closed verification semantics",
+                "fails closed" in status_doc.lower(),
+                "a verifier whose failure mode is a green tick proves nothing",
+            )
+            f.check(
+                "the status document does not claim resources are free",
+                "free at rest" not in status_doc.lower()
+                and "not literally guaranteed zero" in status_doc,
+                "S3 state storage and lock requests bill; idle cost is near zero, not zero",
+            )
+            f.check(
+                "the empty-bucket claim is scoped to the research-data buckets",
+                "research-data" in status_doc.lower(),
+                "the Terraform state bucket is not empty and must not be",
+            )
+            f.check(
+                "the status document states the precise deletion-role property",
+                all(
+                    phrase in status_doc
+                    for phrase in (
+                        "no human can directly assume it",
+                        "no deletion task definition exists",
+                        "iam:PassRole",
+                    )
+                ),
+                'the role trusts ecs-tasks.amazonaws.com, so "unassumable" would overstate it',
+            )
             f.check(
                 "the status document keeps the gates open",
                 "OPEN" in status_doc and "PROPOSED" in status_doc,
@@ -1427,7 +1473,16 @@ def main() -> int:
         # TRACKED files only -- see `tracked_files`. The git-ignored `terraform.tfvars`
         # holds a real account id by design; finding it here would report the ignore
         # rule working as a failure.
-        all_infra = [p for p in tracked_files(INFRA) if p.is_file()]
+        try:
+            all_infra = [p for p in tracked_files(INFRA) if p.is_file()]
+            git_ok = True
+        except GitUnavailableError:
+            all_infra, git_ok = [], False
+        f.check(
+            "git can enumerate the tracked files under infra/",
+            git_ok,
+            "without git the committed-file scans below cannot be evaluated",
+        )
         all_infra_text = "\n".join(read(p) for p in all_infra)
 
         # A forbidden construct is allowed to be *named* in a comment explaining why it is absent.
@@ -1682,6 +1737,10 @@ def main() -> int:
 
         # -- nothing identity-bearing was committed under infra/ ------------------
         for label, pattern in SECRET_PATTERNS.items():
+            if not git_ok:
+                # An empty file list would make every scan below pass vacuously.
+                f.check(f"no {label} is committed under infra/", False, "git could not enumerate")
+                continue
             hits: list[str] = []
             for path in all_infra:
                 for lineno, line in enumerate(read(path).splitlines(), 1):
@@ -1705,8 +1764,8 @@ def main() -> int:
         )
         f.check(
             "no Terraform state, plan or real tfvars file is COMMITTED in the scaffold",
-            not stray,
-            ", ".join(stray),
+            git_ok and not stray,
+            ", ".join(stray) if stray else "git could not enumerate tracked files",
         )
         f.check(
             "the example tfvars carries placeholders rather than values",

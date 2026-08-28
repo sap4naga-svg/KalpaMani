@@ -22,9 +22,12 @@ test. What these guard is the repository's account of itself.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -93,7 +96,9 @@ def _tracked_infra_files() -> list[Path]:
         check=False,
     )
     if result.returncode != 0:
-        pytest.skip("git is unavailable; the committed-file scan cannot run")
+        # NOT a skip. This is a repository-governance test: "we could not check"
+        # must read as a failure, not as a silent pass in the run summary.
+        pytest.fail("git ls-files failed; committed-file governance cannot be verified")
     return [PROJECT_ROOT / line for line in result.stdout.split() if line]
 
 
@@ -140,13 +145,20 @@ def test_the_provision_record_does_not_present_the_smoke_test_as_the_rehearsal()
 
 
 @pytest.mark.parametrize("name", STATUS_DOCUMENTS)
-def test_the_status_documents_record_the_account_as_created(name: str) -> None:
+def test_the_status_documents_do_not_claim_the_account_was_created(name: str) -> None:
+    """This work created no AWS account.
+
+    The account already existed and was configured for the KalpaMani foundation on
+    2026-08-27. Recording it as CREATED invents a history, and "NOT CREATED" is now
+    equally wrong -- account existence and foundation provisioning are different
+    facts and the repository must not collapse them.
+    """
     text = _read(PROJECT_ROOT / name)
-    assert re.search(r"AWS account.*NOT CREATED", text) is None, (
-        f"{name} still reports the AWS account as NOT CREATED"
+    assert re.search(r"AWS account.*CREATED", text) is None, (
+        f"{name} states an AWS account creation that did not happen"
     )
-    assert re.search(r"AWS account.*CREATED", text) is not None, (
-        f"{name} does not record the AWS account as created"
+    assert re.search(r"AWS account.*EXISTING", text) is not None, (
+        f"{name} does not record the AWS account as pre-existing"
     )
 
 
@@ -157,6 +169,24 @@ def test_the_status_documents_still_bound_further_spend(name: str) -> None:
     assert re.search(r"(?i)spend.{0,60}NOT AUTHORIZED", text) is not None, (
         f"{name} does not bound cloud spend beyond the idle foundation"
     )
+
+
+def test_the_provision_record_does_not_claim_resources_are_free() -> None:
+    """S3 state storage and lock/version requests bill, however slightly.
+
+    "Free at rest" is a stronger claim than the account can support. The accurate
+    claim is that there is no fixed always-on hourly cost.
+    """
+    text = _read(STATUS_DOC).lower()
+    assert "free at rest" not in text, "the provision record overclaims zero cost"
+    assert "not literally guaranteed zero" in text, "idle cost is not properly qualified"
+
+
+def test_the_provision_record_scopes_the_empty_bucket_claim_to_research_data() -> None:
+    """The Terraform state bucket is NOT empty and must not be -- it holds state."""
+    text = _read(STATUS_DOC).replace("*", "").lower()
+    assert "research-data" in text, "the empty-bucket claim is not scoped to research data"
+    assert "state bucket is not empty" in text, "the state bucket exception is not stated"
 
 
 @pytest.mark.parametrize("name", STATUS_DOCUMENTS)
@@ -261,3 +291,130 @@ def test_the_verification_script_refuses_an_unpinned_profile() -> None:
     source = _read(VERIFY_SCRIPT)
     assert "EXPECTED_PROFILE" in source, "the verification script does not pin a profile"
     assert "REFUSED" in source, "the verification script does not refuse a wrong profile"
+
+
+# ---------------------------------------------------------------------------
+# The verifier's fail-closed rules, exercised without touching AWS
+# ---------------------------------------------------------------------------
+#
+# These are the rules that decide whether a green tick means anything. An earlier
+# revision computed `denied = decision != "allowed"`, which silently converted a
+# FAILED simulation into proof that a permission was denied -- the exact shape of
+# bug that makes a verification tool worse than none.
+
+
+_VERIFIER_MODULE = "aws_foundation_verify"
+
+
+def _verifier() -> Any:
+    """Load the verification script as a module. It is a script, not a package.
+
+    Registered in ``sys.modules`` before execution: ``@dataclass`` resolves its own
+    annotations through ``sys.modules[cls.__module__]``, so an unregistered module makes
+    every dataclass construction fail with an unrelated-looking AttributeError.
+    """
+    cached = sys.modules.get(_VERIFIER_MODULE)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(_VERIFIER_MODULE, VERIFY_SCRIPT)
+    assert spec is not None and spec.loader is not None, "could not load the verification script"
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_VERIFIER_MODULE] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_allowed"),
+    [("allowed", True), ("implicitDeny", False), ("explicitDeny", False)],
+)
+def test_explicit_iam_decisions_are_classified(decision: str, expected_allowed: bool) -> None:
+    assert _verifier().classify_decision(decision) is expected_allowed
+
+
+@pytest.mark.parametrize(
+    "decision",
+    ["unknown", "", "Allowed", "deny", "implicitdeny", "someFutureDecision"],
+)
+def test_an_unresolved_iam_decision_is_a_verification_failure(decision: str) -> None:
+    """Never silently denied. A decision we cannot read proves nothing either way."""
+    verifier = _verifier()
+    with pytest.raises(verifier.VerificationError):
+        verifier.classify_decision(decision)
+
+
+def test_a_failed_simulation_call_raises_rather_than_reporting_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier()
+    monkeypatch.setattr(
+        verifier,
+        "_run_aws",
+        lambda args: verifier.AwsOutcome(ok=False, data=None, code="AccessDenied"),
+    )
+    with pytest.raises(verifier.VerificationError):
+        verifier.simulate("role-arn", "s3:DeleteObject", "resource-arn")
+
+
+def test_a_simulation_returning_no_result_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _verifier()
+    monkeypatch.setattr(
+        verifier,
+        "_run_aws",
+        lambda args: verifier.AwsOutcome(ok=True, data={"EvaluationResults": []}, code=""),
+    )
+    with pytest.raises(verifier.VerificationError):
+        verifier.simulate("role-arn", "s3:DeleteObject", "resource-arn")
+
+
+def test_an_absence_is_accepted_only_for_a_declared_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AccessDenied must never be read as "the configuration is absent"."""
+    verifier = _verifier()
+
+    monkeypatch.setattr(
+        verifier,
+        "_run_aws",
+        lambda args: verifier.AwsOutcome(ok=False, data=None, code="NoSuchBucketPolicy"),
+    )
+    assert (
+        verifier.aws_absent_or("s3api", "get-bucket-policy", absent=("NoSuchBucketPolicy",)) is None
+    )
+
+    monkeypatch.setattr(
+        verifier,
+        "_run_aws",
+        lambda args: verifier.AwsOutcome(ok=False, data=None, code="AccessDenied"),
+    )
+    with pytest.raises(verifier.VerificationError):
+        verifier.aws_absent_or("s3api", "get-bucket-policy", absent=("NoSuchBucketPolicy",))
+
+
+def test_a_required_call_never_tolerates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _verifier()
+    monkeypatch.setattr(
+        verifier,
+        "_run_aws",
+        lambda args: verifier.AwsOutcome(ok=False, data=None, code="ExpiredToken"),
+    )
+    with pytest.raises(verifier.VerificationError):
+        verifier.aws_required("s3api", "head-bucket", "--bucket", "x")
+
+
+def test_the_expected_absence_codes_are_specific_rather_than_wildcards() -> None:
+    """Absence must be proved by a named AWS error code, never by a non-zero exit."""
+    codes = [c for group in _verifier().EXPECTED_ABSENCE.values() for c in group]
+    assert codes, "no expected-absence codes are declared"
+    for code in codes:
+        assert code and code[0].isupper(), f"{code!r} is not an AWS error code"
+        assert "*" not in code, f"{code!r} is a wildcard, not a specific code"
+
+
+def test_the_identity_gate_runs_before_remote_state_is_read() -> None:
+    """Ordering is a control: a stale profile must refuse before state is read."""
+    source = _read(VERIFY_SCRIPT)
+    main_body = source[source.index("def main(") :]
+    assert main_body.index("identity_gate(") < main_body.index("tf_outputs("), (
+        "remote state is read before the identity gate refuses"
+    )
