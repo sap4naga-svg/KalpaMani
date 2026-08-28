@@ -328,6 +328,19 @@ def lines_with(text: str, needle: str) -> Iterable[tuple[int, str]]:
             yield i, line
 
 
+def strip_hcl_comments(text: str) -> str:
+    """Drop whole-line `#` comments from Terraform source.
+
+    Necessary rather than fastidious. These files explain at length **why** a
+    permission or setting is absent, and to do that they name the exact action or
+    argument they do not grant -- ``# NO s3:DeleteObject``, ``# no iam:PassRole``.
+    A scan over raw text therefore reports every deliberate, well-documented
+    omission as a violation, which would train the next person to delete the
+    explanation rather than fix the config.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -1277,9 +1290,7 @@ def main() -> int:
 
         # A forbidden construct is allowed to be *named* in a comment explaining why it is absent.
         # Only a real HCL usage counts, so comment lines are stripped before the scan.
-        hcl_only = "\n".join(
-            line for line in tf_text.splitlines() if not line.lstrip().startswith("#")
-        )
+        hcl_only = strip_hcl_comments(tf_text)
         for token, why in FORBIDDEN_TERRAFORM.items():
             f.check(
                 f"Terraform declares no {token}",
@@ -1349,6 +1360,110 @@ def main() -> int:
             re.search(r'actions\s*=\s*\[\s*"\*"', tf_text) is None and '"*:*"' not in tf_text,
             "a wildcard action appeared in an IAM policy",
         )
+
+        # -- destructive authority is separated from routine research -------------
+        #
+        # The licensed bucket has no versioning, no replication and no backup, so a
+        # delete cannot be undone and a re-fetch is not a restore. An earlier revision
+        # gave `s3:DeleteObject` to the role that also runs routine ingestion, arguing
+        # that deletion is a licensing requirement. It is -- but the obligation binds
+        # KalpaMani AS A SYSTEM, not every compute role continuously, and conflating
+        # the two is how standing destructive authority gets justified. The effect was
+        # that a bug in ordinary research code could destroy unrecoverable history.
+        #
+        # These checks parse each policy document separately, because "does the file
+        # mention DeleteObject" cannot distinguish the routine role from the dedicated
+        # deletion role -- and the whole point is which role holds it.
+        # Comments are stripped first. These files explain at length WHY a permission is
+        # absent, naming the very action they do not grant -- so a scan over raw text
+        # reports every deliberate omission as a violation. Only real HCL counts.
+        iam_text = strip_hcl_comments(read(INFRA / "iam.tf"))
+
+        def policy_body(name: str) -> str:
+            """The body of one `data "aws_iam_policy_document" "<name>"` block."""
+            match = re.search(
+                r'data\s+"aws_iam_policy_document"\s+"' + re.escape(name) + r'"\s*\{(.*?)\n\}',
+                iam_text,
+                re.S,
+            )
+            return match.group(1) if match else ""
+
+        routine = policy_body("task")
+        deletion = policy_body("licensed_data_deletion")
+
+        f.check(
+            "the routine research role exists as a policy document",
+            bool(routine),
+            'data "aws_iam_policy_document" "task" not found',
+        )
+        for action in ("s3:DeleteObject", "s3:DeleteObjectVersion"):
+            f.check(
+                f"the routine research role does not grant {action}",
+                f'"{action}"' not in routine,
+                "an irreversible delete on the licensed bucket must not be routine authority",
+            )
+        f.check(
+            "the routine research role still cannot delete control-bucket objects",
+            '"s3:DeleteObject"' not in routine,
+            "manifests, lineage and receipts are governance evidence",
+        )
+        f.check(
+            "the routine research role writes no CloudWatch Logs directly",
+            "logs:PutLogEvents" not in routine and "logs:CreateLogStream" not in routine,
+            "the awslogs driver uses the execution role; direct log writes bypass redaction",
+        )
+
+        f.check(
+            "a dedicated licensed-data deletion role exists",
+            bool(deletion)
+            and re.search(r'resource\s+"aws_iam_role"\s+"licensed_data_deletion"', iam_text)
+            is not None,
+            "no dedicated deletion identity; deletion would fall back to a broader role",
+        )
+        if deletion:
+            for action in ("s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"):
+                f.check(
+                    f"the deletion role grants {action}",
+                    f'"{action}"' in deletion,
+                    "the deletion procedure could not complete",
+                )
+            f.check(
+                "the deletion role can prove the bucket's versioning and replication state",
+                '"s3:GetBucketVersioning"' in deletion
+                and '"s3:GetReplicationConfiguration"' in deletion,
+                "runbook steps 8-9 would be asserted rather than evidenced",
+            )
+            f.check(
+                "the deletion role cannot write objects",
+                '"s3:PutObject"' not in deletion,
+                "a role that destroys must not also be able to write",
+            )
+            f.check(
+                "the deletion role cannot read licensed object contents",
+                '"s3:GetObject"' not in deletion,
+                "deletion does not require reading the data it destroys",
+            )
+            f.check(
+                "the deletion role cannot reach the control bucket",
+                "aws_s3_bucket.control" not in deletion,
+                "the evidence a deletion happened must be outside the reach of the deleter",
+            )
+            f.check(
+                "the deletion role has no provider-secret access",
+                "secretsmanager" not in deletion and "ssm:" not in deletion,
+                "the credential is revoked before deletion begins; this role never needs it",
+            )
+            f.check(
+                "the deletion role is scoped to the licensed bucket only",
+                "aws_s3_bucket.licensed" in deletion,
+                "the deletion role names no licensed-bucket resource",
+            )
+        f.check(
+            "nothing is granted iam:PassRole for the deletion role",
+            "iam:PassRole" not in iam_text,
+            "a PassRole grant makes the deletion role assumable; that is a separate authorization",
+        )
+
         # -- wrong-account protection must fail closed ----------------------------
         #
         # This is the check with the most history behind it. The variable originally
