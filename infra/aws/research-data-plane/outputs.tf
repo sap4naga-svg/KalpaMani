@@ -52,6 +52,17 @@ output "task_execution_role_arn" {
   value       = aws_iam_role.task_execution.arn
 }
 
+output "licensed_data_deletion_role_arn" {
+  description = <<-EOT
+    The ONLY identity that may destroy licensed data, used solely for an authorized
+    vendor-termination deletion or rehearsal -- never for routine research.
+
+    Nothing can assume it as committed: no deletion task exists and no identity is
+    granted iam:PassRole for it. Contains an account id -- do not publish.
+  EOT
+  value       = aws_iam_role.licensed_data_deletion.arn
+}
+
 output "log_group_name" {
   description = "Task log group. Never a destination for payloads or credentials."
   value       = aws_cloudwatch_log_group.research.name
