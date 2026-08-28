@@ -35,6 +35,7 @@ Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -183,6 +184,11 @@ ADR_IMPLEMENTATION = DECISIONS / "ADR-0009-sharadar-provider-realistic-implement
 ADR_QUALIFICATION = DECISIONS / (
     "ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md"
 )
+#: The licensed S3 object-store implementation (ADR-0011). Section 17 exists because this ADR
+#: is the easiest of all of them to misread as access: a cloud backend now exists in the source
+#: tree, and it has no credential, no bucket, no client and no caller.
+ADR_OBJECT_STORE = DECISIONS / "ADR-0011-implement-the-licensed-s3-research-object-store.md"
+S3_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "storage" / "s3.py"
 PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
 OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
 PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
@@ -453,6 +459,182 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+#: Ways a document could assert the very thing corrected on 2026-08-28: that a
+#: conflict answer establishes occupancy. A targeted denylist of the defect,
+#: matching this file's existing idiom, rather than a heuristic sentence scan --
+#: a scan that had to be tuned until the prose passed would be measuring the
+#: prose, not the claim.
+CONFLICT_AS_OCCUPANCY = (
+    "409 means occupied",
+    "409 means the name is occupied",
+    "409 preconditionfailed",
+    "conditionalrequestconflict means occupied",
+    "conditionalrequestconflict is an occupied",
+    "a 409 is an occupied name",
+    "409 or 412",
+    "412 or 409",
+    "preconditionfailed or conditionalrequestconflict",
+    "conditionalrequestconflict, both",
+)
+
+
+#: Dash spellings folded together before matching, so a guard cannot be evaded by
+#: retyping one character. The middle dot is here because the negative control
+#: proved a legacy block separated by it slipped past a guard written with
+#: hyphens. Written as escapes: a literal dash in source is itself ambiguous,
+#: which is the problem being solved.
+EM_DASH = "\u2014"
+EN_DASH = "\u2013"
+MIDDLE_DOT = "\u00b7"
+
+#: Formulations that were true once and are false now. Each names a specific
+#: superseded claim rather than a topic, because a topic-shaped guard would
+#: also forbid the *historical* framing these documents are required to keep.
+#:
+#: The distinction this section enforces: a document may say "ADR-0009 did not
+#: authorize a purchase, as written on 2026-08-27". It may not say a purchase
+#: is unauthorized, because on 2026-08-28 the owner authorized one and it
+#: completed.
+#: Verbatim fragments of ADR-0009's obsolete matrix, and the conclusions drawn
+#: from reproducing it. A current-status document must not carry any of them.
+#:
+#: The two prohibition forms at the end are separate from the block itself: a
+#: document could drop the copy and still assert, in prose, that a vendor account
+#: or billing is forbidden. Neither was ever this repository's to forbid.
+REPRODUCED_LEGACY_MATRIX: list[tuple[str, str]] = [
+    (
+        "NOT AUTHORIZED subscription",
+        "the obsolete matrix, reproduced; a labelled copy is still a second matrix",
+    ),
+    (
+        "trial - vendor account - billing",
+        "the obsolete matrix's prohibition line, which described a slice, not the owner",
+    ),
+    (
+        "ADR-0009, as written on 2026-08-27 -- HISTORICAL",
+        "the reproduced block's own header",
+    ),
+    (
+        "Two lines of it were superseded, and only two",
+        "a conclusion that only holds if the obsolete list is read as current",
+    ),
+    (
+        "Two lines of that historical boundary were superseded, and only two",
+        "same conclusion, README phrasing",
+    ),
+    (
+        "Everything else on that line is still forbidden",
+        "false: the line also named a vendor account and billing, which are not forbidden here",
+    ),
+    (
+        "Everything else on that list is still forbidden",
+        "same, README phrasing",
+    ),
+    (
+        "a vendor account is not authorized",
+        "the owner's account is not this repository's to authorize or forbid",
+    ),
+    (
+        "vendor account is forbidden",
+        "the owner's account is not this repository's to authorize or forbid",
+    ),
+    (
+        "billing is not authorized",
+        "an authorized purchase necessarily involved billing; forbidding it in the abstract "
+        "contradicts a completed, authorized action",
+    ),
+    (
+        "billing is forbidden",
+        "same",
+    ),
+    (
+        "ACCEPTED ON MERGE OF PR #13",
+        "PR #13 merged; an event-conditional status is no longer a status",
+    ),
+]
+
+
+SUPERSEDED_CLAIMS: list[tuple[str, str]] = [
+    (
+        "must still be answered before any purchase",
+        "ADR-0010 decided Q7 and Q8, and the purchase completed",
+    ),
+    ("nothing has been purchased", "the qualification subscription is purchased and active"),
+    (
+        "no vendor account exists",
+        "what exists in a vendor account is outside what this repository establishes",
+    ),
+    (
+        "no private credential exists",
+        "the checkable claim is that none is stored, configured or bound HERE",
+    ),
+    (
+        "no provider credential exists",
+        "the checkable claim is about this repository, not the owner's accounts",
+    ),
+    ("provider credentials NONE", "an unscoped absence claim about the owner's accounts"),
+    (
+        "No provider has been purchased, trialled or credentialed",
+        "a bounded qualification subscription was purchased under ADR-0010",
+    ),
+    ("subscription NONE", "a qualification subscription is active"),
+    (
+        "awaiting acceptance",
+        "PR #13 merged; Slice 1 is accepted",
+    ),
+    (
+        "nothing below is in force until that merge",
+        "PR #13 merged, so what follows IS in force",
+    ),
+    (
+        "ACCEPTED on merge of PR #13 - carries no authority before it",
+        "PR #13 merged, so ADR-0009 is in force",
+    ),
+    (
+        "ACCEPTED on merge of the PR introducing it - carries no authority before it",
+        "ADR-0010's PR merged; ADR-0011's row must name PR #16 explicitly",
+    ),
+]
+
+
+def _asserts_conflict_is_occupancy(text: str) -> list[str]:
+    """Every defective phrasing a document contains, or an empty list."""
+    flat = " ".join(" ".join(line.lstrip("> ") for line in text.splitlines()).split()).lower()
+    return [phrase for phrase in CONFLICT_AS_OCCUPANCY if phrase in flat]
+
+
+def _has_a_loop(path: Path) -> bool:
+    """Whether a module contains any loop statement at all.
+
+    Comprehensions are not loops for this purpose: they cannot retry a request,
+    which is the thing being ruled out.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    return any(isinstance(node, ast.While | ast.For | ast.AsyncFor) for node in ast.walk(tree))
+
+
+def _executable_python(path: Path) -> str:
+    """A Python module's code with every docstring removed.
+
+    A guard that scanned raw source would fire on the prose explaining what a
+    module refuses to do -- which would either weaken the guard or forbid saying
+    why it exists. Unparsing a docstring-stripped tree keeps string literals and
+    attribute access, and drops only the narration.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
 def code_tokens(text: str) -> set[str]:
     """Every backtick-quoted token in a document."""
     return set(re.findall(r"`([A-Za-z_][A-Za-z0-9_.]*)`", text))
@@ -516,7 +698,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/16] Closed vocabularies are defined where they are used")
+    print("[1/18] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -540,7 +722,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/16] Source and derived envelopes stay disjoint")
+    print("\n[2/18] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -575,7 +757,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/16] Every declared temporal semantics has its required anchor")
+    print("\n[3/18] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -592,7 +774,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/16] Exact and bound derivations name the correct fields")
+    print("\n[4/18] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -619,7 +801,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/16] Normative rules use the current resolved model")
+    print("\n[5/18] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -665,7 +847,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/16] Entities keep source and derived rows apart")
+    print("\n[6/18] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -735,7 +917,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/16] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/18] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -797,7 +979,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/16] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/18] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -902,7 +1084,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/16] Resolved-timing wording, closure rules and current status")
+    print("\n[9/18] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -1007,7 +1189,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/16] No document refers to a retired field name")
+    print("\n[10/18] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1051,7 +1233,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/16] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/18] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1208,7 +1390,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/16] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/18] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1300,7 +1482,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/16] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/18] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -1938,7 +2120,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/16] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/18] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2172,7 +2354,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/16] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/18] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2562,7 +2744,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/16] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/18] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -2915,6 +3097,551 @@ def main() -> int:
             "remain pre-purchase blockers" not in body,
             "ADR-0010 decided both; leaving the old wording would contradict the record",
         )
+
+    # ------------------- 17. The S3 store is written, and has never reached AWS
+    print("\n[17/18] The licensed S3 object store is implemented, and has touched nothing")
+    f.check(
+        "ADR-0011 exists",
+        ADR_OBJECT_STORE.is_file(),
+        f"missing: {ADR_OBJECT_STORE}",
+    )
+    if ADR_OBJECT_STORE.is_file():
+        adr11 = read(ADR_OBJECT_STORE)
+        # Prose wraps, and the exhaustive non-authorization list is a blockquote, so the
+        # leading "> " has to come off before flattening -- otherwise a claim that spans a
+        # line break reads as "... configuring a > credential", and the guard would be
+        # checking the line width rather than the claim.
+        unquoted = [line.lstrip("> ") for line in adr11.replace("**", "").splitlines()]
+        flat11 = " ".join(" ".join(unquoted).split())
+
+        f.check(
+            "ADR-0011 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr11 and "carries no authority" in adr11,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0011 records that the store has never run against AWS",
+            "never been run against AWS" in flat11,
+            "the whole point of the slice is that it is code, reviewed before access exists",
+        )
+        f.check(
+            "ADR-0011 states the append-only mechanism as a single conditional write",
+            "IfNoneMatch" in adr11 and "no preflight `HEAD`" in flat11,
+            "a check-then-write would be a race the deletion-first bucket cannot absorb",
+        )
+        f.check(
+            "ADR-0011 ties conditional publication to the absence of versioning",
+            "conditional publication in software is the immutability" in flat11,
+            "no versioning means software is the only immutability boundary there is",
+        )
+        f.check(
+            "ADR-0011 distinguishes a 412 from a 409",
+            "Only a `412` means occupied" in flat11
+            and "409 ConditionalRequestConflict" in adr11
+            and "the condition was never resolved" in flat11.lower(),
+            "a conflict is retryable and proves nothing; occupancy is a 412 and only a 412",
+        )
+        f.check(
+            "ADR-0011 records that a 409 sends no HeadObject and yields no verdict",
+            "sends no `HeadObject`" in flat11
+            and "no idempotency or collision determination" in flat11,
+            "a HeadObject issued on a non-answer would invent a collision or a contradiction",
+        )
+        f.check(
+            "ADR-0011 adds no retry loop and says why a caller's retry is safe",
+            "no retry loop" in flat11 and "every attempt stays conditional" in flat11,
+            "retry policy is the caller's; safety comes from the write staying conditional",
+        )
+        f.check(
+            "no document asserts that a conflict answer establishes occupancy",
+            not any(
+                _asserts_conflict_is_occupancy(text)
+                for text in (adr11, read(REPO_ROOT / "CLAUDE.md"), read(REPO_ROOT / "README.md"))
+            ),
+            "the whole correction is that a 409 is not occupancy; pairing the two codes as "
+            "one meaning is how the defect was written in the first place",
+        )
+        f.check(
+            "ADR-0011 refuses the ETag as an identity",
+            "never an ETag" in flat11 and "multipart-dependent opaque token" in flat11,
+            "an ETag is not a content hash, and treating it as one voids every identity claim",
+        )
+        f.check(
+            "ADR-0011 requires a proven FULL_OBJECT checksum type",
+            "FULL_OBJECT" in adr11 and "COMPOSITE" in adr11,
+            "the algorithm being SHA-256 is not enough; the type has to be proven",
+        )
+        f.check(
+            "ADR-0011 explains why a composite checksum is not a content address",
+            "digest of part digests" in flat11 or "digest of a multipart upload" in flat11,
+            "a composite value varies with the part size, so it does not name the bytes",
+        )
+        f.check(
+            "ADR-0011 refuses an unstated checksum type as well as a composite one",
+            "an allowlist of one, matched exactly" in flat11,
+            "a denylist would admit every checksum type AWS has not invented yet",
+        )
+        f.check(
+            "ADR-0011 substantiates the declared SDK floor rather than asserting it",
+            "boto3==1.36.0" in adr11
+            and "botocore==1.36.0" in adr11
+            and "the lowest `botocore` that release permits" in flat11,
+            "a version floor nobody checked is a guess wearing a bound",
+        )
+        f.check(
+            "ADR-0011 names the model members the floor was checked for",
+            all(
+                member in adr11
+                for member in ("IfNoneMatch", "ChecksumMode", "ChecksumType", "ChecksumSHA256")
+            ),
+            "the claim has to say what was verified, or it cannot be re-checked",
+        )
+        f.check(
+            "ADR-0011 resolves a collision by metadata rather than by download",
+            "never by downloading" in flat11 and "bytes are never retrieved" in flat11,
+            "downloading a vendor payload to compare it would spread licensed rows",
+        )
+        f.check(
+            "ADR-0011 fails closed on an unverifiable response",
+            "INVALID_RESPONSE" in adr11 and "never a guess in either direction" in flat11,
+            "an ambiguous answer is a refusal, not a decision",
+        )
+        f.check(
+            "ADR-0011 requires backend errors to be sanitized into a closed vocabulary",
+            "from None" in adr11
+            and "no bucket, key, endpoint, request id, host id or credential-shaped text" in flat11,
+            "a raw ClientError string is exactly what CLAUDE.md s.3 forbids committing",
+        )
+        f.check(
+            "ADR-0011 keeps deletion out of the routine research writer",
+            "Deletion belongs to the separately roled path under ADR-0007" in flat11,
+            "ADR-0007 separated deletion authority; a writer must not quietly reunite it",
+        )
+        f.check(
+            "ADR-0011 keeps CONTROL publication deferred",
+            "CONTROL publication remains deferred" in flat11,
+            "CONTROL was not authorized for this slice",
+        )
+        f.check(
+            "ADR-0011 records the dependency posture it gave up, and its bound",
+            "boto3>=1.36.0,<2.0" in adr11 and "first and only" in flat11,
+            "a dependency change is a governed decision, not an incidental one",
+        )
+        f.check(
+            "ADR-0011 states that no module imports the SDK",
+            "No module under `src/` imports it" in flat11,
+            "injection is what keeps import network-silent and credential-free",
+        )
+        f.check(
+            "ADR-0011 rejects the service emulators explicitly",
+            "moto" in adr11 and "LocalStack" in adr11 and "Rejected" in adr11,
+            "an emulator is a second implementation of S3 semantics to be wrong about",
+        )
+        f.check(
+            "ADR-0011 rejects bucket versioning on the deletion-first grounds",
+            "versioning leaves copies behind" in flat11,
+            "s.4.23 forbids it; a durability argument must not be allowed to reopen it",
+        )
+        f.check(
+            "ADR-0011 closes no gate",
+            "G1 OPEN" in adr11
+            and "G2 OPEN" in adr11
+            and "G4 OPEN" in adr11
+            and "G5 OPEN" in adr11
+            and "G6 OPEN" in adr11
+            and "G7 OPEN" in adr11,
+            "implementing a backend resolves no decision gate",
+        )
+        f.check(
+            "ADR-0011 leaves ADR-0005 proposed and live trading disabled",
+            "ADR-0005 remains **PROPOSED**" in adr11
+            and "LIVE_TRADING_HARD_DISABLED` remains **True**" in adr11,
+            "neither is touched by a storage backend",
+        )
+        f.check(
+            "ADR-0011 states its non-authorizations exhaustively",
+            all(
+                phrase in flat11
+                for phrase in (
+                    "any AWS mutation or read",
+                    "Terraform plan, apply or destroy",
+                    "retrieving, disclosing or binding a bucket name",
+                    "creating, retrieving or configuring a credential",
+                    "constructing a client",
+                    "an ingestion runner",
+                    "CONTROL publication",
+                )
+            ),
+            "a reader must not have to infer what merging this does not enable",
+        )
+        f.check(
+            "ADR-0011 uses merge-stable status wording",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in adr11
+            and "PENDING MERGE ACCEPTANCE" not in adr11,
+            "a status that has to be edited on merge is a status that will be wrong",
+        )
+        f.check(
+            "ADR-0011 scopes its absence claims to this slice",
+            "retrieved, inspected, created, configured and bound no credential" in flat11
+            and "binds no bucket identifier" in flat11,
+            "what this slice did is checkable; what exists elsewhere is not its claim",
+        )
+        f.check(
+            "ADR-0011 acknowledges what already exists outside this slice",
+            "provisioned in August 2026 and exist now" in flat11
+            and "its clock is running" in flat11,
+            "the foundation and the subscription are real; the ADR must not imply otherwise",
+        )
+        f.check(
+            "ADR-0011 makes no claim that no bill is running",
+            "before a bill is running" not in adr11 and "no bill is running" not in adr11,
+            "cost is not something this slice established",
+        )
+        f.check(
+            "ADR-0011 infers nothing about owner account activity",
+            "vendor account page" not in adr11 and "did not examine and must not" in flat11,
+            "assistant activity is not evidence about what the owner did",
+        )
+        f.check(
+            "ADR-0011 rests its safety on absence rather than on care",
+            "not that the code is careful" in flat11,
+            '"the code is careful" is not a control; having no credential and no caller is',
+        )
+
+    # -- the code matches what the ADR says about it ---------------------------
+    if S3_STORE.is_file():
+        s3_source = read(S3_STORE)
+        f.check(
+            "the S3 store imports no AWS SDK",
+            not re.search(r"^\s*(import|from)\s+(boto3|botocore)\b", s3_source, re.M),
+            "the client is injected; an import here would undo the whole posture",
+        )
+        f.check(
+            "the S3 store writes conditionally",
+            'IfNoneMatch="*"' in s3_source,
+            "the append-only guarantee is this one argument",
+        )
+        f.check(
+            "the S3 store requests SSE-S3 explicitly",
+            'SERVER_SIDE_ENCRYPTION: Final = "AES256"' in s3_source,
+            "an object must be encrypted because this code asked, not because a setting survived",
+        )
+        f.check(
+            "the S3 store sends and verifies a full-object SHA-256",
+            "ChecksumSHA256" in s3_source and "ChecksumAlgorithm" in s3_source,
+            "identity is the digest the ObjectKey is named by",
+        )
+        f.check(
+            "the S3 store requires a proven FULL_OBJECT checksum type",
+            'FULL_OBJECT_CHECKSUM: Final = "FULL_OBJECT"' in s3_source
+            and "checksum_type != FULL_OBJECT_CHECKSUM" in s3_source,
+            "a COMPOSITE SHA-256 depends on the upload, not only on the bytes",
+        )
+        f.check(
+            "the S3 store treats only a 412 as occupancy",
+            '_OCCUPIED_CODES: Final[frozenset[str]] = frozenset({"PreconditionFailed", "412"})'
+            in s3_source,
+            "409 is a retryable conflict, and reading it as occupancy would be a fail-open",
+        )
+        f.check(
+            "the S3 store classifies a conflict as transient",
+            "_CONFLICT_CODES: Final[frozenset[str]] = frozenset("
+            '{"ConditionalRequestConflict", "409"})'
+            in s3_source
+            and "_TRANSIENT_CODES" in s3_source,
+            "the condition was never resolved, so nothing was learned about the name",
+        )
+        f.check(
+            "the S3 store adds no retry loop in this slice",
+            not _has_a_loop(S3_STORE),
+            "retry policy belongs to an authorized caller, not to the store. Checked as an "
+            "absence of loop *nodes*, because a substring probe for `while True` would miss "
+            "every other spelling of a retry",
+        )
+        f.check(
+            "the S3 store exposes no read, list, delete or copy operation",
+            not any(
+                name in _executable_python(S3_STORE)
+                for name in ("get_object", "delete_object", "list_objects", "copy_object")
+            ),
+            "a routine research writer must not be able to reach any of them",
+        )
+        f.check(
+            "the S3 store hard-codes no bucket, ARN, account or endpoint",
+            not re.search(
+                r"(arn:aws|s3://|amazonaws\.com|\b\d{12}\b)",
+                _executable_python(S3_STORE),
+            ),
+            "a bucket name is operational configuration and never belongs in Git",
+        )
+        f.check(
+            "the S3 store has no runner and no entry point",
+            '__name__ == "__main__"' not in s3_source and "argparse" not in s3_source,
+            "no execution path is authorized for this slice",
+        )
+
+    if OBJECT_STORE.is_file():
+        neutral = read(OBJECT_STORE)
+        f.check(
+            "the neutral contract names no cloud provider",
+            not re.search(
+                r"\b(boto3|botocore|s3|aws|bucket)\b",
+                _executable_python(OBJECT_STORE),
+                re.I,
+            ),
+            "the protocol is the seam; a backend leaking into it would remove the seam",
+        )
+        f.check(
+            "the shared admission rules live in the neutral contract",
+            all(
+                f"def {helper}(" in neutral
+                for helper in ("require_exact_key", "require_publishable", "physical_key")
+            ),
+            "two implementations of what may be published would eventually disagree",
+        )
+
+    # -- the status documents record a store that exists and has never been used
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records the S3 store as code that has never run against AWS",
+            "ADR-0011" in body and "NEVER RUN AGAINST AWS" in body,
+            "a reader must not mistake a written backend for a used one",
+        )
+        f.check(
+            f"{name} uses merge-stable status wording for this slice",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in body,
+            "the same sentence must stay true on both sides of the merge",
+        )
+        f.check(
+            f"{name} does not describe the slice as pending merge acceptance",
+            "PENDING MERGE ACCEPTANCE" not in body,
+            "a pending status is stale the moment it stops being pending -- the PR #13 defect",
+        )
+        f.check(
+            f"{name} scopes its absence claims to this slice and this repository",
+            "adapter bucket binding: NONE" in body and "adapter credential binding: NONE" in body,
+            "an unscoped 'bucket NONE' claims something this slice cannot establish",
+        )
+        f.check(
+            f"{name} makes no claim that nothing is billable",
+            "before a bill is running" not in body and "no bill is running" not in body,
+            "the AWS foundation exists and a vendor subscription clock is running",
+        )
+        f.check(
+            f"{name} claims zero requests for the adapter, not for the account",
+            "AWS requests sent by the adapter: ZERO" in body and "adapter-attributable" in body,
+            "what is checkable here is the adapter's behaviour, not the account's",
+        )
+        f.check(
+            f"{name} states no unscoped 'bucket NONE' or 'credential NONE'",
+            "bucket NONE   " not in body and "credential NONE   " not in body,
+            "the corrected wording names what is bound to the adapter",
+        )
+        f.check(
+            f"{name} narrows the SDK-boundary claim to application modules under src/",
+            "only application module under" in body or "only module under" in body,
+            "tests and this documentation name the SDK; the enforced boundary is src/",
+        )
+        f.check(
+            f"{name} records the single runtime dependency and that nothing imports it",
+            "boto3" in body and "imports it" in flat,
+            "the dependency posture changed; the status documents must say how far",
+        )
+        f.check(
+            f"{name} keeps every AWS action unauthorized",
+            re.search(r"AWS[^|\n]*\|\s*\*\*NOT AUTHORIZED", body) is not None,
+            "provisioning a platform was never permission to use it, and neither is this",
+        )
+        f.check(
+            f"{name} states that the control is absence rather than care, and scopes it",
+            "retrieved, inspected, created, configured and" in flat
+            and "no bucket identifier is bound to the adapter" in flat
+            and "no module constructs a client or calls the store" in flat,
+            "the store is safe because nothing binds it to AWS -- said as a claim about this "
+            "slice, not as a claim about the owner's account",
+        )
+
+    # ------------------- 18. No status document carries a superseded current state
+    print("\n[18/18] The status documents describe the current governance state, not a past one")
+
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        whole = read(path)
+        # The WHOLE document, flattened, with every separator folded to one.
+        #
+        # A guard that inspected only the section it expected the claim in would
+        # pass while a stale narrative sat three screens further down -- which is
+        # exactly how this defect survived two rounds of review. And a guard that
+        # matched one separator character would miss the same sentence typed with
+        # another; the negative control found that hole twice here, once for a
+        # hyphen against an em dash and once for a middle-dot-separated list.
+        flat_whole = " ".join(
+            whole.replace("**", "")
+            .replace(EM_DASH, "-")
+            .replace(EN_DASH, "-")
+            .replace(MIDDLE_DOT, "-")
+            .split()
+        )
+
+        for phrase, why in SUPERSEDED_CLAIMS:
+            f.check(
+                f"{name} no longer states {phrase!r}",
+                phrase not in flat_whole,
+                why,
+            )
+
+        # -- the obsolete matrix must not be reproduced here at all -----------
+        #
+        # Round 2 allowed a verbatim copy provided it was labelled historical.
+        # That was not enough. A labelled copy is still a second authorization
+        # matrix in a current-status document, and its contents were narrower
+        # than the label admitted: the old list forbade "vendor account" and
+        # "billing", which described what an implementation slice could do and
+        # never described the owner's private affairs. An accepted ADR already
+        # preserves its own boundary; a status document should link to it.
+        for phrase, why in REPRODUCED_LEGACY_MATRIX:
+            f.check(
+                f"{name} does not reproduce {phrase!r}",
+                phrase.lower() not in flat_whole.lower(),
+                why,
+            )
+        f.check(
+            f"{name} points at ADR-0009 for the historical boundary instead of copying it",
+            "ADR-0009" in whole
+            and (
+                "holds the historical scope" in flat_whole
+                or "original Slice-1 boundary lives in" in flat_whole
+            ),
+            "the history has to remain findable; it just must not be restated as a matrix",
+        )
+        f.check(
+            f"{name} says the current matrix is the only one governing a session",
+            "only one that governs a session now" in flat_whole
+            or "the list below is what governs today" in flat_whole.lower(),
+            "two matrices in one document is the defect; one of them has to be named as live",
+        )
+        f.check(
+            f"{name} declines to govern owner-side account or billing activity",
+            "neither governs nor records" in flat_whole,
+            "an authorized purchase involved owner-side activity this repository must not "
+            "forbid, infer or deny",
+        )
+
+        # -- the positive current state ---------------------------------------
+        f.check(
+            f"{name} records ADR-0009 and Slice 1 as accepted and in force",
+            "ACCEPTED / IN FORCE" in whole and "PR #13 merged" in whole,
+            "the merged state must be readable where a session looks first",
+        )
+        f.check(
+            f"{name} states the top-level Slice-1 status as current, not event-conditional",
+            "IMPLEMENTED / ACCEPTED - PR #13 MERGED - CODE ONLY" in flat_whole,
+            "'accepted on merge' stopped being a status the moment the merge happened",
+        )
+        f.check(
+            f"{name} keeps the published test token unauthorized, and says why that is not odd",
+            "the published test token" in flat_whole
+            and "not permission to run the harness" in flat_whole,
+            "the harness being able to read it is not authorization to run it",
+        )
+        f.check(
+            f"{name} records the qualification subscription as purchased and active",
+            "PURCHASED / ACTIVE" in whole and "ADR-0010" in whole,
+            "a completed purchase that a document calls unauthorized is a contradiction",
+        )
+        f.check(
+            f"{name} records ADR-0011 against PR #16 by number",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in whole,
+            "'the PR introducing it' stops identifying anything once other PRs exist",
+        )
+        f.check(
+            f"{name} keeps the real S3 writer off the currently-unauthorized list",
+            "real S3 writer" not in flat_whole
+            or "the real S3 writer arrived as its own separately authorized slice" in flat_whole
+            or "the real S3 writer became its own slice" in flat_whole
+            or "the real S3 writer was authorized as its own slice" in flat_whole,
+            "ADR-0011 authorized it; listing it as unauthorized contradicts this very PR",
+        )
+
+        # -- what is still forbidden, stated as current ------------------------
+        for forbidden in (
+            "credential retrieval",
+            "Services Data",
+            "empirical qualification",
+            "production ingestion",
+        ):
+            f.check(
+                f"{name} still forbids {forbidden}",
+                forbidden.lower() in flat_whole.lower(),
+                "a purchase is not access, and the documents must keep saying so",
+            )
+        f.check(
+            f"{name} keeps production-provider selection unauthorized",
+            "production-provider selection" in flat_whole.lower()
+            or "production provider is selected" in flat_whole.lower(),
+            "buying a qualification subscription selected nothing",
+        )
+        f.check(
+            f"{name} keeps G1 and G2 open after the purchase",
+            "G1 OPEN" in whole or "**G1** provider selection" in whole,
+            "no gate was resolved by ADR-0010 or by this slice",
+        )
+        f.check(
+            f"{name} keeps ADR-0005 proposed and Phase 3 incomplete",
+            "PROPOSED" in whole and "NOT COMPLETE" in whole.upper(),
+            "neither is touched by a purchase or a storage backend",
+        )
+
+    # -- the Q7/Q8 disposition, as ADR-0010 actually recorded it ---------------
+    readme_body = read(REPO_ROOT / "README.md")
+    f.check(
+        "README records Q7 as publicly unresolved and owner-accepted",
+        "PUBLICLY_UNRESOLVED" in readme_body,
+        "a decision is not a discovery; the document must not blur the two",
+    )
+    f.check(
+        "README binds Sharadar price data to PROVIDER_DERIVED and PROVIDER_REALISTIC_PIT",
+        "PROVIDER_DERIVED" in readme_body and "PROVIDER_REALISTIC_PIT" in readme_body,
+        "an unresolved origin has exactly one safe classification",
+    )
+    f.check(
+        "README forbids representing Sharadar price data as PUBLIC_PIT",
+        "never represented as `PUBLIC_PIT`" in readme_body,
+        "that prohibition is the whole consequence of an unresolved Q7",
+    )
+    f.check(
+        "README records Q8 as publicly bounded, with measurement still required",
+        "PUBLICLY_BOUNDED" in readme_body
+        and "not certified earliest records" in readme_body.replace("**", ""),
+        "documented depths are planning boundaries, not measured coverage",
+    )
+    f.check(
+        "README defers the Q8 measurement to a separate authorization",
+        "under a separate authorization" in readme_body.replace("**", ""),
+        "measuring the delivered data is provider access, which is not authorized",
+    )
+    f.check(
+        "README states the purchase closed no gate and selected no provider",
+        "selected no production provider and closed no" in readme_body.replace("**", ""),
+        "a purchase is not a selection",
+    )
+    f.check(
+        "README scopes its credential claim to this repository",
+        "no credential is stored, configured or bound by this repository"
+        in readme_body.replace("**", ""),
+        "whether a key exists in a vendor account is not something this repository knows",
+    )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")

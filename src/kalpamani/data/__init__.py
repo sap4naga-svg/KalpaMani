@@ -21,6 +21,13 @@ Layout, and who may import what:
     the provider-neutral logical object contract Bronze publishes through.
     Classification is part of an object's identity, and LICENSED is what you get
     by writing the ordinary thing.
+``storage``
+    the backends behind that contract. ``storage.local`` is the Silver/Gold
+    analytical store; ``storage.s3`` is the licensed cloud object store
+    (ADR-0011) -- **code only, and it has never run against AWS.** ``s3`` is
+    deliberately *not* re-exported from the package, so importing the data
+    platform pulls in no AWS SDK, opens no socket and discovers no credential.
+    It is also the only module under ``src/`` permitted to name that SDK.
 ``normalize``
     silver transforms: bronze bytes to normalised source facts.
 ``curate``
@@ -33,8 +40,11 @@ and **nothing else** here. Two packages rather than one package with a flag,
 because a flag is a thing that can be set wrongly and a missing import is a thing
 that fails in CI.
 
-**Status: Phase 3A A1 foundation kernel, IN REVIEW.** Vendor-neutral and proven
-against repository-owned synthetic fixtures only. No provider is connected, no
-external data has been acquired, and no result produced here is evidence about
+**Status: Phase 3A A1 foundation kernel, ACCEPTED**, plus two separately
+authorized code-only slices on top of it -- the Sharadar provider adapter
+(ADR-0009) and the licensed S3 object store (ADR-0011). Everything here is proven
+against repository-owned synthetic fixtures only. **No provider is connected, no
+request has ever been sent to a vendor, no object has ever been written to AWS**,
+no external data has been acquired, and no result produced here is evidence about
 any real security.
 """

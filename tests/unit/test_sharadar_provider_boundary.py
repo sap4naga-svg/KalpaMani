@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import re
 import socket as socket_module
 import sys
 from collections.abc import Iterator
@@ -446,8 +447,28 @@ def test_no_external_ai_path_exists_for_a_vendor_payload(marker: str) -> None:
     assert offenders == [], f"{marker!r} appears in the provider package: {offenders}"
 
 
+#: The project's entire runtime dependency list, as ADR-0011 authorized it.
+#: Written out rather than pattern-matched: a guard that accepted "anything
+#: starting with boto3" would accept a second entry beside it.
+AUTHORIZED_RUNTIME_DEPENDENCIES = ["boto3>=1.36.0,<2.0"]
+
+
+def declared_runtime_dependencies() -> list[str]:
+    """The `[project] dependencies` array, and nothing from the dev extras."""
+    content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(r"^dependencies = \[(.*?)^\]", content, flags=re.M | re.S)
+    assert block is not None, "pyproject declares no runtime dependency array at all"
+    return re.findall(r'"([^"]+)"', block.group(1))
+
+
 def test_the_provider_package_declares_no_new_dependency() -> None:
-    """Standard library only. The project still declares no runtime dependency."""
+    """Standard library only, and the AWS SDK stays out of the provider package.
+
+    The project acquired one runtime dependency on 2026-08-28 (ADR-0011), and it
+    belongs to the storage boundary. A provider adapter that reached the SDK
+    would know about buckets, which is exactly what the ``ResearchObjectStore``
+    protocol exists to stop it knowing.
+    """
     forbidden = {"boto3", "botocore", "requests", "httpx", "urllib3", "pandas", "pyarrow", "duckdb"}
     offenders = [
         f"{path.relative_to(PROJECT_ROOT)} imports {module}"
@@ -456,4 +477,4 @@ def test_the_provider_package_declares_no_new_dependency() -> None:
         if module.split(".")[0] in forbidden
     ]
     assert offenders == [], f"Found: {offenders}"
-    assert "dependencies = []" in (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert declared_runtime_dependencies() == AUTHORIZED_RUNTIME_DEPENDENCIES

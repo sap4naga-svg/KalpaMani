@@ -15,6 +15,11 @@ platform has no brokerage boundary to breach (schema 19 rule 9).
 from __future__ import annotations
 
 from kalpamani.common.errors import KalpaManiError
+from kalpamani.data.contracts.vocabulary import (
+    ObjectStoreFailure,
+    ObjectStoreOperation,
+    closed_member,
+)
 
 
 class PointInTimeError(KalpaManiError):
@@ -158,6 +163,37 @@ class ObjectAlreadyExistsError(ObjectStoreError):
     The research object store is append-only, so this is either a hash collision
     or a corrupted store. Neither is resolved by overwriting.
     """
+
+
+class ObjectStoreBackendError(ObjectStoreError):
+    """A storage backend refused or failed, described only by closed categories.
+
+    **Assembled from a vocabulary, not redacted after the fact.** A cloud SDK's
+    exception carries the bucket name, the physical object key, the endpoint,
+    the request id, the host id, response headers and sometimes credential-shaped
+    text. There is no parameter here for any of it: the message is built from an
+    :class:`~kalpamani.data.contracts.vocabulary.ObjectStoreOperation` and an
+    :class:`~kalpamani.data.contracts.vocabulary.ObjectStoreFailure`, and the
+    originating exception is suppressed rather than chained.
+
+    Both fields are normalised on the way in, so a bare string or a hostile
+    object cannot make a later ``.value`` raise from inside exception handling.
+    """
+
+    __slots__ = ("failure", "operation")
+
+    def __init__(
+        self,
+        *,
+        operation: ObjectStoreOperation,
+        failure: ObjectStoreFailure,
+    ) -> None:
+        """Carry an operation and a failure category. Nothing else has a home here."""
+        self.operation = closed_member(ObjectStoreOperation, operation) or (
+            ObjectStoreOperation.HEAD
+        )
+        self.failure = closed_member(ObjectStoreFailure, failure) or ObjectStoreFailure.UNKNOWN
+        super().__init__(f"research object store {self.operation.value}: {self.failure.value}")
 
 
 class ObjectPayloadTypeError(ObjectStoreError):

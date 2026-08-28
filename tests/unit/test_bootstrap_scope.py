@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 from pathlib import Path
 
 import pytest
@@ -101,10 +102,29 @@ def test_no_brokerage_client_is_importable() -> None:
             importlib.import_module(module_name)
 
 
-def test_package_declares_no_runtime_dependencies() -> None:
-    """pyproject must keep the bootstrap runtime dependency list empty."""
+#: The project's entire runtime dependency list, as ADR-0011 authorized it.
+#: Written out rather than pattern-matched: a guard that accepted "anything
+#: starting with boto3" would accept a second entry beside it.
+AUTHORIZED_RUNTIME_DEPENDENCIES = ["boto3>=1.36.0,<2.0"]
+
+
+def declared_runtime_dependencies() -> list[str]:
+    """The `[project] dependencies` array, and nothing from the dev extras."""
     content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "dependencies = []" in content
+    block = re.search(r"^dependencies = \[(.*?)^\]", content, flags=re.M | re.S)
+    assert block is not None, "pyproject declares no runtime dependency array at all"
+    return re.findall(r'"([^"]+)"', block.group(1))
+
+
+def test_package_declares_only_the_authorized_runtime_dependency() -> None:
+    """The bootstrap list was empty until 2026-08-28; now it holds exactly one entry.
+
+    ADR-0011 gave up the zero-dependency posture for the AWS SDK alone, and the
+    guard is narrowed to match rather than deleted. The point it protected is
+    unchanged: no brokerage, market-data or AI client library may arrive
+    unannounced, and each of those is still refused by name above.
+    """
+    assert declared_runtime_dependencies() == AUTHORIZED_RUNTIME_DEPENDENCIES
 
 
 def test_env_example_contains_no_real_credentials() -> None:

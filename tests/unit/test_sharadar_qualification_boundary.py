@@ -448,9 +448,23 @@ def test_the_harness_imports_no_sdk_and_stays_standard_library() -> None:
     assert not roots & FORBIDDEN_IMPORTS, f"forbidden imports: {sorted(roots & FORBIDDEN_IMPORTS)}"
 
 
-def test_the_project_still_declares_no_runtime_dependency() -> None:
+#: The project's entire runtime dependency list, as ADR-0011 authorized it.
+#: Written out rather than pattern-matched: a guard that accepted "anything
+#: starting with boto3" would accept a second entry beside it.
+AUTHORIZED_RUNTIME_DEPENDENCIES = ["boto3>=1.36.0,<2.0"]
+
+
+def declared_runtime_dependencies() -> list[str]:
+    """The `[project] dependencies` array, and nothing from the dev extras."""
     content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "dependencies = []" in content
+    block = re.search(r"^dependencies = \[(.*?)^\]", content, flags=re.M | re.S)
+    assert block is not None, "pyproject declares no runtime dependency array at all"
+    return re.findall(r'"([^"]+)"', block.group(1))
+
+
+def test_the_project_declares_only_the_authorized_runtime_dependency() -> None:
+    """One entry, for the storage boundary. The harness still imports none of it."""
+    assert declared_runtime_dependencies() == AUTHORIZED_RUNTIME_DEPENDENCIES
 
 
 # ---------------------------------------------------------------------------

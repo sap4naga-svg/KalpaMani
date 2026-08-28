@@ -530,6 +530,67 @@ class IngestionStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class ObjectStoreOperation(StrEnum):
+    """What the store was doing when it refused. Part of a refusal's closed vocabulary.
+
+    ``BIND`` is not an S3 call: it is the moment a store is bound to a client and
+    a bucket, before any request exists. It has its own member because reporting a
+    configuration mistake as a failed ``PUT`` would send a reader looking for a
+    request that was never sent.
+    """
+
+    BIND = "BIND"
+    PUT = "PUT"
+    HEAD = "HEAD"
+
+
+class ObjectStoreFailure(StrEnum):
+    """Why a storage backend refused, in categories a caller can act on.
+
+    **Deliberately coarse, and that is the point.** A finer vocabulary would have
+    to be derived from the backend's own message -- and a cloud SDK's exception
+    text carries the bucket, the object key, the endpoint, the request id and
+    sometimes a credential fragment. None of that may reach a log, so none of it
+    may reach a category either.
+
+    ``ACCESS_DENIED``
+        The backend refused the caller. **Never to be read as absence**: a
+        permission failure that returned "not there" would let a misconfigured
+        role silently re-publish objects that already exist.
+    ``PRECONDITION_FAILED``
+        The name is already occupied. The conditional write did its job, and
+        this is the **only** category that means it. A backend's conflict answer
+        -- S3's ``409 ConditionalRequestConflict``, where the condition was never
+        resolved because a concurrent operation was in flight -- is ``TRANSIENT``,
+        because it proves nothing about what is stored.
+    ``NOT_FOUND``
+        The backend answered, and the object genuinely is not there.
+    ``THROTTLED``
+        Rate-limited. Retryable by a caller that wants to.
+    ``TRANSIENT``
+        A backend-side failure that may not recur, including a conditional-write
+        **conflict**: retryable, and never to be read as occupancy.
+    ``INVALID_RESPONSE``
+        The backend answered with something that cannot be verified -- a missing
+        checksum, a malformed length, a contradictory result. Fails closed.
+    ``INVALID_CONFIGURATION``
+        The store was handed something it cannot be bound to -- a value that is
+        not a bucket name, or a client that cannot serve the operations. Nothing
+        was sent, and nothing will be.
+    ``UNKNOWN``
+        Anything else. Never optimistic.
+    """
+
+    ACCESS_DENIED = "ACCESS_DENIED"
+    PRECONDITION_FAILED = "PRECONDITION_FAILED"
+    NOT_FOUND = "NOT_FOUND"
+    THROTTLED = "THROTTLED"
+    TRANSIENT = "TRANSIENT"
+    INVALID_RESPONSE = "INVALID_RESPONSE"
+    INVALID_CONFIGURATION = "INVALID_CONFIGURATION"
+    UNKNOWN = "UNKNOWN"
+
+
 class DataClassification(StrEnum):
     """Which private research store an object belongs in (ADR-0007).
 
@@ -583,6 +644,8 @@ __all__ = [
     "IssueStatus",
     "LimitationToken",
     "ListingFactKind",
+    "ObjectStoreFailure",
+    "ObjectStoreOperation",
     "OutputValidity",
     "ProviderBoundDerivation",
     "ProviderTimeDerivation",
