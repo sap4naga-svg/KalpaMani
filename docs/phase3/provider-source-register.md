@@ -12,10 +12,10 @@ claim that source supports, and the limitation on that claim.
 
 | | |
 |---|---|
-| research performed | **2026-08-26** (round 1) · **2026-08-27** (round 2, the `R2` section below) |
-| claim records | **542** |
-| by grade | `V` 379 · `V2` 79 · `Q` 16 · `U` 68 |
-| by source type | `OFFICIAL` 392 · `SECONDARY` 79 · `UNAVAILABLE` 71 |
+| research performed | **2026-08-26** (round 1) · **2026-08-27** (rounds 2 and 3, `R2` and `R3` below) · **2026-08-28** (round 4, `R4` below) |
+| claim records | **544** |
+| by grade | `V` 379 · `V2` 79 · `Q` 16 · `U` 70 |
+| by source type | `OFFICIAL` 392 · `SECONDARY` 79 · `UNAVAILABLE` 73 |
 
 Round 2 is the maintenance rule at the end of this document exercised for the G1/G3 decision
 packet. It re-verified the licensing and pricing rows that a purchase would rest on, read four
@@ -708,6 +708,27 @@ and Q8 (Full History depth) remain unanswered and are now unasked, since
 [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md)
 cancels the clarification message. **Both questions must be answered before any purchase**, and the
 cancelled draft is retained for that reason.
+
+## R4 — 2026-08-28 public-source refresh (ADR-0009 / Q7 and Q8 re-check)
+
+A fourth round, performed **2026-08-28** for
+[ADR-0009](../decisions/ADR-0009-sharadar-provider-realistic-implementation.md). Its purpose was
+narrower still than R3's: re-read the **public** pages that could plausibly answer **Q7** (are the
+daily bars officially disseminated or provider-aggregated?) and **Q8** (what depth does the Full
+History tier deliver, per table?), and record the outcome **whatever it was**.
+
+**Neither question was answered. Neither was invented an answer.** Both remain **pre-purchase
+blockers**, and neither blocks the code-only implementation slice ADR-0009 authorizes, because
+nothing built there presumes an answer to either.
+
+**Scope discipline.** Public pages on `sharadar.com` and `blog.sharadar.com` only.
+**`api.sharadar.com` was not called. The vendor was not contacted. No account was signed into. No
+Services Data was retrieved, inspected, summarized or evaluated. Nothing was purchased.**
+
+| claim_id | provider | type | grade | claim | source | accessed | qualification |
+|---|---|---|---|---|---|---|---|
+| `PSR-SHD-122` | Sharadar | `UNAVAILABLE` | **`U`** | **Bar construction and origin are stated on no public page.** Four were read for this specific question: the stock-prices documentation, the FAQ, the prices product page and the vendor blog's launch post. Between them they state *what* is delivered (*"End-of-day (EOD) Open, High, Low, Close and Volume (OHLCV) price data for active and delisted US public stocks"*), the three adjustment methods, and — since 2026-07-29 — the adjustment formulas. **None states whether the bars are officially disseminated, sourced from a consolidated feed, licensed from another vendor, or aggregated by Sharadar from trades.** | [Documentation — Stock Prices \| sharadar.com](https://sharadar.com/docs/stocks) | 2026-08-28 | **Q7 remains UNRESOLVED, on a wider evidence base than before.** `PSR-SHD-098` recorded the silence of one page; this records the silence of four, including the two most likely to break it — the product page and the methodology post. The conservative `PROVIDER_DERIVED` classification stands, and with it the consequence: if the answer is provider-aggregated, `price_bar` and the universe built on it are ineligible under `PUBLIC_PIT`. It is **not discoverable from the data** either, which is why P9 cannot settle it and why it is a question for the vendor rather than a test. **Answer before purchase, not after** — it is the cheapest question in the set and the most expensive to get wrong. |
+| `PSR-SHD-123` | Sharadar | `UNAVAILABLE` | **`U`** | **The subscribe page still does not define "Full History".** It lists three history tiers — *5 Years*, *10 Years*, *Full History* — and states that bulk downloads (`years=5`, `years=10`, `years=full`) match the purchased history. **No start date, and no per-table depth, is given for any tier.** Two further readings bear on the apparent 1998/1999 conflict: the prices product page states *"History back to December 1998"* for stock prices, while the stock-prices documentation states **January 1998**; and the launch post's *"99% survivorship bias from since 1999"* describes **fundamental data**, not prices. | [Subscribe \| sharadar.com](https://sharadar.com/subscribe) · [Stock Price Data \| sharadar.com](https://sharadar.com/prices) · [Sharadar Launches Direct (vendor blog)](https://blog.sharadar.com/2026/07/sharadar-launches-direct.html) | 2026-08-28 | **Q8 remains UNRESOLVED, and the reason it is unresolved changed shape.** Two corrections, deliberately recorded together because they do not cut the same way. (1) **Narrowing, in the vendor's favour:** the *"since 1999"* figure recorded against `PSR-SHD-104` describes fundamentals, so citing it as a price-history contradiction was an attribution error, and part of the conflict dissolves. (2) **A new, smaller discrepancy against it:** two vendor pages give two start dates for the *same* table — December 1998 and January 1998. One month is immaterial to any strategy; what is material is that **the tier a purchase would buy is defined nowhere, and the pages that describe the underlying depth do not agree with each other to the month**. Depth is the whole point of the Full History tier, and a 15-year-old delisting is unreachable on the 5- and 10-year tiers (`PSR-SHD-090`), so this determines which tier — if any — is purchasable. `PSR-SHD-091` stands. |
 
 ## Retrieval failures, recorded rather than papered over
 

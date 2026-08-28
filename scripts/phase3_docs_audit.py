@@ -172,6 +172,30 @@ DELETION_RUNBOOK = REPO_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion
 ADR_LICENCE = DECISIONS / ("ADR-0008-sharadar-personal-use-license-and-private-qualification.md")
 QUALIFICATION_HARNESS = REPO_ROOT / "scripts" / "sharadar_private_qualification.py"
 
+#: The provider-realistic implementation authorization (ADR-0009), and the package it authorized.
+#: Section 15 exists because this decision **narrowed** a rule rather than removing one: provider
+#: code is now allowed, and every clause that keeps it code-only has to survive the next edit.
+ADR_IMPLEMENTATION = DECISIONS / "ADR-0009-sharadar-provider-realistic-implementation.md"
+PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
+OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
+SOURCE_REGISTER = PHASE3 / "provider-source-register.md"
+
+#: Wording that would read as authorization the owner did not give. Checked against the two
+#: CURRENT-status documents, where a reader looks first and where an over-claim does real damage.
+#:
+#: The pairing matters: each phrase is only a defect when it appears **without** a negation to its
+#: left, because the same words are exactly how a document correctly states the prohibition.
+OVERCLAIM_PHRASES = (
+    "production ingestion is authorized",
+    "subscription is authorized",
+    "purchase is authorized",
+    "provider selection is closed",
+    "g1 is closed",
+    "g1 closed",
+    "sharadar is the selected production provider",
+    "sharadar is selected",
+)
+
 #: A document claiming that **this work** created the AWS account. The account pre-dated
 #: the work and was configured for the foundation on 2026-08-27, so "CREATED" invents a
 #: history -- and "NOT CREATED" is equally wrong, because account existence and foundation
@@ -468,7 +492,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/14] Closed vocabularies are defined where they are used")
+    print("[1/15] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -492,7 +516,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/14] Source and derived envelopes stay disjoint")
+    print("\n[2/15] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -527,7 +551,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/14] Every declared temporal semantics has its required anchor")
+    print("\n[3/15] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -544,7 +568,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/14] Exact and bound derivations name the correct fields")
+    print("\n[4/15] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -571,7 +595,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/14] Normative rules use the current resolved model")
+    print("\n[5/15] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -617,7 +641,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/14] Entities keep source and derived rows apart")
+    print("\n[6/15] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -687,7 +711,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/14] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/15] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -749,7 +773,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/14] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/15] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -854,7 +878,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/14] Resolved-timing wording, closure rules and current status")
+    print("\n[9/15] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -959,7 +983,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/14] No document refers to a retired field name")
+    print("\n[10/15] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1003,7 +1027,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/14] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/15] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1160,7 +1184,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/14] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/15] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1252,7 +1276,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/14] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/15] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -1890,7 +1914,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/14] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/15] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2121,6 +2145,230 @@ def main() -> int:
             "bucket emptiness is recorded as a closeout observation, not an invariant",
             "not a continuing invariant" in status_body,
             "qualification may legitimately place private material in the licensed bucket",
+        )
+
+    # -------------------------- 15. ADR-0009 authorizes code, and only code
+    print("\n[15/15] The Sharadar implementation authorization is code-only, and G1 stays open")
+    f.check(
+        "ADR-0009 exists",
+        ADR_IMPLEMENTATION.is_file(),
+        f"missing: {ADR_IMPLEMENTATION}",
+    )
+    if ADR_IMPLEMENTATION.is_file():
+        adr9 = read(ADR_IMPLEMENTATION)
+
+        f.check(
+            "ADR-0009 is accepted on merge and not before",
+            "Accepted — effective on the merge" in adr9 and "carries no authority" in adr9,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0009 records the owner's instruction as the governance input",
+            "Authorize the next Sharadar implementation phase" in adr9,
+            "the decision this ADR records is not stated",
+        )
+        f.check(
+            "ADR-0009 separates the implementation target from the production provider",
+            "Sharadar is not the selected production provider" in adr9,
+            "naming an implementation target must not read as closing G1",
+        )
+        # Each of these is a distinct thing a reader could wrongly infer from
+        # "the next Sharadar implementation phase is authorized".
+        for label, needle in (
+            ("G1 closure", "**Not** final **G1** closure"),
+            ("subscription authorization", "**Not** subscription authorization (**A3**)"),
+            ("purchase authorization", "**Not** purchase authorization"),
+            ("production ingestion", "**Not** production ingestion authorization"),
+            ("a qualification finding", "**Not** a finding about the private qualification"),
+        ):
+            f.check(
+                f"ADR-0009 disclaims {label}",
+                needle in adr9,
+                f"missing: {needle!r}",
+            )
+        f.check(
+            "ADR-0009 states that no request has been sent",
+            "No request has been sent to the vendor by this work" in adr9,
+            "a code-only slice must say plainly that the code has never run",
+        )
+        f.check(
+            "ADR-0009 carries an explicit non-authorization block",
+            "Explicit non-authorizations" in adr9,
+            "no non-authorization block",
+        )
+        f.check(
+            "ADR-0009 keeps G1 open",
+            re.search(r"\*\*G1\*\*[^|\n]*\|[^|\n]*\|\s*\*\*OPEN", adr9) is not None,
+            "G1 is not recorded OPEN in ADR-0009",
+        )
+        f.check(
+            "ADR-0009 keeps G3 closed",
+            re.search(r"\*\*G3\*\*[^|\n]*\|[^|\n]*\|\s*\*\*CLOSED", adr9) is not None,
+            "G3 is not recorded CLOSED in ADR-0009",
+        )
+        for gate in OPEN_GATES:
+            f.check(
+                f"ADR-0009 leaves {gate} open",
+                re.search(rf"\*\*{gate}\*\*[^|\n]*\|[^|\n]*\|\s*\*\*OPEN", adr9) is not None,
+                f"{gate} is not recorded OPEN in ADR-0009",
+            )
+        f.check(
+            "ADR-0009 leaves ADR-0005 proposed",
+            "remains **PROPOSED**" in adr9,
+            "ADR-0005 status changed",
+        )
+        f.check(
+            "ADR-0009 keeps live trading hard-disabled",
+            "HARD-DISABLED" in adr9.upper(),
+            "live-trading wording missing from ADR-0009",
+        )
+        f.check(
+            "ADR-0009 records Q7 and Q8 as still unresolved",
+            "Q7" in adr9 and "Q8" in adr9 and "STILL UNRESOLVED" in adr9,
+            "the two pre-purchase questions must be reported, not quietly dropped",
+        )
+        f.check(
+            "ADR-0009 keeps Q7 and Q8 as pre-purchase blockers",
+            "pre-purchase blockers" in adr9,
+            "an unanswered pre-purchase question must still block the purchase",
+        )
+        f.check(
+            "ADR-0009 records that the vendor was not contacted for the refresh",
+            "The vendor was not contacted" in adr9,
+            "a public-source refresh must say what it did not do",
+        )
+        # Terms s.8 keeps empirical conclusions out of a public repository, and an
+        # authorization to build is not a licence to publish what motivated it.
+        f.check(
+            "ADR-0009 publishes no empirical provider result",
+            not re.search(
+                r"\bP[1-9]\b\s*[:=]\s*(TESTED|PARTIALLY_TESTED|INCONCLUSIVE|DEFERRED)", adr9
+            )
+            and "PROCEED_TO_PROVIDER_REALISTIC_IMPLEMENTATION" not in adr9
+            and "HOLD_FOR_ADDITIONAL_PRIVATE_SAMPLE" not in adr9
+            and "REJECT_FOR_PHASE3A" not in adr9,
+            "the private qualification result must not be disclosed or implied",
+        )
+
+    # -- the authorized package exists, and every clause that keeps it inert holds ----
+    f.check(
+        "the authorized provider package exists",
+        PROVIDER_PACKAGE.is_dir(),
+        f"missing: {PROVIDER_PACKAGE}",
+    )
+    if PROVIDER_PACKAGE.is_dir():
+        modules = sorted(p for p in PROVIDER_PACKAGE.glob("*.py"))
+        package = "\n".join(read(p) for p in modules)
+        f.check(
+            "the provider package carries no API key literal",
+            "test-api-key" not in package,
+            "not even the vendor's published test token belongs in production code",
+        )
+        f.check(
+            "the provider package has no executable entry point",
+            "__main__" not in package,
+            "no runner is authorized in this slice",
+        )
+        f.check(
+            "the provider package declares no new dependency",
+            not re.search(r"^\s*import\s+(boto3|botocore|requests|httpx|urllib3)\b", package, re.M),
+            "the project still declares no runtime dependency",
+        )
+        f.check(
+            "request construction refuses a table-wide bulk download",
+            '"years"' in package and "FORBIDDEN_QUERY_PARAMETERS" in package,
+            "`years=` fetches every security and must not be constructible",
+        )
+        f.check(
+            "request construction requires an explicit window on a windowed table",
+            "WINDOWED_DATASETS" in package,
+            "the vendor defaults an omitted window to one year (PSR-SHD-121)",
+        )
+        f.check(
+            "the credential is injected and renders as a placeholder",
+            "CREDENTIAL_PLACEHOLDER" in package and "def reveal(" in package,
+            "a credential must have exactly one named route out and no other rendering",
+        )
+        f.check(
+            "errors are assembled from a closed vocabulary",
+            "class SharadarErrorCode" in package and "def redact(" in package,
+            "a response body must have no parameter to reach an error through",
+        )
+        f.check(
+            "pacing and bounded retries exist and are deterministic",
+            "class Pacer" in package and "class RetryPolicy" in package,
+            "no documented rate limit is not an absent rate limit",
+        )
+
+    f.check(
+        "the object-store contract defaults provider material to LICENSED",
+        OBJECT_STORE.is_file()
+        and "def licensed(" in read(OBJECT_STORE)
+        and "control_attestation" in read(OBJECT_STORE),
+        "CONTROL must require a written attestation; uncertain resolves to LICENSED",
+    )
+    f.check(
+        "no cloud writer was built in this slice",
+        OBJECT_STORE.is_file()
+        and not re.search(r"^\s*import\s+(boto3|botocore)\b", read(OBJECT_STORE), re.M),
+        "the real S3 writer is a following reviewed slice",
+    )
+
+    # -- the two Q-questions are recorded as answered by nobody -----------------
+    if SOURCE_REGISTER.is_file():
+        register = read(SOURCE_REGISTER)
+        for claim in ("PSR-SHD-122", "PSR-SHD-123"):
+            f.check(
+                f"the source register carries {claim}",
+                claim in register,
+                "the Q7/Q8 public-source refresh must be traceable to a row",
+            )
+        f.check(
+            "the Q7/Q8 refresh is recorded as unresolved rather than as progress",
+            "Neither question was answered. Neither was invented an answer." in register,
+            "an unanswered question recorded as answered is the defect this guards",
+        )
+
+    # -- neither current-status document may over-claim the authorization -------
+    overclaims: list[str] = []
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        for lineno, line in enumerate(read(path).lower().splitlines(), 1):
+            for phrase in OVERCLAIM_PHRASES:
+                at = line.find(phrase)
+                # A negation to the left is the document stating the PROHIBITION, which is
+                # exactly what it should say. Banning the phrase outright would push both
+                # documents toward saying less rather than more.
+                if at >= 0 and not GATE_NEGATION_INLINE.search(line[:at]):
+                    overclaims.append(f"{name}:{lineno} ({phrase})")
+                    break
+    f.check(
+        "no current-status document claims a purchase or ingestion authorization",
+        not overclaims,
+        ", ".join(overclaims[:6]),
+    )
+
+    # -- and both must state the distinction the slice rests on -----------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        f.check(
+            f"{name} records the provider-integration slice as code-only",
+            "ADR-0009" in body and re.search(r"CODE ONLY|code only", body) is not None,
+            "the authorized slice and the unauthorized ingestion must be distinguishable",
+        )
+        f.check(
+            f"{name} still records real-data ingestion as unauthorized",
+            re.search(r"real-data ingestion\**\s*\|\s*\**NOT AUTHORIZED", body) is not None,
+            "full Stage 3A ingestion is not authorized by ADR-0009",
         )
 
     # ---------------------------------------------------------------- verdict
