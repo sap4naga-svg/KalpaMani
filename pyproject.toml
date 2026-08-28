@@ -94,6 +94,12 @@ ignore = [
 [tool.mypy]
 python_version = "3.11"
 files = ["src", "tests"]
+# `scripts/` is not in `files`: the operational scripts predate strict typing and
+# checking them is a separate decision. It is on the *path* so a test that imports
+# one -- the offline plan-check command does -- resolves it instead of reporting a
+# missing stub, which would be an error about the configuration rather than about
+# the code.
+mypy_path = ["scripts"]
 strict = true
 warn_unused_configs = true
 warn_unreachable = true

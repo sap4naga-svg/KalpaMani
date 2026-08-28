@@ -190,6 +190,14 @@ ADR_QUALIFICATION = DECISIONS / (
 ADR_OBJECT_STORE = DECISIONS / "ADR-0011-implement-the-licensed-s3-research-object-store.md"
 S3_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "storage" / "s3.py"
 PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
+#: The dormant qualification runtime core (ADR-0012). Section 19 exists because
+#: this ADR narrowed a claim rather than adding one: something in this repository
+#: now calls the object store, and the checkable control moved from "nothing calls
+#: it" to "nothing can build a real one to call".
+ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
+QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
+QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
+PLAN_CHECK = REPO_ROOT / "scripts" / "sharadar_plan_check.py"
 OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
 PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
 TRANSPORT_TEST = REPO_ROOT / "tests" / "unit" / "test_sharadar_transport.py"
@@ -698,7 +706,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/18] Closed vocabularies are defined where they are used")
+    print("[1/19] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -722,7 +730,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/18] Source and derived envelopes stay disjoint")
+    print("\n[2/19] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -757,7 +765,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/18] Every declared temporal semantics has its required anchor")
+    print("\n[3/19] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -774,7 +782,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/18] Exact and bound derivations name the correct fields")
+    print("\n[4/19] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -801,7 +809,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/18] Normative rules use the current resolved model")
+    print("\n[5/19] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -847,7 +855,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/18] Entities keep source and derived rows apart")
+    print("\n[6/19] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -917,7 +925,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/18] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/19] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -979,7 +987,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/18] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/19] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -1084,7 +1092,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/18] Resolved-timing wording, closure rules and current status")
+    print("\n[9/19] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -1189,7 +1197,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/18] No document refers to a retired field name")
+    print("\n[10/19] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1233,7 +1241,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/18] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/19] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1390,7 +1398,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/18] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/19] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1482,7 +1490,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/18] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/19] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -2120,7 +2128,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/18] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/19] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2354,7 +2362,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/18] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/19] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2744,7 +2752,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/18] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/19] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -3099,7 +3107,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/18] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/19] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -3415,9 +3423,15 @@ def main() -> int:
             "a reader must not mistake a written backend for a used one",
         )
         f.check(
-            f"{name} uses merge-stable status wording for this slice",
-            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in body,
+            f"{name} uses merge-stable status wording for the slice under review",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #17" in body,
             "the same sentence must stay true on both sides of the merge",
+        )
+        f.check(
+            f"{name} records PR #16 as merged rather than pending",
+            "PR #16 MERGED" in body and "ACCEPTED EFFECTIVE ON MERGE OF PR #16" not in body,
+            "a merge-stable status is stable, not permanent: once the merge happens the "
+            "condition is satisfied and the document should say so",
         )
         f.check(
             f"{name} does not describe the slice as pending merge acceptance",
@@ -3461,15 +3475,27 @@ def main() -> int:
         )
         f.check(
             f"{name} states that the control is absence rather than care, and scopes it",
-            "retrieved, inspected, created, configured and" in flat
+            "retrieved, inspected, created, configured or bound anywhere in this repository" in flat
             and "no bucket identifier is bound to the adapter" in flat
-            and "no module constructs a client or calls the store" in flat,
+            and "no module constructs a client" in flat,
             "the store is safe because nothing binds it to AWS -- said as a claim about this "
-            "slice, not as a claim about the owner's account",
+            "repository, not as a claim about the owner's account",
+        )
+        f.check(
+            f"{name} no longer claims that nothing calls the object store",
+            "no module constructs a client or calls the store" not in flat,
+            "ADR-0012's runtime calls it, on an injected store; the narrower true claim is "
+            "that no composition root exists",
+        )
+        f.check(
+            f"{name} names the composition root as the thing that is absent",
+            "composition root" in flat.lower(),
+            "'nothing calls the store' stopped being the control; 'nothing can build a real "
+            "one to call' is",
         )
 
     # ------------------- 18. No status document carries a superseded current state
-    print("\n[18/18] The status documents describe the current governance state, not a past one")
+    print("\n[18/19] The status documents describe the current governance state, not a past one")
 
     for name, path in (
         ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
@@ -3561,8 +3587,9 @@ def main() -> int:
             "a completed purchase that a document calls unauthorized is a contradiction",
         )
         f.check(
-            f"{name} records ADR-0011 against PR #16 by number",
-            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in whole,
+            f"{name} records every merge-conditional ADR against a PR by number",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #" in whole
+            and "ACCEPTED on merge of the PR introducing it" not in whole,
             "'the PR introducing it' stops identifying anything once other PRs exist",
         )
         f.check(
@@ -3642,6 +3669,293 @@ def main() -> int:
         in readme_body.replace("**", ""),
         "whether a key exists in a vendor account is not something this repository knows",
     )
+
+    # ------------------- 19. The qualification runtime exists, and cannot be run
+    print("\n[19/19] The Sharadar qualification runtime core is dormant, and says so precisely")
+    f.check(
+        "ADR-0012 exists",
+        ADR_RUNTIME.is_file(),
+        f"missing: {ADR_RUNTIME}",
+    )
+    if ADR_RUNTIME.is_file():
+        adr12 = read(ADR_RUNTIME)
+        unquoted12 = [line.lstrip("> ") for line in adr12.replace("**", "").splitlines()]
+        flat12 = " ".join(" ".join(unquoted12).split())
+
+        f.check(
+            "ADR-0012 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr12 and "carries no authority" in adr12,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0012 records that nothing has been run against Sharadar or AWS",
+            "Sharadar requests sent: ZERO" in adr12 and "AWS requests sent: ZERO" in adr12,
+            "the whole point of the slice is that it is code, written while nothing can run",
+        )
+        f.check(
+            "ADR-0012 names the composition root as the thing it deliberately omits",
+            "composition root: NONE" in adr12
+            and "no credential resolver, no client factory and no bucket binding exists" in flat12,
+            "a runtime that could build its own client would need a credential",
+        )
+        f.check(
+            "ADR-0012 rejects gating a composition root behind a flag",
+            "A flag is a thing that can be set" in flat12
+            and "Absence is checkable; a flag is a promise" in flat12,
+            "absence is checkable; a flag is a promise",
+        )
+        f.check(
+            "ADR-0012 states every hard ceiling and why each is that number",
+            all(
+                token in adr12
+                for token in ("8", "96", "512 MiB", "32", "lowerable and never raisable")
+            ),
+            "a number with no stated reason is a number the next session will raise",
+        )
+        f.check(
+            "ADR-0012 records that a limit above its ceiling is refused, not clamped",
+            "refused rather than clamped" in flat12,
+            "clamping lets a plan claim a budget it does not have",
+        )
+        f.check(
+            "ADR-0012 records that validation is complete and happens first",
+            "refused whole" in flat12 and "zero" in flat12.lower(),
+            "a partly-wrong plan discovered mid-run leaves immutable objects nobody chose",
+        )
+        f.check(
+            "ADR-0012 states that a failure reports rather than raises, and why",
+            "no rollback" in flat12 and "states `partial`" in flat12,
+            "an exception would discard the record of which immutable objects exist",
+        )
+        f.check(
+            "ADR-0012 keeps the three-dataset boundary and names what is refused",
+            "fundamentals" in adr12 and "refused" in flat12 and "later phase" in flat12,
+            "an out-of-phase table would be authority this slice does not have",
+        )
+        f.check(
+            "ADR-0012 binds the permitted point-in-time profile and refuses PUBLIC_PIT",
+            "PROVIDER_REALISTIC_PIT" in adr12 and "PUBLIC_PIT" in adr12,
+            "an unresolved Q7 has exactly one safe classification",
+        )
+        f.check(
+            "ADR-0012 leaves Q7, Q8 and permaticker unresolved",
+            "PUBLICLY_UNRESOLVED" in adr12
+            and "PUBLICLY_BOUNDED" in adr12
+            and "resolves none of them" in flat12,
+            "a runtime core is not evidence about a vendor's data",
+        )
+        f.check(
+            "ADR-0012 derives nothing from permaticker",
+            "derives nothing from `permaticker` at all" in flat12,
+            "its level is publicly unresolved, so no grouping may rest on it",
+        )
+        f.check(
+            "ADR-0012 records that the CLI has no execution mode, structurally",
+            "no execution mode" in flat12 and "structural" in flat12,
+            "an absent mode is stronger than a disabled one",
+        )
+        f.check(
+            "ADR-0012 leaves the private harness untouched and unauthorized",
+            "untouched, unimported and still unauthorized to execute" in flat12,
+            "a production-shaped runtime must not inherit the harness's test token",
+        )
+        f.check(
+            "ADR-0012 adds no dependency",
+            "No dependency was added" in flat12,
+            "the runtime dependency list is a governed decision, not an incidental one",
+        )
+        f.check(
+            "ADR-0012 closes no gate",
+            all(
+                token in adr12
+                for token in ("G1 OPEN", "G2 OPEN", "G4 OPEN", "G5 OPEN", "G6 OPEN", "G7 OPEN")
+            ),
+            "writing a runtime core resolves no decision gate",
+        )
+        f.check(
+            "ADR-0012 leaves ADR-0005 proposed, INC-0002 open and live trading disabled",
+            "ADR-0005 remains PROPOSED" in flat12
+            and "INC-0002 remains OPEN" in flat12
+            and "LIVE_TRADING_HARD_DISABLED` remains True" in flat12,
+            "none of the three is touched by a runtime core",
+        )
+        f.check(
+            "ADR-0012 states its non-authorizations exhaustively",
+            all(
+                phrase in flat12
+                for phrase in (
+                    "binding a private credential",
+                    "Secrets Manager",
+                    "constructing a real AWS SDK session or client",
+                    "resolving or binding a real bucket",
+                    "any Sharadar API call",
+                    "published-test-token probing",
+                    "bulk downloads",
+                    "CONTROL publication",
+                )
+            ),
+            "a reader must not have to infer what merging this does not enable",
+        )
+        f.check(
+            "ADR-0012 says what the next slice must bring",
+            "supply the real private bindings" in flat12,
+            "the boundary is only useful if the next step across it is named",
+        )
+        f.check(
+            "ADR-0012 records the one change it made to an accepted module",
+            "max_attempts" in adr12 and "read-only" in flat12,
+            "a change to merged code is a decision, and it should be findable",
+        )
+
+    # -- the code matches what the ADR says about it --------------------------
+    for label, path in (("plan", QUALIFICATION_PLAN), ("runtime", QUALIFICATION_RUNTIME)):
+        if not path.is_file():
+            f.check(f"the qualification {label} module exists", False, f"missing: {path}")
+            continue
+        f.check(f"the qualification {label} module exists", True, "")
+        code = _executable_python(path)
+        f.check(
+            f"the qualification {label} module imports no network client or SDK",
+            not re.search(
+                r"^\s*(import|from)\s+(boto3|botocore|urllib|requests|httpx|socket|ssl|http)\b",
+                read(path),
+                re.M,
+            ),
+            "a dormant core that could open a socket is not dormant",
+        )
+        f.check(
+            f"the qualification {label} module reads no environment and no file",
+            not any(
+                reader in code
+                for reader in ("os.environ", "getenv", "open(", "read_text", "read_bytes")
+            ),
+            "ambient discovery is how a test run ends up holding a credential",
+        )
+        f.check(
+            f"the qualification {label} module names no host, bucket, ARN or account",
+            not re.search(r"(https?://|s3://|arn:aws|amazonaws\.com|\b\d{12}\b)", code),
+            "operational configuration never belongs in Git",
+        )
+        f.check(
+            f"the qualification {label} module has no entry point",
+            '__name__ == "__main__"' not in code and "argparse" not in code,
+            "no execution path is authorized for this slice",
+        )
+
+    if QUALIFICATION_RUNTIME.is_file():
+        runtime_code = _executable_python(QUALIFICATION_RUNTIME)
+        f.check(
+            "the runtime publishes only through the Bronze bridge",
+            "publish_sharadar_payload" in runtime_code
+            and not any(
+                bypass in runtime_code
+                for bypass in ("put_object", "head_object", "ObjectKey.", "put_if_absent(")
+            ),
+            "a second storage path would own rules the neutral publisher already owns",
+        )
+        f.check(
+            "the runtime constructs no client, session, store or credential",
+            not any(
+                name in runtime_code
+                for name in (
+                    "S3ResearchObjectStore(",
+                    "UrllibTransport(",
+                    "SharadarCredential(",
+                    "credential_from_env(",
+                    "SharadarClient(",
+                )
+            ),
+            "constructing any of them would be the composition root this slice omits",
+        )
+        f.check(
+            "the runtime never names PUBLIC_PIT",
+            "PUBLIC_PIT" not in runtime_code,
+            "a profile that cannot be written cannot be written by accident",
+        )
+        f.check(
+            "the runtime never names permaticker",
+            "permaticker" not in runtime_code.lower(),
+            "payloads are opaque bytes here and are never parsed",
+        )
+        f.check(
+            "the runtime uses no free-text notes field",
+            "notes" not in runtime_code,
+            "`notes` has no durable destination on this path; using it would invent one",
+        )
+
+    if PLAN_CHECK.is_file():
+        cli = read(PLAN_CHECK)
+        cli_code = _executable_python(PLAN_CHECK)
+        f.check(
+            "the plan-check command refuses every live or secret option by name",
+            all(
+                option in cli
+                for option in (
+                    "--execute",
+                    "--live",
+                    "--api-key",
+                    "--secret",
+                    "--bucket",
+                    "--aws-profile",
+                    "--endpoint",
+                )
+            ),
+            "an unrecognised flag teaches nothing, and someone will try another spelling",
+        )
+        f.check(
+            "the plan-check command imports no client, transport, store or executor",
+            not re.search(
+                r"^\s*from\s+kalpamani[.\w]*\.(client|transport|runtime|credentials)\b",
+                cli,
+                re.M,
+            )
+            and not re.search(
+                r"^\s*import\s+(boto3|botocore|urllib|requests)\b",
+                cli,
+                re.M,
+            ),
+            "the absence of an execution mode has to be structural, not a policy",
+        )
+        f.check(
+            "the plan-check command does not touch the private harness",
+            "private_qualification" not in cli_code,
+            "the harness is owner-only and remains unauthorized to execute",
+        )
+
+    # -- the status documents record a runtime that exists and cannot be run ---
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records the qualification runtime core and ADR-0012",
+            "ADR-0012" in body and "qualification runtime core" in flat.lower(),
+            "a session must be able to find what now exists and what still does not",
+        )
+        f.check(
+            f"{name} records that no composition root exists",
+            # `and`, not `or`. The negative control found that an `or` here was
+            # unfalsifiable: deleting the checkable posture line still left the
+            # prose standing, so the guard passed while the fact it checks had
+            # been removed.
+            "composition root: NONE" in body and "composition root" in flat.lower(),
+            "that absence is the control; it must be stated where it is read, and the "
+            "posture line is the part a reader can check",
+        )
+        f.check(
+            f"{name} states that the runtime has sent zero provider and zero AWS requests",
+            "Sharadar requests sent: ZERO" in body and "AWS requests sent: ZERO" in body,
+            "dormancy is a count, not an adjective",
+        )
+        f.check(
+            f"{name} keeps a credential source and client construction unauthorized",
+            "credential source" in flat and "client construction" in flat,
+            "the next slice must bring them, under its own authorization",
+        )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")

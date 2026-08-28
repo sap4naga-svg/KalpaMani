@@ -256,6 +256,22 @@ class SharadarClient:
             f"max_attempts={self._retry_policy.max_attempts})"
         )
 
+    @property
+    def max_attempts(self) -> int:
+        """How many attempts this client will make for one request, at most.
+
+        Read-only, and read by the qualification plan so a run's retry budget is a
+        bound on what will actually happen rather than a number written down
+        beside it. Without it, a budget could only be *declared*: the plan would
+        have to trust that whoever built the client respected it, which is exactly
+        the kind of bound that is correct in the review and wrong in production.
+
+        The value already appears in :meth:`__repr__`, so this exposes nothing new
+        -- it makes an existing, non-sensitive configuration number reachable
+        without reading a private attribute.
+        """
+        return self._retry_policy.max_attempts
+
     def headers(self) -> Mapping[str, str]:
         """The fixed request headers. Constant, and carrying no credential.
 
