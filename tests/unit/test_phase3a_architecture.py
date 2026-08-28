@@ -319,6 +319,7 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
     """Widening the data platform beyond the A1 slice is a phase decision."""
     authorized = {
         "__init__.py",
+        "objectstore.py",
         "storage.py",
         "contracts",
         "curate",

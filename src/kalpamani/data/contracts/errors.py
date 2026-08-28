@@ -134,6 +134,51 @@ class AcquisitionIncompleteError(PointInTimeError):
     """
 
 
+class ObjectStoreError(PointInTimeError):
+    """A research object-store refusal.
+
+    Storage-shaped rather than query-shaped, and still a refusal: a publisher that
+    degraded here would leave the store holding something other than what the
+    caller believes it holds.
+    """
+
+
+class ObjectContentMismatchError(ObjectStoreError):
+    """A payload does not hash to the content address its key claims.
+
+    Refused rather than corrected. Correcting it would mean minting a second
+    identity for bytes a caller has already named, and every downstream reference
+    to the first would then point at nothing.
+    """
+
+
+class ObjectAlreadyExistsError(ObjectStoreError):
+    """Different bytes are already stored under this logical key.
+
+    The research object store is append-only, so this is either a hash collision
+    or a corrupted store. Neither is resolved by overwriting.
+    """
+
+
+class ObjectClassificationError(ObjectStoreError):
+    """An object was routed to CONTROL without an explicit written attestation.
+
+    ADR-0007 classifies by one question -- *can vendor rows be recovered from this
+    artifact?* -- under which uncertain resolves to LICENSED. A CONTROL object
+    survives a vendor deletion, so reaching that store by omission rather than by
+    decision is the failure this refuses.
+    """
+
+
+class ProviderMetadataDisclosureError(PointInTimeError):
+    """Ingestion metadata carried something that must never be recorded.
+
+    A credential, a request URL, a query string, a bucket or a cloud identifier.
+    Recorded metadata outlives the process that wrote it, so the check is a
+    refusal at write time rather than a redaction afterwards.
+    """
+
+
 class UnsafePathComponentError(PointInTimeError):
     """An identifier reaching the filesystem is not a safe path component.
 

@@ -488,6 +488,33 @@ class IngestionStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class DataClassification(StrEnum):
+    """Which private research store an object belongs in (ADR-0007).
+
+    One question decides it -- *can vendor rows be recovered from this artifact?*
+    -- and **uncertain resolves to LICENSED**, because the cost of the two
+    mistakes is not symmetric. A control-plane artifact misfiled as licensed is
+    merely deleted early; a reconstructable artifact misfiled as control survives
+    a vendor termination the licence required us to honour.
+
+    Exactly two members, deliberately. A third would become the place an artifact
+    goes when nobody wanted to answer the question.
+
+    ``LICENSED``
+        Vendor data, and anything from which vendor rows could be reconstructed.
+        Inside the 30-day deletion surface of the vendor-data deletion runbook,
+        and therefore carrying no versioning, no Object Lock, no replication and
+        no backup (CLAUDE.md §4.23).
+    ``CONTROL``
+        Manifests, lineage and receipts that provably cannot reconstruct a vendor
+        row. **Never reached by default**: an object is classified ``CONTROL``
+        only on an explicit written attestation, never by omission.
+    """
+
+    LICENSED = "LICENSED"
+    CONTROL = "CONTROL"
+
+
 __all__ = [
     "BAR_CONSTRUCTION_ORIGIN",
     "EXACT_PROVIDER_DERIVATIONS",
@@ -502,6 +529,7 @@ __all__ = [
     "BarResolution",
     "CorporateActionType",
     "CoverageScope",
+    "DataClassification",
     "DatasetGapPolicy",
     "DelistingReason",
     "Exchange",
