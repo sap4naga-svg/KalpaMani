@@ -395,8 +395,74 @@ def test_the_fetcher_paces_before_it_opens_anything() -> None:
 def test_the_request_inventory_is_small_fixed_and_single_ticker() -> None:
     tables = [table for table, _ in H.REQUEST_INVENTORY]
     assert tables == ["tickers", "stocks", "actions", "fundamentals", "events"]
-    for _, params in H.REQUEST_INVENTORY:
-        assert dict(params) == {"ticker": H.SAMPLE_TICKER}
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    for table, windowed in H.REQUEST_INVENTORY:
+        params = dict(H.build_request_params(table, windowed, window))
+        assert params["ticker"] == H.SAMPLE_TICKER
+        assert set(params) <= {"ticker", "from", "to"}
+
+
+# ---------------------------------------------------------------------------
+# The request window -- five years, explicitly, on every temporal table
+# ---------------------------------------------------------------------------
+
+
+def test_no_temporal_table_relies_on_the_vendors_one_year_default() -> None:
+    """The correction this pins.
+
+    Every temporal table defaults to `from` = one year ago. Supplying neither would have
+    run a ONE-year probe while the methodology described five years throughout -- and a
+    one-year window of a single mega-cap very likely contains no split, which would
+    silently reduce the only genuinely empirical check to a trivial agreement.
+    """
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    for table in H.WINDOWED_TABLES:
+        params = dict(H.build_request_params(table, True, window))
+        assert "from" in params, f"{table} would fall back to the vendor's one-year default"
+        assert "to" in params
+
+
+def test_every_temporal_request_shares_one_window() -> None:
+    """A per-table window would make the tables describe different periods."""
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    windows = {
+        (
+            dict(H.build_request_params(t, True, window))["from"],
+            dict(H.build_request_params(t, True, window))["to"],
+        )
+        for t in H.WINDOWED_TABLES
+    }
+    assert len(windows) == 1
+    assert H.WINDOWED_TABLES == ("stocks", "actions", "fundamentals", "events")
+
+
+def test_the_snapshot_table_carries_no_artificial_time_window() -> None:
+    """A date range on a snapshot is a parameter attached to a table with no time axis."""
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    params = dict(H.build_request_params("tickers", False, window))
+    assert params == {"ticker": H.SAMPLE_TICKER}
+    assert "tickers" not in H.WINDOWED_TABLES
+
+
+def test_the_window_spans_five_calendar_years_ending_on_the_prior_day() -> None:
+    start, end = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    assert end == "2026-08-27"
+    assert start == "2021-08-27"
+
+
+def test_the_window_is_deterministic_across_a_leap_day() -> None:
+    """29 February has no counterpart five years back; the fallback must not vary."""
+    first = H.five_year_window(datetime(2024, 3, 1, 0, 0, tzinfo=UTC))
+    second = H.five_year_window(datetime(2024, 3, 1, 23, 59, tzinfo=UTC))
+    assert first == second == ("2019-02-28", "2024-02-29")
+
+
+def test_the_window_never_uses_the_bulk_download_parameter() -> None:
+    """`years=` fetches a table-wide zip of every security, not a single-ticker probe."""
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    for table, windowed in H.REQUEST_INVENTORY:
+        assert "years" not in dict(H.build_request_params(table, windowed, window))
+    assert "years" not in H.build_request_url("stocks", (("ticker", "AAPL"),))
 
 
 def test_the_user_agent_is_deterministic_and_identifies_the_project() -> None:
@@ -409,7 +475,9 @@ def test_only_the_vendor_published_public_test_key_is_used() -> None:
 
 
 def test_every_request_is_https() -> None:
-    for table, params in H.REQUEST_INVENTORY:
+    window = H.five_year_window(datetime(2026, 8, 28, 3, 0, tzinfo=UTC))
+    for table, windowed in H.REQUEST_INVENTORY:
+        params = H.build_request_params(table, windowed, window)
         assert H.build_request_url(table, params).startswith("https://")
 
 
@@ -829,7 +897,7 @@ def test_the_dividend_limb_pins_both_the_convention_and_the_denomination() -> No
     """
     finding = H.evaluate_p5(_samples(fx.COHERENT_SAMPLE))
     assert finding.attributes["dividend_limb"] == H.TESTED
-    assert finding.attributes["dividend_model"] == "EXCLUSIVE_UNADJUSTED"
+    assert finding.attributes["dividend_model"] == H.DIVIDEND_BASIS_UNADJUSTED
 
 
 def test_the_dividend_limb_is_inconclusive_when_the_vocabulary_is_ambiguous() -> None:
@@ -978,18 +1046,18 @@ def test_a_malformed_payload_produces_no_pass_anywhere() -> None:
 
 
 def test_the_recommendation_is_one_of_the_declared_values() -> None:
-    assert H.private_recommendation(H.evaluate_all(_samples(fx.COHERENT_SAMPLE))) in (
-        H.RECOMMENDATIONS
-    )
+    assert H.private_recommendation(
+        H.evaluate_all(_samples(fx.COHERENT_SAMPLE)), retrieval_complete=True
+    ) in (H.RECOMMENDATIONS)
 
 
 def test_a_vendor_series_that_does_not_reconcile_produces_a_reject() -> None:
     samples = _samples({"stocks": fx.STOCKS_IRRECONCILABLE_CSV, "actions": fx.ACTIONS_CSV})
-    assert H.private_recommendation(H.evaluate_all(samples)) == H.REJECT
+    assert H.private_recommendation(H.evaluate_all(samples), retrieval_complete=True) == H.REJECT
 
 
 def test_missing_evidence_holds_rather_than_proceeding() -> None:
-    assert H.private_recommendation(H.evaluate_all({})) == H.HOLD
+    assert H.private_recommendation(H.evaluate_all({}), retrieval_complete=True) == H.HOLD
 
 
 def test_missing_evidence_never_rejects_the_provider() -> None:
@@ -1003,18 +1071,23 @@ def test_missing_evidence_never_rejects_the_provider() -> None:
     p5 = next(f for f in findings if f.test_id == "P5")
     assert p5.attributes["split_limb"] == H.NOT_EXERCISED
     assert p5.attributes["evidence"] == "STOCKS_NOT_RETRIEVED"
-    assert H.private_recommendation(findings) == H.HOLD
+    assert H.private_recommendation(findings, retrieval_complete=True) == H.HOLD
 
 
 def test_a_genuine_reconciliation_failure_still_rejects() -> None:
     """Without this, the test above could pass on a function that never rejects at all."""
     samples = _samples({"stocks": fx.STOCKS_IRRECONCILABLE_CSV, "actions": fx.ACTIONS_CSV})
-    assert H.private_recommendation(H.evaluate_all(samples)) == H.REJECT
+    assert H.private_recommendation(H.evaluate_all(samples), retrieval_complete=True) == H.REJECT
 
 
 def test_a_coherent_sample_can_reach_proceed() -> None:
     """Without this, the two tests above could pass on a function that always says HOLD."""
-    assert H.private_recommendation(H.evaluate_all(_samples(fx.COHERENT_SAMPLE))) == H.PROCEED
+    assert (
+        H.private_recommendation(
+            H.evaluate_all(_samples(fx.COHERENT_SAMPLE)), retrieval_complete=True
+        )
+        == H.PROCEED
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1138,3 +1211,250 @@ def test_a_partly_unreachable_api_still_produces_a_valid_private_report(tmp_path
     html = outcome.report_path.read_text(encoding="utf-8")
     assert "HTTP_ENDPOINT_NOT_FOUND" in html
     assert sum(1 for key in keys if "/raw/sha256/" in key) == len(payloads)
+
+
+# ---------------------------------------------------------------------------
+# The dividend ratio base is the ACTION-DATE close
+# ---------------------------------------------------------------------------
+
+
+def test_the_ratio_base_is_the_close_on_the_action_date() -> None:
+    """The correction this pins, stated arithmetically.
+
+    The vendor's worked example computes the ratio from `current_close` -- the close ON the
+    action date -- and divides the preceding history by it. An earlier revision used the
+    PREVIOUS row's close. The fixture makes the two differ by a factor of two, so the wrong
+    base misses by 10%: far outside tolerance, not a rounding argument.
+    """
+    rows = _samples({"stocks": fx.STOCKS_COHERENT_CSV})["stocks"].rows
+    ordered = H._numeric_rows(rows)
+    by_date = {str(r["date"]): r for r in ordered}
+
+    action_base = H.action_date_base(by_date, fx.DIVIDEND_ACTION_DATE, "closeunadj")
+    assert action_base == fx.DIVIDEND_ACTION_DATE_CLOSEUNADJ
+
+    correct_ratio = (action_base + fx.DIVIDEND_AMOUNT) / action_base
+    previous_base = fx.DIVIDEND_PREVIOUS_ROW_CLOSEUNADJ
+    wrong_ratio = (previous_base + fx.DIVIDEND_AMOUNT) / previous_base
+
+    assert abs(wrong_ratio - correct_ratio) / correct_ratio > H.SPLIT_TOLERANCE
+
+    # And the harness reconciles, which it could only do with the correct base.
+    result = H.reconcile_dividend_adjustment(
+        rows, [(fx.DIVIDEND_ACTION_DATE, fx.DIVIDEND_AMOUNT)], [], True
+    )
+    assert result.status == H.TESTED
+    assert result.worst_relative_deviation == pytest.approx(0.0)
+
+
+def test_a_dividend_with_no_price_row_on_its_date_is_not_exercisable() -> None:
+    """Substituting the nearest earlier close would answer a different question."""
+    rows = _samples({"stocks": fx.STOCKS_COHERENT_CSV})["stocks"].rows
+    ordered = H._numeric_rows(rows)
+    by_date = {str(r["date"]): r for r in ordered}
+    assert H.action_date_base(by_date, "2020-03-03", "closeunadj") is None
+
+
+def test_only_the_share_basis_remains_a_candidate_axis() -> None:
+    """The date axis was closed by the source and must not be carried as pretend caution."""
+    names = [name for name, _ in H.DIVIDEND_MODELS]
+    assert names == [H.DIVIDEND_BASIS_UNADJUSTED, H.DIVIDEND_BASIS_SPLIT_ADJUSTED]
+    assert not any("INCLUSIVE" in name for name in names)
+
+
+def test_the_dividend_diagnostic_reports_the_best_models_worst_row() -> None:
+    """One model fits perfectly and another badly; the report must publish the good one.
+
+    The previous accumulator seeded at 0.0 and treated that as "unset", so a genuinely
+    perfect model was overwritten by a worse later one.
+    """
+    rows = _samples({"stocks": fx.STOCKS_COHERENT_CSV})["stocks"].rows
+    result = H.reconcile_dividend_adjustment(
+        rows, [(fx.DIVIDEND_ACTION_DATE, fx.DIVIDEND_AMOUNT)], [], True
+    )
+    assert result.model == H.DIVIDEND_BASIS_UNADJUSTED
+    assert result.worst_relative_deviation == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# An unusable actions table is absence of evidence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "payloads"),
+    [
+        ("missing", {"stocks": fx.STOCKS_COHERENT_CSV}),
+        ("header only", {"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_HEADER_ONLY_CSV}),
+        (
+            "missing required column",
+            {"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_MISSING_VALUE_COLUMN_CSV},
+        ),
+    ],
+)
+def test_an_unusable_actions_table_exercises_no_limb(label: str, payloads: dict[str, str]) -> None:
+    """ "No actions table" is not "the actions table says no actions."
+
+    Every extractor returns an empty list here, which downstream once read as no split, no
+    dividend and no spinoff -- and the split limb then reconciled trivially and partially
+    validated P5 on a request that never arrived.
+    """
+    finding = H.evaluate_p5(_samples(payloads))
+    assert finding.status == H.INCONCLUSIVE, label
+    assert finding.attributes["split_limb"] == H.NOT_EXERCISED
+    assert finding.attributes["dividend_limb"] == H.NOT_EXERCISED
+    assert finding.attributes["spinoff_limb"] == H.NOT_EXERCISED
+    assert finding.attributes["evidence"] == "ACTIONS_NOT_USABLE"
+
+
+def test_a_failed_actions_request_exercises_no_limb() -> None:
+    samples = _samples({"stocks": fx.STOCKS_COHERENT_CSV})
+    samples["actions"] = H.TableSample(table="actions", fetch_error="HTTP_SERVER_ERROR")
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["evidence"] == "ACTIONS_NOT_USABLE"
+    assert finding.status == H.INCONCLUSIVE
+
+
+def test_a_malformed_actions_payload_exercises_no_limb() -> None:
+    samples = _samples({"stocks": fx.STOCKS_COHERENT_CSV})
+    samples["actions"] = H.parse_csv_payload("actions", fx.MALFORMED_PAYLOAD, "sha256/x")
+    assert H.evaluate_p5(samples).attributes["evidence"] == "ACTIONS_NOT_USABLE"
+
+
+@pytest.mark.parametrize(
+    ("label", "payloads"),
+    [
+        ("missing", {"stocks": fx.STOCKS_COHERENT_CSV}),
+        ("header only", {"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_HEADER_ONLY_CSV}),
+    ],
+)
+def test_an_unusable_actions_table_holds_and_never_rejects(
+    label: str, payloads: dict[str, str]
+) -> None:
+    findings = H.evaluate_all(_samples(payloads))
+    assert H.private_recommendation(findings, retrieval_complete=True) == H.HOLD, label
+
+
+# ---------------------------------------------------------------------------
+# No comparable price rows is absence of evidence too
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "stocks"),
+    [
+        ("header only", fx.STOCKS_HEADER_ONLY_CSV),
+        ("no closeunadj", fx.STOCKS_NO_CLOSEUNADJ_CSV),
+        ("no close", fx.STOCKS_NO_CLOSE_CSV),
+        ("non-numeric close", fx.STOCKS_NONNUMERIC_CLOSE_CSV),
+    ],
+)
+def test_zero_comparable_price_rows_never_rejects_the_provider(label: str, stocks: str) -> None:
+    """A syntactically valid response with nothing comparable is not a vendor defect.
+
+    REJECT means the vendor's own two series contradict each other, which requires having
+    compared them. Reaching it from a table that yielded no comparison would be a
+    rejection with no reconciliation behind it.
+    """
+    samples = _samples({"stocks": stocks, "actions": fx.ACTIONS_COHERENT_CSV})
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["split_limb"] == H.NOT_EXERCISED, label
+    assert finding.status == H.INCONCLUSIVE
+    assert H.private_recommendation(H.evaluate_all(samples), retrieval_complete=True) == H.HOLD
+
+
+# ---------------------------------------------------------------------------
+# A split-like action we cannot model confounds rather than convicts
+# ---------------------------------------------------------------------------
+
+
+def test_a_stock_dividend_confounds_the_split_limb_rather_than_failing_it() -> None:
+    """It shares the split's float ratio, so the split-adjusted close would carry it too.
+
+    Its `value` semantics are undocumented, so a disagreement has an innocent explanation.
+    Reading that as vendor corruption would convict on evidence we cannot interpret.
+    """
+    samples = _samples(
+        {
+            "stocks": fx.STOCKS_COHERENT_CSV,
+            "actions": fx.ACTIONS_STOCK_AND_CASH_DIVIDEND_CSV,
+        }
+    )
+    finding = H.evaluate_p5(samples)
+    assert finding.attributes["split_limb"] == H.INCONCLUSIVE
+    assert finding.attributes["split_confounded"] == "true"
+    assert finding.attributes["split_convention"] == "CONFOUNDED"
+    assert "SPLIT_ADJUSTMENT_CONFOUNDED_BY_UNMODELLED_ACTION" in finding.limitations
+
+
+def test_a_confounded_split_limb_holds_and_never_rejects() -> None:
+    samples = _samples(
+        {
+            "stocks": fx.STOCKS_COHERENT_CSV,
+            "actions": fx.ACTIONS_STOCK_AND_CASH_DIVIDEND_CSV,
+        }
+    )
+    assert H.private_recommendation(H.evaluate_all(samples), retrieval_complete=True) == H.HOLD
+
+
+# ---------------------------------------------------------------------------
+# A split that adjusts nothing has not exercised the limb
+# ---------------------------------------------------------------------------
+
+
+def test_a_split_predating_the_whole_sample_does_not_exercise_the_limb() -> None:
+    """Counting it as "in range" would report TESTED with the mechanism never applied."""
+    samples = _samples(
+        {"stocks": fx.STOCKS_AFTER_EARLY_SPLIT_CSV, "actions": fx.ACTIONS_EARLY_SPLIT_CSV}
+    )
+    result = H.reconcile_split_adjustment(
+        samples["stocks"].rows, H.extract_splits(samples["actions"])
+    )
+    assert result.splits_in_range == 1
+    assert result.splits_exercised == 0
+    assert result.status != H.TESTED
+    assert result.status in (H.PARTIALLY_TESTED, H.NOT_EXERCISED)
+
+
+def test_an_exercised_split_is_counted_as_exercised() -> None:
+    """Without this the previous test could pass on a function that always counts zero."""
+    samples = _samples({"stocks": fx.STOCKS_COHERENT_CSV, "actions": fx.ACTIONS_COHERENT_CSV})
+    result = H.reconcile_split_adjustment(
+        samples["stocks"].rows, H.extract_splits(samples["actions"])
+    )
+    assert result.splits_exercised == 1
+    assert result.status == H.TESTED
+
+
+# ---------------------------------------------------------------------------
+# An incomplete run cannot recommend proceeding
+# ---------------------------------------------------------------------------
+
+
+def test_incomplete_retrieval_forces_hold() -> None:
+    findings = H.evaluate_all(_samples(fx.COHERENT_SAMPLE))
+    assert H.private_recommendation(findings, retrieval_complete=True) == H.PROCEED
+    assert H.private_recommendation(findings, retrieval_complete=False) == H.HOLD
+
+
+def test_the_recommendation_requires_the_caller_to_state_completeness() -> None:
+    """A default would let a caller reach PROCEED on an incomplete run by forgetting it."""
+    with pytest.raises(TypeError):
+        H.private_recommendation(H.evaluate_all(_samples(fx.COHERENT_SAMPLE)))
+
+
+def test_an_incomplete_run_never_reports_proceed(tmp_path: Path) -> None:
+    """A report must not say "retrieval incomplete" and "PROCEED" in the same breath."""
+    payloads = {k: v for k, v in fx.COHERENT_SAMPLE.items() if k != "events"}
+    outcome, _ = _run(tmp_path, payloads)
+    html = outcome.report_path.read_text(encoding="utf-8")
+
+    assert "HTTP_ENDPOINT_NOT_FOUND" in html
+    assert H.PROCEED not in html
+    assert H.HOLD in html
+
+
+def test_a_complete_run_can_still_report_proceed(tmp_path: Path) -> None:
+    """Without this, the test above could pass on a report that never says PROCEED."""
+    outcome, _ = _run(tmp_path, dict(fx.COHERENT_SAMPLE))
+    assert H.PROCEED in outcome.report_path.read_text(encoding="utf-8")

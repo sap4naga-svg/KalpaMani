@@ -171,22 +171,25 @@ MALFORMED_PAYLOAD = b"\xff\xfe\x00not a csv payload at all"
 # ---------------------------------------------------------------------------
 #
 # The identity under test: close / closeadj == the product of cash-dividend ratios falling
-# after the row's date, where each ratio is (C_prev + D) / C_prev on the close BEFORE the
-# ex-date (the vendor's published formula).
+# after the row's date, where each ratio is (C + D) / C on the close **ON the action date**
+# -- the vendor's `current_close` -- with preceding history divided by it.
 #
-# Two things are deliberately arranged so the fixture DISCRIMINATES rather than merely
-# agrees, because the vendor states neither:
+# Three things are deliberately arranged so the fixture DISCRIMINATES rather than merely
+# agrees:
 #
-#   * the dividend sits BEFORE the split, so the pre-event unadjusted close (200.0) and
-#     split-adjusted close (100.0) differ -- which separates the two denominations;
-#   * a price row sits ON the ex-date, which separates the inclusive convention from the
-#     exclusive one.
+#   * a price row sits ON the dividend date, so the event is exercisable at all;
+#   * the action-date close differs sharply from the previous row's close, so a harness
+#     that used the PREVIOUS close as the base would fail visibly rather than by a rounding
+#     margin -- that is the regression the correction needs;
+#   * the dividend sits BEFORE the split, so the action-date unadjusted close (200.0) and
+#     split-adjusted close (100.0) differ, which separates the two share bases.
 #
 # Arithmetic, all exact:
-#   dividend 50.0 on 2020-03-02, prior row 2020-01-02
-#     unadjusted base 200.0 -> ratio 250/200 = 1.25   -> closeadj 100.0/1.25 = 80.0
-#     split-adjusted base 100.0 -> ratio 150/100 = 1.5 -> would give 66.67, far outside
-#   rows on/after the ex-date carry no later dividend, so close == closeadj
+#   dividend 50.0 on 2020-03-02; the row ON that date has close 100.0, closeunadj 200.0
+#     UNADJUSTED_BASIS     ratio 250/200 = 1.25  -> closeadj 200.0/1.25 = 160.0
+#     SPLIT_ADJUSTED_BASIS ratio 150/100 = 1.5   -> would give 133.33, far outside
+#     PREVIOUS-close (wrong) 450/400 = 1.125     -> would give 177.78, far outside
+#   the action-date row keeps its traded price, so close == closeadj there and after
 
 ACTIONS_COHERENT_CSV = """date,action,ticker,name,value,contraticker,contraname
 2020-03-02,dividend,FAKE,Fictitious Inc,50.0,,
@@ -195,13 +198,22 @@ ACTIONS_COHERENT_CSV = """date,action,ticker,name,value,contraticker,contraname
 
 STOCKS_COHERENT_CSV = (
     _STOCKS_HEADER
-    + """FAKE,2020-01-02,99.0,101.0,98.0,100.0,1000,80.0,200.0,2024-06-03
-FAKE,2020-03-02,89.0,91.0,88.0,90.0,1100,90.0,180.0,2024-06-03
+    + """FAKE,2020-01-02,199.0,201.0,198.0,200.0,1000,160.0,400.0,2024-06-03
+FAKE,2020-03-02,99.0,101.0,98.0,100.0,1100,100.0,200.0,2024-06-03
 FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,120.0,2024-06-03
 FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
 FAKE,2020-09-01,64.0,66.0,63.0,65.0,1400,65.0,65.0,2024-06-03
 """
 )
+
+#: The action-date close (200.0 unadjusted) and the previous row's close (400.0 unadjusted)
+#: differ by a factor of two, so the two candidate bases give ratios 1.25 and 1.125. A
+#: harness using the wrong one misses by 10%, far outside tolerance. Named so the regression
+#: that pins the correction reads clearly.
+DIVIDEND_ACTION_DATE = "2020-03-02"
+DIVIDEND_AMOUNT = 50.0
+DIVIDEND_ACTION_DATE_CLOSEUNADJ = 200.0
+DIVIDEND_PREVIOUS_ROW_CLOSEUNADJ = 400.0
 
 #: Two dividend-like literals. `infer_action_literal` must return None rather than pick a
 #: favourite, and the limb must be INCONCLUSIVE rather than silently choose one.
@@ -231,8 +243,8 @@ ACTIONS_WITH_SPINOFF_CSV = """date,action,ticker,name,value,contraticker,contran
 #: denomination. A broken dividend adjustment must report INCONCLUSIVE, never a pass.
 STOCKS_DIVIDEND_IRRECONCILABLE_CSV = (
     _STOCKS_HEADER
-    + """FAKE,2020-01-02,99.0,101.0,98.0,100.0,1000,37.0,200.0,2024-06-03
-FAKE,2020-03-02,89.0,91.0,88.0,90.0,1100,90.0,180.0,2024-06-03
+    + """FAKE,2020-01-02,199.0,201.0,198.0,200.0,1000,120.0,400.0,2024-06-03
+FAKE,2020-03-02,99.0,101.0,98.0,100.0,1100,100.0,200.0,2024-06-03
 FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,120.0,2024-06-03
 FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
 """
@@ -258,6 +270,63 @@ STOCKS_UNEXPLAINED_DIVERGENCE_CSV = (
     _STOCKS_HEADER
     + """FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,50.0,120.0,2024-06-03
 FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+"""
+)
+
+# ---------------------------------------------------------------------------
+# Absent evidence, which must never read as evidence of absence
+# ---------------------------------------------------------------------------
+#
+# Each of these makes some extractor return an empty list. Downstream that once read as
+# "no split, no dividend, no spinoff", and the split limb reconciled trivially. Every one
+# must now leave the limbs NOT_EXERCISED and the finding INCONCLUSIVE.
+
+#: A syntactically valid response carrying only a header row.
+ACTIONS_HEADER_ONLY_CSV = "date,action,ticker,name,value,contraticker,contraname\n"
+
+#: Required columns absent. The table cannot answer, and must not be read as answering.
+ACTIONS_MISSING_VALUE_COLUMN_CSV = """date,action,ticker,name,contraticker,contraname
+2020-06-01,split,FAKE,Fictitious Inc,,
+"""
+
+#: Prices with a header and nothing else.
+STOCKS_HEADER_ONLY_CSV = _STOCKS_HEADER
+
+#: The unadjusted close is absent, so no row is comparable against the adjusted one.
+STOCKS_NO_CLOSEUNADJ_CSV = """ticker,date,open,high,low,close,volume,closeadj,lastupdated
+FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,2024-06-03
+"""
+
+#: The split-adjusted close is absent.
+STOCKS_NO_CLOSE_CSV = """ticker,date,open,high,low,volume,closeadj,closeunadj,lastupdated
+FAKE,2020-04-01,59.0,61.0,58.0,1200,60.0,120.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,1300,130.0,130.0,2024-06-03
+"""
+
+#: Every close is non-numeric. Parsing succeeds; comparison cannot.
+STOCKS_NONNUMERIC_CLOSE_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-04-01,59.0,61.0,58.0,n/a,1200,n/a,n/a,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,n/a,1300,n/a,n/a,2024-06-03
+"""
+)
+
+# ---------------------------------------------------------------------------
+# A split that adjusts nothing in the sample
+# ---------------------------------------------------------------------------
+
+#: The split predates every price row, so it adjusts none of them. Counting it as "in
+#: range" would let the limb report TESTED while the mechanism was never applied.
+ACTIONS_EARLY_SPLIT_CSV = """date,action,ticker,name,value,contraticker,contraname
+2015-01-05,split,FAKE,Fictitious Inc,2.0,,
+"""
+
+STOCKS_AFTER_EARLY_SPLIT_CSV = (
+    _STOCKS_HEADER
+    + """FAKE,2020-04-01,59.0,61.0,58.0,60.0,1200,60.0,60.0,2024-06-03
+FAKE,2020-06-01,129.0,131.0,128.0,130.0,1300,130.0,130.0,2024-06-03
+FAKE,2020-09-01,64.0,66.0,63.0,65.0,1400,65.0,65.0,2024-06-03
 """
 )
 

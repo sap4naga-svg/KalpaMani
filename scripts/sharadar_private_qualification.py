@@ -83,7 +83,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -124,16 +124,34 @@ SPLIT_TOLERANCE = 0.005
 #: The single security the published test key documents. Not a choice -- a constraint.
 SAMPLE_TICKER = "AAPL"
 
+#: The qualification window, in whole calendar years.
+#:
+#: **This is not cosmetic.** Every temporal table defaults to `from` = one year ago and
+#: `to` = the prior day (`PSR-SHD-121`). An earlier revision of this harness supplied
+#: neither, so it would have run a **one-year** probe while the methodology described a
+#: five-year sample throughout -- and a one-year window of a single mega-cap is very
+#: likely to contain no split at all, which would have quietly reduced the only genuinely
+#: empirical check to a trivial agreement.
+QUALIFICATION_WINDOW_YEARS = 5
+
 #: Every request this harness will ever make. A fixed inventory, not a crawl. Endpoint
 #: path segments and parameter names are from the vendor's own public query examples
 #: (`PSR-SHD-118`); nothing here is guessed.
-REQUEST_INVENTORY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
-    ("tickers", (("ticker", SAMPLE_TICKER),)),
-    ("stocks", (("ticker", SAMPLE_TICKER),)),
-    ("actions", (("ticker", SAMPLE_TICKER),)),
-    ("fundamentals", (("ticker", SAMPLE_TICKER),)),
-    ("events", (("ticker", SAMPLE_TICKER),)),
+#:
+#: The flag is whether the table takes an explicit date window. `tickers` does not, and
+#: deliberately: the vendor documents it as a **snapshot** whose 5, 10 and full bulk
+#: options return the same table (`PSR-SHD-119`), so a date range there would be a
+#: meaningless parameter attached to a table that has no time axis.
+REQUEST_INVENTORY: tuple[tuple[str, bool], ...] = (
+    ("tickers", False),
+    ("stocks", True),
+    ("actions", True),
+    ("fundamentals", True),
+    ("events", True),
 )
+
+#: The tables whose evidence the qualification actually depends on being windowed.
+WINDOWED_TABLES: tuple[str, ...] = tuple(t for t, windowed in REQUEST_INVENTORY if windowed)
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -496,6 +514,42 @@ class Pacer:
         return slept
 
 
+def five_year_window(now: datetime) -> tuple[str, str]:
+    """The explicit ``(from, to)`` window for every temporal request.
+
+    ``to`` is the prior UTC calendar day, matching the vendor's own documented ``to``
+    default; ``from`` is the same calendar date five years earlier. Supplying both is the
+    whole point: without them the vendor returns **one year** (`PSR-SHD-121`), and the
+    methodology describes a five-year sample.
+
+    29 February has no counterpart five years earlier -- leap years are four apart, so the
+    subtraction always lands on a non-leap year -- and it resolves to 28 February. That is
+    deterministic and one day narrower, which is the safe direction for a window.
+    """
+    end = now.astimezone(UTC).date() - timedelta(days=1)
+    try:
+        start = end.replace(year=end.year - QUALIFICATION_WINDOW_YEARS)
+    except ValueError:
+        start = end.replace(year=end.year - QUALIFICATION_WINDOW_YEARS, month=2, day=28)
+    return start.isoformat(), end.isoformat()
+
+
+def build_request_params(
+    table: str, windowed: bool, window: tuple[str, str]
+) -> tuple[tuple[str, str], ...]:
+    """Query parameters for one request. Named parameters only, never a bulk download.
+
+    ``years=`` is deliberately unused: it triggers a table-wide zip of every security, which
+    is neither the small fixed probe authorized here nor something a public test key should
+    be pointed at.
+    """
+    params: list[tuple[str, str]] = [("ticker", SAMPLE_TICKER)]
+    if windowed:
+        params.append(("from", window[0]))
+        params.append(("to", window[1]))
+    return tuple(params)
+
+
 def build_request_url(table: str, params: Sequence[tuple[str, str]]) -> str:
     """Build one request URL. **Never log, print or store the return value.**"""
     query = urllib.parse.urlencode([("api_key", PUBLIC_TEST_API_KEY), ("format", "csv"), *params])
@@ -611,12 +665,21 @@ class SplitReconciliation:
     status: str
     convention: str
     rows_compared: int
+    #: Splits present in the retrieved actions, whether or not they touch a compared row.
     splits_in_range: int
+    #: Splits that actually affect at least one compared row. **This is the number that
+    #: decides whether the limb was exercised.** A split that predates every price row
+    #: adjusts nothing in the sample, so counting it would let the limb report TESTED
+    #: while the adjustment mechanism was never applied to anything.
+    splits_exercised: int
     exclusive_matches: int
     inclusive_matches: int
     #: Deviation under the BEST-fitting convention, so it reads as "how far from any
     #: explanation", not "how far from the one we happened to try first".
     worst_relative_deviation: float
+    #: The earliest compared row date, or "" when nothing was comparable. Used to decide
+    #: whether an unmodelled action could have touched the comparison.
+    earliest_compared: str
     note: str
 
 
@@ -652,14 +715,16 @@ def reconcile_split_adjustment(
     """Does ``close`` equal ``closeunadj`` divided by the cumulative later split factor?
 
     The vendor publishes that OHLCV is split-adjusted and ``closeunadj`` is unadjusted
-    (`PSR-SHD-110`, `PSR-SHD-111`), so this relationship is specified well enough to
-    test. What is **not** published is whether an action dated ``D`` affects the factor
-    applied at ``D`` itself. Both conventions are therefore evaluated and the answer is
-    *observed*; assuming one and reporting agreement would be the defect ADR-0004 s.20
-    describes -- a sign convention assumed rather than measured, invisible behind a green
-    test.
+    (`PSR-SHD-110`, `PSR-SHD-111`), so this relationship is specified well enough to test.
+
+    **The documented direction is exclusive of the action date**: adjustment is backward,
+    the action-date price stays as traded, and preceding history is adjusted
+    (`PSR-SHD-120`). Both conventions are still evaluated -- not to resolve an ambiguity
+    the vendor has settled, but so the observation can *disagree* with the documentation
+    rather than being assumed to match it. An INCLUSIVE result would be a finding about
+    the data, not a discovery about the convention.
     """
-    compared = 0
+    compared_dates: list[str] = []
     exclusive_ok = 0
     inclusive_ok = 0
     worst = 0.0
@@ -672,7 +737,7 @@ def reconcile_split_adjustment(
             continue
         if close <= 0 or unadjusted <= 0:
             continue
-        compared += 1
+        compared_dates.append(row_date)
         exclusive_deviation = _relative_deviation(unadjusted, close, splits, row_date, False)
         inclusive_deviation = _relative_deviation(unadjusted, close, splits, row_date, True)
         if exclusive_deviation <= tolerance:
@@ -684,34 +749,49 @@ def reconcile_split_adjustment(
         # convention's error would overstate the gap whenever the vendor uses the other.
         worst = max(worst, min(exclusive_deviation, inclusive_deviation))
 
+    compared = len(compared_dates)
     in_range = sum(1 for _, value in splits if value > 0)
+    earliest = min(compared_dates) if compared_dates else ""
+    # A split adjusts rows that PRECEDE it. One dated at or before every compared row
+    # therefore touches nothing in this comparison, however real it is.
+    exercised = sum(1 for date, value in splits if value > 0 and date > earliest) if earliest else 0
 
     if compared == 0:
+        # NOT a reconciliation failure. Nothing was compared, so nothing disagreed --
+        # and only a disagreement between the vendor's own two series may reject it.
         return SplitReconciliation(
-            status=INCONCLUSIVE,
+            status=NOT_EXERCISED,
             convention=CONVENTION_UNRESOLVED,
             rows_compared=0,
             splits_in_range=in_range,
+            splits_exercised=0,
             exclusive_matches=0,
             inclusive_matches=0,
             worst_relative_deviation=0.0,
-            note="no row carried both an adjusted and an unadjusted close",
+            earliest_compared="",
+            note=(
+                "no row carried a date with both an adjusted and an unadjusted close, so "
+                "the limb did not run; this is missing evidence, not a failed comparison"
+            ),
         )
 
     exclusive_all = exclusive_ok == compared
     inclusive_all = inclusive_ok == compared
 
-    if in_range == 0:
+    if exercised == 0:
         return SplitReconciliation(
             status=PARTIALLY_TESTED,
             convention=CONVENTION_UNRESOLVED,
             rows_compared=compared,
-            splits_in_range=0,
+            splits_in_range=in_range,
+            splits_exercised=0,
             exclusive_matches=exclusive_ok,
             inclusive_matches=inclusive_ok,
             worst_relative_deviation=worst,
+            earliest_compared=earliest,
             note=(
-                "no split occurred in the sampled range, so adjusted and unadjusted "
+                "no split affects any compared row -- either none occurred in the window, "
+                "or every one predates the whole price sample -- so adjusted and unadjusted "
                 "agree trivially and the adjustment method is not exercised"
             ),
         )
@@ -736,9 +816,11 @@ def reconcile_split_adjustment(
         convention=convention,
         rows_compared=compared,
         splits_in_range=in_range,
+        splits_exercised=exercised,
         exclusive_matches=exclusive_ok,
         inclusive_matches=inclusive_ok,
         worst_relative_deviation=worst,
+        earliest_compared=earliest,
         note=note,
     )
 
@@ -747,22 +829,34 @@ def reconcile_split_adjustment(
 # P5 -- the cash-dividend limb, against the vendor's published ratio
 # ---------------------------------------------------------------------------
 
-#: Candidate models for the cash-dividend adjustment. The vendor publishes the ratio --
-#: ``(Close + Dividend) / Close`` on the pre-event close (`PSR-SHD-120`) -- but not which
-#: price series the dividend is denominated in, and not whether an action dated ``D``
-#: affects the factor applied at ``D`` itself. Both axes are therefore **observed** rather
-#: than assumed, exactly as the split limb observes its date convention.
-DIVIDEND_MODELS: tuple[tuple[str, bool, str], ...] = (
-    ("EXCLUSIVE_UNADJUSTED", False, "closeunadj"),
-    ("EXCLUSIVE_SPLIT_ADJUSTED", False, "close"),
-    ("INCLUSIVE_UNADJUSTED", True, "closeunadj"),
-    ("INCLUSIVE_SPLIT_ADJUSTED", True, "close"),
+#: Candidate models for the cash-dividend adjustment.
+#:
+#: **One axis, not two.** The vendor's worked example computes the ratio from
+#: ``current_close`` -- the close **on the action date itself** -- and divides the
+#: *preceding* history by it (`PSR-SHD-120`). That settles the date question: the
+#: action-date row keeps its traded price, and adjustment runs backward from it. An
+#: earlier revision of this harness used the *prior* row as the base and carried an
+#: inclusive/exclusive model axis to cover an ambiguity the vendor had already resolved.
+#: Both are corrected: keeping a model axis the source has closed is not caution, it is
+#: noise that makes a wrong model look like a legitimate alternative.
+#:
+#: What genuinely remains unresolved is the **share basis** of ``actions.value``. When a
+#: later split exists, the action-date ``close`` is split-adjusted while ``closeunadj`` is
+#: not, and the vendor does not say which one the recorded dividend amount is expressed
+#: against. That is observed rather than assumed.
+DIVIDEND_BASIS_UNADJUSTED = "UNADJUSTED_BASIS"
+DIVIDEND_BASIS_SPLIT_ADJUSTED = "SPLIT_ADJUSTED_BASIS"
+
+DIVIDEND_MODELS: tuple[tuple[str, str], ...] = (
+    (DIVIDEND_BASIS_UNADJUSTED, "closeunadj"),
+    (DIVIDEND_BASIS_SPLIT_ADJUSTED, "close"),
 )
 
 DIVIDEND_MODEL_UNRESOLVED = "UNRESOLVED"
 DIVIDEND_MODELS_AGREE = "AMBIGUOUS_MODELS_AGREE"
 DIVIDEND_LITERAL_UNIDENTIFIED = "ACTION_LITERAL_NOT_IDENTIFIED"
 DIVIDEND_NOT_IN_RANGE = "NO_DIVIDEND_IN_USABLE_RANGE"
+DIVIDEND_NO_COMPARABLE_ROWS = "NO_COMPARABLE_ROWS"
 
 
 @dataclass(frozen=True)
@@ -796,6 +890,22 @@ def _numeric_rows(rows: Sequence[Mapping[str, str]]) -> list[dict[str, float | s
     return sorted(out, key=lambda r: str(r["date"]))
 
 
+def action_date_base(
+    rows_by_date: Mapping[str, Mapping[str, float | str]], event_date: str, column: str
+) -> float | None:
+    """The close ON an action date, or None when the sample has no row for that date.
+
+    The vendor's ratio is computed from the action-date close, so a missing row makes the
+    event **unexercisable**. Substituting the nearest earlier close would silently answer a
+    different question and would reconcile only by luck.
+    """
+    row = rows_by_date.get(event_date)
+    if row is None:
+        return None
+    value = row.get(column)
+    return float(value) if isinstance(value, (int, float)) and float(value) > 0 else None
+
+
 def reconcile_dividend_adjustment(
     rows: Sequence[Mapping[str, str]],
     dividends: Sequence[tuple[str, float]],
@@ -805,15 +915,19 @@ def reconcile_dividend_adjustment(
 ) -> DividendReconciliation:
     """Does ``close / closeadj`` equal the cumulative later cash-dividend ratio?
 
-    Both series are the vendor's own, so the identity is internal to its data:
-    ``close`` is split-adjusted, ``closeadj`` is split, dividend and spinoff adjusted, and
-    adjustment is backward (`PSR-SHD-120`). Their ratio at a date is therefore the product
-    of the dividend and spinoff ratios that fall after it.
+    Both series are the vendor's own, so the identity is internal to its data: ``close`` is
+    split-adjusted, ``closeadj`` is split, dividend and spinoff adjusted, and adjustment is
+    backward (`PSR-SHD-120`). Their ratio at a date is therefore the product of the dividend
+    and spinoff ratios that fall after it.
+
+    **The ratio base is the close on the action date**, per the vendor's worked example. An
+    event whose date has no price row in the sample is *unexercisable*, and every row it
+    would have adjusted is dropped rather than compared against a substituted base.
 
     **Rows a spinoff could explain are excluded rather than explained away.** A spinoff's
     ratio needs the spun-off entity's opening price, which this sample does not contain, so
-    any row a spinoff sits after is dropped from the comparison. What remains isolates the
-    dividend mechanism, or is empty and says so.
+    any row a spinoff sits after is dropped. What remains isolates the dividend mechanism,
+    or is empty and says so.
     """
     if not literal_identified:
         return DividendReconciliation(
@@ -831,64 +945,66 @@ def reconcile_dividend_adjustment(
 
     ordered = _numeric_rows(rows)
     if not ordered:
+        # Missing evidence, not a failed comparison.
         return DividendReconciliation(
-            status=INCONCLUSIVE,
-            model=DIVIDEND_MODEL_UNRESOLVED,
+            status=NOT_EXERCISED,
+            model=DIVIDEND_NO_COMPARABLE_ROWS,
             rows_compared=0,
             events_applied=0,
             worst_relative_deviation=0.0,
-            note="no row carried a date and all three close columns",
+            note="no row carried a date and all three close columns, so the limb did not run",
         )
 
+    by_date: dict[str, Mapping[str, float | str]] = {str(r["date"]): r for r in ordered}
     last_spinoff = max(spinoff_dates) if spinoff_dates else None
 
-    # A dividend needs the close on the day before its ex-date. One that predates every
-    # row has no such close, so rows it could reach are dropped rather than approximated.
-    resolvable: list[tuple[str, float, float, float]] = []
-    unresolvable: list[str] = []
+    # The ratio base is the close ON the action date. A dividend whose date has no price
+    # row cannot be computed, and the rows it would have adjusted are dropped rather than
+    # compared against a substituted base.
+    exercisable: list[tuple[str, float, float, float]] = []
+    unexercisable: list[str] = []
     for event_date, amount in sorted(dividends):
-        prior = [r for r in ordered if str(r["date"]) < event_date]
-        if not prior:
-            unresolvable.append(event_date)
+        base_unadj = action_date_base(by_date, event_date, "closeunadj")
+        base_close = action_date_base(by_date, event_date, "close")
+        if base_unadj is None or base_close is None:
+            unexercisable.append(event_date)
             continue
-        previous = prior[-1]
-        resolvable.append(
-            (event_date, amount, float(previous["closeunadj"]), float(previous["close"]))
-        )
-    blocked = max(unresolvable) if unresolvable else None
+        exercisable.append((event_date, amount, base_unadj, base_close))
+    blocked = max(unexercisable) if unexercisable else None
 
+    # An event adjusts rows that PRECEDE it, so a row at or after an unexercisable event
+    # is unaffected by it and stays comparable.
     usable = [
         r
         for r in ordered
         if (last_spinoff is None or str(r["date"]) > last_spinoff)
-        and (blocked is None or str(r["date"]) > blocked)
+        and (blocked is None or str(r["date"]) >= blocked)
     ]
     if not usable:
         return DividendReconciliation(
-            status=INCONCLUSIVE,
-            model=DIVIDEND_MODEL_UNRESOLVED,
+            status=NOT_EXERCISED,
+            model=DIVIDEND_NO_COMPARABLE_ROWS,
             rows_compared=0,
             events_applied=0,
             worst_relative_deviation=0.0,
             note=(
-                "every row sits before a spinoff or an unresolvable dividend, so none "
-                "isolates the cash-dividend mechanism"
+                "every row sits before a spinoff or an unexercisable dividend, so none "
+                "isolates the cash-dividend mechanism and the limb did not run"
             ),
         )
 
     earliest = str(usable[0]["date"])
-    events_applied = sum(1 for event_date, _, _, _ in resolvable if event_date > earliest)
+    events_applied = sum(1 for event_date, _, _, _ in exercisable if event_date > earliest)
 
     matching: list[str] = []
-    worst = 0.0
-    for name, inclusive, column in DIVIDEND_MODELS:
+    model_worsts: list[float] = []
+    for name, column in DIVIDEND_MODELS:
         model_worst = 0.0
         matches = 0
         for row in usable:
             factor = 1.0
-            for event_date, amount, base_unadj, base_close in resolvable:
-                applies = event_date > str(row["date"]) or (inclusive and event_date == row["date"])
-                if not applies:
+            for event_date, amount, base_unadj, base_close in exercisable:
+                if event_date <= str(row["date"]):
                     continue
                 base = base_unadj if column == "closeunadj" else base_close
                 factor *= (base + amount) / base
@@ -899,7 +1015,12 @@ def reconcile_dividend_adjustment(
                 matches += 1
         if matches == len(usable):
             matching.append(name)
-        worst = model_worst if worst == 0.0 else min(worst, model_worst)
+        model_worsts.append(model_worst)
+
+    # The best model's worst row. An earlier revision seeded this at 0.0 and treated that
+    # as "unset", so a genuinely perfect model was overwritten by a worse later one and the
+    # private report published the wrong diagnostic.
+    worst = min(model_worsts) if model_worsts else 0.0
 
     if events_applied == 0:
         agrees = all(
@@ -928,7 +1049,7 @@ def reconcile_dividend_adjustment(
             events_applied=events_applied,
             worst_relative_deviation=worst,
             note=(
-                "no combination of action-date convention and dividend denomination "
+                "neither share basis for the recorded dividend amount "
                 "reconciles every row; the adjustment method is not established"
             ),
         )
@@ -944,6 +1065,58 @@ def reconcile_dividend_adjustment(
             "and the published cash-dividend ratio"
         ),
     )
+
+
+#: The columns the split and dividend limbs both depend on. Without them the actions table
+#: cannot answer anything, and must not be read as answering "nothing happened".
+REQUIRED_ACTION_COLUMNS = frozenset({"date", "action", "value"})
+
+
+def actions_usable(actions: TableSample | None) -> tuple[bool, str]:
+    """Can the actions table be used as evidence? Returns ``(usable, reason)``.
+
+    **"No actions table" is not "the actions table says no actions."** That collapse is the
+    dangerous one: a failed, malformed or empty response makes every extractor return an
+    empty list, which reads downstream as "no split, no dividend, no spinoff" -- and the
+    split limb would then reconcile trivially and partially validate P5 on the strength of
+    a request that never arrived.
+
+    An **empty** table is refused for the same reason. Over a five-year window a security
+    with literally no corporate action is possible but unremarkable-looking, and it is
+    indistinguishable from a silently truncated response. The cost of being wrong is a
+    false partial validation, so the absence of rows is treated as absence of evidence.
+    """
+    if actions is None:
+        return False, "actions: not requested or not present in the sample"
+    if actions.fetch_error is not None:
+        return False, f"actions: retrieval failed ({actions.fetch_error})"
+    if actions.parse_error is not None:
+        return False, f"actions: unparseable ({actions.parse_error})"
+    if not actions.columns:
+        return False, "actions: no header row"
+    present = {column.strip().lower() for column in actions.columns}
+    missing = sorted(REQUIRED_ACTION_COLUMNS - present)
+    if missing:
+        return False, f"actions: missing required column(s) {', '.join(missing)}"
+    if not actions.rows:
+        return False, (
+            "actions: the table returned no rows, which is indistinguishable from a "
+            "truncated response and is not read as 'no corporate actions occurred'"
+        )
+    return True, ""
+
+
+def stock_dividend_literals(vocabulary: Sequence[str]) -> tuple[str, ...]:
+    """Observed literals that look like a stock dividend.
+
+    A stock dividend changes the float, so the vendor adjusts it with the *same*
+    ``New Float / Old Float`` ratio as a split (`PSR-SHD-120`) -- and the split-adjusted
+    close would therefore carry it too. The actions page publishes neither the action-type
+    vocabulary nor the per-type meaning of ``value`` (`PSR-SHD-112`), so such an event
+    cannot be translated safely. Where one could touch the comparison, the split limb is
+    confounded rather than failed.
+    """
+    return tuple(literal for literal in vocabulary if "dividend" in literal and "stock" in literal)
 
 
 #: The one action literal the vendor evidences, in its own published query example
@@ -1246,6 +1419,29 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
             },
         )
 
+    usable, reason = actions_usable(actions)
+    if not usable:
+        # Every extractor would return an empty list here, which downstream reads as "no
+        # split, no dividend, no spinoff" -- and the split limb would then reconcile
+        # trivially. Refusing at the source is the only place this stays honest.
+        return Finding(
+            test_id="P5",
+            title="Adjusted/raw reconciliation",
+            status=INCONCLUSIVE,
+            observations=(
+                reason,
+                "no limb was exercised: an unusable actions table is absence of evidence, "
+                "not evidence that no corporate action occurred",
+            ),
+            limitations=("ADJUSTMENT_UNVERIFIED",),
+            attributes={
+                "split_limb": NOT_EXERCISED,
+                "dividend_limb": NOT_EXERCISED,
+                "spinoff_limb": NOT_EXERCISED,
+                "evidence": "ACTIONS_NOT_USABLE",
+            },
+        )
+
     vocabulary = observed_action_vocabulary(actions)
     splits = extract_splits(actions)
     split_result = reconcile_split_adjustment(stocks.rows, splits)
@@ -1280,15 +1476,41 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
         spinoff_status = NOT_EXERCISED
         spinoff_note = "no spinoff falls in the sampled range, so the limb did not run"
 
-    limbs = (split_result.status, dividend_result.status, spinoff_status)
-    status = INCONCLUSIVE if INCONCLUSIVE in limbs else PARTIALLY_TESTED
+    # A stock dividend shares the split's float ratio, so it would also be inside the
+    # split-adjusted close -- but its `value` semantics are undocumented, so it cannot be
+    # modelled. Where one could touch the comparison, a split-limb disagreement has an
+    # innocent explanation and must not be read as vendor corruption.
+    confounders = tuple(
+        literal
+        for literal in stock_dividend_literals(vocabulary)
+        if any(
+            date > split_result.earliest_compared
+            for date, _ in extract_dated_values(actions, literal)
+            if split_result.earliest_compared
+        )
+    )
+    split_status = INCONCLUSIVE if confounders else split_result.status
+    split_convention = "CONFOUNDED" if confounders else split_result.convention
+
+    # The split and dividend limbs are REQUIRED evidence: a limb that did not run leaves P5
+    # inconclusive rather than partially satisfied. Only the spinoff limb may legitimately
+    # be NOT_EXERCISED, because it can never run from this surface at all.
+    required = (split_status, dividend_result.status)
+    status = (
+        INCONCLUSIVE
+        if spinoff_status == INCONCLUSIVE
+        or any(limb not in (TESTED, PARTIALLY_TESTED) for limb in required)
+        else PARTIALLY_TESTED
+    )
     # PARTIALLY_TESTED is the ceiling and TESTED is unreachable, because the spinoff limb is
     # NOT_EXERCISED at best. That is deliberate: a mechanism never run end to end is not
     # proven by the parts of it that did run.
 
     limitations: list[str] = []
-    if split_result.status != TESTED:
+    if split_status != TESTED:
         limitations.append("ADJUSTMENT_UNVERIFIED")
+    if confounders:
+        limitations.append("SPLIT_ADJUSTMENT_CONFOUNDED_BY_UNMODELLED_ACTION")
     if dividend_result.status != TESTED:
         limitations.append("DIVIDEND_ADJUSTMENT_UNVERIFIED")
     limitations.append(
@@ -1302,9 +1524,11 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
         observations=(
             f"observed action vocabulary: {len(vocabulary)} literal(s); "
             f"cash-dividend literal {dividend_state}",
-            f"split limb: {split_result.status} ({split_result.convention}); "
+            f"split limb: {split_status} ({split_convention}); "
             f"rows compared {split_result.rows_compared}, "
-            f"splits in range {split_result.splits_in_range}",
+            f"splits present {split_result.splits_in_range}, "
+            f"splits actually exercised {split_result.splits_exercised}",
+            f"unmodelled split-like action literals touching the comparison: {len(confounders)}",
             f"split exclusive matches {split_result.exclusive_matches}, "
             f"inclusive matches {split_result.inclusive_matches}, "
             f"worst relative deviation {split_result.worst_relative_deviation:.6f}",
@@ -1317,8 +1541,9 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
         ),
         limitations=tuple(limitations),
         attributes={
-            "split_limb": split_result.status,
-            "split_convention": split_result.convention,
+            "split_limb": split_status,
+            "split_convention": split_convention,
+            "split_confounded": "true" if confounders else "false",
             "dividend_limb": dividend_result.status,
             "dividend_model": dividend_result.model,
             "spinoff_limb": spinoff_status,
@@ -1512,25 +1737,41 @@ def validate_findings(findings: Sequence[Finding]) -> None:
             raise SafeHarnessError("validate", "P6_MUST_RETAIN_REVISION_CHRONOLOGY_LIMITATION")
 
 
-def private_recommendation(findings: Sequence[Finding]) -> str:
+def private_recommendation(findings: Sequence[Finding], retrieval_complete: bool) -> str:
     """The PRIVATE owner-only recommendation.
 
     **Never printed, never returned to an AI session, never committed, never in a PR.**
     It exists only inside the private report. It is computed here so the reasoning is
     reviewable in public source while its *result* stays private.
+
+    ``retrieval_complete`` is required rather than defaulted. A report that says "retrieval
+    incomplete" and "PROCEED" in the same breath would be self-contradictory, and a default
+    would let a caller reach that state by forgetting an argument.
     """
     validate_findings(findings)
     by_id = {f.test_id: f for f in findings}
 
     p5 = by_id["P5"]
+
+    # An incomplete run cannot support any conclusion about the provider -- including an
+    # adverse one. A limb may have failed because of what did not arrive.
+    if not retrieval_complete:
+        return HOLD
+
     # Only a limb that actually RAN can reject. `NOT_EXERCISED` -- a table that could not be
     # retrieved, or an event type the window never contained -- is missing evidence, and
     # missing evidence is a reason to look again rather than a verdict about the provider.
-    if p5.attributes.get("split_limb") == INCONCLUSIVE:
+    if (
+        p5.attributes.get("split_limb") == INCONCLUSIVE
+        and p5.attributes.get("split_confounded") != "true"
+    ):
         # The vendor's split-adjusted close does not reconcile against its own unadjusted
         # close using its own actions. Both series and the action are the vendor's, so
         # nothing here depends on an assumption of ours: it is an internal inconsistency,
         # and a data-quality failure rather than a coverage limitation.
+        #
+        # Confounded is excluded deliberately: where an unmodelled split-like action could
+        # explain the disagreement, "the vendor's data is wrong" is not the only reading.
         return REJECT
 
     # A failing dividend limb is deliberately NOT a reject. It depends on the observed
@@ -1841,7 +2082,9 @@ def run_private_qualification(
     samples: dict[str, TableSample] = {}
     fetch_errors: dict[str, str] = {}
 
-    for table, params in REQUEST_INVENTORY:
+    window = five_year_window(now)
+    for table, windowed in REQUEST_INVENTORY:
+        params = build_request_params(table, windowed, window)
         try:
             payload = fetch(authorization, table, params, pacer)
         except SafeHarnessError as exc:
@@ -1853,7 +2096,9 @@ def run_private_qualification(
         samples[table] = parse_csv_payload(table, payload, item.address)
 
     findings = evaluate_all(samples)
-    recommendation = private_recommendation(findings)
+    # The private recommendation is computed from the findings AND from whether the run
+    # actually retrieved what it set out to. An incomplete run cannot say PROCEED.
+    recommendation = private_recommendation(findings, retrieval_complete=not fetch_errors)
 
     uploaded = upload_staged(staged, run_id, buckets, authorization.profile, put=put)
     _, retained = purge_uploaded(uploaded)
