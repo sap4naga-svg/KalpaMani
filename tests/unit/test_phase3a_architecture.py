@@ -14,6 +14,8 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -320,7 +322,6 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
     authorized = {
         "__init__.py",
         "objectstore.py",
-        "storage.py",
         "contracts",
         "curate",
         "ingest",
@@ -328,6 +329,7 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
         "normalize",
         "pit",
         "quality",
+        "storage",
     }
     present = {entry.name for entry in DATA_ROOT.iterdir() if entry.name != "__pycache__"}
     assert present == authorized, (
@@ -336,16 +338,21 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
     )
 
 
-#: SDKs and data engines this slice must not depend on. The check is about what
+#: SDKs and data engines this project must not depend on. The check is about what
 #: the project declares and imports, never about what happens to be installed in
 #: whichever virtualenv the suite runs in.
+#:
+#: **`boto3` and `botocore` left this list on 2026-08-28** (ADR-0011), and the
+#: replacement rule is narrower rather than absent: the AWS SDK is declared as the
+#: single runtime dependency, and `AWS_SDK_BOUNDARY` below is the only module
+#: permitted to name it. Everything else here is still forbidden everywhere.
 FORBIDDEN_DISTRIBUTIONS = (
     "duckdb",
     "pyarrow",
     "pandas",
     "polars",
-    "boto3",
-    "botocore",
+    "moto",
+    "localstack",
     "requests",
     "httpx",
     "urllib3",
@@ -365,6 +372,171 @@ def _declared_dependencies() -> list[str]:
     for match in re.finditer(r"^\s*\"([^\"]+)\",?\s*$", content, flags=re.M):
         declared.append(match.group(1))
     return declared
+
+
+def test_the_storage_package_holds_only_the_authorized_backends() -> None:
+    """Two backends, named. A third would be a decision, not a file."""
+    present = {
+        entry.name for entry in (DATA_ROOT / "storage").iterdir() if entry.name != "__pycache__"
+    }
+    assert present == {"__init__.py", "local.py", "s3.py"}, sorted(present)
+
+
+def test_importing_the_storage_package_does_not_pull_in_the_s3_backend() -> None:
+    """``kalpamani.data.storage`` re-exports the local store only.
+
+    A convenience re-export of ``s3`` would make every importer of the local
+    table store transitively depend on the AWS boundary, which is the coupling
+    the package split exists to prevent. Reaching the S3 store is deliberately an
+    explicit ``from kalpamani.data.storage.s3 import ...``.
+
+    Proven in a **fresh interpreter** rather than against this one: by the time
+    this test runs, some earlier test has almost certainly imported the S3
+    module, so ``sys.modules`` here would say nothing at all.
+    """
+    probe = (
+        "import sys;"
+        "import kalpamani.data.storage as pkg;"
+        "print(pkg.LocalTableStore.__name__,"
+        " 'kalpamani.data.storage.s3' in sys.modules,"
+        " any(m.split('.')[0] in ('boto3', 'botocore') for m in sys.modules))"
+    )
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=PROJECT_ROOT,
+    )
+    assert completed.stdout.split() == ["LocalTableStore", "False", "False"], completed.stdout
+
+
+#: The one module allowed to speak AWS. Everything above it depends on the
+#: `ResearchObjectStore` protocol and knows no bucket, ARN, account or SDK type.
+AWS_SDK_BOUNDARY = DATA_ROOT / "storage" / "s3.py"
+
+#: Distributions that only `AWS_SDK_BOUNDARY` may import.
+AWS_SDK_DISTRIBUTIONS = ("boto3", "botocore")
+
+
+def test_only_the_storage_boundary_may_import_the_aws_sdk() -> None:
+    """A narrower rule than "nobody", and it has to be enforced rather than agreed.
+
+    ADR-0011 authorized one S3 adapter. If the SDK could be imported anywhere,
+    the seam that keeps buckets and credentials out of the provider packages and
+    the point-in-time kernel would be a convention rather than a boundary.
+    """
+    offenders: list[str] = []
+    for path in _python_files(PACKAGE_ROOT):
+        if path == AWS_SDK_BOUNDARY:
+            continue
+        for module in _imported_modules(path):
+            if module.split(".")[0] in AWS_SDK_DISTRIBUTIONS:
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)} imports {module}")
+    assert offenders == [], f"only data/storage/s3.py may name the AWS SDK. Found: {offenders}"
+
+
+def test_the_s3_adapter_imports_no_sdk_at_all() -> None:
+    """Stronger than the boundary rule, and worth stating separately.
+
+    The client is injected, so even the one permitted module does not import the
+    SDK today: importing the data platform pulls in no AWS code, opens no socket
+    and performs no ambient credential discovery. If a future edit needs the
+    import, the boundary test above still allows it -- here.
+    """
+    assert AWS_SDK_BOUNDARY.is_file()
+    imported = _imported_modules(AWS_SDK_BOUNDARY)
+    assert not {module.split(".")[0] for module in imported} & set(AWS_SDK_DISTRIBUTIONS)
+
+
+def test_no_data_module_constructs_an_s3_client_or_store() -> None:
+    """No composition root exists in this slice, so nothing may build one."""
+    offenders: list[str] = []
+    for path in _python_files(PACKAGE_ROOT):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if name in {"S3ResearchObjectStore", "client", "resource", "Session"}:
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} {name}")
+    assert offenders == [], f"no runner or composition root is authorized. Found: {offenders}"
+
+
+def _executable_code(path: Path) -> str:
+    """The module's code with every docstring removed.
+
+    A guard that scanned raw source would fire on the prose explaining what the
+    module refuses to do -- which would either weaken the guard or forbid saying
+    why it exists. Unparsing a docstring-stripped tree keeps string literals and
+    attribute access, and drops only the narration.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
+def test_the_s3_client_protocol_declares_exactly_two_operations() -> None:
+    """The injected client is typed by what the store may ask of it.
+
+    A wider protocol would let a future edit reach a destructive operation with
+    no type error, and would oblige every synthetic client to implement one.
+    """
+    members = {
+        node.name
+        for node in ast.walk(ast.parse(AWS_SDK_BOUNDARY.read_text(encoding="utf-8")))
+        if isinstance(node, ast.ClassDef) and node.name == "S3Client"
+        for node in node.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert members == {"put_object", "head_object"}, sorted(members)
+
+
+def test_the_s3_store_adds_nothing_to_the_protocol_surface() -> None:
+    """Deletion belongs to the separately roled path under ADR-0007. A routine
+    research writer must never receive it, and must not grow a read or list
+    surface either."""
+    source = _executable_code(AWS_SDK_BOUNDARY)
+    for forbidden in (
+        "delete_object",
+        "delete_objects",
+        "list_objects",
+        "list_objects_v2",
+        "get_object",
+        "copy_object",
+        "upload_file",
+        "S3Transfer",
+        "create_multipart_upload",
+        "put_object_acl",
+        "put_bucket_versioning",
+    ):
+        assert forbidden not in source, f"{forbidden} has no place in a research writer"
+
+
+def test_the_project_declares_only_the_aws_sdk_at_runtime() -> None:
+    """One dependency, bounded, and named. The zero-dependency posture was given
+    up deliberately by ADR-0011 rather than drifting."""
+    content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r"^dependencies = \[(.*?)^\]", content, flags=re.M | re.S)
+    assert declared is not None
+    body = declared.group(1)
+    entries = re.findall(r'"([^"]+)"', body)
+    assert entries == ["boto3>=1.36.0,<2.0"], entries
 
 
 def test_no_vendor_sdk_or_data_engine_is_declared_as_a_dependency() -> None:
@@ -394,10 +566,17 @@ def test_no_kalpamani_module_imports_a_vendor_sdk_or_data_engine() -> None:
     assert offenders == [], f"Found: {offenders}"
 
 
-def test_the_project_still_declares_no_runtime_dependencies() -> None:
-    """The A1 kernel adds none. A data engine is a decision gate G1 has not reached."""
-    content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "dependencies = []" in content
+def test_no_service_emulator_is_introduced() -> None:
+    """Moto and LocalStack are emulators, not evidence.
+
+    A synthetic in-process client proves what the adapter *sends* and what it
+    refuses to guess at, which is the part that has to be right. An emulator
+    would add a large dependency and a second implementation of S3's semantics
+    to be wrong about.
+    """
+    content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8").lower()
+    for emulator in ("moto", "localstack", "minio"):
+        assert emulator not in content
 
 
 # ---------------------------------------------------------------------------

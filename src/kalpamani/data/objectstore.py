@@ -85,9 +85,16 @@ silently replaces evidence is not evidence.
 
 **Nothing here opens a socket, reads a file or names a cloud.** The only
 implementation in this module is :class:`InMemoryResearchObjectStore`, which is
-for tests and local development. **The real S3 writer is a separate, later,
-separately authorized slice** -- it is the piece that needs a credential, a bucket
-and an SDK, and none of those is authorized here.
+for tests and local development. The licensed cloud backend lives behind the same
+protocol in :mod:`kalpamani.data.storage.s3` (ADR-0011), and this module does not
+import it: the seam only means something if the contract stays ignorant of the
+backends.
+
+**Admission is decided here, once, for every backend.** :func:`require_exact_key`,
+:func:`require_publishable` and :func:`physical_key` are shared rather than
+reimplemented per store. Two implementations of *what may be published* would
+eventually disagree, and the disagreement would surface as a divergence between
+what a test proved and what a bucket holds.
 """
 
 from __future__ import annotations
@@ -279,6 +286,74 @@ class ObjectKey:
         )
 
 
+def require_exact_key(key: ObjectKey) -> ObjectKey:
+    """``key`` if it is an exact, publishable :class:`ObjectKey`, else a refusal.
+
+    **The admission rule every backend applies, in one place.** Extracted so the
+    in-memory store and the S3 store cannot drift apart on what they accept --
+    two stores disagreeing about which keys are valid is a difference that only
+    shows up in production.
+
+    Raises:
+        ObjectClassificationError: if ``key`` is not an exact ``ObjectKey``, or
+            names a classification this slice cannot publish. Subclassing is
+            refused at class creation; this is the boundary half of the same
+            rule, so a duck-typed stand-in cannot present an identity that was
+            never validated.
+    """
+    if type(key) is not ObjectKey:
+        raise ObjectClassificationError(
+            f"key must be an exact ObjectKey, not {type(key).__name__}. Subclassing is "
+            "refused at class creation; this is the boundary half of the same rule, so a "
+            "duck-typed stand-in cannot present an identity that was never validated."
+        )
+    if key.classification is not DataClassification.LICENSED:
+        raise ObjectClassificationError(
+            f"{key.classification.value} objects are not publishable in this slice."
+        )
+    return key
+
+
+def require_publishable(key: ObjectKey, payload: bytes) -> bytes:
+    """The exact bytes ``key`` names, or a refusal. Applied by every backend.
+
+    Raises:
+        ObjectClassificationError: if ``key`` is not an exact, publishable key.
+        ObjectPayloadTypeError: if ``payload`` is not exact, immutable ``bytes``.
+        ObjectContentMismatchError: if ``payload`` does not hash to the content
+            address ``key`` claims.
+    """
+    require_exact_key(key)
+    exact = immutable_payload(payload)
+    digest = sha256_hex(exact)
+    if digest != key.content_sha256:
+        raise ObjectContentMismatchError(
+            f"payload hashes to {digest}, but {key.logical_key} claims "
+            f"{key.content_sha256}. A content address the content does not satisfy would "
+            "make every identity in this store a coincidence."
+        )
+    return exact
+
+
+def physical_key(key: ObjectKey) -> str:
+    """The location a backend stores ``key`` at, below its classification's store.
+
+    **Identity and location are different things, and this is the seam.**
+    :attr:`ObjectKey.logical_key` is the deployment-independent identity and
+    keeps its ``licensed/`` prefix; the classification *selects the store*, so
+    repeating it inside that store would name the object
+    ``<licensed-bucket>/licensed/...`` -- the classification stated twice, once
+    as a routing decision and once as a directory.
+
+    So a logical ``licensed/bronze/<provider>/<dataset>/...`` is stored at
+    ``bronze/<provider>/<dataset>/...`` inside the licensed store. Every segment
+    has already passed :func:`~kalpamani.data.contracts.paths.path_segment`, so
+    the join introduces nothing a caller chose.
+    """
+    require_exact_key(key)
+    return "/".join(key.segments)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PutOutcome:
     """What one :meth:`ResearchObjectStore.put_if_absent` actually did.
@@ -362,20 +437,8 @@ class InMemoryResearchObjectStore:
 
     def put_if_absent(self, *, key: ObjectKey, payload: bytes) -> PutOutcome:
         """Store ``payload`` under ``key`` unless the name is already occupied."""
-        if type(key) is not ObjectKey:
-            raise ObjectClassificationError(
-                f"key must be an exact ObjectKey, not {type(key).__name__}. Subclassing is "
-                "refused at class creation; this is the boundary half of the same rule, so a "
-                "duck-typed stand-in cannot present an identity that was never validated."
-            )
-        payload = immutable_payload(payload)
-        digest = sha256_hex(payload)
-        if digest != key.content_sha256:
-            raise ObjectContentMismatchError(
-                f"payload hashes to {digest}, but {key.logical_key} claims "
-                f"{key.content_sha256}. A content address the content does not satisfy would "
-                "make every identity in this store a coincidence."
-            )
+        payload = require_publishable(key, payload)
+        digest = key.content_sha256
         stored = self._objects.get(key.logical_key)
         if stored is not None:
             if stored.content_sha256 == digest and stored.payload == payload:
@@ -390,6 +453,7 @@ class InMemoryResearchObjectStore:
 
     def exists(self, *, key: ObjectKey) -> bool:
         """Whether this exact object -- name **and** content address -- is stored."""
+        require_exact_key(key)
         stored = self._objects.get(key.logical_key)
         return stored is not None and stored.content_sha256 == key.content_sha256
 
@@ -437,4 +501,7 @@ __all__ = [
     "ResearchObjectStore",
     "exact_str",
     "immutable_payload",
+    "physical_key",
+    "require_exact_key",
+    "require_publishable",
 ]

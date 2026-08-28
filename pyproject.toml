@@ -16,9 +16,28 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 
-# Bootstrap phase: intentionally zero runtime dependencies.
-# No brokerage, market-data or AI client libraries are installed yet.
-dependencies = []
+# ONE runtime dependency, added by ADR-0011 for the licensed S3 object store.
+#
+# The zero-dependency posture held from bootstrap through the A1 kernel and the
+# provider-integration slice, and it is given up deliberately rather than
+# incidentally. A store that writes to S3 must sign requests, resolve credentials
+# and honour retry semantics, and none of that may be hand-written: SigV4
+# implemented here would be a security-critical component with no review surface
+# and no upstream fixes.
+#
+# `boto3` only. No brokerage, market-data, AI, data-engine or emulator library is
+# installed, and a static test still refuses every one of them. The floor is the
+# first release whose S3 model carries conditional `PutObject` through
+# `IfNoneMatch`, which is the mechanism the store's append-only guarantee rests
+# on; the ceiling keeps a major-version change a reviewed decision.
+#
+# **Nothing in `src/` imports it.** The S3 client is injected, so the SDK is
+# needed to *construct* that client in a future authorized runner -- which does
+# not exist yet -- and importing the data platform stays SDK-free and
+# network-silent.
+dependencies = [
+    "boto3>=1.36.0,<2.0",
+]
 
 [project.optional-dependencies]
 dev = [
