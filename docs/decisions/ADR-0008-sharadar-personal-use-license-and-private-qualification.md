@@ -58,15 +58,30 @@ method*, not the decision:
 | `https://sharadar.com/docs/auth` | A key is passed **in the query string**; a vendor-published test key exists and is documented for AAPL queries |
 | `https://sharadar.com/sample` | Free sample: 30 DJIA names, 5 years, sign-in required |
 | `https://sharadar.com/docs/tickers` | **The tickers table is a snapshot** — the vendor states that its 5, 10 and full bulk options all download the same table (`PSR-SHD-119`) |
-| `https://blog.sharadar.com/` — post dated 2026-07-29 | **The price-adjustment methodology is published**: backward adjustment, and the cash-dividend, stock-dividend, split and spinoff ratios (`PSR-SHD-120`) |
+| `https://blog.sharadar.com/` — post dated 2026-07-29 | **The price-adjustment methodology is published**: backward adjustment from the **action-date** close, and the cash-dividend, stock-dividend, split and spinoff ratios (`PSR-SHD-120`) |
+| `https://sharadar.com/docs/{stocks,actions,fundamentals,events}` | Every temporal table defaults to `from` = **one year ago** and `to` = the prior day (`PSR-SHD-121`) |
 
-> **Two corrections the second pass forced, recorded because they cut in opposite directions.**
-> The snapshot statement made the harness's classification test **more** conservative: a table the
-> vendor calls a snapshot has no temporal axis, so differing values across its rows can never be
-> read as a dated change. The published methodology made another test **less** conservative: the
-> harness had recorded the dividend and spinoff formulas as unpublished, and that had stopped
-> being true. A pessimism that is no longer true is as much a defect as an unearned pass, and
-> both were fixed rather than only the flattering one.
+> **Three corrections these passes forced, recorded because they do not all cut the same way.**
+>
+> The **snapshot** statement made the classification test *more* conservative: a table the vendor
+> calls a snapshot has no temporal axis, so differing values across its rows can never be read as
+> a dated change.
+>
+> The **published methodology** made the adjustment test *less* conservative: the harness had
+> recorded the dividend and spinoff formulas as unpublished, and that had stopped being true. A
+> pessimism that is no longer true is as much a defect as an unearned pass. Reading the post
+> closely also **reversed** an assumption inside the correction itself — the ratio base is the
+> close *on* the action date, not the close before it, and the date question the harness had been
+> carrying as an open ambiguity was one the vendor had already answered.
+>
+> The **documented one-year default** was the one that would have quietly changed what the run
+> *meant*. Supplying no date window would have produced a one-year probe described everywhere as a
+> five-year sample — and a one-year window of a single mega-cap plausibly contains no split at
+> all, which would have reduced the only genuinely empirical check to a trivial agreement and
+> reported it as evidence.
+>
+> None of the three touches the licensing decision. All three change how the qualification must be
+> run, which is why they are recorded here rather than left in the harness alone.
 
 **No Sharadar API was called. No Services Data was retrieved, inspected or evaluated to reach this
 decision.** Everything above is the vendor's own public website.
