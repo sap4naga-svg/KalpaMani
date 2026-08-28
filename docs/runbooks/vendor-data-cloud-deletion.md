@@ -57,6 +57,39 @@ maintained, this runbook does not work, and no amount of care on the day recover
 | 2 | The owner has authorized execution. This is a destructive, irreversible operation. |
 | 3 | The date the 30-day clock started is recorded. |
 | 4 | The licensed/control boundary has been maintained ([§7](#7-pre-flight-verification-that-the-boundary-held)). If it has not, that is established **before** deleting anything, because a misfiled artifact in the control bucket will otherwise survive. |
+| 5 | A deletion task or operator path has been **separately authorized and created**, and an identity has been granted `iam:PassRole` for the deletion role. **Neither exists today**, so this runbook is currently unexecutable by construction — see below. |
+
+### Which identity performs the deletion
+
+**Every deletion step below runs as the dedicated `licensed_data_deletion` role, never as the
+routine research task role.**
+
+The routine research role deliberately holds **no** `s3:DeleteObject`. The licensed bucket has no
+versioning, no replication and no backup, so a delete cannot be undone; giving standing
+destructive authority to the role that also runs daily ingestion would let an ordinary bug in
+research code destroy unrecoverable history. Deleting therefore requires deliberately assuming a
+different identity, which is the point.
+
+| | `licensed_data_deletion` |
+|---|---|
+| **can** | list the licensed bucket and its versions; read its versioning, replication and lifecycle configuration; delete objects, delete object versions, abort and list multipart uploads |
+| **cannot** | read licensed object contents (`GetObject`), write anything (`PutObject`), touch the **control** bucket at all, or read any provider secret |
+
+That shape is deliberate. Deletion does not require reading the data, so it does not get to; the
+object counts and sizes for the receipt come from listing, not from contents. And because the role
+has no access to the control bucket, it cannot destroy the manifests, lineage or deletion receipts
+that must survive — **the evidence that a deletion happened is outside the reach of the identity
+performing it.**
+
+> **The role is committed but currently unusable, and that is intentional.** No ECS task
+> definition exists, no deletion task or workflow exists, no image exists, and no identity has
+> `iam:PassRole` for it — so nothing can launch anything that runs as this role. Creating that
+> task and granting `PassRole` is a **separate authorization that has not been given**. The role
+> is defined in advance for the same reason this runbook is written in advance: so the deletion
+> path is reviewable before it is ever needed, not improvised inside a 30-day window.
+
+The receipt in step 14 is written to the control bucket by the **operator path**, not by the
+deletion role.
 
 **This procedure is irreversible by design.** The licensed bucket has no versioning, no
 replication and no backup precisely so that deletion is complete — which also means there is no

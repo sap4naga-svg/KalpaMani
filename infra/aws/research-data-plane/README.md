@@ -120,13 +120,40 @@ listening.
 **Conditional on there never being a listener.** If any component ever needs to accept a
 connection, replace this with private subnets plus a NAT Gateway, or with VPC endpoints.
 
-### 3. Two roles, no users, no access keys
+### 3. Three roles, and only one of them can destroy anything
 
-The execution role pulls the image and opens a log stream; it never sees research data. The task
-role reaches the buckets; it cannot pull images. No IAM user and no long-lived access key is
-created anywhere. The only `"*"` resource in the configuration is on
-`ecr:GetAuthorizationToken`, which AWS does not permit to be scoped — one named action, not a
-wildcard.
+| Role | Can | Cannot |
+|---|---|---|
+| **Execution** — the ECS agent, before the container starts | pull the image, open the log stream | see research data |
+| **Task** — the research code itself | read/write both buckets, later read one secret | pull images, write CloudWatch directly, **delete anything** |
+| **Deletion** — vendor termination and rehearsals only | list and delete licensed objects and versions, abort multipart uploads, read the bucket's versioning/replication/lifecycle state | read object contents, write anything, touch the control bucket, read a secret |
+
+**The task role deliberately holds no `s3:DeleteObject`.** An earlier revision granted it, arguing
+that deletion is a licensing requirement — which is true of *KalpaMani as a system* and does not
+follow for a role that runs every ingestion job. Because the licensed bucket has no versioning, no
+replication and no backup, that grant meant a bug in routine research code could silently destroy
+unrecoverable history. Deleting now requires deliberately assuming a different identity.
+
+**The deletion role cannot reach the control bucket**, so the manifests, lineage and deletion
+receipts proving a deletion happened lie outside the reach of the identity performing it. It also
+cannot read the objects it deletes — deletion does not require reading the data, and receipt
+figures come from listing.
+
+**It is unusable as committed, on purpose.** No ECS task definition exists, no deletion task or
+workflow exists, no image exists, and nothing is granted `iam:PassRole` for it — so nothing can
+launch anything that runs as this role. Creating that task and granting `PassRole` is a separate
+authorization that has not been given.
+
+**No IAM user and no long-lived access key is created anywhere.** The only `"*"` resource in the
+configuration is on `ecr:GetAuthorizationToken`, which AWS does not permit to be scoped — one
+named action, not a wildcard.
+
+**The task role also has no CloudWatch Logs permissions, and they are not missing.** Under the ECS
+`awslogs` driver the agent collects stdout/stderr using the *execution* role. Granting them to the
+application as well was redundant, and not harmlessly so: it would let application code call
+`PutLogEvents` directly, which is exactly the path by which a vendor payload or a query-string API
+key reaches a durable, queryable store. Not holding the permission is a structural barrier behind
+the redaction rules.
 
 ---
 

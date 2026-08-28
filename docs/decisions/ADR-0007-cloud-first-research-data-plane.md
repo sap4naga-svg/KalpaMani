@@ -227,6 +227,39 @@ The control bucket carries the same public-access, ownership, encryption and TLS
 Versioning **may** be enabled there, because nothing in it is subject to a vendor deletion
 obligation — which is precisely what promotion into it asserts.
 
+#### Destructive authority is separated from routine research
+
+Deletion-friendly storage creates a hazard the storage configuration cannot address on its own:
+if deletes are irreversible, whichever identity holds `s3:DeleteObject` can permanently destroy
+history by accident. **Three roles, and only one of them can destroy anything:**
+
+| Role | Purpose | Delete authority |
+|---|---|---|
+| **Execution** | ECS agent: pull the image, open the log stream | none; never sees data |
+| **Task** | the research code itself: read/write both buckets | **none** |
+| **Deletion** | vendor termination and authorized rehearsals only | licensed objects and versions **only** |
+
+An earlier revision gave the task role `s3:DeleteObject`, reasoning that deletion is a licensing
+requirement rather than a convenience. **That reasoning was wrong.** The obligation binds
+KalpaMani *as a system* — the owner must be able to destroy the data within 30 days — and it does
+not follow that the role running every ingestion job must carry the permission continuously.
+Conflating a system-level capability with a per-role grant is how standing destructive authority
+gets justified, and here it meant a bug in routine research code could silently destroy
+unrecoverable history.
+
+The deletion role can list and destroy licensed objects and versions, abort multipart uploads, and
+read the bucket's versioning, replication and lifecycle configuration — the last of these so that
+runbook steps 8 and 9 are *evidenced* rather than assumed. It deliberately **cannot** read object
+contents, write anything, reach the control bucket, or read a provider secret. Keeping it out of
+the control bucket means the manifests and deletion receipts proving a deletion happened lie
+outside the reach of the identity that performed it.
+
+**The deletion role is unusable as committed.** No task definition, no deletion workflow, no
+image, and no `iam:PassRole` grant exists, so nothing can run as it. Creating that path is a
+separate authorization that has not been given. It is defined now for the same reason the deletion
+runbook is written now: so the destructive path is reviewable before it is needed, rather than
+improvised inside a 30-day window.
+
 ### 5. Storage persists; compute is ephemeral
 
 **No always-on research server.** An idle EC2 instance or a permanently running container is
