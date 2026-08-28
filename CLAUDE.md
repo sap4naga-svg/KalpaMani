@@ -163,6 +163,28 @@ Do **not** modify global Git identity. If KalpaMani needs a distinct identity, s
     destroying every copy within 30 days of a termination that arrives without notice, so the
     licensed store carries no versioning, Object Lock, replication, archival lifecycle or
     backup. Enabling any of them is an ADR-level change, not a durability improvement.
+24. **Every AWS task must prove its identity before it acts.** This workstation holds AWS
+    profiles for an unrelated project, and `default` is what an unpinned command falls back
+    to — the AWS form of the wrong-account hazard §3 guards against for GitHub.
+
+    Before any AWS-mutating command, any `terraform` command that reads or writes remote
+    state, and any verification run, a session **MUST** in this order:
+
+    1. pin the intended profile explicitly (`AWS_PROFILE=kalpamani-foundation`);
+    2. call `sts:GetCallerIdentity` and compare the returned account against the local
+       account binding in the git-ignored `terraform.tfvars`;
+    3. **STOP** on a missing binding, an unusable or expired session, an unreadable
+       identity, or an account mismatch.
+
+    Only then may remote state be read or any resource be touched. The check reports
+    **PASS/FAIL only** and must never print the account id, an ARN, a user or role ARN, or
+    an SSO URL. `scripts/aws_foundation_verify.py` implements this gate and refuses before
+    reading state; a task that cannot run it has not established its identity and must stop.
+
+    Verification must also **fail closed**: an absence may be concluded only from a specific,
+    declared AWS error code, and an IAM decision only from an explicit `allowed`,
+    `implicitDeny` or `explicitDeny`. Any other outcome is a verification failure, never a
+    satisfied invariant.
 
 ---
 
@@ -375,8 +397,8 @@ trading remains **hard-disabled**.
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **G1–G5** | **OPEN** |
 | **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
-| **AWS account** | **CREATED (2026-08-27)** |
-| **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 54/54 |
+| **AWS account** | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
+| **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
@@ -453,11 +475,11 @@ role under ADR-0001 is untouched.
 
 **The foundation is PROVISIONED; nothing uses it (2026-08-27).**
 [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) was applied — 36 resources,
-`0 changed, 0 destroyed`, verified 54/54 against the live account. Full record:
+`0 changed, 0 destroyed`, verified 66/66 against the live account. Full record:
 [docs/operations/aws-foundation-status.md](docs/operations/aws-foundation-status.md).
 
 ```
-AWS account CREATED   ·   foundation PROVISIONED   ·   verification 54/54 PASS
+AWS account EXISTING   ·   foundation PROVISIONED   ·   verification 66/66 PASS
 licensed bucket EMPTY   ·   control bucket EMPTY   ·   ECR EMPTY
 no task definition   ·   nothing running   ·   no always-on billable resource
 provider NONE   ·   provider credentials NONE   ·   vendor data NONE
@@ -468,9 +490,16 @@ credentialing, ingestion, image builds, task execution and any further cloud spe
 **separate written authorization** (§4.21). **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**,
 no provider is selected, and Phase 3 remains **NOT COMPLETE**.
 
-Deletion authority stayed separated through provisioning: the routine research role cannot
-delete, and the deletion role can neither read nor be assumed by anything — no `iam:PassRole` for
-it exists. Both properties are verified against the live account, not merely declared.
+Deletion authority stayed separated through provisioning. The routine research role cannot
+delete. The deletion role can delete licensed objects but cannot read or write them and cannot
+reach the control bucket.
+
+Its trust policy **does** admit `ecs-tasks.amazonaws.com` — it is not "unassumable", and describing
+it that way would overstate the control. The property that actually holds it inert is narrower and
+worth stating exactly: **no human can directly assume it, no deletion task definition exists, no
+deletion workflow exists, and no authorized principal holds `iam:PassRole` for it — so no current
+path can launch an ECS task running as it.** Every one of those is verified against the live
+account, not merely declared.
 
 The termination procedure exists in advance and has **never been run**:
 [docs/runbooks/vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).

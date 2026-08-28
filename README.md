@@ -303,7 +303,7 @@ live brokerage execution, real-money operation.
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
 | G1–G5 decision gates | **OPEN** |
 | G6 options overlay · G7 strategy-taxonomy evidence | **OPEN (added by V3.0)** |
-| AWS account | **CREATED (2026-08-27)** |
+| AWS account | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
 | Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
 | Provider purchase / trial / credentialing | **NOT AUTHORIZED** |
@@ -364,7 +364,7 @@ already implements. The termination procedure exists in advance and has never be
 
 > **The foundation exists; nothing uses it.**
 > [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) was applied on 2026-08-27 —
-> 36 resources, verified 54/54 against the live account
+> 36 resources, verified 66/66 against the live account
 > ([status](docs/operations/aws-foundation-status.md)). It is an empty, idle platform: both
 > buckets hold nothing, the image registry is empty, no task definition exists and nothing runs.
 >

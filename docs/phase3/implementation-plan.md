@@ -176,7 +176,7 @@ unchanged by this relocation — see [ADR-0007](../decisions/ADR-0007-cloud-firs
 
 **The AWS foundation is provisioned; nothing uses it.**
 [`infra/aws/research-data-plane/`](../../infra/aws/research-data-plane/) was applied on 2026-08-27
-— 36 resources, verified 54/54, both buckets empty
+— 36 resources verified against the live account, both research-data buckets empty
 ([status](../operations/aws-foundation-status.md)). Further AWS spending, provider credentials,
 image builds and task execution each require their own separate written authorization.
 

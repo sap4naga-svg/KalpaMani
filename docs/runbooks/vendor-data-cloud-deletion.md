@@ -317,9 +317,13 @@ start and abandon a multipart upload, then run every step and produce a receipt.
 > Provisioning included a five-step synthetic *storage* smoke test (put, get, checksum, delete,
 > confirm-absent). That is **not** this rehearsal and must not be recorded as one: it used the
 > operator's federated session rather than the deletion role, touched one object rather than the
-> licensed prefixes, started no multipart upload, and produced no receipt. The deletion role
-> remains unassumable by design — nothing holds `iam:PassRole` for it — so a real rehearsal needs
-> the deletion workflow that is **not authorized**.
+> licensed prefixes, started no multipart upload, and produced no receipt.
+>
+> The deletion role was not used because **no current path can run anything as it**: its trust
+> policy admits `ecs-tasks.amazonaws.com` only, so no human can directly assume it; no deletion
+> task definition exists; no deletion workflow exists; and no authorized principal holds
+> `iam:PassRole` for it. A real rehearsal therefore needs the deletion workflow that is **not
+> authorized**.
 
 A rehearsal costs cents and finds the steps that do not work. Discovering them inside a 30-day
 window that started without notice costs considerably more. **Rehearsal requires the same

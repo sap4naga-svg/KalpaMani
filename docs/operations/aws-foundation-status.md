@@ -19,6 +19,8 @@ entire reason the two are separated.
 
 | | |
 |---|---|
+| AWS account | **EXISTING** — pre-dates this work; **no account was created here** |
+| Account configured for the foundation | **2026-08-27** |
 | Provision date | **2026-08-27** |
 | Region | **us-east-1** |
 | Terraform | **v1.16.0** |
@@ -48,9 +50,15 @@ Athena, no OpenSearch, no IAM user, no access key and no secret.
 
 ### Cost posture
 
-Every resource above is free at rest. Charges begin only when something is *used*: a Fargate task
-running, an image stored in ECR, logs ingested, or objects stored in S3. There is no always-on
-billable resource — no NAT Gateway, no load balancer, no DynamoDB lock table, no ECS service.
+**There is no fixed always-on hourly compute, network or database cost** — no NAT Gateway, no
+load balancer, no DynamoDB lock table, no ECS service, no EC2 instance, no RDS instance. Charges
+accrue only from *usage*: a Fargate task running, an image stored in ECR, logs ingested, objects
+stored in S3.
+
+Idle cost is expected to be **near zero, not literally guaranteed zero**. The Terraform state
+bucket holds state and version history, and every plan, apply and lock acquisition issues S3
+requests; those are usage-based charges, tiny but real. Calling the foundation cost-free at
+rest would be the wrong claim, so this document does not make it.
 
 The USD 50 budget is an **alert threshold, not a spending authorization**. CLAUDE.md §4.21 is
 unchanged: cloud spend beyond this idle foundation requires its own written authorization.
@@ -63,10 +71,31 @@ unchanged: cloud spend beyond this idle foundation requires its own written auth
 Terraform back. It is read-only — every call is a describe/get/list or an IAM policy
 *simulation*, which evaluates a permission without exercising it.
 
-**Result: PASS — 54 of 54 checks.**
+**It fails closed.** An absence is only accepted when AWS returns a *specific, declared* error
+code for that call; every other failure — access denied, an expired session, throttling, a
+network fault — is a verification FAILURE, never an absence. IAM decisions are read the same
+way: `allowed` means allowed, `implicitDeny`/`explicitDeny` mean denied, and anything else,
+including a simulation that did not run, fails. A simulation that failed must never be counted
+as proof that a permission is denied.
+
+Order is itself a control. The identity gate runs **before** any remote state is read:
+
+```
+AWS_PROFILE pinned  ->  sts:GetCallerIdentity vs the local account binding
+                    ->  Terraform remote state  ->  foundation verification
+```
+
+A stale profile, a missing binding, an expired session or a mismatched account refuses
+immediately. **Zero unresolved AWS calls and zero unresolved IAM decisions** were recorded in
+the run below.
+
+**Result: PASS — 66 of 66 checks.**
 
 | Group | Result |
 |---|---|
+| **Identity gate** — profile pinned, STS account matches the local binding | **PASS** |
+| **Terraform state backend** — local backend file, region, `encrypt`, `use_lockfile` | **PASS** |
+| **State bucket** — exists, BPA all ON, ACLs disabled, AES256, **versioning ENABLED**, not public, no cross-account policy | **PASS** |
 | Licensed bucket — exists, private, BPA all ON, ACLs disabled, TLS-only policy, AES256 | **PASS** |
 | Control bucket — exists, private, BPA all ON, ACLs disabled, TLS-only policy, AES256 | **PASS** |
 | Licensed bucket versioning **disabled**; Object Lock, replication, archival transitions **absent** | **PASS** |
@@ -92,11 +121,18 @@ effect of anything attached outside the configuration.
 
 **Result: PASS.** A hand-authored, fictitious payload of a few bytes — **no vendor data, no
 provider contacted** — was uploaded to a test prefix in the licensed bucket, retrieved, verified
-by SHA-256 round trip, deleted, and confirmed absent. Both buckets are empty afterwards.
+by SHA-256 round trip, deleted, and confirmed absent. Both **research-data** buckets — licensed
+and control — are empty afterwards.
 
-**Which identity deleted, and why it was not the deletion role.** The deletion role trusts only
-`ecs-tasks.amazonaws.com`, so no human can assume it, and no identity holds `iam:PassRole` for
-it — so nothing can launch a task as it either. That is deliberate. Using it here would have
+That scope is deliberate. The separately bootstrapped **Terraform state bucket is not empty and
+must not be**: it holds remote state, its version history and lock objects. It is
+infrastructure-control data, not research data, and takes the opposite durability posture.
+
+**Which identity deleted, and why it was not the deletion role.** The deletion role is not
+"unassumable" — its trust policy deliberately admits `ecs-tasks.amazonaws.com`. The precise
+property is narrower: **no human can directly assume it, no deletion task definition exists, no
+deletion workflow exists, and no authorized principal holds `iam:PassRole` for it**, so no current
+path can launch an ECS task running as it. That is deliberate. Using it here would have
 required creating exactly the deletion workflow and `PassRole` grant that are **not authorized**,
 so the delete ran as the **operator**: the human's temporary Identity Center session. No IAM
 policy was weakened or broadened for the smoke test.

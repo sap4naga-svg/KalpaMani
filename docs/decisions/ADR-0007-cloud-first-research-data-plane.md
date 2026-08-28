@@ -26,17 +26,18 @@ authorization covering the foundation and nothing else. Record:
 [docs/operations/aws-foundation-status.md](../operations/aws-foundation-status.md).
 
 ```
-AWS account CREATED   ·   36 resources applied   ·   0 changed, 0 destroyed
-verification 54/54 PASS   ·   remote S3 state, versioned, S3 native locking
+AWS account EXISTING (pre-dates this work)   ·   36 resources applied   ·   0 changed, 0 destroyed
+verification 66/66 PASS   ·   remote S3 state, versioned, S3 native locking
 budget + cost-anomaly alerts configured
 licensed EMPTY   ·   control EMPTY   ·   ECR EMPTY   ·   nothing running
 provider NONE   ·   provider credentials NONE   ·   vendor data NONE
 ```
 
 **The decision below is unchanged and is not rewritten.** It is read as of its own date: when it
-was accepted, nothing existed, and it authorized nothing. Two items in the §12 list — creating an
-AWS account, and `terraform apply` — were subsequently authorized on their own, exactly as §12
-required them to be. Everything else in that list still stands and is still refused: **no provider
+was accepted, no AWS resource existed and it authorized nothing. Two items in the §12 list — using
+an AWS account for KalpaMani, and `terraform apply` — were subsequently authorized on their own,
+exactly as §12 required them to be. **No AWS account was created by this work**: the account
+already existed and was configured for the foundation on 2026-08-27. Everything else in that list still stands and is still refused: **no provider
 is selected, no credential exists, no vendor data has been retrieved, G1–G7 remain OPEN, ADR-0005
 remains PROPOSED, Phase 3 remains NOT COMPLETE, and live trading remains HARD-DISABLED.**
 
