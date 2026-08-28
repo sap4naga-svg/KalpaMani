@@ -45,9 +45,11 @@ ADR records that decision, the constraints it carries, and exactly how far it re
 
 ### Public sources re-verified for this decision
 
-Re-read on **2026-08-27** and recorded in
-[provider-source-register.md](../phase3/provider-source-register.md) §R3. Nothing material had
-changed since the packet's round:
+Re-read on **2026-08-27**, and again on **2026-08-28** during review of the pull request that
+introduces this ADR. Both rounds are recorded in
+[provider-source-register.md](../phase3/provider-source-register.md) §R3. **Nothing bearing on
+the licensing decision changed**; two rows added on the second pass corrected the *qualification
+method*, not the decision:
 
 | Source | Bearing on this decision |
 |---|---|
@@ -55,6 +57,16 @@ changed since the packet's round:
 | `https://sharadar.com/docs/faqs` | Personal Use covers *research, backtesting, and automated trading of their own account with no external clients or money managed for others* |
 | `https://sharadar.com/docs/auth` | A key is passed **in the query string**; a vendor-published test key exists and is documented for AAPL queries |
 | `https://sharadar.com/sample` | Free sample: 30 DJIA names, 5 years, sign-in required |
+| `https://sharadar.com/docs/tickers` | **The tickers table is a snapshot** — the vendor states that its 5, 10 and full bulk options all download the same table (`PSR-SHD-119`) |
+| `https://blog.sharadar.com/` — post dated 2026-07-29 | **The price-adjustment methodology is published**: backward adjustment, and the cash-dividend, stock-dividend, split and spinoff ratios (`PSR-SHD-120`) |
+
+> **Two corrections the second pass forced, recorded because they cut in opposite directions.**
+> The snapshot statement made the harness's classification test **more** conservative: a table the
+> vendor calls a snapshot has no temporal axis, so differing values across its rows can never be
+> read as a dated change. The published methodology made another test **less** conservative: the
+> harness had recorded the dividend and spinoff formulas as unpublished, and that had stopped
+> being true. A pessimism that is no longer true is as much a defect as an unearned pass, and
+> both were fixed rather than only the flattering one.
 
 **No Sharadar API was called. No Services Data was retrieved, inspected or evaluated to reach this
 decision.** Everything above is the vendor's own public website.
