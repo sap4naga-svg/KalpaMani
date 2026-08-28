@@ -647,6 +647,75 @@ def test_a_transport_that_breaks_its_declared_ceiling_is_stopped_before_publicat
     assert result.publication_state_unknown is False
 
 
+def test_a_stricter_clients_declared_ceiling_is_what_the_returned_body_is_checked_against() -> None:
+    """**The case a plan-only check would have published.**
+
+    Client declares 32, plan permits 64, transport returns 50. The configuration
+    is legitimate -- a client stricter than its plan is exactly what
+    ``test_a_stricter_client_ceiling_is_permitted_and_stays_effective`` allows --
+    so validation succeeds and the request is sent.
+
+    But a transport that returned 50 has broken the 32 it declared. Comparing the
+    body against the plan's 64 would find nothing wrong and publish it. The check
+    uses the **effective** ceiling, ``min(client, plan)``, which is 32 here.
+
+    Revert the implementation to ``len(payload) > plan.limits.max_response_bytes``
+    and this test fails; the other four ceiling tests do not, which is why it had
+    to be written.
+    """
+    body = b"x" * 50
+    built, transport = client([ok(body)], max_response_bytes=32)
+    store = RecordingStore()
+    engine = QualificationRuntime(client=built, store=store, clock=FixedClock())
+    plan = snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=64))
+
+    # Validation succeeds: 32 <= 64, so the configuration is permitted.
+    assert len(engine.validate(plan)) == 1
+
+    result = engine.execute(plan)
+
+    assert transport.call_count == 1, "exactly one provider call"
+    assert result.outcome is QualificationOutcome.HALTED
+    assert result.failure is QualificationFailure.RESPONSE_TOO_LARGE
+    assert store.call_count == 0, "nothing may be stored"
+    assert result.completed_requests == 0, "no acquisition completed"
+    assert result.fetched_payload_bytes == 50, "the bytes were returned, so they count"
+    assert result.completed_payload_bytes == 0
+    assert result.publication_state_unknown is False, "no publication was attempted"
+
+
+def test_neither_ceiling_is_mutated_by_the_effective_check() -> None:
+    built, transport = client([ok(b"x" * 50)], max_response_bytes=32)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    plan = snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=64))
+    engine.execute(plan)
+    assert built.max_response_bytes == 32 == transport.max_response_bytes
+    assert plan.limits.max_response_bytes == 64
+
+
+def test_a_body_within_a_stricter_clients_ceiling_still_publishes() -> None:
+    """The control for the test above: 30 bytes under a declared 32 is fine."""
+    built, _ = client([ok(b"x" * 30)], max_response_bytes=32)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    result = engine.execute(
+        snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=64))
+    )
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert result.completed_payload_bytes == 30
+
+
+def test_a_declared_ceiling_violation_discloses_no_transport_or_payload_text() -> None:
+    built, _ = client([ok(b"synthetic-oversized-body-" + b"x" * 40)], max_response_bytes=32)
+    engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
+    result = engine.execute(
+        snapshot_plan(SUBJECT_A, limits=QualificationLimits(max_response_bytes=64))
+    )
+    rendered = repr(result)
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+    assert "synthetic-oversized-body" not in rendered
+
+
 @pytest.mark.parametrize(
     "failure",
     [

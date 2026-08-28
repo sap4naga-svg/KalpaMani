@@ -225,9 +225,16 @@ lower ceiling must construct the transport with one. Silently lowering either nu
 run behaving differently from what its plan says.
 
 **That guarantee rests on the transport honouring what it declares.** The accepted `UrllibTransport`
-does — it reads `max_response_bytes + 1` and refuses anything longer. The post-fetch length check is
-retained as defence against an injected transport that does not, and is defence in depth rather than
-the ceiling itself.
+does: it reads `max_response_bytes + 1` and refuses anything longer, so a body over its declared
+ceiling never reaches the client. The post-fetch length check is retained as defence against an
+injected transport that does not, and is defence in depth rather than the ceiling itself.
+
+**That check compares against the *effective* ceiling, `min(client, plan)` — not the plan's alone.**
+The plan's ceiling is insufficient whenever the client is stricter, and that configuration is
+explicitly permitted. With a client declaring 32 and a plan permitting 64, a transport returning 50
+has violated its own declaration; a check against 64 would find nothing wrong and publish it. The
+explicit `min` is kept rather than simplified to the client's value, so a later change to the
+validation relationship cannot silently reopen the defect.
 
 The run ceiling is enforced separately, as **headroom, before each request is sent**:
 

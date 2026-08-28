@@ -4272,6 +4272,22 @@ def main() -> int:
             "a guarantee whose dependency is unstated is a guarantee nobody can check",
         )
         f.check(
+            "ADR-0012 records that the accepted transport enforces its ceiling before returning",
+            "never reaches the client" in flat12,
+            "the pre-access property depends on where the read actually stops",
+        )
+        f.check(
+            "ADR-0012 records that the post-fetch check uses the effective ceiling",
+            "min(client, plan)" in flat12 and "not the plan's alone" in flat12,
+            "the plan's ceiling is insufficient whenever the client is stricter",
+        )
+        f.check(
+            "ADR-0012 names the asymmetric case the plan ceiling alone would miss",
+            "declaring 32 and a plan permitting 64" in flat12
+            and "would find nothing wrong and publish it" in flat12,
+            "a stated counterexample is what makes the rule checkable later",
+        )
+        f.check(
             "ADR-0012 defines completed payload bytes as acquisition completion",
             "regardless of whether the payload object was newly written, reused, or already"
             in flat12,
@@ -4293,9 +4309,21 @@ def main() -> int:
         )
         f.check(
             "the runtime keeps the post-fetch length check as defence in depth",
-            "len(payload) > plan.limits.max_response_bytes" in round3_source
+            "len(payload) > effective_response_ceiling" in round3_source
             and "Defence in depth, not the ceiling" in round3_source,
             "an injected transport may break the contract it declares",
+        )
+        f.check(
+            "the post-fetch check uses the effective ceiling, not the plan's alone",
+            "effective_response_ceiling = min(" in round3_source
+            and "self._client.max_response_bytes, plan.limits.max_response_bytes" in round3_source,
+            "a client stricter than its plan is permitted, so comparing against the plan "
+            "alone would publish a body that broke the client's own declaration",
+        )
+        f.check(
+            "the runtime no longer compares a returned body against the plan ceiling alone",
+            "len(payload) > plan.limits.max_response_bytes" not in round3_source,
+            "that comparison misses every violation where the client is the stricter of the two",
         )
         f.check(
             "no source, test or audit still names a published-payload total",

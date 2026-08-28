@@ -59,9 +59,16 @@ thing that stops reading, so a caller wanting a lower ceiling must build the
 transport with one.
 
 **That guarantee rests on the transport honouring what it declares.** The accepted
-:class:`~kalpamani.data.ingest.sharadar.transport.UrllibTransport` does -- it reads
-``max_response_bytes + 1`` and refuses anything longer -- and the post-fetch length
-check here remains as defence against an injected transport that does not.
+:class:`~kalpamani.data.ingest.sharadar.transport.UrllibTransport` does: it reads
+``max_response_bytes + 1`` and refuses anything longer, so a body over its
+declared ceiling never reaches the client at all.
+
+The post-fetch length check here remains as defence against an injected transport
+that does not, and it compares against the **effective** ceiling --
+``min(client, plan)`` -- rather than the plan's alone. The plan's ceiling is not
+sufficient whenever the client is stricter: with a client declaring 32 and a plan
+permitting 64, a transport returning 50 has broken its own declaration, and a
+check against 64 would let it through.
 
 **A publication that raises leaves durable state this module cannot describe.**
 The three writes are separate appends. A failure on the second or third may have
@@ -693,6 +700,19 @@ class QualificationRuntime:
 
         outcomes: list[RequestOutcome] = []
         fetched_bytes = 0
+        # **The stricter of the two, computed once.** `validate()` already
+        # requires the client's declared ceiling to be no larger than the plan's,
+        # so this normally *is* the client's -- but comparing a returned body
+        # against the plan's alone would miss the case that matters here.
+        #
+        # Client 32, plan 64, body 50: the configuration is legitimate, and a
+        # transport that returned 50 has broken the 32 it declared. Checking
+        # against 64 would publish it. The explicit `min` is kept rather than
+        # simplified to `self._client.max_response_bytes`, so a later change to
+        # the validation relationship cannot silently reopen that.
+        effective_response_ceiling = min(
+            self._client.max_response_bytes, plan.limits.max_response_bytes
+        )
 
         for request in requests:
             if fetched_bytes + self._client.max_response_bytes > plan.limits.max_run_bytes:
@@ -735,7 +755,7 @@ class QualificationRuntime:
             # what the run actually cost.
             fetched_bytes += len(payload)
 
-            if len(payload) > plan.limits.max_response_bytes:
+            if len(payload) > effective_response_ceiling:
                 # **Defence in depth, not the ceiling.** The ceiling is enforced
                 # in `validate()`, before any body is read. This catches an
                 # injected transport that returned more than it declared -- a
