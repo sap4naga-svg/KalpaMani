@@ -35,6 +35,7 @@ Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -183,6 +184,11 @@ ADR_IMPLEMENTATION = DECISIONS / "ADR-0009-sharadar-provider-realistic-implement
 ADR_QUALIFICATION = DECISIONS / (
     "ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md"
 )
+#: The licensed S3 object-store implementation (ADR-0011). Section 17 exists because this ADR
+#: is the easiest of all of them to misread as access: a cloud backend now exists in the source
+#: tree, and it has no credential, no bucket, no client and no caller.
+ADR_OBJECT_STORE = DECISIONS / "ADR-0011-implement-the-licensed-s3-research-object-store.md"
+S3_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "storage" / "s3.py"
 PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
 OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
 PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
@@ -453,6 +459,28 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _executable_python(path: Path) -> str:
+    """A Python module's code with every docstring removed.
+
+    A guard that scanned raw source would fire on the prose explaining what a
+    module refuses to do -- which would either weaken the guard or forbid saying
+    why it exists. Unparsing a docstring-stripped tree keeps string literals and
+    attribute access, and drops only the narration.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
 def code_tokens(text: str) -> set[str]:
     """Every backtick-quoted token in a document."""
     return set(re.findall(r"`([A-Za-z_][A-Za-z0-9_.]*)`", text))
@@ -516,7 +544,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/16] Closed vocabularies are defined where they are used")
+    print("[1/17] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -540,7 +568,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/16] Source and derived envelopes stay disjoint")
+    print("\n[2/17] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -575,7 +603,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/16] Every declared temporal semantics has its required anchor")
+    print("\n[3/17] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -592,7 +620,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/16] Exact and bound derivations name the correct fields")
+    print("\n[4/17] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -619,7 +647,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/16] Normative rules use the current resolved model")
+    print("\n[5/17] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -665,7 +693,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/16] Entities keep source and derived rows apart")
+    print("\n[6/17] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -735,7 +763,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/16] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/17] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -797,7 +825,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/16] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/17] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -902,7 +930,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/16] Resolved-timing wording, closure rules and current status")
+    print("\n[9/17] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -1007,7 +1035,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/16] No document refers to a retired field name")
+    print("\n[10/17] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1051,7 +1079,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/16] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/17] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1208,7 +1236,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/16] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/17] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1300,7 +1328,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/16] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/17] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -1938,7 +1966,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/16] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/17] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2172,7 +2200,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/16] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/17] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2562,7 +2590,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/16] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/17] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -2914,6 +2942,229 @@ def main() -> int:
             f"{name} no longer calls Q7 and Q8 open pre-purchase blockers",
             "remain pre-purchase blockers" not in body,
             "ADR-0010 decided both; leaving the old wording would contradict the record",
+        )
+
+    # ------------------- 17. The S3 store is written, and has never reached AWS
+    print("\n[17/17] The licensed S3 object store is implemented, and has touched nothing")
+    f.check(
+        "ADR-0011 exists",
+        ADR_OBJECT_STORE.is_file(),
+        f"missing: {ADR_OBJECT_STORE}",
+    )
+    if ADR_OBJECT_STORE.is_file():
+        adr11 = read(ADR_OBJECT_STORE)
+        # Prose wraps, and the exhaustive non-authorization list is a blockquote, so the
+        # leading "> " has to come off before flattening -- otherwise a claim that spans a
+        # line break reads as "... configuring a > credential", and the guard would be
+        # checking the line width rather than the claim.
+        unquoted = [line.lstrip("> ") for line in adr11.replace("**", "").splitlines()]
+        flat11 = " ".join(" ".join(unquoted).split())
+
+        f.check(
+            "ADR-0011 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr11 and "carries no authority" in adr11,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0011 records that the store has never run against AWS",
+            "never been run against AWS" in flat11,
+            "the whole point of the slice is that it is code, reviewed before access exists",
+        )
+        f.check(
+            "ADR-0011 states the append-only mechanism as a single conditional write",
+            "IfNoneMatch" in adr11 and "no preflight `HEAD`" in flat11,
+            "a check-then-write would be a race the deletion-first bucket cannot absorb",
+        )
+        f.check(
+            "ADR-0011 ties conditional publication to the absence of versioning",
+            "conditional publication in software is the immutability" in flat11,
+            "no versioning means software is the only immutability boundary there is",
+        )
+        f.check(
+            "ADR-0011 refuses the ETag as an identity",
+            "never ETag" in adr11 and "multipart-dependent opaque token" in flat11,
+            "an ETag is not a content hash, and treating it as one voids every identity claim",
+        )
+        f.check(
+            "ADR-0011 resolves a collision by metadata rather than by download",
+            "never by downloading" in flat11 and "bytes are never retrieved" in flat11,
+            "downloading a vendor payload to compare it would spread licensed rows",
+        )
+        f.check(
+            "ADR-0011 fails closed on an unverifiable response",
+            "INVALID_RESPONSE" in adr11 and "never a guess in either direction" in flat11,
+            "an ambiguous answer is a refusal, not a decision",
+        )
+        f.check(
+            "ADR-0011 requires backend errors to be sanitized into a closed vocabulary",
+            "from None" in adr11
+            and "no bucket, key, endpoint, request id, host id or credential-shaped text" in flat11,
+            "a raw ClientError string is exactly what CLAUDE.md s.3 forbids committing",
+        )
+        f.check(
+            "ADR-0011 keeps deletion out of the routine research writer",
+            "Deletion belongs to the separately roled path under ADR-0007" in flat11,
+            "ADR-0007 separated deletion authority; a writer must not quietly reunite it",
+        )
+        f.check(
+            "ADR-0011 keeps CONTROL publication deferred",
+            "CONTROL publication remains deferred" in flat11,
+            "CONTROL was not authorized for this slice",
+        )
+        f.check(
+            "ADR-0011 records the dependency posture it gave up, and its bound",
+            "boto3>=1.36.0,<2.0" in adr11 and "first and only" in flat11,
+            "a dependency change is a governed decision, not an incidental one",
+        )
+        f.check(
+            "ADR-0011 states that no module imports the SDK",
+            "No module under `src/` imports it" in flat11,
+            "injection is what keeps import network-silent and credential-free",
+        )
+        f.check(
+            "ADR-0011 rejects the service emulators explicitly",
+            "moto" in adr11 and "LocalStack" in adr11 and "Rejected" in adr11,
+            "an emulator is a second implementation of S3 semantics to be wrong about",
+        )
+        f.check(
+            "ADR-0011 rejects bucket versioning on the deletion-first grounds",
+            "versioning leaves copies behind" in flat11,
+            "s.4.23 forbids it; a durability argument must not be allowed to reopen it",
+        )
+        f.check(
+            "ADR-0011 closes no gate",
+            "G1 OPEN" in adr11
+            and "G2 OPEN" in adr11
+            and "G4 OPEN" in adr11
+            and "G5 OPEN" in adr11
+            and "G6 OPEN" in adr11
+            and "G7 OPEN" in adr11,
+            "implementing a backend resolves no decision gate",
+        )
+        f.check(
+            "ADR-0011 leaves ADR-0005 proposed and live trading disabled",
+            "ADR-0005 remains **PROPOSED**" in adr11
+            and "LIVE_TRADING_HARD_DISABLED` remains **True**" in adr11,
+            "neither is touched by a storage backend",
+        )
+        f.check(
+            "ADR-0011 states its non-authorizations exhaustively",
+            all(
+                phrase in flat11
+                for phrase in (
+                    "any AWS mutation or read",
+                    "Terraform plan, apply or destroy",
+                    "retrieving, disclosing or binding a bucket name",
+                    "creating, retrieving or configuring a credential",
+                    "constructing a client",
+                    "an ingestion runner",
+                    "CONTROL publication",
+                )
+            ),
+            "a reader must not have to infer what merging this does not enable",
+        )
+        f.check(
+            "ADR-0011 rests its safety on absence rather than on care",
+            "not that the code is careful" in flat11,
+            '"the code is careful" is not a control; having no credential and no caller is',
+        )
+
+    # -- the code matches what the ADR says about it ---------------------------
+    if S3_STORE.is_file():
+        s3_source = read(S3_STORE)
+        f.check(
+            "the S3 store imports no AWS SDK",
+            not re.search(r"^\s*(import|from)\s+(boto3|botocore)\b", s3_source, re.M),
+            "the client is injected; an import here would undo the whole posture",
+        )
+        f.check(
+            "the S3 store writes conditionally",
+            'IfNoneMatch="*"' in s3_source,
+            "the append-only guarantee is this one argument",
+        )
+        f.check(
+            "the S3 store requests SSE-S3 explicitly",
+            'SERVER_SIDE_ENCRYPTION: Final = "AES256"' in s3_source,
+            "an object must be encrypted because this code asked, not because a setting survived",
+        )
+        f.check(
+            "the S3 store sends and verifies a full-object SHA-256",
+            "ChecksumSHA256" in s3_source and "ChecksumAlgorithm" in s3_source,
+            "identity is the digest the ObjectKey is named by",
+        )
+        f.check(
+            "the S3 store exposes no read, list, delete or copy operation",
+            not any(
+                name in _executable_python(S3_STORE)
+                for name in ("get_object", "delete_object", "list_objects", "copy_object")
+            ),
+            "a routine research writer must not be able to reach any of them",
+        )
+        f.check(
+            "the S3 store hard-codes no bucket, ARN, account or endpoint",
+            not re.search(
+                r"(arn:aws|s3://|amazonaws\.com|\b\d{12}\b)",
+                _executable_python(S3_STORE),
+            ),
+            "a bucket name is operational configuration and never belongs in Git",
+        )
+        f.check(
+            "the S3 store has no runner and no entry point",
+            '__name__ == "__main__"' not in s3_source and "argparse" not in s3_source,
+            "no execution path is authorized for this slice",
+        )
+
+    if OBJECT_STORE.is_file():
+        neutral = read(OBJECT_STORE)
+        f.check(
+            "the neutral contract names no cloud provider",
+            not re.search(
+                r"\b(boto3|botocore|s3|aws|bucket)\b",
+                _executable_python(OBJECT_STORE),
+                re.I,
+            ),
+            "the protocol is the seam; a backend leaking into it would remove the seam",
+        )
+        f.check(
+            "the shared admission rules live in the neutral contract",
+            all(
+                f"def {helper}(" in neutral
+                for helper in ("require_exact_key", "require_publishable", "physical_key")
+            ),
+            "two implementations of what may be published would eventually disagree",
+        )
+
+    # -- the status documents record a store that exists and has never been used
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records the S3 store as code that has never run against AWS",
+            "ADR-0011" in body and "NEVER RUN AGAINST AWS" in body,
+            "a reader must not mistake a written backend for a used one",
+        )
+        f.check(
+            f"{name} records the single runtime dependency and that nothing imports it",
+            "boto3" in body and "imports it" in flat,
+            "the dependency posture changed; the status documents must say how far",
+        )
+        f.check(
+            f"{name} keeps every AWS action unauthorized",
+            re.search(r"AWS[^|\n]*\|\s*\*\*NOT AUTHORIZED", body) is not None,
+            "provisioning a platform was never permission to use it, and neither is this",
+        )
+        f.check(
+            f"{name} states that the control is absence rather than care",
+            all(
+                phrase in flat.lower()
+                for phrase in ("no credential", "no bucket", "no client", "no caller")
+            ),
+            "the store is safe because it has nothing to reach AWS with, and that has to be read",
         )
 
     # ---------------------------------------------------------------- verdict

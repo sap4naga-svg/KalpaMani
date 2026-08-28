@@ -292,6 +292,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 2 — CONTROLLED IBKR PAPER ORDER LIFECYCLE: COMPLETE AND ACCEPTED (2026-08-26).**
 **PHASE 3A A1 — POINT-IN-TIME FOUNDATION KERNEL: ACCEPTED (2026-08-27).**
 **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED, CODE ONLY — ACCEPTED ON MERGE OF PR #13.**
+**PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -381,8 +382,12 @@ database schema, dashboard, alerting, kill switch; data purchases; production cl
 infrastructure; options; leverage; X/social signals. Live trading remains **hard-disabled**.
 
 The provider adapter authorized by ADR-0009 is **code that has never run against a vendor**. A
-subscription, a private credential, any API call, Services Data retrieval, the real S3 writer and
+subscription now exists (ADR-0010); a private credential, any API call, Services Data retrieval and
 production ingestion are each still **separately unauthorized**.
+
+The licensed S3 object store authorized by
+[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) is **code
+that has never run against AWS** — see *The licensed S3 object store* below.
 
 ### Current phase state
 
@@ -393,6 +398,7 @@ production ingestion are each still **separately unauthorized**.
 | **PHASE 3 PLANNING** | **ACCEPTED / MERGED** |
 | **PHASE 3A — A1 FOUNDATION KERNEL** | **ACCEPTED (2026-08-27)** |
 | **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1** | **IMPLEMENTED / ACCEPTED (ADR-0009, PR #13 merged) — CODE ONLY** |
+| **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE** | **IMPLEMENTED / PENDING MERGE ACCEPTANCE — CODE ONLY, NEVER RUN AGAINST AWS** |
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
@@ -406,6 +412,7 @@ production ingestion are each still **separately unauthorized**.
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge of PR #13 — carries no authority before it** |
 | **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
+| **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -413,6 +420,9 @@ production ingestion are each still **separately unauthorized**.
 | **AWS account** | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
+| **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
+| **Bucket binding · client construction · ingestion runner · ECS task or image** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
+| **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
 | **Provider credentialing / API access / Services Data** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
@@ -591,6 +601,48 @@ never returned and never encoded in the exit status.
 empty *at AWS-foundation closeout*, and that record stands as evidence of that day. Once
 qualification begins, the licensed bucket may legitimately hold private material. Object counts,
 row counts and pass/fail results are private and are never published.
+
+### The licensed S3 object store — implemented, code only, never run against AWS
+
+[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) authorized
+one thing: the **LICENSED-only S3 backend** of the provider-neutral `ResearchObjectStore`, written
+and reviewed **before** a credential exists, **before** a bucket is bound, and **before** a bill is
+running. `src/kalpamani/data/storage/s3.py` is the whole of it.
+
+```
+adapter EXISTS   ·   client INJECTED   ·   no client is constructed anywhere
+bucket NONE   ·   credential NONE   ·   profile NONE   ·   endpoint NONE
+runner NONE   ·   __main__ NONE   ·   caller NONE
+requests sent to AWS: ZERO   ·   objects written: ZERO   ·   buckets touched: ZERO
+```
+
+What it guarantees, each with a test behind it rather than an intention:
+
+| | |
+|---|---|
+| **Append-only** | one `PutObject` with `IfNoneMatch="*"`. **No preflight `HEAD`** — a check-then-write is a race, and the bucket carries no versioning to absorb it (§4.23) |
+| **Integrity** | full-object **SHA-256**, sent and verified. **Never an ETag** — an ETag is a multipart-dependent opaque token, not a content hash |
+| **Encryption** | SSE-S3 requested explicitly on every write, never inherited from a bucket default |
+| **Collisions** | resolved by `HeadObject` metadata. **The bytes are never downloaded** — this store has no read surface, and pulling vendor payloads back would spread licensed rows |
+| **Ambiguity** | an unverifiable response is `INVALID_RESPONSE`, a refusal. A permission failure is never absence |
+| **Errors** | sanitized into closed `StrEnum` vocabularies and raised `from None`. No bucket, key, endpoint, request id, host id or credential-shaped text can reach a log or a traceback |
+| **Surface** | `put_object` and `head_object` only. No read, list, delete, copy or multipart path exists to reach. **Deletion stays with the separately roled path** under ADR-0007 |
+| **CONTROL** | refused at admission. CONTROL publication remains **deferred** |
+
+**One runtime dependency, and nothing imports it.** `boto3>=1.36.0,<2.0` is declared because a real
+deployment must *construct* a signed client, and request signing, credential resolution and retry
+behaviour must be the official SDK's. **No module under `src/` imports it**: the client is injected
+and backend errors are classified structurally, so importing the data platform pulls in no AWS
+code, opens no socket and performs no ambient credential discovery. A static test permits only
+`data/storage/s3.py` to name the SDK at all, and asserts that even it imports none of it today.
+
+**The control is absence, not care.** There is no credential, no bucket, no client and no caller
+anywhere in this repository — each verified by a static test rather than asserted here.
+
+**Writing this backend authorized nothing else.** Every AWS action, Terraform command, verifier
+run, bucket binding, credential, client construction, ingestion runner, ECS task and CONTROL
+publication remains **separately unauthorized** (§4.21, §4.24). **G1 and G2 stay OPEN**, ADR-0005
+stays **PROPOSED**, and Phase 3 stays **NOT COMPLETE**.
 
 ### Sharadar provider-integration Slice 1 — implemented, code only, never run
 
