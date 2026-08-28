@@ -616,8 +616,12 @@ package opens no socket. Static tests prove each of those rather than asserting 
 | **No key value exists under `src/`** | not a private one, and **not the vendor's published test token either** — that stays in the manual harness. A credential is injected, renders as a placeholder everywhere, and is reachable only through `reveal()` |
 | **Errors disclose nothing** | assembled from closed vocabularies, so a URL, a query string and a response body have **no parameter to arrive through**. The key travels in the query string (`PSR-SHD-109`), so a request URL *is* a credential |
 | **Requests are explicit** | HTTPS, stated format, stated pagination, explicit date window — **no implicit one-year default** (`PSR-SHD-121`), no window on the snapshot table (`PSR-SHD-119`), and **no constructible table-wide bulk download** |
+| **The transport is origin-pinned** | the URL is **parsed**, not prefix-matched: scheme, host, port, empty userinfo, empty fragment and the documented path prefix must all match. Redirects are refused rather than followed, ambient proxy discovery is off, no opener is installed globally, and a successful body is bounded (64 MiB default, 256 MiB hard cap) |
 | **Storage defaults to LICENSED** | `ObjectKey.licensed(...)` takes no classification parameter; `CONTROL` requires a written attestation and is refused when blank. Classification is part of an object's identity, so an object cannot move stores without becoming a different object |
-| **Recorded metadata is allowlisted** | a credential, URL, query string or cloud identifier in an acquisition record is **refused at write time**, not redacted afterwards |
+| **Object identity is name + digest** | `exists` is `False` when a name holds different content, and a forged key cannot read another object's bytes |
+| **Acquisition identity is global** | `(digest, run id)` is claimed in a provider-independent namespace, so two providers cannot claim one retrieval. Payload storage stays provider-scoped, keeping each vendor's deletion surface separable |
+| **Durable metadata has no free-text field** | not a filtered one — an absent one. Every recorded field is validated against its own grammar, and the provider bridge offers no `notes` parameter |
+| **Closed vocabularies are normalised** | at construction, running no code belonging to the value, so a bare string, a sibling enum or a hostile `str` subclass cannot reach `.value` and raise from inside an error |
 
 **Naming an implementation target is not selecting a production provider. G1 stays OPEN**, and it
 cannot close while **Q7** (are the daily bars officially disseminated or provider-aggregated?) and

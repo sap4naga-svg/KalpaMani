@@ -178,6 +178,8 @@ QUALIFICATION_HARNESS = REPO_ROOT / "scripts" / "sharadar_private_qualification.
 ADR_IMPLEMENTATION = DECISIONS / "ADR-0009-sharadar-provider-realistic-implementation.md"
 PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
 OBJECT_STORE = REPO_ROOT / "src" / "kalpamani" / "data" / "objectstore.py"
+PUBLICATION = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "publication.py"
+TRANSPORT_TEST = REPO_ROOT / "tests" / "unit" / "test_sharadar_transport.py"
 SOURCE_REGISTER = PHASE3 / "provider-source-register.md"
 
 #: Wording that would read as authorization the owner did not give. Checked against the two
@@ -2299,6 +2301,81 @@ def main() -> int:
             "class Pacer" in package and "class RetryPolicy" in package,
             "no documented rate limit is not an absent rate limit",
         )
+        # -- the transport boundary corrections, each a way a credential could travel
+        f.check(
+            "the transport pins an exact origin by parsing, not by string prefix",
+            "def origin_refusal(" in package
+            and "urlsplit" in package
+            and "parts.hostname" in package
+            and "parts.username" in package
+            and "parts.fragment" in package,
+            "a lookalike host and a userinfo prefix both satisfy startswith('https://')",
+        )
+        f.check(
+            "the transport refuses redirects rather than following them",
+            "class RefuseRedirects" in package
+            and "HTTP_REDIRECT_REFUSED" in package
+            and "def redirect_request(" in package,
+            "a 3xx would hand the query string, and the key, to the Location host",
+        )
+        f.check(
+            "the transport suppresses ambient proxy discovery",
+            "ProxyHandler({})" in package,
+            "HTTPS_PROXY must not route a credential-bearing request",
+        )
+        f.check(
+            "the transport installs no global opener",
+            "install_opener" not in package,
+            "a globally installed opener would change unrelated code in the process",
+        )
+        f.check(
+            "a successful response body is bounded by a finite, capped ceiling",
+            "DEFAULT_MAX_RESPONSE_BYTES" in package
+            and "MAX_RESPONSE_BYTES_CEILING" in package
+            and "RESPONSE_TOO_LARGE" in package,
+            "an unbounded read lets the other end decide this process's memory",
+        )
+        f.check(
+            "closed vocabularies are normalised at construction, not merely annotated",
+            "closed_member" in package and "UNCLASSIFIED" in package,
+            "a bare string differs from the member only where .value is read",
+        )
+
+    # -- the transport is exercised, so 'dormant' does not mean 'unchecked' -----
+    f.check(
+        "the concrete transport has a dedicated synthetic test",
+        TRANSPORT_TEST.is_file(),
+        f"missing: {TRANSPORT_TEST}",
+    )
+    if TRANSPORT_TEST.is_file():
+        transport_test = read(TRANSPORT_TEST)
+        f.check(
+            "the transport test injects a fake opener and opens no socket",
+            "opener=" in transport_test and "urlopen" not in transport_test,
+            "the one module allowed to build a transport must not reach a network",
+        )
+
+    # -- durable metadata has no free-text field at all -------------------------
+    f.check(
+        "the durable acquisition record carries no free-form notes field",
+        PUBLICATION.is_file()
+        and '"notes"' not in read(PUBLICATION)
+        and "_FIELD_GRAMMAR" in read(PUBLICATION),
+        "a substring blocklist cannot prove an arbitrary credential is absent from free text",
+    )
+    f.check(
+        "acquisition identity is claimed in a global, provider-independent namespace",
+        PUBLICATION.is_file()
+        and "CLAIM_NAMESPACE" in read(PUBLICATION)
+        and "acquisition-claims" in read(PUBLICATION),
+        "(digest, run id) names one retrieval globally, not one per provider partition",
+    )
+    f.check(
+        "the object store binds the content address to the logical name",
+        OBJECT_STORE.is_file()
+        and "stored.content_sha256 == key.content_sha256" in read(OBJECT_STORE),
+        "a store keyed on the name alone would let a forged key read another object",
+    )
 
     f.check(
         "the object-store contract defaults provider material to LICENSED",

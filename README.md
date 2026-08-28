@@ -427,14 +427,28 @@ LEAN activity, Paper expansion, live trading.
 every vendor-neutral package stay vendor-neutral, and no other production module names the
 provider. **No API key value exists anywhere under `src/`** — not a private one, and not the
 vendor's published test token, which stays in the manual harness. **The package has never sent a
-request**: one module is network-capable, nothing in the repository constructs it, no runner
-exists, and importing it opens no socket. Static tests prove each of those.
+request**: one module is network-capable, no production module, script or runner constructs it,
+and importing the package opens no socket. Static tests prove each of those.
 
-Storage goes through a provider-neutral `ResearchObjectStore` contract in which **classification
-is part of an object's identity** and `LICENSED` is what you get by writing the ordinary thing;
-reaching the control store requires a written attestation and is refused when blank. Only an
-in-memory implementation exists — the real S3 writer is a separate, later, separately authorized
-slice, and the project still declares **no runtime dependency**.
+The transport is **pinned to one origin by parsing** the URL — scheme, host, port, empty userinfo,
+empty fragment and the documented path prefix — because `startswith("https://")` admits both a
+lookalike host and a userinfo prefix. Redirects are refused rather than followed (a 3xx would hand
+the query string, and so the key, to the `Location` host), ambient proxy discovery is off, no
+opener is installed globally, and a successful body is bounded. A dedicated synthetic test builds
+the transport with a **fake opener** and proves each of those without opening a socket: *dormant*
+is not allowed to mean *untested*.
+
+Storage goes through a provider-neutral `ResearchObjectStore` contract offering **immutable
+logical names with a content-integrity binding**: a key is a name *and* the digest the object must
+hold, so a forged key cannot read another object's bytes. **Classification is part of that
+identity**, and `LICENSED` is what you get by writing the ordinary thing; reaching the control
+store requires a written attestation and is refused when blank. Acquisition identity
+— `(digest, run id)` — is claimed in a **global, provider-independent namespace**, so two providers
+cannot claim one retrieval, while payload storage stays provider-scoped to keep each vendor's
+deletion surface separable. Durable metadata has **no free-text field at all**, and every field
+that is written is validated against its own grammar. Only an in-memory store implementation
+exists — the real S3 writer is a separate, later, separately authorized slice, and the project
+still declares **no runtime dependency**.
 
 **Naming an implementation target is not selecting a production provider. G1 remains OPEN.** A
 public-source re-check on 2026-08-28 answered neither Q7 (bar construction and origin) nor Q8

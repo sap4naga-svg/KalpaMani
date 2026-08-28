@@ -131,7 +131,21 @@ Code only. No network call, no credential, no vendor data, no cloud mutation.
 [ADR-0007](ADR-0007-cloud-first-research-data-plane.md) anticipated an interface between the code
 that *produces* an object and the code that *puts it somewhere*.
 `src/kalpamani/data/objectstore.py` is that interface at the smallest production-worthy size:
-`put_if_absent` and `exists`, over content-addressed logical objects.
+`put_if_absent` and `exists`, over **immutable logical names with a content-integrity binding**.
+
+**That phrase is precise, and an earlier draft of this ADR was not.** A key is a name *together
+with* the SHA-256 the named object must hold, and both methods are about the whole key: `exists`
+is `False` when the name is occupied by *different* content, and a key carrying the right path
+with the wrong digest cannot read the stored bytes. Only namespaces that put a digest **in the
+path** are content-addressed, and exactly one does — the Bronze payload namespace. Calling every
+path content-addressed would suggest the store computes locations from content, which it does
+not, and would lead a reader to expect a re-published variant to land somewhere new instead of
+being refused.
+
+The pairing that follows is worth stating because it looks odd for a moment: when a name holds
+different content, `exists` reports `False` **and** `put_if_absent` still refuses. The object you
+asked about is not there, and the name is not free either. Any other answer would either hide the
+occupant or invite an overwrite.
 
 **A producer knows no bucket, no cloud account, no ARN, no Terraform output and no SDK type.**
 Those are deployment facts, and an adapter that knew one could not be tested without it — which is
@@ -161,25 +175,60 @@ SHA-256 of its contents, plus the record of how it was acquired. It has no HTTP 
 credential and no vendor vocabulary, and a static test refuses the file if a vendor name appears
 in it.
 
-Two ordering facts are worth recording, because both were forced by the storage model:
+**Acquisition identity is global, and the layout now makes it so.** The Bronze contract says
+`(payload digest, ingestion run id)` names **one** retrieval — not one per provider and not one
+per dataset. The filesystem writer enforces that by scanning every partition. This store has no
+listing surface, deliberately, so a scan is not available and would be the wrong fix anyway: a
+producer that could enumerate the store could enumerate what a vendor sent. The global fact is
+therefore given a **global name**, in a namespace no provider can occupy, and the store's own
+append-only refusal does the enforcing.
 
-1. **The payload is written first, the acquisition record second.** The record's existence is
-   what marks an acquisition complete.
-2. **The `PENDING`/`COMPLETE` two-phase pattern used by the filesystem Bronze writer is
+```
+licensed/acquisition-claims/<digest>/<run-id>.json      GLOBAL, provider-independent
+licensed/bronze/<provider>/<dataset>/objects/sha256/<digest>
+licensed/bronze/<provider>/<dataset>/acquisitions/<digest>/<run-id>.json
+```
+
+Two providers claiming one `(digest, run id)` write different bytes to the same claim name, and
+the second is refused. Payload *storage* stays provider-scoped so each vendor's deletion surface
+remains separable; acquisition *identity* is global. Both are true at once because they live in
+different namespaces.
+
+Three ordering facts, all forced by the storage model:
+
+1. **The claim is written first** — it is a reservation, not completion evidence — so a
+   contradictory identity is refused before any vendor bytes land. That matters concretely: a
+   second provider's payload key is a *different* name, so nothing but the claim can stop it, and
+   a claim written later would leave a payload inside that vendor's deletion surface with no
+   record to explain it.
+2. **The acquisition record is written last.** Its existence is what marks the acquisition
+   complete, so a record can never name a payload that does not exist.
+3. **The `PENDING`/`COMPLETE` two-phase pattern used by the filesystem Bronze writer is
    structurally unavailable here**, because an append-only `put_if_absent` store has no *replace*
-   — a `PENDING` record could never be advanced. Record-last is the ordering that works under
-   append-only semantics and is the safer of the two: an interrupted run can leave a payload
-   nothing explains, which is detectable and inert, but it can never leave a record naming a
-   payload that does not exist.
+   — a `PENDING` record could never be advanced. Record-last is what works, and it is the safer
+   of the two orderings: an interrupted run can leave a claim or a payload nothing completes,
+   which is detectable and inert. Re-running the same identity finishes it, because every write
+   on the path is idempotent for identical content.
 
 **No payload is parsed before publication.** A future response that is malformed, truncated or in
 an unexpected encoding is still preservable as evidence — which is exactly the case where
 evidence matters.
 
-**Recorded metadata carries an allowlisted field set**, and a write is refused if any value
-contains a credential, a URL, a query string or a cloud identifier. A caller-supplied note is the
-realistic way one would arrive, so the guard runs on every publication rather than on the day
-someone remembers it. The refusal names the offending field and never quotes its value.
+**Durable metadata has no free-text field at all — not a filtered one, an absent one.** The
+record carries a closed field set, and every field is validated against *its own* format: a
+lowercase provider token, a closed range grammar (an explicit date range or a single named token),
+a UTC instant, a 64-hex digest, a non-negative `int`, an exact `bool`, the LICENSED
+classification. Types are checked with `type(...) is`, so a `bool` cannot pass as an `int` and a
+`str` subclass cannot pass as a `str`.
+
+That replaces a substring blocklist that was doing more work than it could bear. A blocklist
+cannot prove an arbitrary credential, query string, bucket or cloud identifier is absent from
+free text; a grammar admitting neither a space, a colon nor a slash outside a date can.
+`RetrievalMetadata.notes` belongs to the A1 filesystem writer and is **never read** on this path,
+and the provider bridge offers no `notes` parameter at all — not offering one is better than
+accepting one and dropping it. The blocklist is retained as unreachable defence in depth and is
+documented as no longer load-bearing. Every refusal names the offending field and never quotes
+its value.
 
 The ingestion-run representation is the **existing** `IngestionRun` contract entity, not a new
 one. A parallel vocabulary is a vocabulary that eventually disagrees with itself.
@@ -239,12 +288,75 @@ redaction exists as a second layer, and it matches any key rather than one known
 Response bodies are never read on a failing status: `urlopen` raises an exception that *is* the
 response, and the transport closes it and returns the status with an empty body instead.
 
+**The transport is pinned to one origin, by parsing.** `url.startswith("https://")` is not an
+origin check, and treating it as one was the sharpest defect in the first draft of this slice: a
+host of the form `<allowed-host>.attacker.example` passes it, and so does a userinfo prefix —
+`<allowed-host>:key@somewhere-else` — where the part a human reads as the host is not the host.
+The URL is parsed and every component must match: scheme, host, port (absent or 443), empty
+userinfo, empty fragment, and a path under the documented data prefix. The allowed origin is
+*derived* from the documented API root rather than restated, because a second literal is a second
+thing to drift. Anything else is refused with a sanitized code **before `urlopen` sees it**.
+
+**Redirects are refused and proxies are not discovered.** A 3xx would hand the query string — and
+therefore the key — to whatever host the `Location` header names, and that header is
+attacker-influenced exactly when the response is not the one expected. The opener's redirect
+handler returns `None`, so urllib raises rather than following: the status becomes
+`HTTP_REDIRECT_REFUSED`, the body is not read, `Location` is never surfaced, and the target is
+never contacted. The same opener is built with an empty `ProxyHandler`, which suppresses the
+default handler that reads `HTTPS_PROXY` and the Windows system proxy settings — so an
+environment variable cannot route a credential-bearing request through a host nobody chose. The
+opener is **never installed globally**: doing so would change unrelated code in the process, and
+inheriting the global one would let unrelated code change this. A governed proxy configuration
+is a separate decision.
+
+**A successful body is bounded.** An unbounded `read()` lets the other end decide this process's
+memory. At most `limit + 1` bytes are read, so an oversized response is detected without being
+loaded, and a `Content-Length` already over the limit refuses before any body is read at all. The
+default is **64 MiB** against a documented maximum page of 10,000 rows (`PSR-SHD-121`) — on the
+order of one megabyte of CSV — which leaves roughly two orders of magnitude of headroom while
+still bounding the cost of one response; the configurable hard maximum is 256 MiB. A malformed
+`Content-Length` is **ignored under a stated rule**: the header is an early exit, the read ceiling
+is the control, and refusing on an unparseable header would reject a legitimate response for a
+cosmetic vendor bug while adding nothing.
+
+**Dormant no longer means untested.** The opener is injectable, and a dedicated synthetic unit
+test constructs the concrete transport with a fake and proves every rule above — approved origin
+accepted; lookalike host, userinfo, wrong scheme, non-default port, fragment and out-of-prefix
+path refused and never opened; redirect refused and its target never contacted; body bounds at
+and over the limit; oversized `Content-Length` short-circuiting the read; failing body unread; no
+URL, key, host or body in any exception. **No socket is opened.** The architecture guard was
+narrowed to match: production code, scripts and unattended runners still may not construct the
+transport, and that one test may. The earlier "nowhere" rule made a guarantee nobody could check
+— an unconstructed class cannot be shown to pin an origin or bound a body.
+
 **Pacing and retries.** No public rate limit exists (`PSR-SHD-109`), and *no documented limit is
 not an absent limit* — so the default is one request per second, with the clock and the sleep
 injected so the pacing is provable without spending it. Retries are bounded (three attempts), on
 a fixed backoff schedule with no jitter, and narrow: **an authorization refusal is not retried**,
 because a rejected key is rejected every time and retrying turns one refused request into
 several. A backoff subsumes the pacing interval rather than adding to it.
+
+**Closed vocabularies are normalised at construction, not merely annotated.** These are
+`StrEnum`s, so a bare `"stocks"` compares equal to the member, satisfies an `in` test, and differs
+only where something reads `.value` — which is precisely where the query is built and where the
+logical key is formed. `ObjectKey.classification`, `SharadarRequest.dataset` and
+`.response_format`, `SharadarRequestError.stage` and `.code`, and `TransportUnavailableError.code`
+all resolve through one shared helper that **runs no code belonging to the value**: lookup goes
+through a table keyed by exact `str` data obtained with `str.__str__`, so an overridden `__eq__`,
+`__hash__` or `__str__` cannot make an object match a member it is not, and a `str` subclass is
+resolved by the bytes it holds rather than by what it claims. Anything that is not a string is
+refused outright, and no path can produce a bare `AttributeError: 'str' object has no attribute
+'value'`.
+
+The two error types **normalise to a defined fallback rather than raising** —
+`SharadarStage.UNKNOWN` and `SharadarErrorCode.UNCLASSIFIED`, the latter never retryable. An
+exception that raised while being constructed would discard the failure it was reporting, which
+is strictly worse than reporting one whose stage could not be established.
+
+Numeric policy inputs — the pacing interval, the request timeout, each retry backoff, the response
+ceiling — are checked for **finiteness**, not only for range. NaN is the case worth naming: `nan <
+0`, `nan > 0` and `nan <= 0` are all `False`, so an ordinary bounds check *accepts* it and then
+every comparison downstream silently disables the behaviour the check was guarding.
 
 ### 4.4 Boundaries, enforced by scan
 
