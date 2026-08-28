@@ -440,15 +440,22 @@ is not allowed to mean *untested*.
 
 Storage goes through a provider-neutral `ResearchObjectStore` contract offering **immutable
 logical names with a content-integrity binding**: a key is a name *and* the digest the object must
-hold, so a forged key cannot read another object's bytes. **Classification is part of that
-identity**, and `LICENSED` is what you get by writing the ordinary thing; reaching the control
-store requires a written attestation and is refused when blank. Acquisition identity
-— `(digest, run id)` — is claimed in a **global, provider-independent namespace**, so two providers
-cannot claim one retrieval, while payload storage stays provider-scoped to keep each vendor's
-deletion surface separable. Durable metadata has **no free-text field at all**, and every field
-that is written is validated against its own grammar. Only an in-memory store implementation
-exists — the real S3 writer is a separate, later, separately authorized slice, and the project
-still declares **no runtime dependency**.
+hold, so a forged key cannot read another object's bytes. Keys are **deeply frozen** — segments are
+copied into a fresh plain tuple of plain strings and subclassing is refused — and payloads must be
+exact immutable `bytes`, because a caller-held list or buffer could otherwise change a key or its
+content after it had been validated and filed.
+
+**`LICENSED` is the only classification this slice publishes.** `ObjectKey.control` was withdrawn:
+a free-text attestation accepted whenever it was merely non-blank is not auditable clearance, and
+there is no permitted-output artifact to publish yet. Acquisition identity — `(digest, run id)` —
+is claimed under the reserved `bronze/_acquisition_claims/`, so two providers cannot claim one
+retrieval; the leading underscore is refused by the path grammar, so no provider can collide with
+it, and the deletion runbook's existing `bronze/` step already covers it. Payloads and acquisition
+records stay separable by provider prefix; **claims are not**, and the design says so rather than
+implying otherwise. Durable metadata has **no free-text field at all**, and ranges and instants are
+*parsed* rather than pattern-matched. Only an in-memory store implementation exists — the real S3
+writer is a separate, later, separately authorized slice, and the project still declares **no
+runtime dependency**.
 
 **Naming an implementation target is not selecting a production provider. G1 remains OPEN.** A
 public-source re-check on 2026-08-28 answered neither Q7 (bar construction and origin) nor Q8

@@ -158,11 +158,35 @@ classification is part of its key cannot move without becoming a different objec
 because the licensed store is deletion-first under CLAUDE.md §4.23 and the control store is
 precisely the material that must *survive* a deletion.
 
-**LICENSED is structural.** `ObjectKey.licensed(...)` takes no classification parameter, so
-provider-derived material cannot be routed elsewhere by omission, by a wrong keyword or by a
-copied line. `ObjectKey.control(...)` exists and demands a written attestation that vendor rows
-cannot be reconstructed from the object; a blank attestation is refused. This encodes ADR-0007's
-rule that **uncertain resolves to LICENSED**.
+**LICENSED is structural, and it is the only classification this slice can publish.**
+`ObjectKey.licensed(...)` takes no classification parameter, so provider-derived material cannot
+be routed elsewhere by omission, by a wrong keyword or by a copied line — and `CONTROL` is refused
+outright at construction.
+
+`ObjectKey.control(...)` was **withdrawn**. It gated clearance on a free-text attestation accepted
+whenever it was merely non-blank, and never bound that attestation to the object it cleared. That
+is not auditable clearance: `"x"` would have passed, nothing recorded *which* decision cleared the
+object, and the artifact would then have survived a vendor deletion on the strength of a string
+nobody could check. There is no permitted-output artifact to publish yet, so withdrawing the
+surface costs nothing this slice needs. `DataClassification.CONTROL` remains as architecture; a
+*structured* attestation — closed reason code, governing decision reference, version, deterministic
+identity, durably bound to the object — is a later, separately reviewed decision. This still
+encodes ADR-0007's rule that **uncertain resolves to LICENSED**; with no CONTROL constructor,
+uncertain is the only answer expressible.
+
+**Nothing a caller still owns survives construction.** `ObjectKey` was frozen but its leaves were
+not: a caller could pass a `list`, keep the reference, and change `logical_key` after the key had
+been validated and used. `segments` is now copied into a fresh plain `tuple` of exact plain `str`
+(a `str` subclass is rebuilt from the data it actually holds, so a lying `__str__` cannot pick a
+different path), the content address is stored as an exact `str`, and subclassing is refused at
+class creation so `logical_key` cannot be overridden. The store additionally requires an exact
+`ObjectKey`, so a duck-typed stand-in cannot present an identity that was never validated.
+
+**Payloads must be exact, immutable `bytes`.** A `bytearray` or `memoryview` could be mutated by
+whoever still holds it *after* the store hashed it and filed it under that hash — leaving an object
+whose content address no longer describes its content, silently, at a time of the caller's
+choosing. Every storage and publication boundary fails closed rather than copying, so the caller's
+mistake surfaces instead of being papered over.
 
 **The real S3 writer is deliberately not in this slice.** It is the piece that needs a
 credential, a bucket and an SDK, and it belongs immediately before authorized ingestion rather
@@ -184,7 +208,7 @@ therefore given a **global name**, in a namespace no provider can occupy, and th
 append-only refusal does the enforcing.
 
 ```
-licensed/acquisition-claims/<digest>/<run-id>.json      GLOBAL, provider-independent
+licensed/bronze/_acquisition_claims/<digest>/<run-id>.json   GLOBAL, provider-independent
 licensed/bronze/<provider>/<dataset>/objects/sha256/<digest>
 licensed/bronze/<provider>/<dataset>/acquisitions/<digest>/<run-id>.json
 ```
@@ -193,6 +217,28 @@ Two providers claiming one `(digest, run id)` write different bytes to the same 
 the second is refused. Payload *storage* stays provider-scoped so each vendor's deletion surface
 remains separable; acquisition *identity* is global. Both are true at once because they live in
 different namespaces.
+
+**The claim namespace is a reserved segment inside `bronze/`, not a new top-level prefix**, and
+that choice reconciles it with the deletion runbook rather than requiring the runbook to change.
+Two properties make it work:
+
+- **Collision is refused by grammar.** `_acquisition_claims` begins with an underscore, and
+  `safe_component` requires an externally supplied identifier to start with a letter or a digit —
+  so no provider can ever be named that. The reservation holds without anyone remembering it.
+- **Deletion already covers it.** [The deletion runbook](../runbooks/vendor-data-cloud-deletion.md)
+  Step 6 deletes every object under `bronze/`, and Step 8 lists the whole bucket with no prefix
+  filter. Claims are therefore inside the 30-day surface with **no change** to that runbook,
+  ADR-0007's layout, or the deletion role's permissions. A new top-level prefix would have been an
+  "unexpected prefix" finding under Step 3, and reconciling it would have meant editing the
+  deletion procedure to accommodate a storage detail — the wrong direction of travel.
+
+**What deletion attribution actually is, stated rather than implied.** Provider attribution lives
+*inside* the claim object, and the deletion role can list and delete by name but cannot
+`GetObject`. So: payloads and acquisition records **are** separable by provider prefix; **claims
+are not**. A whole-store termination deletes everything under `bronze/`, which is what a
+termination requires. A hypothetical single-provider purge could delete `bronze/<provider>/` by
+prefix and would have to treat the claim namespace as all-or-nothing. This slice therefore does
+**not** claim provider-separated deletion for claims, because the layout does not provide it.
 
 Three ordering facts, all forced by the storage model:
 
@@ -215,11 +261,16 @@ an unexpected encoding is still preservable as evidence — which is exactly the
 evidence matters.
 
 **Durable metadata has no free-text field at all — not a filtered one, an absent one.** The
-record carries a closed field set, and every field is validated against *its own* format: a
-lowercase provider token, a closed range grammar (an explicit date range or a single named token),
-a UTC instant, a 64-hex digest, a non-negative `int`, an exact `bool`, the LICENSED
-classification. Types are checked with `type(...) is`, so a `bool` cannot pass as an `int` and a
-`str` subclass cannot pass as a `str`.
+record carries a closed field set, and every field is validated against *its own* contract. Tokens
+and identifiers are matched by grammar; the two fields carrying meaning beyond their shape are
+**parsed**. A requested range must name real calendar dates that do not run backwards, or be the
+one named range token — a pattern that merely counts digits admits `2026-13-45` and every inverted
+range there is. A retrieval instant must parse, be offset-aware **UTC**, and be the canonical
+spelling of itself: a naive or offset instant recorded as UTC moves an acquisition in time, and a
+second spelling of one instant is a second content hash. Types are checked with `type(...) is`, so
+a `bool` cannot pass as an `int` and a `StrEnum` member — itself a `str` subclass — cannot pass as
+the classification string. What is written is bytes on a disk: it must *be* the value, not
+something that currently compares equal to it.
 
 That replaces a substring blocklist that was doing more work than it could bear. A blocklist
 cannot prove an arbitrary credential, query string, bucket or cloud identifier is absent from
@@ -254,7 +305,23 @@ key. A credential is injected, renders as a fixed placeholder through `repr`, `s
 `format` and `%`-formatting alike, and is reachable only through a method named `reveal()` so
 every genuine use is one grep away. It is never logged, stringified, persisted in Bronze metadata
 or attached to an exception. `credential_from_env` takes an **explicit mapping**, so this slice
-has no route to the process environment and creates and reads no real secret.
+has no route to the process environment and creates and reads no real secret. The URL
+builders that carry the key are **off the package surface**: only the client needs them.
+
+**The client takes no `user_agent`, and no caller text reaches a header.** An earlier revision
+accepted one and put it straight into a request header and into `repr`. A header value is not free
+text: a caller-supplied `CR LF` splits the request, a key-shaped string turns the User-Agent into
+a second credential channel, and a `repr` that echoes it turns a log line into a disclosure. There
+is exactly one honest thing for this client to call itself, so there is no parameter — and every
+value in its `repr` is now a constant or a number.
+
+The transport **validates headers itself** rather than trusting urllib to. `Request` stores a
+header without checking it, and a `CR LF` in a value is only rejected much later, at send time, by
+`http.client` — so a split-request attempt would look well formed in between. Names and values are
+held to strict ASCII token grammars before an opener sees them. Request construction, opener
+failures, response-metadata access, reads and `close()` are all caught and converted to sanitized
+codes: a `ValueError` from urllib carries the value it disliked, which for this vendor is a URL
+with the key in it.
 
 **Request construction.** HTTPS only, a deterministic User-Agent, an explicit format, explicit
 pagination, and an explicit date range on the two windowed tables. Every path segment and

@@ -2367,8 +2367,37 @@ def main() -> int:
         "acquisition identity is claimed in a global, provider-independent namespace",
         PUBLICATION.is_file()
         and "CLAIM_NAMESPACE" in read(PUBLICATION)
-        and "acquisition-claims" in read(PUBLICATION),
+        and "_acquisition_claims" in read(PUBLICATION),
         "(digest, run id) names one retrieval globally, not one per provider partition",
+    )
+    f.check(
+        "the claim namespace sits inside bronze/, which the deletion runbook already deletes",
+        PUBLICATION.is_file() and "BRONZE_NAMESPACE, CLAIM_NAMESPACE" in read(PUBLICATION),
+        "a new top-level prefix would be an unexpected-prefix finding in the deletion runbook",
+    )
+    f.check(
+        "the reserved claim segment cannot collide with a provider name",
+        "_acquisition_claims" in read(REPO_ROOT / "src/kalpamani/data/contracts/paths.py")
+        and "RESERVED_SEGMENTS" in read(REPO_ROOT / "src/kalpamani/data/contracts/paths.py"),
+        "safe_component refuses a leading underscore, so the reservation holds by grammar",
+    )
+    f.check(
+        "durable ranges and instants are parsed, not pattern-matched",
+        PUBLICATION.is_file()
+        and "_requested_range_defect" in read(PUBLICATION)
+        and "_retrieved_at_defect" in read(PUBLICATION),
+        "a pattern that counts digits admits an impossible date and an inverted range",
+    )
+    f.check(
+        "the client fixes its User-Agent rather than accepting one",
+        "user_agent" not in read(PROVIDER_PACKAGE / "client.py")
+        or "DEFAULT_USER_AGENT" in read(PROVIDER_PACKAGE / "client.py"),
+        "a caller-supplied header value is a request-splitting and disclosure channel",
+    )
+    f.check(
+        "the transport validates headers itself rather than trusting urllib",
+        "def headers_are_safe(" in read(PROVIDER_PACKAGE / "transport.py"),
+        "Request stores a header unvalidated; CR/LF is only rejected at send time",
     )
     f.check(
         "the object store binds the content address to the logical name",
@@ -2378,11 +2407,20 @@ def main() -> int:
     )
 
     f.check(
-        "the object-store contract defaults provider material to LICENSED",
+        "the object-store contract publishes LICENSED objects only in this slice",
         OBJECT_STORE.is_file()
         and "def licensed(" in read(OBJECT_STORE)
-        and "control_attestation" in read(OBJECT_STORE),
-        "CONTROL must require a written attestation; uncertain resolves to LICENSED",
+        and "def control(" not in read(OBJECT_STORE)
+        and "not publishable in this slice" in read(OBJECT_STORE),
+        "a free-text attestation is not auditable clearance; the constructor is withdrawn",
+    )
+    f.check(
+        "the object key is deeply frozen and cannot be subclassed",
+        OBJECT_STORE.is_file()
+        and "__init_subclass__" in read(OBJECT_STORE)
+        and "def exact_str(" in read(OBJECT_STORE)
+        and "def immutable_payload(" in read(OBJECT_STORE),
+        "a caller-owned list or buffer surviving construction can change a key after it is used",
     )
     f.check(
         "no cloud writer was built in this slice",
