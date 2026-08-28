@@ -9,9 +9,15 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
   }
+
+  # The exact provider build is pinned by `.terraform.lock.hcl`, which IS
+  # committed. The constraint above says which versions are acceptable; the lock
+  # file records which one was actually selected and the checksums of its
+  # packages, so a later `init` on another machine resolves to the same provider
+  # rather than to whatever is newest that day.
 
   # NOTE: no backend block.
   #

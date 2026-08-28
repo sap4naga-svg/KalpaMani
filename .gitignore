@@ -157,8 +157,13 @@ research_output/
 #
 # Only `terraform.tfvars.example` is committed -- placeholders alone, on the
 # same rule `.env.example` follows.
+#
+# `.terraform.lock.hcl` is deliberately NOT ignored. It is repository metadata,
+# not state: it records the provider versions actually selected and the checksums
+# of their packages, so a later `init` resolves to the same provider rather than
+# to whatever is newest that day. Committing it is HashiCorp's own guidance, and
+# it is what makes a supply-chain substitution visible as a diff.
 **/.terraform/
-**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfstate.backup
