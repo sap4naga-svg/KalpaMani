@@ -174,9 +174,11 @@ any future bucket or region, and renaming a bucket cannot invalidate a manifest.
 point-in-time contract asserts about hashes, manifests, profiles, coverage and provenance is
 unchanged by this relocation — see [ADR-0007](../decisions/ADR-0007-cloud-first-research-data-plane.md) §10.
 
-**No AWS resource exists.** [`infra/aws/research-data-plane/`](../../infra/aws/research-data-plane/)
-holds a Terraform *description* that has never been applied. `terraform apply`, AWS spending and
-provider credentials each require their own separate written authorization.
+**The AWS foundation is provisioned; nothing uses it.**
+[`infra/aws/research-data-plane/`](../../infra/aws/research-data-plane/) was applied on 2026-08-27
+— 36 resources, verified 54/54, both buckets empty
+([status](../operations/aws-foundation-status.md)). Further AWS spending, provider credentials,
+image builds and task execution each require their own separate written authorization.
 
 **Vendor data must never be committed, and the reason is licensing as much as secrecy.** Every
 low-cost provider examined forbids redistribution, and several restrict publishing derived

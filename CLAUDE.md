@@ -375,8 +375,9 @@ trading remains **hard-disabled**.
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **G1–G5** | **OPEN** |
 | **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
-| **AWS account** | **NOT CREATED** |
-| **AWS resources / `terraform apply` / cloud spend** | **NONE / NOT AUTHORIZED** |
+| **AWS account** | **CREATED (2026-08-27)** |
+| **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 54/54 |
+| **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Provider purchase / trial / credentialing** | **NOT AUTHORIZED** |
 | **Real external-data acquisition** | **NOT STARTED** |
 | **Short research** | **NOT AUTHORIZED** |
@@ -450,18 +451,26 @@ role under ADR-0001 is untouched.
 | Compute | **ephemeral** — one-off tasks. No always-on server |
 | Network | **zero inbound rules**, outbound HTTPS only, no listener, no load balancer |
 
-**Nothing exists.** [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) holds a
-Terraform *description* that has **never been applied**:
+**The foundation is PROVISIONED; nothing uses it (2026-08-27).**
+[`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) was applied — 36 resources,
+`0 changed, 0 destroyed`, verified 54/54 against the live account. Full record:
+[docs/operations/aws-foundation-status.md](docs/operations/aws-foundation-status.md).
 
 ```
-AWS account NOT CREATED   ·   AWS resources NONE   ·   AWS spend NONE
-terraform apply NOT AUTHORIZED   ·   provider credentials NONE   ·   vendor data NONE
+AWS account CREATED   ·   foundation PROVISIONED   ·   verification 54/54 PASS
+licensed bucket EMPTY   ·   control bucket EMPTY   ·   ECR EMPTY
+no task definition   ·   nothing running   ·   no always-on billable resource
+provider NONE   ·   provider credentials NONE   ·   vendor data NONE
 ```
 
-Cloud spend, `terraform apply`, AWS account creation and provider credentials are each a
+**Provisioning a platform is not permission to use it.** Provider purchase, provider
+credentialing, ingestion, image builds, task execution and any further cloud spend are each a
 **separate written authorization** (§4.21). **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**,
-no provider is selected, and Phase 3 remains **NOT COMPLETE**. Adopting a deployment platform
-authorizes no ingestion, no purchase and no implementation.
+no provider is selected, and Phase 3 remains **NOT COMPLETE**.
+
+Deletion authority stayed separated through provisioning: the routine research role cannot
+delete, and the deletion role can neither read nor be assumed by anything — no `iam:PassRole` for
+it exists. Both properties are verified against the live account, not merely declared.
 
 The termination procedure exists in advance and has **never been run**:
 [docs/runbooks/vendor-data-cloud-deletion.md](docs/runbooks/vendor-data-cloud-deletion.md).
