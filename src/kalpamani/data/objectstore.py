@@ -48,14 +48,34 @@ attribute could be moved between the two by an ordinary-looking edit; an object
 whose classification is part of its key cannot move without becoming a different
 object.
 
-**LICENSED is structural, not a default argument.** :meth:`ObjectKey.licensed`
-takes no classification parameter, so provider-derived material cannot be routed
-anywhere else by omission, by a wrong keyword or by a copied line.
-:meth:`ObjectKey.control` exists, and it demands a written attestation saying why
-the object cannot reconstruct a vendor row. That attestation is refused when
-empty, so "it is control-plane because I said so" is not expressible. The rule it
-encodes is ADR-0007's classification question -- *can vendor rows be recovered
-from this artifact?* -- under which **uncertain resolves to LICENSED**.
+**This slice publishes LICENSED objects only, and there is no constructor for
+anything else.** :meth:`ObjectKey.licensed` takes no classification parameter, so
+provider-derived material cannot be routed elsewhere by omission, by a wrong
+keyword or by a copied line -- and ``CONTROL`` is refused outright at
+construction.
+
+An earlier revision offered ``ObjectKey.control`` gated on a free-text
+attestation, accepted whenever it was merely non-blank and never durably bound to
+the object it cleared. That is not auditable clearance: ``"x"`` would have passed,
+nothing recorded *which* decision cleared the object, and the artifact would then
+have survived a vendor deletion on the strength of a string nobody could check.
+Withdrawing the constructor is the honest fix for this slice, because there is no
+permitted-output artifact to publish yet and therefore nothing the surface is
+needed for. :class:`~kalpamani.data.contracts.vocabulary.DataClassification`
+keeps ``CONTROL`` as architecture; adding a *structured* attestation -- a closed
+reason code, a governing decision reference, a version, a deterministic identity,
+and durable binding to the object -- is a later, separately reviewed decision.
+
+The rule this encodes is ADR-0007's classification question -- *can vendor rows be
+recovered from this artifact?* -- under which **uncertain resolves to LICENSED**.
+With no CONTROL constructor, uncertain is the only answer expressible.
+
+**Nothing a caller still owns survives construction.** ``segments`` is copied into
+a fresh plain :class:`tuple` of exact plain :class:`str`, and every payload must
+be exact plain :class:`bytes`. A frozen dataclass holding a caller's ``list``
+would let ``segments[1] = "elsewhere"`` change ``logical_key`` after the fact, and
+a ``bytearray`` would let the bytes change after they were hashed. Subclassing is
+refused, so ``logical_key`` cannot be overridden either.
 
 **Puts are append-only and idempotent.** :meth:`ResearchObjectStore.put_if_absent`
 writes only when nothing is stored under the key. Re-putting identical bytes
@@ -73,7 +93,7 @@ and an SDK, and none of those is authorized here.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -82,8 +102,9 @@ from kalpamani.data.contracts.errors import (
     ObjectAlreadyExistsError,
     ObjectClassificationError,
     ObjectContentMismatchError,
+    ObjectPayloadTypeError,
 )
-from kalpamani.data.contracts.paths import safe_component
+from kalpamani.data.contracts.paths import path_segment
 from kalpamani.data.contracts.vocabulary import DataClassification, closed_member
 
 #: A content address is exactly 64 lowercase hex characters. Checked rather than
@@ -96,24 +117,78 @@ _CONTENT_ADDRESS: Final = re.compile(r"^[0-9a-f]{64}$")
 MAX_LOGICAL_KEY_LENGTH: Final = 900
 
 
+def exact_str(value: object) -> str | None:
+    """``value`` as a plain :class:`str` holding its real character data, or ``None``.
+
+    A ``str`` subclass is rebuilt from the data it actually holds, obtained with
+    ``str.__str__`` so an overridden ``__str__`` cannot substitute something else.
+    The result is a genuine ``str``, so nothing the caller wrote -- an overridden
+    ``__eq__``, ``__hash__`` or ``__str__`` -- travels into the key. Anything that
+    is not a string at all yields ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    return str(str.__str__(value))
+
+
+def immutable_payload(payload: object) -> bytes:
+    """``payload`` if it is exact plain :class:`bytes`, else a refusal.
+
+    **Fail closed rather than normalise.** A ``bytearray`` or a ``memoryview``
+    could be mutated by whoever still holds it after this store hashed it and
+    filed it under that hash -- so the object's content address would stop
+    describing its content, silently, at a time of the caller's choosing. Copying
+    would fix the storage but hide the caller's mistake; refusing surfaces it.
+    A ``bytes`` subclass is refused for the same reason a ``str`` subclass is:
+    its behaviour is not this module's.
+
+    Raises:
+        ObjectPayloadTypeError: for anything that is not exactly ``bytes``.
+    """
+    if type(payload) is not bytes:
+        raise ObjectPayloadTypeError(
+            f"payload must be exact bytes, not {type(payload).__name__}. A mutable buffer can "
+            "be changed after it has been hashed and filed under that hash, which would leave "
+            "an object whose content address no longer describes its content."
+        )
+    return payload
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ObjectKey:
     """The logical name of one immutable object, and its content address.
 
     ``segments`` are the path below the classification prefix. Every one of them
-    passes :func:`~kalpamani.data.contracts.paths.safe_component`, so a provider
+    passes :func:`~kalpamani.data.contracts.paths.path_segment`, so a provider
     name, a dataset name or a run identifier arriving from outside the system
     cannot choose where we write.
 
-    Prefer :meth:`licensed` and :meth:`control` over constructing this directly:
-    they are the two spellings that make the classification decision visible at
-    the call site.
+    **Deeply frozen.** ``segments`` is copied into a fresh plain ``tuple`` of
+    exact plain ``str``, so mutating whatever the caller passed -- a list, a
+    tuple subclass, a string subclass -- changes nothing here afterwards.
+    Subclassing is refused, so ``logical_key`` cannot be overridden.
+
+    Use :meth:`licensed`. It is the only constructor, and the only classification
+    this slice publishes.
     """
 
     classification: DataClassification
     segments: tuple[str, ...]
     content_sha256: str
-    control_attestation: str = ""
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing.
+
+        A subclass could override ``logical_key`` or ``content_sha256`` and hand
+        the store a key whose identity is not the one it validated. The store also
+        requires an exact ``ObjectKey``; this is the half that makes the subclass
+        impossible to write in the first place.
+        """
+        raise TypeError(
+            "ObjectKey may not be subclassed. A subclass could override logical_key or "
+            "content_sha256 and present the store with an identity other than the one that "
+            "was checked."
+        )
 
     def __post_init__(self) -> None:
         # Normalised, not merely annotated. These are StrEnums, so a bare
@@ -129,32 +204,47 @@ class ObjectKey:
                 "value cannot be resolved to a store, and guessing one would put an "
                 "object somewhere nobody chose."
             )
+        if classification is not DataClassification.LICENSED:
+            raise ObjectClassificationError(
+                f"{classification.value} objects are not publishable in this slice. There is no "
+                "permitted-output artifact to publish yet, and clearing one to a store that "
+                "survives a vendor deletion needs a structured, durably-bound attestation "
+                "rather than a string. That is a later, separately reviewed decision."
+            )
         object.__setattr__(self, "classification", classification)
-        if not self.segments:
+
+        # Read through `object` deliberately: the annotation says tuple[str, ...],
+        # and the whole point of this block is the caller who ignored it.
+        supplied: object = self.segments
+        if isinstance(supplied, str | bytes) or not isinstance(supplied, Iterable):
+            raise ObjectClassificationError(
+                "segments must be an iterable of path components, not a single value."
+            )
+        segments: list[str] = []
+        for segment in supplied:
+            exact = exact_str(segment)
+            if exact is None:
+                raise ObjectClassificationError(
+                    f"an object key segment must be a string, not {type(segment).__name__}."
+                )
+            segments.append(path_segment(exact, kind="object key segment"))
+        if not segments:
             raise ObjectClassificationError(
                 "An object key needs at least one segment; a bare classification prefix "
                 "names a whole store rather than an object in it."
             )
-        for segment in self.segments:
-            safe_component(segment, kind="object key segment")
-        if not _CONTENT_ADDRESS.match(self.content_sha256):
+        # A fresh plain tuple of plain strings. Whatever the caller still holds is
+        # now unrelated to this key.
+        object.__setattr__(self, "segments", tuple(segments))
+
+        digest = exact_str(self.content_sha256)
+        if digest is None or not _CONTENT_ADDRESS.match(digest):
             raise ObjectContentMismatchError(
                 f"content_sha256={self.content_sha256!r} is not 64 lowercase hex characters. "
                 "A content address that two spellings can share is not an address."
             )
-        if self.classification is DataClassification.CONTROL:
-            if not self.control_attestation.strip():
-                raise ObjectClassificationError(
-                    "A CONTROL object requires a written attestation that vendor rows cannot "
-                    "be reconstructed from it (ADR-0007). Uncertain resolves to LICENSED, so "
-                    "an unattested object is licensed by construction rather than by choice."
-                )
-        elif self.control_attestation:
-            raise ObjectClassificationError(
-                "A LICENSED object carries no control attestation. An attestation on the "
-                "licensed side records a decision nobody made, and would read as evidence "
-                "that the object had been cleared."
-            )
+        object.__setattr__(self, "content_sha256", digest)
+
         if len(self.logical_key) > MAX_LOGICAL_KEY_LENGTH:
             raise ObjectClassificationError(
                 f"logical key is {len(self.logical_key)} characters, over the "
@@ -168,33 +258,17 @@ class ObjectKey:
 
     @classmethod
     def licensed(cls, *segments: str, payload: bytes) -> ObjectKey:
-        """Name a LICENSED object. **There is no parameter that changes that.**
+        """Name a LICENSED object. **The only constructor, and the only classification.**
 
         Provider-derived material, and anything that could reconstruct it, takes
         this route. The absence of a classification argument is the point:
-        licensed is what you get by writing the ordinary thing.
+        licensed is what you get by writing the ordinary thing, and in this slice
+        it is the only thing you can write.
         """
         return cls(
             classification=DataClassification.LICENSED,
             segments=tuple(segments),
-            content_sha256=sha256_hex(payload),
-        )
-
-    @classmethod
-    def control(cls, *segments: str, payload: bytes, attestation: str) -> ObjectKey:
-        """Name a CONTROL object, on a written attestation that is refused when empty.
-
-        Raises:
-            ObjectClassificationError: if ``attestation`` is blank. The control
-                store survives a vendor deletion, so putting a reconstructable
-                artifact there would defeat the obligation ADR-0007 and
-                CLAUDE.md §4.23 exist to keep provable.
-        """
-        return cls(
-            classification=DataClassification.CONTROL,
-            segments=tuple(segments),
-            content_sha256=sha256_hex(payload),
-            control_attestation=attestation,
+            content_sha256=sha256_hex(immutable_payload(payload)),
         )
 
 
@@ -231,6 +305,10 @@ class ResearchObjectStore(Protocol):
         """Store ``payload`` under ``key`` unless the name is already occupied.
 
         Raises:
+            ObjectPayloadTypeError: if ``payload`` is not exact, immutable
+                ``bytes``.
+            ObjectClassificationError: if ``key`` is not an exact
+                :class:`ObjectKey`.
             ObjectContentMismatchError: if ``payload`` does not hash to the
                 content address ``key`` claims.
             ObjectAlreadyExistsError: if different content is already stored under
@@ -277,6 +355,13 @@ class InMemoryResearchObjectStore:
 
     def put_if_absent(self, *, key: ObjectKey, payload: bytes) -> PutOutcome:
         """Store ``payload`` under ``key`` unless the name is already occupied."""
+        if type(key) is not ObjectKey:
+            raise ObjectClassificationError(
+                f"key must be an exact ObjectKey, not {type(key).__name__}. Subclassing is "
+                "refused at class creation; this is the boundary half of the same rule, so a "
+                "duck-typed stand-in cannot present an identity that was never validated."
+            )
+        payload = immutable_payload(payload)
         digest = sha256_hex(payload)
         if digest != key.content_sha256:
             raise ObjectContentMismatchError(
@@ -343,4 +428,6 @@ __all__ = [
     "ObjectKey",
     "PutOutcome",
     "ResearchObjectStore",
+    "exact_str",
+    "immutable_payload",
 ]

@@ -10,10 +10,16 @@ every "reproduces bit-identically" claim downstream a coincidence.
 no-op that says so; publishing *different* bytes under an occupied key must be a
 refusal, not a replacement.
 
-**LICENSED is what you get by writing the ordinary thing.** ADR-0007 classifies by
-one question -- can vendor rows be recovered from this artifact? -- under which
-uncertain resolves to LICENSED. The tests below establish that the CONTROL side
-cannot be reached by omission, a wrong keyword or a blank string.
+**LICENSED is the only thing this slice can publish.** ADR-0007 classifies by one
+question -- can vendor rows be recovered from this artifact? -- under which
+uncertain resolves to LICENSED. ``ObjectKey.control`` was withdrawn: a free-text
+attestation accepted whenever it was merely non-blank is not auditable clearance,
+and there is no permitted-output artifact to publish yet.
+
+**Nothing the caller still owns survives construction.** A frozen dataclass
+holding a caller's list would let ``segments[1] = "elsewhere"`` change
+``logical_key`` afterwards, and a ``bytearray`` would let the bytes change after
+they were hashed and filed under that hash.
 
 No filesystem, no network, no cloud. The store under test is in memory.
 """
@@ -27,6 +33,7 @@ from kalpamani.data.contracts.errors import (
     ObjectAlreadyExistsError,
     ObjectClassificationError,
     ObjectContentMismatchError,
+    ObjectPayloadTypeError,
     UnsafePathComponentError,
 )
 from kalpamani.data.contracts.vocabulary import DataClassification
@@ -123,46 +130,57 @@ def test_the_licensed_constructor_has_no_parameter_that_changes_the_classificati
     key = ObjectKey.licensed("bronze", "provider", payload=PAYLOAD)
     assert key.classification is DataClassification.LICENSED
     assert key.logical_key.startswith("licensed/")
-    assert key.control_attestation == ""
 
 
-@pytest.mark.parametrize("attestation", ["", "   ", "\t\n"])
-def test_control_is_refused_without_a_written_attestation(attestation: str) -> None:
-    """Uncertain resolves to LICENSED, so an unattested object cannot be CONTROL."""
-    with pytest.raises(ObjectClassificationError, match="written attestation"):
-        ObjectKey.control("control", "manifest", payload=PAYLOAD, attestation=attestation)
+def test_licensed_is_the_only_public_constructor() -> None:
+    """``ObjectKey.control`` was withdrawn for this slice, and its absence is the fix."""
+    assert not hasattr(ObjectKey, "control")
+    constructors = {
+        name
+        for name, member in vars(ObjectKey).items()
+        if isinstance(member, classmethod) and not name.startswith("_")
+    }
+    assert constructors == {"licensed"}
 
 
-def test_control_is_reachable_only_by_stating_why() -> None:
-    key = ObjectKey.control(
-        "control",
-        "manifest",
-        payload=PAYLOAD,
-        attestation="a manifest of hashes; no vendor row can be reconstructed from it",
-    )
-    assert key.classification is DataClassification.CONTROL
-    assert key.logical_key.startswith("control/")
+def test_a_control_object_cannot_be_constructed_at_all() -> None:
+    """A free-text attestation was never auditable clearance.
 
-
-def test_a_licensed_object_may_not_carry_a_control_attestation() -> None:
-    """An attestation on the licensed side would read as evidence of a clearance."""
-    with pytest.raises(ObjectClassificationError, match="carries no control attestation"):
+    ``"x"`` would have passed it, nothing recorded *which* decision cleared the
+    object, and the artifact would then have survived a vendor deletion on the
+    strength of a string nobody could check. With no constructor, the unsafe
+    surface is not merely guarded -- it does not exist.
+    """
+    with pytest.raises(ObjectClassificationError, match="not publishable in this slice"):
         ObjectKey(
-            classification=DataClassification.LICENSED,
-            segments=("bronze",),
+            classification=DataClassification.CONTROL,
+            segments=("control", "manifest"),
             content_sha256=sha256_hex(PAYLOAD),
-            control_attestation="cleared",
         )
 
 
+def test_no_attestation_string_can_clear_an_object_to_control() -> None:
+    """Including the one-character string the old rule would have accepted."""
+    for attestation in ("x", "cleared", "not reconstructable", ""):
+        with pytest.raises(TypeError):
+            ObjectKey(  # type: ignore[call-arg]
+                classification=DataClassification.CONTROL,
+                segments=("control",),
+                content_sha256=sha256_hex(PAYLOAD),
+                control_attestation=attestation,
+            )
+
+
+def test_control_remains_in_the_architecture_vocabulary() -> None:
+    """Withdrawing the constructor is not withdrawing the concept."""
+    assert DataClassification.CONTROL.value == "CONTROL"
+    assert set(DataClassification) == {DataClassification.LICENSED, DataClassification.CONTROL}
+
+
 def test_the_classification_is_part_of_the_identity_not_an_attribute() -> None:
-    """An object cannot move between the two stores without becoming a different one."""
-    licensed = ObjectKey.licensed("bronze", "x", payload=PAYLOAD)
-    controlled = ObjectKey.control(
-        "bronze", "x", payload=PAYLOAD, attestation="hashes only, not reconstructable"
-    )
-    assert licensed.content_sha256 == controlled.content_sha256
-    assert licensed.logical_key != controlled.logical_key
+    """The prefix comes from the classification, so it cannot be edited away."""
+    key = ObjectKey.licensed("bronze", "x", payload=PAYLOAD)
+    assert key.logical_key.split("/")[0] == DataClassification.LICENSED.value.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +216,190 @@ def test_different_bytes_under_one_key_are_refused_rather_than_replacing() -> No
     with pytest.raises(ObjectAlreadyExistsError, match="append-only"):
         backing.put_if_absent(key=forged_key(key, OTHER_PAYLOAD), payload=OTHER_PAYLOAD)
     assert backing.read(key) == PAYLOAD
+
+
+# ---------------------------------------------------------------------------
+# Deep immutability -- nothing the caller still owns survives construction
+# ---------------------------------------------------------------------------
+
+
+def test_mutating_the_source_segment_list_changes_nothing() -> None:
+    """The defect this closes: a frozen dataclass holding a caller's list.
+
+    ``ObjectKey`` was frozen, but its leaves were not. A caller could hand in a
+    list, keep the reference, and change ``logical_key`` after the key had been
+    validated and used.
+    """
+    segments = ["bronze", "provider", "dataset"]
+    key = ObjectKey(
+        classification=DataClassification.LICENSED,
+        segments=segments,  # type: ignore[arg-type]
+        content_sha256=sha256_hex(PAYLOAD),
+    )
+    before = key.logical_key
+    segments[1] = "elsewhere"
+    segments.append("appended")
+    assert key.logical_key == before == "licensed/bronze/provider/dataset"
+
+
+def test_the_retained_segments_are_an_exact_tuple_of_exact_strings() -> None:
+    class SneakyTuple(tuple):  # type: ignore[type-arg]
+        pass
+
+    class SneakySegment(str):
+        def __str__(self) -> str:
+            return "elsewhere"
+
+    key = ObjectKey(
+        classification=DataClassification.LICENSED,
+        segments=SneakyTuple(("bronze", SneakySegment("provider"))),
+        content_sha256=sha256_hex(PAYLOAD),
+    )
+    assert type(key.segments) is tuple
+    assert all(type(segment) is str for segment in key.segments)
+    # Rebuilt from the data the subclass actually holds, not from what it claims.
+    assert key.logical_key == "licensed/bronze/provider"
+
+
+def test_the_retained_content_address_is_an_exact_string() -> None:
+    class SneakyDigest(str):
+        def __str__(self) -> str:
+            return "0" * 64
+
+    key = ObjectKey(
+        classification=DataClassification.LICENSED,
+        segments=("bronze",),
+        content_sha256=SneakyDigest(sha256_hex(PAYLOAD)),
+    )
+    assert type(key.content_sha256) is str
+    assert key.content_sha256 == sha256_hex(PAYLOAD)
+
+
+@pytest.mark.parametrize("segment", [None, 7, b"bytes", ["nested"], object()])
+def test_a_non_string_segment_is_refused(segment: object) -> None:
+    with pytest.raises(ObjectClassificationError, match="must be a string"):
+        ObjectKey(
+            classification=DataClassification.LICENSED,
+            segments=("bronze", segment),  # type: ignore[arg-type]
+            content_sha256=sha256_hex(PAYLOAD),
+        )
+
+
+@pytest.mark.parametrize("segments", ["bronze", b"bronze", 7, None])
+def test_a_single_value_is_not_a_segment_collection(segments: object) -> None:
+    """A bare string is iterable, and iterating it would make one segment per letter."""
+    with pytest.raises(ObjectClassificationError, match="iterable of path components"):
+        ObjectKey(
+            classification=DataClassification.LICENSED,
+            segments=segments,  # type: ignore[arg-type]
+            content_sha256=sha256_hex(PAYLOAD),
+        )
+
+
+def test_object_key_cannot_be_subclassed() -> None:
+    """A subclass could override ``logical_key`` and present an unvalidated identity."""
+    with pytest.raises(TypeError, match="may not be subclassed"):
+
+        class Forged(ObjectKey):
+            @property
+            def logical_key(self) -> str:
+                return "licensed/somewhere/else"
+
+
+def test_the_store_requires_an_exact_object_key() -> None:
+    """The boundary half of the same rule: a duck-typed stand-in is refused too."""
+
+    class NotAnObjectKey:
+        classification = DataClassification.LICENSED
+        segments = ("bronze",)
+        content_sha256 = sha256_hex(PAYLOAD)
+        logical_key = "licensed/bronze"
+
+    backing = InMemoryResearchObjectStore()
+    with pytest.raises(ObjectClassificationError, match="exact ObjectKey"):
+        backing.put_if_absent(key=NotAnObjectKey(), payload=PAYLOAD)  # type: ignore[arg-type]
+
+
+def test_a_put_outcome_key_stays_stable_after_the_source_is_mutated() -> None:
+    segments = ["bronze", "provider"]
+    key = ObjectKey(
+        classification=DataClassification.LICENSED,
+        segments=segments,  # type: ignore[arg-type]
+        content_sha256=sha256_hex(PAYLOAD),
+    )
+    backing = InMemoryResearchObjectStore()
+    outcome = backing.put_if_absent(key=key, payload=PAYLOAD)
+    segments[0] = "elsewhere"
+    assert outcome.key.logical_key == "licensed/bronze/provider"
+    assert backing.read(outcome.key) == PAYLOAD
+
+
+# ---------------------------------------------------------------------------
+# Payload bytes are exact and immutable
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bytearray(b"synthetic-mutable"),
+        memoryview(b"synthetic-view"),
+        "synthetic-str",
+        None,
+        7,
+    ],
+)
+def test_only_exact_bytes_may_be_hashed_into_a_key(payload: object) -> None:
+    with pytest.raises(ObjectPayloadTypeError, match="exact bytes"):
+        ObjectKey.licensed("bronze", payload=payload)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "payload", [bytearray(b"synthetic-mutable"), memoryview(b"synthetic-view"), "str", None]
+)
+def test_only_exact_bytes_may_be_stored(payload: object) -> None:
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", payload=PAYLOAD)
+    with pytest.raises(ObjectPayloadTypeError, match="exact bytes"):
+        backing.put_if_absent(key=key, payload=payload)  # type: ignore[arg-type]
+    assert backing.snapshot() == {}
+
+
+def test_a_bytes_subclass_is_refused_rather_than_retained() -> None:
+    """Its behaviour is not this module's, and neither is its lifetime."""
+
+    class SneakyBytes(bytes):
+        pass
+
+    with pytest.raises(ObjectPayloadTypeError):
+        ObjectKey.licensed("bronze", payload=SneakyBytes(PAYLOAD))
+
+
+def test_a_mutable_buffer_cannot_be_edited_into_stored_content() -> None:
+    """The scenario the refusal exists for, run end to end.
+
+    Hash, file under the hash, then mutate what the caller still holds -- and the
+    object's content address would have stopped describing its content, silently.
+    """
+    buffer = bytearray(PAYLOAD)
+    backing = InMemoryResearchObjectStore()
+    with pytest.raises(ObjectPayloadTypeError):
+        ObjectKey.licensed("bronze", payload=buffer)  # type: ignore[arg-type]
+
+    # The supported route: an exact copy the caller no longer shares.
+    key = ObjectKey.licensed("bronze", payload=bytes(buffer))
+    backing.put_if_absent(key=key, payload=bytes(buffer))
+    buffer[0] = 0
+    assert backing.read(key) == PAYLOAD
+    assert sha256_hex(backing.read(key)) == key.content_sha256
+
+
+def test_everything_the_store_exposes_is_immutable_bytes() -> None:
+    backing = InMemoryResearchObjectStore()
+    key = ObjectKey.licensed("bronze", payload=PAYLOAD)
+    backing.put_if_absent(key=key, payload=PAYLOAD)
+    assert type(backing.read(key)) is bytes
+    assert all(type(value) is bytes for value in backing.snapshot().values())
 
 
 # ---------------------------------------------------------------------------
@@ -355,12 +557,12 @@ def test_an_unrecognised_classification_is_refused_rather_than_guessed(value: ob
 def test_a_str_subclass_is_resolved_by_the_data_it_actually_holds() -> None:
     """Not by what ``__str__`` claims -- otherwise a lie would pick the member."""
     key = ObjectKey(
-        classification=_SneakyClassification("CONTROL"),  # type: ignore[arg-type]
-        segments=("control",),
+        classification=_SneakyClassification("LICENSED"),  # type: ignore[arg-type]
+        segments=("bronze",),
         content_sha256=sha256_hex(PAYLOAD),
-        control_attestation="hashes only",
     )
-    assert key.classification is DataClassification.CONTROL
+    assert type(key.classification) is DataClassification
+    assert key.classification is DataClassification.LICENSED
 
 
 def test_the_in_memory_store_satisfies_the_protocol_at_runtime() -> None:

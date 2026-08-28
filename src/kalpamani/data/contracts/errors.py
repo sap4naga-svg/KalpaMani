@@ -160,6 +160,16 @@ class ObjectAlreadyExistsError(ObjectStoreError):
     """
 
 
+class ObjectPayloadTypeError(ObjectStoreError):
+    """A payload was not exact, immutable :class:`bytes`.
+
+    A ``bytearray`` or ``memoryview`` can be changed by whoever still holds it
+    after the store has hashed it and filed it under that hash, leaving an object
+    whose content address no longer describes its content. Refused rather than
+    copied, so the caller's mistake surfaces instead of being papered over.
+    """
+
+
 class ObjectClassificationError(ObjectStoreError):
     """An object was routed to CONTROL without an explicit written attestation.
 
