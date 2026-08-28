@@ -36,12 +36,38 @@ Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def tracked_files(directory: Path) -> list[Path]:
+    """Files under `directory` that git ACTUALLY TRACKS.
+
+    The identifier and stray-file scans below must test what is *committed*, not what
+    happens to sit on disk. Once the foundation was provisioned, operating it requires a
+    real, git-ignored `terraform.tfvars` in the scaffold -- carrying, by design, the
+    account id whose commitment those scans exist to prevent.
+
+    Scanning the working tree would therefore fail on precisely the file whose
+    git-ignored status is the control working correctly. That is the same mistake an
+    earlier revision made with `.terraform/`, and the fix is the same: ask git.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["git", "-C", str(REPO_ROOT), "ls-files", "--", str(directory)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return sorted(q for q in directory.iterdir() if q.is_file())
+    return sorted((REPO_ROOT / line).resolve() for line in result.stdout.split() if line)
+
+
 PHASE3 = REPO_ROOT / "docs" / "phase3"
 DECISIONS = REPO_ROOT / "docs" / "decisions"
 ARCHITECTURE = REPO_ROOT / "docs" / "architecture"
@@ -103,6 +129,9 @@ V3_HISTORICAL_MARKERS = (
 #: checks below read the `.tf` files as text and assert on what they actually say.
 ADR_CLOUD = DECISIONS / "ADR-0007-cloud-first-research-data-plane.md"
 DELETION_RUNBOOK = REPO_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion.md"
+#: The provision record. It is the one document that describes real, deployed infrastructure,
+#: which makes it the likeliest place for an account id, bucket name or ARN to arrive.
+FOUNDATION_STATUS = REPO_ROOT / "docs" / "operations" / "aws-foundation-status.md"
 INFRA = REPO_ROOT / "infra" / "aws" / "research-data-plane"
 
 #: Every file the scaffold is expected to contain. A missing one is a silent gap in the design.
@@ -154,14 +183,29 @@ SECRET_PATTERNS = {
 #: Wording that would present the cloud plane as built rather than described. Legitimate only next
 #: to a negation -- ADR-0007 itself says the laptop is *not* the authoritative store, and a naive
 #: substring scan would trip on exactly the sentence that establishes the property.
-PROVISIONED_CLAIMS = (
-    "aws resources have been created",
-    "aws resources were created",
-    "resources have been provisioned",
-    "the aws account was created",
-    "an aws account exists",
-    "terraform has been applied",
-    "we applied the terraform",
+#: Wording that was true before 2026-08-27 and is FALSE now. The foundation is provisioned, so a
+#: document still saying nothing exists is not cautious -- it is wrong, and wrong in the direction
+#: that hides real infrastructure and real (if currently zero) spend from whoever reads it next.
+STALE_UNBUILT_CLAIMS = (
+    "aws account not created",
+    "no aws account has been created",
+    "aws resources created    none",
+    "no aws resource has been created",
+    "never been applied",
+    "description only",
+)
+
+#: The claims that must NEVER appear, before or after provisioning. Provisioning a platform
+#: resolved no gate, selected no provider and retrieved no data; a document drifting into any of
+#: these would report authority that was never granted.
+USE_CLAIMS = (
+    "provider has been selected",
+    "sharadar has been selected",
+    "provider credential has been issued",
+    "vendor data has been retrieved",
+    "vendor data has been ingested",
+    "ingestion has run",
+    "a research image has been pushed",
 )
 
 #: Wording that would restore the laptop to authority over Phase-3 production data.
@@ -1158,6 +1202,7 @@ def main() -> int:
         claude_md = read(REPO_ROOT / "CLAUDE.md")
         readme = read(REPO_ROOT / "README.md")
         infra_readme = read(INFRA / "README.md") if (INFRA / "README.md").is_file() else ""
+        status_doc = read(FOUNDATION_STATUS) if FOUNDATION_STATUS.is_file() else ""
 
         # -- the ADR decides a platform and nothing else --------------------------
         f.check(
@@ -1166,9 +1211,21 @@ def main() -> int:
             "ADR-0007 does not state its effective condition",
         )
         f.check(
-            "ADR-0007 states that no AWS resource exists",
-            "No AWS resource exists" in adr7,
-            "ADR-0007 does not disclaim existing resources",
+            "ADR-0007 carries an implementation-status section rather than a rewritten decision",
+            "## Implementation status" in adr7,
+            "ADR-0007 has no implementation-status section",
+        )
+        f.check(
+            "ADR-0007 still frames its own text as of its decision date",
+            "At the time of this decision, no AWS resource exists" in adr7,
+            "the as-of-decision framing was lost",
+        )
+        f.check(
+            "ADR-0007 records that provisioning granted no further authority",
+            "Provisioning a platform is not permission to use it" in adr7
+            or "authorized nothing" in adr7
+            or "still stands and is still refused" in adr7,
+            "ADR-0007 does not bound what provisioning authorized",
         )
         for name, doc in (
             ("ADR-0007", adr7),
@@ -1214,19 +1271,39 @@ def main() -> int:
             "CLAUDE.md": claude_md,
             "README.md": readme,
             "implementation-plan.md": everything[PHASE3 / "implementation-plan.md"],
+            "aws-foundation-status.md": status_doc,
         }
-        built: list[str] = []
+        # A stale claim is legitimate only where the sentence marks itself historical --
+        # ADR-0007 deliberately preserves its own as-of-decision wording.
+        stale: list[str] = []
         for name, doc in cloud_docs.items():
             for lineno, line in enumerate(doc.splitlines(), 1):
                 low = line.lower()
-                for claim in PROVISIONED_CLAIMS:
-                    if claim in low and not CLAIM_NEGATION.search(low):
-                        built.append(f"{name}:{lineno}")
+                historical = any(mark in low for mark in V3_HISTORICAL_MARKERS) or (
+                    "at the time of this decision" in low or "pre-apply" in low
+                )
+                for claim in STALE_UNBUILT_CLAIMS:
+                    if claim in low and not historical:
+                        stale.append(f"{name}:{lineno}")
                         break
         f.check(
-            "no document claims AWS resources exist or that Terraform was applied",
-            not built,
-            ", ".join(built[:6]),
+            "no document still claims the AWS foundation does not exist",
+            not stale,
+            ", ".join(stale[:6]),
+        )
+
+        overclaim: list[str] = []
+        for name, doc in cloud_docs.items():
+            for lineno, line in enumerate(doc.splitlines(), 1):
+                low = line.lower()
+                for claim in USE_CLAIMS:
+                    if claim in low and not CLAIM_NEGATION.search(low):
+                        overclaim.append(f"{name}:{lineno}")
+                        break
+        f.check(
+            "no document claims a provider, credential, ingestion or image exists",
+            not overclaim,
+            ", ".join(overclaim[:6]),
         )
 
         # `terraform apply` is the most consequential phrase in this change: it is the one that
@@ -1240,8 +1317,11 @@ def main() -> int:
         # break still counts.
         unrefused_apply: list[str] = []
         refusal = re.compile(
-            r"(?i)(?:not\s+authoriz|does\s+not\s+authoriz|never\s+been\s+applied"
-            r"|requires\s+(?:its\s+own|explicit)|separate\w*[^.]{0,40}authoriz)"
+            # `never been applied` was removed as an accepted refusal: the foundation HAS
+            # been applied, so a document satisfying this guard with that phrase would be
+            # passing the audit by making a false statement.
+            r"(?i)(?:not\s+authoriz|does\s+not\s+authoriz"
+            r"|requires\s+(?:its\s+own|their\s+own|explicit)|separate\w*[^.]{0,40}authoriz)"
         )
         for name, doc in cloud_docs.items():
             if "terraform apply" not in doc.lower():
@@ -1270,10 +1350,69 @@ def main() -> int:
 
         for name, doc in (("CLAUDE.md", claude_md), ("README.md", readme)):
             f.check(
-                f"{name} records the AWS account as not created",
-                re.search(r"AWS account.*NOT CREATED", doc) is not None,
-                "no not-created statement for the AWS account",
+                f"{name} records the AWS account as created",
+                re.search(r"AWS account.*CREATED", doc) is not None
+                and re.search(r"AWS account.*NOT CREATED", doc) is None,
+                "the AWS account status row is missing or still says NOT CREATED",
             )
+            f.check(
+                f"{name} records the foundation as provisioned",
+                "PROVISIONED" in doc,
+                "no provisioned statement for the AWS foundation",
+            )
+            f.check(
+                f"{name} still bounds further cloud spend",
+                re.search(r"(?i)spend.{0,60}NOT AUTHORIZED", doc) is not None,
+                "no statement bounding cloud spend beyond the idle foundation",
+            )
+
+        # -- the provision record ------------------------------------------------
+        f.check(
+            "the AWS foundation status document exists",
+            FOUNDATION_STATUS.is_file(),
+            f"missing: {FOUNDATION_STATUS}",
+        )
+        if status_doc:
+            for label, needle in (
+                ("records the provision date", "2026-08-27"),
+                ("records the region", "us-east-1"),
+                ("records the Terraform version", "v1.16.0"),
+                ("records the AWS provider version", "v6.62.0"),
+                ("records remote state as active", "ACTIVE"),
+                ("records a configured budget", "budget"),
+                ("records a cost anomaly alert", "anomaly"),
+                ("records the verification result", "54"),
+                ("records that no vendor data exists", "vendor data"),
+                ("records that no provider credential exists", "provider credential"),
+                ("keeps live trading hard-disabled", "HARD-DISABLED"),
+            ):
+                f.check(
+                    f"the status document {label}", needle in status_doc, f"missing: {needle!r}"
+                )
+
+            f.check(
+                "the status document keeps the gates open",
+                "OPEN" in status_doc and "PROPOSED" in status_doc,
+                "gate or ADR-0005 status missing",
+            )
+            f.check(
+                "the status document separates the smoke test from the deletion rehearsal",
+                "not the 15-step" in status_doc.replace("*", "").lower(),
+                "the smoke test could be misread as the vendor-termination rehearsal",
+            )
+
+            # The scan that matters most: this document describes real infrastructure.
+            for label, pattern in SECRET_PATTERNS.items():
+                hits = [
+                    f"line {n}"
+                    for n, line in enumerate(status_doc.splitlines(), 1)
+                    if pattern.search(line)
+                ]
+                f.check(
+                    f"the status document contains no {label}",
+                    not hits,
+                    ", ".join(hits[:6]),
+                )
 
         # -- the Terraform enforces the posture, rather than the prose describing it --
         missing_infra = [n for n in INFRA_FILES if not (INFRA / n).is_file()]
@@ -1285,7 +1424,10 @@ def main() -> int:
 
         tf_files = sorted(INFRA.glob("*.tf"))
         tf_text = "\n".join(read(p) for p in tf_files)
-        all_infra = sorted(p for p in INFRA.iterdir() if p.is_file())
+        # TRACKED files only -- see `tracked_files`. The git-ignored `terraform.tfvars`
+        # holds a real account id by design; finding it here would report the ignore
+        # rule working as a failure.
+        all_infra = [p for p in tracked_files(INFRA) if p.is_file()]
         all_infra_text = "\n".join(read(p) for p in all_infra)
 
         # A forbidden construct is allowed to be *named* in a comment explaining why it is absent.
@@ -1553,17 +1695,16 @@ def main() -> int:
         # started failing the moment anyone actually ran init. Presence on disk was
         # never the property worth guarding -- what must be true is that nothing of
         # this kind can be committed, which the ignore rules below establish.
+        # COMMITTED, not present-on-disk. A real `terraform.tfvars` must exist locally to
+        # operate the provisioned foundation; what must never be true is that git tracks it.
         stray = sorted(
             p.name
-            for p in INFRA.iterdir()
-            if p.is_file()
-            and (
-                p.name.endswith((".tfstate", ".tfplan"))
-                or (p.name.endswith(".tfvars") and p.name != "terraform.tfvars.example")
-            )
+            for p in all_infra
+            if p.name.endswith((".tfstate", ".tfplan"))
+            or (p.name.endswith(".tfvars") and p.name != "terraform.tfvars.example")
         )
         f.check(
-            "no Terraform state, plan or real tfvars file sits in the scaffold",
+            "no Terraform state, plan or real tfvars file is COMMITTED in the scaffold",
             not stray,
             ", ".join(stray),
         )
