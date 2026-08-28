@@ -410,9 +410,9 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **ADR-0006 — Blueprint V3.0 adoption** | **ACCEPTED (2026-08-27)** |
 | **ADR-0007 — cloud-first research data plane** | **ACCEPTED on merge (2026-08-27)** |
 | **[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence** | **ACCEPTED on merge (2026-08-27)** |
-| **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED on merge of PR #13 — carries no authority before it** |
-| **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
-| **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED on merge of the PR introducing it — carries no authority before it** |
+| **[ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation** | **ACCEPTED / IN FORCE** — PR #13 merged |
+| **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED / IN FORCE (2026-08-28)** — PR #15 merged |
+| **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED EFFECTIVE ON MERGE OF PR #16** — carries no authority before it |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -459,8 +459,10 @@ ADR-0005's five open decision gates —
 > G1 provider selection · G2 production information-set profile · G3 vendor licensing ·
 > G4 the analyst-estimate gap · G5 borrow-history qualification
 
-No provider has been purchased, trialled or credentialed. No external data has been acquired.
-Beginning any further implementation requires explicit written authorization, per §8.
+**No *production* provider has been selected or credentialed, and no external data has been
+acquired.** A bounded Sharadar qualification subscription was later purchased under ADR-0010
+(2026-08-28) — for qualification only, selecting nothing and closing no gate. Beginning any further
+implementation requires explicit written authorization, per §8.
 
 **Blueprint V3.0 is ADOPTED and is repository authority (2026-08-27).** It was adopted by
 owner authorization through a documentation-only pull request, and the authority order in
@@ -505,16 +507,26 @@ role under ADR-0001 is untouched.
 
 ```
 AWS account EXISTING   ·   foundation PROVISIONED   ·   verification 66/66 PASS
-licensed bucket EMPTY   ·   control bucket EMPTY   ·   ECR EMPTY
+at closeout: licensed bucket EMPTY · control bucket EMPTY · ECR EMPTY
 no task definition   ·   nothing running   ·   no always-on billable resource
-provider NONE   ·   provider credentials NONE   ·   vendor data NONE
+production provider SELECTED: NONE   ·   G1 OPEN
+credential stored, configured or bound by this repository: NONE
+vendor data in this repository: NONE   ·   ingestion runs: ZERO
 ```
 
-**Provisioning a platform is not permission to use it.** Provider purchase, provider
-credentialing, ingestion, image builds, task execution and any further cloud spend are each a
-**separate written authorization** (§4.21). ADR-0005 **remains PROPOSED**, no provider is
-selected, and Phase 3 remains **NOT COMPLETE**. The gate map is in *Decision gates* below;
-provisioning the foundation resolved none of them.
+**These are claims about this repository and about the foundation as provisioned**, not about the
+owner's accounts. A Sharadar qualification subscription is **purchased and active** (ADR-0010) and
+its clock is running; whether a vendor API key exists in the owner's possession is outside what
+this repository establishes, and nothing here may infer it. What *is* checkable: no credential is
+stored, configured or bound anywhere in this repository, and no ingestion has run.
+
+**Provisioning a platform is not permission to use it.** Production-provider **selection**,
+credentialing, provider API access, Services Data, ingestion, image builds, task execution and any
+further cloud spend are each a **separate written authorization** (§4.21). The one purchase that
+*has* been authorized and completed is the bounded qualification subscription under ADR-0010, and
+it authorizes no access. ADR-0005 **remains PROPOSED**, no production provider is selected, and
+Phase 3 remains **NOT COMPLETE**. The gate map is in *Decision gates* below; neither provisioning
+the foundation nor buying the qualification subscription resolved any of them.
 
 Deletion authority stayed separated through provisioning. The routine research role cannot
 delete. The deletion role can delete licensed objects but cannot read or write them and cannot
@@ -574,7 +586,9 @@ Accepting the licence means accepting these, in every session:
 
 **What ADR-0008 does not do:** it selects no provider, closes no other gate, purchases nothing,
 creates no vendor account, holds no private credential, and authorizes no production ingestion,
-no A2/A3 implementation and no further cloud spend.
+no A2/A3 implementation and no further cloud spend. That is a statement about **ADR-0008's own
+scope**, not about the world today: the qualification subscription was authorized and purchased
+separately, later, under [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md).
 
 ### Private Sharadar qualification harness — built, never run by an AI
 
@@ -584,7 +598,8 @@ dependency, imports no cloud SDK, writes nothing under `src/`, and does not wide
 surface.
 
 ```
-credential   vendor-PUBLISHED public test key only   ·   subscription NONE   ·   account NONE
+credential   the harness reads ONLY the vendor's PUBLISHED public test key
+             no private credential is stored, configured or bound by this repository
 network      OFF by default -- --private-live-run required, plus the AWS identity gate
 refuses      pytest, CI, import, preflight, docs audit
 stdout       an allowlist -- no P-status, no recommendation, no bucket, no URL, no vendor row
@@ -663,10 +678,19 @@ owner's instruction — *"Authorize the next Sharadar implementation phase"* —
 boundary. It supersedes one repository rule and nothing else: **"no production module may name a
 provider"**, which was correct while no provider-specific implementation was authorized.
 
-**The branch implementation is complete and awaiting acceptance.** ADR-0009 is *accepted on merge
-of PR #13* and **carries no authority before it**; nothing below is in force until that merge.
+**PR #13 is merged. ADR-0009 is ACCEPTED and IN FORCE**, and Slice 1 is
+**IMPLEMENTED / ACCEPTED — CODE ONLY**: the adapter is reviewed, merged code that has never sent a
+request to a vendor.
+
+The block below is **ADR-0009's boundary as written on 2026-08-27**. It is retained as the record
+of what that authorization did and did not cover, on the same rule that keeps an ADR unedited.
+**It is history, not the current authorization matrix** — two of its lines have since been
+superseded by later owner decisions, and reading it as current would understate what is authorized
+*and* overstate what is forbidden.
 
 ```
+ADR-0009, as written on 2026-08-27 -- HISTORICAL
+
 AUTHORIZED     provider-specific code · provider-neutral interfaces · request construction
                credential-INJECTION interfaces · redaction · pacing · bounded retries
                Bronze mechanics · content addressing · synthetic tests · docs
@@ -675,6 +699,32 @@ NOT AUTHORIZED subscription · purchase · trial · vendor account · billing ·
                ANY API call · Services Data · production ingestion · Silver/Gold real data
                the real S3 writer · ECR/ECS · terraform apply · ANY AWS mutation
                broker/LEAN activity · Paper expansion · live trading
+```
+
+**Two lines of it were superseded, and only two.** The qualification **subscription and purchase**
+were authorized and completed on 2026-08-28 ([ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md)), and **the real S3 writer** was authorized as its own slice
+([ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md)) — it is
+implemented, code only, and has never run against AWS. Everything else on that line is still
+forbidden.
+
+**The current matrix, which is what governs a session now:**
+
+```
+IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
+               ADR-0010 bounded semantics + qualification subscription PURCHASED / ACTIVE
+               ADR-0011 licensed S3 object store -- ACCEPTED EFFECTIVE ON MERGE OF PR #16,
+                        CODE ONLY, NEVER RUN AGAINST AWS
+
+NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
+               ANY provider API call · the published test token · Services Data · bulk download
+               empirical qualification · production backfill · production ingestion
+               Silver/Gold real data · production-provider SELECTION
+               ANY AWS mutation, read, verifier run or terraform command · ECR/ECS · image builds
+               bucket binding · client construction · ingestion runner · CONTROL publication
+               broker/LEAN activity · Paper expansion · live trading
+
+UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN
+               ADR-0005 PROPOSED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED
 ```
 
 **The adapter has never sent a request, and cannot send one by accident.** Only one module is

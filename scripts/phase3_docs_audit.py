@@ -478,6 +478,63 @@ CONFLICT_AS_OCCUPANCY = (
 )
 
 
+#: Dash spellings folded together before matching, so a guard cannot be evaded by
+#: retyping one character. Written as escapes: a literal dash in source is itself
+#: ambiguous, which is the problem being solved.
+EM_DASH = "\u2014"
+EN_DASH = "\u2013"
+
+#: Formulations that were true once and are false now. Each names a specific
+#: superseded claim rather than a topic, because a topic-shaped guard would
+#: also forbid the *historical* framing these documents are required to keep.
+#:
+#: The distinction this section enforces: a document may say "ADR-0009 did not
+#: authorize a purchase, as written on 2026-08-27". It may not say a purchase
+#: is unauthorized, because on 2026-08-28 the owner authorized one and it
+#: completed.
+SUPERSEDED_CLAIMS: list[tuple[str, str]] = [
+    (
+        "must still be answered before any purchase",
+        "ADR-0010 decided Q7 and Q8, and the purchase completed",
+    ),
+    ("nothing has been purchased", "the qualification subscription is purchased and active"),
+    (
+        "no vendor account exists",
+        "what exists in a vendor account is outside what this repository establishes",
+    ),
+    (
+        "no private credential exists",
+        "the checkable claim is that none is stored, configured or bound HERE",
+    ),
+    (
+        "no provider credential exists",
+        "the checkable claim is about this repository, not the owner's accounts",
+    ),
+    ("provider credentials NONE", "an unscoped absence claim about the owner's accounts"),
+    (
+        "No provider has been purchased, trialled or credentialed",
+        "a bounded qualification subscription was purchased under ADR-0010",
+    ),
+    ("subscription NONE", "a qualification subscription is active"),
+    (
+        "awaiting acceptance",
+        "PR #13 merged; Slice 1 is accepted",
+    ),
+    (
+        "nothing below is in force until that merge",
+        "PR #13 merged, so what follows IS in force",
+    ),
+    (
+        "ACCEPTED on merge of PR #13 - carries no authority before it",
+        "PR #13 merged, so ADR-0009 is in force",
+    ),
+    (
+        "ACCEPTED on merge of the PR introducing it - carries no authority before it",
+        "ADR-0010's PR merged; ADR-0011's row must name PR #16 explicitly",
+    ),
+]
+
+
 def _asserts_conflict_is_occupancy(text: str) -> list[str]:
     """Every defective phrasing a document contains, or an empty list."""
     flat = " ".join(" ".join(line.lstrip("> ") for line in text.splitlines()).split()).lower()
@@ -579,7 +636,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/17] Closed vocabularies are defined where they are used")
+    print("[1/18] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -603,7 +660,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/17] Source and derived envelopes stay disjoint")
+    print("\n[2/18] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -638,7 +695,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/17] Every declared temporal semantics has its required anchor")
+    print("\n[3/18] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -655,7 +712,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/17] Exact and bound derivations name the correct fields")
+    print("\n[4/18] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -682,7 +739,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/17] Normative rules use the current resolved model")
+    print("\n[5/18] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -728,7 +785,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/17] Entities keep source and derived rows apart")
+    print("\n[6/18] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -798,7 +855,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/17] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/18] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -860,7 +917,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/17] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/18] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -965,7 +1022,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/17] Resolved-timing wording, closure rules and current status")
+    print("\n[9/18] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -1070,7 +1127,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/17] No document refers to a retired field name")
+    print("\n[10/18] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1114,7 +1171,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/17] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/18] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1271,7 +1328,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/17] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/18] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1363,7 +1420,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/17] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/18] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -2001,7 +2058,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/17] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/18] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2235,7 +2292,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/17] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/18] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2625,7 +2682,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/17] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/18] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -2980,7 +3037,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/17] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/18] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -3348,6 +3405,140 @@ def main() -> int:
             "the store is safe because nothing binds it to AWS -- said as a claim about this "
             "slice, not as a claim about the owner's account",
         )
+
+    # ------------------- 18. No status document carries a superseded current state
+    print("\n[18/18] The status documents describe the current governance state, not a past one")
+
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        whole = read(path)
+        # The WHOLE document, flattened, with every dash spelling folded to one.
+        #
+        # A guard that inspected only the section it expected the claim in would
+        # pass while a stale narrative sat three screens further down -- which is
+        # exactly how this defect survived two rounds of review. And a guard that
+        # matched one dash character would miss the same sentence typed with a
+        # hyphen; the negative control found precisely that hole in this check.
+        flat_whole = " ".join(
+            whole.replace("**", "").replace(EM_DASH, "-").replace(EN_DASH, "-").split()
+        )
+
+        for phrase, why in SUPERSEDED_CLAIMS:
+            f.check(
+                f"{name} no longer states {phrase!r}",
+                phrase not in flat_whole,
+                why,
+            )
+
+        # -- the historical boundary must be labelled as historical -----------
+        f.check(
+            f"{name} labels the ADR-0009 boundary as historical where it lists it",
+            "as written on 2026-08-27" in flat_whole,
+            "ADR-0009's list is retained as a record; unlabelled, it reads as the current matrix",
+        )
+        f.check(
+            f"{name} says which parts of that boundary were superseded, and by what",
+            "ADR-0010" in whole and "ADR-0011" in whole and "superseded" in flat_whole.lower(),
+            "a historical list beside a current one has to say where they differ",
+        )
+
+        # -- the positive current state ---------------------------------------
+        f.check(
+            f"{name} records ADR-0009 and Slice 1 as accepted and in force",
+            "ACCEPTED / IN FORCE" in whole and "PR #13 merged" in whole,
+            "the merged state must be readable where a session looks first",
+        )
+        f.check(
+            f"{name} records the qualification subscription as purchased and active",
+            "PURCHASED / ACTIVE" in whole and "ADR-0010" in whole,
+            "a completed purchase that a document calls unauthorized is a contradiction",
+        )
+        f.check(
+            f"{name} records ADR-0011 against PR #16 by number",
+            "ACCEPTED EFFECTIVE ON MERGE OF PR #16" in whole,
+            "'the PR introducing it' stops identifying anything once other PRs exist",
+        )
+        f.check(
+            f"{name} keeps the real S3 writer off the currently-unauthorized list",
+            "real S3 writer" not in flat_whole
+            or "the real S3 writer arrived as its own separately authorized slice" in flat_whole
+            or "the real S3 writer became its own slice" in flat_whole
+            or "the real S3 writer was authorized as its own slice" in flat_whole,
+            "ADR-0011 authorized it; listing it as unauthorized contradicts this very PR",
+        )
+
+        # -- what is still forbidden, stated as current ------------------------
+        for forbidden in (
+            "credential retrieval",
+            "Services Data",
+            "empirical qualification",
+            "production ingestion",
+        ):
+            f.check(
+                f"{name} still forbids {forbidden}",
+                forbidden.lower() in flat_whole.lower(),
+                "a purchase is not access, and the documents must keep saying so",
+            )
+        f.check(
+            f"{name} keeps production-provider selection unauthorized",
+            "production-provider selection" in flat_whole.lower()
+            or "production provider is selected" in flat_whole.lower(),
+            "buying a qualification subscription selected nothing",
+        )
+        f.check(
+            f"{name} keeps G1 and G2 open after the purchase",
+            "G1 OPEN" in whole or "**G1** provider selection" in whole,
+            "no gate was resolved by ADR-0010 or by this slice",
+        )
+        f.check(
+            f"{name} keeps ADR-0005 proposed and Phase 3 incomplete",
+            "PROPOSED" in whole and "NOT COMPLETE" in whole.upper(),
+            "neither is touched by a purchase or a storage backend",
+        )
+
+    # -- the Q7/Q8 disposition, as ADR-0010 actually recorded it ---------------
+    readme_body = read(REPO_ROOT / "README.md")
+    f.check(
+        "README records Q7 as publicly unresolved and owner-accepted",
+        "PUBLICLY_UNRESOLVED" in readme_body,
+        "a decision is not a discovery; the document must not blur the two",
+    )
+    f.check(
+        "README binds Sharadar price data to PROVIDER_DERIVED and PROVIDER_REALISTIC_PIT",
+        "PROVIDER_DERIVED" in readme_body and "PROVIDER_REALISTIC_PIT" in readme_body,
+        "an unresolved origin has exactly one safe classification",
+    )
+    f.check(
+        "README forbids representing Sharadar price data as PUBLIC_PIT",
+        "never represented as `PUBLIC_PIT`" in readme_body,
+        "that prohibition is the whole consequence of an unresolved Q7",
+    )
+    f.check(
+        "README records Q8 as publicly bounded, with measurement still required",
+        "PUBLICLY_BOUNDED" in readme_body
+        and "not certified earliest records" in readme_body.replace("**", ""),
+        "documented depths are planning boundaries, not measured coverage",
+    )
+    f.check(
+        "README defers the Q8 measurement to a separate authorization",
+        "under a separate authorization" in readme_body.replace("**", ""),
+        "measuring the delivered data is provider access, which is not authorized",
+    )
+    f.check(
+        "README states the purchase closed no gate and selected no provider",
+        "selected no production provider and closed no" in readme_body.replace("**", ""),
+        "a purchase is not a selection",
+    )
+    f.check(
+        "README scopes its credential claim to this repository",
+        "no credential is stored, configured or bound by this repository"
+        in readme_body.replace("**", ""),
+        "whether a key exists in a vendor account is not something this repository knows",
+    )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
