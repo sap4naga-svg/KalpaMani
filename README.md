@@ -301,7 +301,10 @@ live brokerage execution, real-money operation.
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
 | ADR-0007 — cloud-first research data plane | **ACCEPTED on merge (2026-08-27)** |
-| G1–G5 decision gates | **OPEN** |
+| [ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) — Sharadar personal-use licence | **ACCEPTED on merge (2026-08-27)** |
+| G1 provider selection · G2 production information-set profile | **OPEN** |
+| G3 vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
+| G4 analyst revisions · G5 historical borrow | **OPEN** |
 | G6 options overlay · G7 strategy-taxonomy evidence | **OPEN (added by V3.0)** |
 | AWS account | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
@@ -365,14 +368,37 @@ already implements. The termination procedure exists in advance and has never be
 > **The foundation exists; nothing uses it.**
 > [`infra/aws/research-data-plane/`](infra/aws/research-data-plane/) was applied on 2026-08-27 —
 > 36 resources, verified 66/66 against the live account
-> ([status](docs/operations/aws-foundation-status.md)). It is an empty, idle platform: both
-> buckets hold nothing, the image registry is empty, no task definition exists and nothing runs.
+> ([status](docs/operations/aws-foundation-status.md)). At foundation closeout it was an empty,
+> idle platform: both research-data buckets held nothing, the image registry was empty, no task
+> definition existed and nothing ran. **Bucket emptiness is a closeout observation, not a
+> standing invariant** — owner-authorized Phase-3 qualification may place private licensed
+> material under the licensed bucket's `qualification/` prefix.
 >
 > Provisioning a platform is not permission to use it. **No provider is selected, no provider
 > credential exists, no vendor data has been retrieved and no ingestion has run.** Provider
 > purchase, credentialing, ingestion and any further cloud spend each remain a **separate written
-> authorization**. **G1–G7 remain OPEN**, ADR-0005 **remains PROPOSED**, and Phase 3 remains
-> **NOT COMPLETE**.
+> authorization**. **G1 OPEN · G2 OPEN · G3 CLOSED (Sharadar personal use, ADR-0008) · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN**, ADR-0005 **remains PROPOSED**, and Phase 3
+> remains **NOT COMPLETE**.
+
+### Sharadar personal-use licence and private qualification — G3 closed
+
+[ADR-0008](docs/decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md) records the owner's acceptance of the **published** Sharadar Personal Use
+License for personal research, personal backtesting, programmatic API use and automated trading of
+the owner's own account. The drafted Q1–Q8 vendor clarification is **CANCELLED — NOT SENT —
+historical evidence only** and is retained, because Q7 (bar construction) and Q8 (Full History
+depth) must still be answered before any purchase.
+
+**G3 is CLOSED for Sharadar personal use. Every other gate is OPEN**, Sharadar is **not selected**
+as the production provider, nothing has been purchased, no vendor account exists and no private
+credential exists.
+
+[`scripts/sharadar_private_qualification.py`](scripts/sharadar_private_qualification.py) is a
+standalone P1–P9 qualification harness using **only the vendor's published public test key**. Its
+methodology is public; **its output is not**. Network access is off unless `--private-live-run` is
+passed and the AWS identity gate passes; it refuses to run under pytest or CI; stdout is an
+allowlist; and the exit code reports harness success or failure only, never a provider verdict.
+Results live in the licensed S3 bucket and in git-ignored `.runtime/`, and never in this
+repository. It is **not** a production provider adapter and adds no dependency.
 
 **Blueprint V3.0 is ADOPTED and is the current architecture authority (2026-08-27),** by
 owner authorization through a documentation-only pull request —

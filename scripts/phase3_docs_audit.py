@@ -97,9 +97,38 @@ ADOPTION = ARCHITECTURE / "BLUEPRINT_V3_ADOPTION.md"
 PACKET = PHASE3 / "provider-licensing-decision-packet.md"
 CLARIFICATION = PHASE3 / "provider-licensing-clarification-draft.md"
 
-#: Every decision gate that must still read as open. V3 adoption resolved none of them and
-#: added two. A gate is "silently resolved" if a document calls it closed/resolved/satisfied.
-OPEN_GATES = ("G1", "G2", "G3", "G4", "G5", "G6", "G7")
+#: Every decision gate. Seven of them; **exactly one is closed.**
+ALL_GATES = ("G1", "G2", "G3", "G4", "G5", "G6", "G7")
+
+#: The gates that must still read as open. A gate is "silently resolved" if a document calls it
+#: closed/resolved/satisfied. **G3 is deliberately absent**: ADR-0008 closed it for Sharadar
+#: personal use on 2026-08-27, so scanning for a resolution word next to G3 would now report the
+#: recorded decision as a defect.
+OPEN_GATES = ("G1", "G2", "G4", "G5", "G6", "G7")
+
+#: Gates that are closed, and by which decision. A blanket "G1-G7 are all OPEN" statement in a
+#: CURRENT-status document is now a factual error, and section 14 refuses one.
+CLOSED_GATES = {"G3": "ADR-0008"}
+
+#: Negation appearing anywhere earlier in the line. Deliberately looser than
+#: ``GATE_NEGATION``: a prohibition on a phrase reads naturally as "no ... <phrase> ...",
+#: with the negation far to the left of the quoted claim.
+GATE_NEGATION_INLINE = re.compile(
+    r"\b(?:no|not|never|none|neither|nor|rather than|instead of|no longer|superseded)\b"
+)
+
+#: Statements that were true when written and are now historical. They are legitimate **only**
+#: inside an accepted ADR, which the repository never rewrites -- the same rule that keeps a
+#: Blueprint PDF unedited. In a current-status document they are simply wrong.
+BLANKET_ALL_OPEN = (
+    "g1\u2013g7 are all open",
+    "g1-g7 are all open",
+    "g1\u2013g7 remain open",
+    "g1-g7 remain open",
+    "g1\u2013g7 are open",
+    "g1-g7 are open",
+    "g1\u2013g7 decision gates | **open**",
+)
 GATE_RESOLVED_WORDS = ("closed", "resolved", "satisfied", "passed", "complete")
 
 #: A resolution word only counts as a claim if it is not negated. "no G1-G7 resolved" and
@@ -137,6 +166,32 @@ V3_HISTORICAL_MARKERS = (
 #: checks below read the `.tf` files as text and assert on what they actually say.
 ADR_CLOUD = DECISIONS / "ADR-0007-cloud-first-research-data-plane.md"
 DELETION_RUNBOOK = REPO_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion.md"
+
+#: The Sharadar personal-use licensing decision, and the harness it authorizes. The ADR
+#: closes exactly one gate; the harness is code and methodology only, never a result.
+ADR_LICENCE = DECISIONS / ("ADR-0008-sharadar-personal-use-license-and-private-qualification.md")
+QUALIFICATION_HARNESS = REPO_ROOT / "scripts" / "sharadar_private_qualification.py"
+
+#: A document claiming that **this work** created the AWS account. The account pre-dated
+#: the work and was configured for the foundation on 2026-08-27, so "CREATED" invents a
+#: history -- and "NOT CREATED" is equally wrong, because account existence and foundation
+#: provisioning are different facts that must not be collapsed.
+#:
+#: **Written with explicit word boundaries, and that is the point.** Three earlier copies of
+#: this pattern carried literal ASCII backspace bytes (0x08) where `\b` was intended -- which
+#: is exactly what `\b` means inside a NON-raw Python string. The compiled pattern then
+#: required a control character no document contains, so every guard built on it passed
+#: unconditionally, and passed invisibly: the defect renders as ordinary text in a terminal,
+#: a diff and a review. One definition now, exercised by a behavioural regression test, with
+#: a byte scan refusing 0x08 from returning.
+ACCOUNT_CREATED_CLAIM = re.compile(r"AWS account.*\bCREATED\b")
+
+
+def claims_account_created(text: str) -> bool:
+    """True if ``text`` states that an AWS account was created by this work."""
+    return ACCOUNT_CREATED_CLAIM.search(text) is not None
+
+
 #: The provision record. It is the one document that describes real, deployed infrastructure,
 #: which makes it the likeliest place for an account id, bucket name or ARN to arrive.
 FOUNDATION_STATUS = REPO_ROOT / "docs" / "operations" / "aws-foundation-status.md"
@@ -413,7 +468,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/13] Closed vocabularies are defined where they are used")
+    print("[1/14] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -437,7 +492,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/13] Source and derived envelopes stay disjoint")
+    print("\n[2/14] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -472,7 +527,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/13] Every declared temporal semantics has its required anchor")
+    print("\n[3/14] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -489,7 +544,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/13] Exact and bound derivations name the correct fields")
+    print("\n[4/14] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -516,7 +571,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/13] Normative rules use the current resolved model")
+    print("\n[5/14] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -562,7 +617,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/13] Entities keep source and derived rows apart")
+    print("\n[6/14] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -632,7 +687,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/13] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/14] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -694,7 +749,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/13] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/14] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -799,7 +854,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/13] Resolved-timing wording, closure rules and current status")
+    print("\n[9/14] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -904,7 +959,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/13] No document refers to a retired field name")
+    print("\n[10/14] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -948,7 +1003,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/13] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/14] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1046,16 +1101,19 @@ def main() -> int:
             not gate_offenders,
             ", ".join(gate_offenders[:6]),
         )
-        for gate in OPEN_GATES:
+        for gate in ALL_GATES:
             f.check(
-                f"{gate} is recorded OPEN",
+                f"{gate} is recorded in ADR-0006",
                 re.search(rf"\*\*{gate}\*\*|{gate}\b", adr6) is not None,
                 f"{gate} is not mentioned in ADR-0006",
             )
+        # ADR-0006's all-gates-open statement is HISTORICAL and must survive verbatim.
+        # Editing an accepted ADR to agree with a later one would destroy the record of what
+        # was decided when; ADR-0008 records the supersession instead (section 14).
         f.check(
-            "ADR-0006 states all seven gates are open",
+            "ADR-0006 preserves its historical all-gates-open statement",
             "G1\u2013G7 are all OPEN" in adr6 or "G1-G7 are all OPEN" in adr6,
-            "no explicit all-gates-open statement",
+            "the as-at-adoption gate statement was rewritten rather than superseded",
         )
 
         # Stale proposal wording may survive only where it is explicitly labelled historical.
@@ -1102,7 +1160,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/13] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/14] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1130,9 +1188,9 @@ def main() -> int:
                 f"{gate} is not recorded OPEN in the packet",
             )
         f.check(
-            "the packet states G1 and G3 are not closed",
-            "G1 remains OPEN" in packet and "G3 remains OPEN" in packet,
-            "the packet does not disclaim closing G1/G3",
+            "the packet states G1 is not closed",
+            "G1 remains OPEN" in packet,
+            "the packet does not disclaim closing G1",
         )
         f.check(
             "the packet leaves ADR-0005 proposed",
@@ -1194,7 +1252,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/13] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/14] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -1245,10 +1303,12 @@ def main() -> int:
                 "NOT AUTHORIZED" in doc.upper() or "not authorize" in doc,
                 "authorization disclaimer missing",
             )
+        # Historical, exactly as in ADR-0006 above: true when accepted, superseded for G3 by
+        # ADR-0008, and never rewritten.
         f.check(
-            "ADR-0007 keeps every gate open",
+            "ADR-0007 preserves its historical all-gates-open statement",
             "Gates G1\u2013G7 are all OPEN" in adr7 or "G1-G7 are all OPEN" in adr7,
-            "no explicit all-gates-open statement in ADR-0007",
+            "the as-at-decision gate statement was rewritten rather than superseded",
         )
         f.check(
             "ADR-0007 leaves ADR-0005 proposed",
@@ -1359,7 +1419,7 @@ def main() -> int:
         for name, doc in (("CLAUDE.md", claude_md), ("README.md", readme)):
             f.check(
                 f"{name} does not claim an AWS account was created",
-                re.search(r"AWS account.*CREATED", doc) is None
+                not claims_account_created(doc)
                 and re.search(r"AWS account.*EXISTING", doc) is not None,
                 "account existence and foundation provisioning must not be collapsed",
             )
@@ -1400,7 +1460,7 @@ def main() -> int:
 
             f.check(
                 "the status document records the account as pre-existing",
-                "EXISTING" in status_doc and re.search(r"AWS account.*CREATED", status_doc) is None,
+                "EXISTING" in status_doc and not claims_account_created(status_doc),
                 "account existence and foundation provisioning must not be collapsed",
             )
             f.check(
@@ -1828,6 +1888,240 @@ def main() -> int:
                 "hashes = [" in lock_text and lock_text.count("zh:") >= 5,
                 "no checksum block; a lock file without hashes pins nothing",
             )
+
+    # ----------------------------------------------- 14. ADR-0008 and the exact gate map
+    print("\n[14/14] The Sharadar licence decision closes G3, and nothing else")
+    f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
+    if ADR_LICENCE.is_file():
+        adr8 = read(ADR_LICENCE)
+
+        f.check(
+            "ADR-0008 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr8 and "carries no authority" in adr8,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0008 records the owner's acceptance of the published licence",
+            "accepts the Sharadar Personal Use License as currently published" in adr8,
+            "the decision itself is not stated",
+        )
+        f.check(
+            "ADR-0008 records the clarification message as cancelled and unsent",
+            "CANCELLED" in adr8 and "NOT SENT" in adr8,
+            "the Q1-Q8 draft status is not recorded",
+        )
+        f.check(
+            "ADR-0008 retains rather than deletes the cancelled draft",
+            "not deleted" in adr8 and CLARIFICATION.is_file(),
+            "historical evidence must be preserved, not removed",
+        )
+        f.check(
+            "ADR-0008 closes G3",
+            re.search(r"\*\*G3\*\*[^|\n]*\|[^|\n]*\|\s*\*\*CLOSED", adr8) is not None,
+            "G3 is not recorded CLOSED",
+        )
+        for gate in OPEN_GATES:
+            f.check(
+                f"ADR-0008 leaves {gate} open",
+                re.search(rf"\*\*{gate}\*\*[^|\n]*\|[^|\n]*\|\s*\*\*OPEN", adr8) is not None,
+                f"{gate} is not recorded OPEN in ADR-0008",
+            )
+        f.check(
+            "ADR-0008 reopens G3 if the provider changes",
+            "G3 reopens for the replacement provider" in adr8,
+            "a licence decision is provider-specific and must say so",
+        )
+        f.check(
+            "ADR-0008 selects no provider",
+            "Sharadar selected as the production provider     NO" in adr8,
+            "closing a licensing gate must not read as selecting a provider",
+        )
+        f.check(
+            "ADR-0008 supersedes the historical all-gates-open statements explicitly",
+            "Supersession of the historical all-gates-open statements" in adr8
+            and "neither ADR is edited" in adr8,
+            "the contradiction with ADR-0006/0007 must be named, not left implicit",
+        )
+        f.check(
+            "ADR-0008 leaves ADR-0005 proposed",
+            "ADR-0005 remains PROPOSED" in adr8,
+            "ADR-0005 status changed",
+        )
+        f.check(
+            "ADR-0008 keeps live trading hard-disabled",
+            "HARD-DISABLED" in adr8.upper(),
+            "live-trading wording missing from ADR-0008",
+        )
+        f.check(
+            "ADR-0008 withholds every other authorization",
+            "Explicit non-authorizations" in adr8,
+            "no non-authorization block",
+        )
+        for label, needle in (
+            ("personal use only", "Personal use only"),
+            ("Services Data privacy", "Services Data stays private"),
+            ("private empirical evaluation", "Empirical provider evaluation is private"),
+            ("the 30-day deletion obligation", "vendor-data-cloud-deletion.md"),
+            ("the third-party AI boundary", "Third-party AI"),
+        ):
+            f.check(
+                f"ADR-0008 retains the {label} constraint",
+                needle in adr8,
+                f"missing {needle!r}",
+            )
+        f.check(
+            "ADR-0008 publishes no empirical provider result",
+            not re.search(
+                r"\bP[1-9]\b\s*[:=]\s*(TESTED|PARTIALLY_TESTED|INCONCLUSIVE|DEFERRED)", adr8
+            ),
+            "Terms s.8 keeps empirical conclusions out of a public repository",
+        )
+
+    # -- the cancelled draft says so, prominently --------------------------------
+    if CLARIFICATION.is_file():
+        draft = read(CLARIFICATION)
+        f.check(
+            "the clarification draft is marked cancelled and unsent",
+            "CANCELLED" in draft and "NOT SENT" in draft and "HISTORICAL" in draft.upper(),
+            "the retired draft must say plainly that it was never sent",
+        )
+        f.check(
+            "the cancelled draft still carries the two questions a purchase needs",
+            "Q7" in draft and "Q8" in draft and "before any purchase" in draft,
+            "Q7 and Q8 are not licensing questions and are still unanswered",
+        )
+
+    # -- no current-status document may still claim all seven gates are open -----
+    current_status_docs = {
+        "CLAUDE.md": REPO_ROOT / "CLAUDE.md",
+        "README.md": REPO_ROOT / "README.md",
+        "aws-foundation-status.md": FOUNDATION_STATUS,
+        "vendor-data-cloud-deletion.md": DELETION_RUNBOOK,
+        "infra README": INFRA / "README.md",
+        "decision packet": PACKET,
+        "clarification draft": CLARIFICATION,
+    }
+    blanket: list[str] = []
+    for name, path in current_status_docs.items():
+        if not path.is_file():
+            continue
+        for lineno, line in enumerate(read(path).lower().splitlines(), 1):
+            for phrase in BLANKET_ALL_OPEN:
+                at = line.find(phrase)
+                if at < 0:
+                    continue
+                # A sentence that FORBIDS the blanket claim contains it. "No blanket
+                # 'G1-G7 are all OPEN' statement is correct any more" asserts the opposite
+                # of what a bare substring match reads, and banning it would push the
+                # document toward saying less rather than more.
+                if GATE_NEGATION_INLINE.search(line[:at]):
+                    continue
+                blanket.append(f"{name}:{lineno} ({phrase})")
+                break
+    f.check(
+        "no current-status document still claims all seven gates are open",
+        not blanket,
+        ", ".join(blanket[:6]),
+    )
+
+    # -- and each one carries the closed gate, so the map is stated rather than implied
+    for name, path in current_status_docs.items():
+        if not path.is_file():
+            continue
+        body = read(path)
+        f.check(
+            f"{name} records G3 as closed",
+            re.search(r"G3[^.\n]{0,80}CLOSED", body) is not None,
+            "the gate map must be stated where the old blanket claim used to be",
+        )
+
+    # -- the harness exists, is not production code, and is not run by automation
+    f.check(
+        "the private qualification harness exists",
+        QUALIFICATION_HARNESS.is_file(),
+        f"missing: {QUALIFICATION_HARNESS}",
+    )
+    if QUALIFICATION_HARNESS.is_file():
+        harness = read(QUALIFICATION_HARNESS)
+        for label, needle in (
+            ("requires an explicit live-run flag", "--private-live-run"),
+            ("pins the foundation AWS profile", 'EXPECTED_PROFILE = "kalpamani-foundation"'),
+            ("reuses the fail-closed AWS identity gate", "aws_identity_gate"),
+            ("refuses automated contexts", "running_under_automation"),
+            ("stores evidence under the licensed prefix", "assert_licensed_destination"),
+            ("writes its report under .runtime", '".runtime" / "phase3" / "sharadar"'),
+            ("redacts URLs and query strings", "def redact("),
+            ("keeps the verdict out of the exit code", "def operational_exit_code("),
+            # Live-run correctness. Each of these was a way the run could have meant
+            # something other than what the methodology said it meant.
+            ("sends an explicit five-year window", "def five_year_window("),
+            ("takes the ratio base from the action date", "def action_date_base("),
+            ("refuses an unusable actions table", "ACTIONS_NOT_USABLE"),
+            ("counts only splits that adjust a compared row", "splits_exercised"),
+            ("treats a split-like unmodelled action as confounding", "stock_dividend_literals"),
+            ("makes the caller state retrieval completeness", "retrieval_complete: bool"),
+            (
+                "validates that responses are usable, not merely returned",
+                "def validate_retrieved_inventory(",
+            ),
+            ("confounds on any unmodelled action literal", "def unmodelled_action_literals("),
+            (
+                "refuses to file a documented-method contradiction as a pass",
+                "DOCUMENTATION_DATA_CONTRADICTION",
+            ),
+            (
+                "refuses agreement by absence of a discriminating row",
+                "CONVENTION_NOT_DISCRIMINATED",
+            ),
+        ):
+            f.check(f"the harness {label}", needle in harness, f"missing: {needle!r}")
+
+        f.check(
+            "the harness cannot convict the provider from this free probe",
+            "return REJECT" not in harness,
+            "the split comparison rests on an undocumented reading of actions.value",
+        )
+        f.check(
+            "the harness requires both runnable P5 limbs before proceeding",
+            'for limb in ("split_limb", "dividend_limb"):' in harness,
+            "a trivially-agreeing limb must not reach PROCEED",
+        )
+        f.check(
+            "the harness describes the probe as single-name",
+            "single-name, five-year" in harness and "30-name" not in harness,
+            "the 30-name sample subscription is a different surface",
+        )
+        f.check(
+            "the harness never requests a table-wide bulk download",
+            '("years"' not in harness and '"years":' not in harness,
+            "`years=` fetches every security, not the authorized single-ticker probe",
+        )
+        f.check(
+            "the harness windows every temporal table and no snapshot",
+            "WINDOWED_TABLES: tuple[str, ...] = tuple(t for t, windowed in REQUEST_INVENTORY"
+            in harness
+            and '("tickers", False)' in harness,
+            "tickers is a snapshot and must not carry a date range; the rest must",
+        )
+        f.check(
+            "the harness declares the test key as a vendor-published public token",
+            "PUBLIC TEST TOKEN" in harness,
+            "a committed key literal must be labelled as the vendor's published test token",
+        )
+        f.check(
+            "the harness imports no cloud or vendor SDK",
+            not re.search(r"^\s*import\s+(boto3|botocore|requests|httpx)\b", harness, re.M),
+            "AWS access goes through the CLI so no SDK becomes a project dependency",
+        )
+
+    # -- research-bucket emptiness must no longer read as a standing invariant ---
+    if FOUNDATION_STATUS.is_file():
+        status_body = read(FOUNDATION_STATUS)
+        f.check(
+            "bucket emptiness is recorded as a closeout observation, not an invariant",
+            "not a continuing invariant" in status_body,
+            "qualification may legitimately place private material in the licensed bucket",
+        )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")

@@ -122,7 +122,16 @@ effect of anything attached outside the configuration.
 **Result: PASS.** A hand-authored, fictitious payload of a few bytes — **no vendor data, no
 provider contacted** — was uploaded to a test prefix in the licensed bucket, retrieved, verified
 by SHA-256 round trip, deleted, and confirmed absent. Both **research-data** buckets — licensed
-and control — are empty afterwards.
+and control — were empty at foundation closeout.
+
+> **That emptiness is a closeout observation, not a continuing invariant.** It was true on the
+> day the foundation was provisioned, and it is recorded here as evidence of that day. Once
+> owner-authorized Phase-3 qualification begins
+> ([ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md)),
+> the **licensed** bucket may legitimately hold private qualification material under
+> `qualification/`. A future check must therefore assert the bucket's *configuration* — no
+> versioning, no Object Lock, no replication — and never its emptiness. Object counts, row
+> counts and qualification results are private and are not published here.
 
 That scope is deliberate. The separately bootstrapped **Terraform state bucket is not empty and
 must not be**: it holds remote state, its version history and lock objects. It is
@@ -185,17 +194,21 @@ broker / LEAN activity       NONE
 
 | | |
 |---|---|
-| **G1–G7 decision gates** | **OPEN** — none resolved by this work |
+| **Decision gates** | **G1 · G2 · G4 · G5 · G6 · G7 OPEN**; **G3 CLOSED** — closed afterwards by [ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md), not by this work, which resolved none |
 | **ADR-0005** | **PROPOSED** |
 | **Phase 3** | **NOT COMPLETE** |
 | **Live trading** | **HARD-DISABLED** |
 
-The licensed bucket holds nothing. It is a correctly-configured empty container, and the
-deletion-first posture it was built with is what keeps a future vendor obligation satisfiable.
+At closeout the licensed bucket held nothing. It was a correctly-configured empty container,
+and the deletion-first posture it was built with is what keeps a future vendor obligation
+satisfiable — which matters more, not less, once it stops being empty.
 
 ---
 
 ## Next authorized task
 
-**Phase 3 — Sharadar free-sample qualification.** That is a separate task with its own
-authorization; nothing in this document begins it.
+**Phase 3 — Sharadar free-sample qualification.** Authorized separately and recorded in
+[ADR-0008](../decisions/ADR-0008-sharadar-personal-use-license-and-private-qualification.md); nothing in *this*
+document begins it. It uses only the vendor's published public test key, buys nothing, creates
+no vendor account and holds no private credential. Its empirical output is **private** and
+never appears in this repository.
