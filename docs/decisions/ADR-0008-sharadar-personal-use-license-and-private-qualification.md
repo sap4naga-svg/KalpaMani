@@ -56,7 +56,7 @@ method*, not the decision:
 | `https://sharadar.com/terms` | Eighteen sections; **still no version number and no effective date** |
 | `https://sharadar.com/docs/faqs` | Personal Use covers *research, backtesting, and automated trading of their own account with no external clients or money managed for others* |
 | `https://sharadar.com/docs/auth` | A key is passed **in the query string**; a vendor-published test key exists and is documented for AAPL queries |
-| `https://sharadar.com/sample` | Free sample: 30 DJIA names, 5 years, sign-in required |
+| `https://sharadar.com/sample` | The free **sample subscription** — 30 DJIA names, 5 years, **sign-in required**. Distinct from the no-account test-key surface the harness uses, which is a **single security** (`PSR-SHD-109`) |
 | `https://sharadar.com/docs/tickers` | **The tickers table is a snapshot** — the vendor states that its 5, 10 and full bulk options all download the same table (`PSR-SHD-119`) |
 | `https://blog.sharadar.com/` — post dated 2026-07-29 | **The price-adjustment methodology is published**: backward adjustment from the **action-date** close, and the cash-dividend, stock-dividend, split and spinoff ratios (`PSR-SHD-120`) |
 | `https://sharadar.com/docs/{stocks,actions,fundamentals,events}` | Every temporal table defaults to `from` = **one year ago** and `to` = the prior day (`PSR-SHD-121`) |

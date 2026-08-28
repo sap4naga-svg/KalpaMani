@@ -39,13 +39,21 @@ That constraint shapes every design decision below, and the shape is deliberate:
 to query tables for AAPL. No account, no subscription, no trial, no private key, no
 Secrets Manager entry.
 
-**Honesty about what a 30-name, 5-year public sample can settle.** Most of the nine tests
+**Honesty about what a single-name, five-year public test-key probe can settle.**
+Most of the nine tests
 cannot be answered by it at all, and the vocabulary in :data:`STATUSES` exists so that they
 are not quietly recorded as passes. :func:`validate_findings` enforces the ceilings
 structurally -- P2 can only ever be ``NOT_TESTABLE_WITH_PUBLIC_SAMPLE``, P7 and P8 only
 ``DEFERRED``, P4 only ``DOCUMENTATION_RESOLVED`` and never without
 ``CLASSIFICATION_STATIC``, and P9 can never yield ``PUBLIC_PIT`` eligibility from sample
 values.
+
+**The probe is one security, not thirty.** The vendor publishes two different free
+surfaces and they are easy to conflate: a *sample subscription* covering 30 DJIA names over
+five years, which requires signing in, and the *published test key*, which requires no
+account and is documented for a single security. This harness uses the second. Everything
+below is therefore a **single-name, five-year public test-key probe**, and the ceilings in
+:data:`STATUS_CEILING` are calibrated to that and not to the wider sample.
 
 **The correction that matters most is that honesty runs both ways.** An earlier revision
 recorded the vendor's dividend and spinoff adjustment formulas as *unpublished*. The vendor
@@ -81,7 +89,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -189,7 +197,8 @@ REJECT = "REJECT_FOR_PHASE3A"
 
 RECOMMENDATIONS = frozenset({PROCEED, HOLD, REJECT})
 
-#: The statuses each test may legitimately reach on a 30-name, 5-year public sample.
+#: The statuses each test may legitimately reach on a single-name, five-year public
+#: test-key probe.
 #: This is the anti-optimism guard, and it is enforced rather than documented:
 #: :func:`validate_findings` refuses a report whose finding sits outside its ceiling.
 #:
@@ -535,7 +544,7 @@ def five_year_window(now: datetime) -> tuple[str, str]:
 
 
 def build_request_params(
-    table: str, windowed: bool, window: tuple[str, str]
+    table: str, windowed: bool, window: tuple[str, str], ticker: str = SAMPLE_TICKER
 ) -> tuple[tuple[str, str], ...]:
     """Query parameters for one request. Named parameters only, never a bulk download.
 
@@ -543,7 +552,7 @@ def build_request_params(
     is neither the small fixed probe authorized here nor something a public test key should
     be pointed at.
     """
-    params: list[tuple[str, str]] = [("ticker", SAMPLE_TICKER)]
+    params: list[tuple[str, str]] = [("ticker", ticker)]
     if windowed:
         params.append(("from", window[0]))
         params.append(("to", window[1]))
@@ -652,9 +661,20 @@ def _floats(rows: Sequence[Mapping[str, str]], column: str) -> list[float]:
 # P5 -- the split-adjustment reconciliation, the one real empirical check
 # ---------------------------------------------------------------------------
 
+#: The convention the vendor documents: adjustment is backward from an action-date price
+#: that keeps its traded value, so an action dated ``D`` adjusts rows strictly *before* ``D``
+#: (`PSR-SHD-120`). This is the only outcome that counts as the split limb succeeding.
 EXCLUSIVE_OF_ACTION_DATE = "EXCLUSIVE_OF_ACTION_DATE"
-INCLUSIVE_OF_ACTION_DATE = "INCLUSIVE_OF_ACTION_DATE"
-BOTH_CONVENTIONS_AGREE = "AMBIGUOUS_BOTH_CONVENTIONS_AGREE"
+
+#: The sample contained no row on an action date, so both conventions fit and neither was
+#: distinguished. Agreement by absence of a discriminating row is not a measurement.
+CONVENTION_NOT_DISCRIMINATED = "NOT_EMPIRICALLY_DISCRIMINATED"
+
+#: Only the inclusive convention fits -- the data contradicts the vendor's published
+#: method. That is a **finding about the data**, and calling it a successful test would
+#: record a contradiction as a confirmation.
+DOCUMENTATION_DATA_CONTRADICTION = "DOCUMENTATION_DATA_CONTRADICTION"
+
 CONVENTION_UNRESOLVED = "UNRESOLVED"
 
 
@@ -795,22 +815,33 @@ def reconcile_split_adjustment(
                 "agree trivially and the adjustment method is not exercised"
             ),
         )
+    # The vendor's published direction is exclusive of the action date. Only that outcome
+    # is a success; the others are each a different kind of not-yet-established.
     if exclusive_all and inclusive_all:
-        convention, status = BOTH_CONVENTIONS_AGREE, TESTED
+        convention, status = CONVENTION_NOT_DISCRIMINATED, PARTIALLY_TESTED
+        note = (
+            "both conventions fit because no compared row falls on an action date, so the "
+            "documented direction was never distinguished from its opposite"
+        )
     elif exclusive_all:
         convention, status = EXCLUSIVE_OF_ACTION_DATE, TESTED
+        note = (
+            "the vendor's split-adjusted close reconciles against raw prices and actions "
+            "under the documented backward direction"
+        )
     elif inclusive_all:
-        convention, status = INCLUSIVE_OF_ACTION_DATE, TESTED
+        convention, status = DOCUMENTATION_DATA_CONTRADICTION, INCONCLUSIVE
+        note = (
+            "only the inclusive convention reconciles, which contradicts the vendor's "
+            "published backward-from-the-action-date method; a contradiction is a finding "
+            "about the data, not a successful test"
+        )
     else:
         convention, status = CONVENTION_UNRESOLVED, INCONCLUSIVE
-
-    note = {
-        TESTED: "the vendor's split-adjusted close reconciles against raw prices and actions",
-        INCONCLUSIVE: (
+        note = (
             "neither the inclusive nor the exclusive action-date convention reconciles "
             "every row; the adjustment method is not established"
-        ),
-    }[status]
+        )
     return SplitReconciliation(
         status=status,
         convention=convention,
@@ -1106,6 +1137,49 @@ def actions_usable(actions: TableSample | None) -> tuple[bool, str]:
     return True, ""
 
 
+#: Action literals that plainly cannot change the split-adjusted price relationship. The
+#: vendor's own prose names ticker changes, listings and delistings among the event types
+#: the table carries (`PSR-SHD-095`), and none of them is a float or price event.
+#:
+#: The list is short **because it has to be justifiable**. Everything outside it is treated
+#: as potentially price-affecting, which is the fail-closed direction: an ADR ratio change,
+#: for instance, rescales shares exactly as a split does.
+PRICE_NEUTRAL_ACTION_HINTS = ("ticker", "list", "name")
+
+
+def unmodelled_action_literals(
+    vocabulary: Sequence[str], modelled: Container[str]
+) -> tuple[str, ...]:
+    """Observed literals that are neither modelled nor demonstrably price-neutral.
+
+    The vendor publishes no action-type vocabulary, so an unrecognised literal cannot be
+    interpreted -- and that is the reason it confounds rather than the reason to ignore it.
+    No semantics are invented for it; its mere presence in the compared window is enough to
+    make a split-limb disagreement unattributable.
+    """
+    return tuple(
+        literal
+        for literal in vocabulary
+        if literal not in modelled
+        and not any(hint in literal for hint in PRICE_NEUTRAL_ACTION_HINTS)
+    )
+
+
+def extract_dated_events(actions: TableSample | None, literal: str) -> list[str]:
+    """Dates for one action literal, without requiring a parseable ``value``.
+
+    An unmodelled literal may carry a value we cannot read; its *date* is still enough to
+    know whether it falls inside the compared window.
+    """
+    if actions is None or not actions.usable or not literal:
+        return []
+    return sorted(
+        str(row["date"])
+        for row in actions.rows
+        if str(row.get("action", "")).strip().lower() == literal and row.get("date")
+    )
+
+
 def stock_dividend_literals(vocabulary: Sequence[str]) -> tuple[str, ...]:
     """Observed literals that look like a stock dividend.
 
@@ -1196,6 +1270,76 @@ def infer_action_literal(vocabulary: Sequence[str], include: str, exclude: str =
 
 
 # ---------------------------------------------------------------------------
+# Operational validation -- did the run actually retrieve what it set out to?
+# ---------------------------------------------------------------------------
+
+#: Columns each table must carry before the run counts as operationally complete. These are
+#: the vendor's own documented column names; requiring them catches a wrong-schema response
+#: that arrived with HTTP 200 and would otherwise be indistinguishable from a good one.
+REQUIRED_TABLE_COLUMNS: Mapping[str, frozenset[str]] = {
+    "tickers": frozenset({"ticker", "permaticker", "name"}),
+    "stocks": frozenset({"ticker", "date", "close", "closeadj", "closeunadj", "lastupdated"}),
+    "actions": frozenset({"date", "action", "value"}),
+    "fundamentals": frozenset({"ticker", "datekey", "reportperiod", "calendardate"}),
+    "events": frozenset({"ticker", "date", "eventcodes"}),
+}
+
+
+def validate_retrieved_inventory(
+    samples: Mapping[str, TableSample], ticker: str = SAMPLE_TICKER
+) -> tuple[bool, tuple[str, ...]]:
+    """Is every table in the fixed inventory actually usable? Returns ``(ok, problems)``.
+
+    **HTTP success is not retrieval success**, and the gap between them is where a run
+    quietly stops meaning what it claims. A request can return 200 and still yield malformed
+    CSV, invalid UTF-8, a header with no rows, a truncated body or an entirely different
+    schema. None of those appears in the fetch-error list, so a run built only on that list
+    would call itself complete and could reach PROCEED on evidence it never had.
+
+    Problems are phrased from table names and column names only -- the vendor's own public
+    schema. **No vendor row, count or value enters a problem string**, because the private
+    report is the only place this text is allowed to appear and it should not need to be.
+    """
+    problems: list[str] = []
+    for table, _windowed in REQUEST_INVENTORY:
+        sample = samples.get(table)
+        if sample is None:
+            problems.append(f"{table}: not retrieved")
+            continue
+        if sample.fetch_error is not None:
+            problems.append(f"{table}: retrieval failed ({sample.fetch_error})")
+            continue
+        if sample.parse_error is not None:
+            problems.append(f"{table}: unparseable ({sample.parse_error})")
+            continue
+        if not sample.columns:
+            problems.append(f"{table}: no header row")
+            continue
+
+        present = {column.strip().lower() for column in sample.columns}
+        missing = sorted(REQUIRED_TABLE_COLUMNS.get(table, frozenset()) - present)
+        if missing:
+            problems.append(f"{table}: missing documented column(s) {', '.join(missing)}")
+            continue
+        if not sample.rows:
+            problems.append(f"{table}: returned no rows")
+            continue
+
+        if table == "tickers" and not any(
+            str(row.get("ticker", "")).strip().upper() == ticker.upper() for row in sample.rows
+        ):
+            problems.append("tickers: no row for the requested security")
+        if table == "stocks" and not _numeric_rows(sample.rows):
+            problems.append("stocks: no row carried a date with all three close columns")
+        if table == "actions":
+            usable, reason = actions_usable(sample)
+            if not usable:
+                problems.append(reason)
+
+    return not problems, tuple(problems)
+
+
+# ---------------------------------------------------------------------------
 # Findings
 # ---------------------------------------------------------------------------
 
@@ -1275,7 +1419,7 @@ def evaluate_p1(samples: Mapping[str, TableSample]) -> Finding:
 def evaluate_p2() -> Finding:
     """Delisted coverage is real.
 
-    Takes no sample argument, and that is the guard. A 30-name, 5-year public sample of a
+    Takes no sample argument, and that is the guard. A single-name, five-year probe of a
     listed mega-cap contains no security delisted 5, 10 or 15 years ago, so there is no
     input from which a pass could be computed and no way for one to be manufactured.
     """
@@ -1386,9 +1530,10 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
     ``cash dividend``
         Testable *if* the observed action vocabulary names cash dividends unambiguously and
         no spinoff confounds the window. The published ratio is
-        ``(Close + Dividend) / Close`` on the pre-event close; which price series the
-        dividend is denominated in is not stated, so both candidates are evaluated and the
-        answer is observed.
+        ``(Close + Dividend) / Close`` on the **action-date** close, with preceding
+        history adjusted backward from it; which price series the dividend amount is
+        expressed against is not stated, so both candidates are evaluated and the answer
+        is observed.
     ``spinoff``
         **Never testable from this surface.** The published ratio needs the spun-off
         entity's opening price and share counts -- another security's data -- and the
@@ -1446,7 +1591,7 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
     splits = extract_splits(actions)
     split_result = reconcile_split_adjustment(stocks.rows, splits)
 
-    spinoff_literal = infer_action_literal(vocabulary, "spin")
+    spinoff_literal, spinoff_state = classify_action_literal(vocabulary, "spin")
     spinoffs = extract_dated_values(actions, spinoff_literal or "")
     dividend_literal, dividend_state = classify_action_literal(
         vocabulary, "dividend", exclude="stock"
@@ -1465,7 +1610,17 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
 
     # The spinoff limb has no computable form here, so it is not "run and failed" -- it is
     # either absent from the sample or present and unanswerable. Both are recorded as such.
-    if spinoffs:
+    if spinoff_state == LITERAL_AMBIGUOUS:
+        # Several spin-like literals. Treating that as "no spinoff" would collapse
+        # AMBIGUOUS into ABSENT and let the dividend limb compare rows a spinoff may sit
+        # after -- the exact confusion the dividend limb was already fixed to avoid.
+        spinoff_status = INCONCLUSIVE
+        spinoff_note = (
+            "the observed action vocabulary names several spin-like literals and the vendor "
+            "publishes no action-type list, so which rows are spinoffs cannot be determined "
+            "and no row can be trusted to be free of one"
+        )
+    elif spinoffs:
         spinoff_status = INCONCLUSIVE
         spinoff_note = (
             "a spinoff falls in the sampled range and its adjustment ratio needs the "
@@ -1476,17 +1631,23 @@ def evaluate_p5(samples: Mapping[str, TableSample]) -> Finding:
         spinoff_status = NOT_EXERCISED
         spinoff_note = "no spinoff falls in the sampled range, so the limb did not run"
 
-    # A stock dividend shares the split's float ratio, so it would also be inside the
-    # split-adjusted close -- but its `value` semantics are undocumented, so it cannot be
-    # modelled. Where one could touch the comparison, a split-limb disagreement has an
-    # innocent explanation and must not be read as vendor corruption.
+    # Any observed literal we do not model could be another float-changing event -- an ADR
+    # ratio change behaves like a split, and the vendor publishes no action-type list at
+    # all. Where such an event could touch the comparison, a split-limb disagreement has an
+    # innocent explanation and must not be read as vendor corruption. Nothing is *assumed*
+    # about an unknown literal; it is precisely because nothing can be assumed that it
+    # confounds.
+    modelled = {SPLIT_ACTION}
+    if dividend_literal:
+        modelled.add(dividend_literal)
+    if spinoff_literal:
+        modelled.add(spinoff_literal)
     confounders = tuple(
         literal
-        for literal in stock_dividend_literals(vocabulary)
-        if any(
-            date > split_result.earliest_compared
-            for date, _ in extract_dated_values(actions, literal)
-            if split_result.earliest_compared
+        for literal in unmodelled_action_literals(vocabulary, modelled)
+        if split_result.earliest_compared
+        and any(
+            date > split_result.earliest_compared for date in extract_dated_events(actions, literal)
         )
     )
     split_status = INCONCLUSIVE if confounders else split_result.status
@@ -1747,42 +1908,41 @@ def private_recommendation(findings: Sequence[Finding], retrieval_complete: bool
     ``retrieval_complete`` is required rather than defaulted. A report that says "retrieval
     incomplete" and "PROCEED" in the same breath would be self-contradictory, and a default
     would let a caller reach that state by forgetting an argument.
+
+    **REJECT is deliberately unreachable from this harness.** It stays in the vocabulary for
+    a future qualification with stronger evidence, but nothing here can earn it. The split
+    limb's comparison rests on reading ``actions.value`` as the adjustment ratio, and the
+    vendor documents ``value`` only as *numeric* -- it publishes no per-action-type meaning
+    (`PSR-SHD-112`). The adjustment *formulas* being published (`PSR-SHD-120`) does not
+    establish that this column carries the ratio they take. A failed reconciliation is
+    therefore consistent with our interpretation being wrong, and convicting a provider on
+    an interpretation we cannot verify is exactly the error this whole harness is shaped to
+    avoid. A free single-name probe may return **PROCEED or HOLD**, and nothing else.
     """
     validate_findings(findings)
     by_id = {f.test_id: f for f in findings}
 
     p5 = by_id["P5"]
 
-    # An incomplete run cannot support any conclusion about the provider -- including an
-    # adverse one. A limb may have failed because of what did not arrive.
+    # An incomplete run cannot support any conclusion about the provider. A limb may have
+    # failed because of what did not arrive.
     if not retrieval_complete:
         return HOLD
 
-    # Only a limb that actually RAN can reject. `NOT_EXERCISED` -- a table that could not be
-    # retrieved, or an event type the window never contained -- is missing evidence, and
-    # missing evidence is a reason to look again rather than a verdict about the provider.
-    if (
-        p5.attributes.get("split_limb") == INCONCLUSIVE
-        and p5.attributes.get("split_confounded") != "true"
-    ):
-        # The vendor's split-adjusted close does not reconcile against its own unadjusted
-        # close using its own actions. Both series and the action are the vendor's, so
-        # nothing here depends on an assumption of ours: it is an internal inconsistency,
-        # and a data-quality failure rather than a coverage limitation.
-        #
-        # Confounded is excluded deliberately: where an unmodelled split-like action could
-        # explain the disagreement, "the vendor's data is wrong" is not the only reading.
-        return REJECT
+    # **PROCEED requires both runnable limbs to have actually run and reconciled.**
+    #
+    # This is stricter than it looks, and deliberately so. The probe is a SINGLE security
+    # over five years, and the security's most recent split may well fall outside that
+    # window -- in which case the split limb reports PARTIALLY_TESTED on a trivial
+    # agreement. Allowing that plus a passing dividend limb to reach PROCEED would let the
+    # strongest available check be skipped by an accident of the calendar and still produce
+    # a favourable answer. If the free surface cannot exercise the split limb, HOLD is the
+    # honest result, and widening the window past the authorized five years to go hunting
+    # for an old split is not the remedy.
+    for limb in ("split_limb", "dividend_limb"):
+        if p5.attributes.get(limb) != TESTED:
+            return HOLD
 
-    # A failing dividend limb is deliberately NOT a reject. It depends on the observed
-    # action vocabulary and on a denomination the vendor does not state, so the fault may
-    # be our reading rather than the vendor's data. That is a reason to look again, not a
-    # reason to conclude.
-    if p5.attributes.get("dividend_limb") == INCONCLUSIVE:
-        return HOLD
-
-    # P4 is documentation-resolved and can no longer be inconclusive, so it is no longer
-    # consulted here.
     if any(by_id[t].status == INCONCLUSIVE for t in ("P1", "P5")):
         return HOLD
     return PROCEED
@@ -1919,6 +2079,7 @@ def render_private_report(
     recommendation: str,
     fetch_errors: Mapping[str, str],
     retained_raw: int,
+    inventory_problems: Sequence[str] = (),
 ) -> str:
     """Render the owner-readable private report.
 
@@ -1944,6 +2105,9 @@ def render_private_report(
     errors = (
         "".join(f"<li>{_escape(t)}: {_escape(c)}</li>" for t, c in sorted(fetch_errors.items()))
         or "<li>none</li>"
+    )
+    unusable = (
+        "".join(f"<li>{_escape(problem)}</li>" for problem in inventory_problems) or "<li>none</li>"
     )
     banner = "<br>".join(_escape(line) for line in REPORT_BANNER)
 
@@ -1975,7 +2139,11 @@ no subscription, no vendor account, no private credential.</p>
 </table>
 
 <h2>Retrieval problems</h2>
+<p>Requests that failed outright:</p>
 <ul>{errors}</ul>
+<p>Requests that returned but were not usable &mdash; a wrong schema, an empty body or a
+truncated response arrives with HTTP success and would otherwise pass unnoticed:</p>
+<ul>{unusable}</ul>
 
 <div class="rec">
 <h2>Private recommendation</h2>
@@ -2066,6 +2234,7 @@ def run_private_qualification(
     buckets: ResearchBuckets,
     now: datetime,
     runtime_root: Path = RUNTIME_ROOT,
+    ticker: str = SAMPLE_TICKER,
     fetcher: Callable[[LiveRunAuthorization, str, Sequence[tuple[str, str]], Pacer], bytes]
     | None = None,
     put: Callable[[str, str, Path, str], None] | None = None,
@@ -2084,7 +2253,7 @@ def run_private_qualification(
 
     window = five_year_window(now)
     for table, windowed in REQUEST_INVENTORY:
-        params = build_request_params(table, windowed, window)
+        params = build_request_params(table, windowed, window, ticker)
         try:
             payload = fetch(authorization, table, params, pacer)
         except SafeHarnessError as exc:
@@ -2096,14 +2265,20 @@ def run_private_qualification(
         samples[table] = parse_csv_payload(table, payload, item.address)
 
     findings = evaluate_all(samples)
-    # The private recommendation is computed from the findings AND from whether the run
-    # actually retrieved what it set out to. An incomplete run cannot say PROCEED.
-    recommendation = private_recommendation(findings, retrieval_complete=not fetch_errors)
+
+    # Operational completeness is judged on whether the responses are USABLE, not on whether
+    # the requests returned. A 200 carrying a wrong schema is a failed retrieval that no
+    # fetch-error list will ever mention.
+    inventory_ok, inventory_problems = validate_retrieved_inventory(samples, ticker)
+    retrieval_complete = not fetch_errors and inventory_ok
+    recommendation = private_recommendation(findings, retrieval_complete=retrieval_complete)
 
     uploaded = upload_staged(staged, run_id, buckets, authorization.profile, put=put)
     _, retained = purge_uploaded(uploaded)
 
-    html = render_private_report(run_id, findings, recommendation, fetch_errors, retained)
+    html = render_private_report(
+        run_id, findings, recommendation, fetch_errors, retained, inventory_problems
+    )
     report_path = run_dir / REPORT_FILENAME
     report_path.write_text(html, encoding="utf-8")
     (runtime_root / REPORT_FILENAME).write_text(html, encoding="utf-8")
@@ -2121,7 +2296,7 @@ def run_private_qualification(
         report_uploaded = False
 
     return HarnessOutcome(
-        ok=report_uploaded and retained == 0 and not fetch_errors,
+        ok=report_uploaded and retained == 0 and retrieval_complete,
         report_path=report_path,
         retained_raw=retained,
     )
