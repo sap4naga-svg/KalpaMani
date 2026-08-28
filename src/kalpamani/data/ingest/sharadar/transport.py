@@ -43,6 +43,11 @@ decided by the other end decide this process's memory. At most
 being loaded; a ``Content-Length`` already over the limit refuses before any body
 is read at all.
 
+**Headers are validated here, not left to urllib.** ``Request`` stores a header
+without checking it, and a ``CR LF`` in a value is only rejected much later, at
+send time -- so a split-request attempt would look well formed in between. Names
+and values are held to strict ASCII token grammars before an opener sees them.
+
 **A failing response is never read.** ``urlopen`` raises
 :class:`~urllib.error.HTTPError` for a 4xx or 5xx, and that exception *is* the
 response object -- reading it is one attribute access away. This transport closes
@@ -58,7 +63,9 @@ else, with the original exception suppressed via ``from None``.
 
 from __future__ import annotations
 
+import http.client
 import math
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -262,6 +269,32 @@ def origin_refusal(url: str) -> SharadarErrorCode | None:
     return None
 
 
+#: An RFC 7230 header field-name token.
+_HEADER_NAME: Final = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$")
+
+#: A header value: printable US-ASCII only, no leading or trailing space, bounded.
+#: CR, LF and NUL are excluded by construction, which is the point.
+_HEADER_VALUE: Final = re.compile(r"^[\x21-\x7e]([\x20-\x7e]{0,254}[\x21-\x7e])?$")
+
+
+def headers_are_safe(headers: Mapping[str, str]) -> bool:
+    """Whether every header name and value is an exact, well-formed ASCII token.
+
+    **Checked here rather than left to urllib**, which was the assumption an
+    earlier revision made and it was wrong: :class:`urllib.request.Request` stores
+    headers without validating them, and a ``\\r\\n`` in a value is only rejected
+    much later, at send time, by :mod:`http.client`. Between those two points the
+    request looks well formed. Validating at the boundary means a split-request
+    attempt never reaches an opener at all.
+    """
+    for name, value in headers.items():
+        if type(name) is not str or type(value) is not str:
+            return False
+        if not _HEADER_NAME.match(name) or not _HEADER_VALUE.match(value):
+            return False
+    return True
+
+
 def _content_length_over(response: HttpResponseLike, limit: int) -> bool:
     """Whether a declared ``Content-Length`` already exceeds ``limit``.
 
@@ -271,12 +304,15 @@ def _content_length_over(response: HttpResponseLike, limit: int) -> bool:
     response for a cosmetic vendor bug, and would add nothing, because an
     oversized body is caught by the bounded read either way.
     """
-    declared = response.getheader("Content-Length")
+    try:
+        declared = response.getheader("Content-Length")
+    except Exception:
+        return False
     if declared is None:
         return False
     try:
         return int(declared.strip()) > limit
-    except (ValueError, AttributeError):
+    except (ValueError, TypeError, AttributeError):
         return False
 
 
@@ -324,10 +360,20 @@ class UrllibTransport:
             raise TransportUnavailableError(refusal)
         if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
             raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED)
+        if not headers_are_safe(headers):
+            raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED)
 
-        request = urllib.request.Request(  # noqa: S310 - origin pinned by origin_refusal above
-            url, headers=dict(headers), method="GET"
-        )
+        try:
+            request = urllib.request.Request(  # noqa: S310 - origin pinned above
+                url, headers=dict(headers), method="GET"
+            )
+        except (ValueError, TypeError, http.client.HTTPException):
+            # Header and URL construction raise ValueError carrying the offending
+            # value -- a header line, or the URL with the key in it. Converted
+            # here rather than allowed to propagate, because the message is the
+            # disclosure.
+            raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED) from None
+
         try:
             response = self._opener(request, float(timeout_seconds))
         except urllib.error.HTTPError as exc:
@@ -341,8 +387,14 @@ class UrllibTransport:
             raise TransportUnavailableError(SharadarErrorCode.NETWORK_TIMEOUT) from None
         except urllib.error.URLError:
             raise TransportUnavailableError(SharadarErrorCode.NETWORK_UNREACHABLE) from None
+        except http.client.HTTPException:
+            raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED) from None
         except OSError:
             raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED) from None
+        except (ValueError, TypeError):
+            # An opener can raise these for a URL or header it dislikes, and the
+            # message carries the value it disliked.
+            raise TransportUnavailableError(SharadarErrorCode.REQUEST_MALFORMED) from None
 
         try:
             if _content_length_over(response, self._max_response_bytes):
@@ -351,15 +403,29 @@ class UrllibTransport:
                 # One byte past the ceiling: enough to know it was exceeded,
                 # never enough to load a body that exceeds it.
                 body = response.read(self._max_response_bytes + 1)
+                status = int(response.status)
             except TimeoutError:
                 raise TransportUnavailableError(SharadarErrorCode.NETWORK_TIMEOUT) from None
-            except OSError:
+            except (OSError, http.client.HTTPException):
                 raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED) from None
-            if len(body) > self._max_response_bytes:
-                raise TransportUnavailableError(SharadarErrorCode.RESPONSE_TOO_LARGE)
-            return TransportResponse(status=int(response.status), body=body)
+            except (ValueError, TypeError, AttributeError):
+                # Reading response metadata can fail on a malformed response. No
+                # value from it reaches the caller.
+                raise TransportUnavailableError(SharadarErrorCode.RESPONSE_READ_FAILED) from None
+            if type(body) is not bytes or len(body) > self._max_response_bytes:
+                raise TransportUnavailableError(
+                    SharadarErrorCode.RESPONSE_TOO_LARGE
+                    if type(body) is bytes
+                    else SharadarErrorCode.RESPONSE_READ_FAILED
+                )
+            return TransportResponse(status=status, body=body)
         finally:
-            response.close()
+            # A close() that raises must not replace the outcome, and must not
+            # surface a socket message naming the host.
+            try:
+                response.close()
+            except Exception:  # noqa: S110 - a close failure is never the caller's problem
+                pass
 
 
 __all__ = [
@@ -379,5 +445,6 @@ __all__ = [
     "UrllibTransport",
     "build_pinned_opener",
     "build_pinned_opener_director",
+    "headers_are_safe",
     "origin_refusal",
 ]

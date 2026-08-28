@@ -26,6 +26,7 @@ What is proven:
 
 from __future__ import annotations
 
+import http.client
 import urllib.error
 import urllib.request
 from typing import Any
@@ -86,7 +87,7 @@ class FakeResponse:
 class RecordingOpener:
     """Records every URL it was asked to open, and returns a queued outcome."""
 
-    def __init__(self, outcome: FakeResponse | BaseException) -> None:
+    def __init__(self, outcome: Any) -> None:
         self._outcome = outcome
         self.opened: list[str] = []
 
@@ -97,7 +98,7 @@ class RecordingOpener:
         return self._outcome
 
 
-def transport(outcome: FakeResponse | BaseException, **kwargs: Any) -> UrllibTransport:
+def transport(outcome: Any, **kwargs: Any) -> UrllibTransport:
     """A transport wired to a fake opener. **The only place this class is built.**"""
     return UrllibTransport(opener=RecordingOpener(outcome), **kwargs)
 
@@ -445,6 +446,126 @@ def test_a_transport_error_code_is_normalised_rather_than_trusted() -> None:
     assert TransportUnavailableError("NETWORK_TIMEOUT").code is SharadarErrorCode.NETWORK_TIMEOUT  # type: ignore[arg-type]
     assert TransportUnavailableError("nonsense").code is SharadarErrorCode.UNCLASSIFIED  # type: ignore[arg-type]
     assert TransportUnavailableError(object()).code is SharadarErrorCode.UNCLASSIFIED  # type: ignore[arg-type]
+
+
+class ExplodingResponse:
+    """A response whose every accessor fails the way a malformed one would."""
+
+    def __init__(self, failure: BaseException, *, fail_close: bool = False) -> None:
+        self._failure = failure
+        self._fail_close = fail_close
+        self.closed = False
+
+    @property
+    def status(self) -> int:
+        raise self._failure
+
+    def read(self, amount: int, /) -> bytes:
+        raise self._failure
+
+    def getheader(self, name: str, default: str | None = None, /) -> str | None:
+        raise self._failure
+
+    def close(self) -> None:
+        self.closed = True
+        if self._fail_close:
+            raise OSError("connection reset while closing api.sharadar.com")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError(
+            "invalid header value for https://api.sharadar.com/?api_key=synthetic-leak-canary"
+        ),
+        TypeError("bad header type"),
+        AttributeError("no attribute 'status'"),
+        OSError("connection reset"),
+        http.client.HTTPException("malformed chunked encoding"),
+    ],
+)
+def test_a_failing_response_accessor_becomes_a_sanitized_code(failure: BaseException) -> None:
+    """Reading response metadata can fail, and the message names what it choked on."""
+    fake = ExplodingResponse(failure)
+    with pytest.raises(TransportUnavailableError) as caught:
+        transport(fake).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code in {
+        SharadarErrorCode.RESPONSE_READ_FAILED,
+        SharadarErrorCode.RESPONSE_TOO_LARGE,
+    }
+    for leak in ("api_key", "https://", "sharadar.com", "synthetic-leak-canary"):
+        assert leak not in str(caught.value)
+    assert fake.closed is True
+
+
+def test_a_close_that_fails_does_not_replace_the_outcome_or_leak_a_host() -> None:
+    """A close failure is never the caller's problem, and its message names the host."""
+
+    class ClosesBadly(FakeResponse):
+        def close(self) -> None:
+            self.closed = True
+            raise OSError("connection reset while closing api.sharadar.com")
+
+    fake = ClosesBadly(body=b"synthetic-ok")
+    response = transport(fake).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert response.body == b"synthetic-ok"
+    assert fake.closed is True
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"User-Agent": "agent" + chr(13) + chr(10) + "X-Injected: yes"},
+        {"User-Agent" + chr(10) + "X-Injected": "yes"},
+    ],
+)
+def test_an_invalid_header_cannot_escape_as_a_raw_value_error(
+    headers: dict[str, str],
+) -> None:
+    """``Request`` raises ValueError carrying the offending header line."""
+    opener = RecordingOpener(FakeResponse())
+    with pytest.raises(TransportUnavailableError) as caught:
+        UrllibTransport(opener=opener).get(url=APPROVED_URL, headers=headers, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    assert "X-Injected" not in str(caught.value)
+    assert opener.opened == []
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        ValueError("unknown url type: https://api.sharadar.com/?api_key=synthetic-leak-canary"),
+        TypeError(),
+    ],
+)
+def test_an_opener_value_error_is_converted_without_echoing_the_url(
+    raised: BaseException,
+) -> None:
+    with pytest.raises(TransportUnavailableError) as caught:
+        transport(raised).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.REQUEST_MALFORMED
+    for leak in ("api_key", "https://", "sharadar.com", "synthetic-leak-canary"):
+        assert leak not in str(caught.value)
+
+
+def test_a_non_bytes_body_is_refused_rather_than_returned() -> None:
+    """A fake or a future response object that returns a str is a read failure."""
+
+    class WrongBodyType(FakeResponse):
+        def read(self, amount: int, /) -> bytes:
+            self.read_calls.append(amount)
+            return "synthetic-str-body"  # type: ignore[return-value]
+
+    with pytest.raises(TransportUnavailableError) as caught:
+        transport(WrongBodyType()).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert caught.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+
+
+def test_the_fixed_user_agent_still_reaches_the_opener() -> None:
+    """The negative control for every refusal above: the valid header does arrive."""
+    opener = RecordingOpener(FakeResponse(body=b"synthetic-ok"))
+    UrllibTransport(opener=opener).get(url=APPROVED_URL, headers=HEADERS, timeout_seconds=10.0)
+    assert opener.opened == [APPROVED_URL]
 
 
 def test_the_response_is_always_closed() -> None:

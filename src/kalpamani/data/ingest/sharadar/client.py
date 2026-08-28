@@ -185,7 +185,7 @@ DEFAULT_RETRY_POLICY: Final = RetryPolicy(max_attempts=3, backoff_seconds=(2.0, 
 class SharadarClient:
     """Fetches exact response bytes for one request. Stores nothing, parses nothing."""
 
-    __slots__ = ("_credential", "_pacer", "_retry_policy", "_timeout", "_transport", "_user_agent")
+    __slots__ = ("_credential", "_pacer", "_retry_policy", "_timeout", "_transport")
 
     def __init__(
         self,
@@ -195,13 +195,21 @@ class SharadarClient:
         pacer: Pacer | None = None,
         retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-        user_agent: str = DEFAULT_USER_AGENT,
     ) -> None:
         """Bind the credential, the transport and the pacing and retry policy.
 
         ``transport`` has **no default**, deliberately: a client that could reach a
         network without one being handed in is a client a forgetful test can point
         at the vendor.
+
+        **There is no ``user_agent`` parameter.** An earlier revision took one and
+        put it straight into a request header and into ``repr``. A header value is
+        not free text: a caller-supplied ``\\r\\n`` splits the request, a
+        key-shaped string turns the User-Agent into a second credential channel,
+        and a ``repr`` that echoes it turns any log line into a disclosure. None of
+        that buys anything here, because there is exactly one honest thing for this
+        client to call itself. Configurability, if it is ever wanted, is a grammar
+        and a length ceiling -- and a separate decision.
         """
         if not _finite(timeout_seconds) or not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
             raise SharadarRequestError(
@@ -216,24 +224,27 @@ class SharadarClient:
         self._pacer = pacer if pacer is not None else Pacer()
         self._retry_policy = retry_policy
         self._timeout = timeout_seconds
-        self._user_agent = user_agent
 
     def __repr__(self) -> str:
-        """Configuration only. The credential is never part of a rendering."""
+        """Configuration only, and every value in it is a constant or a number.
+
+        Nothing a caller supplied can appear here, which is what makes the repr
+        safe to log without anyone having to think about it.
+        """
         return (
             f"SharadarClient(timeout_seconds={self._timeout}, "
-            f"max_attempts={self._retry_policy.max_attempts}, "
-            f"user_agent={self._user_agent!r})"
+            f"max_attempts={self._retry_policy.max_attempts})"
         )
 
     def headers(self) -> Mapping[str, str]:
-        """The fixed request headers. Deterministic, and carrying no credential.
+        """The fixed request headers. Constant, and carrying no credential.
 
-        The key travels in the query string for this vendor (`PSR-SHD-109`), so
-        there is no authorization header here -- and nothing else that varies per
-        run, per host or per machine.
+        Both values are module constants -- **nothing caller-supplied reaches a
+        header**, so header injection has no source. The key travels in the query
+        string for this vendor (`PSR-SHD-109`), so there is no authorization
+        header here, and nothing that varies per run, per host or per machine.
         """
-        return {"User-Agent": self._user_agent, "Accept-Encoding": "identity"}
+        return {"User-Agent": DEFAULT_USER_AGENT, "Accept-Encoding": "identity"}
 
     def fetch(self, request: SharadarRequest) -> bytes:
         """Return the vendor's response bytes for ``request``, exactly as received.

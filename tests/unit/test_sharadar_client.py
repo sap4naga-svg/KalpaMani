@@ -25,6 +25,8 @@ Every transport here is synthetic. **No test opens a socket or names a host.**
 
 from __future__ import annotations
 
+import inspect
+import re
 from datetime import date
 
 import pytest
@@ -315,6 +317,63 @@ def test_the_client_repr_names_configuration_and_not_the_credential() -> None:
     assert syn.SYNTHETIC_CREDENTIAL_VALUE not in rendered
     assert "credential" not in rendered
     assert "max_attempts=3" in rendered
+
+
+def test_the_client_takes_no_user_agent_and_can_carry_no_caller_text() -> None:
+    """A header value is not free text.
+
+    An earlier revision accepted a ``user_agent`` and put it straight into a
+    request header and into ``repr``. A caller-supplied CR/LF splits the request,
+    a key-shaped string turns the User-Agent into a second credential channel, and
+    a repr that echoes it turns a log line into a disclosure. There is exactly one
+    honest thing for this client to call itself, so there is no parameter.
+    """
+    parameters = set(inspect.signature(SharadarClient.__init__).parameters)
+    assert "user_agent" not in parameters
+
+    transport = syn.ScriptedTransport([syn.ok()])
+    fetcher = client(transport, syn.ManualClock())
+    fetcher.fetch(syn.stocks_request())
+    assert transport.headers[0] == {
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Accept-Encoding": "identity",
+    }
+    # Every value in the repr is a constant or a number, so nothing a caller
+    # supplied can reach it.
+    assert set(re.findall(r"[A-Za-z_]+=", repr(fetcher))) == {
+        "timeout_seconds=",
+        "max_attempts=",
+    }
+
+
+#: Header values a caller must never be able to supply. The first two carry real
+#: CR/LF, built with ``chr`` so the hazard is visible in the source rather than
+#: hidden inside an escape sequence.
+HOSTILE_USER_AGENTS = (
+    "agent" + chr(13) + chr(10) + "X-Injected: yes",
+    "agent" + chr(10) + "X-Injected: yes",
+    "api_key=synthetic-fake-secret",
+    "https://elsewhere.invalid/?api_key=synthetic-fake-secret",
+)
+
+
+@pytest.mark.parametrize("hostile", HOSTILE_USER_AGENTS)
+def test_no_caller_supplied_user_agent_can_reach_a_header(hostile: str) -> None:
+    """The refusal is structural: the constructor has nowhere to put one."""
+    with pytest.raises(TypeError):
+        SharadarClient(
+            credential=syn.credential(),
+            transport=syn.ScriptedTransport([]),
+            user_agent=hostile,  # type: ignore[call-arg]
+        )
+
+
+def test_the_credential_bearing_helpers_are_not_on_the_package_surface() -> None:
+    """Only the client needs to build a URL that contains the key."""
+    import kalpamani.data.ingest.sharadar as package
+
+    assert "build_request_url" not in package.__all__
+    assert "build_query_parameters" not in package.__all__
 
 
 @pytest.mark.parametrize(

@@ -74,8 +74,6 @@ from kalpamani.data.ingest.sharadar.datasets import (
     ResponseFormat,
     SharadarDataset,
     SharadarRequest,
-    build_query_parameters,
-    build_request_url,
     describe_request,
 )
 from kalpamani.data.ingest.sharadar.redaction import (
@@ -125,8 +123,6 @@ __all__ = [
     "TransportResponse",
     "TransportUnavailableError",
     "UrllibTransport",
-    "build_query_parameters",
-    "build_request_url",
     "classify_http_status",
     "credential_from_env",
     "describe_request",
