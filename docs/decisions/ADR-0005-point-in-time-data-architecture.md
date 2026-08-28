@@ -529,6 +529,16 @@ artifact with a hash rather than the result of a query that may behave different
 
 ### 11. Parquet + DuckDB for research; PostgreSQL remains the operational database
 
+> **Deployment location superseded by
+> [ADR-0007](ADR-0007-cloud-first-research-data-plane.md) (2026-08-27).** The *engine* choice
+> below stands unchanged and its reasoning still holds. What no longer holds is **where the
+> files live**: the authoritative Bronze/Silver/Gold location is a private, deletion-first AWS
+> S3 bucket, with `.runtime/data/` demoted to an optional development cache. The decisive reason
+> is the vendor deletion obligation examined after this ADR was written
+> ([packet §3.C](../phase3/provider-licensing-decision-packet.md)), which the "git-ignored
+> runtime area" wording below predates. **This ADR is not rewritten** — the supersession is
+> recorded here and decided in ADR-0007. ADR-0005 itself **remains PROPOSED**.
+
 **Proposed:** Parquet files under the git-ignored runtime area, queried by DuckDB, as the
 research analytics layer for the current single-node Windows/Docker environment. No server, no
 port, no credentials, no container.

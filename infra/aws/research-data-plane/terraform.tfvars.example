@@ -1,0 +1,76 @@
+# Example variable values.
+#
+# COPY THIS TO `terraform.tfvars` AND FILL IT IN LOCALLY. `*.tfvars` is
+# git-ignored; only this `.example` file is committed, and it contains
+# placeholders alone.
+#
+# THE SAME RULE AS `.env`: variable NAMES are committed, VALUES never are.
+#
+# Nothing here may ever be given a real value in this file:
+#   - no AWS account id
+#   - no bucket name tied to the owner's identity
+#   - no ARN
+#   - no access key, secret key or session token
+#   - no email address
+#   - no provider API key
+#   - no broker identifier
+#
+# Credentials do not belong in a `.tfvars` file at all. Use an AWS profile,
+# SSO/Identity Center, or environment variables -- never a variable in this
+# configuration.
+#
+# ----------------------------------------------------------------------------
+# THIS CONFIGURATION HAS NEVER BEEN APPLIED. `terraform apply` is NOT authorized
+# (ADR-0007 §12). Filling this file in does not change that.
+# ----------------------------------------------------------------------------
+
+# Prefix for every resource name. Lowercase, 3-32 chars, no leading/trailing hyphen.
+name_prefix = "REPLACE-ME-kalpamani-research"
+
+# Globally-unique S3 bucket suffix. S3 bucket names share one global namespace.
+# Use something random and meaningless. Do NOT derive it from a name, an email,
+# an account id or the broker account -- a bucket name is not a secret and leaks
+# in DNS and in error messages.
+bucket_suffix = "REPLACE-ME-random-suffix"
+
+# Region. Any region works; this is the generic default.
+aws_region = "us-east-1"
+
+# REQUIRED, AND IT FAILS CLOSED. There is no default: Terraform refuses to run at
+# all until this is supplied, and each entry must be exactly 12 decimal digits.
+# The placeholder below is deliberately NOT a valid value -- this `.example` file
+# is never loaded by Terraform, so a value that would fail validation is exactly
+# what belongs here. Copying it across unchanged fails immediately and loudly.
+#
+# It refuses to apply against any other account, so a stale AWS_PROFILE cannot
+# silently build this in the wrong place. An account id is an identifier: put the
+# real value only in the git-ignored `terraform.tfvars`.
+allowed_account_ids = ["REPLACE-WITH-12-DIGIT-AWS-ACCOUNT-ID"]
+
+# Networking. Private address space; adjust only if it collides with something.
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_count = 2
+
+# CloudWatch Logs retention, in days. Bounded on purpose; "never expire" is not
+# an accepted value.
+log_retention_days = 30
+
+# Days before an incomplete multipart upload is aborted. A deletion aid: parts of
+# an incomplete upload are stored and billed but do not appear in an object
+# listing, so a list-and-delete procedure would miss them.
+multipart_abort_days = 7
+
+# Days before an untagged ECR image is expired.
+untagged_image_expiry_days = 14
+
+# Provider credential ARNs the research task role may READ.
+#
+# LEAVE THIS EMPTY. Empty is the correct current value: no provider is selected
+# (gate G1 is OPEN), no licence is resolved (gate G3 is OPEN), no subscription
+# exists and no credential has been issued. This configuration creates no secret
+# and stores no secret value.
+#
+# When a credential is eventually authorized, the secret is created OUTSIDE this
+# configuration and only its ARN is referenced here, in the uncommitted
+# `terraform.tfvars`. An ARN contains an account id and is never committed.
+provider_secret_arns = []

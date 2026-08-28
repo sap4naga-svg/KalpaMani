@@ -11,11 +11,24 @@ Those are exactly the defects the review rounds kept finding by hand. This scrip
 running.
 
 It reads `docs/phase3/` (including the G1/G3 provider decision packet and its clarification
-draft), the point-in-time and blueprint-adoption ADRs, `docs/architecture/`,
-`CLAUDE.md` and `README.md`. It touches no runtime code, opens no
-network connection, and asserts nothing about data. Exit code 0 means the documents are
+draft), the point-in-time, blueprint-adoption and cloud-data-plane ADRs, `docs/architecture/`,
+the vendor cloud-deletion runbook, `CLAUDE.md` and `README.md`. It touches no runtime code,
+opens no network connection, and asserts nothing about data. Exit code 0 means the documents are
 consistent on the named properties below; non-zero lists what disagrees. It is a guard over
 those properties, not a proof that the design is correct.
+
+**One section reads configuration rather than prose.** ADR-0007 makes claims about a private AWS
+research data plane -- no versioning, no Object Lock, no replication, no inbound rule, no IAM
+user -- and those claims are only worth anything if the committed Terraform actually says so.
+Prose and configuration drift apart silently, and the drift is invisible precisely because
+nobody re-reads the `.tf` files when editing an ADR. Section 13 therefore parses
+`infra/aws/research-data-plane/*.tf` as text and asserts on what it contains, so a "helpful"
+durability improvement that would defeat a vendor deletion obligation fails the audit instead of
+merging quietly. It also scans that directory for account ids, access keys and email addresses,
+because the same directory is where such a value is most likely to arrive by accident.
+
+That section checks what the configuration *declares*. It does not run Terraform, reach AWS, or
+establish that applying it would produce a working or correct system. **No AWS resource exists.**
 
 Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 """
@@ -81,6 +94,89 @@ V3_HISTORICAL_MARKERS = (
     "pre-adoption",
     "at drafting",
     "drafted",
+)
+
+#: The cloud-first research data plane (ADR-0007). Two properties have to hold, and they pull in
+#: opposite directions: the documents must describe AWS as the *intended* platform without ever
+#: reading as though anything exists, and the committed Terraform must *enforce* the deletion-first
+#: posture rather than merely describe it. Prose can drift from configuration silently, so the
+#: checks below read the `.tf` files as text and assert on what they actually say.
+ADR_CLOUD = DECISIONS / "ADR-0007-cloud-first-research-data-plane.md"
+DELETION_RUNBOOK = REPO_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion.md"
+INFRA = REPO_ROOT / "infra" / "aws" / "research-data-plane"
+
+#: Every file the scaffold is expected to contain. A missing one is a silent gap in the design.
+INFRA_FILES = (
+    "README.md",
+    "versions.tf",
+    "providers.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf",
+    "storage.tf",
+    "iam.tf",
+    "network.tf",
+    "ecr.tf",
+    "ecs.tf",
+    "logging.tf",
+    "terraform.tfvars.example",
+)
+
+#: Terraform constructs that must never appear. Each one either creates a copy a vendor deletion
+#: obligation would have to reach, opens an inbound path, or mints a long-lived human credential.
+FORBIDDEN_TERRAFORM = {
+    "object_lock": "Object Lock makes deletion impossible until expiry, including for the root",
+    "aws_s3_bucket_replication_configuration": "replication creates a copy elsewhere",
+    "aws_nat_gateway": "an always-on NAT Gateway contradicts the near-zero-idle-cost objective",
+    "aws_lb": "no load balancer: nothing accepts inbound connections",
+    "aws_iam_user": "no IAM user: roles issue short-lived credentials instead",
+    "aws_iam_access_key": "no long-lived access key may be created by Terraform",
+    "aws_vpc_security_group_ingress_rule": "the task security group admits nothing",
+    "aws_ecs_service": "compute is ephemeral; a service is an always-on workload",
+    "GLACIER": "an archival transition makes provable deletion slow and expensive",
+    'sse_algorithm = "aws:kms"': "not wrong, but a KMS key is a governed change, not a default",
+    # S3 Bucket Keys reduce KMS API calls, so they apply to SSE-KMS only. Setting one
+    # alongside AES256 declares an optimization for a service the bucket never calls:
+    # harmless at runtime, and a false statement about how the data is encrypted.
+    "bucket_key_enabled": "Bucket Keys are an SSE-KMS feature; under SSE-S3 they mean nothing",
+}
+
+#: Secret-shaped material that must never be committed under infra/. The account-id pattern is the
+#: one most likely to arrive by accident, pasted from a console URL or an ARN.
+SECRET_PATTERNS = {
+    "AWS access key id": re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[A-Z0-9]{16}\b"),
+    "12-digit AWS account id": re.compile(r"(?<![\d.])\d{12}(?![\d.])"),
+    "email address": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    "secret access key assignment": re.compile(r"(?i)secret_access_key\s*=\s*\"[^\"]"),
+    "session token assignment": re.compile(r"(?i)session_token\s*=\s*\"[^\"]"),
+}
+
+#: Wording that would present the cloud plane as built rather than described. Legitimate only next
+#: to a negation -- ADR-0007 itself says the laptop is *not* the authoritative store, and a naive
+#: substring scan would trip on exactly the sentence that establishes the property.
+PROVISIONED_CLAIMS = (
+    "aws resources have been created",
+    "aws resources were created",
+    "resources have been provisioned",
+    "the aws account was created",
+    "an aws account exists",
+    "terraform has been applied",
+    "we applied the terraform",
+)
+
+#: Wording that would restore the laptop to authority over Phase-3 production data.
+LAPTOP_AUTHORITY_CLAIMS = (
+    "laptop is the authoritative",
+    "laptop remains the authoritative",
+    "local disk is the authoritative",
+    "workstation is the authoritative",
+    "authoritative long-term licensed-data store",
+    "authoritative research store on the laptop",
+)
+
+#: A negation anywhere on the line makes a claim above the opposite of a claim.
+CLAIM_NEGATION = re.compile(
+    r"\b(?:not|never|no|nor|none|neither|rather than|instead of|no longer|without)\b"
 )
 
 CONTRACT = PHASE3 / "pit-data-contract.md"
@@ -232,6 +328,19 @@ def lines_with(text: str, needle: str) -> Iterable[tuple[int, str]]:
             yield i, line
 
 
+def strip_hcl_comments(text: str) -> str:
+    """Drop whole-line `#` comments from Terraform source.
+
+    Necessary rather than fastidious. These files explain at length **why** a
+    permission or setting is absent, and to do that they name the exact action or
+    argument they do not grant -- ``# NO s3:DeleteObject``, ``# no iam:PassRole``.
+    A scan over raw text therefore reports every deliberate, well-documented
+    omission as a violation, which would train the next person to delete the
+    explanation rather than fix the config.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -252,7 +361,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/12] Closed vocabularies are defined where they are used")
+    print("[1/13] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -276,7 +385,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/12] Source and derived envelopes stay disjoint")
+    print("\n[2/13] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -311,7 +420,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/12] Every declared temporal semantics has its required anchor")
+    print("\n[3/13] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -328,7 +437,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/12] Exact and bound derivations name the correct fields")
+    print("\n[4/13] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -355,7 +464,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/12] Normative rules use the current resolved model")
+    print("\n[5/13] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -401,7 +510,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/12] Entities keep source and derived rows apart")
+    print("\n[6/13] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -471,7 +580,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/12] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/13] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -533,7 +642,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/12] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/13] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -638,7 +747,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/12] Resolved-timing wording, closure rules and current status")
+    print("\n[9/13] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -743,7 +852,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/12] No document refers to a retired field name")
+    print("\n[10/13] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -787,7 +896,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/12] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/13] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -863,7 +972,9 @@ def main() -> int:
 
         # No gate may be silently marked resolved.
         gate_offenders: list[str] = []
-        for path in (ADR_V3, ADOPTION, REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md"):
+        gate_scanned = [ADR_V3, ADOPTION, REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md"]
+        gate_scanned += [p for p in (ADR_CLOUD, DELETION_RUNBOOK) if p.is_file()]
+        for path in gate_scanned:
             body = read(path)
             for lineno, line in enumerate(body.splitlines(), 1):
                 low = line.lower()
@@ -939,7 +1050,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/12] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/13] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1028,6 +1139,494 @@ def main() -> int:
                 f"{name} withholds authorization",
                 "NOT AUTHORIZED" in doc.upper() or "not authorize" in doc,
                 "authorization disclaimer missing",
+            )
+
+    # ------------------------------------------- 9. cloud-first research data plane
+    print("\n[13/13] The cloud data plane is described, not built -- and the Terraform enforces it")
+
+    f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
+    f.check(
+        "the vendor cloud-deletion runbook exists",
+        DELETION_RUNBOOK.is_file(),
+        f"missing: {DELETION_RUNBOOK}",
+    )
+    f.check("the Terraform scaffold directory exists", INFRA.is_dir(), f"missing: {INFRA}")
+
+    if ADR_CLOUD.is_file() and DELETION_RUNBOOK.is_file() and INFRA.is_dir():
+        adr7 = read(ADR_CLOUD)
+        runbook = read(DELETION_RUNBOOK)
+        claude_md = read(REPO_ROOT / "CLAUDE.md")
+        readme = read(REPO_ROOT / "README.md")
+        infra_readme = read(INFRA / "README.md") if (INFRA / "README.md").is_file() else ""
+
+        # -- the ADR decides a platform and nothing else --------------------------
+        f.check(
+            "ADR-0007 is accepted on merge rather than silently already in force",
+            "Accepted — effective on the merge" in adr7,
+            "ADR-0007 does not state its effective condition",
+        )
+        f.check(
+            "ADR-0007 states that no AWS resource exists",
+            "No AWS resource exists" in adr7,
+            "ADR-0007 does not disclaim existing resources",
+        )
+        for name, doc in (
+            ("ADR-0007", adr7),
+            ("the deletion runbook", runbook),
+            ("the infra README", infra_readme),
+        ):
+            f.check(
+                f"{name} withholds authorization",
+                "NOT AUTHORIZED" in doc.upper() or "not authorize" in doc,
+                "authorization disclaimer missing",
+            )
+        f.check(
+            "ADR-0007 keeps every gate open",
+            "Gates G1\u2013G7 are all OPEN" in adr7 or "G1-G7 are all OPEN" in adr7,
+            "no explicit all-gates-open statement in ADR-0007",
+        )
+        f.check(
+            "ADR-0007 leaves ADR-0005 proposed",
+            "remains PROPOSED" in adr7,
+            "ADR-0007 does not record ADR-0005 as still Proposed",
+        )
+        f.check(
+            "ADR-0007 selects no provider",
+            "does not select Sharadar" in adr7 or "and does not select Sharadar" in adr7,
+            "ADR-0007 does not disclaim provider selection",
+        )
+        f.check(
+            "ADR-0007 keeps live trading hard-disabled",
+            "HARD-DISABLED" in adr7.upper(),
+            "live-trading wording missing from ADR-0007",
+        )
+        f.check(
+            "the deletion runbook declares itself unexecuted",
+            "NOT EXECUTED" in runbook.upper(),
+            "the runbook does not declare itself unexecuted",
+        )
+
+        # -- nothing may read as though the cloud plane is built ------------------
+        cloud_docs = {
+            "ADR-0007": adr7,
+            "runbook": runbook,
+            "infra/README.md": infra_readme,
+            "CLAUDE.md": claude_md,
+            "README.md": readme,
+            "implementation-plan.md": everything[PHASE3 / "implementation-plan.md"],
+        }
+        built: list[str] = []
+        for name, doc in cloud_docs.items():
+            for lineno, line in enumerate(doc.splitlines(), 1):
+                low = line.lower()
+                for claim in PROVISIONED_CLAIMS:
+                    if claim in low and not CLAIM_NEGATION.search(low):
+                        built.append(f"{name}:{lineno}")
+                        break
+        f.check(
+            "no document claims AWS resources exist or that Terraform was applied",
+            not built,
+            ", ".join(built[:6]),
+        )
+
+        # `terraform apply` is the most consequential phrase in this change: it is the one that
+        # spends money and creates resources. Any document that raises it must also refuse it.
+        #
+        # Deliberately a DOCUMENT-level property, not a line-level one. An earlier version
+        # required the refusal on the same line and failed against five perfectly correct
+        # sentences whose refusal was simply the previous line -- "it does not: ... authorize
+        # `terraform apply`". A guard that a correctly-written document cannot satisfy trains
+        # people to weaken the guard. Whitespace is flattened so a refusal split across a line
+        # break still counts.
+        unrefused_apply: list[str] = []
+        refusal = re.compile(
+            r"(?i)(?:not\s+authoriz|does\s+not\s+authoriz|never\s+been\s+applied"
+            r"|requires\s+(?:its\s+own|explicit)|separate\w*[^.]{0,40}authoriz)"
+        )
+        for name, doc in cloud_docs.items():
+            if "terraform apply" not in doc.lower():
+                continue
+            if not refusal.search(re.sub(r"\s+", " ", doc)):
+                unrefused_apply.append(name)
+        f.check(
+            "every document mentioning terraform apply also refuses it",
+            not unrefused_apply,
+            ", ".join(unrefused_apply),
+        )
+
+        laptop: list[str] = []
+        for name, doc in cloud_docs.items():
+            for lineno, line in enumerate(doc.splitlines(), 1):
+                low = line.lower()
+                for claim in LAPTOP_AUTHORITY_CLAIMS:
+                    if claim in low and not CLAIM_NEGATION.search(low):
+                        laptop.append(f"{name}:{lineno}")
+                        break
+        f.check(
+            "no document calls the laptop the authoritative Phase-3 production data store",
+            not laptop,
+            ", ".join(laptop[:6]),
+        )
+
+        for name, doc in (("CLAUDE.md", claude_md), ("README.md", readme)):
+            f.check(
+                f"{name} records the AWS account as not created",
+                re.search(r"AWS account.*NOT CREATED", doc) is not None,
+                "no not-created statement for the AWS account",
+            )
+
+        # -- the Terraform enforces the posture, rather than the prose describing it --
+        missing_infra = [n for n in INFRA_FILES if not (INFRA / n).is_file()]
+        f.check(
+            "the Terraform scaffold has every expected file",
+            not missing_infra,
+            ", ".join(missing_infra),
+        )
+
+        tf_files = sorted(INFRA.glob("*.tf"))
+        tf_text = "\n".join(read(p) for p in tf_files)
+        all_infra = sorted(p for p in INFRA.iterdir() if p.is_file())
+        all_infra_text = "\n".join(read(p) for p in all_infra)
+
+        # A forbidden construct is allowed to be *named* in a comment explaining why it is absent.
+        # Only a real HCL usage counts, so comment lines are stripped before the scan.
+        hcl_only = strip_hcl_comments(tf_text)
+        for token, why in FORBIDDEN_TERRAFORM.items():
+            f.check(
+                f"Terraform declares no {token}",
+                token.lower() not in hcl_only.lower(),
+                why,
+            )
+
+        f.check(
+            "the licensed bucket has versioning disabled",
+            re.search(
+                r'aws_s3_bucket_versioning"\s+"licensed".*?status\s*=\s*"Disabled"',
+                tf_text,
+                re.S,
+            )
+            is not None,
+            "licensed-bucket versioning is not explicitly Disabled",
+        )
+        for flag in (
+            "block_public_acls",
+            "block_public_policy",
+            "ignore_public_acls",
+            "restrict_public_buckets",
+        ):
+            f.check(
+                f"both buckets set {flag} = true",
+                len(re.findall(rf"{flag}\s*=\s*true", tf_text)) == 2,
+                f"expected 2 occurrences, found {len(re.findall(rf'{flag}s*=s*true', tf_text))}",
+            )
+        f.check(
+            "both buckets deny non-TLS requests",
+            len(re.findall(r'variable\s*=\s*"aws:SecureTransport"', tf_text)) == 2,
+            "a bucket is missing its TLS-only policy",
+        )
+        f.check(
+            "both buckets enforce bucket-owner ownership, disabling ACLs",
+            len(re.findall(r'object_ownership\s*=\s*"BucketOwnerEnforced"', tf_text)) == 2,
+            "a bucket still permits ACLs",
+        )
+        f.check(
+            "both buckets encrypt at rest",
+            len(re.findall(r"apply_server_side_encryption_by_default", tf_text)) == 2,
+            "a bucket has no default encryption",
+        )
+        f.check(
+            "the task security group declares no ingress block",
+            re.search(r"resource\s+\"aws_security_group\".*?\n\s*ingress\s*\{", tf_text, re.S)
+            is None,
+            "an inbound rule appeared; ADR-0007 §6 depends on there being none",
+        )
+        f.check(
+            "the licensed bucket aborts incomplete multipart uploads",
+            "abort_incomplete_multipart_upload" in tf_text,
+            "incomplete-upload parts would survive a list-and-delete deletion",
+        )
+        f.check(
+            "the container registry uses immutable tags",
+            'image_tag_mutability = "IMMUTABLE"' in tf_text,
+            "a mutable tag breaks the link between an image and the results it produced",
+        )
+        f.check(
+            "the container registry scans images on push",
+            re.search(r"scan_on_push\s*=\s*true", tf_text) is not None,
+            "image scanning is off",
+        )
+        f.check(
+            "no IAM policy grants a wildcard action",
+            re.search(r'actions\s*=\s*\[\s*"\*"', tf_text) is None and '"*:*"' not in tf_text,
+            "a wildcard action appeared in an IAM policy",
+        )
+
+        # -- destructive authority is separated from routine research -------------
+        #
+        # The licensed bucket has no versioning, no replication and no backup, so a
+        # delete cannot be undone and a re-fetch is not a restore. An earlier revision
+        # gave `s3:DeleteObject` to the role that also runs routine ingestion, arguing
+        # that deletion is a licensing requirement. It is -- but the obligation binds
+        # KalpaMani AS A SYSTEM, not every compute role continuously, and conflating
+        # the two is how standing destructive authority gets justified. The effect was
+        # that a bug in ordinary research code could destroy unrecoverable history.
+        #
+        # These checks parse each policy document separately, because "does the file
+        # mention DeleteObject" cannot distinguish the routine role from the dedicated
+        # deletion role -- and the whole point is which role holds it.
+        # Comments are stripped first. These files explain at length WHY a permission is
+        # absent, naming the very action they do not grant -- so a scan over raw text
+        # reports every deliberate omission as a violation. Only real HCL counts.
+        iam_text = strip_hcl_comments(read(INFRA / "iam.tf"))
+
+        def policy_body(name: str) -> str:
+            """The body of one `data "aws_iam_policy_document" "<name>"` block."""
+            match = re.search(
+                r'data\s+"aws_iam_policy_document"\s+"' + re.escape(name) + r'"\s*\{(.*?)\n\}',
+                iam_text,
+                re.S,
+            )
+            return match.group(1) if match else ""
+
+        routine = policy_body("task")
+        deletion = policy_body("licensed_data_deletion")
+
+        f.check(
+            "the routine research role exists as a policy document",
+            bool(routine),
+            'data "aws_iam_policy_document" "task" not found',
+        )
+        for action in ("s3:DeleteObject", "s3:DeleteObjectVersion"):
+            f.check(
+                f"the routine research role does not grant {action}",
+                f'"{action}"' not in routine,
+                "an irreversible delete on the licensed bucket must not be routine authority",
+            )
+        f.check(
+            "the routine research role still cannot delete control-bucket objects",
+            '"s3:DeleteObject"' not in routine,
+            "manifests, lineage and receipts are governance evidence",
+        )
+        f.check(
+            "the routine research role writes no CloudWatch Logs directly",
+            "logs:PutLogEvents" not in routine and "logs:CreateLogStream" not in routine,
+            "the awslogs driver uses the execution role; direct log writes bypass redaction",
+        )
+
+        f.check(
+            "a dedicated licensed-data deletion role exists",
+            bool(deletion)
+            and re.search(r'resource\s+"aws_iam_role"\s+"licensed_data_deletion"', iam_text)
+            is not None,
+            "no dedicated deletion identity; deletion would fall back to a broader role",
+        )
+        if deletion:
+            for action in ("s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"):
+                f.check(
+                    f"the deletion role grants {action}",
+                    f'"{action}"' in deletion,
+                    "the deletion procedure could not complete",
+                )
+            f.check(
+                "the deletion role can prove the bucket's versioning and replication state",
+                '"s3:GetBucketVersioning"' in deletion
+                and '"s3:GetReplicationConfiguration"' in deletion,
+                "runbook steps 8-9 would be asserted rather than evidenced",
+            )
+            f.check(
+                "the deletion role cannot write objects",
+                '"s3:PutObject"' not in deletion,
+                "a role that destroys must not also be able to write",
+            )
+            f.check(
+                "the deletion role cannot read licensed object contents",
+                '"s3:GetObject"' not in deletion,
+                "deletion does not require reading the data it destroys",
+            )
+            f.check(
+                "the deletion role cannot reach the control bucket",
+                "aws_s3_bucket.control" not in deletion,
+                "the evidence a deletion happened must be outside the reach of the deleter",
+            )
+            f.check(
+                "the deletion role has no provider-secret access",
+                "secretsmanager" not in deletion and "ssm:" not in deletion,
+                "the credential is revoked before deletion begins; this role never needs it",
+            )
+            f.check(
+                "the deletion role is scoped to the licensed bucket only",
+                "aws_s3_bucket.licensed" in deletion,
+                "the deletion role names no licensed-bucket resource",
+            )
+        f.check(
+            "nothing is granted iam:PassRole for the deletion role",
+            "iam:PassRole" not in iam_text,
+            "a PassRole grant makes the deletion role assumable; that is a separate authorization",
+        )
+
+        # The runbook must not over-claim what the deletion role does. A role scoped
+        # tightly enough to be safe is necessarily too narrow to run the whole
+        # procedure: it cannot stop a schedule, revoke a credential, delete a container
+        # image, touch a log group, clear a laptop, or write the receipt to the control
+        # bucket. An earlier revision said "every deletion step runs as the dedicated
+        # deletion role", which contradicted the role's own policy in the same PR.
+        f.check(
+            "the runbook does not claim the deletion role performs every step",
+            not re.search(r"(?i)every (?:deletion )?step (?:below )?runs as", runbook),
+            "the deletion role cannot perform the non-S3 steps; saying so contradicts iam.tf",
+        )
+        f.check(
+            "the runbook assigns the licensed-S3 steps to the deletion role explicitly",
+            "steps 3\u20139" in runbook or "steps 3-9" in runbook,
+            "no explicit step range is assigned to the dedicated deletion role",
+        )
+        f.check(
+            "the runbook names a separate operator path for the surrounding steps",
+            "operator path" in runbook,
+            "no operator/orchestration path is named for the non-S3 steps",
+        )
+
+        # -- wrong-account protection must fail closed ----------------------------
+        #
+        # This is the check with the most history behind it. The variable originally
+        # defaulted to `[]`, which the AWS provider reads as "no restriction" -- so the
+        # guard against building KalpaMani in the wrong AWS account was present in the
+        # file and inactive in practice. That is the same shape of defect ADR-0003
+        # records for broker-side order controls: a safety claim resting on something
+        # that is off unless someone remembers to switch it on.
+        #
+        # Both halves matter. Without the no-default rule, omission silently disables
+        # the check; without the digit rule, a placeholder copied out of the `.example`
+        # would be accepted and would match no account.
+        account_var = re.search(
+            r'variable\s+"allowed_account_ids"\s*\{(.*?)\n\}', read(INFRA / "variables.tf"), re.S
+        )
+        account_body = account_var.group(1) if account_var else ""
+        f.check(
+            "allowed_account_ids has no default, so omitting it fails closed",
+            bool(account_body) and not re.search(r"^\s*default\s*=", account_body, re.M),
+            "a default makes wrong-account protection optional",
+        )
+        f.check(
+            "allowed_account_ids rejects an empty list",
+            "length(var.allowed_account_ids) >= 1" in account_body,
+            "an empty list would disable the provider's account check",
+        )
+        f.check(
+            "allowed_account_ids requires exactly 12 decimal digits per entry",
+            r"^[0-9]{12}$" in account_body,
+            "a placeholder or malformed id would silently disable the check",
+        )
+        f.check(
+            "the example tfvars placeholder cannot pass account-id validation",
+            not re.search(
+                r"^\s*allowed_account_ids\s*=\s*\[\s*\"[0-9]{12}\"",
+                read(INFRA / "terraform.tfvars.example"),
+                re.M,
+            ),
+            "the example carries something shaped like a real account id",
+        )
+
+        f.check(
+            "log retention is bounded",
+            "retention_in_days" in tf_text and "retention_in_days = 0" not in tf_text,
+            "unbounded log retention makes any redaction failure permanent",
+        )
+        f.check(
+            "no secret value is declared in Terraform",
+            re.search(r'resource\s+"aws_secretsmanager_secret_version"', tf_text) is None,
+            "a secret value would be written to state in plaintext",
+        )
+
+        # -- nothing identity-bearing was committed under infra/ ------------------
+        for label, pattern in SECRET_PATTERNS.items():
+            hits: list[str] = []
+            for path in all_infra:
+                for lineno, line in enumerate(read(path).splitlines(), 1):
+                    if pattern.search(line):
+                        hits.append(f"{path.name}:{lineno}")
+            f.check(f"no {label} is committed under infra/", not hits, ", ".join(hits[:6]))
+
+        # Only files, and only committable ones. `.terraform/` is a directory that
+        # `terraform init` legitimately creates locally and `.gitignore` excludes; an
+        # earlier version of this check tested for its ABSENCE ON DISK and therefore
+        # started failing the moment anyone actually ran init. Presence on disk was
+        # never the property worth guarding -- what must be true is that nothing of
+        # this kind can be committed, which the ignore rules below establish.
+        stray = sorted(
+            p.name
+            for p in INFRA.iterdir()
+            if p.is_file()
+            and (
+                p.name.endswith((".tfstate", ".tfplan"))
+                or (p.name.endswith(".tfvars") and p.name != "terraform.tfvars.example")
+            )
+        )
+        f.check(
+            "no Terraform state, plan or real tfvars file sits in the scaffold",
+            not stray,
+            ", ".join(stray),
+        )
+        f.check(
+            "the example tfvars carries placeholders rather than values",
+            "REPLACE-ME" in all_infra_text,
+            "terraform.tfvars.example has no placeholder marker",
+        )
+
+        # -- the dependency lock file is committed; state and caches are not -------
+        #
+        # `.terraform.lock.hcl` is repository metadata, not state: it records which
+        # provider build was actually selected and the checksums of its packages, so a
+        # later `init` resolves to the same provider instead of whatever is newest that
+        # day. Committing it is what makes a supply-chain substitution show up as a
+        # diff. It is the one Terraform-generated file that must be tracked, which is
+        # exactly why it is easy to sweep into a blanket ignore rule by accident.
+        lock = INFRA / ".terraform.lock.hcl"
+        gitignore = read(REPO_ROOT / ".gitignore")
+        ignore_rules = {
+            line.strip() for line in gitignore.splitlines() if not line.strip().startswith("#")
+        }
+
+        f.check(
+            "the provider dependency lock file is committed",
+            lock.is_file(),
+            "run `terraform init -backend=false` to generate .terraform.lock.hcl",
+        )
+        f.check(
+            ".gitignore does not exclude the dependency lock file",
+            not any("terraform.lock.hcl" in rule for rule in ignore_rules),
+            "an ignore rule would keep the lock file out of version control",
+        )
+        for rule in ("**/.terraform/", "*.tfstate", "*.tfvars", "*.tfplan"):
+            f.check(
+                f".gitignore still excludes {rule}",
+                rule in ignore_rules,
+                f"{rule} is no longer ignored",
+            )
+        f.check(
+            ".gitignore keeps the example tfvars committable",
+            "!*.tfvars.example" in ignore_rules,
+            "the placeholder tfvars would be ignored along with real ones",
+        )
+
+        if lock.is_file():
+            lock_text = read(lock)
+            declared = re.findall(r'^provider\s+"([^"]+)"', lock_text, re.M)
+            f.check(
+                "the lock file declares only the expected AWS provider",
+                declared == ["registry.terraform.io/hashicorp/aws"],
+                f"declares {declared}",
+            )
+            m = re.search(r'version\s*=\s*"(\d+)\.', lock_text)
+            f.check(
+                "the locked AWS provider is the major this root targets",
+                m is not None and m.group(1) == "6",
+                f"locked major is {m.group(1) if m else 'absent'}",
+            )
+            f.check(
+                "the lock file carries package checksums",
+                "hashes = [" in lock_text and lock_text.count("zh:") >= 5,
+                "no checksum block; a lock file without hashes pins nothing",
             )
 
     # ---------------------------------------------------------------- verdict
