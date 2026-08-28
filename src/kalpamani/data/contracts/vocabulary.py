@@ -48,17 +48,28 @@ def closed_member(vocabulary: type[VocabularyMember], value: object) -> Vocabula
     value gets through an approval check and then raises ``AttributeError`` in
     the code that would have refused it.
 
-    **No code belonging to ``value`` is executed.** Lookup goes through a table
-    keyed by exact ``str`` data obtained with ``str.__str__``, so an object with
-    an overridden ``__eq__``, ``__hash__`` or ``__str__`` cannot make itself
-    match a member it is not, and a ``str`` subclass is resolved by the bytes it
-    actually holds rather than by what it claims to be. Anything that is not a
-    string at all is refused outright.
+    **No code belonging to ``value`` is executed, and this function never
+    raises.** Lookup goes through a table keyed by exact ``str`` data obtained
+    with ``str.__str__``, so an object with an overridden ``__eq__``, ``__hash__``
+    or ``__str__`` cannot make itself match a member it is not, and a ``str``
+    subclass is resolved by the data it actually holds rather than by what it
+    claims to be. Anything that is not a string is refused outright.
+
+    The ``str.__str__`` call is guarded because ``isinstance`` is not proof: an
+    object can spoof ``__class__`` to satisfy the check and then make the
+    descriptor raise. Not raising matters because callers include an exception
+    constructor, and an exception that fails while being built discards the
+    failure it was reporting.
     """
-    if not isinstance(value, str):
-        return None
+    if type(value) is not str:
+        if not isinstance(value, str):
+            return None
+        try:
+            value = str(str.__str__(value))
+        except Exception:
+            return None
     table = {str.__str__(member): member for member in vocabulary}
-    return table.get(str.__str__(value))
+    return table.get(value)
 
 
 # ---------------------------------------------------------------------------

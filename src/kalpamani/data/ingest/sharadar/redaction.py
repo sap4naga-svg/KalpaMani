@@ -120,11 +120,30 @@ def redact(text: str) -> str:
     return out
 
 
-def safe_dataset_label(label: str | None) -> str | None:
-    """A dataset name if it looks like one, ``<unnamed>`` if it does not, else ``None``."""
+def safe_dataset_label(label: object) -> str | None:
+    """A dataset name if it looks like one, ``<unnamed>`` if it does not, else ``None``.
+
+    Takes an arbitrary object and **never raises**. An earlier revision annotated
+    the parameter ``str | None`` and then trusted the annotation, so an integer, a
+    hostile ``__eq__`` object or a ``str`` subclass with a spoofed ``__class__``
+    would have raised from inside an exception constructor -- replacing the
+    failure being reported with a less informative one.
+
+    A ``str`` subclass is judged on the character data it actually holds, so a
+    lying ``__str__`` cannot smuggle a label past the pattern.
+    """
     if label is None:
         return None
-    return label if _DATASET_LABEL.match(label) else UNNAMED_DATASET
+    if type(label) is str:
+        exact = label
+    elif isinstance(label, str):
+        try:
+            exact = str(str.__str__(label))
+        except Exception:
+            return UNNAMED_DATASET
+    else:
+        return UNNAMED_DATASET
+    return exact if _DATASET_LABEL.match(exact) else UNNAMED_DATASET
 
 
 def classify_http_status(status: int) -> SharadarErrorCode:
@@ -180,7 +199,7 @@ class SharadarRequestError(PointInTimeError):
         *,
         stage: SharadarStage,
         code: SharadarErrorCode,
-        dataset: str | None = None,
+        dataset: object = None,
     ) -> None:
         """Build the error from a stage, a code and an optional dataset label.
 

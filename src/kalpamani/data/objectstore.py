@@ -124,11 +124,18 @@ def exact_str(value: object) -> str | None:
     ``str.__str__`` so an overridden ``__str__`` cannot substitute something else.
     The result is a genuine ``str``, so nothing the caller wrote -- an overridden
     ``__eq__``, ``__hash__`` or ``__str__`` -- travels into the key. Anything that
-    is not a string at all yields ``None``.
+    is not a string yields ``None``, and so does anything that merely claims to be
+    one: ``isinstance`` can be satisfied by a spoofed ``__class__``, and the
+    descriptor then raises rather than returning.
     """
+    if type(value) is str:
+        return value
     if not isinstance(value, str):
         return None
-    return str(str.__str__(value))
+    try:
+        return str(str.__str__(value))
+    except Exception:
+        return None
 
 
 def immutable_payload(payload: object) -> bytes:
