@@ -94,7 +94,8 @@ Nine properties, each with a test behind it:
    differently-shaped bytes, and Bronze identity *is* the bytes), and `lastupdated` (incremental
    sync, which is production ingestion).
 6. **One canonical request order**, by dataset then subject then page offset, independent of input
-   order — which is what makes a resumed run comparable to the run it resumes.
+   order — so two plans holding the same content derive the same acquisition identities and
+   reconcile with the same durable evidence.
 7. **Seven compiled ceilings, lowerable and never raisable.** A limit above its constant is
    refused rather than clamped: clamping would let a plan claim a budget it does not have and then
    behave differently from what it says.
@@ -117,6 +118,32 @@ Nine properties, each with a test behind it:
 | run bytes | 512 MiB | A per-response ceiling bounds one answer; without this, ninety-six maximum-size answers are still authorized. Enforced as bytes are published, not estimated |
 | retry budget | 32 | The vendor publishes no rate limit (`PSR-SHD-109`), and *no documented limit is not an absent limit*. Checked against the **injected client's own attempt policy**, so it bounds what will happen rather than describing an intention |
 
+### One request is one acquisition
+
+The neutral contract defines a retrieval identity as
+``(payload digest, ingestion run id)``. An earlier draft of this slice passed one **execution-level**
+id to every publication, which made that identity mean something it does not. Three defects followed,
+and all three were real:
+
+* byte-identical payloads from **two datasets** collided on the global acquisition claim, so a run
+  halted on a conflict that was an artefact of the identity rather than a fact about the data;
+* byte-identical payloads from **two subjects** collapsed into one acquisition, so the second
+  retrieval left no durable evidence at all;
+* byte-identical payloads on **two pages** did the same.
+
+Each request now derives its own identity, ``<execution>.<24 hex>``, where the digest binds the
+execution id, the provider, the dataset, the subject, the requested range, the response format and
+both page values. Two different requests therefore differ **even when their bytes are identical**,
+and the same canonical request under the same execution derives the same identity every time — which
+is what lets durable evidence be reconciled with the attempt that produced it.
+
+Disclosure safety is a property of the shape rather than a filter: every component is already
+grammar-bound (an enum member, a validated subject, a closed range token, an exact integer), so
+there is no field a credential, a URL, a bucket or a response body could arrive in. The derivation
+takes no credential at all.
+
+**The execution id has no default.** A reusable one made two attempts share evidence.
+
 ### The runtime acts, and reports
 
 **Every dependency is a constructor parameter with no default**: the client, the object store and
@@ -134,9 +161,36 @@ implying otherwise.
 malformed dependency or an unusable clock stops the caller at the point of the mistake, with zero
 provider requests and zero writes.
 
-**Resume is the store's content identity doing the work.** Re-running the same plan republishes
-identical bytes, which the store reports as an idempotent no-op. There is no bookkeeping file this
-module would have to keep honest.
+**One publication writes three objects, and the result says which.** The neutral publisher appends a
+global acquisition claim, then the payload, then the acquisition record. All three dispositions are
+reported separately, because *the payload was already there* and *this acquisition was already
+recorded* are different facts — an earlier draft reported only the payload and called it
+`stored_objects`, which could not tell a first retrieval from a repeat of one whose bytes happened to
+be present. Four states are distinguished: `FULLY_NEW`, `PAYLOAD_REUSED`, `ALREADY_COMPLETE`, and
+`COMPLETED_PRIOR_PARTIAL` — the signature of an earlier publication interrupted between its appends.
+
+**A publication that raises leaves durable state this runtime cannot describe, and it says so.** The
+three writes are separate appends: a failure on the second or third may have committed the first,
+and an ambiguous backend failure **may not prove whether any of them committed**. The result carries
+`publication_state_unknown` and **claims to know nothing more** — in particular, no field here
+claims to identify which objects exist after such a failure.
+
+**There is no resume, and an earlier draft of this ADR wrongly said there was.** It claimed that
+re-running a halted plan resumed it safely through object-store idempotency. That was only ever
+true of a *frozen* clock: a real second execution reads a new ``retrieved_at``, so the acquisition
+record under an already-occupied name differs and is **refused** — correctly, and not as a resume.
+Re-running the same execution id after a halt therefore fails closed on the first already-recorded
+request.
+
+The supported path is stated instead: **a halted execution must be reviewed, and any subsequent
+refetch must use a new explicit execution id.** Identical payload bytes may still deduplicate in the
+payload namespace, but the later retrieval is a **new acquisition with a new retrieval instant** —
+payload reuse is not acquisition reuse. Reusing an execution id with different acquisition metadata
+fails closed rather than being described as a resume.
+
+**Durable cross-process resume is deferred** until a separately governed checkpoint or attestation
+exists. This slice adds no checkpoint file, no CONTROL record, no mutable ledger, no store listing
+and no ungoverned attestation, and would need an ADR of its own to add one.
 
 **Nothing a dependency says reaches a message.** A response body, a URL carrying the key
 (`PSR-SHD-109`), a bucket name, a backend error string and an arbitrary exception have no parameter
@@ -149,6 +203,27 @@ to enter through: every failure is one member of a closed `StrEnum`, and excepti
 `__repr__`, so nothing new is exposed; it makes an existing non-sensitive configuration number
 reachable without reading a private attribute. Without it the retry budget could only be
 *declared* — a bound that is correct in review and unenforced in production.
+
+### The backfill flag is fixed, and the fit is imperfect — a finding, not a decision
+
+An earlier draft took a raw ``is_backfill`` boolean on the public plan. A caller could therefore
+label qualification evidence as a **production backfill** by passing ``True``, turning a metadata
+field into an authorization claim nobody made. The field is removed from the plan, and the bridge
+receives the fixed value :data:`~kalpamani.data.ingest.sharadar.runtime.QUALIFICATION_IS_BACKFILL`
+(``False``). **This authorizes and implements no production backfill**, and no second acquisition
+mode, production mode or backfill route is added.
+
+**The fixed value is not a perfect fit, and pretending otherwise would be the wrong kind of tidy.**
+The neutral contract describes ``is_backfill`` as distinguishing "a vendor backfill from an update".
+A qualification retrieval is neither: it extends no prior state, so it is not an update; and it is
+not an authoritative historical load, so calling it a backfill would overstate what the evidence is.
+``False`` is chosen as the value that **cannot be mistaken for authoritative historical loading**,
+which is the failure that would matter downstream.
+
+**Owner decision required before this metadata is relied on.** A design that fits exactly — a
+per-dataset value, or a third token in the neutral vocabulary — is available and is deliberately
+**not** chosen here, because inventing one would be a change to the neutral contract that this
+correction was not authorized to make.
 
 ### An offline plan-check command
 
@@ -210,6 +285,10 @@ store. **The narrower and still-true statement is that no composition root exist
 no client, no bucket, no runner and no caller outside the runtime's own tests, each verified by a
 static test. That correction is made in `CLAUDE.md` and `README.md` in the same change.
 
+**A finding carried forward.** The ``is_backfill`` fit above is imperfect and is recorded rather
+than smoothed over. Until it is decided, no consumer should read a qualification acquisition
+record's ``is_backfill`` as evidence about the retrieval's nature.
+
 **Not gained — stated exhaustively.** This ADR authorizes **code, tests, documentation and
 synthetic validation only.** It does not authorize, and merging it does not enable:
 
@@ -265,9 +344,19 @@ Enforced by test, not by review:
 | a refused plan issues zero provider and zero store calls | recorded call counts on both |
 | exact bytes and digests preserved, payload never parsed | a payload that was never valid anything |
 | LICENSED only; no CONTROL key | logical-key inspection |
-| idempotent replay; conflicting identity refused | the real in-memory store, not a lenient fake |
+| byte-identical payloads across two datasets complete without conflict | the real in-memory store, not a lenient fake |
+| byte-identical payloads for two subjects create two acquisitions | distinct derived identities asserted |
+| byte-identical payloads on two pages create two acquisitions | distinct derived identities asserted |
+| changing any identity component changes the identity | parametrised over all six components plus the execution |
+| no credential or URL can influence or enter an identity | the derivation takes no credential, and the pre-image has no field one could arrive in |
+| a replay on a **real** clock is refused, not reported as a resume | a stepping clock, five minutes later |
+| a new execution id records a second retrieval, reusing the payload | payload reuse and acquisition recording asserted separately |
+| a failure at each of the three publication writes halts and reports unknown state | fault injected at write 1, 2 and 3 |
+| an interrupted publication completes on a later run as `COMPLETED_PRIOR_PARTIAL` | staged failure, then a clean run |
+| every result field is validated at construction | adversarial constructors: string subclasses, negative counts, malformed digests, wrong profile, wrong classification, list-for-tuple, contradictory states |
+| a result summary that disagrees with its outcomes is refused | every derived count re-checked |
+| an unknown query parameter is refused | allowlist admission, including `api_key` and an invented future name |
 | stop on first failure, partial stated | recorded transport call count and `partial` |
-| deterministic safe resume | a halted run resumed to completion |
 | errors carry no body, URL, key or bucket | leak canaries plus `__cause__ is None` |
 | no outcome is `PUBLIC_PIT`; the runtime never names it | outcome inspection and source scan |
 | `permaticker` is never named or derived from | docstring-stripped scan of both modules |

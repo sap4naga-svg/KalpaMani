@@ -19,7 +19,7 @@ file.**
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from fixtures.sharadar_provider import ManualClock, ScriptedTransport, credential
 from kalpamani.data.ingest.sharadar.client import Pacer, RetryPolicy, SharadarClient
@@ -51,8 +51,10 @@ PAYLOAD_C = b"synthetic-opaque-qualification-payload-0003"
 #: A fixed instant. Nothing here reads a wall clock.
 RUN_INSTANT = datetime(2026, 8, 28, 15, 30, 0, tzinfo=UTC)
 
-RUN_ID = "synthetic-qualification-run-0001"
-OTHER_RUN_ID = "synthetic-qualification-run-0002"
+#: Two explicit execution identities. There is **no default** on the plan, so a
+#: fixture that wants one has to name it -- which is the point.
+EXECUTION_ID = "synthetic-exec-0001"
+OTHER_EXECUTION_ID = "synthetic-exec-0002"
 SCHEMA_VERSION = "synthetic-qualification-schema-v0"
 
 #: Text that must never escape into a runtime error or a run result. Every value
@@ -199,7 +201,7 @@ def snapshot_plan(*tickers: str, **overrides: object) -> QualificationPlan:
         "subjects": subjects(*(tickers or (SUBJECT_A,))),
         "datasets": (DatasetPlan(dataset=SharadarDataset.TICKERS),),
         "limits": QualificationLimits(),
-        "ingestion_run_id": RUN_ID,
+        "execution_id": EXECUTION_ID,
         "source_schema_version": SCHEMA_VERSION,
     }
     fields.update(overrides)
@@ -216,20 +218,75 @@ def three_dataset_plan(*tickers: str, **overrides: object) -> QualificationPlan:
             DatasetPlan(dataset=SharadarDataset.ACTIONS, window=window()),
         ),
         "limits": QualificationLimits(),
-        "ingestion_run_id": RUN_ID,
+        "execution_id": EXECUTION_ID,
         "source_schema_version": SCHEMA_VERSION,
     }
     fields.update(overrides)
     return QualificationPlan(**fields)  # type: ignore[arg-type]
 
 
+class SteppingClock:
+    """A clock that advances by one second on every read.
+
+    What a *real* clock does, and therefore the fixture that makes the absence of
+    a resume visible: two executions of one plan record two different instants, so
+    the second acquisition record differs from the first under an occupied name
+    and is refused.
+    """
+
+    def __init__(self, start: datetime = RUN_INSTANT) -> None:
+        """Begin at ``start``."""
+        self.instant = start
+        self.calls = 0
+
+    def now(self) -> datetime:
+        """The next instant, one second on from the last."""
+        self.calls += 1
+        current = self.instant
+        self.instant = self.instant + timedelta(seconds=1)
+        return current
+
+
+class StagedFailureStore:
+    """The real in-memory store, made to fail on the *nth* publication write.
+
+    A Bronze publication appends three objects -- claim, payload, acquisition
+    record -- so "the store failed" is three different situations with three
+    different amounts of durable residue. Injecting at a chosen write is the only
+    way to test what the runtime says about each.
+    """
+
+    def __init__(self, *, fail_on_write: int, error: BaseException) -> None:
+        """Serve writes normally until ``fail_on_write``, then raise ``error``."""
+        self._store = InMemoryResearchObjectStore()
+        self.fail_on_write = fail_on_write
+        self.error = error
+        self.put_keys: list[str] = []
+
+    def put_if_absent(self, *, key: ObjectKey, payload: bytes) -> PutOutcome:
+        """Delegate, unless this is the write that must fail."""
+        self.put_keys.append(key.logical_key)
+        if len(self.put_keys) == self.fail_on_write:
+            raise self.error
+        return self._store.put_if_absent(key=key, payload=payload)
+
+    def exists(self, *, key: ObjectKey) -> bool:
+        """Delegate."""
+        return self._store.exists(key=key)
+
+    @property
+    def call_count(self) -> int:
+        """How many publications were attempted."""
+        return len(self.put_keys)
+
+
 __all__ = [
+    "EXECUTION_ID",
     "LEAK_CANARIES",
-    "OTHER_RUN_ID",
+    "OTHER_EXECUTION_ID",
     "PAYLOAD_A",
     "PAYLOAD_B",
     "PAYLOAD_C",
-    "RUN_ID",
     "RUN_INSTANT",
     "SCHEMA_VERSION",
     "SUBJECT_A",
@@ -241,6 +298,8 @@ __all__ = [
     "RaisingClock",
     "RecordingStore",
     "RefusingStore",
+    "StagedFailureStore",
+    "SteppingClock",
     "client",
     "snapshot_plan",
     "subjects",

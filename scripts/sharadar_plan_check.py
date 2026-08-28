@@ -24,9 +24,14 @@ neither imports nor invokes it, and nothing here reads its output.
 
 Output is a fixed set of lines: counts, dataset identifiers, the compiled
 ceilings, and ``PLAN OK`` or ``PLAN REFUSED`` with a closed defect code. **No
-subject symbol, no window, no URL, no credential, no bucket and no account
-identifier is ever printed**, so the transcript of a run is safe to paste
-anywhere.
+subject symbol, no window, no execution id, no URL, no credential, no bucket and
+no account identifier is ever printed**, so the transcript of a run is safe to
+paste anywhere.
+
+``--parameter`` is checked against an **allowlist**: the six plan-controlled
+names are admitted and every other is refused, including ``api_key`` and any name
+the vendor has not invented yet. ``PLAN OK`` is therefore never printed for a
+credential-related or unknown parameter.
 """
 
 from __future__ import annotations
@@ -99,11 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--page-limit", type=int, default=500)
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument(
+        "--execution-id",
+        default=None,
+        metavar="ID",
+        help="the explicit qualification execution identity. There is no default.",
+    )
+    parser.add_argument(
         "--parameter",
         action="append",
         default=[],
         metavar="NAME",
-        help="an extra query parameter to test for refusal. Every one is expected to be refused.",
+        help=(
+            "a query parameter to test against the plan allowlist. Only the six "
+            "plan-controlled names are admitted; everything else, including api_key "
+            "and any unknown future name, is refused."
+        ),
     )
     return parser
 
@@ -170,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         plan = QualificationPlan(
             subjects=subjects,
             datasets=datasets,
+            execution_id=parsed.execution_id if parsed.execution_id is not None else "",
             response_format=ResponseFormat.CSV,
             limits=QualificationLimits(),
         )
@@ -192,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"plan.dataset              {dataset_plan.dataset.value}")
     print(f"plan.requests             {plan.request_count}")
     print(f"plan.profile              {plan.profile.value}")
+    print(f"plan.parameters_admitted  {len(parsed.parameter)}")
     print("PLAN OK")
     return 0
 

@@ -3957,6 +3957,182 @@ def main() -> int:
             "the next slice must bring them, under its own authorization",
         )
 
+    # -- correction round 1: identity, reporting, resume, admission -----------
+    if ADR_RUNTIME.is_file():
+        f.check(
+            "ADR-0012 records one acquisition identity per request",
+            "One request is one acquisition" in adr12
+            and "execution id, the provider, the dataset, the subject" in flat12,
+            "an execution-level id shared by every request is not a retrieval identity",
+        )
+        f.check(
+            "ADR-0012 names the three defects a shared identity caused",
+            "collided on the global acquisition claim" in flat12
+            and "collapsed into one acquisition" in flat12,
+            "the correction is only checkable if what it corrected is written down",
+        )
+        f.check(
+            "ADR-0012 states that the execution id has no default",
+            "The execution id has no default" in flat12,
+            "a reusable default made two attempts share evidence",
+        )
+        f.check(
+            "ADR-0012 retracts the resume claim explicitly",
+            "There is no resume" in flat12 and "wrongly said there was" in flat12,
+            "a false capability quietly dropped is a false capability someone still believes",
+        )
+        f.check(
+            "ADR-0012 says what to do after a halt instead",
+            "must use a new explicit execution id" in flat12,
+            "removing a capability without naming the supported path leaves a gap",
+        )
+        f.check(
+            "ADR-0012 defers durable resume rather than improvising one",
+            "Durable cross-process resume is deferred" in flat12 and "no checkpoint file" in flat12,
+            "a checkpoint, a ledger or an attestation would each need their own governance",
+        )
+        f.check(
+            "ADR-0012 distinguishes payload reuse from acquisition reuse",
+            "payload reuse is not acquisition reuse" in flat12.lower(),
+            "conflating them is what made a repeat look like progress",
+        )
+        f.check(
+            "ADR-0012 records that a failed publication leaves unknown durable state",
+            "publication_state_unknown" in adr12
+            and "claims to know nothing more" in flat12
+            and "may not prove whether any of them committed" in flat12,
+            "an append-only publication interrupted mid-way cannot be described exactly",
+        )
+        f.check(
+            "ADR-0012 records the parameter allowlist, not a denylist",
+            "allowlist" in flat12.lower() and "api_key" in adr12,
+            "a denylist admits every name nobody has heard of yet",
+        )
+        f.check(
+            "ADR-0012 records the backfill flag as fixed, with the fit stated honestly",
+            "not a perfect fit" in flat12
+            and "Owner decision required" in flat12
+            and "authorizes and implements no production backfill" in flat12,
+            "a metadata value that does not fit should be reported, not smoothed over",
+        )
+        f.check(
+            "ADR-0012 makes no claim to know which objects exist after a failure",
+            "which objects exist" not in flat12 or "no field here claims" in flat12,
+            "the honest position is that an interrupted publication is not describable",
+        )
+
+    if QUALIFICATION_RUNTIME.is_file() and QUALIFICATION_PLAN.is_file():
+        runtime_source = read(QUALIFICATION_RUNTIME)
+        plan_source = read(QUALIFICATION_PLAN)
+        f.check(
+            "the runtime publishes under a per-request acquisition identity",
+            "ingestion_run_id=identity" in runtime_source,
+            "passing the execution id would restore the defect this round removed",
+        )
+        f.check(
+            "the plan derives an acquisition identity that binds every request component",
+            all(
+                component in plan_source
+                for component in (
+                    'f"execution={execution_id}"',
+                    'f"dataset={request.dataset.value}"',
+                    'f"subject={request.ticker}"',
+                    'f"range={request.requested_range}"',
+                    'f"limit={request.page.limit}"',
+                    'f"skip={request.page.skip}"',
+                )
+            ),
+            "an identity that omits a component cannot separate two requests that differ in it",
+        )
+        f.check(
+            "the plan admits query parameters by allowlist",
+            "PLAN_PARAMETER_ALLOWLIST" in plan_source
+            and "name not in PLAN_PARAMETER_ALLOWLIST" in plan_source,
+            "a denylist admits every name the vendor has not invented yet",
+        )
+        f.check(
+            "the plan carries no caller-controlled backfill flag",
+            "is_backfill" not in plan_source,
+            "a raw boolean would let a caller label evidence as a production backfill",
+        )
+        f.check(
+            "the runtime passes the fixed qualification backfill value",
+            "is_backfill=QUALIFICATION_IS_BACKFILL" in runtime_source,
+            "the value must not be reachable from a plan",
+        )
+        f.check(
+            "the runtime reports all three publication dispositions",
+            all(
+                field in runtime_source
+                for field in ("claim_written", "payload_written", "acquisition_written")
+            ),
+            "payload presence alone does not represent acquisition completion",
+        )
+        f.check(
+            "the runtime no longer reports a payload-only stored count",
+            "stored_objects" not in _executable_python(QUALIFICATION_RUNTIME)
+            and "already_present_objects" not in _executable_python(QUALIFICATION_RUNTIME),
+            "the old names described one of three writes and called it the whole publication",
+        )
+        f.check(
+            "the runtime carries an explicit unknown-durable-state field",
+            "publication_state_unknown" in runtime_source,
+            "an interrupted append-only publication cannot be described exactly",
+        )
+        f.check(
+            "both result structures validate themselves at construction",
+            runtime_source.count("def __post_init__") >= 2,
+            "an annotation is a static claim and stops nothing at run time",
+        )
+        f.check(
+            "the runtime claims no resume",
+            "There is no resume" in runtime_source,
+            "the module docstring is where a reader looks first",
+        )
+        f.check(
+            "the runtime adds no checkpoint, ledger or listing",
+            not any(
+                token in _executable_python(QUALIFICATION_RUNTIME)
+                for token in ("checkpoint", "ledger", "list_objects", "attestation")
+            ),
+            "each would need its own governance, and none is authorized",
+        )
+
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} states that one request is one acquisition",
+            "One request, one acquisition" in body,
+            "the identity model is the correction a later session most needs to see",
+        )
+        f.check(
+            f"{name} records that there is no resume",
+            "No resume" in body and "new explicit execution id" in flat,
+            "a false capability left in a status document is one someone will rely on",
+        )
+        f.check(
+            f"{name} no longer describes rerunning a plan as a safe resume",
+            "Resume is the store's job" not in body
+            and "identical bytes republish as an idempotent no-op" not in flat,
+            "that sentence was true only of a frozen clock",
+        )
+        f.check(
+            f"{name} records the three-write publication reporting",
+            "Three writes, three dispositions" in body,
+            "payload presence alone is not acquisition completion",
+        )
+        f.check(
+            f"{name} records that a failed publication leaves unknown durable state",
+            "publication_state_unknown" in body and "claims to know nothing more" in flat,
+            "the result must not appear to know what an interrupted publication left",
+        )
+
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
     if f.failures:

@@ -31,6 +31,18 @@ sample", and no implicit window -- the vendor defaults ``from`` to one year ago
 and ``to`` to the prior day (`PSR-SHD-121`), so an omitted window silently means
 something narrower than it looks.
 
+**One execution, many acquisitions.** The neutral contract defines a retrieval
+identity as ``(payload digest, ingestion run id)``. An execution-level id shared
+by every request therefore made byte-identical responses from different requests
+collide or collapse -- a conflict invented by the identity rather than found in
+the data. :func:`acquisition_id` derives one identity per canonical request,
+binding the execution, provider, dataset, subject, range, format and both page
+values, so two different requests differ even when their bytes do not.
+
+**The execution id has no default.** A reusable one makes two attempts share
+evidence, and a run nobody named is a run whose evidence cannot be told apart
+from the last one's.
+
 **Point-in-time consequences travel with the plan, not beside it.** Sharadar
 price data is ``PROVIDER_DERIVED`` and usable only under
 ``PROVIDER_REALISTIC_PIT``; Q7 is publicly unresolved and Q8 publicly bounded
@@ -45,11 +57,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
+from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.errors import PointInTimeError
 from kalpamani.data.contracts.vocabulary import InformationSetProfile, closed_member
 from kalpamani.data.ingest.sharadar.client import MAX_ATTEMPTS_CEILING
 from kalpamani.data.ingest.sharadar.datasets import (
     MAX_PAGE_LIMIT,
+    PROVIDER,
+    QUERY_PARAMETER_ALLOWLIST,
     WINDOWED_DATASETS,
     DateWindow,
     Page,
@@ -152,12 +167,21 @@ OUT_OF_PHASE_DATASETS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: Query parameters a plan may never carry. A superset of the request builder's
-#: own refusal list, restated here because a plan is refused *before* a request is
-#: built and the earlier refusal is the one that costs nothing.
-UNSUPPORTED_PLAN_PARAMETERS: Final[frozenset[str]] = frozenset(
-    {"years", "fields", "sort", "lastupdated", "lastupdated.gte", "columns", "order", "qopts"}
-)
+#: The **only** query parameters a plan may carry. Derived from the request
+#: builder's own allowlist rather than restated, minus ``api_key``.
+#:
+#: An **allowlist, not a denylist**, and the difference is the whole point. A
+#: denylist of known-bad names admits everything the vendor has not invented yet:
+#: ``future_vendor_option`` would have passed the earlier version of this check,
+#: reached the request builder, and been refused there -- or not, if the builder's
+#: list also lagged. An allowlist fails closed on a name nobody has heard of,
+#: which is the case that matters.
+#:
+#: ``api_key`` is excluded deliberately. It is a legitimate *request* parameter
+#: and never a *plan* parameter: the credential is injected into the client and
+#: reaches the query string inside the request builder, never through a plan. A
+#: plan that could name it would be a plan that could carry one.
+PLAN_PARAMETER_ALLOWLIST: Final[frozenset[str]] = QUERY_PARAMETER_ALLOWLIST - {"api_key"}
 
 #: What a qualification subject is allowed to look like. Identical in spirit to
 #: the request builder's grammar; restated so a plan is refused at construction
@@ -386,9 +410,31 @@ class QualificationLimits:
                 raise _refuse(QualificationDefect.LIMIT_MALFORMED) from None
 
 
-#: A run identity is a path segment and a metadata field. Held to a grammar here
-#: so a malformed one is refused before it can reach an object key.
+#: A qualification **execution** identity: one human-chosen name for one attempt.
+#:
+#: Shorter than the neutral 64-character ceiling on purpose. Every acquisition
+#: identity derived from it is ``<execution>.<24 hex>`` -- 25 characters of
+#: suffix -- so bounding the execution id at 32 keeps every derived identity
+#: inside the neutral grammar by construction rather than by a length check that
+#: could be forgotten.
+_EXECUTION_ID: Final = re.compile(r"^[a-z0-9][a-z0-9._\-]{0,31}$")
+
+#: A schema-version identity, which is not derived from and may use the full
+#: neutral ceiling.
 _IDENTITY: Final = re.compile(r"^[a-z0-9][a-z0-9._\-]{0,63}$")
+
+#: How many hex characters of the request digest an acquisition identity carries.
+#:
+#: 96 bits. A qualification execution may issue at most :data:`MAX_REQUESTS`
+#: requests, so the chance of a collision is not a number worth writing down; what
+#: matters is that the digest binds every identity component, so two different
+#: requests cannot derive one identity by accident.
+ACQUISITION_DIGEST_CHARACTERS: Final = 24
+
+#: The neutral layer's ceiling on an ``ingestion_run_id``. Restated as a guard,
+#: not as a duplicate: :func:`acquisition_id` asserts against it so a future edit
+#: to either grammar fails here rather than at the object key.
+NEUTRAL_IDENTIFIER_CEILING: Final = 64
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -404,12 +450,11 @@ class QualificationPlan:
 
     subjects: tuple[QualificationSubject, ...]
     datasets: tuple[DatasetPlan, ...]
+    execution_id: str
     response_format: ResponseFormat = ResponseFormat.CSV
     limits: QualificationLimits = field(default_factory=QualificationLimits)
     profile: InformationSetProfile = PERMITTED_PROFILE
-    ingestion_run_id: str = "qualification-run"
     source_schema_version: str = "sharadar-qualification-v0"
-    is_backfill: bool = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing: a stand-in could present requests never validated."""
@@ -428,11 +473,17 @@ class QualificationPlan:
         object.__setattr__(self, "response_format", response_format)
         object.__setattr__(self, "profile", refuse_public_pit(self.profile))
 
-        if type(self.is_backfill) is not bool:
-            raise _refuse(QualificationDefect.PLAN_MALFORMED) from None
-        for identity in (self.ingestion_run_id, self.source_schema_version):
-            if type(identity) is not str or not _IDENTITY.match(identity):
-                raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
+        # `execution_id` has **no default**, deliberately. A reusable one --
+        # "qualification-run" was the earlier value -- makes two attempts share an
+        # acquisition identity, which is the defect this correction exists to
+        # remove. A run nobody named is a run whose evidence cannot be told apart
+        # from the last one's.
+        if type(self.execution_id) is not str or not _EXECUTION_ID.match(self.execution_id):
+            raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
+        if type(self.source_schema_version) is not str or not _IDENTITY.match(
+            self.source_schema_version
+        ):
+            raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
 
         if len(subjects) > self.limits.max_subjects:
             raise _refuse(QualificationDefect.LIMIT_EXCEEDS_CEILING) from None
@@ -528,26 +579,123 @@ class QualificationPlan:
         return tuple(built)
 
 
-def refuse_unsupported_parameters(names: object) -> None:
-    """Refuse any query parameter this slice will not plan.
+def request_identity_preimage(*, execution_id: str, request: SharadarRequest) -> str:
+    """The exact canonical text one acquisition identity is derived from.
 
-    Called by the plan-check command and by the runtime before the first fetch, so
-    a caller assembling parameters by hand meets the same rule the request builder
-    applies -- one step earlier, where the refusal is free.
+    Returned rather than hidden so a test can assert on it, and so a reader can
+    see that **every component is already grammar-bound**: the dataset and format
+    are enum members, the subject matched :data:`_SUBJECT`, the range is either
+    ``SNAPSHOT`` or two ISO dates, and the page values are exact ``int``. There is
+    no field here a credential, a URL, a bucket, an endpoint or a response body
+    could arrive in -- disclosure safety is a property of the shape, not of a
+    filter applied afterwards.
+
+    Newline-separated ``key=value`` lines in a fixed order. A separator that
+    cannot appear in any component means two different requests cannot produce one
+    pre-image by rearranging where a delimiter falls.
+    """
+    return "\n".join(
+        (
+            f"execution={execution_id}",
+            f"provider={PROVIDER}",
+            f"dataset={request.dataset.value}",
+            f"subject={request.ticker}",
+            f"range={request.requested_range}",
+            f"format={request.response_format.value}",
+            f"limit={request.page.limit}",
+            f"skip={request.page.skip}",
+        )
+    )
+
+
+def acquisition_id(*, execution_id: str, request: SharadarRequest) -> str:
+    """The acquisition identity of **one request** within one execution.
+
+    The neutral contract defines a retrieval identity as
+    ``(payload digest, ingestion run id)``. Passing one execution-level id to
+    every publication therefore made every request in an execution claim the same
+    identity, which is wrong in three separate ways:
+
+    * two datasets returning byte-identical payloads collided on the global claim,
+      and the run halted on a conflict that was an artefact of the identity, not
+      of the data;
+    * two subjects returning byte-identical payloads collapsed into **one**
+      acquisition, so the second retrieval left no durable evidence;
+    * two pages returning byte-identical payloads did the same.
+
+    A request-scoped identity fixes all three: the digest below binds the
+    execution, the provider, the dataset, the subject, the requested range, the
+    response format and both page values, so **two different requests derive
+    different identities even when their bytes are identical**, and the same
+    canonical request under the same execution derives the same identity every
+    time.
+
+    The form is ``<execution>.<24 hex>``: the execution stays legible so durable
+    evidence can be reconciled with the attempt that produced it, and the digest
+    makes it unique. Both halves are inside the neutral identifier grammar.
 
     Raises:
-        QualificationPlanError: ``PARAMETER_UNSUPPORTED`` for ``years`` (a
-            table-wide bulk download), ``fields``/``sort``/``columns``/``order``
-            (which make two requests for one range return differently-shaped
-            bytes, and Bronze identity *is* the bytes), and ``lastupdated``
-            (incremental sync, which is production ingestion).
+        QualificationPlanError: ``IDENTITY_MALFORMED`` if the execution id is not
+            a valid one, the request is not an exact
+            :class:`~kalpamani.data.ingest.sharadar.datasets.SharadarRequest`, or
+            the derived value would fall outside the neutral grammar or ceiling.
     """
-    if not isinstance(names, (list, tuple, set, frozenset)):
+    if type(execution_id) is not str or not _EXECUTION_ID.match(execution_id):
+        raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
+    if type(request) is not SharadarRequest:
+        raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
+    digest = sha256_hex(
+        request_identity_preimage(execution_id=execution_id, request=request).encode("utf-8")
+    )
+    derived = f"{execution_id}.{digest[:ACQUISITION_DIGEST_CHARACTERS]}"
+    if len(derived) > NEUTRAL_IDENTIFIER_CEILING or not _IDENTITY.match(derived):
+        # Unreachable while the two grammars above hold. Checked anyway, because
+        # the thing it guards is a value that would otherwise be refused deep
+        # inside the neutral publisher with a less specific reason.
+        raise _refuse(QualificationDefect.IDENTITY_MALFORMED) from None
+    return derived
+
+
+def refuse_unsupported_parameters(names: object) -> None:
+    """Admit only :data:`PLAN_PARAMETER_ALLOWLIST`, by exact spelling.
+
+    **An allowlist admission check, not a denylist.** The earlier version named
+    the parameters it knew to be dangerous and admitted everything else, so a name
+    the vendor adds tomorrow -- or a name a caller invents -- passed without
+    review. This admits six names and refuses every other, which is the direction
+    that fails closed.
+
+    Exact spelling, so ``Years``, ``YEARS`` and ``ticker `` are all refused: a
+    case-folding comparison here would decide that two spellings mean one thing,
+    which is a judgement a boundary should not make on a caller's behalf.
+
+    ``api_key`` is refused like any other name. It is a request parameter, not a
+    plan parameter, and a plan that could name it would be a plan that could carry
+    a credential.
+
+    Raises:
+        QualificationPlanError: ``PARAMETER_UNSUPPORTED`` for any name outside the
+            allowlist -- which includes ``years`` (a table-wide bulk download),
+            ``fields``/``sort``/``columns``/``order`` (which make two requests for
+            one range return differently-shaped bytes, and Bronze identity *is*
+            the bytes), ``lastupdated`` (incremental sync, which is production
+            ingestion), ``api_key``, and every name nobody has heard of yet.
+            ``PLAN_MALFORMED`` for a collection or element that is not exactly
+            what it must be.
+    """
+    # `isinstance` on the container, exact `type` on each element. A container
+    # subclass can only change *what it yields*, and every yielded value is then
+    # checked exactly -- so the loose check outside costs nothing, while a loose
+    # check inside would be the bypass.
+    if not isinstance(names, list | tuple | set | frozenset):
         raise _refuse(QualificationDefect.PLAN_MALFORMED) from None
     for name in names:
+        # Exact `str`: a subclass can override `__eq__` and `__hash__`, so a
+        # membership test against the allowlist could be made to answer True for
+        # a value that is not in it.
         if type(name) is not str:
             raise _refuse(QualificationDefect.PLAN_MALFORMED) from None
-        if name.lower() in UNSUPPORTED_PLAN_PARAMETERS:
+        if name not in PLAN_PARAMETER_ALLOWLIST:
             raise _refuse(QualificationDefect.PARAMETER_UNSUPPORTED) from None
 
 
@@ -573,6 +721,7 @@ def refuse_retry_budget(*, request_count: int, max_attempts: int, budget: int) -
 
 
 __all__ = [
+    "ACQUISITION_DIGEST_CHARACTERS",
     "CANONICAL_DATASET_ORDER",
     "MAX_DATASETS",
     "MAX_PAGES_PER_REQUEST",
@@ -581,17 +730,20 @@ __all__ = [
     "MAX_RETRY_BUDGET",
     "MAX_RUN_BYTES",
     "MAX_SUBJECTS",
+    "NEUTRAL_IDENTIFIER_CEILING",
     "OUT_OF_PHASE_DATASETS",
     "PERMITTED_PROFILE",
+    "PLAN_PARAMETER_ALLOWLIST",
     "REFUSED_PROFILE",
-    "UNSUPPORTED_PLAN_PARAMETERS",
     "DatasetPlan",
     "QualificationDefect",
     "QualificationLimits",
     "QualificationPlan",
     "QualificationPlanError",
     "QualificationSubject",
+    "acquisition_id",
     "refuse_public_pit",
     "refuse_retry_budget",
     "refuse_unsupported_parameters",
+    "request_identity_preimage",
 ]

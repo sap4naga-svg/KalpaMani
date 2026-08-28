@@ -278,7 +278,10 @@ def _importable_scripts(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_the_command_validates_a_plan_and_reports_a_fixed_schema(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    code, out = _run(["--subject", "ZZQA", "--dataset", "tickers"], capsys)
+    code, out = _run(
+        ["--subject", "ZZQA", "--dataset", "tickers", "--execution-id", "synthetic-exec-0001"],
+        capsys,
+    )
     assert code == 0
     assert "PLAN OK" in out
     assert "mode                      PLAN VALIDATION ONLY" in out
@@ -288,7 +291,10 @@ def test_the_command_validates_a_plan_and_reports_a_fixed_schema(
 
 def test_the_command_prints_no_subject_symbol(capsys: pytest.CaptureFixture[str]) -> None:
     """Counts and dataset names only, so a transcript is safe to paste anywhere."""
-    _, out = _run(["--subject", "ZZQA", "--dataset", "tickers"], capsys)
+    _, out = _run(
+        ["--subject", "ZZQA", "--dataset", "tickers", "--execution-id", "synthetic-exec-0001"],
+        capsys,
+    )
     assert "ZZQA" not in out
 
 
@@ -399,6 +405,8 @@ def test_the_command_opens_no_socket(
             "2024-01-02",
             "--window-end",
             "2024-03-28",
+            "--execution-id",
+            "synthetic-exec-0001",
         ],
         capsys,
     )
@@ -407,7 +415,10 @@ def test_the_command_opens_no_socket(
 
 def test_the_command_prints_the_compiled_ceilings(capsys: pytest.CaptureFixture[str]) -> None:
     """A run's bounds should be readable without opening the source."""
-    _, out = _run(["--subject", "ZZQA", "--dataset", "tickers"], capsys)
+    _, out = _run(
+        ["--subject", "ZZQA", "--dataset", "tickers", "--execution-id", "synthetic-exec-0001"],
+        capsys,
+    )
     for line in (
         "ceiling.subjects",
         "ceiling.requests",
@@ -418,7 +429,10 @@ def test_the_command_prints_the_compiled_ceilings(capsys: pytest.CaptureFixture[
 
 
 def test_the_command_declares_zero_activity(capsys: pytest.CaptureFixture[str]) -> None:
-    _, out = _run(["--subject", "ZZQA", "--dataset", "tickers"], capsys)
+    _, out = _run(
+        ["--subject", "ZZQA", "--dataset", "tickers", "--execution-id", "synthetic-exec-0001"],
+        capsys,
+    )
     for line in (
         "network.sockets           0",
         "network.provider_requests 0",

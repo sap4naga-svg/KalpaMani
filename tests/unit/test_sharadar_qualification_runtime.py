@@ -17,15 +17,16 @@ response appears here or is reachable from here.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from fixtures.sharadar_provider import ok
 from fixtures.sharadar_runtime import (
+    EXECUTION_ID,
     LEAK_CANARIES,
-    OTHER_RUN_ID,
+    OTHER_EXECUTION_ID,
     PAYLOAD_A,
     PAYLOAD_B,
     PAYLOAD_C,
@@ -38,6 +39,8 @@ from fixtures.sharadar_runtime import (
     RaisingClock,
     RecordingStore,
     RefusingStore,
+    StagedFailureStore,
+    SteppingClock,
     client,
     snapshot_plan,
     three_dataset_plan,
@@ -46,6 +49,7 @@ from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.errors import (
     ObjectAlreadyExistsError,
     ObjectStoreBackendError,
+    ObjectStoreError,
 )
 from kalpamani.data.contracts.vocabulary import (
     DataClassification,
@@ -56,12 +60,15 @@ from kalpamani.data.contracts.vocabulary import (
 from kalpamani.data.ingest.sharadar.datasets import SharadarDataset
 from kalpamani.data.ingest.sharadar.qualification import (
     PERMITTED_PROFILE,
+    DatasetPlan,
     QualificationDefect,
     QualificationLimits,
     QualificationPlanError,
+    acquisition_id,
 )
 from kalpamani.data.ingest.sharadar.runtime import (
-    PublicationDisposition,
+    QUALIFICATION_IS_BACKFILL,
+    AcquisitionDisposition,
     QualificationFailure,
     QualificationOutcome,
     QualificationRunResult,
@@ -184,11 +191,20 @@ def test_a_complete_run_publishes_every_planned_request() -> None:
     assert result.failure is None
     assert result.partial is False
     assert result.planned_requests == result.completed_requests == 3
-    assert result.stored_objects == 3
-    assert result.already_present_objects == 0
+    assert result.acquisitions_recorded == 3
+    assert result.payloads_reused == 0
+    assert result.already_complete == 0
+    assert result.publication_state_unknown is False
     assert transport.call_count == 3
     # Three publications, each writing a claim, a payload and a record.
     assert store.call_count == 9
+    for outcome in result.outcomes:
+        assert outcome.disposition is AcquisitionDisposition.FULLY_NEW
+        assert (outcome.claim_written, outcome.payload_written, outcome.acquisition_written) == (
+            True,
+            True,
+            True,
+        )
 
 
 def test_requests_are_issued_in_the_plans_canonical_order() -> None:
@@ -273,18 +289,23 @@ def test_a_non_utc_clock_reading_is_normalised_rather_than_refused() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_an_identical_replay_is_idempotent() -> None:
-    """A resumed run republishes identical bytes and stores nothing new."""
+def test_an_exact_replay_on_a_frozen_clock_is_already_complete() -> None:
+    """A *frozen* clock is the only way a second execution can look complete.
+
+    It is not what a real clock does, which is why this test is named for the
+    fixture rather than for a resume: see
+    ``test_a_replay_on_a_real_clock_is_refused_and_is_not_a_resume``.
+    """
     store = RecordingStore()
     first, _, _ = runtime([PAYLOAD_A], store=store)
-    assert first.execute(snapshot_plan(SUBJECT_A)).stored_objects == 1
+    assert first.execute(snapshot_plan(SUBJECT_A)).acquisitions_recorded == 1
 
     second, _, _ = runtime([PAYLOAD_A], store=store)
     result = second.execute(snapshot_plan(SUBJECT_A))
     assert result.outcome is QualificationOutcome.COMPLETED
-    assert result.stored_objects == 0
-    assert result.already_present_objects == 1
-    assert result.outcomes[0].disposition is PublicationDisposition.ALREADY_PRESENT
+    assert result.acquisitions_recorded == 0
+    assert result.already_complete == 1
+    assert result.outcomes[0].disposition is AcquisitionDisposition.ALREADY_COMPLETE
 
 
 def test_a_clock_that_breaks_mid_run_halts_and_keeps_the_partial_record() -> None:
@@ -315,25 +336,55 @@ def test_a_clock_that_breaks_mid_run_halts_and_keeps_the_partial_record() -> Non
     assert result.completed_requests == 1
 
 
-def test_resume_after_a_partial_run_completes_the_remainder() -> None:
-    """The store's content identity does the work; no bookkeeping file is kept."""
+def test_a_replay_on_a_real_clock_is_refused_and_is_not_a_resume() -> None:
+    """**The claim this test exists to kill.**
+
+    An earlier revision said re-running a halted plan resumed it safely through
+    object-store idempotency. That was only ever true of a *frozen* clock. A real
+    second execution reads a new instant, so the acquisition record differs from
+    the one already stored under the same name -- and the store refuses it, which
+    is correct and is not a resume.
+
+    The consequence, stated rather than discovered later: a halted execution must
+    be reviewed, and any refetch must use a **new explicit execution id**.
+    """
     store = RecordingStore()
-    from fixtures.sharadar_provider import failing
+    first, _, _ = runtime([PAYLOAD_A], store=store, clock=SteppingClock())
+    assert first.execute(snapshot_plan(SUBJECT_A)).outcome is QualificationOutcome.COMPLETED
 
-    built, _ = client([ok(PAYLOAD_A), failing(500)])
-    partial = QualificationRuntime(client=built, store=store, clock=FixedClock())
-    first = partial.execute(three_dataset_plan(SUBJECT_A))
-    assert first.outcome is QualificationOutcome.HALTED
-    assert first.partial is True
-    assert first.completed_requests == 1
+    # Five minutes later, which is what a second execution actually looks like.
+    later = SteppingClock(start=RUN_INSTANT + timedelta(minutes=5))
+    second, _, _ = runtime([PAYLOAD_A], store=store, clock=later)
+    result = second.execute(snapshot_plan(SUBJECT_A))
 
-    resumed, _, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C], store=store)
-    second = resumed.execute(three_dataset_plan(SUBJECT_A))
-    assert second.outcome is QualificationOutcome.COMPLETED
-    assert second.completed_requests == 3
-    # The first object was already there; the other two are new.
-    assert second.already_present_objects == 1
-    assert second.stored_objects == 2
+    assert result.outcome is QualificationOutcome.HALTED
+    assert result.failure is QualificationFailure.CONTENT_CONFLICT
+    assert result.partial is True
+    assert result.publication_state_unknown is True
+    assert result.acquisitions_recorded == 0
+
+
+def test_a_new_execution_id_records_a_second_retrieval_of_the_same_bytes() -> None:
+    """The supported way forward after a halt: a new execution, a new identity.
+
+    The payload deduplicates -- identical bytes are identical bytes -- and the
+    acquisition is new, which is exactly the distinction between payload identity
+    and acquisition identity.
+    """
+    store = RecordingStore()
+    first, _, _ = runtime([PAYLOAD_A], store=store, clock=SteppingClock())
+    first.execute(snapshot_plan(SUBJECT_A))
+
+    later = SteppingClock(start=RUN_INSTANT + timedelta(minutes=5))
+    second, _, _ = runtime([PAYLOAD_A], store=store, clock=later)
+    result = second.execute(snapshot_plan(SUBJECT_A, execution_id=OTHER_EXECUTION_ID))
+
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert result.acquisitions_recorded == 1
+    assert result.payloads_reused == 1
+    assert result.outcomes[0].disposition is AcquisitionDisposition.PAYLOAD_REUSED
+    assert result.outcomes[0].payload_written is False
+    assert result.outcomes[0].acquisition_written is True
 
 
 def test_different_bytes_are_a_different_object_not_a_collision() -> None:
@@ -349,39 +400,82 @@ def test_different_bytes_are_a_different_object_not_a_collision() -> None:
     first.execute(snapshot_plan(SUBJECT_A))
 
     second, _, _ = runtime([PAYLOAD_B], store=store)
-    result = second.execute(snapshot_plan(SUBJECT_A, ingestion_run_id=OTHER_RUN_ID))
+    result = second.execute(snapshot_plan(SUBJECT_A, execution_id=OTHER_EXECUTION_ID))
     assert result.outcome is QualificationOutcome.COMPLETED
     assert result.outcomes[0].content_sha256 == sha256_hex(PAYLOAD_B)
 
 
-def test_one_run_id_cannot_claim_one_digest_for_two_datasets() -> None:
-    """The real collision, and the runtime meets it in an ordinary run.
+# ---------------------------------------------------------------------------
+# Identical bytes are three different acquisitions
+# ---------------------------------------------------------------------------
 
-    ``(digest, run id)`` is a **global** acquisition identity that binds the
-    provider and the dataset. If two datasets in one run return byte-identical
-    payloads, the second claim contradicts the first and is refused -- which is
-    exactly the guarantee that stops two providers claiming one retrieval.
 
-    Reported as ``CONTENT_CONFLICT`` and never overwritten.
-    """
+def test_identical_bytes_from_two_datasets_complete_without_conflict() -> None:
+    """Previously a halt. Two datasets returning the same bytes is an ordinary
+    thing for a vendor to do, and it was the *identity* that collided, not the
+    data."""
     engine, _store, _ = runtime([PAYLOAD_A, PAYLOAD_A, PAYLOAD_A])
     result = engine.execute(three_dataset_plan(SUBJECT_A))
 
-    assert result.outcome is QualificationOutcome.HALTED
-    assert result.failure is QualificationFailure.CONTENT_CONFLICT
-    assert result.partial is True
-    assert result.completed_requests == 1, "the first dataset published, the second was refused"
-
-
-def test_a_second_run_id_records_a_second_acquisition_of_the_same_bytes() -> None:
-    store = RecordingStore()
-    first, _, _ = runtime([PAYLOAD_A], store=store)
-    first.execute(snapshot_plan(SUBJECT_A))
-
-    second, _, _ = runtime([PAYLOAD_A], store=store)
-    result = second.execute(snapshot_plan(SUBJECT_A, ingestion_run_id=OTHER_RUN_ID))
     assert result.outcome is QualificationOutcome.COMPLETED
-    assert result.outcomes[0].disposition is PublicationDisposition.ALREADY_PRESENT
+    assert result.completed_requests == 3
+    assert result.acquisitions_recorded == 3
+    assert len({o.acquisition_id for o in result.outcomes}) == 3
+    assert len({o.content_sha256 for o in result.outcomes}) == 1
+    # Payload *storage* is scoped per provider and dataset, so three datasets
+    # holding one digest are three payload objects, not one reused. Payload reuse
+    # is a within-dataset property, tested next.
+    assert result.payloads_reused == 0
+
+
+def test_identical_bytes_for_two_subjects_create_two_acquisitions() -> None:
+    """Previously a collapse: the second retrieval left no durable evidence."""
+    engine, _store, _ = runtime([PAYLOAD_A, PAYLOAD_A])
+    result = engine.execute(snapshot_plan(SUBJECT_A, SUBJECT_B))
+
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert result.acquisitions_recorded == 2
+    assert len({o.acquisition_id for o in result.outcomes}) == 2
+    assert {o.subject for o in result.outcomes} == {SUBJECT_A, SUBJECT_B}
+    # One dataset, one digest, so the second publication reuses the payload -- and
+    # still records its own acquisition, which is the whole distinction.
+    assert result.payloads_reused == 1
+    assert result.outcomes[1].disposition is AcquisitionDisposition.PAYLOAD_REUSED
+    assert result.outcomes[1].acquisition_written is True
+
+
+def test_identical_bytes_on_two_pages_create_two_acquisitions() -> None:
+    engine, _store, _ = runtime([PAYLOAD_A, PAYLOAD_A])
+    plan = snapshot_plan(
+        SUBJECT_A,
+        datasets=(DatasetPlan(dataset=SharadarDataset.TICKERS, max_pages=2),),
+    )
+    result = engine.execute(plan)
+
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert result.acquisitions_recorded == 2
+    assert [o.page_skip for o in result.outcomes] == [0, 500]
+    assert len({o.acquisition_id for o in result.outcomes}) == 2
+    assert result.payloads_reused == 1
+
+
+def test_every_outcome_carries_its_acquisition_identity() -> None:
+    """So a result can be reconciled with durable Bronze evidence."""
+    engine, _store, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C])
+    result = engine.execute(three_dataset_plan(SUBJECT_A))
+    for outcome, request in zip(
+        result.outcomes, three_dataset_plan(SUBJECT_A).requests(), strict=True
+    ):
+        assert outcome.acquisition_id == acquisition_id(execution_id=EXECUTION_ID, request=request)
+
+
+def test_two_executions_of_one_plan_derive_different_identities() -> None:
+    """Which is why a refetch after a halt uses a new execution id."""
+    first, _, _ = runtime([PAYLOAD_A])
+    second, _, _ = runtime([PAYLOAD_A])
+    a = first.execute(snapshot_plan(SUBJECT_A)).outcomes[0].acquisition_id
+    b = second.execute(snapshot_plan(SUBJECT_A, execution_id=OTHER_EXECUTION_ID))
+    assert a != b.outcomes[0].acquisition_id
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +507,10 @@ def test_a_partial_run_states_that_it_is_partial_rather_than_implying_a_rollback
     engine = QualificationRuntime(client=built, store=RecordingStore(), clock=FixedClock())
     result = engine.execute(three_dataset_plan(SUBJECT_A))
     assert result.partial is True
-    assert result.stored_objects == 1
+    assert result.acquisitions_recorded == 1
     assert len(result.outcomes) == 1
     assert result.total_bytes == len(PAYLOAD_A)
+    assert result.publication_state_unknown is False, "the fetch failed, not a publication"
 
 
 def test_a_storage_refusal_halts_the_run() -> None:
@@ -482,6 +577,7 @@ def test_the_run_byte_ceiling_is_checked_before_publishing_not_after() -> None:
     assert result.failure is QualificationFailure.RUN_BYTE_CEILING_EXCEEDED
     assert result.completed_requests == 1
     assert result.total_bytes == len(PAYLOAD_A)
+    assert result.publication_state_unknown is False, "no publication was attempted"
     assert store.call_count == 3, "only the first publication's three writes"
 
 
@@ -517,6 +613,7 @@ def test_a_run_result_carries_no_payload_and_no_error_text() -> None:
 
     outcome_fields = {field.name for field in fields(RequestOutcome)}
     assert "payload" not in outcome_fields and "body" not in outcome_fields
+    assert {"claim_written", "payload_written", "acquisition_written"} <= outcome_fields
     result_fields = {field.name for field in fields(QualificationRunResult)}
     assert not result_fields & {"payload", "body", "message", "error", "url", "bucket"}
 
@@ -537,10 +634,98 @@ def test_result_types_refuse_subclassing(cls: type) -> None:
         type("Sneaky", (cls,), {})
 
 
+# ---------------------------------------------------------------------------
+# A publication writes three objects, and a failure at any of them is honest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("write", [1, 2, 3], ids=["claim", "payload", "acquisition record"])
+def test_a_failure_at_any_publication_write_halts_and_reports_unknown_state(
+    write: int,
+) -> None:
+    """A Bronze publication appends three objects. A failure at the second or the
+    third may have committed the first, and an ambiguous backend failure may not
+    prove whether *any* of them committed -- so the result says the durable state
+    is unknown rather than claiming to know what exists."""
+    store = StagedFailureStore(
+        fail_on_write=write,
+        error=ObjectStoreBackendError(
+            operation=ObjectStoreOperation.PUT, failure=ObjectStoreFailure.TRANSIENT
+        ),
+    )
+    engine, _, transport = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C], store=store)
+    result = engine.execute(three_dataset_plan(SUBJECT_A))
+
+    assert result.outcome is QualificationOutcome.HALTED
+    assert result.failure is QualificationFailure.STORAGE_REFUSED
+    assert result.partial is True
+    assert result.publication_state_unknown is True
+    assert result.completed_requests == 0, "the interrupted request is not reported complete"
+    assert result.acquisitions_recorded == 0
+    assert transport.call_count == 1, "no later request may be fetched"
+    assert store.call_count == write, "the run stops at the failing write"
+
+
+@pytest.mark.parametrize("write", [1, 2, 3], ids=["claim", "payload", "acquisition record"])
+def test_a_publication_failure_discloses_no_backend_message(write: int) -> None:
+    class LeakyStoreError(ObjectStoreError):
+        pass
+
+    store = StagedFailureStore(
+        fail_on_write=write,
+        error=LeakyStoreError(
+            "api_key=synthetic-fake-not-a-real-sharadar-key-0001 "
+            "https://api.sharadar.com bucket synthetic-fake-not-a-real-bucket"
+        ),
+    )
+    engine, _, _ = runtime([PAYLOAD_A, PAYLOAD_B, PAYLOAD_C], store=store)
+    result = engine.execute(three_dataset_plan(SUBJECT_A))
+    rendered = repr(result)
+    for canary in LEAK_CANARIES:
+        assert canary not in rendered
+
+
+def test_a_second_run_after_an_interrupted_publication_completes_the_remainder() -> None:
+    """The `COMPLETED_PRIOR_PARTIAL` case, which only an interrupted publication
+    can produce: some objects existed, some were written, and the record is
+    complete now."""
+    store = StagedFailureStore(
+        fail_on_write=2,
+        error=ObjectStoreBackendError(
+            operation=ObjectStoreOperation.PUT, failure=ObjectStoreFailure.TRANSIENT
+        ),
+    )
+    engine, _, _ = runtime([PAYLOAD_A], store=store)
+    interrupted = engine.execute(snapshot_plan(SUBJECT_A))
+    assert interrupted.publication_state_unknown is True
+    # The claim committed; the payload and the record did not.
+    assert store.call_count == 2
+
+    store.fail_on_write = 0  # nothing fails from here on
+    resumed, _, _ = runtime([PAYLOAD_A], store=store)
+    result = resumed.execute(snapshot_plan(SUBJECT_A))
+
+    assert result.outcome is QualificationOutcome.COMPLETED
+    assert result.outcomes[0].disposition is AcquisitionDisposition.COMPLETED_PRIOR_PARTIAL
+    assert result.outcomes[0].claim_written is False
+    assert result.outcomes[0].payload_written is True
+    assert result.outcomes[0].acquisition_written is True
+
+
+def test_the_backfill_flag_is_fixed_and_not_a_callers_choice() -> None:
+    """A raw boolean on the plan would have let a caller label qualification
+    evidence as a production backfill."""
+    assert QUALIFICATION_IS_BACKFILL is False
+
+
 def test_a_refused_result_reports_zero_of_everything() -> None:
     result = refused_result(4)
     assert result.outcome is QualificationOutcome.REFUSED
-    assert (result.completed_requests, result.stored_objects, result.total_bytes) == (0, 0, 0)
+    assert (result.completed_requests, result.acquisitions_recorded, result.total_bytes) == (
+        0,
+        0,
+        0,
+    )
     assert result.outcomes == ()
     assert result.partial is False
     assert result.planned_requests == 4
@@ -669,14 +854,12 @@ def test_a_full_run_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_two_subjects_across_three_datasets_stay_within_the_ceiling() -> None:
-    """Six distinct payloads, because six identical ones would collide on the
-    global acquisition claim -- which is a different property, tested above."""
     distinct = [b"synthetic-opaque-qualification-payload-%02d" % index for index in range(6)]
     engine, _, transport = runtime(distinct)
     result = engine.execute(three_dataset_plan(SUBJECT_A, SUBJECT_B))
     assert result.planned_requests == 6
     assert transport.call_count == 6
-    assert result.stored_objects == 6
+    assert result.acquisitions_recorded == 6
     assert result.outcome is QualificationOutcome.COMPLETED
 
 

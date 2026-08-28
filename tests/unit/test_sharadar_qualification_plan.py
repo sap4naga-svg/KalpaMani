@@ -20,7 +20,13 @@ from typing import Any
 
 import pytest
 
-from fixtures.sharadar_runtime import SUBJECT_A, SUBJECT_B, subjects, window
+from fixtures.sharadar_runtime import (
+    EXECUTION_ID,
+    SUBJECT_A,
+    SUBJECT_B,
+    subjects,
+    window,
+)
 from kalpamani.data.contracts.vocabulary import InformationSetProfile
 from kalpamani.data.ingest.sharadar.datasets import (
     MAX_PAGE_LIMIT,
@@ -38,14 +44,15 @@ from kalpamani.data.ingest.sharadar.qualification import (
     MAX_SUBJECTS,
     OUT_OF_PHASE_DATASETS,
     PERMITTED_PROFILE,
+    PLAN_PARAMETER_ALLOWLIST,
     REFUSED_PROFILE,
-    UNSUPPORTED_PLAN_PARAMETERS,
     DatasetPlan,
     QualificationDefect,
     QualificationLimits,
     QualificationPlan,
     QualificationPlanError,
     QualificationSubject,
+    acquisition_id,
     refuse_public_pit,
     refuse_retry_budget,
     refuse_unsupported_parameters,
@@ -58,6 +65,7 @@ def snapshot(**overrides: Any) -> QualificationPlan:
     fields: dict[str, Any] = {
         "subjects": subjects(SUBJECT_A),
         "datasets": (DatasetPlan(dataset=SharadarDataset.TICKERS),),
+        "execution_id": EXECUTION_ID,
     }
     fields.update(overrides)
     return QualificationPlan(**fields)
@@ -322,26 +330,72 @@ def test_the_request_ceiling_is_the_product_of_the_other_three() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", sorted(UNSUPPORTED_PLAN_PARAMETERS))
-def test_every_unsupported_parameter_is_refused(name: str) -> None:
+#: Names outside the allowlist. The last three matter most: a denylist would have
+#: admitted every one of them.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "years",
+        "fields",
+        "sort",
+        "columns",
+        "order",
+        "lastupdated",
+        "lastupdated.gte",
+        "qopts",
+        "api_key",
+        "future_vendor_option",
+        "anything_at_all",
+        "",
+    ],
+)
+def test_every_name_outside_the_allowlist_is_refused(name: str) -> None:
     with pytest.raises(QualificationPlanError) as caught:
         refuse_unsupported_parameters((name,))
     assert caught.value.defect is QualificationDefect.PARAMETER_UNSUPPORTED
 
 
-def test_unsupported_parameters_are_refused_case_insensitively() -> None:
+def test_an_unknown_future_name_is_refused_which_a_denylist_would_have_admitted() -> None:
+    """The whole reason this is an allowlist."""
+    assert "future_vendor_option" not in PLAN_PARAMETER_ALLOWLIST
     with pytest.raises(QualificationPlanError):
-        refuse_unsupported_parameters(("YEARS",))
+        refuse_unsupported_parameters(["future_vendor_option"])
 
 
-def test_years_is_refused_because_it_is_a_table_wide_bulk_download() -> None:
-    assert "years" in UNSUPPORTED_PLAN_PARAMETERS
+def test_the_credential_parameter_is_never_a_plan_parameter() -> None:
+    """`api_key` is a request parameter injected into the client. A plan that
+    could name it would be a plan that could carry a credential."""
+    assert "api_key" not in PLAN_PARAMETER_ALLOWLIST
     with pytest.raises(QualificationPlanError):
-        refuse_unsupported_parameters(["years"])
+        refuse_unsupported_parameters(("api_key",))
 
 
-def test_a_supported_parameter_name_is_not_refused() -> None:
-    refuse_unsupported_parameters(("ticker", "from", "to", "limit", "skip"))
+@pytest.mark.parametrize("name", ["YEARS", "Ticker", "TICKER", "From", "LIMIT", "ticker "])
+def test_admission_is_by_exact_spelling(name: str) -> None:
+    """Case folding here would decide two spellings mean one thing, which is a
+    judgement a boundary should not make on a caller's behalf."""
+    with pytest.raises(QualificationPlanError):
+        refuse_unsupported_parameters((name,))
+
+
+def test_the_six_plan_controlled_names_are_admitted() -> None:
+    refuse_unsupported_parameters(("format", "ticker", "from", "to", "limit", "skip"))
+    assert PLAN_PARAMETER_ALLOWLIST == {"format", "ticker", "from", "to", "limit", "skip"}
+
+
+def test_a_string_subclass_parameter_is_refused() -> None:
+    """A subclass can override `__eq__` and `__hash__`, so a membership test could
+    be made to answer True for a value that is not in the allowlist."""
+
+    class Sneaky(str):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        __hash__ = str.__hash__
+
+    with pytest.raises(QualificationPlanError) as caught:
+        refuse_unsupported_parameters((Sneaky("years"),))
+    assert caught.value.defect is QualificationDefect.PLAN_MALFORMED
 
 
 @pytest.mark.parametrize("supplied", [None, "years", 7, {"years": 1}])
@@ -363,6 +417,7 @@ def test_requests_are_generated_in_one_canonical_order() -> None:
             DatasetPlan(dataset=SharadarDataset.TICKERS),
             DatasetPlan(dataset=SharadarDataset.STOCKS, window=window()),
         ),
+        execution_id=EXECUTION_ID,
     )
     shape = [(request.dataset.value, request.ticker) for request in plan.requests()]
     assert shape == [
@@ -384,6 +439,7 @@ def test_input_order_does_not_change_the_generated_order() -> None:
             DatasetPlan(dataset=SharadarDataset.TICKERS),
             DatasetPlan(dataset=SharadarDataset.STOCKS, window=window()),
         ),
+        execution_id=EXECUTION_ID,
     )
     reversed_plan = QualificationPlan(
         subjects=subjects(SUBJECT_B, SUBJECT_A),
@@ -391,8 +447,15 @@ def test_input_order_does_not_change_the_generated_order() -> None:
             DatasetPlan(dataset=SharadarDataset.STOCKS, window=window()),
             DatasetPlan(dataset=SharadarDataset.TICKERS),
         ),
+        execution_id=EXECUTION_ID,
     )
     assert forward.requests() == reversed_plan.requests()
+    # And the derived identities, which is the property that actually matters:
+    # two plans holding the same content must reconcile with the same durable
+    # evidence.
+    assert [acquisition_id(execution_id=EXECUTION_ID, request=r) for r in forward.requests()] == [
+        acquisition_id(execution_id=EXECUTION_ID, request=r) for r in reversed_plan.requests()
+    ]
 
 
 def test_pages_walk_in_ascending_offset_order() -> None:
@@ -417,6 +480,7 @@ def test_the_request_count_matches_what_requests_yields() -> None:
             DatasetPlan(dataset=SharadarDataset.TICKERS, max_pages=2),
             DatasetPlan(dataset=SharadarDataset.STOCKS, window=window(), max_pages=3),
         ),
+        execution_id=EXECUTION_ID,
     )
     assert plan.request_count == len(plan.requests()) == 10
 
@@ -499,11 +563,39 @@ def test_a_malformed_attempt_count_is_refused(attempts: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("identity", ["", "Has-Upper", "has space", "x" * 65, 7, None])
-def test_a_malformed_run_identity_is_refused(identity: Any) -> None:
+@pytest.mark.parametrize("identity", ["", "Has-Upper", "has space", "x" * 33, 7, None])
+def test_a_malformed_execution_identity_is_refused(identity: Any) -> None:
     with pytest.raises(QualificationPlanError) as caught:
-        snapshot(ingestion_run_id=identity)
+        snapshot(execution_id=identity)
     assert caught.value.defect is QualificationDefect.IDENTITY_MALFORMED
+
+
+def test_the_execution_identity_has_no_default() -> None:
+    """A reusable default made two attempts share an acquisition identity.
+
+    A run nobody named is a run whose evidence cannot be told apart from the last
+    one's, so the field is required rather than defaulted.
+    """
+    import dataclasses
+
+    fields = {f.name: f for f in dataclasses.fields(QualificationPlan)}
+    assert fields["execution_id"].default is dataclasses.MISSING
+    assert fields["execution_id"].default_factory is dataclasses.MISSING
+    with pytest.raises(TypeError):
+        QualificationPlan(  # type: ignore[call-arg]
+            subjects=subjects(SUBJECT_A),
+            datasets=(DatasetPlan(dataset=SharadarDataset.TICKERS),),
+        )
+
+
+def test_the_plan_carries_no_caller_controlled_backfill_flag() -> None:
+    """A raw boolean would have let a caller label qualification evidence as a
+    production backfill, turning a metadata field into an authorization claim."""
+    import dataclasses
+
+    assert "is_backfill" not in {f.name for f in dataclasses.fields(QualificationPlan)}
+    with pytest.raises(TypeError):
+        snapshot(is_backfill=True)
 
 
 def test_no_real_ticker_is_compiled_into_the_plan_module() -> None:
@@ -545,6 +637,7 @@ def test_building_and_rendering_a_plan_performs_no_io(monkeypatch: pytest.Monkey
             DatasetPlan(dataset=SharadarDataset.TICKERS),
             DatasetPlan(dataset=SharadarDataset.STOCKS, window=window()),
         ),
+        execution_id=EXECUTION_ID,
     )
     assert len(plan.requests()) == 4
     assert repr(plan)
