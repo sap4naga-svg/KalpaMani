@@ -1425,9 +1425,15 @@ CHRONOLOGY_ORDER: Final[tuple[str, ...]] = (
 
 #: What must stay UNKNOWN about the fourth attempt.
 #:
-#: The identity gate was invoked once and did not pass. A gate can fail before
-#: anything leaves the machine, and **no diagnosis was performed**, so the
-#: network-request count is genuinely unknown -- not zero, and not one.
+#: The identity gate was invoked once and did not pass, and a gate can fail
+#: before anything leaves the machine -- so the network-request count is
+#: genuinely unknown, not zero and not one.
+#:
+#: The unknown does **not** rest on nothing having been diagnosed. A later
+#: separately authorized standalone diagnosis did run, and it fixes no count
+#: either: it returned one closed word about a session, not a tally of
+#: requests. An earlier revision of this comment made the uncertainty depend on
+#: no diagnosis ever occurring, which stopped being true.
 FOURTH_ATTEMPT_NETWORK_UNKNOWN: Final[tuple[str, ...]] = (
     "Whether the fourth attempt sent an AWS network request is UNKNOWN",
     "neither zero nor one network request may be claimed",
@@ -1459,22 +1465,70 @@ FOURTH_ATTEMPT_NETWORK_CLAIMS: Final[tuple[str, ...]] = (
     "EXACTLY ONE AWS NETWORK REQUEST ON THE FOURTH",
 )
 
-#: Diagnoses of the fourth refusal that no run performed.
+#: This audit's own prose that a completed diagnosis made false.
+#:
+#: The comments, check names and failure details in this file are a status
+#: surface like any document it guards, and they went stale in the same way: they
+#: asserted that nothing had diagnosed the fourth refusal, long after a
+#: separately authorized standalone diagnosis had.
+#:
+#: Every entry is written in the **case the prose uses**, never the upper case
+#: the denylists use. That is the whole mechanism separating an assertion from a
+#: fixture: ``STALE_NO_DIAGNOSIS_CLAIMS`` and :data:`STALE_GATE_PROBE_CLAIMS`
+#: deliberately quote forbidden phrases as test data, and a quoted phrase is not
+#: a claim. Only an audit-owned sentence stating one as current truth is the
+#: defect, and only those can match here.
+STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = (
+    "Nothing diagnosed the fourth",
+    "infers no SSO defect from the fourth refusal",
+    "no diagnosis was performed, so nothing may say why",
+    "and none was diagnosed",
+    "no diagnosis was performed**, so the",
+    "nothing here may say why its gate refused",
+)
+
+#: Exact-state, contemporaneous and causal overclaims about the fourth refusal.
+#:
+#: **Not** a prohibition on the diagnosis. A separately authorized standalone
+#: diagnosis did run after attempt 4 and classified the governed SSO session or
+#: cached token as **missing or expired** -- the first direct diagnostic evidence
+#: explaining that attempt's identity refusal -- and the documents must be able
+#: to say so. The name says which of the two jobs this list does, because the
+#: previous name (``SSO_INFERENCE_CLAIMS``) read as though any inference were
+#: forbidden.
+#:
+#: What the evidence does not establish is *which* of the two states applied,
+#: that the state held **at the moment** the gate refused, or that it is the
+#: proven cause of that refusal. The diagnosis ran afterwards and returned one
+#: closed word covering two states.
 #:
 #: Scoped to the fourth attempt deliberately. The *first* attempt was followed by
 #: a separately authorized ``sts:GetCallerIdentity`` diagnosis that did classify
 #: its session, and that sentence is accurate history which these must not reach.
-#: Nothing diagnosed the fourth, so nothing here may say why its gate refused.
-SSO_INFERENCE_CLAIMS: Final[tuple[str, ...]] = (
+SSO_EXACT_STATE_OVERCLAIMS: Final[tuple[str, ...]] = (
+    # Causal. The diagnosis is evidence, not proof of why the gate refused.
     "THE FOURTH ATTEMPT REFUSED BECAUSE THE SESSION",
     "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO",
-    "THE FOURTH ATTEMPT'S SESSION WAS MISSING",
-    "THE FOURTH ATTEMPT'S SESSION WAS EXPIRED",
-    "THE FOURTH ATTEMPT'S SSO SESSION",
-    "A MISSING OR EXPIRED SESSION CAUSED THE FOURTH",
-    "THE SESSION WAS MISSING OR EXPIRED AT THE FOURTH",
     "THE IDENTITY GATE REFUSED BECAUSE THE SESSION",
     "THE IDENTITY GATE REFUSED BECAUSE THE SSO",
+    "A MISSING OR EXPIRED SESSION CAUSED THE FOURTH",
+    # Contemporaneous. The diagnosis ran later, not during the attempt.
+    "THE SESSION WAS MISSING OR EXPIRED AT THE FOURTH",
+    "THE FOURTH ATTEMPT PROVED THE SESSION",
+    "PROVED CONTEMPORANEOUSLY",
+    # Exact state. One closed word covering two states is neither of them.
+    #
+    # Gone from this list: the bare "THE FOURTH ATTEMPT'S SSO SESSION", which
+    # refused an accurate combined sentence for naming its subject. A guard
+    # that blocks a true statement is answered by writing a vaguer one.
+    "THE FOURTH ATTEMPT'S SESSION WAS MISSING",
+    "THE FOURTH ATTEMPT'S SESSION WAS EXPIRED",
+    "THE SESSION WAS DEFINITELY MISSING",
+    "THE SESSION WAS DEFINITELY EXPIRED",
+    "DEFINITELY MISSING",
+    "DEFINITELY EXPIRED",
+    "PROVEN TO BE MISSING",
+    "PROVEN TO BE EXPIRED",
 )
 
 #: Current-status wording a fourth attempt made false.
@@ -1614,6 +1668,7 @@ POST_FOURTH_DIAGNOSIS_HISTORY: Final[tuple[str, ...]] = (
     "neither the gate's own STS operation above, nor the diagnosis that followed the first",
     "one process and one `aws sts get-caller-identity` command, which exited 255",
     "classified as `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
+    "the governed SSO session or cached token was unavailable or expired",
     "It does not distinguish missing from expired",
     "first direct diagnostic evidence explaining the fourth attempt's identity refusal",
     "the attempt's own network-request total stays UNKNOWN",
@@ -2404,6 +2459,27 @@ def _matrix_entry(text: str, first_line: str, continuation_indent: int = 24) -> 
             break
         collected.append(line.strip())
     return " ".join(collected)
+
+
+def _audit_prose_excluding_own_fixture(source: str) -> str:
+    """This file's text with the stale-diagnostic fixture block cut out.
+
+    The guard built on :data:`STALE_AUDIT_DIAGNOSTICS` searches for phrases that
+    must not be *asserted*, and the tuple listing them necessarily contains every
+    one -- so scanning the whole file would always match. That is the same
+    self-referential trap this slice has now hit three times: a denylist entry
+    that is a substring of the thing protecting against it.
+
+    Cutting the block out keeps the fixture and searches only the prose around
+    it. Returns ``source`` unchanged when the block is absent, so a rename fails
+    loudly through the guard rather than silently disabling it.
+    """
+    marker = "STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = ("
+    head, sep, rest = source.partition(marker)
+    if not sep:
+        return source
+    _, _, tail = rest.partition("\n)\n")
+    return head + tail
 
 
 def _governed_profile_value(source: str) -> str:
@@ -8063,6 +8139,30 @@ def main() -> int:
             "the gate's call and the standalone command are separate, uncounted events",
         )
         f.check(
+            "this audit's own diagnostics do not deny the completed diagnosis",
+            not [
+                claim
+                for claim in STALE_AUDIT_DIAGNOSTICS
+                if claim in _audit_prose_excluding_own_fixture(read(Path(__file__).resolve()))
+            ],
+            "its comments and labels are a status surface, and one diagnosis has run",
+        )
+        f.check(
+            "this audit still quotes the forbidden phrases it refuses, as fixtures",
+            # The companion to the guard above, and the reason that one matches on
+            # case. Deleting the quoted phrases would silence it while removing
+            # the denylists doing the actual work, so their presence is required
+            # here -- in the upper case that marks them as data, not assertion.
+            all(
+                phrase in read(Path(__file__).resolve())
+                for phrase in (
+                    "NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF",
+                    "UNKNOWN -- NO DIAGNOSIS WAS PERFORMED",
+                )
+            ),
+            "a fixture is test data; only an audit-owned sentence is a claim",
+        )
+        f.check(
             "the entry point makes no unqualified profile-disclosure claim",
             not [
                 claim
@@ -8090,13 +8190,15 @@ def main() -> int:
             "neither zero nor one is established by an identity gate that did not pass",
         )
         f.check(
-            "the entry point infers no SSO defect from the fourth refusal",
+            "the entry point does not overstate the post-fourth diagnosis as an exact "
+            "or contemporaneous cause",
             not [
                 claim
-                for claim in SSO_INFERENCE_CLAIMS
+                for claim in SSO_EXACT_STATE_OVERCLAIMS
                 if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
             ],
-            "no diagnosis was performed, so nothing may say why that gate refused",
+            "the later diagnosis is direct evidence; it fixes neither the exact state nor "
+            "a request count",
         )
         f.check(
             "the entry point makes no stale zero-AWS or never-run claim",
@@ -8515,7 +8617,8 @@ def main() -> int:
         f.check(
             f"{name} leaves the fourth attempt's AWS network-request count UNKNOWN",
             all(phrase in binding_flat for phrase in FOURTH_ATTEMPT_NETWORK_UNKNOWN),
-            "a gate can fail before anything leaves the machine, and none was diagnosed",
+            "a gate can fail before anything leaves the machine, and the later diagnosis "
+            "fixes no count",
         )
         f.check(
             f"{name} states no definite network-request count for the fourth attempt",
@@ -8523,9 +8626,11 @@ def main() -> int:
             "neither zero nor one is established by an identity gate that did not pass",
         )
         f.check(
-            f"{name} infers no SSO defect from the fourth refusal",
-            not [claim for claim in SSO_INFERENCE_CLAIMS if claim in flat.upper()],
-            "no diagnosis was performed, so nothing may say why that gate refused",
+            f"{name} does not overstate the post-fourth diagnosis as an exact or "
+            "contemporaneous cause",
+            not [claim for claim in SSO_EXACT_STATE_OVERCLAIMS if claim in flat.upper()],
+            "the later diagnosis is direct evidence; it fixes neither the exact state nor "
+            "a request count",
         )
         f.check(
             f"{name} carries no stale three-attempt current status",
