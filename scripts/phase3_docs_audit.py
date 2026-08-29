@@ -915,7 +915,8 @@ BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
     "INVOKED FOUR TIMES UNDER SEPARATE AUTHORIZATION",
     "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
     "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
-    "AWS AUTHENTICATION DIAGNOSIS OR SSO REFRESH SEPARATELY GATED / NOT AUTHORIZED",
+    "FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
+    "AWS SSO REFRESH/LOGIN SEPARATELY GATED / NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
 
@@ -1000,6 +1001,10 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
     "REFUSED_IDENTITY",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
     "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ARE UNKNOWN",
+    "POST-FOURTH STANDALONE AWS IDENTITY DIAGNOSIS HAS SINCE COMPLETED",
+    "NO STANDALONE DIAGNOSIS WAS PERFORMED AS PART OF THE ATTEMPT",
+    "INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
+    "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "REACHED NEITHER LICENSED-BUCKET RESOLUTION NOR THE SECRET-IDENTIFIER SOURCE",
     "DID NOT READ `KALPAMANI_SHARADAR_SECRET_ID`",
     "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
@@ -1063,7 +1068,9 @@ ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "AND THE FOURTH WITH REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
     "SET UP AFTER THE THIRD ATTEMPT AND NOT READ BY THE FOURTH",
     "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN",
-    "A FIFTH ATTEMPT AND AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
+    "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
+    "ONE COMMAND, EXIT CODE 255, MISSING AND EXPIRED NOT DISTINGUISHED",
+    "A FIFTH ATTEMPT AND FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
     "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
     "SET UP AFTER THE THIRD ATTEMPT",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
@@ -1175,7 +1182,8 @@ STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API acc
 #: *further* one is gated, and the word carries the whole difference.
 FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
-    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+    "further AWS authentication diagnosis: NOT AUTHORIZED",
+    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
@@ -1267,7 +1275,8 @@ NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
     "real bucket binding NONE",
     "SDK/client construction outside the ADR-0015 operator boundary",
     "a fifth binding-preflight attempt",
-    "AWS authentication diagnosis or an SSO refresh -- separately gated",
+    "further AWS authentication diagnosis -- one completed after the fourth",
+    "an AWS SSO refresh or login -- separately gated",
     "ANY provider API call",
     "an authenticated qualification run",
 )
@@ -1339,7 +1348,8 @@ STALE_SECTION_IDENTIFIER_LINE: Final = "operational secret-identifier configurat
 #: separate decisions and none has been taken.
 ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
     "A FIFTH ATTEMPT",
-    "AWS AUTHENTICATION DIAGNOSIS OR AN SSO REFRESH",
+    "FURTHER AWS AUTHENTICATION DIAGNOSIS",
+    "AN AWS SSO REFRESH OR LOGIN",
     "CREDENTIAL ACCESS BY THE APPLICATION",
     "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
 )
@@ -1374,14 +1384,18 @@ FOURTH_ATTEMPT_ANCHOR: Final = (
 #: word alone would let a reader assume the run got as far as the third did.
 FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "fourth attempt        REFUSED_IDENTITY at the AWS identity gate",
-    "AWS network requests on the fourth attempt: UNKNOWN -- no diagnosis was performed",
+    "identity-gate invocations on the fourth attempt: ONE -- the gate runs its own STS "
+    "identity operation",
+    "standalone diagnostic commands during the fourth attempt: ZERO",
+    "AWS network requests on the fourth attempt: UNKNOWN -- no numeric count is established",
     "owner credential setup occurred AFTER the third attempt and BEFORE the fourth",
     "identifier-source resolutions on the fourth attempt: ZERO",
     "licensed-bucket resolutions on the fourth attempt: ZERO",
     "KALPAMANI_SHARADAR_SECRET_ID read by the fourth attempt: NO",
     "offline composition-preflight invocations: ZERO",
     "fifth binding-preflight attempt: NOT AUTHORIZED",
-    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+    "further AWS authentication diagnosis: NOT AUTHORIZED",
+    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
 )
 
 #: What the fourth attempt's chronology entry must state, not merely tabulate.
@@ -1411,13 +1425,20 @@ CHRONOLOGY_ORDER: Final[tuple[str, ...]] = (
 
 #: What must stay UNKNOWN about the fourth attempt.
 #:
-#: The identity gate was invoked once and did not pass. A gate can fail before
-#: anything leaves the machine, and **no diagnosis was performed**, so the
-#: network-request count is genuinely unknown -- not zero, and not one.
+#: The identity gate was invoked once and did not pass, and a gate can fail
+#: before anything leaves the machine -- so the network-request count is
+#: genuinely unknown, not zero and not one.
+#:
+#: The unknown does **not** rest on nothing having been diagnosed. A later
+#: separately authorized standalone diagnosis did run, and it fixes no count
+#: either: it returned one closed word about a session, not a tally of
+#: requests. An earlier revision of this comment made the uncertainty depend on
+#: no diagnosis ever occurring, which stopped being true.
 FOURTH_ATTEMPT_NETWORK_UNKNOWN: Final[tuple[str, ...]] = (
     "Whether the fourth attempt sent an AWS network request is UNKNOWN",
     "neither zero nor one network request may be claimed",
-    "No diagnosis was performed",
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
 )
 
 #: Definite network-request counts the fourth attempt does not support.
@@ -1444,22 +1465,74 @@ FOURTH_ATTEMPT_NETWORK_CLAIMS: Final[tuple[str, ...]] = (
     "EXACTLY ONE AWS NETWORK REQUEST ON THE FOURTH",
 )
 
-#: Diagnoses of the fourth refusal that no run performed.
+#: This audit's own prose that a completed diagnosis made false.
+#:
+#: The comments, check names and failure details in this file are a status
+#: surface like any document it guards, and they went stale in the same way: they
+#: asserted that nothing had diagnosed the fourth refusal, long after a
+#: separately authorized standalone diagnosis had.
+#:
+#: Every entry is written in the **case the prose uses**, never the upper case
+#: the denylists use. That is the whole mechanism separating an assertion from a
+#: fixture: ``STALE_NO_DIAGNOSIS_CLAIMS`` and :data:`STALE_GATE_PROBE_CLAIMS`
+#: deliberately quote forbidden phrases as test data, and a quoted phrase is not
+#: a claim. Only an audit-owned sentence stating one as current truth is the
+#: defect, and only those can match here.
+STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = (
+    "Nothing diagnosed the fourth",
+    "infers no SSO defect from the fourth refusal",
+    "no diagnosis was performed, so nothing may say why",
+    "and none was diagnosed",
+    # Normalised: the scanned surface goes through `_comment_prose`, which strips
+    # comment markers and emphasis so a claim wrapped across two lines is still
+    # one phrase. The bold markers this sentence originally carried are gone by
+    # the time it is searched.
+    "no diagnosis was performed, so the",
+    "nothing here may say why its gate refused",
+)
+
+#: Exact-state, contemporaneous and causal overclaims about the fourth refusal.
+#:
+#: **Not** a prohibition on the diagnosis. A separately authorized standalone
+#: diagnosis did run after attempt 4 and classified the governed SSO session or
+#: cached token as **missing or expired** -- the first direct diagnostic evidence
+#: explaining that attempt's identity refusal -- and the documents must be able
+#: to say so. The name says which of the two jobs this list does, because the
+#: previous name (``SSO_INFERENCE_CLAIMS``) read as though any inference were
+#: forbidden.
+#:
+#: What the evidence does not establish is *which* of the two states applied,
+#: that the state held **at the moment** the gate refused, or that it is the
+#: proven cause of that refusal. The diagnosis ran afterwards and returned one
+#: closed word covering two states.
 #:
 #: Scoped to the fourth attempt deliberately. The *first* attempt was followed by
 #: a separately authorized ``sts:GetCallerIdentity`` diagnosis that did classify
 #: its session, and that sentence is accurate history which these must not reach.
-#: Nothing diagnosed the fourth, so nothing here may say why its gate refused.
-SSO_INFERENCE_CLAIMS: Final[tuple[str, ...]] = (
+SSO_EXACT_STATE_OVERCLAIMS: Final[tuple[str, ...]] = (
+    # Causal. The diagnosis is evidence, not proof of why the gate refused.
     "THE FOURTH ATTEMPT REFUSED BECAUSE THE SESSION",
     "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO",
-    "THE FOURTH ATTEMPT'S SESSION WAS MISSING",
-    "THE FOURTH ATTEMPT'S SESSION WAS EXPIRED",
-    "THE FOURTH ATTEMPT'S SSO SESSION",
-    "A MISSING OR EXPIRED SESSION CAUSED THE FOURTH",
-    "THE SESSION WAS MISSING OR EXPIRED AT THE FOURTH",
     "THE IDENTITY GATE REFUSED BECAUSE THE SESSION",
     "THE IDENTITY GATE REFUSED BECAUSE THE SSO",
+    "A MISSING OR EXPIRED SESSION CAUSED THE FOURTH",
+    # Contemporaneous. The diagnosis ran later, not during the attempt.
+    "THE SESSION WAS MISSING OR EXPIRED AT THE FOURTH",
+    "THE FOURTH ATTEMPT PROVED THE SESSION",
+    "PROVED CONTEMPORANEOUSLY",
+    # Exact state. One closed word covering two states is neither of them.
+    #
+    # Gone from this list: the bare "THE FOURTH ATTEMPT'S SSO SESSION", which
+    # refused an accurate combined sentence for naming its subject. A guard
+    # that blocks a true statement is answered by writing a vaguer one.
+    "THE FOURTH ATTEMPT'S SESSION WAS MISSING",
+    "THE FOURTH ATTEMPT'S SESSION WAS EXPIRED",
+    "THE SESSION WAS DEFINITELY MISSING",
+    "THE SESSION WAS DEFINITELY EXPIRED",
+    "DEFINITELY MISSING",
+    "DEFINITELY EXPIRED",
+    "PROVEN TO BE MISSING",
+    "PROVEN TO BE EXPIRED",
 )
 
 #: Current-status wording a fourth attempt made false.
@@ -1573,10 +1646,241 @@ REVERSED_CHRONOLOGY_CLAIMS: Final[tuple[str, ...]] = (
     "BEFORE THAT SETUP",
 )
 
+#: The post-fourth AWS identity diagnosis, as the fenced block must record it.
+#:
+#: Raw, like the other count tuples: the block is column-aligned and read beside
+#: the attempt rows above it.
+#:
+#: Two counts are deliberately different things. ``STS command invocations: ONE``
+#: is what a caller can witness; ``diagnosis underlying AWS network requests:
+#: UNKNOWN`` is what the command's own behaviour does not reveal, because a CLI
+#: call resolves credentials locally and can fail before anything leaves the
+#: machine. Collapsing them would be the same mistake ADR-0016 corrected.
+POST_FOURTH_DIAGNOSIS_COUNTS: Final[tuple[str, ...]] = (
+    "post-fourth AWS identity diagnosis: COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
+    "diagnosis process invocations: ONE   ·   STS command invocations: ONE   ·   exit code: 255",
+    "diagnosis underlying AWS network requests: UNKNOWN",
+    "missing vs expired: NOT DISTINGUISHED by the diagnosis",
+    "governed profile: PINNED IN THE CHILD ENVIRONMENT, NEVER DISCLOSED",
+    "SSO-login invocations: ZERO   ·   authentication-repair actions: ZERO",
+    "fifth binding-preflight attempts: ZERO",
+)
+
+#: What the diagnosis narrative must state, not merely tabulate.
+POST_FOURTH_DIAGNOSIS_HISTORY: Final[tuple[str, ...]] = (
+    "A separately authorized diagnosis has since answered that. It is an additional standalone",
+    "neither the gate's own STS operation above, nor the diagnosis that followed the first",
+    "one process and one `aws sts get-caller-identity` command, which exited 255",
+    "classified as `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
+    "the governed SSO session or cached token was unavailable or expired",
+    "It does not distinguish missing from expired",
+    "first direct diagnostic evidence explaining the fourth attempt's identity refusal",
+    "the attempt's own network-request total stays UNKNOWN",
+    "SSO-login invocations ZERO",
+    "authentication-repair actions ZERO",
+    "fifth binding-preflight attempts ZERO",
+)
+
+#: How the diagnosis pinned the governed profile, and why that was correct.
+#:
+#: A shell-level pin does not survive separate tool invocations, so an unpinned
+#: call would have fallen back to an unrelated default profile -- the wrong-account
+#: hazard section 4.24 exists to prevent. Recording the *mechanism* matters: the
+#: value came from a static parse of the repository's own constant, and the module
+#: was never imported or executed.
+PROFILE_PIN_FACTS: Final[tuple[str, ...]] = (
+    "shell-level `AWS_PROFILE` pin does not persist across separate tool invocations",
+    "an unpinned CLI call would have fallen back to an unrelated default profile",
+    "statically parsing the repository-owned `EXPECTED_PROFILE` constant",
+    "the entry-point module was neither imported nor executed",
+    "That constant already existed in tracked executable source",
+    "not print, log, disclose or newly write it",
+    "added it to no document, comment, output or new file",
+    "This is the governed profile, not an alternate one",
+)
+
+#: The two standalone diagnoses, which are different events.
+#:
+#: One followed the *first* attempt and preceded an SSO login; one followed the
+#: *fourth* and was followed by nothing. A document that merges them would report
+#: a single diagnosis whose session was then refreshed, which is false of the
+#: second and would imply attempt 5 was reachable.
+DISTINCT_DIAGNOSES: Final[tuple[str, ...]] = (
+    "| separately authorized diagnosis | one `sts:GetCallerIdentity` request, which classified "
+    "the session as missing or expired |",
+    "| a second, separately authorized diagnosis, after the fourth attempt and after PR #28 "
+    "merged |",
+)
+
+#: The chronology anchor for the post-fourth diagnosis, which must come last.
+POST_FOURTH_DIAGNOSIS_ANCHOR: Final = (
+    "a second, separately authorized diagnosis, after the fourth attempt and after PR #28 merged"
+)
+
+#: Current-status wording the completed diagnosis made false.
+#:
+#: Every entry is a *full* superseded form rather than a prefix of the corrected
+#: one. "No diagnosis was performed" alone would match the accurate sentence that
+#: replaced it -- "No diagnosis was performed during the attempt itself" -- and a
+#: guard answered by deleting the true statement is worse than no guard.
+STALE_NO_DIAGNOSIS_CLAIMS: Final[tuple[str, ...]] = (
+    "UNKNOWN -- NO DIAGNOSIS WAS PERFORMED",
+    "AND NO DIAGNOSIS WAS PERFORMED.",
+    "NOTHING HERE ESTABLISHES THAT THE AWS SSO SESSION WAS MISSING, EXPIRED OR OTHERWISE DEFECTIVE",
+    "AWS AUTHENTICATION DIAGNOSIS OR SSO REFRESH: SEPARATELY GATED",
+    "AWS AUTHENTICATION DIAGNOSIS OR AN SSO REFRESH",
+    "AWS AUTHENTICATION DIAGNOSIS AND AN SSO REFRESH ARE",
+    "NO POST-FOURTH DIAGNOSIS",
+    "AWS AUTHENTICATION DIAGNOSIS IS ENTIRELY FUTURE",
+    "NO DIAGNOSIS HAS OCCURRED",
+    "NO DIAGNOSIS OF THE FOURTH",
+)
+
+#: Claims the diagnosis does not support, each in the affirmative form.
+#:
+#: It returned one closed word. It did not say *which* of missing or expired, it
+#: did not pass, nothing was logged in or repaired afterwards, no fifth attempt
+#: ran, and the underlying network count stays unknown in both directions.
+DIAGNOSIS_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "IDENTITY_PASSED",
+    "THE SSO SESSION WAS SPECIFICALLY MISSING",
+    "THE SSO SESSION WAS SPECIFICALLY EXPIRED",
+    "THE SESSION WAS MISSING, NOT EXPIRED",
+    "THE SESSION WAS EXPIRED, NOT MISSING",
+    "MISSING RATHER THAN EXPIRED",
+    "EXPIRED RATHER THAN MISSING",
+    "AWS SSO LOGIN OCCURRED",
+    "AN SSO LOGIN WAS PERFORMED",
+    "AUTHENTICATION WAS REPAIRED",
+    "AUTHENTICATION HAS BEEN REPAIRED",
+    "THE SESSION WAS REFRESHED",
+    "THE SESSION HAS BEEN REFRESHED",
+    "THE FIFTH ATTEMPT OCCURRED",
+    "THE FIFTH ATTEMPT RAN",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT OCCURRED",
+    "DIAGNOSIS AWS NETWORK REQUESTS: ZERO",
+    "DIAGNOSIS AWS NETWORK REQUESTS: ONE",
+    "THE DIAGNOSIS SENT ONE AWS NETWORK REQUEST",
+    "THE DIAGNOSIS SENT NO AWS NETWORK REQUEST",
+)
+
+#: What the entry point's own documentation must say about the diagnosis.
+BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
+    "post-fourth identity diagnosis: COMPLETED",
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
+    "A separately authorized diagnosis has since answered that. It is an additional",
+    "standalone command",
+    "one process and one ``aws sts get-caller-identity`` command, which exited 255",
+    "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
+    "It does not distinguish missing from expired",
+    "SSO-login invocations zero, authentication-repair actions zero, fifth binding-preflight "
+    "attempts zero.",
+    "because a shell-level pin does not survive across separate tool invocations",
+    "That constant already existed in tracked executable source",
+    "did not print, log, disclose or newly write the value",
+    "Further AWS authentication diagnosis is not authorized",
+)
+
+#: The gate's own STS operation, kept apart from the standalone diagnosis.
+#:
+#: ``identity_gate()`` in ``scripts/aws_foundation_verify.py`` runs
+#: ``sts get-caller-identity`` itself. Attempt 4 invoked that gate once, so the
+#: attempt **did** make an STS identity call -- what it did not make was an
+#: *additional* diagnostic command. An earlier revision wrote the stronger claim
+#: and it was false against the repository's own unchanged verifier.
+GATE_VERSUS_DIAGNOSIS: Final[tuple[str, ...]] = (
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
+    "`identity_gate()` in `scripts/aws_foundation_verify.py` runs `sts get-caller-identity` itself",
+    "it is false to say the attempt made no STS identity call",
+    "run an *additional* diagnostic command or any SSO inspection",
+    "the gate's internal operation is not the later standalone diagnosis",
+)
+
+#: Claims the governed verifier's own source contradicts.
+#:
+#: Every entry asserts that attempt 4 issued no STS identity operation at all.
+#: The gate issues one by construction, so each is refuted by
+#: ``scripts/aws_foundation_verify.py`` -- which this correction does not edit,
+#: because it is the evidence.
+#:
+#: The accurate scoped statements are required by :data:`GATE_VERSUS_DIAGNOSIS`
+#: and are deliberately not matched here: "no *standalone* diagnosis" stays
+#: sayable, and only the unqualified forms are refused.
+STALE_GATE_PROBE_CLAIMS: Final[tuple[str, ...]] = (
+    "IT MADE NO `STS:GETCALLERIDENTITY` PROBE",
+    "IT MADE NO ``STS:GETCALLERIDENTITY`` PROBE",
+    "MADE NO STS:GETCALLERIDENTITY PROBE",
+    "NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF",
+    "THE IDENTITY GATE MADE NO STS",
+    "THE GATE MADE NO STS IDENTITY CALL",
+    "NO STS COMMAND OCCURRED DURING ATTEMPT 4",
+    "NO STS IDENTITY OPERATION OCCURRED DURING ATTEMPT 4",
+    "ATTEMPT 4 ISSUED NO STS",
+    "THE FOURTH ATTEMPT MADE NO STS",
+)
+
+#: Each refused phrase paired with the denylist that must still contain it.
+#:
+#: The companion guard used to ask whether these strings occurred *anywhere* in
+#: this file. Each occurs twice -- once in the real denylist, once in the check's
+#: own literal tuple -- so deleting the enforcing entry left the guard green on
+#: the strength of its own copy. Occurrence proved nothing; **membership** does.
+#:
+#: Pairing the expectation with its intended tuple also catches a subtler edit:
+#: moving a phrase into some other denylist while removing it from the one whose
+#: guard actually reaches the surface it protects.
+#:
+#: This does **not** make guard-weakening behaviourally detectable in general.
+#: Deleting an expectation *and* its enforcement together still passes, because
+#: nothing is left to disagree with; that remains a targeted source assertion's
+#: job, and is reported as such rather than dressed up as a behavioural catch.
+REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("UNKNOWN -- NO DIAGNOSIS WAS PERFORMED", STALE_NO_DIAGNOSIS_CLAIMS),
+    ("NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF", STALE_GATE_PROBE_CLAIMS),
+)
+
+#: Wording that merges the gate's operation with the standalone diagnosis, or
+#: that adds them into a number.
+#:
+#: They are two operations with two scopes and no shared count. A total would be
+#: a numeric claim about AWS traffic that neither event establishes.
+GATE_DIAGNOSIS_CONFLATIONS: Final[tuple[str, ...]] = (
+    "THE IDENTITY GATE WAS THE DIAGNOSIS",
+    "THE GATE'S STS CALL WAS THE DIAGNOSIS",
+    "THE GATE OPERATION IS THE STANDALONE DIAGNOSIS",
+    "TWO STANDALONE DIAGNOSES OCCURRED AFTER THE FOURTH",
+    "TWO STANDALONE POST-FOURTH DIAGNOSES",
+    "TOTAL AWS NETWORK REQUESTS: TWO",
+    "TOTAL AWS NETWORK REQUESTS: ONE",
+    "COMBINED AWS NETWORK REQUESTS",
+    "TWO AWS NETWORK REQUESTS IN TOTAL",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ONE",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ZERO",
+)
+
+#: The superseded unqualified profile-disclosure sentence.
+#:
+#: ``EXPECTED_PROFILE`` already existed in tracked executable source before the
+#: diagnosis ran, so "never written down" was false about the repository. What the
+#: diagnosis did -- and did not -- do is the narrower supportable claim.
+STALE_PROFILE_DISCLOSURE_CLAIMS: Final[tuple[str, ...]] = (
+    "THE VALUE WAS NEVER PRINTED OR WRITTEN DOWN",
+    "THE VALUE WAS NEVER WRITTEN DOWN",
+    "THE VALUE HAS NEVER BEEN WRITTEN DOWN",
+    "THE PROFILE VALUE APPEARS NOWHERE",
+    "THE PROFILE VALUE EXISTS NOWHERE IN TRACKED SOURCE",
+    "NOT PRINTED, LOGGED OR WRITTEN INTO ANY DOCUMENT",
+    "THE DIAGNOSIS WROTE THE PROFILE VALUE",
+    "THE DIAGNOSIS NEWLY WROTE THE VALUE",
+)
+
 #: What must stay unauthorized now that a fourth attempt has happened.
 FIFTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
-    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+    "further AWS authentication diagnosis: NOT AUTHORIZED",
+    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
 
@@ -1585,7 +1889,9 @@ BINDING_SOURCE_FOURTH: Final[tuple[str, ...]] = (
     "invoked four times under separate authorization",
     "the fourth refused at the AWS identity gate, reaching neither",
     "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
-    "fourth-attempt AWS network requests: UNKNOWN -- no diagnosis performed",
+    "fourth-attempt identity-gate invocations: ONE -- the gate runs its own STS",
+    "fourth-attempt standalone diagnostic commands: ZERO",
+    "fourth-attempt AWS network requests: UNKNOWN -- no numeric count established",
     "Four later, separately authorized operator attempts did execute it, and all four refused",
     "Whether the fourth attempt sent an AWS network request is UNKNOWN.",
     "neither zero nor one may be claimed here",
@@ -1620,8 +1926,9 @@ BINDING_SOURCE_FACTORY_HISTORY: Final[tuple[str, ...]] = (
     "the third attempt, which refused there; the fourth never reached it and",
     "never been constructed by any attempt: the second refused inside",
     "No credential has been retrieved, and no composition preflight or",
-    "qualification execution has occurred. A fifth attempt, AWS authentication",
-    "diagnosis and every further operational event remain separately gated.",
+    "qualification execution has occurred. Diagnosis is no longer entirely future:",
+    "governed SSO session or cached token as missing or expired, without",
+    "other operational event remain separately gated.",
 )
 
 
@@ -1692,7 +1999,8 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "binding preflight or composition preflight run during environment verification: NEITHER",
     "composition preflight run: NEVER",
     "a fifth binding-preflight attempt: NOT AUTHORIZED",
-    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+    "further AWS authentication diagnosis: NOT AUTHORIZED",
+    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
     "credential access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
@@ -1791,9 +2099,16 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
     "FOUR AUTHORIZED ATTEMPTS TO DATE, ALL REFUSED",
     "FOURTH ATTEMPT REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
-    "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN -- NO DIAGNOSIS",
+    "FOURTH-ATTEMPT IDENTITY-GATE INVOCATIONS ONE -- THE GATE RUNS ITS OWN STS IDENTITY "
+    "OPERATION; STANDALONE DIAGNOSTIC COMMANDS ZERO; AWS NETWORK REQUESTS UNKNOWN",
+    # Three clauses rather than one long one: the stanza is joined before it is
+    # searched, so each is independently required and each fails on its own.
+    "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
+    "ONE COMMAND, EXIT CODE 255",
+    "ITS OWN NETWORK COUNT UNKNOWN, ZERO SSO LOGINS, ZERO REPAIR ACTIONS",
     "a fifth attempt NOT AUTHORIZED",
-    "AWS authentication diagnosis or SSO refresh SEPARATELY GATED / NOT AUTHORIZED",
+    "further AWS authentication diagnosis NOT AUTHORIZED",
+    "AWS SSO refresh/login SEPARATELY GATED / NOT AUTHORIZED",
     "credential access and authenticated qualification NOT AUTHORIZED",
     "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
 )
@@ -2170,6 +2485,82 @@ def _matrix_entry(text: str, first_line: str, continuation_indent: int = 24) -> 
     return " ".join(collected)
 
 
+def _audit_fixture_span(source: str) -> tuple[int, int]:
+    """The 1-based inclusive line span of the one ``STALE_AUDIT_DIAGNOSTICS`` assignment.
+
+    Resolved through :mod:`ast`, so the end of the assignment is the parser's
+    ``end_lineno`` rather than the next line that happens to look like a tuple
+    closing. The first revision of this helper partitioned on a raw ``"\\n)\\n"``
+    delimiter, which is not a boundary: a comment on the closing line, or any
+    other valid reformatting, made it run on to a *later* tuple and silently hide
+    unrelated audit prose from the guard that depends on it.
+
+    Raises:
+        ValueError: if the assignment is missing, appears more than once at
+            module level, or reports no end line. Fail closed -- an ambiguous
+            boundary must break the guard, never quietly widen what it skips.
+    """
+    spans = [
+        (node.lineno, node.end_lineno)
+        for node in ast.parse(source).body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "STALE_AUDIT_DIAGNOSTICS"
+        and node.end_lineno is not None
+    ]
+    if len(spans) != 1:
+        raise ValueError(
+            f"expected exactly one STALE_AUDIT_DIAGNOSTICS assignment, found {len(spans)}"
+        )
+    return spans[0]
+
+
+def _audit_prose_excluding_own_fixture(source: str) -> str:
+    """This file's text with exactly the stale-diagnostic fixture assignment removed.
+
+    The guard built on :data:`STALE_AUDIT_DIAGNOSTICS` searches for phrases that
+    must not be *asserted*, and the tuple listing them necessarily contains every
+    one -- so scanning the whole file would always match. That is the same
+    self-referential trap this slice has hit repeatedly: a denylist entry that is
+    a substring of the thing protecting against it.
+
+    Only the assignment's own lines are dropped. Comments, check names and
+    failure details immediately before and after it stay in the scanned surface,
+    which is the point: those are exactly where a stale claim would reappear.
+
+    Raises:
+        ValueError: propagated from :func:`_audit_fixture_span`.
+        SyntaxError: if this file will not parse. Both are fail-closed at the
+            call site.
+    """
+    start, end = _audit_fixture_span(source)
+    lines = source.splitlines()
+    return "\n".join(lines[: start - 1] + lines[end:])
+
+
+def _governed_profile_value(source: str) -> str:
+    """The pinned profile name, read from the entry point rather than repeated.
+
+    The guard below needs this string only to prove a status narrative does *not*
+    contain it. Writing the value here would put it on one more line for no
+    benefit; the entry point already declares it once, and reading it from there
+    keeps a single source of truth as well as one fewer copy.
+
+    Returns ``""`` when the constant is absent, which the caller treats as a
+    failure rather than as a vacuous pass.
+    """
+    for node in ast.parse(source).body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "EXPECTED_PROFILE"
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            return node.value.value
+    return ""
+
+
 def _comment_prose(text: str) -> str:
     """``text`` with comment markers stripped and line breaks joined out.
 
@@ -2179,10 +2570,17 @@ def _comment_prose(text: str) -> str:
     ``so it read no`` / ``# environment variable`` across a line break -- so the
     marker comes off before the join, the same shape as the blockquote strip
     used for licence prose.
+
+    Both the plain ``#`` and the Sphinx-style ``#:`` marker are removed. A
+    negative control found the second: a stale claim wrapped across two ``#:``
+    lines survived the guard, because ``lstrip("# ")`` stopped at the colon and
+    left it sitting in the middle of the joined phrase. Most commentary in this
+    file uses ``#:``, so that gap covered nearly all of it.
     """
-    return " ".join(
-        " ".join(line.lstrip("# ") for line in text.replace("**", "").splitlines()).split()
+    stripped = (
+        re.sub(r"^[ \t]*#:?[ \t]?", "", line) for line in text.replace("**", "").splitlines()
     )
+    return " ".join(" ".join(stripped).split())
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -7753,6 +8151,111 @@ def main() -> int:
             "correcting an overbroad absence must not manufacture the opposite one",
         )
         f.check(
+            "the entry point records the post-fourth diagnosis as a distinct completed event",
+            all(
+                phrase in _comment_prose(read(BINDING_PREFLIGHT))
+                for phrase in BINDING_SOURCE_DIAGNOSIS
+            ),
+            "its docstring is a current-status surface, and diagnosis is no longer future",
+        )
+        f.check(
+            "the entry point carries no stale claim that no diagnosis occurred",
+            not [
+                claim
+                for claim in STALE_NO_DIAGNOSIS_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "the module said diagnosis and an SSO refresh were one unperformed action",
+        )
+        f.check(
+            "the entry point claims nothing the diagnosis did not establish",
+            not [
+                claim
+                for claim in DIAGNOSIS_OVERCLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "missing or expired, undistinguished, and nothing repaired afterwards",
+        )
+        f.check(
+            "the entry point's factory commentary no longer calls all diagnosis future",
+            "Diagnosis is no longer entirely future:" in read(BINDING_PREFLIGHT)
+            and "any further AWS authentication diagnosis, an SSO refresh and every"
+            in read(BINDING_PREFLIGHT),
+            "one diagnosis ran; only a further one is gated",
+        )
+        f.check(
+            "the entry point claims no absent STS identity call for attempt 4",
+            not [
+                claim
+                for claim in STALE_GATE_PROBE_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "its own gate runs sts get-caller-identity; the docstring may not deny it",
+        )
+        f.check(
+            "the entry point neither merges the two operations nor totals them",
+            not [
+                claim
+                for claim in GATE_DIAGNOSIS_CONFLATIONS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "the gate's call and the standalone command are separate, uncounted events",
+        )
+        audit_source = read(Path(__file__).resolve())
+        try:
+            fixture_start, fixture_end = _audit_fixture_span(audit_source)
+            audit_outside_fixture = _audit_prose_excluding_own_fixture(audit_source)
+            exclusion_resolved = True
+        except (ValueError, SyntaxError):
+            # Fail closed. An unresolvable boundary leaves nothing scanned, so
+            # both guards below must report the failure rather than pass on an
+            # empty surface.
+            fixture_start, fixture_end = 0, 0
+            audit_outside_fixture = ""
+            exclusion_resolved = False
+        f.check(
+            "the fixture exclusion resolves to exactly the assignment's own lines",
+            exclusion_resolved
+            and len(audit_source.splitlines()) - len(audit_outside_fixture.splitlines())
+            == fixture_end - fixture_start + 1,
+            "a raw-delimiter boundary ran past the tuple and hid unrelated prose",
+        )
+        f.check(
+            "the fixture exclusion keeps the prose on either side of the assignment",
+            exclusion_resolved
+            and audit_source.splitlines()[fixture_start - 2] in audit_outside_fixture
+            and audit_source.splitlines()[fixture_end] in audit_outside_fixture,
+            "the lines around the fixture are exactly where a stale claim reappears",
+        )
+        f.check(
+            "this audit's own diagnostics do not deny the completed diagnosis",
+            exclusion_resolved
+            and not [
+                claim
+                for claim in STALE_AUDIT_DIAGNOSTICS
+                if claim in _comment_prose(audit_outside_fixture)
+            ],
+            "its comments and labels are a status surface, and one diagnosis has run",
+        )
+        f.check(
+            "the refused phrases are still members of the denylists that enforce them",
+            # Membership, not occurrence. The previous form asked whether these
+            # strings appeared anywhere in this file, and each appears twice --
+            # once in the real denylist and once in the check's own tuple -- so
+            # deleting the enforcing entry left the guard green on its own copy.
+            all(phrase in denylist for phrase, denylist in REQUIRED_FIXTURE_MEMBERSHIP),
+            "a fixture is test data only while the denylist that enforces it still holds it",
+        )
+        f.check(
+            "the entry point makes no unqualified profile-disclosure claim",
+            not [
+                claim
+                for claim in STALE_PROFILE_DISCLOSURE_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "EXPECTED_PROFILE already existed in tracked source before the diagnosis ran",
+        )
+        f.check(
             "the entry point carries no stale three-attempt claim",
             not [
                 claim
@@ -7771,13 +8274,15 @@ def main() -> int:
             "neither zero nor one is established by an identity gate that did not pass",
         )
         f.check(
-            "the entry point infers no SSO defect from the fourth refusal",
+            "the entry point does not overstate the post-fourth diagnosis as an exact "
+            "or contemporaneous cause",
             not [
                 claim
-                for claim in SSO_INFERENCE_CLAIMS
+                for claim in SSO_EXACT_STATE_OVERCLAIMS
                 if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
             ],
-            "no diagnosis was performed, so nothing may say why that gate refused",
+            "the later diagnosis is direct evidence; it fixes neither the exact state nor "
+            "a request count",
         )
         f.check(
             "the entry point makes no stale zero-AWS or never-run claim",
@@ -8196,7 +8701,8 @@ def main() -> int:
         f.check(
             f"{name} leaves the fourth attempt's AWS network-request count UNKNOWN",
             all(phrase in binding_flat for phrase in FOURTH_ATTEMPT_NETWORK_UNKNOWN),
-            "a gate can fail before anything leaves the machine, and none was diagnosed",
+            "a gate can fail before anything leaves the machine, and the later diagnosis "
+            "fixes no count",
         )
         f.check(
             f"{name} states no definite network-request count for the fourth attempt",
@@ -8204,9 +8710,11 @@ def main() -> int:
             "neither zero nor one is established by an identity gate that did not pass",
         )
         f.check(
-            f"{name} infers no SSO defect from the fourth refusal",
-            not [claim for claim in SSO_INFERENCE_CLAIMS if claim in flat.upper()],
-            "no diagnosis was performed, so nothing may say why that gate refused",
+            f"{name} does not overstate the post-fourth diagnosis as an exact or "
+            "contemporaneous cause",
+            not [claim for claim in SSO_EXACT_STATE_OVERCLAIMS if claim in flat.upper()],
+            "the later diagnosis is direct evidence; it fixes neither the exact state nor "
+            "a request count",
         )
         f.check(
             f"{name} carries no stale three-attempt current status",
@@ -8217,6 +8725,87 @@ def main() -> int:
             f"{name} keeps a fifth attempt and AWS authentication diagnosis unauthorized",
             all(boundary in binding_section for boundary in FIFTH_ATTEMPT_BOUNDARIES),
             "a refusal is a completed diagnostic result, not permission to repair and retry",
+        )
+        f.check(
+            f"{name} records the post-fourth AWS identity diagnosis and its counts",
+            all(token in binding_section for token in POST_FOURTH_DIAGNOSIS_COUNTS),
+            "a completed diagnosis absent from the block reads as one that never happened",
+        )
+        f.check(
+            f"{name} records the diagnosis outcome REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
+            "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED" in binding_section
+            and bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED"
+                in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+            ),
+            "the outcome is required in the section and in the row, independently",
+        )
+        f.check(
+            f"{name} states the diagnosis narrative, not only its counts",
+            all(phrase in binding_flat for phrase in POST_FOURTH_DIAGNOSIS_HISTORY),
+            "what it established and what it left unknown are both the finding",
+        )
+        f.check(
+            f"{name} keeps the two standalone diagnoses distinct",
+            all(entry in binding_flat for entry in DISTINCT_DIAGNOSES),
+            "merged, they read as one diagnosis whose session was then refreshed",
+        )
+        f.check(
+            f"{name} places the post-fourth diagnosis after the fourth attempt",
+            POST_FOURTH_DIAGNOSIS_ANCHOR in binding_flat
+            and "fourth authorized attempt, after that setup" in binding_flat
+            and binding_flat.index("fourth authorized attempt, after that setup")
+            < binding_flat.index(POST_FOURTH_DIAGNOSIS_ANCHOR),
+            "a diagnosis printed before the attempt describes the first one, not this one",
+        )
+        f.check(
+            f"{name} records how the governed profile was pinned, and that it was not disclosed",
+            all(fact in binding_flat for fact in PROFILE_PIN_FACTS),
+            "a pin nobody recorded reads as an alternate profile nobody noticed",
+        )
+        f.check(
+            f"{name} discloses no profile value in the ADR-0015 section",
+            bool(_governed_profile_value(read(BINDING_PREFLIGHT)))
+            and _governed_profile_value(read(BINDING_PREFLIGHT)) not in binding_section,
+            "the governed profile name belongs in the pinned constant, not in a status narrative",
+        )
+        f.check(
+            f"{name} carries no stale claim that no diagnosis occurred",
+            not [claim for claim in STALE_NO_DIAGNOSIS_CLAIMS if claim in flat.upper()],
+            "one has completed; the attempt-time statement stays and the blanket one cannot",
+        )
+        f.check(
+            f"{name} scopes the attempt-time statement to standalone diagnosis",
+            "No standalone diagnosis was performed as part of attempt 4" in flat
+            and "Its governed identity gate invoked its own STS identity operation once" in flat,
+            "the gate runs sts get-caller-identity itself; only an extra command was absent",
+        )
+        f.check(
+            f"{name} distinguishes the gate's own STS operation from the standalone diagnosis",
+            all(phrase in binding_flat for phrase in GATE_VERSUS_DIAGNOSIS),
+            "one is the gate's, one is a separate command, and neither is the other",
+        )
+        f.check(
+            f"{name} claims no absent STS identity call for attempt 4",
+            not [claim for claim in STALE_GATE_PROBE_CLAIMS if claim in flat.upper()],
+            "the governed verifier issues one by construction; the source refutes it",
+        )
+        f.check(
+            f"{name} neither merges the two operations nor totals them",
+            not [claim for claim in GATE_DIAGNOSIS_CONFLATIONS if claim in flat.upper()],
+            "two scopes, no shared count, and no number either establishes",
+        )
+        f.check(
+            f"{name} makes no unqualified claim about the profile value never being written",
+            not [claim for claim in STALE_PROFILE_DISCLOSURE_CLAIMS if claim in flat.upper()],
+            "the governed constant predates the diagnosis in tracked source",
+        )
+        f.check(
+            f"{name} claims nothing the diagnosis did not establish",
+            not [claim for claim in DIAGNOSIS_OVERCLAIMS if claim in flat.upper()],
+            "one closed word: not which of missing or expired, and not a repair",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
@@ -8990,9 +9579,19 @@ def main() -> int:
         )
         f.check(
             f"{name} records the environment as synchronized and verified, and still gated",
-            "operational environment synchronized: DONE AND VERIFIED" in body
-            and "Python dependency lock: ABSENT" in body
-            and "a fifth binding-preflight attempt: NOT AUTHORIZED" in body,
+            # Scoped to the ADR-0016 section, not to `body`. The document-wide
+            # form could not tell which fenced block still carried the clause:
+            # the same sentence appears in the environment and ADR-0015 blocks,
+            # so authorizing a fifth attempt *here* left the guard green. A
+            # negative control found it.
+            all(
+                clause in _document_section(body, ADR_0016_SECTION_HEADING)
+                for clause in (
+                    "operational environment synchronized: DONE AND VERIFIED",
+                    "Python dependency lock: ABSENT",
+                    "a fifth binding-preflight attempt: NOT AUTHORIZED",
+                )
+            ),
             "the drift was real evidence; a separately authorized action has since fixed it",
         )
         f.check(
