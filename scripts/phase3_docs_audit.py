@@ -230,10 +230,63 @@ COMPOSITION_OVERCLAIMS: Final[tuple[str, ...]] = (
     "and is unreachable after it",
 )
 
-#: The unscoped execution-surface claim. Checked separately, because the *scoped*
-#: line -- "qualification-run execution surface NONE" -- is the correct form and
-#: contains the wrong one as a substring.
-UNSCOPED_EXECUTION_SURFACE: Final = "execution surface     NONE"
+#: The unscoped execution-surface claim, matched after normalisation.
+#:
+#: An earlier revision checked one exact literal, ``"execution surface     NONE"``,
+#: with the spacing a fenced status block happened to use. That missed the two
+#: places the claim actually did the damage -- the Markdown status rows, which
+#: write it as ``**execution surface NONE**``. A guard that only recognises the
+#: form it was written against is a guard for that form, not for the claim.
+#:
+#: Matched against text with emphasis and backticks removed and whitespace
+#: collapsed, so ``**execution surface NONE**``, `` `execution surface: NONE` ``
+#: and the multi-space fenced form are all one pattern. The optional colon is
+#: part of it.
+#:
+#: The *scoped* form is the correct claim and is permitted, which is why this is
+#: a search with a preceding-context test rather than a plain substring check:
+#: "qualification-run execution surface NONE" contains the wrong phrase inside
+#: the right one.
+UNSCOPED_EXECUTION_SURFACE: Final = re.compile(r"execution\s+surface\s*:?\s*NONE", re.IGNORECASE)
+
+#: What must precede the phrase for it to be the scoped, correct claim.
+EXECUTION_SURFACE_SCOPE: Final = "qualification-run "
+
+#: Markdown emphasis and code fencing. Removed before the scan, because a status
+#: row's asterisks are formatting and a guard that reads them as content is
+#: defeated by bolding the sentence.
+MARKDOWN_EMPHASIS: Final = re.compile(r"[*`]+")
+
+#: The object-lifetime claim, in whatever order it is written.
+#:
+#: "a local is unreachable when the call returns" is a garbage-collection claim
+#: dressed as a safety property. The enforced property is that nothing durable
+#: retains the object; whether it still exists is a different question, and one
+#: that is false-by-construction on an exception path where a traceback holds the
+#: frame. Matched semantically -- ``unreachable`` near a returning call -- rather
+#: than as the one sentence that happened to be written today.
+LIFETIME_CLAIM: Final = re.compile(
+    r"unreachable[^.]{0,90}?\b(?:when|after|once)\b[^.]{0,50}?\breturns?\b"
+    r"|\breturns?\b[^.]{0,60}?\bunreachable\b",
+    re.IGNORECASE,
+)
+
+#: Wording that marks a quoted phrase as something being *refuted* rather than
+#: asserted. Deliberately not a general "anything in quotes is exempt" rule: a
+#: current status row could otherwise bypass the guard by adding quotation marks.
+REFUTATION_MARKERS: Final = (
+    "would be false",
+    "was false",
+    "is false",
+    "were false",
+    "no longer true",
+    "an earlier revision",
+    "earlier revision of this adr",
+    "retired",
+    "unqualified",
+    "overclaim",
+    "corrected",
+)
 COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
@@ -707,35 +760,74 @@ def _conditional_mode_sites() -> list[str]:
     return offenders
 
 
-def _composition_overclaims(text: str) -> list[str]:
-    """Every overclaim asserted in ``text``.
+def _is_refuted(text: str, start: int, end: int) -> bool:
+    """Whether the span at ``[start, end)`` is quoted *and* explained as false.
 
-    Double-quoted spans are removed first. Each of these phrases now appears in
-    the documents *inside quotation marks*, as the thing being refuted -- and a
-    guard that could not tell a refutation from an assertion would forbid
-    explaining what was corrected, which is exactly the wrong trade.
-
-    The execution-surface phrase is checked in its unscoped form only: the scoped
-    line names a *qualification-run* execution surface and is the correct claim.
+    Both halves are required. Quotation alone would be a general bypass -- a
+    current status row could keep its claim and add quotation marks -- so the
+    surrounding sentence must also say the phrase was wrong.
     """
-    unquoted = re.sub(r'"[^"\n]*"', "", text)
-    found = [phrase for phrase in COMPOSITION_OVERCLAIMS if phrase in unquoted]
-    for index in range(len(unquoted)):
-        if not unquoted.startswith(UNSCOPED_EXECUTION_SURFACE, index):
+    quoted = text[max(0, start - 1) : start].endswith(('"', "\u201c")) and text[
+        end : end + 1
+    ].startswith(('"', "\u201d"))
+    if not quoted:
+        return False
+    window = text[max(0, start - 400) : end + 400].lower()
+    return any(marker in window for marker in REFUTATION_MARKERS)
+
+
+def _composition_overclaims(text: str) -> list[str]:
+    """Every overclaim *asserted* in ``text``.
+
+    Normalised first: Markdown emphasis and backticks are removed and whitespace
+    is collapsed, so a claim cannot escape by being bolded, code-fenced or
+    line-wrapped. That is the whole reason this exists -- the previous revision
+    matched one exact literal and missed the two status rows that wrote the same
+    claim in bold.
+
+    A phrase is permitted only where it is quoted **and** the surrounding text
+    identifies it as false, so the documents can still explain what was
+    corrected without that becoming a way to keep asserting it.
+    """
+    normalised = re.sub(r"\s+", " ", MARKDOWN_EMPHASIS.sub("", text))
+    found: list[str] = []
+
+    for phrase in COMPOSITION_OVERCLAIMS:
+        target = re.sub(r"\s+", " ", phrase)
+        for match in re.finditer(re.escape(target), normalised):
+            if not _is_refuted(normalised, match.start(), match.end()):
+                found.append(phrase)
+                break
+
+    for match in UNSCOPED_EXECUTION_SURFACE.finditer(normalised):
+        if normalised[: match.start()].lower().endswith(EXECUTION_SURFACE_SCOPE):
+            continue  # the scoped form is the correct claim
+        if _is_refuted(normalised, match.start(), match.end()):
             continue
-        if not unquoted[:index].endswith("qualification-run "):
-            found.append(UNSCOPED_EXECUTION_SURFACE)
-            break
+        found.append(f"unscoped execution-surface claim: {match.group(0)!r}")
+        break
+
+    for match in LIFETIME_CLAIM.finditer(normalised):
+        if _is_refuted(normalised, match.start(), match.end()):
+            continue
+        found.append(f"object-lifetime claim: {match.group(0)[:60]!r}")
+        break
+
     return found
 
 
 def _composition_state_sites() -> list[str]:
     """Every place the composition module stores a constructed component durably.
 
-    A local variable is fine -- it is unreachable when the call returns. An
-    attribute on ``self``, a class attribute or a module global is not: the first
-    revision of ADR-0014 stored all three on an instance, and
+    **Durable retention is the property, not object lifetime.** A local variable
+    is fine: the function neither returns it nor keeps it anywhere a later caller
+    can reach. An attribute on ``self``, a class attribute or a module global is
+    not -- the first revision of ADR-0014 stored all three on an instance, and
     ``composition._runtime.execute(plan)`` worked.
+
+    Nothing here claims a local stops existing when the call returns. Whether it
+    does is a garbage-collection question this audit has no business answering,
+    and it is not what makes the composition dormant.
     """
     if not COMPOSITION_ROOT.is_file():
         return []
@@ -5197,7 +5289,7 @@ def main() -> int:
             "validate fetches nothing and stores nothing; that is the whole dormancy claim",
         )
         f.check(
-            "the composition has no execution surface",
+            "the composition has no qualification-run execution surface",
             "execute" not in composition
             and not any(
                 f"def {verb}" in composition
@@ -5220,7 +5312,7 @@ def main() -> int:
                     ("runtime", "QualificationRuntime"),
                 )
             ),
-            "a local is unreachable when the call returns; an attribute is not",
+            "a local is not retained; an attribute on self, a class or a module is",
         )
         f.check(
             "the preflight result is bounded by the compiled constants",

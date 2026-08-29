@@ -1029,7 +1029,7 @@ def test_the_result_repr_carries_only_counts_and_members() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Structural: no execution surface, no runner, no caller
+# Structural: no qualification-run execution surface, no runner, no caller
 # ---------------------------------------------------------------------------
 
 EXECUTION_LIKE = re.compile(

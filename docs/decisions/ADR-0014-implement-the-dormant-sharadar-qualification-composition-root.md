@@ -366,8 +366,8 @@ Recorded because they are the reason several rows above exist, and because a cor
 what it corrected teaches a later reader nothing.
 
 **An executable runtime escaped.** The composition was a class holding `_client`, `_store` and
-`_runtime`. This ADR claimed no attribute exposed the runtime, that there was no way to run
-anything, and that a first authenticated run would need new execution code. All three were false:
+`_runtime`. This ADR claimed no attribute exposed the runtime, that there was "no way to run
+anything", and that a first authenticated run would need new execution code. All three were false:
 `composition._runtime.execute(plan)` ran, using only what the object already handed out. The slice's
 own tests reached those attributes with `object.__getattribute__` to prove the components had been
 built — **which was the demonstration of the defect, not evidence of safety**. The correction is a

@@ -337,7 +337,7 @@ live brokerage execution, real-money operation.
 | Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
 | Any AWS mutation, read, verifier run or Terraform command | **NOT AUTHORIZED** — writing a client-shaped adapter is not permission to run one |
 | Real bucket binding · SDK client construction · credential source | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
-| [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED EFFECTIVE ON MERGE** — one dormant composition root exists; **execution surface NONE**, **runner NONE**, provider and AWS requests **ZERO** |
+| [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED EFFECTIVE ON MERGE** — one dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
 | Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -478,8 +478,8 @@ setup, configuration or binding · Secrets Manager use · any provider API call 
 token · Services Data · bulk download · empirical qualification · production backfill · production
 ingestion · Silver or Gold real data · production-provider selection · any AWS mutation, read,
 verifier run or Terraform command · ECR or ECS · image builds · real bucket binding · SDK client
-construction · a credential source · an execution surface on the composition root · a second
-composition root · an ingestion runner · CONTROL publication · broker or LEAN activity · Paper expansion · live
+construction · a credential source · a qualification-run execution surface on the composition root
+· a second composition root · an ingestion runner · CONTROL publication · broker or LEAN activity · Paper expansion · live
 trading. **G1 and G2 stay OPEN**, ADR-0005 stays **PROPOSED**, and Phase 3 stays **NOT COMPLETE**.
 
 **The published test token stays unauthorized deliberately.** The manual qualification harness is
@@ -493,7 +493,8 @@ request**: one module is network-capable, and importing the package opens no soc
 now constructed — by the dormant composition root (ADR-0014), from an **injected** transport and an
 **injected** credential, in a class whose only operation validates a plan offline. **No credential
 source exists**, so nothing can hand it a real key; nothing outside its own tests constructs it; and
-it has no execution surface to reach a transport through. Static tests prove each of those.
+its only exposed operation is offline plan validation, which reaches no transport. Static tests
+prove each of those.
 
 The transport is **pinned to one origin by parsing** the URL — scheme, host, port, empty userinfo,
 empty fragment and the documented path prefix — because `startswith("https://")` admits both a
@@ -706,7 +707,8 @@ closing this blocker removed one obstacle in front of *asking* for authorization
 nothing else: no credential, no client construction, no bucket binding, no runner. (A dormant
 composition root was authorized separately and later, under
 [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md);
-it has no execution surface and changes nothing about that authorization.)
+its only exposed operation is offline plan validation, it has no qualification-run execution
+surface, and it changes nothing about that authorization.)
 `BACKFILL` and `UPDATE` exist as production modes and **neither production operation is
 authorized**.
 

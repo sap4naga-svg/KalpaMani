@@ -426,7 +426,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
 | **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
-| **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it. One dormant composition root exists; **execution surface NONE**, **runner NONE**, provider and AWS requests **ZERO** |
+| **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -725,7 +725,8 @@ closing this blocker removed one obstacle in front of *asking* for authorization
 nothing else: no credential, no client construction, no bucket binding, no runner. (A dormant
 composition root was authorized separately and later, under
 [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md);
-it has no execution surface and changes nothing about that authorization.)
+its only exposed operation is offline plan validation, it has no qualification-run execution
+surface, and it changes nothing about that authorization.)
 `BACKFILL` and `UPDATE` exist as production modes and **neither production operation is
 authorized**.
 
@@ -921,11 +922,13 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                ADR-0012 dormant qualification runtime core -- ACCEPTED EFFECTIVE ON
                         MERGE OF PR #17, CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS
                ADR-0014 dormant composition root + offline preflight -- ACCEPTED EFFECTIVE
-                        ON MERGE, CODE ONLY, NO EXECUTION SURFACE, NEVER RUN
+                        ON MERGE, CODE ONLY, OFFLINE PREFLIGHT ONLY,
+                        NO QUALIFICATION-RUN EXECUTION SURFACE, NEVER RUN
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
                a credential source · real credential or bucket binding · SDK client construction
-               an execution surface on the composition root · a second composition root
+               a qualification-run execution surface on the composition root
+               a second composition root
                ANY provider API call · the published test token · Services Data · bulk download
                empirical qualification · production backfill · production ingestion
                Silver/Gold real data · production-provider SELECTION
@@ -948,8 +951,8 @@ dormant composition root
 ([ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)),
 from an **injected** transport and an **injected** credential, in a class whose only operation
 validates a plan offline. **No credential source exists**, so nothing can hand it a real key; nothing
-outside its own tests constructs it; and it has no execution surface to reach a transport through.
-Static tests prove each of those rather than asserting them.
+outside its own tests calls it; and its only exposed operation is offline plan validation, which
+reaches no transport. Static tests prove each of those rather than asserting them.
 
 | | |
 |---|---|
