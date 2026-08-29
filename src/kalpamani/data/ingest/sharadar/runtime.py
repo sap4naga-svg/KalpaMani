@@ -124,7 +124,6 @@ from kalpamani.data.contracts.errors import (
     PointInTimeError,
 )
 from kalpamani.data.contracts.vocabulary import (
-    AcquisitionMode,
     DataClassification,
     InformationSetProfile,
     closed_member,
@@ -140,6 +139,7 @@ from kalpamani.data.ingest.sharadar.qualification import (
     MAX_PAGES_PER_REQUEST,
     MAX_RUN_BYTES,
     PERMITTED_PROFILE,
+    QUALIFICATION_ACQUISITION_MODE,
     QualificationDefect,
     QualificationPlan,
     QualificationPlanError,
@@ -786,7 +786,7 @@ class QualificationRuntime:
                     # runtime performs exactly one kind of retrieval, and
                     # ADR-0013 gave that kind its own name -- so there is nothing
                     # left to choose and no parameter through which to choose it.
-                    acquisition_mode=AcquisitionMode.QUALIFICATION,
+                    acquisition_mode=QUALIFICATION_ACQUISITION_MODE,
                 )
             except ObjectAlreadyExistsError:
                 # A name is held by different content. Never overwritten: this is

@@ -42,6 +42,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -204,6 +205,89 @@ LOCAL_BRONZE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "bronze.py"
 #: the behavioural suite for the mode contract, including the completeness
 #: verifier the second revision left fail-open.
 ACQUISITION_MODE_TESTS = REPO_ROOT / "tests" / "unit" / "test_acquisition_mode_contract.py"
+
+#: ADR-0014: the one module authorized to construct the client, the licensed store
+#: and the qualification runtime, and the suite that proves it inert.
+ADR_COMPOSITION = (
+    DECISIONS / "ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md"
+)
+COMPOSITION_ROOT = PROVIDER_PACKAGE / "composition.py"
+PROVIDER_CLIENT = PROVIDER_PACKAGE / "client.py"
+
+#: Claims about the composition that are stronger than the code supports.
+#:
+#: Each was written in an earlier revision and each is false. A caller's
+#: arguments do not stop existing when a function returns -- the caller still owns
+#: them. A returned result is not "the only reachable object" in a running
+#: program. And offline preflight *validates*, which is work, so "no way to run
+#: anything" is wrong; the true, narrower claim is that there is no
+#: qualification-run execution surface.
+COMPOSITION_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "all unreachable: nothing holds them",
+    "the only reachable object",
+    "no way to run anything",
+    "and is unreachable when that call returns",
+    "and is unreachable after it",
+)
+
+#: The unscoped execution-surface claim, matched after normalisation.
+#:
+#: An earlier revision checked one exact literal, ``"execution surface     NONE"``,
+#: with the spacing a fenced status block happened to use. That missed the two
+#: places the claim actually did the damage -- the Markdown status rows, which
+#: write it as ``**execution surface NONE**``. A guard that only recognises the
+#: form it was written against is a guard for that form, not for the claim.
+#:
+#: Matched against text with emphasis and backticks removed and whitespace
+#: collapsed, so ``**execution surface NONE**``, `` `execution surface: NONE` ``
+#: and the multi-space fenced form are all one pattern. The optional colon is
+#: part of it.
+#:
+#: The *scoped* form is the correct claim and is permitted, which is why this is
+#: a search with a preceding-context test rather than a plain substring check:
+#: "qualification-run execution surface NONE" contains the wrong phrase inside
+#: the right one.
+UNSCOPED_EXECUTION_SURFACE: Final = re.compile(r"execution\s+surface\s*:?\s*NONE", re.IGNORECASE)
+
+#: What must precede the phrase for it to be the scoped, correct claim.
+EXECUTION_SURFACE_SCOPE: Final = "qualification-run "
+
+#: Markdown emphasis and code fencing. Removed before the scan, because a status
+#: row's asterisks are formatting and a guard that reads them as content is
+#: defeated by bolding the sentence.
+MARKDOWN_EMPHASIS: Final = re.compile(r"[*`]+")
+
+#: The object-lifetime claim, in whatever order it is written.
+#:
+#: "a local is unreachable when the call returns" is a garbage-collection claim
+#: dressed as a safety property. The enforced property is that nothing durable
+#: retains the object; whether it still exists is a different question, and one
+#: that is false-by-construction on an exception path where a traceback holds the
+#: frame. Matched semantically -- ``unreachable`` near a returning call -- rather
+#: than as the one sentence that happened to be written today.
+LIFETIME_CLAIM: Final = re.compile(
+    r"unreachable[^.]{0,90}?\b(?:when|after|once)\b[^.]{0,50}?\breturns?\b"
+    r"|\breturns?\b[^.]{0,60}?\bunreachable\b",
+    re.IGNORECASE,
+)
+
+#: Wording that marks a quoted phrase as something being *refuted* rather than
+#: asserted. Deliberately not a general "anything in quotes is exempt" rule: a
+#: current status row could otherwise bypass the guard by adding quotation marks.
+REFUTATION_MARKERS: Final = (
+    "would be false",
+    "was false",
+    "is false",
+    "were false",
+    "no longer true",
+    "an earlier revision",
+    "earlier revision of this adr",
+    "retired",
+    "unqualified",
+    "overclaim",
+    "corrected",
+)
+COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -673,6 +757,190 @@ def _conditional_mode_sites() -> list[str]:
                     )
                     if named or attributed:
                         offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    return offenders
+
+
+#: One double-quoted span, straight or curly, not crossing a paragraph.
+QUOTED_SPAN: Final = re.compile('["“][^"“”]{0,300}?["”]')
+
+
+def _is_refuted(text: str, start: int, end: int) -> bool:
+    """Whether the span at ``[start, end)`` sits inside a quotation explained as false.
+
+    Both halves are required. Quotation alone would be a general bypass -- a
+    current status row could keep its claim and add quotation marks -- so the
+    surrounding sentence must also say the phrase was wrong.
+
+    Containment, not adjacency. An earlier revision required the quote marks to
+    touch the match exactly, which failed on a quotation slightly wider than the
+    phrase: quoting *is unreachable when the call returns* encloses one word
+    more than the pattern matches. That is a normal way to quote something, and
+    a guard that mistook it for an assertion would push a writer toward not
+    explaining what they had corrected.
+    """
+    if not any(span.start() <= start and end <= span.end() for span in QUOTED_SPAN.finditer(text)):
+        return False
+    window = text[max(0, start - 400) : end + 400].lower()
+    return any(marker in window for marker in REFUTATION_MARKERS)
+
+
+def _composition_overclaims(text: str) -> list[str]:
+    """Every overclaim *asserted* in ``text``.
+
+    Normalised first: Markdown emphasis and backticks are removed and whitespace
+    is collapsed, so a claim cannot escape by being bolded, code-fenced or
+    line-wrapped. That is the whole reason this exists -- the previous revision
+    matched one exact literal and missed the two status rows that wrote the same
+    claim in bold.
+
+    A phrase is permitted only where it is quoted **and** the surrounding text
+    identifies it as false, so the documents can still explain what was
+    corrected without that becoming a way to keep asserting it.
+    """
+    normalised = re.sub(r"\s+", " ", MARKDOWN_EMPHASIS.sub("", text))
+    found: list[str] = []
+
+    for phrase in COMPOSITION_OVERCLAIMS:
+        target = re.sub(r"\s+", " ", phrase)
+        for match in re.finditer(re.escape(target), normalised):
+            if not _is_refuted(normalised, match.start(), match.end()):
+                found.append(phrase)
+                break
+
+    for match in UNSCOPED_EXECUTION_SURFACE.finditer(normalised):
+        if normalised[: match.start()].lower().endswith(EXECUTION_SURFACE_SCOPE):
+            continue  # the scoped form is the correct claim
+        if _is_refuted(normalised, match.start(), match.end()):
+            continue
+        found.append(f"unscoped execution-surface claim: {match.group(0)!r}")
+        break
+
+    for match in LIFETIME_CLAIM.finditer(normalised):
+        if _is_refuted(normalised, match.start(), match.end()):
+            continue
+        found.append(f"object-lifetime claim: {match.group(0)[:60]!r}")
+        break
+
+    return found
+
+
+def _composition_state_sites() -> list[str]:
+    """Every place the composition module stores a constructed component durably.
+
+    **Durable retention is the property, not object lifetime.** A local variable
+    is fine: the function neither returns it nor keeps it anywhere a later caller
+    can reach. An attribute on ``self``, a class attribute or a module global is
+    not -- the first revision of ADR-0014 stored all three on an instance, and
+    ``composition._runtime.execute(plan)`` worked.
+
+    Nothing here claims a local stops existing when the call returns. Whether it
+    does is a garbage-collection question this audit has no business answering,
+    and it is not what makes the composition dormant.
+    """
+    if not COMPOSITION_ROOT.is_file():
+        return []
+    built = {"SharadarClient", "S3ResearchObjectStore", "QualificationRuntime"}
+    offenders: list[str] = []
+    tree = ast.parse(read(COMPOSITION_ROOT), filename=str(COMPOSITION_ROOT))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id in built
+        ):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                offenders.append(f"line {node.lineno}: {ast.unparse(target)}")
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id != "__all__":
+                    offenders.append(f"module-level state: {target.id}")
+    return offenders
+
+
+def _qualification_mode_definitions() -> int:
+    """How many modules assign ``QUALIFICATION_ACQUISITION_MODE``. Expected: one.
+
+    Two independent statements of one fact is a dual-write, and the interesting
+    case is the one where they disagree.
+    """
+    count = 0
+    for path in _src_python_files():
+        for node in ast.walk(ast.parse(read(path), filename=str(path))):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            count += sum(
+                1
+                for target in targets
+                if isinstance(target, ast.Name) and target.id == "QUALIFICATION_ACQUISITION_MODE"
+            )
+    return count
+
+
+def _src_python_files() -> list[Path]:
+    return [p for p in sorted((REPO_ROOT / "src").rglob("*.py")) if "__pycache__" not in p.parts]
+
+
+def _store_construction_sites() -> list[Path]:
+    """Every module under ``src/`` that constructs the licensed object store."""
+    sites: list[Path] = []
+    for path in _src_python_files():
+        tree = ast.parse(read(path), filename=str(path))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "S3ResearchObjectStore"
+            for node in ast.walk(tree)
+        ):
+            sites.append(path)
+    return sites
+
+
+def _aws_sdk_import_sites() -> list[str]:
+    """Every module under ``src/`` that imports the AWS SDK. Expected: none.
+
+    The SDK is a declared dependency because a *future* authorized runner must
+    construct a signed client; the composition root receives one instead, so the
+    data platform still imports no AWS code.
+    """
+    offenders: list[str] = []
+    for path in _src_python_files():
+        for node in ast.walk(ast.parse(read(path), filename=str(path))):
+            names: set[str] = set()
+            if isinstance(node, ast.Import):
+                names = {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = {node.module}
+            if {name.split(".")[0] for name in names} & {"boto3", "botocore"}:
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    return offenders
+
+
+def _composition_construction_sites() -> list[str]:
+    """Every place the composition is constructed outside its own test module."""
+    offenders: list[str] = []
+    roots = (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts or path == COMPOSITION_TESTS:
+                continue
+            for node in ast.walk(ast.parse(read(path), filename=str(path))):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "SharadarQualificationComposition"
+                ):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return offenders
 
 
@@ -3532,15 +3800,18 @@ def main() -> int:
             f"{name} states that the control is absence rather than care, and scopes it",
             "retrieved, inspected, created, configured or bound anywhere in this repository" in flat
             and "no bucket identifier is bound to the adapter" in flat
-            and "no module constructs a client" in flat,
+            # ADR-0014 narrowed this. A *client* is constructed now -- the Sharadar
+            # one, from an injected transport -- so the true claim is about the AWS
+            # SDK client, which nothing builds because no credential source exists.
+            and "no module constructs an SDK client" in flat,
             "the store is safe because nothing binds it to AWS -- said as a claim about this "
             "repository, not as a claim about the owner's account",
         )
         f.check(
             f"{name} no longer claims that nothing calls the object store",
             "no module constructs a client or calls the store" not in flat,
-            "ADR-0012's runtime calls it, on an injected store; the narrower true claim is "
-            "that no composition root exists",
+            "ADR-0012's runtime calls it, on an injected store, and ADR-0014's composition "
+            "root constructs it; the narrower true claim is that nothing binds it to AWS",
         )
         f.check(
             f"{name} names the composition root as the thing that is absent",
@@ -4163,12 +4434,24 @@ def main() -> int:
         )
         f.check(
             "the plan carries no caller-controlled acquisition mode",
+            # The module *defines* QUALIFICATION_ACQUISITION_MODE, which is the
+            # single source; what must not exist is a lowercase field, parameter
+            # or keyword a caller could set.
             "acquisition_mode" not in plan_source and "is_backfill" not in plan_source,
             "a plan field would let a caller label evidence as a production backfill",
         )
         f.check(
-            "the runtime names the qualification mode directly",
-            "acquisition_mode=AcquisitionMode.QUALIFICATION" in runtime_source,
+            "the qualification module owns the single-source acquisition mode",
+            "QUALIFICATION_ACQUISITION_MODE: Final = AcquisitionMode.QUALIFICATION" in plan_source
+            and '"QUALIFICATION_ACQUISITION_MODE",' in plan_source,
+            "one fact stated once, and exported so nothing has to restate it",
+        )
+        f.check(
+            "the runtime records the single-source qualification mode",
+            "acquisition_mode=QUALIFICATION_ACQUISITION_MODE" in runtime_source
+            # Docstring-stripped: the module *documents* what the constant
+            # resolves to, and a raw scan would forbid saying so.
+            and "AcquisitionMode.QUALIFICATION" not in _executable_python(QUALIFICATION_RUNTIME),
             "the mode must be fixed here and unreachable from a plan or a caller",
         )
         f.check(
@@ -4816,6 +5099,491 @@ def main() -> int:
             "Neither determines `acquisition_mode`" in contract
             or "does **not** set, confirm or contradict `acquisition_mode`" in contract,
             "record counts and coverage extension are observations",
+        )
+
+    # -- 21. ADR-0014: the dormant composition root and offline preflight ----
+    #
+    # This section exists because the slice *changed a standing claim*. Every
+    # earlier status document said no composition root existed, and that was
+    # true. The replacement is narrower and has to be held to: one root, no
+    # execution surface, no runner, no bindings, and zero requests.
+
+    f.check(
+        "ADR-0014 exists",
+        ADR_COMPOSITION.is_file(),
+        f"missing: {ADR_COMPOSITION}",
+    )
+    if ADR_COMPOSITION.is_file():
+        adr14 = read(ADR_COMPOSITION)
+        flat14 = " ".join(
+            " ".join(line.lstrip("> ") for line in adr14.replace("**", "").splitlines()).split()
+        )
+        f.check(
+            "ADR-0014 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr14 and "carries no authority" in adr14,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0014 records the owner's authorization boundary verbatim",
+            "Scope is limited to: code; tests; documentation; audits; and synthetic/local"
+            in flat14,
+            "the boundary a slice was given is the boundary it must be read against",
+        )
+        f.check(
+            "ADR-0014 records that the composition is code-only and dormant",
+            "code, tests, documentation, audits and synthetic/local validation only" in flat14,
+            "authorizing wiring is not authorizing a run",
+        )
+        f.check(
+            "ADR-0014 records that preflight validates construction and the plan",
+            "calls `QualificationRuntime.validate` and nothing else" in flat14,
+            "validate is the whole surface; execute is the thing that is absent",
+        )
+        f.check(
+            "ADR-0014 enumerates what preflight does not do",
+            all(
+                token in flat14
+                for token in (
+                    "a fetch",
+                    "a publication",
+                    "a provider call",
+                    "an AWS call",
+                    "a credential retrieval",
+                    "an environment lookup",
+                    "a file read",
+                )
+            ),
+            "an absence stated as a list is one a reader can check item by item",
+        )
+        f.check(
+            "ADR-0014 records that there is no public execution method",
+            "no qualification-run execution surface" in flat14
+            and "no provider-fetch operation" in flat14
+            and "no object-publication operation" in flat14
+            and "no object to hold a runtime and no attribute to reach one through" in flat14,
+            "a private attribute is reachable; only an absent object is not",
+        )
+        f.check(
+            "ADR-0014 records that the first authenticated run stays separately gated",
+            "The first authenticated qualification run remains separately gated" in flat14,
+            "the gate is the absence of the code, and it must be said beside the wiring",
+        )
+        f.check(
+            "ADR-0014 selects no provider and closes no gate",
+            "selects no provider" in flat14
+            and all(
+                token in adr14
+                for token in ("G1 OPEN", "G2 OPEN", "G4 OPEN", "G5 OPEN", "G6 OPEN", "G7 OPEN")
+            )
+            and "ADR-0005 remains" in adr14
+            and "INC-0002 remains" in adr14,
+            "joining five slices is not selecting a production provider",
+        )
+        f.check(
+            "ADR-0014 records that QUALIFICATION stays fixed by the runtime",
+            "remains fixed by the qualification runtime" in flat14
+            and "nothing for a caller to supply or override" in flat14,
+            "a mode a caller could choose would be a production operation with a name",
+        )
+        f.check(
+            "ADR-0014 keeps CONTROL publication deferred",
+            "CONTROL publication remains DEFERRED and NOT AUTHORIZED" in flat14,
+            "the store refuses CONTROL at admission and nothing here changes that",
+        )
+        f.check(
+            "ADR-0014 keeps real bindings and external activity unauthorized",
+            "credential retrieval, inspection, creation, setup, storage or real binding" in flat14
+            and "bucket discovery or real binding" in flat14
+            and "AWS session or client construction" in flat14,
+            "wiring that could be given real bindings is not permission to give it any",
+        )
+        f.check(
+            "ADR-0014 supersedes only the live no-composition-root claim",
+            'live "no composition root exists" claim only' in adr14
+            and "Accepted ADRs are not rewritten" in flat14,
+            "historical ADR text is evidence and is never edited",
+        )
+        f.check(
+            "ADR-0014 discloses the escaping-runtime defect its first revision contained",
+            "A leading underscore is a naming convention, not an execution barrier" in flat14
+            and "composition._runtime.execute(plan)` ran" in flat14,
+            "a correction that conceals what it corrected teaches a later reader nothing",
+        )
+        f.check(
+            "ADR-0014 records the composition as a function, not a stateful object",
+            "as one function" in flat14 and "no stateful object" in flat14,
+            "the non-escape property has to be structural, not a naming convention",
+        )
+        f.check(
+            "ADR-0014 distinguishes local construction from real binding",
+            'Precisely what "no construction" does and does not mean here' in flat14
+            and "AWS SDK session or S3-client construction" in flat14
+            and "real bucket binding" in flat14,
+            "a blanket 'client construction: NONE' was false once a client is built",
+        )
+        f.check(
+            "ADR-0014 records that the result cannot describe an impossible run",
+            "must describe a plan that could actually have passed" in flat14
+            and "same compiled constants" in flat14,
+            "zero requests and zero bytes described a validation that never happened",
+        )
+        f.check(
+            "ADR-0014 records the transport contract at its owning boundary",
+            "The transport contract is enforced where it is owned" in flat14
+            and "A bound is not a bound if the thing it bounds can move it" in flat14,
+            "a Protocol annotation is a static claim, and nothing checked it",
+        )
+        f.check(
+            "ADR-0014 records one acquisition-mode constant in one module",
+            "One acquisition-mode constant, in the module that owns it" in flat14
+            and "defined once" in flat14,
+            "two independent statements of one fact is a dual-write",
+        )
+        f.check(
+            "ADR-0014 records that offline validation is itself work",
+            "validation is work" in flat14 and "an earlier revision of this ADR did" in flat14,
+            "'no way to run anything' was false while preflight validates a plan",
+        )
+        f.check(
+            "ADR-0014 records that the caller keeps ownership of its arguments",
+            "caller keeps ownership of everything it passed in" in flat14
+            and "neither takes them over nor makes them go away" in flat14,
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
+            "ADR-0014 scopes the retention claim away from object lifetime",
+            "a claim about retention, not about object lifetime" in flat14
+            and "makes no garbage-collection claim" in flat14
+            and "a traceback may hold a frame" in flat14,
+            "a guarantee that is false on an exception path is not a guarantee",
+        )
+        f.check(
+            "ADR-0014 makes no composition overclaim",
+            not _composition_overclaims(adr14),
+            "each of these was written once and each is stronger than the code supports",
+        )
+        f.check(
+            "ADR-0014 records the status vocabulary as a control",
+            "VALIDATED_OFFLINE" in adr14
+            and "Preflight is not a verdict" in flat14
+            and all(word in adr14 for word in ("READY", "PROCEED", "APPROVED", "QUALIFIED")),
+            "a status word a caller could read as permission is a governance defect",
+        )
+
+    # -- the module, as code -------------------------------------------------
+    f.check(
+        "the composition root exists",
+        COMPOSITION_ROOT.is_file(),
+        f"missing: {COMPOSITION_ROOT}",
+    )
+    if COMPOSITION_ROOT.is_file():
+        composition = _executable_python(COMPOSITION_ROOT)
+        f.check(
+            "the composition constructs the three accepted components",
+            all(
+                token in composition
+                for token in (
+                    "SharadarClient(",
+                    "S3ResearchObjectStore(",
+                    "QualificationRuntime(",
+                )
+            ),
+            "a composition root that constructs nothing is a name, not a slice",
+        )
+        f.check(
+            "the composition exposes offline preflight and calls only validate",
+            "def preflight_qualification_composition(" in composition
+            and "runtime.validate(plan)" in composition,
+            "validate fetches nothing and stores nothing; that is the whole dormancy claim",
+        )
+        f.check(
+            "the composition has no qualification-run execution surface",
+            "execute" not in composition
+            and not any(
+                f"def {verb}" in composition
+                for verb in ("run", "fetch", "publish", "upload", "main", "ingest")
+            ),
+            "a private spelling hides a callable from a reviewer, not from a caller",
+        )
+        f.check(
+            "the composition is a function, holding no state a caller could reach",
+            not _composition_state_sites(),
+            "a leading underscore is a naming convention, not an execution barrier",
+        )
+        f.check(
+            "the composition builds its components as locals only",
+            all(
+                f"    {name} = {name.capitalize() if False else construction}(" in composition
+                for name, construction in (
+                    ("client", "SharadarClient"),
+                    ("store", "S3ResearchObjectStore"),
+                    ("runtime", "QualificationRuntime"),
+                )
+            ),
+            "a local is not retained; an attribute on self, a class or a module is",
+        )
+        f.check(
+            "the preflight result is bounded by the compiled constants",
+            all(
+                constant in composition
+                for constant in (
+                    "MAX_REQUESTS",
+                    "MAX_ATTEMPTS_CEILING",
+                    "MAX_RESPONSE_BYTES",
+                    "MAX_RUN_BYTES",
+                    "MAX_RETRY_BUDGET",
+                )
+            ),
+            "a second set of numbers beside the plan's is a second thing to drift",
+        )
+        f.check(
+            "the preflight result refuses counts no validated plan could produce",
+            "if self.max_response_bytes > self.max_run_bytes:" in composition
+            and "self.request_count * (self.max_attempts - 1) > self.retry_budget" in composition,
+            "zero requests and zero bytes described a run that never happened",
+        )
+        f.check(
+            "the composition module makes no reachability overclaim",
+            not _composition_overclaims(read(COMPOSITION_ROOT)),
+            "the module's own prose is read as the contract more often than the ADR",
+        )
+        f.check(
+            "the composition states that the caller keeps its arguments",
+            "The caller keeps what the caller passed in" in read(COMPOSITION_ROOT)
+            and "caller-owned arguments" in read(COMPOSITION_ROOT),
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
+            "the composition reads the single-source acquisition mode",
+            "QUALIFICATION_ACQUISITION_MODE" in composition
+            and "AcquisitionMode.QUALIFICATION" not in composition,
+            "two independent spellings of one fact is a dual-write",
+        )
+        f.check(
+            "the composition has no runner, entry point or argument parsing",
+            'if __name__ == "__main__"' not in composition
+            and "argparse" not in composition
+            and "sys.argv" not in composition
+            and "subprocess" not in composition,
+            "an entry point is what turns dormant code into something a scheduler runs",
+        )
+        f.check(
+            "the composition reads no environment, no file and no credential source",
+            not any(
+                token in composition
+                for token in ("os.environ", "getenv", "credential_from_env", "reveal(", "open(")
+            ),
+            "a credential source is the one binding that would make this live",
+        )
+        f.check(
+            "the composition imports no SDK and no network client",
+            not any(
+                f"import {module}" in composition
+                for module in ("boto3", "botocore", "urllib", "requests", "socket", "os", "sys")
+            ),
+            "the S3 client is injected here as it is everywhere else",
+        )
+        f.check(
+            "the composition names no host, bucket, endpoint, ARN or account",
+            re.search(r"(https?://|s3://|arn:aws|amazonaws\.com|\b\d{12}\b)", composition) is None,
+            "a real identifier in a dormant module is a real identifier",
+        )
+        f.check(
+            "the composition admits only the provider-realistic profile",
+            "PERMITTED_PROFILE" in composition and "PUBLIC_PIT" not in composition,
+            "PUBLIC_PIT is refused by the type and is not named here at all",
+        )
+        f.check(
+            "the composition fixes the acquisition mode and offers no override",
+            "QUALIFICATION_ACQUISITION_MODE" in composition
+            and "acquisition_mode="
+            not in composition.replace("acquisition_mode=QUALIFICATION_ACQUISITION_MODE", ""),
+            "one kind of retrieval, so there is nothing to choose",
+        )
+        f.check(
+            "the composition uses no wording implying permission to run",
+            not any(
+                word in composition
+                for word in ("PROCEED", "APPROVED", "QUALIFIED", "AUTHORIZED", "READY")
+            ),
+            "a caller must not be able to read arithmetic as permission",
+        )
+        f.check(
+            "the composition does not touch the private harness or the test token",
+            "sharadar_private_qualification" not in read(COMPOSITION_ROOT)
+            and "test-api-key" not in read(COMPOSITION_ROOT),
+            "the harness is an owner-run instrument and is not the composition root",
+        )
+
+    if PROVIDER_CLIENT.is_file():
+        client_source = _executable_python(PROVIDER_CLIENT)
+        f.check(
+            "the client requires a callable transport get",
+            "if not callable(get):" in client_source,
+            "a Protocol annotation is a static claim; this is the runtime half",
+        )
+        f.check(
+            "the client resolves the response ceiling once, at construction",
+            "self._max_response_bytes = _resolve_response_ceiling(transport)" in client_source
+            and "return self._max_response_bytes" in client_source,
+            "a bound is not a bound if the thing it bounds can move it",
+        )
+        f.check(
+            "the client retains the validated transport operation and calls that one",
+            "_transport_get" in client_source
+            and "self._transport_get = get" in client_source
+            and "self._transport_get(" in client_source
+            and "self._transport." not in client_source,
+            "checking one object and invoking another is not validation",
+        )
+        f.check(
+            "the client sanitizes a raising transport declaration",
+            "def _resolve_response_ceiling" in client_source and "from None" in client_source,
+            "a dependency's own exception text must not become the refusal",
+        )
+
+    f.check(
+        "exactly one assignment defines the qualification acquisition mode",
+        _qualification_mode_definitions() == 1,
+        "one fact, one statement; two copies cannot be reconciled after the fact",
+    )
+    f.check(
+        "exactly one module under src/ constructs the licensed store",
+        [path.name for path in _store_construction_sites()] == ["composition.py"],
+        "the permission is one named module, not a count that could drift",
+    )
+    f.check(
+        "no module under src/ imports the AWS SDK",
+        not _aws_sdk_import_sites(),
+        "the SDK is declared so a future runner can construct a signed client",
+    )
+    f.check(
+        "nothing outside its own tests constructs the composition",
+        not _composition_construction_sites(),
+        "the wiring exists and nobody uses it -- the whole slice in one property",
+    )
+
+    # -- the behavioural suite ------------------------------------------------
+    if COMPOSITION_TESTS.is_file():
+        composition_tests = read(COMPOSITION_TESTS)
+        for label, needle in (
+            ("required inputs", "test_every_composition_input_is_required_and_keyword_only"),
+            ("the constructed components", "test_the_three_accepted_components_are_constructed"),
+            ("validate rather than execute", "test_preflight_calls_validate_and_never_execute"),
+            ("the offline status", "test_a_bounded_plan_validates_offline"),
+            (
+                "derived ceilings",
+                "test_the_reported_numbers_are_derived_from_the_plan_and_the_client",
+            ),
+            ("the fixed mode", "test_no_caller_can_supply_or_override_the_acquisition_mode"),
+            ("the profile", "test_the_profile_is_exactly_provider_realistic_pit"),
+            ("zero provider and S3 calls", "test_a_successful_preflight_touches_no_transport"),
+            ("no publication", "test_no_object_store_publication_occurs"),
+            ("no credential reveal", "test_the_credential_is_never_revealed"),
+            ("no execution-like callable", "test_the_module_has_no_execution_like_callable"),
+            ("no escaping component", "test_no_executable_component_escapes_the_preflight"),
+            ("no retained state", "test_the_module_holds_no_stateful_composition_object"),
+            (
+                "no durable component assignment",
+                "test_no_assignment_stores_a_constructed_component_anywhere_durable",
+            ),
+            ("no returned component or closure", "test_the_module_returns_no_component_closure"),
+            (
+                "every adversarial result value",
+                "test_the_result_refuses_a_value_no_validated_plan_could_produce",
+            ),
+            ("every legitimate boundary", "test_the_result_accepts_every_legitimate_boundary"),
+            ("a transport without get", "test_a_transport_without_get_is_refused"),
+            ("a frozen response ceiling", "test_the_transport_ceiling_is_read_exactly_once"),
+            (
+                "a mutating transport",
+                "test_changing_the_transport_after_construction_cannot_move_the_ceiling",
+            ),
+            ("no caller anywhere", "test_nothing_calls_the_composition_outside_this_file"),
+            ("the leak canaries", "test_no_canary_reaches_the_result_its_repr_or_captured_output"),
+        ):
+            f.check(
+                f"a composition test covers {label}",
+                needle in composition_tests,
+                "the ADR's verification table must name tests that exist",
+            )
+
+    # -- the current documentation --------------------------------------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records that one dormant composition root exists",
+            "ADR-0014" in flat
+            and "composition           ONE function, and no stateful object" in body,
+            "the standing 'composition root: NONE' claim is no longer true",
+        )
+        f.check(
+            f"{name} records that it constructs from injected values",
+            "It constructs from injected values only" in flat,
+            "constructing from injections is what keeps a constructed component inert",
+        )
+        f.check(
+            f"{name} records that it exposes validation only",
+            "exposed operation     offline preflight -- plan validation, and only that" in body
+            and "qualification-run execution surface: NONE" in body,
+            "validation is work, so the absence has to be scoped to a qualification run",
+        )
+        f.check(
+            f"{name} records the four absences that keep it dormant",
+            all(
+                token in body
+                for token in (
+                    "components            LOCALS, built inside one call, not returned",
+                    "provider-fetch operation: NONE",
+                    "object-publication operation: NONE",
+                    "runner                NONE",
+                    "retained state        NONE",
+                    "credential retrieval  NONE",
+                    "real credential binding: NONE",
+                    "real bucket binding: NONE",
+                    "AWS SDK session / S3-client construction: NONE",
+                )
+            ),
+            "each is separately checkable, so each is separately stated",
+        )
+        f.check(
+            f"{name} records zero provider and AWS requests beside the composition",
+            "Sharadar requests: ZERO   \u00b7   AWS requests: ZERO   \u00b7   Services Data: NONE"
+            in body,
+            "a composition that had sent one request would be a different slice",
+        )
+        f.check(
+            f"{name} keeps the first authenticated run separately gated",
+            "The first authenticated qualification run remains separately gated" in flat,
+            "the wiring must never read as an approach to running",
+        )
+        f.check(
+            f"{name} records that the caller keeps ownership of what it passed in",
+            "caller-owned arguments" in body
+            and "keeps ownership of every argument it passes in" in flat,
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
+            f"{name} scopes the retention claim away from object lifetime",
+            "about what *this function and its result* retain, not about object lifetimes" in flat
+            and "not asserted on an exception path" in flat,
+            "a traceback can hold a frame for as long as the caller keeps the exception",
+        )
+        f.check(
+            f"{name} makes no composition overclaim",
+            not _composition_overclaims(body),
+            "each of these was written once and each is stronger than the code supports",
+        )
+        f.check(
+            f"{name} states that the guards were narrowed rather than deleted",
+            "architecture guards were narrowed, not deleted" in flat,
+            "a guard removed to accommodate a slice is a guard that stopped guarding",
         )
 
     # ---------------------------------------------------------------- verdict
