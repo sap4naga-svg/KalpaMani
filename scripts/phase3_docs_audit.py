@@ -204,6 +204,14 @@ LOCAL_BRONZE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "bronze.py"
 #: the behavioural suite for the mode contract, including the completeness
 #: verifier the second revision left fail-open.
 ACQUISITION_MODE_TESTS = REPO_ROOT / "tests" / "unit" / "test_acquisition_mode_contract.py"
+
+#: ADR-0014: the one module authorized to construct the client, the licensed store
+#: and the qualification runtime, and the suite that proves it inert.
+ADR_COMPOSITION = (
+    DECISIONS / "ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md"
+)
+COMPOSITION_ROOT = PROVIDER_PACKAGE / "composition.py"
+COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -673,6 +681,65 @@ def _conditional_mode_sites() -> list[str]:
                     )
                     if named or attributed:
                         offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    return offenders
+
+
+def _src_python_files() -> list[Path]:
+    return [p for p in sorted((REPO_ROOT / "src").rglob("*.py")) if "__pycache__" not in p.parts]
+
+
+def _store_construction_sites() -> list[Path]:
+    """Every module under ``src/`` that constructs the licensed object store."""
+    sites: list[Path] = []
+    for path in _src_python_files():
+        tree = ast.parse(read(path), filename=str(path))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "S3ResearchObjectStore"
+            for node in ast.walk(tree)
+        ):
+            sites.append(path)
+    return sites
+
+
+def _aws_sdk_import_sites() -> list[str]:
+    """Every module under ``src/`` that imports the AWS SDK. Expected: none.
+
+    The SDK is a declared dependency because a *future* authorized runner must
+    construct a signed client; the composition root receives one instead, so the
+    data platform still imports no AWS code.
+    """
+    offenders: list[str] = []
+    for path in _src_python_files():
+        for node in ast.walk(ast.parse(read(path), filename=str(path))):
+            names: set[str] = set()
+            if isinstance(node, ast.Import):
+                names = {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = {node.module}
+            if {name.split(".")[0] for name in names} & {"boto3", "botocore"}:
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    return offenders
+
+
+def _composition_construction_sites() -> list[str]:
+    """Every place the composition is constructed outside its own test module."""
+    offenders: list[str] = []
+    roots = (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts or path == COMPOSITION_TESTS:
+                continue
+            for node in ast.walk(ast.parse(read(path), filename=str(path))):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "SharadarQualificationComposition"
+                ):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return offenders
 
 
@@ -3532,15 +3599,18 @@ def main() -> int:
             f"{name} states that the control is absence rather than care, and scopes it",
             "retrieved, inspected, created, configured or bound anywhere in this repository" in flat
             and "no bucket identifier is bound to the adapter" in flat
-            and "no module constructs a client" in flat,
+            # ADR-0014 narrowed this. A *client* is constructed now -- the Sharadar
+            # one, from an injected transport -- so the true claim is about the AWS
+            # SDK client, which nothing builds because no credential source exists.
+            and "no module constructs an SDK client" in flat,
             "the store is safe because nothing binds it to AWS -- said as a claim about this "
             "repository, not as a claim about the owner's account",
         )
         f.check(
             f"{name} no longer claims that nothing calls the object store",
             "no module constructs a client or calls the store" not in flat,
-            "ADR-0012's runtime calls it, on an injected store; the narrower true claim is "
-            "that no composition root exists",
+            "ADR-0012's runtime calls it, on an injected store, and ADR-0014's composition "
+            "root constructs it; the narrower true claim is that nothing binds it to AWS",
         )
         f.check(
             f"{name} names the composition root as the thing that is absent",
@@ -4816,6 +4886,303 @@ def main() -> int:
             "Neither determines `acquisition_mode`" in contract
             or "does **not** set, confirm or contradict `acquisition_mode`" in contract,
             "record counts and coverage extension are observations",
+        )
+
+    # -- 21. ADR-0014: the dormant composition root and offline preflight ----
+    #
+    # This section exists because the slice *changed a standing claim*. Every
+    # earlier status document said no composition root existed, and that was
+    # true. The replacement is narrower and has to be held to: one root, no
+    # execution surface, no runner, no bindings, and zero requests.
+
+    f.check(
+        "ADR-0014 exists",
+        ADR_COMPOSITION.is_file(),
+        f"missing: {ADR_COMPOSITION}",
+    )
+    if ADR_COMPOSITION.is_file():
+        adr14 = read(ADR_COMPOSITION)
+        flat14 = " ".join(
+            " ".join(line.lstrip("> ") for line in adr14.replace("**", "").splitlines()).split()
+        )
+        f.check(
+            "ADR-0014 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr14 and "carries no authority" in adr14,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0014 records the owner's authorization boundary verbatim",
+            "Scope is limited to: code; tests; documentation; audits; and synthetic/local"
+            in flat14,
+            "the boundary a slice was given is the boundary it must be read against",
+        )
+        f.check(
+            "ADR-0014 records that the composition is code-only and dormant",
+            "code, tests, documentation, audits and synthetic/local validation only" in flat14,
+            "authorizing wiring is not authorizing a run",
+        )
+        f.check(
+            "ADR-0014 records that preflight validates construction and the plan",
+            "calls `QualificationRuntime.validate` and nothing else" in flat14,
+            "validate is the whole surface; execute is the thing that is absent",
+        )
+        f.check(
+            "ADR-0014 enumerates what preflight does not do",
+            all(
+                token in flat14
+                for token in (
+                    "a fetch",
+                    "a publication",
+                    "a provider call",
+                    "an AWS call",
+                    "a credential retrieval",
+                    "an environment lookup",
+                    "a file read",
+                )
+            ),
+            "an absence stated as a list is one a reader can check item by item",
+        )
+        f.check(
+            "ADR-0014 records that there is no public execution method",
+            "There is no execution surface" in adr14
+            and "no attribute exposing the runtime" in flat14,
+            "a private spelling of execute is still an execution surface",
+        )
+        f.check(
+            "ADR-0014 records that the first authenticated run stays separately gated",
+            "The first authenticated qualification run remains separately gated" in flat14,
+            "the gate is the absence of the code, and it must be said beside the wiring",
+        )
+        f.check(
+            "ADR-0014 selects no provider and closes no gate",
+            "selects no provider" in flat14
+            and all(
+                token in adr14
+                for token in ("G1 OPEN", "G2 OPEN", "G4 OPEN", "G5 OPEN", "G6 OPEN", "G7 OPEN")
+            )
+            and "ADR-0005 remains" in adr14
+            and "INC-0002 remains" in adr14,
+            "joining five slices is not selecting a production provider",
+        )
+        f.check(
+            "ADR-0014 records that QUALIFICATION stays fixed by the runtime",
+            "remains fixed by the qualification runtime" in flat14
+            and "nothing for a caller to supply or override" in flat14,
+            "a mode a caller could choose would be a production operation with a name",
+        )
+        f.check(
+            "ADR-0014 keeps CONTROL publication deferred",
+            "CONTROL publication remains DEFERRED and NOT AUTHORIZED" in flat14,
+            "the store refuses CONTROL at admission and nothing here changes that",
+        )
+        f.check(
+            "ADR-0014 keeps real bindings and external activity unauthorized",
+            "credential retrieval, inspection, creation, setup, storage or real binding" in flat14
+            and "bucket discovery or real binding" in flat14
+            and "AWS session or client construction" in flat14,
+            "wiring that could be given real bindings is not permission to give it any",
+        )
+        f.check(
+            "ADR-0014 supersedes only the live no-composition-root claim",
+            'live "no composition root exists" claim only' in adr14
+            and "Accepted ADRs are not rewritten" in flat14,
+            "historical ADR text is evidence and is never edited",
+        )
+        f.check(
+            "ADR-0014 records the status vocabulary as a control",
+            "VALIDATED_OFFLINE" in adr14
+            and "Preflight is not a verdict" in flat14
+            and all(word in adr14 for word in ("READY", "PROCEED", "APPROVED", "QUALIFIED")),
+            "a status word a caller could read as permission is a governance defect",
+        )
+
+    # -- the module, as code -------------------------------------------------
+    f.check(
+        "the composition root exists",
+        COMPOSITION_ROOT.is_file(),
+        f"missing: {COMPOSITION_ROOT}",
+    )
+    if COMPOSITION_ROOT.is_file():
+        composition = _executable_python(COMPOSITION_ROOT)
+        f.check(
+            "the composition constructs the three accepted components",
+            all(
+                token in composition
+                for token in (
+                    "SharadarClient(",
+                    "S3ResearchObjectStore(",
+                    "QualificationRuntime(",
+                )
+            ),
+            "a composition root that constructs nothing is a name, not a slice",
+        )
+        f.check(
+            "the composition exposes offline preflight and calls only validate",
+            "def preflight(" in composition and "self._runtime.validate(plan)" in composition,
+            "validate fetches nothing and stores nothing; that is the whole dormancy claim",
+        )
+        f.check(
+            "the composition has no execution surface",
+            "execute" not in composition
+            and not any(
+                f"def {verb}" in composition
+                for verb in ("run", "fetch", "publish", "upload", "main", "ingest")
+            ),
+            "a private spelling hides a method from a reviewer, not from a caller",
+        )
+        f.check(
+            "the composition has no runner, entry point or argument parsing",
+            'if __name__ == "__main__"' not in composition
+            and "argparse" not in composition
+            and "sys.argv" not in composition
+            and "subprocess" not in composition,
+            "an entry point is what turns dormant code into something a scheduler runs",
+        )
+        f.check(
+            "the composition reads no environment, no file and no credential source",
+            not any(
+                token in composition
+                for token in ("os.environ", "getenv", "credential_from_env", "reveal(", "open(")
+            ),
+            "a credential source is the one binding that would make this live",
+        )
+        f.check(
+            "the composition imports no SDK and no network client",
+            not any(
+                f"import {module}" in composition
+                for module in ("boto3", "botocore", "urllib", "requests", "socket", "os", "sys")
+            ),
+            "the S3 client is injected here as it is everywhere else",
+        )
+        f.check(
+            "the composition names no host, bucket, endpoint, ARN or account",
+            re.search(r"(https?://|s3://|arn:aws|amazonaws\.com|\b\d{12}\b)", composition) is None,
+            "a real identifier in a dormant module is a real identifier",
+        )
+        f.check(
+            "the composition admits only the provider-realistic profile",
+            "PERMITTED_PROFILE" in composition and "PUBLIC_PIT" not in composition,
+            "PUBLIC_PIT is refused by the type and is not named here at all",
+        )
+        f.check(
+            "the composition fixes the acquisition mode and offers no override",
+            "QUALIFICATION_ACQUISITION_MODE" in composition
+            and "acquisition_mode="
+            not in composition.replace("acquisition_mode=QUALIFICATION_ACQUISITION_MODE", ""),
+            "one kind of retrieval, so there is nothing to choose",
+        )
+        f.check(
+            "the composition uses no wording implying permission to run",
+            not any(
+                word in composition
+                for word in ("PROCEED", "APPROVED", "QUALIFIED", "AUTHORIZED", "READY")
+            ),
+            "a caller must not be able to read arithmetic as permission",
+        )
+        f.check(
+            "the composition does not touch the private harness or the test token",
+            "sharadar_private_qualification" not in read(COMPOSITION_ROOT)
+            and "test-api-key" not in read(COMPOSITION_ROOT),
+            "the harness is an owner-run instrument and is not the composition root",
+        )
+
+    f.check(
+        "exactly one module under src/ constructs the licensed store",
+        [path.name for path in _store_construction_sites()] == ["composition.py"],
+        "the permission is one named module, not a count that could drift",
+    )
+    f.check(
+        "no module under src/ imports the AWS SDK",
+        not _aws_sdk_import_sites(),
+        "the SDK is declared so a future runner can construct a signed client",
+    )
+    f.check(
+        "nothing outside its own tests constructs the composition",
+        not _composition_construction_sites(),
+        "the wiring exists and nobody uses it -- the whole slice in one property",
+    )
+
+    # -- the behavioural suite ------------------------------------------------
+    if COMPOSITION_TESTS.is_file():
+        composition_tests = read(COMPOSITION_TESTS)
+        for label, needle in (
+            ("required inputs", "test_every_composition_input_is_required_and_keyword_only"),
+            ("the constructed components", "test_the_three_accepted_components_are_constructed"),
+            ("validate rather than execute", "test_preflight_calls_validate_and_never_execute"),
+            ("the offline status", "test_a_bounded_plan_validates_offline"),
+            (
+                "derived ceilings",
+                "test_the_reported_numbers_are_derived_from_the_plan_and_the_client",
+            ),
+            ("the fixed mode", "test_no_caller_can_supply_or_override_the_acquisition_mode"),
+            ("the profile", "test_the_profile_is_exactly_provider_realistic_pit"),
+            ("zero provider and S3 calls", "test_a_successful_preflight_touches_no_transport"),
+            ("no publication", "test_no_object_store_publication_occurs"),
+            ("no credential reveal", "test_the_credential_is_never_revealed"),
+            ("no execution-like method", "test_the_composition_has_no_execution_like_method"),
+            ("no caller anywhere", "test_nothing_constructs_the_composition_outside_this_file"),
+            ("the leak canaries", "test_no_canary_reaches_the_result_its_repr_or_captured_output"),
+        ):
+            f.check(
+                f"a composition test covers {label}",
+                needle in composition_tests,
+                "the ADR's verification table must name tests that exist",
+            )
+
+    # -- the current documentation --------------------------------------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records that one dormant composition root exists",
+            "ADR-0014" in flat and "composition root      EXISTS" in body,
+            "the standing 'composition root: NONE' claim is no longer true",
+        )
+        f.check(
+            f"{name} records that it constructs from injected values",
+            "It constructs from injected values only" in flat,
+            "constructing from injections is what keeps a constructed component inert",
+        )
+        f.check(
+            f"{name} records that it exposes validation only",
+            "offline preflight     EXISTS   validate() only" in body,
+            "the surface is the claim; naming it is how a reader checks it",
+        )
+        f.check(
+            f"{name} records the four absences that keep it dormant",
+            all(
+                token in body
+                for token in (
+                    "execution surface     NONE",
+                    "runner                NONE",
+                    "credential retrieval  NONE",
+                    "real credential binding: NONE",
+                    "real bucket binding: NONE",
+                    "AWS SDK session or client construction: NONE",
+                )
+            ),
+            "each is separately checkable, so each is separately stated",
+        )
+        f.check(
+            f"{name} records zero provider and AWS requests beside the composition",
+            "Sharadar requests: ZERO   \u00b7   AWS requests: ZERO   \u00b7   Services Data: NONE"
+            in body,
+            "a composition that had sent one request would be a different slice",
+        )
+        f.check(
+            f"{name} keeps the first authenticated run separately gated",
+            "The first authenticated qualification run remains separately gated" in flat,
+            "the wiring must never read as an approach to running",
+        )
+        f.check(
+            f"{name} states that the guards were narrowed rather than deleted",
+            "architecture guards were narrowed, not deleted" in flat,
+            "a guard removed to accommodate a slice is a guard that stopped guarding",
         )
 
     # ---------------------------------------------------------------- verdict

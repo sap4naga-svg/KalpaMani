@@ -425,7 +425,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **AWS research foundation** | **PROVISIONED (2026-08-27)** — 36 resources, verified 66/66 |
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
-| **Bucket binding · client construction · credential source · composition root** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
+| **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
+| **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it. One dormant composition root exists; **execution surface NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -633,8 +634,9 @@ credential, no client. `src/kalpamani/data/storage/s3.py` is the whole of it.
 adapter EXISTS   ·   client INJECTED   ·   no client is constructed anywhere
 adapter bucket binding: NONE   ·   adapter credential binding: NONE
 no profile, endpoint or region is named   ·   runner NONE   ·   __main__ NONE
-callers: the dormant qualification runtime ONLY, on an INJECTED store
-composition root: NONE
+callers: the dormant qualification runtime, and the dormant composition root
+        that constructs it -- both on INJECTED dependencies (ADR-0014)
+composition root: ONE, dormant, offline-preflight only -- see ADR-0014
 AWS requests sent by the adapter: ZERO
 adapter-attributable request or object-storage activity: NONE
 ```
@@ -663,10 +665,14 @@ SDK at all, and asserts that even it imports none of it today.
 
 **The control is absence, not care.** No credential is retrieved, inspected, created, configured
 or bound anywhere in this repository; no bucket identifier is bound to the adapter or recorded
-here; and no module constructs a client. The store **is** called now — by the dormant qualification
-runtime (ADR-0012), on an injected store — and what remains absent is the composition root that
-would give that runtime a real one. Each is verified by a static test
-rather than asserted here.
+here; and no module constructs an SDK client. The store **is** called now — by the dormant
+qualification runtime (ADR-0012), on an injected store — and it is now also *constructed*, by the
+dormant composition root
+([ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)),
+from an injected client and a caller-supplied bucket string. **What remains absent is what would
+make either real**: a credential source, a real credential, a constructed SDK client, a bound
+bucket, a runner, and any code that calls something other than the offline preflight. Each is
+verified by a static test rather than asserted here.
 
 **What that does and does not claim.** It is a statement about this repository and this slice, not
 about the world: the AWS research foundation and its buckets already exist and were provisioned in
@@ -716,12 +722,76 @@ explicitly, and the dormant runtime passes `QUALIFICATION` with no override. Dur
 **The `is_backfill` metadata blocker is CLOSED effective on merge**, and only if the complete
 removal is accepted. **Real Sharadar qualification remains NOT AUTHORIZED and has never run** —
 closing this blocker removed one obstacle in front of *asking* for authorization, and changed
-nothing else: no credential, no composition root, no client, no bucket binding, no runner.
+nothing else: no credential, no client construction, no bucket binding, no runner. (A dormant
+composition root was authorized separately and later, under
+[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md);
+it has no execution surface and changes nothing about that authorization.)
 `BACKFILL` and `UPDATE` exist as production modes and **neither production operation is
 authorized**.
 
 **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3
 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
+
+### The Sharadar qualification composition root — dormant, and the offline preflight
+
+[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)
+authorized the wiring the five previous slices deliberately did without: one module that receives
+every dependency explicitly and builds the accepted client, licensed store and qualification runtime
+from them. `data/ingest/sharadar/composition.py`, and no second module.
+
+**This supersedes the standing "composition root: NONE" claim, and nothing else.** That claim was
+true of every earlier slice and is quoted in their historical text, which is not rewritten. What
+holds now is narrower and is checked rather than declared:
+
+```
+composition root      EXISTS   one module, named individually, and no second
+offline preflight     EXISTS   validate() only -- no fetch, no publication
+execution surface     NONE     no execute, run, fetch, publish or upload, public or private
+runner                NONE     no CLI, no entry point, no console script, no task, no image
+credential retrieval  NONE     no environment read, no file read, no reveal() call
+real credential binding: NONE   ·   real bucket binding: NONE
+AWS SDK session or client construction: NONE   ·   no module under src/ imports the SDK
+constructed or imported outside its own tests: NEVER
+Sharadar requests: ZERO   ·   AWS requests: ZERO   ·   Services Data: NONE
+```
+
+**It constructs from injected values only.** A credential, a transport, a pacer, a retry policy, a
+timeout, an S3 client, a licensed-bucket string and a clock — each a **required keyword parameter
+with no default**, so nothing here can reach a real service because a caller forgot one. Validation
+is delegated to the constructor that owns each rule rather than copied. The one addition is that
+`pacer` is required and exactly typed: `SharadarClient` accepts `None` and builds one from
+`time.monotonic` and `time.sleep`, which is the right default for a client and the wrong one for a
+composition root.
+
+**`preflight(plan)` calls `QualificationRuntime.validate` and nothing else.** That checks the plan's
+own rules, the retry budget against the *injected client's* attempt policy, the request count, the
+distinctness of every derived acquisition identity, both byte ceilings against what the client could
+actually return, and the clock — issuing **no provider request and no store call**. A composition
+holding real dependencies is still inert while only this method exists.
+
+| | |
+|---|---|
+| **The result is closed** | frozen, slotted, subclass-refusing: a status, five bounded counts, `AcquisitionMode.QUALIFICATION` and `PROVIDER_REALISTIC_PIT`. **No credential, bucket, URL, region, account, subject, payload, backend-message or free-text field** — none has anywhere to be, and `__post_init__` enforces that rather than the annotations |
+| **The numbers are derived** | request count from the plan's generator, attempt ceiling from the injected client's retry policy, response ceiling from the stricter of client and plan. A preflight reporting declared intentions would describe a different run |
+| **The status word is a control** | one member, **`VALIDATED_OFFLINE`**. `READY`, `PROCEED`, `APPROVED`, `QUALIFIED` and `AUTHORIZED` are each refused anywhere in the module. **Preflight is not a verdict**: it says a plan is internally consistent, and nothing about the provider, the data, or whether a run should happen |
+| **One member, on purpose** | a *failure* status that can be returned is a failure a caller can ignore. Every refusal raises, in an existing closed vocabulary |
+| **Nothing leaks** | a secret-shaped, bucket-shaped, backend-message-shaped and subject-shaped canary, each proven absent from the result, its fields, both reprs, every refusal and captured output |
+| **Zero activity, counted** | the transport and the S3 client raise if called, and their call counts are asserted at zero through a real `S3ResearchObjectStore`. `reveal()` is counted by patching the credential class |
+| **`QUALIFICATION` is fixed** | no mode parameter on the composition, on preflight, on the plan or on the limits. The result reports the mode; it does not choose it ([ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)) |
+
+**The first authenticated qualification run remains separately gated, and this slice does not
+approach it.** What would still be needed: an authorization, a credential source, a real credential,
+a constructed SDK client, a bound bucket, and code that calls something other than `preflight`.
+**None of those exists.**
+
+**The architecture guards were narrowed, not deleted.** Exactly one module may construct the
+licensed store, the client and the runtime; a second one fails. **SDK construction stays forbidden
+everywhere, the composition root included** — the S3 client is injected there too, so importing the
+data platform still pulls in no AWS code and performs no ambient credential discovery.
+
+**Merging this selects no provider.** **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005
+**PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live
+trading **HARD-DISABLED**.
 
 ### The Sharadar qualification runtime core — dormant, and what that means exactly
 
@@ -736,16 +806,19 @@ through the neutral Bronze bridge, with an **injected** store. What is still tru
 
 ```
 plan model EXISTS   ·   executor EXISTS   ·   dependencies INJECTED
-composition root: NONE   ·   credential source: NONE   ·   client construction: NONE
-bucket binding: NONE   ·   runner: NONE   ·   __main__ in either module: NONE
-constructed outside its own tests: NEVER
+credential source: NONE   ·   SDK client construction: NONE   ·   real bucket binding: NONE
+runner: NONE   ·   module entry point in either module: NONE
+constructed only by the dormant composition root (ADR-0014) and its own tests
 Sharadar requests sent: ZERO   ·   AWS requests sent: ZERO
 ```
 
-The distance between this and a live run is exactly one composition root, and none exists. A
-future, separately authorized slice would supply the real private bindings — a credential source, a
-constructed client, a bound bucket, a constructed `S3ResearchObjectStore` — and authorize one
-bounded run. **Each of those is a separate decision.**
+That claim once ended *"and no composition root exists"*.
+[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)
+built one, so the accurate statement is narrower: a dormant composition root constructs this runtime
+from injected values and exposes **offline preflight only**. What still stands between it and a live
+run is a separately gated authorization plus the real private bindings — a credential source, a
+constructed SDK client, a bound bucket — and code that calls something other than `preflight`.
+**Each of those is a separate decision, and none exists.**
 
 **Seven ceilings, compiled in, lowerable and never raisable:** 8 subjects · 3 datasets · 4 pages per
 request · 96 requests · the transport's own per-response byte ceiling · 512 MiB per run · 32
@@ -818,9 +891,12 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                         NEVER RUN AGAINST AWS
                ADR-0012 dormant qualification runtime core -- ACCEPTED EFFECTIVE ON
                         MERGE OF PR #17, CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS
+               ADR-0014 dormant composition root + offline preflight -- ACCEPTED EFFECTIVE
+                        ON MERGE, CODE ONLY, NO EXECUTION SURFACE, NEVER RUN
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
-               a credential source · a composition root · client construction · bucket binding
+               a credential source · real credential or bucket binding · SDK client construction
+               an execution surface on the composition root · a second composition root
                ANY provider API call · the published test token · Services Data · bulk download
                empirical qualification · production backfill · production ingestion
                Silver/Gold real data · production-provider SELECTION
@@ -838,10 +914,13 @@ UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN 
 session may.
 
 **The adapter has never sent a request, and cannot send one by accident.** Only one module is
-network-capable, **nothing in the repository constructs it**, and importing the package opens no
-socket. The dormant qualification runtime (ADR-0012) *uses* a client, but never builds one: no
-credential source and no composition root exists to give it a real one. Static tests prove each of
-those rather than asserting them.
+network-capable, and importing the package opens no socket. A client *is* now constructed — by the
+dormant composition root
+([ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)),
+from an **injected** transport and an **injected** credential, in a class whose only operation
+validates a plan offline. **No credential source exists**, so nothing can hand it a real key; nothing
+outside its own tests constructs it; and it has no execution surface to reach a transport through.
+Static tests prove each of those rather than asserting them.
 
 | | |
 |---|---|
