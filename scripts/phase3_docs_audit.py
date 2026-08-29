@@ -1483,7 +1483,11 @@ STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = (
     "infers no SSO defect from the fourth refusal",
     "no diagnosis was performed, so nothing may say why",
     "and none was diagnosed",
-    "no diagnosis was performed**, so the",
+    # Normalised: the scanned surface goes through `_comment_prose`, which strips
+    # comment markers and emphasis so a claim wrapped across two lines is still
+    # one phrase. The bold markers this sentence originally carried are gone by
+    # the time it is searched.
+    "no diagnosis was performed, so the",
     "nothing here may say why its gate refused",
 )
 
@@ -1815,6 +1819,26 @@ STALE_GATE_PROBE_CLAIMS: Final[tuple[str, ...]] = (
     "NO STS IDENTITY OPERATION OCCURRED DURING ATTEMPT 4",
     "ATTEMPT 4 ISSUED NO STS",
     "THE FOURTH ATTEMPT MADE NO STS",
+)
+
+#: Each refused phrase paired with the denylist that must still contain it.
+#:
+#: The companion guard used to ask whether these strings occurred *anywhere* in
+#: this file. Each occurs twice -- once in the real denylist, once in the check's
+#: own literal tuple -- so deleting the enforcing entry left the guard green on
+#: the strength of its own copy. Occurrence proved nothing; **membership** does.
+#:
+#: Pairing the expectation with its intended tuple also catches a subtler edit:
+#: moving a phrase into some other denylist while removing it from the one whose
+#: guard actually reaches the surface it protects.
+#:
+#: This does **not** make guard-weakening behaviourally detectable in general.
+#: Deleting an expectation *and* its enforcement together still passes, because
+#: nothing is left to disagree with; that remains a targeted source assertion's
+#: job, and is reported as such rather than dressed up as a behavioural catch.
+REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("UNKNOWN -- NO DIAGNOSIS WAS PERFORMED", STALE_NO_DIAGNOSIS_CLAIMS),
+    ("NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF", STALE_GATE_PROBE_CLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -2461,25 +2485,57 @@ def _matrix_entry(text: str, first_line: str, continuation_indent: int = 24) -> 
     return " ".join(collected)
 
 
+def _audit_fixture_span(source: str) -> tuple[int, int]:
+    """The 1-based inclusive line span of the one ``STALE_AUDIT_DIAGNOSTICS`` assignment.
+
+    Resolved through :mod:`ast`, so the end of the assignment is the parser's
+    ``end_lineno`` rather than the next line that happens to look like a tuple
+    closing. The first revision of this helper partitioned on a raw ``"\\n)\\n"``
+    delimiter, which is not a boundary: a comment on the closing line, or any
+    other valid reformatting, made it run on to a *later* tuple and silently hide
+    unrelated audit prose from the guard that depends on it.
+
+    Raises:
+        ValueError: if the assignment is missing, appears more than once at
+            module level, or reports no end line. Fail closed -- an ambiguous
+            boundary must break the guard, never quietly widen what it skips.
+    """
+    spans = [
+        (node.lineno, node.end_lineno)
+        for node in ast.parse(source).body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "STALE_AUDIT_DIAGNOSTICS"
+        and node.end_lineno is not None
+    ]
+    if len(spans) != 1:
+        raise ValueError(
+            f"expected exactly one STALE_AUDIT_DIAGNOSTICS assignment, found {len(spans)}"
+        )
+    return spans[0]
+
+
 def _audit_prose_excluding_own_fixture(source: str) -> str:
-    """This file's text with the stale-diagnostic fixture block cut out.
+    """This file's text with exactly the stale-diagnostic fixture assignment removed.
 
     The guard built on :data:`STALE_AUDIT_DIAGNOSTICS` searches for phrases that
     must not be *asserted*, and the tuple listing them necessarily contains every
     one -- so scanning the whole file would always match. That is the same
-    self-referential trap this slice has now hit three times: a denylist entry
-    that is a substring of the thing protecting against it.
+    self-referential trap this slice has hit repeatedly: a denylist entry that is
+    a substring of the thing protecting against it.
 
-    Cutting the block out keeps the fixture and searches only the prose around
-    it. Returns ``source`` unchanged when the block is absent, so a rename fails
-    loudly through the guard rather than silently disabling it.
+    Only the assignment's own lines are dropped. Comments, check names and
+    failure details immediately before and after it stay in the scanned surface,
+    which is the point: those are exactly where a stale claim would reappear.
+
+    Raises:
+        ValueError: propagated from :func:`_audit_fixture_span`.
+        SyntaxError: if this file will not parse. Both are fail-closed at the
+            call site.
     """
-    marker = "STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = ("
-    head, sep, rest = source.partition(marker)
-    if not sep:
-        return source
-    _, _, tail = rest.partition("\n)\n")
-    return head + tail
+    start, end = _audit_fixture_span(source)
+    lines = source.splitlines()
+    return "\n".join(lines[: start - 1] + lines[end:])
 
 
 def _governed_profile_value(source: str) -> str:
@@ -2514,10 +2570,17 @@ def _comment_prose(text: str) -> str:
     ``so it read no`` / ``# environment variable`` across a line break -- so the
     marker comes off before the join, the same shape as the blockquote strip
     used for licence prose.
+
+    Both the plain ``#`` and the Sphinx-style ``#:`` marker are removed. A
+    negative control found the second: a stale claim wrapped across two ``#:``
+    lines survived the guard, because ``lstrip("# ")`` stopped at the colon and
+    left it sitting in the middle of the joined phrase. Most commentary in this
+    file uses ``#:``, so that gap covered nearly all of it.
     """
-    return " ".join(
-        " ".join(line.lstrip("# ") for line in text.replace("**", "").splitlines()).split()
+    stripped = (
+        re.sub(r"^[ \t]*#:?[ \t]?", "", line) for line in text.replace("**", "").splitlines()
     )
+    return " ".join(" ".join(stripped).split())
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -8138,29 +8201,50 @@ def main() -> int:
             ],
             "the gate's call and the standalone command are separate, uncounted events",
         )
+        audit_source = read(Path(__file__).resolve())
+        try:
+            fixture_start, fixture_end = _audit_fixture_span(audit_source)
+            audit_outside_fixture = _audit_prose_excluding_own_fixture(audit_source)
+            exclusion_resolved = True
+        except (ValueError, SyntaxError):
+            # Fail closed. An unresolvable boundary leaves nothing scanned, so
+            # both guards below must report the failure rather than pass on an
+            # empty surface.
+            fixture_start, fixture_end = 0, 0
+            audit_outside_fixture = ""
+            exclusion_resolved = False
+        f.check(
+            "the fixture exclusion resolves to exactly the assignment's own lines",
+            exclusion_resolved
+            and len(audit_source.splitlines()) - len(audit_outside_fixture.splitlines())
+            == fixture_end - fixture_start + 1,
+            "a raw-delimiter boundary ran past the tuple and hid unrelated prose",
+        )
+        f.check(
+            "the fixture exclusion keeps the prose on either side of the assignment",
+            exclusion_resolved
+            and audit_source.splitlines()[fixture_start - 2] in audit_outside_fixture
+            and audit_source.splitlines()[fixture_end] in audit_outside_fixture,
+            "the lines around the fixture are exactly where a stale claim reappears",
+        )
         f.check(
             "this audit's own diagnostics do not deny the completed diagnosis",
-            not [
+            exclusion_resolved
+            and not [
                 claim
                 for claim in STALE_AUDIT_DIAGNOSTICS
-                if claim in _audit_prose_excluding_own_fixture(read(Path(__file__).resolve()))
+                if claim in _comment_prose(audit_outside_fixture)
             ],
             "its comments and labels are a status surface, and one diagnosis has run",
         )
         f.check(
-            "this audit still quotes the forbidden phrases it refuses, as fixtures",
-            # The companion to the guard above, and the reason that one matches on
-            # case. Deleting the quoted phrases would silence it while removing
-            # the denylists doing the actual work, so their presence is required
-            # here -- in the upper case that marks them as data, not assertion.
-            all(
-                phrase in read(Path(__file__).resolve())
-                for phrase in (
-                    "NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF",
-                    "UNKNOWN -- NO DIAGNOSIS WAS PERFORMED",
-                )
-            ),
-            "a fixture is test data; only an audit-owned sentence is a claim",
+            "the refused phrases are still members of the denylists that enforce them",
+            # Membership, not occurrence. The previous form asked whether these
+            # strings appeared anywhere in this file, and each appears twice --
+            # once in the real denylist and once in the check's own tuple -- so
+            # deleting the enforcing entry left the guard green on its own copy.
+            all(phrase in denylist for phrase, denylist in REQUIRED_FIXTURE_MEMBERSHIP),
+            "a fixture is test data only while the denylist that enforces it still holds it",
         )
         f.check(
             "the entry point makes no unqualified profile-disclosure claim",
