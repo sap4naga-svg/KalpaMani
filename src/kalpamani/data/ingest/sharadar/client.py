@@ -237,7 +237,7 @@ class SharadarClient:
         "_pacer",
         "_retry_policy",
         "_timeout",
-        "_transport",
+        "_transport_get",
     )
 
     def __init__(
@@ -299,7 +299,17 @@ class SharadarClient:
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
         self._credential = credential
-        self._transport = transport
+        # **The validated callable, retained -- not the object it came from.**
+        # An earlier revision checked `getattr(transport, "get")` and then threw
+        # the result away, so `fetch()` performed a *second* lookup through
+        # `self._transport.get`. A property, a descriptor or a plain reassignment
+        # can answer that second lookup with something else entirely, so the
+        # callable that passed validation was not necessarily the callable that
+        # ran. Checking one object and invoking another is not validation.
+        #
+        # The transport itself is not stored: nothing else needs it, and an
+        # attribute nobody reads is one a later edit can start reading.
+        self._transport_get = get
         self._pacer = pacer if pacer is not None else Pacer()
         self._retry_policy = retry_policy
         self._timeout = timeout_seconds
@@ -382,7 +392,7 @@ class SharadarClient:
         for attempt in range(self._retry_policy.max_attempts):
             self._pacer.wait()
             try:
-                response = self._transport.get(
+                response = self._transport_get(
                     url=url, headers=self.headers(), timeout_seconds=self._timeout
                 )
             except TransportUnavailableError as exc:

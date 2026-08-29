@@ -15,9 +15,19 @@ One function, no object
 :func:`preflight_qualification_composition` takes every dependency and a plan,
 builds the three accepted components as **local variables**, calls
 :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`,
-and returns a :class:`QualificationPreflight`. When it returns, the client, the
-store, the runtime, the credential, the transport, the S3 client, the bucket
-string and the clock are all unreachable: nothing holds them.
+and returns a :class:`QualificationPreflight`.
+
+**What that guarantees, stated exactly.** The client, the store and the runtime
+are not returned, and are not retained in module state, in an instance, in a
+closure or on the result. The **caller keeps ownership of everything it passed
+in** -- its credential, transport, S3 client, bucket string, clock and plan are
+its own objects, and this function neither takes them over nor makes them go
+away. What it does guarantee is that *this function and the object it returns*
+hold none of them after a successful return.
+
+This is a statement about what the code retains, not about object lifetimes.
+Nothing here claims anything is collected, and on an exception path a traceback
+may hold a frame alive for as long as the caller keeps the exception.
 
 **The first revision of this slice got that wrong.** It was a class holding
 ``_client``, ``_store`` and ``_runtime``, and it claimed that no attribute
@@ -34,12 +44,16 @@ remember and becomes a property of the shape.
 ::
 
     composition           ONE function, and no stateful object
-    execution surface     NONE     validate() only; nothing returns a runtime
+    exposed operation     offline preflight -- plan validation, and only that
+    qualification-run execution surface     NONE
+    provider-fetch operation                NONE
+    object-publication operation            NONE
     runner                NONE     no CLI, no module entry point, no task
     retained state        NONE     no module global, no closure, no instance
+    caller-owned arguments                  the caller's, before and after
     credential retrieval  NONE     no environment read, no file read, no reveal()
     real credential binding: NONE  ·  real bucket binding: NONE
-    AWS SDK session or client construction: NONE
+    AWS SDK session or S3-client construction: NONE
     provider requests     ZERO     ·  AWS requests: ZERO
 
 What this is not
@@ -66,8 +80,9 @@ and takes an explicit mapping, so a future authorized runner can pass
 ``os.environ`` at the one place allowed to. **This module is not that place.** It
 never calls that function, never touches a process environment, and never calls
 :meth:`~kalpamani.data.ingest.sharadar.credentials.SharadarCredential.reveal`.
-The credential arrives already built, is handed to a client that lives for the
-duration of one call, and is unreachable when that call returns.
+The credential arrives already built and is handed to a client that lives for the
+duration of one call. **It stays the caller's object**; what this module
+guarantees is that neither the function nor the result it returns retains it.
 
 Nothing at import time does work, and nothing here opens a socket, reads a file,
 parses an argument or names a host, a bucket, an account or an endpoint.
@@ -246,12 +261,23 @@ def preflight_qualification_composition(
 ) -> QualificationPreflight:
     """Construct the accepted components, validate ``plan`` against them, return facts.
 
-    **Nothing survives the call.** The client, the store and the runtime are
-    local variables; the credential, transport, S3 client, bucket string, clock
-    and plan are parameters. When this returns, the only reachable object is the
-    :class:`QualificationPreflight`, which holds counts and closed vocabulary
-    members and no dependency at all. There is no instance, no module global and
-    no closure for an executable component to be reached through.
+    **Nothing constructed here is handed back or kept.** The client, the store and
+    the runtime are local variables: they are not returned, and not retained in
+    module state, in an instance, in a closure or on the result. The returned
+    :class:`QualificationPreflight` holds counts and closed vocabulary members
+    and no dependency at all.
+
+    **The caller keeps what the caller passed in.** Its credential, transport, S3
+    client, bucket string, clock and plan remain its own objects; this function
+    neither takes them over nor disposes of them. The guarantee is about what
+    *this* function and *its* result retain, and it is about retention rather
+    than object lifetime -- nothing here claims anything is collected.
+
+    **Offline preflight is the one exposed operation.** It validates; that is
+    work, and calling it "no way to run anything" would be false. What does not
+    exist is a *qualification-run* execution surface: no provider fetch, no
+    object publication, and nothing that returns a component through which one
+    could be reached.
 
     **Every dependency is a required keyword parameter with no default**, so
     nothing here can reach a real service because a caller forgot one.

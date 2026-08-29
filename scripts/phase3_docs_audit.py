@@ -42,6 +42,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -212,6 +213,27 @@ ADR_COMPOSITION = (
 )
 COMPOSITION_ROOT = PROVIDER_PACKAGE / "composition.py"
 PROVIDER_CLIENT = PROVIDER_PACKAGE / "client.py"
+
+#: Claims about the composition that are stronger than the code supports.
+#:
+#: Each was written in an earlier revision and each is false. A caller's
+#: arguments do not stop existing when a function returns -- the caller still owns
+#: them. A returned result is not "the only reachable object" in a running
+#: program. And offline preflight *validates*, which is work, so "no way to run
+#: anything" is wrong; the true, narrower claim is that there is no
+#: qualification-run execution surface.
+COMPOSITION_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "all unreachable: nothing holds them",
+    "the only reachable object",
+    "no way to run anything",
+    "and is unreachable when that call returns",
+    "and is unreachable after it",
+)
+
+#: The unscoped execution-surface claim. Checked separately, because the *scoped*
+#: line -- "qualification-run execution surface NONE" -- is the correct form and
+#: contains the wrong one as a substring.
+UNSCOPED_EXECUTION_SURFACE: Final = "execution surface     NONE"
 COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
@@ -683,6 +705,28 @@ def _conditional_mode_sites() -> list[str]:
                     if named or attributed:
                         offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return offenders
+
+
+def _composition_overclaims(text: str) -> list[str]:
+    """Every overclaim asserted in ``text``.
+
+    Double-quoted spans are removed first. Each of these phrases now appears in
+    the documents *inside quotation marks*, as the thing being refuted -- and a
+    guard that could not tell a refutation from an assertion would forbid
+    explaining what was corrected, which is exactly the wrong trade.
+
+    The execution-surface phrase is checked in its unscoped form only: the scoped
+    line names a *qualification-run* execution surface and is the correct claim.
+    """
+    unquoted = re.sub(r'"[^"\n]*"', "", text)
+    found = [phrase for phrase in COMPOSITION_OVERCLAIMS if phrase in unquoted]
+    for index in range(len(unquoted)):
+        if not unquoted.startswith(UNSCOPED_EXECUTION_SURFACE, index):
+            continue
+        if not unquoted[:index].endswith("qualification-run "):
+            found.append(UNSCOPED_EXECUTION_SURFACE)
+            break
+    return found
 
 
 def _composition_state_sites() -> list[str]:
@@ -5013,7 +5057,9 @@ def main() -> int:
         )
         f.check(
             "ADR-0014 records that there is no public execution method",
-            "There is no execution surface" in adr14
+            "no qualification-run execution surface" in flat14
+            and "no provider-fetch operation" in flat14
+            and "no object-publication operation" in flat14
             and "no object to hold a runtime and no attribute to reach one through" in flat14,
             "a private attribute is reachable; only an absent object is not",
         )
@@ -5092,6 +5138,29 @@ def main() -> int:
             "One acquisition-mode constant, in the module that owns it" in flat14
             and "defined once" in flat14,
             "two independent statements of one fact is a dual-write",
+        )
+        f.check(
+            "ADR-0014 records that offline validation is itself work",
+            "validation is work" in flat14 and "an earlier revision of this ADR did" in flat14,
+            "'no way to run anything' was false while preflight validates a plan",
+        )
+        f.check(
+            "ADR-0014 records that the caller keeps ownership of its arguments",
+            "caller keeps ownership of everything it passed in" in flat14
+            and "neither takes them over nor makes them go away" in flat14,
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
+            "ADR-0014 scopes the retention claim away from object lifetime",
+            "a claim about retention, not about object lifetime" in flat14
+            and "makes no garbage-collection claim" in flat14
+            and "a traceback may hold a frame" in flat14,
+            "a guarantee that is false on an exception path is not a guarantee",
+        )
+        f.check(
+            "ADR-0014 makes no composition overclaim",
+            not _composition_overclaims(adr14),
+            "each of these was written once and each is stronger than the code supports",
         )
         f.check(
             "ADR-0014 records the status vocabulary as a control",
@@ -5174,6 +5243,17 @@ def main() -> int:
             "zero requests and zero bytes described a run that never happened",
         )
         f.check(
+            "the composition module makes no reachability overclaim",
+            not _composition_overclaims(read(COMPOSITION_ROOT)),
+            "the module's own prose is read as the contract more often than the ADR",
+        )
+        f.check(
+            "the composition states that the caller keeps its arguments",
+            "The caller keeps what the caller passed in" in read(COMPOSITION_ROOT)
+            and "caller-owned arguments" in read(COMPOSITION_ROOT),
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
             "the composition reads the single-source acquisition mode",
             "QUALIFICATION_ACQUISITION_MODE" in composition
             and "AcquisitionMode.QUALIFICATION" not in composition,
@@ -5247,6 +5327,14 @@ def main() -> int:
             "self._max_response_bytes = _resolve_response_ceiling(transport)" in client_source
             and "return self._max_response_bytes" in client_source,
             "a bound is not a bound if the thing it bounds can move it",
+        )
+        f.check(
+            "the client retains the validated transport operation and calls that one",
+            "_transport_get" in client_source
+            and "self._transport_get = get" in client_source
+            and "self._transport_get(" in client_source
+            and "self._transport." not in client_source,
+            "checking one object and invoking another is not validation",
         )
         f.check(
             "the client sanitizes a raising transport declaration",
@@ -5342,16 +5430,18 @@ def main() -> int:
         )
         f.check(
             f"{name} records that it exposes validation only",
-            "offline preflight     EXISTS   validate() only" in body,
-            "the surface is the claim; naming it is how a reader checks it",
+            "exposed operation     offline preflight -- plan validation, and only that" in body
+            and "qualification-run execution surface: NONE" in body,
+            "validation is work, so the absence has to be scoped to a qualification run",
         )
         f.check(
             f"{name} records the four absences that keep it dormant",
             all(
                 token in body
                 for token in (
-                    "components            EPHEMERAL LOCALS",
-                    "execution surface     NONE",
+                    "components            LOCALS, built inside one call, not returned",
+                    "provider-fetch operation: NONE",
+                    "object-publication operation: NONE",
                     "runner                NONE",
                     "retained state        NONE",
                     "credential retrieval  NONE",
@@ -5372,6 +5462,23 @@ def main() -> int:
             f"{name} keeps the first authenticated run separately gated",
             "The first authenticated qualification run remains separately gated" in flat,
             "the wiring must never read as an approach to running",
+        )
+        f.check(
+            f"{name} records that the caller keeps ownership of what it passed in",
+            "caller-owned arguments" in body
+            and "keeps ownership of every argument it passes in" in flat,
+            "an argument does not stop existing because the callee returned",
+        )
+        f.check(
+            f"{name} scopes the retention claim away from object lifetime",
+            "about what *this function and its result* retain, not about object lifetimes" in flat
+            and "not asserted on an exception path" in flat,
+            "a traceback can hold a frame for as long as the caller keeps the exception",
+        )
+        f.check(
+            f"{name} makes no composition overclaim",
+            not _composition_overclaims(body),
+            "each of these was written once and each is stronger than the code supports",
         )
         f.check(
             f"{name} states that the guards were narrowed rather than deleted",

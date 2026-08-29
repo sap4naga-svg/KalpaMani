@@ -25,16 +25,19 @@ Every transport here is synthetic. **No test opens a socket or names a host.**
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from fixtures import sharadar_provider as syn
 from kalpamani.data.ingest.sharadar.client import (
     DEFAULT_RETRY_POLICY,
+    DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_USER_AGENT,
     MAX_ATTEMPTS_CEILING,
     Pacer,
@@ -69,7 +72,9 @@ from kalpamani.data.ingest.sharadar.redaction import (
     redact,
 )
 from kalpamani.data.ingest.sharadar.transport import (
+    DEFAULT_MAX_RESPONSE_BYTES,
     MAX_TIMEOUT_SECONDS,
+    TransportResponse,
     TransportUnavailableError,
 )
 
@@ -91,6 +96,205 @@ def client(
         pacer=Pacer(min_interval=1.0, clock=clock.time, sleeper=clock.sleep),
         retry_policy=retry_policy,
     )
+
+
+# ---------------------------------------------------------------------------
+# A0 -- the transport operation, resolved once and then actually used
+# ---------------------------------------------------------------------------
+#
+# `__init__` validated `getattr(transport, "get")` and then discarded the result,
+# and `fetch()` performed a *second* lookup through `self._transport.get`. A
+# property, a descriptor or a plain reassignment can answer that second lookup
+# with something else, so the callable that passed validation was not
+# necessarily the callable that ran. Checking one object and invoking another is
+# not validation.
+
+
+class SwappableTransport:
+    """Resolves ``get`` through a property, so each lookup can answer differently.
+
+    A descriptor is the honest shape of this hazard: nothing here is contrived,
+    and a real transport wrapping a session pool could look exactly like it.
+
+    The two implementations are closures created once in ``__init__`` and stored,
+    **not** methods. ``transport.first`` on a method would build a fresh bound
+    object on every access, which would make ``is`` useless -- and identity is
+    exactly what has to be checked, because "a wrapper that delegates to the
+    validated callable" is not "the validated callable".
+    """
+
+    def __init__(self, *, max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES) -> None:
+        self._max_response_bytes = max_response_bytes
+        self.lookups = 0
+        self.first_calls = 0
+        self.second_calls = 0
+
+        def first(*, url: str, headers: Any, timeout_seconds: float) -> TransportResponse:
+            self.first_calls += 1
+            return syn.ok()
+
+        def second(*, url: str, headers: Any, timeout_seconds: float) -> TransportResponse:
+            self.second_calls += 1
+            raise AssertionError(SWAP_CANARY)
+
+        self.first = first
+        self.second = second
+        self.impl: Any = first
+
+    @property
+    def max_response_bytes(self) -> int:
+        return self._max_response_bytes
+
+    @property
+    def get(self) -> Any:
+        self.lookups += 1
+        return self.impl
+
+
+#: Text a substituted callable would carry. If a message ever surfaces, this is
+#: what a leak test has to find.
+SWAP_CANARY = "synthetic-swap-canary-a1b2c3"
+
+
+def swappable_client(transport: SwappableTransport) -> SharadarClient:
+    clock = syn.ManualClock()
+    return SharadarClient(
+        credential=syn.credential(),
+        transport=transport,
+        pacer=Pacer(min_interval=1.0, clock=clock.time, sleeper=clock.sleep),
+        retry_policy=DEFAULT_RETRY_POLICY,
+    )
+
+
+def test_the_transport_operation_is_resolved_exactly_once() -> None:
+    """Once, at construction. A fetch performs no second lookup."""
+    transport = SwappableTransport()
+    built = swappable_client(transport)
+    assert transport.lookups == 1
+
+    built.fetch(syn.stocks_request())
+    assert transport.lookups == 1, "fetch() re-resolved the transport operation"
+
+
+def test_the_callable_that_passed_validation_is_the_one_invoked() -> None:
+    """Identity, not equivalence.
+
+    Reading the client's private slot is the only way to state *this exact
+    object* rather than *something that behaves like it* -- and a wrapper that
+    delegates to the validated callable would satisfy every behavioural
+    assertion while still meaning the client kept a different object than the
+    one it checked.
+    """
+    transport = SwappableTransport()
+    validated = transport.impl
+    built = swappable_client(transport)
+
+    assert built._transport_get is validated, "the retained callable is not the validated one"
+
+    built.fetch(syn.stocks_request())
+    assert transport.first_calls == 1
+    assert transport.second_calls == 0
+
+
+def test_swapping_the_transport_operation_after_construction_changes_nothing() -> None:
+    """The defect this test exists for.
+
+    Before the correction, ``fetch()`` looked ``get`` up again and would have
+    called ``second`` -- a callable nothing ever validated.
+    """
+    transport = SwappableTransport()
+    built = swappable_client(transport)
+
+    transport.impl = transport.second  # a valid callable, and not the validated one
+
+    built.fetch(syn.stocks_request())
+    assert transport.first_calls == 1, "the retained callable was not the one invoked"
+    assert transport.second_calls == 0, "a substituted callable ran"
+
+
+def test_replacing_the_operation_with_a_non_callable_cannot_break_a_fetch() -> None:
+    """A second lookup could return something that is not callable at all."""
+    transport = SwappableTransport()
+    built = swappable_client(transport)
+
+    transport.impl = "not callable"
+
+    built.fetch(syn.stocks_request())
+    assert transport.first_calls == 1
+
+
+def test_the_client_does_not_retain_the_transport_object() -> None:
+    """Retaining the validated callable is the point; the object it came from has
+    no remaining reader, and an attribute nobody reads is one a later edit can
+    start reading."""
+    transport = SwappableTransport()
+    built = swappable_client(transport)
+    assert "_transport_get" in SharadarClient.__slots__
+    assert "_transport" not in SharadarClient.__slots__
+    assert not hasattr(built, "_transport")
+
+
+def test_a_raising_retained_callable_is_still_sanitized() -> None:
+    """Whatever the retained callable raises, the closed vocabulary is what
+    escapes -- and the dependency's own text does not."""
+
+    class RaisingTransport:
+        max_response_bytes = DEFAULT_MAX_RESPONSE_BYTES
+
+        def get(self, *, url: str, headers: Any, timeout_seconds: float) -> TransportResponse:
+            raise RuntimeError(SWAP_CANARY)
+
+    clock = syn.ManualClock()
+    built = SharadarClient(
+        credential=syn.credential(),
+        transport=RaisingTransport(),
+        pacer=Pacer(min_interval=1.0, clock=clock.time, sleeper=clock.sleep),
+        retry_policy=DEFAULT_RETRY_POLICY,
+    )
+    with pytest.raises(SharadarRequestError) as raised:
+        built.fetch(syn.stocks_request())
+    rendered = f"{raised.value!r} {raised.value!s}"
+    assert SWAP_CANARY not in rendered
+    assert raised.value.code is SharadarErrorCode.RESPONSE_READ_FAILED
+
+
+def test_the_retained_callable_receives_the_same_arguments_as_before() -> None:
+    """Pacing, retry, response validation and the response ceiling are untouched:
+    the only change is *which object* is invoked, not how."""
+    transport = syn.ScriptedTransport([syn.ok()])
+    clock = syn.ManualClock()
+    built = client(transport, clock)
+
+    payload = built.fetch(syn.stocks_request())
+    assert payload == syn.SYNTHETIC_PAYLOAD
+    assert transport.call_count == 1
+    assert transport.timeouts == [DEFAULT_TIMEOUT_SECONDS]
+    assert transport.headers[0] == dict(built.headers())
+
+
+def test_no_real_transport_or_network_is_constructible_from_these_tests() -> None:
+    """Every transport above is a local class with no host, socket or name
+    resolution, and no module here builds a real opener.
+
+    Scanned over docstring-stripped code: a fixture whose prose says it *opens no
+    socket* would otherwise fail a raw search for the word, which would either
+    weaken the check or forbid saying what the fixture refuses to do.
+    """
+    for fake in (SwappableTransport, syn.ScriptedTransport):
+        tree = ast.parse(inspect.getsource(fake).lstrip())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef | ast.FunctionDef):
+                continue
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                node.body = node.body[1:] or [ast.Pass()]
+        source = ast.unparse(tree)
+        for forbidden in ("socket", "urlopen", "build_opener", "https://"):
+            assert forbidden not in source, f"{fake.__name__} names {forbidden!r}"
 
 
 # ---------------------------------------------------------------------------

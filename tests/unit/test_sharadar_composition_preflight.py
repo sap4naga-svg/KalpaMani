@@ -382,9 +382,14 @@ def test_no_executable_component_escapes_the_preflight() -> None:
 
     The first revision returned a *stateful object* holding ``_client``,
     ``_store`` and ``_runtime``, so ``composition._runtime.execute(plan)`` ran.
-    A function has no ``self`` to attach them to: they are locals, and when it
-    returns nothing holds them. This walks everything reachable from the result
-    and asserts none of the three is in it.
+    A function has no ``self`` to attach them to: they are locals, and they are
+    neither returned nor stored on the result.
+
+    **What this asserts is retention, not lifetime.** It walks everything
+    reachable *from the returned result* and asserts none of the three
+    components -- and no credential -- is in it. It says nothing about whether
+    those objects still exist: the caller's transport, S3 client, clock and
+    credential are the caller's, before and after.
     """
     result = preflight()
     assert type(result) is QualificationPreflight

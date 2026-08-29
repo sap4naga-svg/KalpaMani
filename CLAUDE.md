@@ -746,17 +746,27 @@ holds now is narrower and is checked rather than declared:
 
 ```
 composition           ONE function, and no stateful object
-offline preflight     EXISTS   validate() only -- no fetch, no publication
-components            EPHEMERAL LOCALS, built inside one call and unreachable after it
-execution surface     NONE     nothing returns a client, store, runtime or closure
+exposed operation     offline preflight -- plan validation, and only that
+components            LOCALS, built inside one call, not returned and not retained
+qualification-run execution surface: NONE
+provider-fetch operation: NONE   ·   object-publication operation: NONE
 runner                NONE     no CLI, no entry point, no console script, no task, no image
 retained state        NONE     no module global, no closure, no instance, no attribute
+caller-owned arguments          the caller's, before and after -- unchanged by this
 credential retrieval  NONE     no environment read, no file read, no reveal() call
 real credential binding: NONE   ·   real bucket binding: NONE
 AWS SDK session / S3-client construction: NONE   ·   no module under src/ imports the SDK
 called or imported outside its own synthetic tests: NEVER
 Sharadar requests: ZERO   ·   AWS requests: ZERO   ·   Services Data: NONE
 ```
+
+**Two things that block reads exactly, and are worth stating rather than rounding off.** *Offline
+preflight is work* — it validates a plan — so "no way to run anything" would be false; what is
+absent is a **qualification-run** execution surface, a provider fetch and an object publication.
+And the **caller keeps ownership of every argument it passes in**: its credential, transport, S3
+client, bucket string, clock and plan are its own objects both before and after. The guarantee here
+is about what *this function and its result* retain, not about object lifetimes, and it is not
+asserted on an exception path where a traceback may hold a frame.
 
 **The first revision of this slice was a stateful object, and its dormancy claim was false.** It
 held `_client`, `_store` and `_runtime`, so `composition._runtime.execute(plan)` ran, and its own
@@ -769,8 +779,8 @@ escapes* is a property of the shape rather than a rule someone must remember.
 `QualificationRuntime` **are** constructed — as local variables, inside one call, from values a
 caller hands in — and a synthetic bucket string and synthetic store are constructed in tests. What
 does **not** exist is a *real* bucket binding, a *real* credential binding, any **AWS SDK session or
-S3-client construction**, and any credential source. The credential is held by the client for the
-duration of one call and is unreachable when it returns.
+S3-client construction**, and any credential source. The credential is handed to a client that lives
+for one call; it stays the caller's object, and neither the function nor the result retains it.
 
 **It constructs from injected values only.** A credential, a transport, a pacer, a retry policy, a
 timeout, an S3 client, a licensed-bucket string and a clock — each a **required keyword parameter

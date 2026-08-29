@@ -52,7 +52,8 @@ validation.
 
 ## 2. Decision
 
-**Implement one composition, in one module, as one function, with no way to run anything.**
+**Implement one composition, in one module, as one function, whose only exposed operation is
+offline plan validation.**
 
 `src/kalpamani/data/ingest/sharadar/composition.py`, and no second module —
 `preflight_qualification_composition`, and **no stateful object**.
@@ -88,14 +89,25 @@ to build anything.
 
 From those it builds `SharadarClient`, `S3ResearchObjectStore` and `QualificationRuntime` as **local
 variables**, and returns only the closed result. **It builds nothing else, and it discovers
-nothing.** When the call returns, the client, the store, the runtime, the credential, the transport,
-the S3 client, the bucket string, the clock and the plan are all unreachable: nothing holds them.
+nothing.**
+
+**What that guarantees, stated exactly.** The client, the store and the runtime are not returned and
+are not retained in module state, in an instance, in a closure or on the result. **The caller keeps
+ownership of everything it passed in** — its credential, transport, S3 client, bucket string, clock
+and plan are its own objects, and this function neither takes them over nor makes them go away. The
+guarantee is that *this function and the object it returns* retain none of them after a successful
+return.
+
+That is a claim about retention, not about object lifetime. This ADR makes no garbage-collection
+claim, and none of the above is asserted on an exception path, where a traceback may hold a frame
+alive for as long as the caller keeps the exception.
 
 **Precisely what "no construction" does and does not mean here.** A client, a store and a runtime
 **are** constructed — from values a caller hands in — and tests construct a synthetic bucket string
 and a synthetic store. What does not exist anywhere is an **AWS SDK session or S3-client
 construction**, a **real** bucket binding, a **real** credential binding, or any credential source.
-The credential is held by the client for the duration of one call and is unreachable after it.
+The credential is handed to a client that lives for one call; it stays the caller's object, and
+neither the function nor the result retains it.
 
 **Validation is delegated, not duplicated.** The credential's exactness, the timeout range, the
 retry policy's shape, the bucket's grammar, the S3 client's two operations and the clock's one
@@ -195,7 +207,14 @@ object this module can hand back is one describing a plan that passed.
 own policy. It says nothing about the provider, nothing about the data, and nothing about whether a
 run should happen.
 
-### There is no execution surface
+### Offline preflight is the operation; there is no qualification-run execution surface
+
+**The exposed operation is plan validation, and validation is work** — calling this "no way to run
+anything" would be false, and an earlier revision of this ADR did. The precise boundary is narrower
+and is what actually matters:
+
+> There is **no qualification-run execution surface**, **no provider-fetch operation** and **no
+> object-publication operation**.
 
 No `execute`, `run`, `fetch`, `publish`, `upload` or any private spelling of one; **no object to
 hold a runtime and no attribute to reach one through**; no CLI, no module entry point, no console
@@ -249,7 +268,8 @@ now say precisely where composition happens, instead of saying it happens nowher
 
 **Given up.** The simplest possible claim. "Nothing constructs any of these" was easy to verify and
 is no longer true. What replaces it is narrower and has to be maintained: *exactly one module
-constructs them, it has no execution surface, and nothing calls it.* Each clause is a test.
+constructs them, its only exposed operation is offline validation, it has no qualification-run
+execution surface, and nothing calls it.* Each clause is a test.
 
 **Not gained — stated exhaustively.** This ADR authorizes **code, tests, documentation, audits and
 synthetic/local validation only.** It does not authorize:
