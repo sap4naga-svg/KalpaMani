@@ -31,10 +31,11 @@ classifiers = [
 # `IfNoneMatch`, which is the mechanism the store's append-only guarantee rests
 # on; the ceiling keeps a major-version change a reviewed decision.
 #
-# **Nothing in `src/` imports it.** The S3 client is injected, so the SDK is
-# needed to *construct* that client in a future authorized runner -- which does
-# not exist yet -- and importing the data platform stays SDK-free and
-# network-silent.
+# **Nothing in `src/` imports it.** The S3 client is injected everywhere,
+# including in the dormant composition root (ADR-0014), which builds the licensed
+# store from a client a caller hands it. The SDK is needed to *construct* that
+# client -- and no module does, because no credential source and no authorized
+# runner exists. Importing the data platform stays SDK-free and network-silent.
 dependencies = [
     "boto3>=1.36.0,<2.0",
 ]

@@ -35,12 +35,26 @@ SRC = PROJECT_ROOT / "src"
 PROVIDER_PACKAGE = SRC / "kalpamani" / "data" / "ingest" / "sharadar"
 QUALIFICATION = PROVIDER_PACKAGE / "qualification.py"
 RUNTIME = PROVIDER_PACKAGE / "runtime.py"
+COMPOSITION = PROVIDER_PACKAGE / "composition.py"
 PLAN_CHECK = PROJECT_ROOT / "scripts" / "sharadar_plan_check.py"
 PRIVATE_HARNESS = PROJECT_ROOT / "scripts" / "sharadar_private_qualification.py"
 
-#: The two modules this slice added. Named individually so a third appearing
-#: beside them has to pass review rather than merely compile.
+#: The two modules the ADR-0012 slice added. Named individually so a third
+#: appearing beside them has to pass review rather than merely compile.
+#:
+#: Used for the one check the composition root is *exempt* from -- constructing a
+#: client, a session or a store -- because building those from injected values is
+#: exactly what ADR-0014 authorized it to do.
 NEW_MODULES = (QUALIFICATION, RUNTIME)
+
+#: Every module that must stay dormant, the composition root included.
+#:
+#: The composition root builds things; it still may not import a network client
+#: or an SDK, read an environment variable or a file, name a host, bucket, ARN or
+#: account, carry an entry point, or hold module-level mutable state. Those are
+#: the properties that keep a constructed component inert, and they apply to the
+#: module that constructs it more than to any other.
+DORMANT_MODULES = (QUALIFICATION, RUNTIME, COMPOSITION)
 
 #: Distributions the runtime core may not import. Wider than the repository-wide
 #: rule on purpose: `boto3` is a declared dependency of the project (ADR-0011) and
@@ -118,7 +132,7 @@ def _executable(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", DORMANT_MODULES, ids=lambda p: p.name)
 def test_the_new_modules_import_no_network_client_or_sdk(path: Path) -> None:
     offenders = [module for module in _imported(path) if module.split(".")[0] in FORBIDDEN_IMPORTS]
     assert offenders == [], f"{path.name} imports {offenders}"
@@ -143,7 +157,7 @@ def test_the_new_modules_construct_no_client_session_or_store(path: Path) -> Non
     assert offenders == [], f"a composition root is not authorized. Found: {offenders}"
 
 
-@pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", DORMANT_MODULES, ids=lambda p: p.name)
 def test_the_new_modules_read_no_environment_and_no_file(path: Path) -> None:
     """Ambient discovery is how a test run ends up holding a credential."""
     source = _executable(path)
@@ -151,20 +165,20 @@ def test_the_new_modules_read_no_environment_and_no_file(path: Path) -> None:
         assert reader not in source, f"{path.name} performs ambient discovery via {reader!r}"
 
 
-@pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", DORMANT_MODULES, ids=lambda p: p.name)
 def test_the_new_modules_name_no_host_bucket_arn_or_account(path: Path) -> None:
     source = _executable(path)
     assert re.search(r"(https?://|s3://|arn:aws|amazonaws\.com|\b\d{12}\b)", source) is None
 
 
-@pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", DORMANT_MODULES, ids=lambda p: p.name)
 def test_the_new_modules_have_no_entry_point(path: Path) -> None:
     source = _executable(path)
     assert '__name__ == "__main__"' not in source
     assert "argparse" not in source
 
 
-@pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", DORMANT_MODULES, ids=lambda p: p.name)
 def test_the_new_modules_hold_no_global_mutable_state(path: Path) -> None:
     """A module-level list or dict is state two runs would share."""
     offenders: list[str] = []
@@ -199,10 +213,18 @@ def test_the_runtime_never_uses_retrieval_metadata_notes() -> None:
 
 
 def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests() -> None:
-    """Dormancy where it matters: no production module, script or runner builds one."""
+    """Dormancy where it still matters: one composition root, and no runner.
+
+    ADR-0014 authorized exactly one production module to build a runtime. That
+    is narrower than "nowhere", and much narrower than "anywhere in the provider
+    package": a script, a task, a second composition module or an ad-hoc caller
+    still fails here, which is the property that keeps the core dormant.
+    """
     allowed = {
+        COMPOSITION,
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_qualification_runtime.py",
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_qualification_boundaries.py",
+        PROJECT_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py",
     }
     offenders: list[str] = []
     for root in (SRC, PROJECT_ROOT / "scripts", PROJECT_ROOT / "tests"):
@@ -219,12 +241,17 @@ def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests(
     assert offenders == [], f"a qualification runtime is constructed at: {offenders}"
 
 
-def test_no_module_under_src_constructs_a_sharadar_client() -> None:
-    """The client needs a credential and a transport; building one is the
-    composition root this slice does not have."""
+def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
+    """The client needs a credential and a transport, so building one *is* the
+    composition root -- and ADR-0014 put it in exactly one module.
+
+    The credential is still a parameter there. Constructing a client from an
+    injected credential sends nothing; what would send something is a credential
+    source, and none exists anywhere.
+    """
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        if "__pycache__" in path.parts:
+        if "__pycache__" in path.parts or path == COMPOSITION:
             continue
         for node in ast.walk(_tree(path)):
             if (

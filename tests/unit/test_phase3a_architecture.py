@@ -449,11 +449,41 @@ def test_the_s3_adapter_imports_no_sdk_at_all() -> None:
     assert not {module.split(".")[0] for module in imported} & set(AWS_SDK_DISTRIBUTIONS)
 
 
+#: The one module ADR-0014 authorized to construct the licensed store.
+#:
+#: Named as a single path rather than a directory: a second composition module
+#: appearing beside it has to pass review rather than merely be in the right
+#: folder.
+COMPOSITION_ROOT = (
+    PROJECT_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar" / "composition.py"
+)
+
+#: SDK construction, which ADR-0014 did **not** authorize anywhere.
+#:
+#: Kept separate from the store because the two are different decisions. A store
+#: bound to an injected client sends nothing until someone hands it a real one;
+#: a `boto3` session or client *is* the real one, and building it here would be
+#: ambient credential resolution inside the data platform.
+SDK_CONSTRUCTIONS = frozenset({"client", "resource", "Session"})
+
+
 def test_no_data_module_constructs_an_s3_client_or_store() -> None:
-    """No composition root exists in this slice, so nothing may build one."""
+    """One composition root exists, and nothing else may build a store.
+
+    ADR-0014 narrowed this rule; it did not remove it. The earlier rule was "no
+    composition root exists", which was correct while none was authorized. One
+    now is, in exactly one module, so the replacement has to be narrower rather
+    than absent: a second module constructing a licensed store fails here.
+
+    **SDK construction is still forbidden everywhere, including the composition
+    root.** The S3 client is injected there too, so the data platform still
+    imports no SDK, opens no socket and performs no ambient credential
+    discovery.
+    """
     offenders: list[str] = []
     for path in _python_files(PACKAGE_ROOT):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        authorized = path == COMPOSITION_ROOT
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -464,9 +494,30 @@ def test_no_data_module_constructs_an_s3_client_or_store() -> None:
                 if isinstance(node.func, ast.Attribute)
                 else ""
             )
-            if name in {"S3ResearchObjectStore", "client", "resource", "Session"}:
+            if name in SDK_CONSTRUCTIONS:
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} {name}")
-    assert offenders == [], f"no runner or composition root is authorized. Found: {offenders}"
+            elif name == "S3ResearchObjectStore" and not authorized:
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} {name}")
+    assert offenders == [], (
+        f"no runner or second composition root is authorized. Found: {offenders}"
+    )
+
+
+def test_exactly_one_module_constructs_the_licensed_store() -> None:
+    """The permission is a single named module, not a count that could drift."""
+    builders = [
+        path.relative_to(PROJECT_ROOT)
+        for path in _python_files(PACKAGE_ROOT)
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "S3ResearchObjectStore"
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        )
+    ]
+    assert builders == [COMPOSITION_ROOT.relative_to(PROJECT_ROOT)], (
+        f"the licensed store is constructed at: {builders}"
+    )
 
 
 def _executable_code(path: Path) -> str:
