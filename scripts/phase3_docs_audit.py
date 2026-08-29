@@ -1088,10 +1088,141 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "INVOCATIONS ZERO",
     "SECRETS MANAGER NETWORK REQUESTS ZERO",
     "REAL CREDENTIAL RETRIEVAL NONE",
-    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    # The environment clause used to read "SYNCHRONIZATION NOT AUTHORIZED",
+    # which two separately authorized events made false. What replaces it says
+    # what happened *and* what is still gated.
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZED AND VERIFIED",
+    "PYTHON DEPENDENCY LOCK ABSENT",
+    "RANGE-CONFORMANT NOT LOCK-CONFORMANT",
+    "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
     "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
+
+#: The heading of the operational-environment section in both status documents.
+ENVIRONMENT_SECTION_HEADING: Final = (
+    "### The operational environment — synchronized and verified, and not reproducibly locked"
+)
+
+#: The environment fingerprint both documents must record.
+#:
+#: Exact versions, because "the SDK is present" is the claim that went stale in the
+#: other direction: a status document that names no version cannot be checked
+#: against the machine it describes.
+ENVIRONMENT_FINGERPRINT: Final[tuple[str, ...]] = (
+    "operational .venv                     EXISTS AND USABLE",
+    "interpreter                           Python 3.11.9",
+    "boto3                                 1.43.83",
+    "botocore                              1.43.83",
+    "pip check                             no broken requirements",
+    "boto3.client                          EXISTS AND CALLABLE -- not invoked during verification",
+    "Python dependency lock                ABSENT",
+    "conformance                           RANGE-CONFORMANT, NOT LOCK-CONFORMANT",
+    "one future bounded attempt            TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
+)
+
+#: The four events the chronology must keep distinct.
+#:
+#: Collapsing them is how a status document starts asserting that a review
+#: performed an installation it deliberately did not perform, or that no
+#: installation ever happened.
+ENVIRONMENT_CHRONOLOGY: Final[tuple[str, ...]] = (
+    "the second authorized binding-preflight attempt refused because this environment lacked "
+    "the AWS SDK",
+    "an earlier, separately authorized environment action",
+    "installed the AWS SDK using the range already declared",
+    "the latest environment-synchronization review",
+    "installed nothing.",
+    "no Python dependency lock, so that path was not executable",
+    "made no change",
+)
+
+#: The dependency-lock limitation, which recording does not resolve.
+ENVIRONMENT_LOCK_LIMITATION: Final[tuple[str, ...]] = (
+    "No Python dependency lock currently exists.",
+    "range-conformant, not lock-conformant",
+    "could resolve different, still-compatible package versions",
+    "DEFERRED to a separately reviewed dependency-governance slice",
+    "provisionally acceptable",
+    "not approval for production qualification, ingestion, CONTROL publication or live operation",
+)
+
+#: The boundaries the environment section must restate rather than relax.
+ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
+    "binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOUNDARY",
+    "real bucket binding: NONE",
+    "operational secret-identifier configuration: UNKNOWN",
+    "Secrets Manager client constructions: ZERO",
+    "get_secret_value invocations: ZERO",
+    "Secrets Manager network requests: ZERO",
+    "S3 object operations: ZERO",
+    "Sharadar/provider requests: ZERO",
+    "credential retrieved: NONE",
+    "qualification runs: ZERO",
+    "AWS credential-provider chain invoked during environment verification: NONE",
+    "AWS requests during environment verification: ZERO",
+    "binding preflight or composition preflight run: NEITHER",
+    "another binding-preflight attempt: NOT AUTHORIZED",
+    "credential access: NOT AUTHORIZED",
+    "authenticated qualification: NOT AUTHORIZED",
+    "further dependency installation or environment resynchronization: SEPARATELY GATED",
+)
+
+#: What a usable environment must never be read as granting.
+#:
+#: "Technically ready" is a fact about a machine. Every entry here is a fact
+#: about a decision, and none of those decisions has been taken.
+ENVIRONMENT_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
+    "BINDING PREFLIGHT AUTHORIZED",
+    "BINDING PREFLIGHT IS AUTHORIZED",
+    "CREDENTIAL ACCESS AUTHORIZED",
+    "CREDENTIAL ACCESS IS AUTHORIZED",
+    "QUALIFICATION IS AUTHORIZED",
+    "ENVIRONMENT REPRODUCIBLY LOCKED",
+    "REPRODUCIBLY LOCKED ENVIRONMENT",
+    "LOCK-CONFORMANT ENVIRONMENT",
+    "A PYTHON DEPENDENCY LOCK EXISTS",
+    "DEPENDENCY LOCK INTRODUCED",
+    "OPERATIONAL SECRET IDENTIFIER CONFIGURED",
+    "SECRET-IDENTIFIER CONFIGURATION: CONFIGURED",
+    "PRODUCTION READY",
+    "PHASE 3 COMPLETE",
+)
+
+#: Environment claims two separately authorized events made false.
+#:
+#: Each was accurate before the SDK was installed. None is now, and each is the
+#: affirmative absence form -- a document must still be able to say the *lock* is
+#: absent, which is a different absence and remains true.
+STALE_ENVIRONMENT_CLAIMS: Final[tuple[str, ...]] = (
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZED: NOT DONE",
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "THE ABSENT SDK STAYS ABSENT",
+    "BOTO3 REMAINS ABSENT",
+    "THE AWS SDK IS ABSENT",
+    "THE AWS SDK REMAINS ABSENT",
+    "NO DEPENDENCY WAS EVER INSTALLED",
+    "ENVIRONMENT SYNCHRONIZATION HAS NEVER OCCURRED",
+    "THE OPERATIONAL ENVIRONMENT DOES NOT EXIST",
+    "BLOCKED BY LOCAL SDK ABSENCE",
+    "SDK CONSTRUCTION IS IMPOSSIBLE",
+)
+
+#: The CLAUDE.md matrix stanza recording the environment.
+ENVIRONMENT_MATRIX_LINE: Final = "ENVIRONMENT    operational .venv and AWS SDK PRESENT / VERIFIED"
+
+#: What that stanza must state.
+ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
+    "Python 3.11.9",
+    "boto3 1.43.83, botocore 1.43.83, pip check clean",
+    "PYTHON DEPENDENCY LOCK ABSENT",
+    "RANGE-CONFORMANT, NOT REPRODUCIBLY LOCKED",
+    "TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
+    "another attempt NOT AUTHORIZED",
+    "credential access and authenticated qualification NOT AUTHORIZED",
+    "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
+)
+
 
 #: The first line of the CLAUDE.md IN FORCE matrix entry recording ADR-0016.
 ADR_0016_MATRIX_LINE: Final = "ADR-0016 corrected private-binding failure boundaries -- ACCEPTED /"
@@ -1101,7 +1232,7 @@ ADR_0016_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "IN FORCE -- PR #24 MERGED",
     "CODE AND FAILURE-BOUNDARY CORRECTION ONLY",
     "SECRET-IDENTIFIER / LOCAL-DEPENDENCY / CREDENTIAL REFUSALS SEPARATED",
-    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
     "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "NEVER USED TO RETRIEVE A CREDENTIAL OR RUN QUALIFICATION",
 )
@@ -1213,12 +1344,15 @@ ADR_0016_BLANKET_COUNT_CLAIMS: Final[tuple[str, ...]] = (
 #: "another binding-preflight attempt: NOT AUTHORIZED" is required while "the
 #: binding preflight completed" is refused.
 ADR_0016_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
-    "THE ENVIRONMENT WAS REPAIRED",
-    "THE ENVIRONMENT HAS BEEN REPAIRED",
-    "BOTO3 WAS INSTALLED",
-    "BOTO3 HAS BEEN INSTALLED",
-    "THE SDK WAS INSTALLED",
-    "THE DEPENDENCY WAS INSTALLED",
+    # Five environment-repair entries stood here and are gone: "the environment
+    # was repaired" / "has been repaired", "boto3 was installed" / "has been
+    # installed", "the SDK was installed" and "the dependency was installed".
+    # Each was refused because it would have been false; a separately authorized
+    # action has since made the installation true, and a guard that forbids a
+    # true statement is answered by writing a vaguer one. The dangerous claims --
+    # about the preflight, the credential and qualification -- all remain, and
+    # `ENVIRONMENT_FORBIDDEN_CLAIMS` adds what a *usable* environment must never
+    # be read as granting.
     "THE BINDING PREFLIGHT COMPLETED",
     "THE BINDING PREFLIGHT SUCCEEDED",
     "A CREDENTIAL WAS RETRIEVED",
@@ -7266,6 +7400,16 @@ def main() -> int:
             "a merged decision absent from the in-force list reads as one that did not merge",
         )
         f.check(
+            "the CLAUDE.md matrix carries exactly one environment stanza",
+            claude_body.count(ENVIRONMENT_MATRIX_LINE) == 1,
+            "two stanzas for one machine is two places for it to go stale",
+        )
+        f.check(
+            "the environment stanza records the fingerprint and what stays gated",
+            all(clause in claude_body for clause in ENVIRONMENT_MATRIX_CLAUSES),
+            "the matrix states the boundary beside the state, or it states half a fact",
+        )
+        f.check(
             "the ADR-0016 matrix entry names its pull request and its boundary",
             all(
                 clause in _matrix_entry(claude_body, ADR_0016_MATRIX_LINE)
@@ -7953,10 +8097,70 @@ def main() -> int:
             "the two places that needed a word for 'I do not know' were asserting a boundary",
         )
         f.check(
-            f"{name} keeps the operational environment unsynchronized and unauthorized",
-            "operational environment synchronized: NOT DONE, NOT AUTHORIZED" in body
+            f"{name} records the environment as synchronized and verified, and still gated",
+            "operational environment synchronized: DONE AND VERIFIED" in body
+            and "Python dependency lock: ABSENT" in body
             and "another binding-preflight attempt: NOT AUTHORIZED" in body,
-            "the drifted environment is evidence, not something this correction repaired",
+            "the drift was real evidence; a separately authorized action has since fixed it",
+        )
+        f.check(
+            f"{name} carries the operational-environment section",
+            ENVIRONMENT_SECTION_HEADING in body,
+            "a machine state nobody wrote down is a machine state nobody can check",
+        )
+        f.check(
+            f"{name} records the exact environment fingerprint",
+            all(
+                token in _document_section(body, ENVIRONMENT_SECTION_HEADING)
+                for token in ENVIRONMENT_FINGERPRINT
+            ),
+            "'the SDK is present' cannot be checked against the machine it describes",
+        )
+        f.check(
+            f"{name} keeps the four environment events distinct",
+            all(
+                phrase
+                in " ".join(
+                    _document_section(body, ENVIRONMENT_SECTION_HEADING).replace("**", "").split()
+                )
+                for phrase in ENVIRONMENT_CHRONOLOGY
+            ),
+            "a review that installed nothing must not read as the action that installed",
+        )
+        f.check(
+            f"{name} states the dependency-lock limitation and defers the lock",
+            all(
+                phrase
+                in " ".join(
+                    _document_section(body, ENVIRONMENT_SECTION_HEADING).replace("**", "").split()
+                )
+                for phrase in ENVIRONMENT_LOCK_LIMITATION
+            ),
+            "recording a missing lock does not supply one",
+        )
+        f.check(
+            f"{name} restates every operational boundary in the environment section",
+            all(
+                token in _document_section(body, ENVIRONMENT_SECTION_HEADING)
+                for token in ENVIRONMENT_BOUNDARIES
+            ),
+            "a usable environment is not a permission, and the zeros are unchanged",
+        )
+        f.check(
+            f"{name} separates technical readiness from authorization",
+            "A usable environment is not a permission." in flat
+            and "that is a statement about the machine, not a permission" in flat,
+            "TECHNICALLY READY is a fact about a machine, never about a decision",
+        )
+        f.check(
+            f"{name} makes no stale environment-absence claim",
+            not [claim for claim in STALE_ENVIRONMENT_CLAIMS if claim in upper],
+            "two separately authorized events made each of these false",
+        )
+        f.check(
+            f"{name} reads a usable environment as granting nothing",
+            not [claim for claim in ENVIRONMENT_FORBIDDEN_CLAIMS if claim in upper],
+            "each names a decision, and none of those decisions has been taken",
         )
         f.check(
             f"{name} does not describe a missing SDK as a credential failure",
