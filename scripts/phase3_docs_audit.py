@@ -295,6 +295,8 @@ ADR_BINDING = DECISIONS / "ADR-0015-implement-the-dormant-sharadar-private-bindi
 BINDING_PREFLIGHT = REPO_ROOT / "scripts" / "sharadar_binding_preflight.py"
 SECRETS_BOUNDARY = PROVIDER_PACKAGE / "secrets.py"
 BINDING_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_binding_preflight.py"
+#: ADR-0016: the correction that split one credential refusal into three.
+ADR_BOUNDARIES = DECISIONS / ("ADR-0016-correct-private-binding-preflight-failure-boundaries.md")
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -900,6 +902,42 @@ PRE_MERGE_STATUS_WORDING: Final[tuple[str, ...]] = (
 )
 
 
+#: The request-count rows a current-status document must carry.
+#:
+#: ADR-0016's correction *is* these counts. A document that describes three
+#: outcomes without them has described three names for one behaviour.
+ADR_0016_COUNT_ROWS: Final[tuple[str, ...]] = (
+    "authorization / profile / identity / bucket            0        0                0",
+    "REFUSED_SECRET_IDENTIFIER                              1        0                0",
+    "REFUSED_DEPENDENCY at client construction              1        1                0",
+    "REFUSED_CREDENTIAL                                     1        1                1",
+)
+
+#: Affirmative claims about things that have not happened.
+#:
+#: Every entry is the **affirmative** form, for the reason the ADR-0015 overclaim
+#: list gives: a current-status document has to *name* what stays absent, so
+#: "another binding-preflight attempt: NOT AUTHORIZED" is required while "the
+#: binding preflight completed" is refused.
+ADR_0016_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
+    "THE ENVIRONMENT WAS REPAIRED",
+    "THE ENVIRONMENT HAS BEEN REPAIRED",
+    "BOTO3 WAS INSTALLED",
+    "BOTO3 HAS BEEN INSTALLED",
+    "THE SDK WAS INSTALLED",
+    "THE DEPENDENCY WAS INSTALLED",
+    "THE BINDING PREFLIGHT COMPLETED",
+    "THE BINDING PREFLIGHT SUCCEEDED",
+    "A CREDENTIAL WAS RETRIEVED",
+    "THE CREDENTIAL WAS RETRIEVED",
+    "GETSECRETVALUE WAS ISSUED",
+    "GETSECRETVALUE SUCCEEDED",
+    "A SECRET WAS READ",
+    "AUTHENTICATED QUALIFICATION IS AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION IS NOW AUTHORIZED",
+)
+
+
 #: One double-quoted span, straight or curly, not crossing a paragraph.
 QUOTED_SPAN: Final = re.compile('["“][^"“”]{0,300}?["”]')
 
@@ -1322,6 +1360,62 @@ def _emitted_preflight_sentences(path: Path) -> str:
             if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Constant):
                 sentences.append(str(statement.value.value))
     return " ".join(sentences)
+
+
+def _outcome_sentence(path: Path, member: str) -> str:
+    """The sentence one ``PreflightOutcome`` member renders as.
+
+    The *value*, not the name: an operator reads the sentence, and ADR-0016 is
+    about a sentence that named a boundary the run never reached.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != "PreflightOutcome":
+            continue
+        for statement in node.body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            named = any(
+                isinstance(target, ast.Name) and target.id == member for target in statement.targets
+            )
+            if named and isinstance(statement.value, ast.Constant):
+                return str(statement.value.value)
+    return ""
+
+
+#: The three calls whose order is the corrected stage boundary.
+BINDING_STAGE_CALLS: Final[tuple[str, ...]] = (
+    "secret_id_source",
+    "secrets_client_factory",
+    "sharadar_credential_from_secret",
+)
+
+
+def _binding_stage_order(source: str) -> list[str]:
+    """The three stage calls, in the order the entry point performs them.
+
+    First occurrence in the executable source. Resolve, then construct, then
+    ask: the identifier must be refusable before a client exists, and a client
+    must exist before anything can be attributed to a request.
+    """
+    found = [(source.index(call), call) for call in BINDING_STAGE_CALLS if call in source]
+    return [call for _, call in sorted(found)]
+
+
+def _module_level_imports(path: Path) -> str:
+    """Every import a module performs at import time, unparsed.
+
+    What an ordinary import of the entry point actually pulls in -- which must
+    stay empty of the SDK *and* of the data platform, so a refusal on a machine
+    with a broken environment is still a refusal rather than a traceback.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    return ast.unparse(
+        ast.Module(
+            body=[n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom)],
+            type_ignores=[],
+        )
+    )
 
 
 def _sdk_client_construction_sites() -> list[Path]:
@@ -6734,6 +6828,321 @@ def main() -> int:
                 )
             ),
             "narrowing a claim that went stale must not relax the operations it governed",
+        )
+
+    # -- 23. ADR-0016: the corrected private-binding failure boundaries -------
+    #
+    # ADR-0015 shipped one `REFUSED_CREDENTIAL` covering the identifier source,
+    # the local SDK and client construction, and the one GetSecretValue call. An
+    # operator ran it against the real foundation on a machine with no `boto3`,
+    # and was told the private credential could not be retrieved -- for a missing
+    # local package, with no request ever sent. These guards keep the three
+    # boundaries distinct, keep their request counts honest, and refuse the
+    # claims a future edit would be tempted to make about either.
+
+    f.check(
+        "the ADR-0016 decision record exists",
+        ADR_BOUNDARIES.is_file(),
+        f"missing: {ADR_BOUNDARIES}",
+    )
+    if ADR_BOUNDARIES.is_file():
+        adr16 = read(ADR_BOUNDARIES)
+        flat16 = " ".join(adr16.replace("**", "").split())
+        f.check(
+            "ADR-0016 records both real preflight refusals",
+            "REFUSED_IDENTITY" in adr16
+            and "refreshed the approved AWS SSO session" in flat16
+            and "refused with `REFUSED_CREDENTIAL`" in flat16,
+            "the decision rests on two runs, and a reader must be able to see both",
+        )
+        f.check(
+            "ADR-0016 records the operational finding and the absent SDK",
+            "neither `boto3` nor `botocore`" in adr16
+            and "operational project virtual environment" in flat16,
+            "the environment fact is evidence, and evidence that is not written down is lost",
+        )
+        f.check(
+            "ADR-0016 states that no GetSecretValue request occurred",
+            "no `GetSecretValue` request could have been issued" in adr16
+            and "requests issued by this repository: zero" in flat16.lower(),
+            "the false implication was that a request had reached AWS; the record must deny it",
+        )
+        f.check(
+            "ADR-0016 names the incorrect mapping it corrects",
+            "inside the same broad exception boundary" in flat16
+            and "reported as a private-credential failure" in flat16.lower(),
+            "a correction that does not state the defect is a rewrite, not a correction",
+        )
+        f.check(
+            "ADR-0016 records that the identifier stage was indistinguishable",
+            "remains unknown" in flat16 and "not separately classified" in flat16,
+            "the second run could not say whether the identifier was configured; nor may this",
+        )
+        f.check(
+            "ADR-0016 states the three corrected boundaries",
+            all(
+                member in adr16
+                for member in (
+                    "REFUSED_SECRET_IDENTIFIER",
+                    "REFUSED_DEPENDENCY",
+                    "REFUSED_CREDENTIAL",
+                )
+            ),
+            "three stages, three closed outcomes",
+        )
+        f.check(
+            "ADR-0016 keeps environment synchronization a separate unauthorized action",
+            "separate action and is not authorized by this ADR" in flat16
+            and "No dependency is installed" in flat16,
+            "installing the package would have hidden the defect it misreported",
+        )
+        f.check(
+            "ADR-0016 keeps another binding-preflight attempt separately authorized",
+            "Another binding-preflight attempt is separately authorized and has not been "
+            "authorized" in flat16,
+            "correcting what a refusal says is not permission to produce another one",
+        )
+        f.check(
+            "ADR-0016 records nothing private",
+            not any(
+                marker in adr16
+                for marker in ("arn:aws:", "amazonaws.com", "s3://", "AKIA", "test-api-key")
+            )
+            and re.search(r"\b\d{12}\b", adr16) is None,
+            "no credential, account, ARN, secret identifier, bucket or exception text",
+        )
+        f.check(
+            "ADR-0016 does not edit or retract ADR-0015",
+            "ADR-0015 is not edited" in flat16 and "and nothing else" in flat16,
+            "the immutable record stands; only the live semantics it produced are superseded",
+        )
+        f.check(
+            "ADR-0016 changes no gate and no phase status",
+            all(
+                token in flat16
+                for token in (
+                    "G1 OPEN",
+                    "G2 OPEN",
+                    "G3 CLOSED",
+                    f"G4{EN_DASH}G7 OPEN",
+                    "Phase 3 NOT COMPLETE",
+                    "live trading HARD-DISABLED",
+                )
+            ),
+            "a correction to a refusal message resolves nothing",
+        )
+
+    # -- the corrected vocabulary, as code ------------------------------------
+    if BINDING_PREFLIGHT.is_file():
+        boundaries = _executable_python(BINDING_PREFLIGHT)
+        f.check(
+            "the entry point carries three distinct failure boundaries",
+            all(
+                member in boundaries
+                for member in (
+                    "REFUSED_SECRET_IDENTIFIER",
+                    "REFUSED_DEPENDENCY",
+                    "REFUSED_CREDENTIAL",
+                )
+            ),
+            "one member for three stages is what misreported a missing package",
+        )
+        f.check(
+            "the superseded plural member survives nowhere in the entry point",
+            "REFUSED_DEPENDENCIES" not in read(BINDING_PREFLIGHT),
+            "a rename, not a synonym: an alias would let one stage answer to two names",
+        )
+        f.check(
+            "neither pre-request refusal is worded as a credential failure",
+            not any(
+                "credential" in sentence
+                for sentence in (
+                    _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_SECRET_IDENTIFIER"),
+                    _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_DEPENDENCY"),
+                )
+            )
+            and "credential" in _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_CREDENTIAL"),
+            "the sentence an operator reads must not name a boundary that was not reached",
+        )
+        f.check(
+            "the identifier is validated before any client is constructed",
+            _binding_stage_order(boundaries)
+            == ["secret_id_source", "secrets_client_factory", "sharadar_credential_from_secret"],
+            "resolve, then construct, then ask -- and refuse at whichever one fails",
+        )
+        f.check(
+            "the identifier rule is the boundary's own, imported rather than restated",
+            "is_usable_secret_identifier(secret_id)" in boundaries
+            and "is_usable_secret_identifier" in _executable_python(SECRETS_BOUNDARY),
+            "two spellings of one rule disagree about which outcome an operator sees",
+        )
+        f.check(
+            "the secrets-boundary failures are classified by a total closed mapping",
+            "SECRET_FAILURE_OUTCOME" in boundaries
+            and all(
+                token in boundaries
+                for token in (
+                    "'CLIENT_UNUSABLE': PreflightOutcome.REFUSED_DEPENDENCY",
+                    "'SECRET_IDENTIFIER_MALFORMED': PreflightOutcome.REFUSED_SECRET_IDENTIFIER",
+                    "'BACKEND_REFUSED': PreflightOutcome.REFUSED_CREDENTIAL",
+                    "'RESPONSE_MALFORMED': PreflightOutcome.REFUSED_CREDENTIAL",
+                    "'SECRET_BINARY_REFUSED': PreflightOutcome.REFUSED_CREDENTIAL",
+                    "'SECRET_VALUE_UNUSABLE': PreflightOutcome.REFUSED_CREDENTIAL",
+                )
+            ),
+            "the two refusals the boundary reaches before the request are not credential facts",
+        )
+        f.check(
+            "the constructed client is checked for the one operation it must serve",
+            "callable(getattr(secrets_client, 'get_secret_value', None))" in boundaries,
+            "an object that cannot send a request is a dependency fact, not a credential one",
+        )
+        f.check(
+            "no kalpamani import runs at entry-point import time",
+            "kalpamani" not in _module_level_imports(BINDING_PREFLIGHT),
+            "the refusing default path must stay clean on the machine the defect was found on",
+        )
+
+    # -- the behavioural evidence ---------------------------------------------
+    if BINDING_TESTS.is_file():
+        boundary_tests = read(BINDING_TESTS)
+        for label, needle in (
+            (
+                "an identifier failure sending nothing",
+                "test_an_identifier_failure_is_its_own_outcome_and_sends_nothing",
+            ),
+            (
+                "an identifier failure disclosing nothing",
+                "test_an_identifier_failure_discloses_neither_value_nor_cause",
+            ),
+            (
+                "a usable identifier shape",
+                "test_a_usable_identifier_shape_reaches_the_backend_exactly_once",
+            ),
+            (
+                "a missing SDK as a dependency refusal",
+                "test_a_client_construction_failure_is_a_dependency_refusal",
+            ),
+            (
+                "a dependency failure disclosing no underlying text",
+                "test_a_dependency_failure_discloses_no_underlying_text",
+            ),
+            (
+                "a client that cannot serve the operation",
+                "test_a_constructed_client_that_cannot_serve_the_operation_is_a_dependency_refusal",
+            ),
+            (
+                "an unimportable secrets boundary",
+                "test_an_unimportable_secrets_boundary_is_a_dependency_refusal",
+            ),
+            (
+                "a dependency failure after the credential",
+                "test_a_late_dependency_failure_is_still_a_dependency_refusal",
+            ),
+            (
+                "a backend refusal after exactly one attempt",
+                "test_a_backend_refusal_is_a_credential_refusal_after_exactly_one_attempt",
+            ),
+            (
+                "an unusable response after exactly one attempt",
+                "test_an_unusable_response_is_a_credential_refusal_after_exactly_one_attempt",
+            ),
+            (
+                "a valid synthetic secret",
+                "test_a_valid_synthetic_secret_completes_with_one_attempt",
+            ),
+            ("a total classification", "test_every_secrets_boundary_failure_is_classified"),
+            (
+                "pre-request failures never credential",
+                "test_the_pre_request_failures_are_never_credential_failures",
+            ),
+            (
+                "post-request failures always credential",
+                "test_the_post_request_failures_are_credential_failures",
+            ),
+            ("a closed outcome vocabulary", "test_the_outcome_vocabulary_is_exactly_these_members"),
+            ("no surviving plural member", "test_the_superseded_plural_member_is_gone"),
+            (
+                "no pre-request refusal worded as a credential failure",
+                "test_no_refusal_before_the_request_is_worded_as_a_credential_failure",
+            ),
+            ("witnessed call counts", "test_every_outcome_has_its_witnessed_call_counts"),
+            (
+                "a refusing path needing neither SDK nor package",
+                "test_the_refusing_default_path_needs_neither_the_sdk_nor_the_package",
+            ),
+        ):
+            f.check(
+                f"a failure-boundary test covers {label}",
+                needle in boundary_tests,
+                "ADR-0016's verification table must name tests that exist",
+            )
+        f.check(
+            "the request counts are read from counters rather than asserted",
+            "self.secrets_factory_calls += 1" in boundary_tests
+            and "self.calls += 1" in boundary_tests
+            and "_counts(harness)" in boundary_tests,
+            "a count argued from which line raised is the inference that misreported",
+        )
+
+    # -- the current documentation --------------------------------------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        upper = flat.upper()
+        f.check(
+            f"{name} records the corrected failure boundaries",
+            "ADR-0016" in body and "The private-binding failure boundaries — corrected" in body,
+            "a superseded live semantic left undescribed is a live semantic a reader will trust",
+        )
+        f.check(
+            f"{name} distinguishes all three refusals by name",
+            all(
+                member in body
+                for member in (
+                    "`REFUSED_SECRET_IDENTIFIER`",
+                    "`REFUSED_DEPENDENCY`",
+                    "`REFUSED_CREDENTIAL`",
+                )
+            ),
+            "three stages, three closed outcomes, and a reader must see which is which",
+        )
+        f.check(
+            f"{name} states the witnessed request-count rules",
+            all(row in body for row in ADR_0016_COUNT_ROWS),
+            "the counts are the correction; a document without them describes the old behaviour",
+        )
+        f.check(
+            f"{name} states that no request was issued and no credential retrieved",
+            "GetSecretValue requests issued: ZERO" in body
+            and "real credential retrieved: NONE" in body,
+            "the defect implied a request had reached AWS; the record must deny it plainly",
+        )
+        f.check(
+            f"{name} keeps the operational environment unsynchronized and unauthorized",
+            "operational environment synchronized: NOT DONE, NOT AUTHORIZED" in body
+            and "another binding-preflight attempt: NOT AUTHORIZED" in body,
+            "the drifted environment is evidence, not something this correction repaired",
+        )
+        f.check(
+            f"{name} does not describe a missing SDK as a credential failure",
+            "never implies a credential was requested" in flat,
+            "the dependency outcome must say what it does not mean, or it means the old thing",
+        )
+        f.check(
+            f"{name} does not describe an identifier failure as credential retrieval",
+            "No client is built and nothing is asked of AWS." in flat,
+            "the identifier outcome is refused before anything is constructed or sent",
+        )
+        f.check(
+            f"{name} claims no repair, no completion and no qualification authority",
+            not [claim for claim in ADR_0016_FORBIDDEN_CLAIMS if claim in upper],
+            "each is an affirmative claim about something that has not happened",
         )
 
     # ---------------------------------------------------------------- verdict

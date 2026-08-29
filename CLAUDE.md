@@ -428,6 +428,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
 | **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**, and an **authenticated qualification run stays separately gated and NOT AUTHORIZED**. Credential source configured **NONE**, real bucket binding **NONE**, provider and AWS requests **ZERO** |
+| **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **PROPOSED** — accepted on the merge of the pull request that introduces it, and carrying no authority before that merge. Separates **secret-identifier**, **local dependency** and **credential** refusals. `GetSecretValue` requests **ZERO**, real credential retrieved **NONE**, operational environment synchronization **NOT AUTHORIZED**, another binding-preflight attempt **NOT AUTHORIZED** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -734,6 +735,69 @@ authorized**.
 **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3
 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
 
+### The private-binding failure boundaries — corrected, and the environment that is not
+
+[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) corrects
+one thing ADR-0015 produced, and **supersedes only that**: a single `REFUSED_CREDENTIAL` outcome
+covered the secret-identifier source, the local SDK and client construction, and the one
+`GetSecretValue` call. **ADR-0015 is not edited** — it is the immutable record of the decision that
+was accepted.
+
+**Status: PROPOSED — accepted on the merge of the pull request that introduces it, and carrying no
+authority before that merge.**
+
+Two authorized operator attempts were made against the real governed foundation. The first refused
+with `REFUSED_IDENTITY`; the owner refreshed the approved AWS SSO session; the second passed the
+profile pin, the identity gate and licensed-bucket resolution, and refused with `REFUSED_CREDENTIAL`.
+A read-only diagnostic then established that the operational virtual environment contains **neither
+`boto3` nor `botocore`** — so `_secrets_client()` raised `ModuleNotFoundError` inside the constructor,
+inside the same broad exception boundary that mapped every failure in the stage to the credential, and
+**no `GetSecretValue` request could have been issued.**
+
+The command reported a private-credential failure for a missing local package. That would have sent an
+operator to inspect a secret, a policy and an account for a problem in none of them, and it implied a
+request had reached AWS when none had. Because the identifier source was not separately classified,
+whether it is configured at all **remains unknown** — the run cannot say, and nothing here guesses.
+
+```
+outcome                                       identifier   client   GetSecretValue
+authorization / profile / identity / bucket            0        0                0
+REFUSED_SECRET_IDENTIFIER                              1        0                0
+REFUSED_DEPENDENCY at client construction              1        1                0
+REFUSED_CREDENTIAL                                     1        1                1
+completed synthetic offline preflight                  1        1                1
+
+GetSecretValue requests issued: ZERO   ·   real credential retrieved: NONE
+operational environment synchronized: NOT DONE, NOT AUTHORIZED
+another binding-preflight attempt: NOT AUTHORIZED
+```
+
+| | |
+|---|---|
+| **`REFUSED_SECRET_IDENTIFIER`** | the configured source is unavailable, raises, returns the wrong exact type, returns an empty value, or returns a value the existing identifier boundary refuses. **No client is built and nothing is asked of AWS.** The rule is `is_usable_secret_identifier` — the secrets boundary's own, imported rather than restated, because two spellings of one rule is how a value one stage admits becomes a value the next refuses |
+| **`REFUSED_DEPENDENCY`** | the SDK is unavailable, an import fails, the client factory is unavailable or raises, construction fails, the constructed client cannot serve the one operation, the secrets boundary will not import, or a dependency built after the credential fails. **It never implies a credential was requested.** The renamed `REFUSED_DEPENDENCIES` — a rename, not a synonym, and no alias survives |
+| **`REFUSED_CREDENTIAL`** | **and only this** follows an attempted `GetSecretValue`: the call raised or was refused, the response is structurally invalid, `SecretString` is absent, binary came back, or the returned string is empty or invalid under the existing credential contract |
+| **Counts are witnessed** | the synthetic suite drives the preflight with factories and a client that count what was asked of them, and every count above is read from those counters. A count argued from which line raised is the inference that produced a false report against the real foundation |
+| **The classification is total** | `SECRET_FAILURE_OUTCOME` maps every `SecretRetrievalFailure` member to an outcome and a test asserts it, so a new member cannot arrive and be swept into "the credential failed" by a default. The two the boundary raises *before* it calls the backend map to the dependency and identifier outcomes, never to the credential |
+| **Nothing leaks, still** | an import error names a path, a client constructor names a profile or a region, a backend exception quotes the secret name. Every refusal is a closed member raised `from None`, and canaries prove the dependency exception, the identifier and the backend message are absent from every refusal, both reprs, stdout and stderr |
+| **The refusing default path** | needs neither the SDK nor the data platform. Every `kalpamani` import in the entry point sits inside a function body, so a machine with a broken environment still gets a clean refusal rather than a traceback — which is the class of machine this defect was found on |
+
+**Two findings, and only one belongs in this repository.** The absent SDK is an operational-environment
+drift finding, recorded as evidence; the declared `boto3>=1.36.0,<2.0` runtime dependency is unchanged
+and was already correct. The mislabelling is the implementation defect, and it is what is corrected.
+**The dependency was deliberately not installed** — installing it would have made the symptom
+disappear and left the defect in place, on a path that only runs when something has already gone
+wrong. Synchronizing that environment is a separate action under separate authorization.
+
+**Nothing else moved.** Secret-identifier access, SDK construction and credential retrieval all still
+sit behind the identity and bucket gates. The singleton authorization capability, the operator flag,
+the identifier staying out of `argv`, the fixed environment-variable name, the profile and region
+pins, the governed identity gate and state read, the licensed-bucket output, `SystemClock` in the
+operator path, `reveal()` at **zero** during preflight, offline composition only, no provider-fetch
+operation and no object-publication operation are all unchanged. **G1 OPEN · G2 OPEN · G3 CLOSED ·
+G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL
+**DEFERRED**, live trading **HARD-DISABLED**.
+
 ### The Sharadar private-binding preflight — dormant, refused by default, never run
 
 [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) authorized the last piece nobody had written: the path that will eventually
@@ -771,7 +835,7 @@ qualification remains NOT AUTHORIZED and has never run.**
 | **One object, admitted by identity** | two revisions got this wrong. The first took `binding_authorized: bool`, so any importer could pass `True`. The second took an object of an exact type carrying a module-private *mint field* — and **a field is copyable**: `copy.copy` returned a distinct object holding the same field, and admission accepted it, so copying manufactured a second bearer. Review caught the closeout claiming both "copying cannot forge one" and "a shallow copy stays genuine", which cannot both be true |
 | **Nothing to copy, and no route to a second** | admission is now identity against **one** module-level object. `__slots__` is empty; `__new__` refuses once the singleton exists; `__copy__`, `__deepcopy__` and `__reduce__` each refuse, so copying and pickling yield **no object at all**; subclassing refuses. An `object.__new__` instance can still be built and is refused for the reason that matters — it is not *this* object. Unexported, handed over at one place. **Not a claim about hostile runtime introspection** — a process that can reach the module's private names already holds the singleton |
 | **The secret identifier never enters argv** | `--secret-id` put a private identifier in shell history and every process listing, whether or not the program printed it. It now comes from an **injected zero-argument source**, called once, after every gate has passed and immediately before the credential. The production source reads one fixed, non-secret variable **name**, `KALPAMANI_SHARADAR_SECRET_ID`; six command-line spellings are refused by name. The default path and every earlier refusal read **no credential-bearing variable** — `argparse` reads locale and terminal-width variables of its own, which is why the claim is scoped rather than "zero lookups" |
-| **Order is the security property** | authorization → profile → identity gate → licensed bucket → credential → dependencies → offline preflight → closed result. No later stage runs after an earlier refusal, so **a wrong-account session never reaches a secret and a failed gate never reaches a credential**. Proven by counting which stages ran |
+| **Order is the security property** | authorization → profile → identity gate → licensed bucket → secret identifier → secrets client → one credential retrieval → dependencies → offline preflight → closed result. No later stage runs after an earlier refusal, so **a wrong-account session never reaches a secret and a failed gate never reaches a credential**. Proven by counting which stages ran. The identifier, the client and the retrieval were **one stage with one outcome** in this slice as merged, which is the defect [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) corrects; nothing moved earlier |
 | **No gate is reimplemented** | `AWS_PROFILE` pinning, account matching and the state read come from the existing governed verifier. The entry point contains no `sts` call, no `get-caller-identity`, no `allowed_account_ids` parse and no `terraform` invocation of its own |
 | **Licensed, never CONTROL** | one named Terraform output. The control bucket has a different key, and the entry point never names it — nor the word `CONTROL` |
 | **One secrets operation** | `get_secret_value`, injected. No listing, describing, writing, rotating or deleting exists in the shape. **`SecretString` only** — binary is refused rather than decoded — with no JSON parsing, key guessing, alias, default or fallback |
@@ -1009,6 +1073,10 @@ NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets 
                Silver/Gold real data · production-provider SELECTION
                ANY AWS mutation, read, verifier run or terraform command · ECR/ECS · image builds
                an ingestion runner · an authenticated qualification run · CONTROL publication
+               operational-environment dependency synchronization -- the absent SDK stays
+                        absent, and the declared range stays as declared (ADR-0016)
+               another binding-preflight attempt -- correcting what a refusal says is not
+                        permission to produce another one
                broker/LEAN activity · Paper expansion · live trading
 
 UNCHANGED      G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN
