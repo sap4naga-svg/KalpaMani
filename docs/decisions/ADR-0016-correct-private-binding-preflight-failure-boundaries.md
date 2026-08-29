@@ -1,0 +1,548 @@
+# ADR-0016 — Correct the Sharadar Private-Binding Preflight Failure Boundaries
+
+**Status:** **Accepted — effective on the merge of the pull request that introduces this ADR.**
+Until that merge it is proposed and carries no authority.
+**Date:** 2026-08-29
+**Deciders:** Project owner (human governance)
+**Supersedes:** the **live failure-classification semantics** of
+[ADR-0015](ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md), and nothing else.
+Specifically: the single `REFUSED_CREDENTIAL` outcome that covered the secret-identifier source, the
+local SDK and client construction, and the one `get_secret_value` call; and the stage list that named
+those three as one stage. **ADR-0015 is not edited.** It is the immutable record of the decision that
+was accepted, and the defect corrected here is a defect in what that decision produced, not a
+retraction of it. Every other property ADR-0015 established — the singleton authorization, the
+operator flag, the identifier staying out of `argv`, the fixed environment-variable name, the profile
+and region pins, the governed identity gate, the licensed-bucket output, offline-composition-only
+behaviour, the allowlisted output vocabulary and the zero-activity guarantees — is untouched and
+re-verified here.
+**Superseded by:** —
+**Relates to:** [ADR-0007](ADR-0007-cloud-first-research-data-plane.md) (the governed AWS foundation
+and its identity gate), [ADR-0009](ADR-0009-sharadar-provider-realistic-implementation.md) (the
+credential contract this boundary hands into),
+[ADR-0011](ADR-0011-implement-the-licensed-s3-research-object-store.md) (the licensed store),
+[ADR-0014](ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) (the offline
+composition this preflight calls),
+[ADR-0015](ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) (the slice corrected)
+**Authority:** Blueprint V3.0 §11, §17, §19 · CLAUDE.md §4.4, §4.5, §4.21, §4.22, §4.24, §7, §8
+
+---
+
+## 1. Context
+
+ADR-0015 was accepted and merged as PR #22. It was written, reviewed and validated synthetically, and
+it had never been run. Two authorized operator attempts were then made against the real governed
+foundation, and between them they found something no synthetic test had been shaped to find.
+
+### The two attempts
+
+| | |
+|---|---|
+| **First attempt** | refused with `REFUSED_IDENTITY`. The AWS identity gate did not pass. This is the gate behaving exactly as designed: nothing later ran, no state was read, no identifier was resolved and no credential was sought |
+| **Operator action** | the owner refreshed the approved AWS SSO session. This is session maintenance the owner governs (CLAUDE.md §4.20), not a change to this repository |
+| **Second attempt** | passed the profile pin, the identity gate and licensed-bucket resolution, and then refused with `REFUSED_CREDENTIAL` |
+
+`REFUSED_CREDENTIAL` reads as one thing: the private credential could not be retrieved. An operator
+who read it would go and look at Secrets Manager, at the secret, at the IAM policy on the role — at
+the credential boundary, because that is what the sentence names.
+
+### What a read-only diagnostic then established
+
+* the operational project virtual environment contains **neither `boto3` nor `botocore`**;
+* `_secrets_client()` performs `import boto3` **inside its own function body**;
+* that construction sat **inside the same broad exception boundary** that mapped every failure in the
+  stage to `REFUSED_CREDENTIAL`;
+* therefore the constructor raised `ModuleNotFoundError` and the refusal was produced **before any
+  client existed**;
+* therefore **no `get_secret_value` invocation could have occurred**, and no AWS network request
+  could have followed one, because there was no client to invoke;
+* and the secret-identifier source was **not separately classified**, so whether it was configured at
+  all, and whether what it produced was usable, **remains unknown** — the run cannot say, and this ADR
+  does not guess.
+
+### Two findings, and only one of them belongs in this repository
+
+**An operational-environment drift finding.** A runtime dependency this repository has declared since
+[ADR-0011](ADR-0011-implement-the-licensed-s3-research-object-store.md) — `boto3>=1.36.0,<2.0`, still
+declared, still correct — is absent from the operational virtual environment. That is a fact about a
+machine, recorded here as evidence. Synchronizing that environment is a **separate action and is not
+authorized by this ADR**, and it is deliberately not performed by the pull request that introduces
+this ADR: installing the package would have made the symptom disappear while leaving the defect that
+misreported it in place, on a path that only runs when something has already gone wrong.
+
+**An implementation defect.** A local dependency failure was reported as a private-credential
+failure. That is a defect in this repository, it is what this ADR corrects, and it would have
+misdirected an operator on any machine, drifted or not.
+
+### Why the wrong label is worse than an unhelpful one
+
+The refusal was not merely vague. It was **wrong in a specific direction**: it named a boundary that
+had not been reached, and it implied AWS had been contacted when it had not. A refusal
+that points at the credential sends an operator to inspect a secret, a policy and an account — the
+three things an operator should touch least often and most carefully — for a problem that was a
+missing local package. And a report implying that AWS was contacted is an unwitnessed claim about
+external activity, which is the class of claim this repository holds to a higher standard than any
+other.
+
+### The owner's authorization, and its exact boundary
+
+> I authorize a synthetic/local correction slice for the ADR-0015 private-binding preflight. It may
+> introduce closed, sanitized distinctions between secret-identifier refusal, local
+> dependency/client-construction refusal, and actual credential-retrieval refusal; update tests,
+> documentation and audits; and record the post-merge correction through the repository's governed
+> decision mechanism.
+>
+> This authorization covers code, tests, documentation, audits and synthetic/local validation only.
+> It does not authorize installing dependencies into the operational environment, AWS activity,
+> Secrets Manager calls, Terraform, another binding-preflight run, Sharadar access, S3 operations,
+> qualification, ingestion, CONTROL publication, gate changes, broker/LEAN/Paper activity or live
+> trading.
+
+---
+
+## 2. Decision
+
+**Three stages, three closed outcomes, and each refused before the next begins.**
+
+### The corrected vocabulary
+
+`PreflightOutcome` keeps its closed-vocabulary discipline: fixed sentences, no interpolation of any
+private or dependency-controlled text, exit status 1 on every refusal, and no word a reader could
+mistake for permission.
+
+| outcome | when | what it must never imply |
+|---|---|---|
+| **`REFUSED_SECRET_IDENTIFIER`** | the configured source is unavailable, raises, returns the wrong exact type, returns an empty value, or returns a value the repository's existing identifier boundary refuses | that a client was built, or that anything was invoked |
+| **`REFUSED_DEPENDENCY`** | the AWS SDK is unavailable, an SDK import fails, the client factory is unavailable or raises, client construction fails, the constructed client cannot serve the one operation, the secrets boundary will not import, an exception of an unknown type escapes the retrieval, or a dependency built after the credential fails | that a credential was retrieved — and, on its own, **any particular invocation count**: it occurs both before a client exists and after a successful retrieval, so only the witnessed stage-specific count says which |
+| **`REFUSED_CREDENTIAL`** | one admitted `get_secret_value` invocation raised or was refused, the response is structurally invalid, `SecretString` is absent, a binary secret came back, or the returned string is empty or invalid under the existing credential contract | anything about the provider, the data, or whether a run should happen — nor that AWS received anything |
+| **`REFUSED_UNCLASSIFIED`** | this program could not work out what the boundary refused: no `failure`, a `failure` with no `value`, a non-string token, an unrecognised token, or attribute access that raises | any boundary at all — that is the point of it |
+
+`REFUSED_DEPENDENCY` is the **renamed** `REFUSED_DEPENDENCIES` — the exact member the earlier
+vocabulary already carried for dependency construction, made singular and given the client stage as
+well. It is a rename, not a synonym: no alias survives, and a test asserts the plural spelling is
+gone from the entry point entirely.
+
+**A missing SDK, a failed import, a failed client construction and a missing identifier can never
+map to `REFUSED_CREDENTIAL`.** That is the whole decision, stated as the thing that must not happen.
+
+### The live stage order
+
+1. operator authorization
+2. profile contract
+3. AWS-foundation identity gate
+4. licensed-bucket resolution
+5. the guarded secrets-boundary import the validation needs
+6. secret-identifier source, and its structural validation
+7. Secrets Manager SDK and client construction
+8. one `get_secret_value` invocation
+9. remaining dependency construction
+10. offline `preflight_qualification_composition`
+11. closed result
+
+Stage 5 is named separately rather than folded in, because it changes a count: if the secrets
+boundary will not import, `REFUSED_DEPENDENCY` is raised **before the identifier source is called at
+all**, so that refusal shows zero identifier resolutions rather than one. Rounding that off would
+have made the table say something the code does not do.
+
+An earlier refusal prevents every later stage, because a refusal raises. **Nothing moved forward.**
+Secret-identifier access, SDK construction and credential retrieval all still sit behind the identity
+and bucket gates, exactly where ADR-0015 put them — a wrong-account session still never reaches a
+secret, and a failed gate still never reaches a credential.
+
+What changed is only that stages 5, 6 and 7 are three stages instead of one, and stage 8 is named
+separately from the credential it now follows.
+
+### One identifier rule, not two
+
+The entry point validates the identifier before it builds anything, and it validates it with
+`is_usable_secret_identifier` — the secrets boundary's **own** rule, exported and imported rather
+than restated. Two spellings of one rule is how a value one stage admits becomes a value the next
+stage refuses, and the two would then disagree about which outcome an operator sees.
+
+### The classification is closed and total
+
+`SECRET_FAILURE_OUTCOME` maps every member of the boundary's `SecretRetrievalFailure` vocabulary to
+an operator outcome, and a test asserts the mapping is total over that vocabulary. Two of the six are
+refusals the boundary reaches **before** it calls the backend — `CLIENT_UNUSABLE` and
+`SECRET_IDENTIFIER_MALFORMED` — and they map to the dependency and identifier outcomes, never to the
+credential. A new failure member arriving with no entry fails the totality test before it can be
+swept into "the credential failed" by a default.
+
+### Invocation counts, witnessed
+
+| outcome | identifier-source calls | secrets-client construction | `get_secret_value` invocations |
+|---|---:|---:|---:|
+| authorization / profile / identity / bucket refusal | 0 | 0 | 0 |
+| secrets-boundary import refusal | 0 | 0 | 0 |
+| `REFUSED_SECRET_IDENTIFIER` | 1 | 0 | 0 |
+| `REFUSED_DEPENDENCY` during secrets-client construction | 1 | 1 | 0 |
+| `REFUSED_CREDENTIAL` | 1 | 1 | exactly 1 |
+| `REFUSED_DEPENDENCY` after the credential | 1 | 1 | exactly 1 |
+| completed synthetic offline preflight | 1 | 1 | exactly 1 |
+| `REFUSED_UNCLASSIFIED` | whatever was witnessed, reported as witnessed | | |
+
+**These are observed, not argued.** The synthetic suite drives the preflight with factories and a
+client that count what was asked of them, and every count above is read from those counters. No test
+concludes that the client was invoked because a particular line raised — that inference is precisely
+what produced a false report against the real foundation.
+
+`REFUSED_DEPENDENCY` also occurs at stage 9, **after** a successful retrieval; there the invocation
+count is 1 and the outcome still names the dependency, because what failed is still a dependency.
+
+**A method invocation is not a proven AWS network request.** The third column counts calls into the
+injected client's `get_secret_value` method — which is what a counter can observe, and all the
+synthetic suite establishes. A real client validates parameters locally and can reject a call after
+the method is entered and before anything leaves the machine. So `REFUSED_CREDENTIAL` establishes one
+admitted invocation and **not** that AWS received anything; and the historical missing-SDK run
+establishes zero invocations *and* zero AWS network requests, because no client existed to make
+either — a stronger fact, resting on absence rather than on a counter.
+
+### The SDK stays out of the platform, and out of import time
+
+`boto3` remains the only runtime dependency and **no module under `src/` imports it**. The one
+authorized construction stays in the operator script, inside the authorized branch, inside a function
+body. Every `kalpamani` import in the entry point also stays inside a function body, so the default
+refusing invocation still performs no lookup, constructs nothing, opens nothing — and now provably
+does not depend on the data platform being importable either, which is the class of machine this
+defect was found on.
+
+---
+
+## 3. Alternatives considered
+
+**Install the dependency and re-run.** Rejected, and explicitly refused by the authorization. It
+would have made the symptom disappear and left the defect exactly where it was — on a path that only
+executes when something has already gone wrong, and that an operator only reads when they are already
+looking in the wrong place. The misreport would have waited for the next environment.
+
+**Include the underlying exception text in the refusal.** Rejected. It would have identified the
+missing package immediately, and it is the one thing this boundary must not do: an import error names
+a filesystem path, a client constructor names a profile, a region or an endpoint, and a backend
+exception quotes the secret name, usually the ARN and often the account. The distinction had to come
+from **which closed member** is raised, not from what the failure said.
+
+**Add one `REFUSED_DEPENDENCY` and leave the identifier folded into the credential.** Rejected. It
+would have fixed the case that was actually observed and left the case that was actually *unknown*:
+the second attempt could not say whether the identifier source was even configured, and folding it
+into the credential is why. Two of the three distinctions were needed to answer the question the run
+raised.
+
+**Report the counts the code intended rather than the counts observed.** Rejected. A stage that
+raises before its work is a stage whose work did not happen, and the only trustworthy witness of "the
+client was invoked" is having watched it be invoked. The counters exist so the claim is a reading
+rather than an argument — and what they read is a method call, never the wire.
+
+**Make `REFUSED_CREDENTIAL` the default for anything unmapped.** **Rejected, and removed** — this
+ADR's first draft kept it, on the argument that earlier stages had already excluded both
+pre-invocation causes so anything left must have followed the invocation. Correction round 1 found
+that reasoning circular: it justified a default by an invariant the default itself broke, and the
+branch was unreachable only *today*, so a future vocabulary member would have inherited a credential
+claim nobody had witnessed. Every unknown, unreadable or unmapped input is `REFUSED_UNCLASSIFIED`,
+and `REFUSED_CREDENTIAL` has no default path to it at all. See §6.1.
+
+---
+
+## 4. Consequences
+
+### What this changes
+
+An operator reading a refusal can now tell, without inspecting anything, whether the secret identifier
+was resolved, whether a client was built, and whether the injected `get_secret_value` operation was
+invoked. **Not whether AWS received anything** — no refusal here establishes that, and none claims
+to. The refusal that was observed against the real foundation would now read `REFUSED_DEPENDENCY`,
+and would send that operator to the environment rather than to Secrets Manager.
+
+### What this does not change, and does not authorize
+
+**The operational environment is not repaired by this decision.** No dependency is installed, no
+lockfile is touched, no virtual environment is altered and the declared dependency range is unchanged
+— it was already correct, and a stale environment is not evidence that a declaration is wrong.
+Synchronizing that environment is a **separate action under separate authorization**.
+
+**Another binding-preflight attempt is separately authorized and has not been authorized.** Correcting
+what a refusal says is not permission to produce another one. The three future events ADR-0015 named
+are still three: private credential setup, a real binding preflight, and an authenticated
+qualification run.
+
+**No credential has been retrieved.** `get_secret_value` invocations by this repository: **zero**;
+AWS network requests from this path: **zero**, because no client has ever been constructed.
+The two operator attempts refused before any invocation, and therefore before any network
+request, on the evidence above.
+
+**Nothing private is recorded by this ADR.** No credential or fragment, no AWS account identifier,
+no ARN, no secret identifier, no bucket identifier, no region-plus-account pair, no provider data,
+no empirical result, and no underlying exception text from either attempt.
+
+### Standing claims that stay exactly as they were
+
+`AcquisitionMode.QUALIFICATION` · `PROVIDER_REALISTIC_PIT` · Q7 and Q8 · `permaticker` · append-only
+S3 semantics · acquisition identity · the response and run ceilings · no-resume semantics ·
+three-write reporting · provider-neutral contracts · every production-ingestion boundary · the
+singleton authorization capability · the operator flag · the identifier staying out of `argv` · the
+fixed environment-variable name · the profile and region pins · the governed identity gate and state
+read · the licensed-bucket output · `SystemClock` in the operator path · `reveal()` called **zero**
+times during preflight · offline composition only · no provider-fetch operation · no
+object-publication operation.
+
+**G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3
+**NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
+
+---
+
+## 5. Verification
+
+Every property below is a test or an audit guard, not an intention. Synthetic and local only: no AWS
+call, no Secrets Manager call, no Terraform command, no provider request, no S3 operation, and no
+binding-preflight execution was performed to produce any of it.
+
+| property | evidence |
+|---|---|
+| an identifier failure is its own outcome, and sends nothing | `test_an_identifier_failure_is_its_own_outcome_and_sends_nothing` |
+| an identifier failure discloses neither the value nor the cause | `test_an_identifier_failure_discloses_neither_value_nor_cause` |
+| a usable name and a usable ARN each reach the backend once | `test_a_usable_identifier_shape_reaches_the_backend_exactly_once` |
+| a missing SDK is a dependency refusal with zero invocations | `test_a_client_construction_failure_is_a_dependency_refusal` |
+| a dependency failure discloses no underlying text | `test_a_dependency_failure_discloses_no_underlying_text` |
+| a constructed client that cannot serve the operation is a dependency refusal | `test_a_constructed_client_that_cannot_serve_the_operation_is_a_dependency_refusal` |
+| an unimportable secrets boundary is a dependency refusal | `test_an_unimportable_secrets_boundary_is_a_dependency_refusal` |
+| a dependency failure after the credential is still a dependency refusal | `test_a_late_dependency_failure_is_still_a_dependency_refusal` |
+| a backend refusal is a credential refusal after exactly one attempt | `test_a_backend_refusal_is_a_credential_refusal_after_exactly_one_attempt` |
+| an unusable response is a credential refusal after exactly one attempt | `test_an_unusable_response_is_a_credential_refusal_after_exactly_one_attempt` |
+| a valid synthetic secret completes with one attempt | `test_a_valid_synthetic_secret_completes_with_one_attempt` |
+| the classification is total over the boundary vocabulary | `test_every_secrets_boundary_failure_is_classified` |
+| the two pre-invocation failures are never credential failures | `test_the_pre_invocation_failures_are_never_credential_failures` |
+| the four post-invocation failures are credential failures | `test_the_post_invocation_failures_are_credential_failures` |
+| the outcome vocabulary is closed, with no alias | `test_the_outcome_vocabulary_is_exactly_these_members` |
+| the superseded plural member is gone, not aliased | `test_the_superseded_plural_member_is_gone` |
+| no pre-invocation refusal is worded as a credential failure | `test_no_refusal_before_the_invocation_is_worded_as_a_credential_failure` |
+| every outcome's call counts are witnessed | `test_every_outcome_has_its_witnessed_call_counts` |
+| the refusing default path needs neither the SDK nor the package | `test_the_refusing_default_path_needs_neither_the_sdk_nor_the_package` |
+| the exact live stage order on the authorized path | `test_the_full_ordering_is_exact_on_the_authorized_path` |
+| the identifier is untouched by every earlier refusal | `test_the_identifier_source_is_untouched_by_every_earlier_refusal` |
+| `reveal()` is never called during preflight | `test_the_credential_is_never_revealed_during_preflight` |
+| no provider or object-store call occurs | `test_provider_and_object_store_call_counts_remain_zero` |
+| no module under `src/` imports the SDK | `test_no_module_under_src_imports_the_sdk` |
+| the entry point is the only SDK client constructor | `test_the_entry_point_is_the_only_place_that_constructs_an_sdk_client` |
+| every well-formed identifier is admitted | `test_the_grammar_admits_every_well_formed_identifier` |
+| every malformed identifier is refused | `test_the_grammar_refuses_every_malformed_identifier` |
+| a malformed identifier never reaches a client | `test_a_malformed_identifier_never_reaches_a_client` |
+| the grammar transforms nothing | `test_the_grammar_transforms_nothing` |
+| an unclassifiable refusal claims no credential | `test_an_unclassifiable_refusal_never_claims_a_credential` |
+| an unclassifiable refusal discloses nothing | `test_an_unclassifiable_refusal_surfaces_without_disclosure` |
+| an unexpected boundary exception is a dependency refusal | `test_an_unexpected_exception_from_the_boundary_is_a_dependency_refusal` |
+| the classifier has no credential default | `test_the_classifier_has_no_credential_default` |
+| the credential outcome is reachable only from four mapped members | `test_credential_is_reachable_only_from_the_four_mapped_members` |
+| a non-member outcome claims no dependency either | `test_a_non_member_outcome_is_unclassified_rather_than_a_dependency_claim` |
+| the three boundaries and the count rules are stated in the status documents | `scripts/phase3_docs_audit.py` §23 |
+| a method invocation is never described as a proven AWS network request | `scripts/phase3_docs_audit.py` §23 |
+| a non-member failure normalises to the unclassified member | `test_a_non_member_failure_normalises_to_unclassified` |
+| a non-member failure can never become a credential refusal | `test_a_non_member_failure_can_never_become_a_credential_refusal` |
+| a non-member failure discloses nothing | `test_a_non_member_failure_discloses_nothing` |
+| a non-member construction surfaces unclassified, with no invented count | `test_a_non_member_construction_surfaces_as_unclassified_with_no_invented_count` |
+| the constructor never names a credential-mapped member | `test_the_constructor_never_names_a_credential_mapped_member` |
+| the unclassified member is never raised by the boundary itself | `test_the_unclassified_member_is_never_raised_by_the_boundary_itself` |
+| the ARN resource length boundary, on both sides | `test_the_arn_resource_length_boundary` |
+| a maximum-length name is admitted and the name ceiling still binds | `test_the_maximum_length_arn_is_admitted_and_the_name_ceiling_still_binds` |
+| a maximum-length ARN reaches the backend exactly once | `test_a_maximum_length_arn_reaches_the_backend_exactly_once` |
+| the `SecretId` ceiling still binds above the name ceiling | `test_the_secret_id_ceiling_still_binds_above_the_name_ceiling` |
+| the suffix check claims structure, not provenance | `test_the_suffix_check_claims_structure_and_not_provenance` |
+| the identifier grammar is a Secrets Manager grammar, not a printability test | `scripts/phase3_docs_audit.py` §23 |
+| no status document describes a missing SDK as a credential failure | `scripts/phase3_docs_audit.py` §23 |
+| no status document claims the environment was repaired or a preflight completed | `scripts/phase3_docs_audit.py` §23 |
+
+**What this verification does not establish.** It says nothing about the provider, the data, the
+secret, the account or the environment. It establishes that the three refusals are distinguishable,
+sanitized and ordered, and that their invocation counts are what the synthetic suite observed — a
+method counter, never the network. Whether the identifier source is configured on any machine remains
+**unknown**, and this correction does not find out.
+
+---
+
+## 6. Correction round 1 — three defects in this ADR's own first implementation
+
+Review of the pull request introducing this ADR found three defects in the correction itself. They
+are recorded here rather than quietly substituted, on the same rule that keeps ADR-0015 unedited: a
+decision document that silently acquires better wording is a decision document nobody can audit.
+
+### 6.1 Two credential-default paths recreated the false claim
+
+The first classifier had both of these:
+
+```
+if type(token) is not str:
+    return PreflightOutcome.REFUSED_CREDENTIAL
+
+return SECRET_FAILURE_OUTCOME.get(token, PreflightOutcome.REFUSED_CREDENTIAL)
+```
+
+Neither an unreadable token nor an unrecognised one establishes that anything was invoked. Both
+answered `REFUSED_CREDENTIAL` — the exact false claim this ADR exists to remove, reintroduced in the
+one place nobody would look for it, because both branches are unreachable *today* and a totality test
+proves only that. A vocabulary member added later by someone who did not run that test would have
+been reported as a credential failure by default. The unexpected-exception branch in the retrieval
+stage had the same shape and the same defect.
+
+**The corrected invariant.** `REFUSED_CREDENTIAL` is reachable **only** through an explicit entry in
+`SECRET_FAILURE_OUTCOME` naming a member known to follow an admitted `get_secret_value` invocation:
+`BACKEND_REFUSED`, `RESPONSE_MALFORMED`, `SECRET_BINARY_REFUSED`, `SECRET_VALUE_UNUSABLE`. There is no
+`.get` default, no `else` branch and no catch-all that can produce it.
+
+`CLIENT_UNUSABLE` maps to `REFUSED_DEPENDENCY` and `SECRET_IDENTIFIER_MALFORMED` to
+`REFUSED_SECRET_IDENTIFIER`, as before. Everything else — a refusal object with no `failure`, a
+`failure` with no `value`, a non-string token, an unmapped token, and attribute access that raises on
+the way to any of them — is a new closed member, **`REFUSED_UNCLASSIFIED`**. An exception of an
+unknown type escaping the boundary is `REFUSED_DEPENDENCY`, because the boundary raises only closed
+members and an escape means something local is broken; it is not a credential claim either way.
+
+A narrower member was genuinely required. The two sites that needed an answer for *I do not know*
+were answering `REFUSED_CREDENTIAL` and `REFUSED_DEPENDENCY`, and each of those is a positive claim
+about a boundary that may never have been reached. Not knowing now has its own word, and the runtime
+is safe under a future vocabulary change whether or not anyone reruns the totality test.
+
+### 6.2 The identifier grammar was too broad
+
+The first rule accepted any exact printable `str` without whitespace, and said so: *"nothing about
+vendor or AWS naming is inferred."* That is too broad for a Secrets Manager `SecretId`. It admitted
+identifiers a client rejects **locally, after `get_secret_value` has been entered** — which is one
+invocation, which then presents as a credential-boundary failure. The looser rule therefore fed the
+very misclassification the rest of this ADR removes.
+
+One shared validator in `secrets.py`, consumed by both the entry point and the retrieval boundary,
+now admits exactly two shapes:
+
+| | |
+|---|---|
+| **a secret name** | exact built-in `str`, 1–512 characters, ASCII letters and digits plus `/ _ + = . @ -` only. No whitespace, no control character, no colon, no other punctuation |
+| **a complete secret ARN** | exact built-in `str` within the `SecretId` ceiling; seven colon-separated fields; a recognised partition; the service exactly `secretsmanager`; a syntactically valid Region; an account of exactly twelve ASCII digits; the resource type exactly `secret`; a resource name in the name character set carrying the generated six-character suffix structure |
+
+A colon routes the decision, because a name may not contain one — so a colon-bearing value is held to
+the ARN grammar rather than falling back to the looser rule.
+
+**What the ARN check can and cannot do.** It establishes that the generated-suffix *structure* is
+present, which is what separates a complete ARN from a partial one. It cannot distinguish a name that
+happens to end in a hyphen and six alphanumerics from a generated suffix, because nothing can: the two
+are lexically identical, and that is a property of the ARN format rather than a gap here.
+
+The validator **transforms nothing** — no trim, no normalisation, no rebuild, and it never returns,
+renders or logs the identifier. A verdict about a normalised string is a verdict about a different
+string.
+
+No real account identifier, ARN, secret name or identifier is compiled or committed. The tests build
+their synthetic account component at runtime from a repeated digit, so no twelve-digit literal exists
+anywhere in this repository.
+
+### 6.3 "Invocation" and "AWS network request" were used interchangeably
+
+The synthetic counter increments when the **injected client's `get_secret_value` method is called**.
+It does not observe transmission, and a `botocore` client can reject parameters locally after the
+method is entered and before anything leaves the machine. The first round's wording — "requests
+issued", "sent to AWS", "asked of AWS" — read a method counter as evidence about the wire. That is a
+smaller version of the same mistake this ADR was written to correct, and it is now separated
+everywhere:
+
+* **method invocation** / **operation attempt** — what the synthetic counter witnesses;
+* **AWS network request** — not established by any synthetic test here.
+
+**A method invocation is not a proven AWS network request.**
+
+So `REFUSED_CREDENTIAL` establishes one admitted invocation and **not** that AWS received anything.
+The historical missing-SDK run still establishes zero invocations *and* zero AWS network requests —
+a stronger fact, because no client existed to make either, which rests on absence rather than on a
+counter. An audit guard refuses method-count evidence presented as evidence about the network.
+
+### 6.4 One count the first round had rounded off
+
+The guarded secrets-boundary import runs **before** the identifier source, because the validation
+rule lives in that module. If that import fails, `REFUSED_DEPENDENCY` is raised with **zero**
+identifier resolutions, not one. The first round's table implied otherwise by omission; the row is
+now stated, and asserted.
+
+### What round 1 did not change
+
+No dependency was installed and no environment was altered. The declared `boto3>=1.36.0,<2.0` range
+is unchanged. ADR-0015 is still not edited. This ADR is still accepted-on-merge and carries no
+authority before it, and is still absent from `MERGED_ADR_STATUS`. The operational environment is
+still unsynchronized, the secret identifier's configuration is still unknown, another real binding
+preflight is still unauthorized, no credential has been retrieved, and every gate, phase, CONTROL and
+live-trading status is untouched.
+
+---
+
+## 7. Correction round 2 — the last credential default, and one length boundary
+
+Review of correction round 1 found two more defects and a set of stale sentences. Recorded here for
+the same reason §6 is: a decision document that quietly acquires better wording is one nobody can
+audit.
+
+### 7.1 The error constructor was the last credential-default path
+
+`SecretRetrievalError.__init__` normalised anything that was not an exact `SecretRetrievalFailure`
+member to `RESPONSE_MALFORMED` — and `RESPONSE_MALFORMED` maps to `REFUSED_CREDENTIAL`, because that
+member is only reachable after an admitted invocation.
+
+So a bare string, a `str` subclass, `None`, an integer, a hostile object or a future member handed to
+this constructor silently acquired a member asserting an invocation nobody witnessed. Round 1's
+invariant — *`REFUSED_CREDENTIAL` is reachable only from an explicitly mapped post-invocation member*
+— was true of the classifier and false of the stack, because the constructor could manufacture such a
+member out of anything.
+
+**The correction.** `SecretRetrievalFailure` gains one closed member, `UNCLASSIFIED`, mapped to
+`REFUSED_UNCLASSIFIED`. The constructor normalises every non-member to it. The boundary itself never
+raises it — every refusal there names a real cause — so it means exactly what it says: *this is not a
+category I know*.
+
+**Normalising rather than raising is deliberate.** A refusal type whose constructor can raise turns a
+handled failure into an unhandled one at the worst possible moment: inside the `except` block that
+was about to report it. The value is therefore always an exact member, and the member for *I do not
+know* says so.
+
+The totality test is unchanged and now covers seven members. A structural test additionally reads the
+constructor's body and refuses any member the entry point maps to `REFUSED_CREDENTIAL` appearing
+there — because the behavioural cases only prove today's inputs.
+
+### 7.2 The ARN length boundary measured the wrong string
+
+The complete ARN resource component is the secret name **plus** the generated `-XXXXXX`. Round 1 ran
+the whole component through the secret-name check, whose ceiling is 512 characters. AWS permits a
+512-character name and then appends seven characters of its own, so a legitimate ARN for a
+maximum-length secret has a 519-character resource and was refused.
+
+The resource is now **split** before it is measured:
+
+| | |
+|---|---|
+| **the name portion** | 1–512 characters, in the approved name character set |
+| **the generated suffix** | exactly `-` plus six ASCII alphanumeric characters |
+| **the whole ARN** | within the `SecretId` ceiling |
+| **the rest** | partition, service, Region, account and resource type, unchanged |
+
+Nothing is trimmed, normalised, reconstructed, logged or returned. And the suffix check establishes
+**structure, not provenance**: it cannot show that AWS generated the suffix, because a name ending in
+a hyphen and six alphanumerics is lexically identical to one. The module says so rather than implying
+a check it does not perform.
+
+### 7.3 Stale wording that contradicted the live contract
+
+Three present-tense statements had survived round 1 and were removed or narrowed:
+
+* §3 listed *"make `REFUSED_CREDENTIAL` the default for anything unmapped"* as **kept**. It is
+  rejected and removed; the alternative now records why the original argument was circular.
+* §4 claimed a refusal revealed whether AWS had been contacted at all. A method counter cannot
+  establish that. It now says whether the injected operation was **invoked**, and states plainly that
+  network transmission is not established.
+* `PreflightOutcome.REFUSED_DEPENDENCY` said no request was sent *"by this stage"*, although the
+  outcome occurs both before a client exists (zero invocations) and after a successful retrieval
+  (one). It now says the outcome alone fixes no count, and that only the witnessed stage-specific
+  count does.
+
+The seven files carrying this branch were swept for *request*, *sent*, *asked*, *issued* and *reached
+AWS*. What survives is only what is justified either by **no client existing** — which establishes
+zero invocations and zero network requests — or by **an observed method invocation**, which
+establishes invocation alone. Historical descriptions are kept only where they are labelled as
+superseded.
+
+### What round 2 did not change
+
+No dependency installed, no environment altered, `boto3>=1.36.0,<2.0` unchanged. ADR-0015 still not
+edited. This ADR is still accepted-on-merge, carries no authority before that merge, and is still
+absent from `MERGED_ADR_STATUS`. The operational environment is still unsynchronized, the secret
+identifier's configuration is still unknown, another real binding preflight is still unauthorized, no
+credential has been retrieved, and every gate, phase, CONTROL and live-trading status is untouched.
