@@ -85,6 +85,15 @@ TESTS = PROJECT_ROOT / "tests"
 COMPOSITION = SRC / "kalpamani" / "data" / "ingest" / "sharadar" / "composition.py"
 CLIENT = SRC / "kalpamani" / "data" / "ingest" / "sharadar" / "client.py"
 
+#: The one operator entry point ADR-0015 authorized to call this composition.
+#:
+#: Named individually, so a second caller has to pass review rather than merely
+#: be in ``scripts/``. It refuses by default and has no qualification-run
+#: execution surface; what it may do is bind the private dependencies and call
+#: the offline preflight below.
+BINDING_PREFLIGHT = SCRIPTS / "sharadar_binding_preflight.py"
+BINDING_PREFLIGHT_TEST = TESTS / "unit" / "test_sharadar_binding_preflight.py"
+
 #: Values that must never surface. Distinctive enough that a substring search is
 #: meaningful, and shaped like the things that would actually hurt.
 CANARY_SECRET = "synthetic-canary-secret-a1b2c3d4e5f6"  # noqa: S105 -- a synthetic
@@ -1150,11 +1159,19 @@ def test_no_default_network_opener_is_constructed_anywhere_under_src() -> None:
 
 
 def test_nothing_calls_the_composition_outside_this_file() -> None:
-    """The whole slice in one assertion: the wiring exists and nobody uses it."""
+    """One authorized caller, and no other.
+
+    ADR-0014's version of this said *nobody* calls it, which was true while no
+    caller was authorized. ADR-0015 authorized exactly one -- the operator
+    binding preflight, which refuses by default -- so the replacement is narrower
+    rather than absent: a second caller, a script, a task or an ad-hoc invocation
+    still fails here.
+    """
+    allowed = {Path(__file__).resolve(), BINDING_PREFLIGHT, BINDING_PREFLIGHT_TEST}
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, TESTS):
         for path in _python_files(root):
-            if path == Path(__file__).resolve():
+            if path in allowed:
                 continue
             for node in ast.walk(_tree(path)):
                 if (
@@ -1167,10 +1184,16 @@ def test_nothing_calls_the_composition_outside_this_file() -> None:
 
 
 def test_no_module_imports_the_composition_outside_this_file() -> None:
+    allowed = {
+        Path(__file__).resolve(),
+        COMPOSITION,
+        BINDING_PREFLIGHT,
+        BINDING_PREFLIGHT_TEST,
+    }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, TESTS):
         for path in _python_files(root):
-            if path in {Path(__file__).resolve(), COMPOSITION}:
+            if path in allowed:
                 continue
             if "sharadar.composition" in path.read_text(encoding="utf-8"):
                 offenders.append(str(path.relative_to(PROJECT_ROOT)))

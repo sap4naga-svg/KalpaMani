@@ -288,6 +288,13 @@ REFUTATION_MARKERS: Final = (
     "corrected",
 )
 COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
+
+#: ADR-0015: the one operator entry point authorized to construct an SDK client
+#: and to call the composition, and the boundary module it reads a secret through.
+ADR_BINDING = DECISIONS / "ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md"
+BINDING_PREFLIGHT = REPO_ROOT / "scripts" / "sharadar_binding_preflight.py"
+SECRETS_BOUNDARY = PROVIDER_PACKAGE / "secrets.py"
+BINDING_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_binding_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -1162,6 +1169,49 @@ def _store_construction_sites() -> list[Path]:
             for node in ast.walk(tree)
         ):
             sites.append(path)
+    return sites
+
+
+def _emitted_preflight_sentences(path: Path) -> str:
+    """Every string value in the entry point's output vocabulary, joined.
+
+    The *values* are what a caller reads. Member names are not: the refusal
+    member is called ``REFUSED_NOT_AUTHORIZED``, and forbidding the word in a
+    name would forbid naming a refusal accurately.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    sentences: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != "PreflightOutcome":
+            continue
+        for statement in node.body:
+            if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Constant):
+                sentences.append(str(statement.value.value))
+    return " ".join(sentences)
+
+
+def _sdk_client_construction_sites() -> list[Path]:
+    """Every file that constructs an AWS SDK client or session.
+
+    ADR-0015 authorized exactly one, in ``scripts/``. Text rather than AST,
+    because ``boto3.client`` is an attribute call on a module imported inside a
+    function body -- which is precisely how the entry point keeps import time
+    free of the SDK.
+    """
+    # This audit and the binding-preflight test both *name* the constructor, in
+    # order to forbid it and to assert its absence. A guard that could not tell a
+    # prohibition from a construction would forbid writing the prohibition.
+    scanning = {Path(__file__).resolve(), BINDING_TESTS}
+    sites: list[Path] = []
+    for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts or path in scanning:
+                continue
+            source = read(path)
+            if "boto3.client(" in source or "boto3.Session(" in source:
+                sites.append(path)
     return sites
 
 
@@ -5945,6 +5995,369 @@ def main() -> int:
         f.check(
             f"{name} states that the guards were narrowed rather than deleted",
             "architecture guards were narrowed, not deleted" in flat,
+            "a guard removed to accommodate a slice is a guard that stopped guarding",
+        )
+
+    # -- 22. ADR-0015: the dormant private-binding preflight -----------------
+    #
+    # The slice narrows three standing absence claims at once -- no SDK client,
+    # no credential source, no composition caller -- so the replacements have to
+    # be held to, and the three future operational events have to stay separate.
+
+    f.check(
+        "ADR-0015 exists",
+        ADR_BINDING.is_file(),
+        f"missing: {ADR_BINDING}",
+    )
+    if ADR_BINDING.is_file():
+        adr15 = read(ADR_BINDING)
+        flat15 = " ".join(
+            " ".join(line.lstrip("> ") for line in adr15.replace("**", "").splitlines()).split()
+        )
+        f.check(
+            "ADR-0015 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr15 and "carries no authority" in adr15,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        f.check(
+            "ADR-0015 records the owner's authorization boundary verbatim",
+            "code, tests, documentation, audits, and synthetic/local validation only" in flat15,
+            "the boundary a slice was given is the boundary it must be read against",
+        )
+        f.check(
+            "ADR-0015 separates the three future operational events",
+            "Three separate future events" in flat15
+            and "Private credential setup" in flat15
+            and "A real binding preflight" in flat15
+            and "authenticated Sharadar qualification run" in flat15
+            and "implementing this path is none of them" in flat15,
+            "setup, binding and running are three decisions, not one",
+        )
+        f.check(
+            "ADR-0015 records the entry point as refused by default",
+            "Refusing by default" in flat15
+            and "no environment lookup, no credential lookup, no SDK construction" in flat15,
+            "a path that does work on an ordinary invocation is not dormant",
+        )
+        f.check(
+            "ADR-0015 records the authorizing flag and what it does not authorize",
+            "i-am-the-operator-authorizing-binding-preflight" in adr15
+            and "does not mint, imply or stand in for authorization to execute" in flat15,
+            "a binding authorization that could be read as a run authorization is a defect",
+        )
+        f.check(
+            "ADR-0015 records the ordering as the security property",
+            "which is the security property" in flat15
+            and "never reaches a secret" in flat15
+            and "never reaches a credential" in flat15,
+            "identity before state, bucket before secret, secret before construction",
+        )
+        f.check(
+            "ADR-0015 reimplements no governed gate",
+            "Nothing here reimplements a gate" in flat15,
+            "a second copy of account matching is a second thing to get wrong",
+        )
+        f.check(
+            "ADR-0015 binds the licensed bucket and refuses the control one",
+            "The licensed bucket, never CONTROL" in flat15,
+            "substituting the control bucket would put licensed rows in the wrong place",
+        )
+        f.check(
+            "ADR-0015 records the one secrets operation and its refusals",
+            "get_secret_value" in adr15
+            and "SecretString` only" in flat15
+            and "refused, not decoded" in flat15
+            and "no JSON parsing, no key guessing, no alias, no default" in flat15,
+            "multi-key guessing selects a wrong value silently",
+        )
+        f.check(
+            "ADR-0015 keeps the SDK out of the data platform",
+            "no module under `src/` imports the SDK" in adr15,
+            "importing the platform must still open no socket",
+        )
+        f.check(
+            "ADR-0015 records that only the offline composition is called",
+            "calls `preflight_qualification_composition` and **nothing else**" in adr15,
+            "one operation, and no route to a fetch or a publication",
+        )
+        f.check(
+            "ADR-0015 admits no permission-bearing output vocabulary",
+            "No permission-bearing vocabulary is added" in flat15
+            and all(word in adr15 for word in ("READY", "APPROVED", "PROCEED", "QUALIFIED")),
+            "a status word a caller could read as permission is a governance defect",
+        )
+        f.check(
+            "ADR-0015 records the exit status as a command status, not a verdict",
+            "reports command success or refusal only" in flat15,
+            "an exit code that meant 'qualified' would be a provider conclusion in a shell",
+        )
+        f.check(
+            "ADR-0015 leaves the private harness alone",
+            "does not import, invoke, modify or repurpose it" in flat15,
+            "the published-token harness is a separate historical instrument",
+        )
+        f.check(
+            "ADR-0015 names the three claims it narrows",
+            "Given up" in flat15
+            and "no credential source exists" in flat15
+            and "has ever been run" in flat15,
+            "a superseded claim must be replaced by a narrower one, not dropped",
+        )
+        f.check(
+            "ADR-0015 selects no provider and closes no gate",
+            "selects no provider" in flat15
+            and all(
+                token in adr15
+                for token in ("G1 OPEN", "G2 OPEN", "G4 OPEN", "G5 OPEN", "G6 OPEN", "G7 OPEN")
+            )
+            and "ADR-0005 remains" in adr15
+            and "INC-0002 remains" in adr15,
+            "writing a binding path is not selecting a production provider",
+        )
+        f.check(
+            "ADR-0015 states its non-authorizations exhaustively",
+            "retrieving, revealing, copying, rotating or storing a real API key" in flat15
+            and "creating or updating a Secrets Manager secret" in flat15
+            and "Terraform init, plan, apply, output or verification" in flat15,
+            "an implementation path is not permission to walk it",
+        )
+        f.check(
+            "ADR-0015 keeps every accepted decision unchanged",
+            "Unchanged." in adr15
+            and "AcquisitionMode.QUALIFICATION" in adr15
+            and "PROVIDER_REALISTIC_PIT" in adr15
+            and "CONTROL deferral" in flat15,
+            "a binding path changes no contract",
+        )
+
+    # -- the entry point, as code --------------------------------------------
+    f.check(
+        "the binding preflight entry point exists",
+        BINDING_PREFLIGHT.is_file(),
+        f"missing: {BINDING_PREFLIGHT}",
+    )
+    if BINDING_PREFLIGHT.is_file():
+        binding = _executable_python(BINDING_PREFLIGHT)
+        f.check(
+            "the entry point refuses without an explicit operator authorization",
+            "BINDING_AUTHORIZATION_FLAG" in binding
+            and "i-am-the-operator-authorizing-binding-preflight" in binding
+            and "binding_authorized is not True" in binding,
+            "exact True; a truthy stand-in must authorize nothing",
+        )
+        f.check(
+            "the entry point refuses the habitual flags by name",
+            all(option in binding for option in ("--run", "--live", "--execute", "--force")),
+            "an unrecognised-argument error teaches nothing and invites a second spelling",
+        )
+        f.check(
+            "the entry point calls only the offline composition",
+            "preflight_qualification_composition(" in binding
+            and not any(
+                forbidden in binding
+                for forbidden in (
+                    ".execute(",
+                    "put_object",
+                    "head_object",
+                    "put_if_absent",
+                    "publish_bronze_payload",
+                    "publish_sharadar_payload",
+                )
+            ),
+            "one operation, and no route to a fetch or a publication",
+        )
+        f.check(
+            "the entry point reuses the governed identity gate and state read",
+            "identity_gate" in binding and "tf_outputs" in binding,
+            "a second implementation of account matching is a second thing to get wrong",
+        )
+        f.check(
+            "the entry point names the licensed bucket output and no control one",
+            "licensed_bucket_name" in binding
+            and "control_bucket_name" not in binding
+            and "CONTROL" not in binding,
+            "the control bucket must not be substitutable for the licensed one",
+        )
+        f.check(
+            "the entry point pins the governed profile and region",
+            'EXPECTED_PROFILE: Final = "kalpamani-foundation"' in read(BINDING_PREFLIGHT)
+            and 'EXPECTED_REGION: Final = "us-east-1"' in read(BINDING_PREFLIGHT),
+            "an unpinned profile is the wrong-account hazard CLAUDE.md 4.24 names",
+        )
+        f.check(
+            "the entry point emits only an allowlisted vocabulary",
+            "class PreflightOutcome" in binding
+            and not any(
+                word in _emitted_preflight_sentences(BINDING_PREFLIGHT).upper()
+                for word in ("READY", "APPROVED", "AUTHORIZED", "PROCEED", "QUALIFIED", "BOUND")
+            ),
+            "a caller must not read a status line as permission to run",
+        )
+        f.check(
+            "the entry point carries no private identifier",
+            not any(
+                marker in read(BINDING_PREFLIGHT)
+                for marker in ("arn:aws:", "amazonaws.com", "s3://", "test-api-key")
+            )
+            and re.search(r"\b\d{12}\b", read(BINDING_PREFLIGHT)) is None,
+            "a private identifier in a tracked file is a public one",
+        )
+        f.check(
+            "the entry point does not touch the private harness",
+            # Docstring-stripped: the module *says* it leaves the harness alone,
+            # and a raw scan would forbid saying so.
+            "sharadar_private_qualification" not in binding,
+            "the published-token harness is a separate instrument",
+        )
+
+    # -- the secrets boundary -------------------------------------------------
+    f.check(
+        "the secrets boundary exists",
+        SECRETS_BOUNDARY.is_file(),
+        f"missing: {SECRETS_BOUNDARY}",
+    )
+    if SECRETS_BOUNDARY.is_file():
+        secrets = _executable_python(SECRETS_BOUNDARY)
+        f.check(
+            "the secrets boundary imports no SDK and constructs no client",
+            not any(marker in secrets for marker in ("boto3", "botocore", "environ", "open(")),
+            "the client is injected here as it is everywhere else",
+        )
+        f.check(
+            "the secrets boundary exposes one operation and no other",
+            "get_secret_value" in secrets
+            and not any(
+                other in secrets
+                for other in (
+                    "list_secrets",
+                    "describe_secret",
+                    "put_secret_value",
+                    "update_secret",
+                    "delete_secret",
+                )
+            ),
+            "reading one value is the least authority that does the job",
+        )
+        f.check(
+            "the secrets boundary refuses binary rather than decoding it",
+            "SECRET_BINARY_REFUSED" in secrets and "SecretBinary" in secrets,
+            "guessing at an encoding is how a wrong value reaches a request",
+        )
+        f.check(
+            "the secrets boundary hands the value straight to the credential",
+            "SharadarCredential(value)" in secrets,
+            "a value held anywhere else is a value that can be logged",
+        )
+        f.check(
+            "every secrets refusal suppresses its cause",
+            secrets.count("from None") >= 6,
+            "a backend exception quotes the secret name and often the account",
+        )
+
+    f.check(
+        "the binding preflight is the only module that constructs an SDK client",
+        [path.name for path in _sdk_client_construction_sites()]
+        == ["sharadar_binding_preflight.py"],
+        "one named module, not a count that could drift",
+    )
+    f.check(
+        "no module under src/ imports the AWS SDK",
+        not _aws_sdk_import_sites(),
+        "importing the data platform must still open no socket",
+    )
+
+    # -- the behavioural suite -------------------------------------------------
+    if BINDING_TESTS.is_file():
+        binding_tests = read(BINDING_TESTS)
+        for label, needle in (
+            ("import doing nothing", "test_importing_the_entry_point_runs_nothing"),
+            (
+                "refusal without the flag",
+                "test_invocation_without_the_flag_refuses_before_any_stage",
+            ),
+            ("unforgeable authorization", "test_authorization_cannot_be_forged"),
+            ("a profile mismatch", "test_a_profile_mismatch_refuses_before_the_identity_call"),
+            (
+                "an identity failure",
+                "test_an_identity_failure_refuses_before_state_secret_or_composition",
+            ),
+            ("a bucket failure", "test_a_bucket_failure_refuses_before_secret_retrieval"),
+            ("a secret failure", "test_a_secret_failure_refuses_before_composition"),
+            ("the exact ordering", "test_the_full_ordering_is_exact_on_the_authorized_path"),
+            ("every unusable secret response", "test_every_unusable_secret_response_is_refused"),
+            ("suppressed causes", "test_every_secret_refusal_is_raised_from_none"),
+            ("the leak canaries", "test_no_canary_reaches_a_refusal_at_any_stage"),
+            ("the licensed bucket", "test_the_entry_point_names_the_licensed_bucket_output"),
+            ("one composition call", "test_the_authorized_path_invokes_the_composition_preflight"),
+            ("no runtime execution", "test_no_qualification_runtime_execution_occurs"),
+            (
+                "zero provider and S3 calls",
+                "test_provider_and_object_store_call_counts_remain_zero",
+            ),
+            ("no credential reveal", "test_the_credential_is_never_revealed_during_preflight"),
+            ("nothing escaping", "test_nothing_escapes_in_the_result"),
+            ("the offline status", "test_the_status_is_exactly_validated_offline"),
+            (
+                "the output vocabulary",
+                "test_the_output_vocabulary_admits_no_permission_bearing_word",
+            ),
+            (
+                "one SDK constructor",
+                "test_the_entry_point_is_the_only_place_that_constructs_an_sdk",
+            ),
+        ):
+            f.check(
+                f"a binding-preflight test covers {label}",
+                needle in binding_tests,
+                "the ADR's verification table must name tests that exist",
+            )
+
+    # -- the current documentation --------------------------------------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records the dormant private-binding preflight",
+            "ADR-0015" in flat and "default behaviour     REFUSE" in body,
+            "the standing 'no credential source exists' claim is no longer true as written",
+        )
+        f.check(
+            f"{name} records that nothing real is configured or read",
+            all(
+                token in body
+                for token in (
+                    "real credential source configured: NONE",
+                    "Secrets Manager secret created or read: NONE",
+                    "real bucket binding performed: NONE",
+                )
+            ),
+            "implementing a path is not walking it",
+        )
+        f.check(
+            f"{name} records zero AWS, provider and object-store activity",
+            "AWS requests: ZERO   \u00b7   provider requests: ZERO   \u00b7   S3 object calls: ZERO"
+            in body,
+            "a binding path that had sent one request would be a different slice",
+        )
+        f.check(
+            f"{name} keeps authenticated qualification unauthorized",
+            # Specific to this slice's section: the same sentence about a *real*
+            # Sharadar qualification also appears under ADR-0013, and a check
+            # that either occurrence satisfies is a check neither has to pass.
+            "Three separate future events, and this is none of them" in flat
+            and "Authenticated qualification remains NOT AUTHORIZED and has never run" in flat,
+            "the three future events stay separate, and none is approached here",
+        )
+        f.check(
+            f"{name} states that this slice's three claims were narrowed, not removed",
+            # ADR-0014's section already says "narrowed, not deleted" about the
+            # architecture guards, so the bare phrase proves nothing here.
+            "Three standing claims are narrowed, not deleted" in flat,
             "a guard removed to accommodate a slice is a guard that stopped guarding",
         )
 
