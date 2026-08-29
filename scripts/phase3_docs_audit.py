@@ -789,6 +789,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0013", "PR #18 merged"),
     ("ADR-0014", "PR #19 merged"),
     ("ADR-0015", "PR #22 merged"),
+    ("ADR-0016", "PR #24 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -889,6 +890,63 @@ ADR_0015_STALE_SENTENCE: Final = (
 #: A third surface, and the one most easily left behind: a merged decision
 #: missing from the in-force list reads as a decision that did not merge.
 ADR_0015_MATRIX_LINE: Final = "ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --"
+
+#: The ADR-0016 status *sentence* in the two status documents.
+#:
+#: The sibling of its table row, and stale in the same way for the same reason:
+#: ADR-0015's section sentence still read "accepted effective on the merge" long
+#: after PR #22 landed, because prose is not a table row and no row guard reaches
+#: it. This one is pinned before it can drift.
+ADR_0016_STATUS_SENTENCE: Final = "**Status: ACCEPTED / IN FORCE — PR #24 merged.**"
+
+#: The superseded pre-merge sentence, refused in a current-status document.
+#:
+#: ADR-0016's *own* immutable status line legitimately still carries the
+#: accepted-on-merge condition -- that is the decision record, and the merge has
+#: satisfied it. A current-status document may not.
+ADR_0016_STALE_SENTENCE: Final = "accepted on the merge of the pull request that introduces it"
+
+#: ADR-0016's own immutable status line, which a status sync must leave alone.
+#:
+#: Checked as *present* rather than absent: the sync changes what the status
+#: documents say, and an ADR whose accepted-on-merge condition had been edited
+#: away would no longer record the condition the merge satisfied.
+ADR_0016_IMMUTABLE_STATUS: Final = (
+    "**Status:** **Accepted — effective on the merge of the pull request that "
+    "introduces this ADR.**"
+)
+
+#: What the ADR-0016 current-status row must carry beyond being in force.
+#:
+#: Same design as :data:`ADR_0015_ROW_BOUNDARY`: the registry pins *that* the
+#: decision merged, and this pins what merging it did **not** do. A row reading
+#: only "ACCEPTED / IN FORCE -- PR #24 merged" would be true and still misread --
+#: this decision corrected what a refusal *says*, and a reader who took that for
+#: permission to produce another refusal would have it backwards.
+ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
+    "SEPARATES SECRET-IDENTIFIER, LOCAL DEPENDENCY, UNCLASSIFIED AND CREDENTIAL REFUSALS",
+    "INVOCATIONS ZERO",
+    "AWS NETWORK REQUESTS ZERO",
+    "NO CLIENT HAS EVER BEEN CONSTRUCTED",
+    "REAL CREDENTIAL RETRIEVED NONE",
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The first line of the CLAUDE.md IN FORCE matrix entry recording ADR-0016.
+ADR_0016_MATRIX_LINE: Final = "ADR-0016 corrected private-binding failure boundaries -- ACCEPTED /"
+
+#: What that matrix entry must state, once its continuation lines are joined.
+ADR_0016_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
+    "IN FORCE -- PR #24 MERGED",
+    "CODE AND FAILURE-BOUNDARY CORRECTION ONLY",
+    "SECRET-IDENTIFIER / LOCAL-DEPENDENCY / CREDENTIAL REFUSALS SEPARATED",
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "NEVER USED TO RETRIEVE A CREDENTIAL OR RUN QUALIFICATION",
+)
+
 
 #: Wording that states a status which has not been reached yet.
 #:
@@ -1192,6 +1250,27 @@ def _registry_coverage_defects(documents: Mapping[str, str]) -> list[str]:
                     f"{first.get(adr)!r} vs {second.get(adr)!r}"
                 )
     return defects
+
+
+def _matrix_entry(text: str, first_line: str) -> str:
+    """One ``IN FORCE`` matrix entry, its continuation lines joined onto it.
+
+    Entries begin at fifteen spaces and continue at twenty-four, so the
+    continuation test is an indentation test rather than a guess at where the
+    next entry starts. Returns ``""`` when the entry is missing **or**
+    duplicated -- a duplicated status line is its own defect, and a guard that
+    silently read the first of two would not see it.
+    """
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.strip().startswith(first_line)]
+    if len(starts) != 1:
+        return ""
+    collected = [lines[starts[0]].strip()]
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith(" " * 24) or not line.strip():
+            break
+        collected.append(line.strip())
+    return " ".join(collected)
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -6915,9 +6994,30 @@ def main() -> int:
             "a guard removed to accommodate a slice is a guard that stopped guarding",
         )
 
+    if ADR_BOUNDARIES.is_file():
+        f.check(
+            "ADR-0016 keeps its own immutable accepted-on-merge status line",
+            ADR_0016_IMMUTABLE_STATUS in read(ADR_BOUNDARIES),
+            "a status sync changes the documents, never the decision record",
+        )
+
     claude_md = REPO_ROOT / "CLAUDE.md"
     if claude_md.is_file():
         claude_body = read(claude_md)
+        f.check(
+            "the CLAUDE.md in-force matrix records ADR-0016 exactly once",
+            claude_body.count(ADR_0016_MATRIX_LINE) == 1
+            and bool(_matrix_entry(claude_body, ADR_0016_MATRIX_LINE)),
+            "a merged decision absent from the in-force list reads as one that did not merge",
+        )
+        f.check(
+            "the ADR-0016 matrix entry names its pull request and its boundary",
+            all(
+                clause in _matrix_entry(claude_body, ADR_0016_MATRIX_LINE)
+                for clause in ADR_0016_MATRIX_CLAUSES
+            ),
+            "the matrix states the boundary beside the status, or it states half a fact",
+        )
         f.check(
             "the CLAUDE.md in-force matrix records ADR-0015",
             ADR_0015_MATRIX_LINE in claude_body,
@@ -7502,6 +7602,51 @@ def main() -> int:
             f"{name} records the tightened identifier grammar",
             "a well-formed secret name or a complete secret ARN" in flat,
             "the earlier rule admitted shapes a client rejects locally, after the call began",
+        )
+        f.check(
+            f"{name} carries exactly one ADR-0016 current-status row",
+            len(_current_status_rows(body, "ADR-0016")) == 1,
+            "two rows for one decision is two places for it to go stale",
+        )
+        f.check(
+            f"{name} states ADR-0016 as in force, naming the pull request",
+            all(
+                "ACCEPTED / IN FORCE" in " ".join(row.replace("**", "").split()).upper()
+                and "PR #24 MERGED" in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0016")
+            )
+            and bool(_current_status_rows(body, "ADR-0016")),
+            "in force without a pull request is a status a reader cannot check",
+        )
+        f.check(
+            f"{name} carries no pre-merge wording in the ADR-0016 row",
+            not [
+                wording
+                for row in _current_status_rows(body, "ADR-0016")
+                for wording in (*PRE_MERGE_STATUS_WORDING, "PROPOSED")
+                if wording.upper() in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "a merged decision described as conditional reads as carrying no authority",
+        )
+        f.check(
+            f"{name} states in the ADR-0016 row what merging it did not authorize",
+            bool(_current_status_rows(body, "ADR-0016"))
+            and all(
+                phrase in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0016")
+                for phrase in ADR_0016_ROW_BOUNDARY
+            ),
+            "in force is the status; the boundaries and what stays unauthorized are the claim",
+        )
+        f.check(
+            f"{name} records ADR-0016 as in force in a merge-stable sentence",
+            ADR_0016_STATUS_SENTENCE in body,
+            "prose is not a table row, and no row guard reaches it",
+        )
+        f.check(
+            f"{name} no longer carries the superseded ADR-0016 status sentence",
+            ADR_0016_STALE_SENTENCE not in flat,
+            "the ADR's own status line may say it; a current-status document may not",
         )
         f.check(
             f"{name} makes no blanket claim about what a dependency refusal counts",

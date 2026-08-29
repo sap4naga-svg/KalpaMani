@@ -428,7 +428,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
 | **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**, and an **authenticated qualification run stays separately gated and NOT AUTHORIZED**. Credential source configured **NONE**, real bucket binding **NONE**, provider and AWS requests **ZERO** |
-| **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **PROPOSED** — accepted on the merge of the pull request that introduces it, and carrying no authority before that merge. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. `get_secret_value` invocations **ZERO**, AWS network requests **ZERO** (no client has ever been constructed), real credential retrieved **NONE**, operational environment synchronization **NOT AUTHORIZED**, another binding-preflight attempt **NOT AUTHORIZED** |
+| **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. `get_secret_value` invocations **ZERO**, AWS network requests **ZERO** (no client has ever been constructed), real credential retrieved **NONE**, operational environment synchronization **NOT AUTHORIZED**, another binding-preflight attempt **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -743,8 +743,7 @@ covered the secret-identifier source, the local SDK and client construction, and
 `get_secret_value` call. **ADR-0015 is not edited** — it is the immutable record of the decision that
 was accepted.
 
-**Status: PROPOSED — accepted on the merge of the pull request that introduces it, and carrying no
-authority before that merge.**
+**Status: ACCEPTED / IN FORCE — PR #24 merged.**
 
 Two authorized operator attempts were made against the real governed foundation. The first refused
 with `REFUSED_IDENTITY`; the owner refreshed the approved AWS SSO session; the second passed the
@@ -1081,6 +1080,13 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --
                         PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING
                         PREFLIGHT ONLY, NEVER RUN
+               ADR-0016 corrected private-binding failure boundaries -- ACCEPTED /
+                        IN FORCE -- PR #24 MERGED, CODE AND FAILURE-BOUNDARY
+                        CORRECTION ONLY, SECRET-IDENTIFIER / LOCAL-DEPENDENCY /
+                        CREDENTIAL REFUSALS SEPARATED, OPERATIONAL ENVIRONMENT
+                        SYNCHRONIZATION NOT AUTHORIZED, ANOTHER BINDING-PREFLIGHT
+                        ATTEMPT NOT AUTHORIZED, NEVER USED TO RETRIEVE A CREDENTIAL
+                        OR RUN QUALIFICATION
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
                a CONFIGURED credential source · real credential or bucket binding
