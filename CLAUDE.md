@@ -416,7 +416,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **[ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription** | **ACCEPTED / IN FORCE (2026-08-28)** — PR #15 merged |
 | **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED / IN FORCE** — PR #16 merged |
 | **[ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md) — dormant Sharadar qualification runtime core** | **ACCEPTED / IN FORCE** — PR #17 merged |
-| **[ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) — acquisition mode, `is_backfill` retired** | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it |
+| **[ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) — acquisition mode, `is_backfill` retired** | **ACCEPTED / IN FORCE** — PR #18 merged |
 | **G1** provider selection · **G2** production information-set profile | **OPEN** |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
@@ -426,7 +426,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Cloud spend beyond the idle foundation** | **NOT AUTHORIZED** |
 | **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
 | **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
-| **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
+| **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -921,8 +921,8 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                         NEVER RUN AGAINST AWS
                ADR-0012 dormant qualification runtime core -- ACCEPTED EFFECTIVE ON
                         MERGE OF PR #17, CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS
-               ADR-0014 dormant composition root + offline preflight -- ACCEPTED EFFECTIVE
-                        ON MERGE, CODE ONLY, OFFLINE PREFLIGHT ONLY,
+               ADR-0014 dormant composition root + offline preflight -- ACCEPTED /
+                        IN FORCE -- PR #19 MERGED, CODE ONLY, OFFLINE PREFLIGHT ONLY,
                         NO QUALIFICATION-RUN EXECUTION SURFACE, NEVER RUN
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
