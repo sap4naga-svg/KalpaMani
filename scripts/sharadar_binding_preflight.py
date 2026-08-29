@@ -47,15 +47,22 @@ caller who imported :func:`run_binding_preflight` and passed ``True`` reached th
 and bucket stages without the flag ever being parsed. A boolean is the one value every caller
 already has; an authorization that any caller can supply is not an authorization.
 
-The parameter is now a **capability minted only by this module, only after the exact flag parses**.
-It has no public constructor: its ``__init__`` refuses any mint but a module-private sentinel, it
-refuses subclassing, and admission is by exact type *and* by that sentinel's identity. It is not
-exported, and neither is the sentinel or the minting function.
+**A copyable mint field was not much better.** The next revision took an object of an exact type
+carrying a module-private mint field. ``copy.copy`` produced a *distinct* object holding the same
+field, and admission accepted it -- so copying manufactured a second bearer of authority. The
+slice's closeout claimed both "copying cannot forge one" and "a shallow copy stays genuine", which
+cannot both be true; review caught it.
 
-*What that claims, exactly:* no caller can construct or forge one through ordinary construction,
-subclassing, copying, deserialisation or a structural lookalike. It is **not** a claim about hostile
-runtime introspection -- a process that can reach a module's private names can reach anything, and
-this file does not pretend otherwise.
+The parameter is now **one module-level object, admitted by identity**. There is no state to copy:
+``__slots__`` is empty, ``__new__`` refuses once the singleton exists, ``__copy__``,
+``__deepcopy__`` and ``__reduce__`` all refuse, and subclassing refuses. The object is not
+exported, and no function returns it except the parser path that has already admitted the flag.
+
+*What that claims, exactly:* no caller can obtain a second admitted authorization through
+construction, copying, deep copying, serialisation, subclassing, a structural lookalike or a
+borrowed field. It is **not** a claim about hostile runtime introspection -- a process that can
+reach a module's private names already holds the singleton, and this file does not pretend
+otherwise.
 
 **A private secret identifier travelled in argv.** ``--secret-id`` put it in shell history and in
 every process listing on the machine, whether or not this program ever printed it. Redacting output
@@ -134,79 +141,110 @@ BINDING_AUTHORIZATION_FLAG: Final = "--i-am-the-operator-authorizing-binding-pre
 #: what the constant is.
 SECRET_ID_ENV_VAR: Final = "KALPAMANI_SHARADAR_SECRET_ID"  # noqa: S105
 
-#: The private mint. Reaching it is the only way to build an authorization.
-#:
-#: Not exported, and no public function returns it. A bare ``object()`` rather
-#: than a string or an enum member, because a caller cannot spell one it does not
-#: already hold a reference to.
-_AUTHORIZATION_MINT: Final = object()
-
 
 class _BindingAuthorization:
-    """Proof that the operator flag was parsed. Not constructible by a caller.
+    """Proof that the operator flag was parsed. **Exactly one exists.**
 
-    The first revision took a ``bool``, which meant a caller who imported
-    :func:`run_binding_preflight` and passed ``True`` authorized a binding
-    preflight without the flag existing. **A boolean is the one value every
-    caller already has.**
+    Two revisions got this wrong, and the second is worth stating because it is
+    the subtler mistake.
 
-    This has no public constructor: ``__init__`` refuses any mint but
-    :data:`_AUTHORIZATION_MINT`, subclassing raises, and there is no default,
-    converter, alias or fallback. Admission is by exact type *and* by the mint's
-    identity, so a structural lookalike, a copy, a subclass instance and a
-    deserialised object are all refused.
+    The first took a ``bool``, so any importer could pass ``True``.
 
-    **What that does not claim.** A process that can reach this module's private
-    names can build one. That is true of every capability in Python and this
-    class does not pretend otherwise; the property implemented and tested is that
-    **no ordinary construction, subclassing, copying, deserialisation or
-    lookalike admits**.
+    The second took an object carrying a module-private *mint field*, and
+    admitted anything of the exact type holding that field. **A field is
+    copyable.** ``copy.copy`` produced a distinct object carrying the same mint,
+    and admission accepted it -- so copying manufactured a second bearer of
+    authority, which is precisely what the capability existed to prevent. The
+    slice's own closeout claimed both "copying cannot forge one" and "a shallow
+    copy stays genuine"; those cannot both be true, and review caught it.
+
+    There is now **no state to copy**: ``__slots__`` is empty, admission is
+    identity against the single module-level instance, and every route that
+    would produce a second object is closed --
+
+    * ``__new__`` refuses once the singleton exists, so there is no second
+      construction;
+    * ``__copy__`` and ``__deepcopy__`` refuse, so no copy operation yields an
+      object at all;
+    * ``__reduce__`` refuses, so the object cannot be pickled and therefore
+      cannot be unpickled into a second bearer;
+    * subclassing refuses, so no subclass instance can stand in.
+
+    An ``object.__new__`` instance can still be built -- that bypasses
+    ``__new__`` -- and it is refused for the reason that matters: it is not
+    *this* object.
+
+    **What that claims, precisely.** No caller can obtain a second admitted
+    authorization through construction, copying, deep copying, serialisation,
+    subclassing, a structural lookalike or a borrowed field. It is **not** a
+    claim about hostile runtime introspection: a process that can reach a
+    module's private names already holds the singleton, and this file does not
+    pretend otherwise.
     """
 
-    __slots__ = ("_mint",)
+    __slots__ = ()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing.
 
         A subclass instance would satisfy an ``isinstance`` check while being a
-        type this module never minted, which is precisely the forgery the exact
-        type check exists to prevent.
+        different object from the one this module made.
         """
         raise TypeError("_BindingAuthorization may not be subclassed.")
 
-    def __init__(self, mint: object) -> None:
-        """Refuse any mint but the module-private one.
+    def __new__(cls) -> _BindingAuthorization:
+        """Build the one instance, and refuse every later construction.
 
         Raises:
-            TypeError: for every other value. The message names no caller input.
+            TypeError: once the singleton is bound. The module binds it below;
+                after that, ``_BindingAuthorization()`` is a refusal rather than
+                a second capability.
         """
-        if mint is not _AUTHORIZATION_MINT:
+        if "_BINDING_PREFLIGHT_AUTHORIZATION" in globals():
             raise TypeError(
-                "a binding authorization is minted by parsing the operator flag, not constructed"
+                "there is one binding-preflight authorization; it is obtained by parsing "
+                "the operator flag, not constructed"
             )
-        self._mint = mint
+        return super().__new__(cls)
+
+    def __copy__(self) -> _BindingAuthorization:
+        """Refuse copying.
+
+        Returning ``self`` would also have been defensible -- one object, no new
+        bearer. Refusing is chosen because it fails loudly: code that copies an
+        authorization is doing something this design does not intend, and a
+        silent pass-through would let that intent survive unexamined.
+        """
+        raise TypeError("a binding-preflight authorization may not be copied.")
+
+    def __deepcopy__(self, memo: object) -> _BindingAuthorization:
+        """Refuse deep copying, for the same reason."""
+        raise TypeError("a binding-preflight authorization may not be copied.")
+
+    def __reduce__(self) -> object:
+        """Refuse pickling, so nothing can be unpickled into a second bearer."""
+        raise TypeError("a binding-preflight authorization may not be serialised.")
 
     def __repr__(self) -> str:
-        """A constant. The mint is never rendered."""
+        """A constant. There is nothing else to render."""
         return "<binding-preflight authorization>"
 
 
-def _mint_binding_authorization() -> _BindingAuthorization:
-    """Mint one authorization. Called **only** after the exact flag has parsed."""
-    return _BindingAuthorization(_AUTHORIZATION_MINT)
+#: The one authorization. Admission is identity against exactly this object.
+#:
+#: Not exported, and no function returns it except the parser path that has
+#: already admitted the operator flag.
+_BINDING_PREFLIGHT_AUTHORIZATION: Final = _BindingAuthorization()
 
 
 def _is_authorized(candidate: object) -> bool:
-    """Whether ``candidate`` is an authorization this module minted.
+    """Whether ``candidate`` **is** the one authorization this module holds.
 
-    Exact type, then mint identity. ``getattr`` with a default rather than an
-    attribute access, because an instance built through ``object.__new__`` has no
-    ``_mint`` at all and must be refused rather than raise.
+    Identity, and nothing else. No type check is needed and none is written: a
+    type check plus a copyable field is what admitted a shallow copy in the
+    previous revision, and adding one back would invite the same mistake.
     """
-    return (
-        type(candidate) is _BindingAuthorization
-        and getattr(candidate, "_mint", None) is _AUTHORIZATION_MINT
-    )
+    return candidate is _BINDING_PREFLIGHT_AUTHORIZATION
 
 
 #: The profile and region the governed foundation is pinned to.
@@ -542,8 +580,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_binding_preflight(
-            # Minted here, and only here: the flag has parsed.
-            authorization=_mint_binding_authorization(),
+            # Handed over here, and only here: the flag has parsed.
+            authorization=_BINDING_PREFLIGHT_AUTHORIZATION,
             subjects=parsed.subjects,
             execution_id=parsed.execution_id,
             profile_of=_ambient_profile,

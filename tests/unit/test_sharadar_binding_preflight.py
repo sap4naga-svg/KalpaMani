@@ -24,6 +24,7 @@ import importlib.util
 import inspect
 import re
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -72,8 +73,8 @@ CANARIES: Final = (
 
 INSTANT = datetime(2026, 8, 29, 12, 0, 0, tzinfo=UTC)
 
-#: "mint me a genuine capability" -- distinct from every value a test might pass
-#: as a forgery, including ``None``.
+#: "hand me the genuine authorization" -- distinct from every value a test might
+#: pass as a forgery, including ``None``.
 _MINT: Final = object()
 
 
@@ -240,7 +241,7 @@ class Harness:
         """Drive the preflight. ``authorization`` defaults to a genuine capability."""
         return bp.run_binding_preflight(
             authorization=(
-                bp._mint_binding_authorization() if authorization is _MINT else authorization
+                bp._BINDING_PREFLIGHT_AUTHORIZATION if authorization is _MINT else authorization
             ),
             subjects=subjects,
             execution_id=execution_id,
@@ -301,13 +302,20 @@ def test_importing_the_entry_point_runs_nothing() -> None:
             assert isinstance(node.value, ast.Constant), "import-time expression"
         if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
             value = node.value
-            # `object()` is the one permitted import-time call: it mints the
-            # private authorization sentinel and does no work -- no lookup, and
-            # no construction of anything that could reach a service.
+            # The only permitted import-time calls are argument-free
+            # constructions of a sentinel type defined in this module -- today,
+            # `_BindingAuthorization()`. They do no work: no lookup, no client,
+            # no socket, and nothing that could reach a service. Anything with
+            # arguments, or naming a type from elsewhere, is refused.
+            local_classes = {
+                statement.name
+                for statement in _tree(ENTRY_POINT).body
+                if isinstance(statement, ast.ClassDef)
+            }
             bare_sentinel = (
                 isinstance(value, ast.Call)
                 and isinstance(value.func, ast.Name)
-                and value.func.id == "object"
+                and value.func.id in local_classes | {"object"}
                 and not value.args
                 and not value.keywords
             )
@@ -362,28 +370,29 @@ class TruthyLookalike:
 
 
 class StructuralLookalike:
-    """Everything the capability has, except having been minted by the module."""
+    """Everything the capability presents, except being the object itself.
 
-    __slots__ = ("_mint",)
+    Empty slots and the same ``repr``, so nothing observable distinguishes it
+    from the singleton except identity -- which is the whole check.
+    """
 
-    def __init__(self) -> None:
-        self._mint = object()
+    __slots__ = ()
 
     def __repr__(self) -> str:
         return "<binding-preflight authorization>"
 
 
-class BorrowedMintLookalike:
-    """A lookalike carrying the *genuine* mint, but of the wrong type.
+class BorrowedFieldLookalike:
+    """Carries a ``_mint`` field, which the previous revision admitted on.
 
-    Separated from :class:`StructuralLookalike` because it isolates the exact-type
-    half of the check: identity of the mint alone would admit this.
+    Kept as a standing witness that field-based admission is gone: there is no
+    ``_mint`` on the real capability any more, and nothing looks for one.
     """
 
     __slots__ = ("_mint",)
 
     def __init__(self) -> None:
-        self._mint = getattr(bp._mint_binding_authorization(), "_mint", None)
+        self._mint = object()
 
 
 class ForgedEnum(StrEnum):
@@ -408,9 +417,8 @@ FORGERIES: tuple[tuple[str, Any], ...] = (
     ("bare object", object()),
     ("truthy lookalike", TruthyLookalike()),
     ("structural lookalike", StructuralLookalike()),
-    ("borrowed-mint lookalike", BorrowedMintLookalike()),
+    ("borrowed-field lookalike", BorrowedFieldLookalike()),
     ("the class itself", bp._BindingAuthorization),
-    ("the mint function", bp._mint_binding_authorization),
 )
 
 
@@ -430,11 +438,15 @@ def test_authorization_cannot_be_forged(label: str, forged: Any) -> None:
     assert harness.secret_id_calls == 0, f"{label} reached the secret identifier"
 
 
-def test_the_capability_has_no_public_constructor() -> None:
-    """Direct construction, with anything but the private mint, raises."""
-    for attempted in (object(), None, True, "mint", 1):
+def test_the_capability_cannot_be_constructed_a_second_time() -> None:
+    """The singleton exists, so every later construction is a refusal.
+
+    Stronger than "no public constructor with the right argument": there is no
+    argument at all, and calling the class raises.
+    """
+    for _ in range(3):
         with pytest.raises(TypeError):
-            bp._BindingAuthorization(attempted)
+            bp._BindingAuthorization()
 
 
 def test_the_capability_refuses_subclassing() -> None:
@@ -454,80 +466,140 @@ def test_an_uninitialised_instance_is_not_an_authorization() -> None:
     assert harness.stages.order == []
 
 
-def test_a_copy_stays_authorized_and_a_deserialised_one_does_not() -> None:
-    """Three outcomes, and each is the right one for what it does to the mint.
+def test_copying_produces_no_object_at_all() -> None:
+    """The defect this round exists for.
 
-    A **shallow copy** shares the *same* sentinel object, so it is still genuine.
-    That is correct rather than a hole: the mint it carries is one this module
-    made, and copying an authorization does not manufacture authority.
+    The previous revision admitted anything of the exact type carrying a
+    module-private ``_mint`` field. **A field is copyable**: ``copy.copy``
+    returned a *distinct* object holding the same field, and admission accepted
+    it -- so copying manufactured a second bearer of authority. Confirmed before
+    fixing, and the slice's own closeout had claimed both "copying cannot forge
+    one" and "a shallow copy stays genuine", which cannot both be true.
 
-    A **deep copy** clones the sentinel, and a **pickle round-trip** reconstructs
-    it as a new ``object()``. Neither result carries the mint, so both are
-    refused. Note the claim: not "serialising raises" -- it does not -- but that
-    the product of serialising is not an authorization.
+    Copying now yields **no object**: it raises. That is the stricter of the two
+    permitted designs -- returning the singleton would also have been sound, but
+    refusing fails loudly, and code that copies an authorization is doing
+    something this design does not intend.
     """
     import copy
-    import pickle
 
-    genuine = bp._mint_binding_authorization()
-    assert bp._is_authorized(copy.copy(genuine)), "a shallow copy shares the genuine mint"
+    genuine = bp._BINDING_PREFLIGHT_AUTHORIZATION
+    operations: tuple[tuple[str, Callable[[], Any]], ...] = (
+        ("shallow copy", lambda: copy.copy(genuine)),
+        ("deep copy", lambda: copy.deepcopy(genuine)),
+    )
+    for label, operation in operations:
+        with pytest.raises(TypeError, match="may not be copied"):
+            operation()
+        assert bp._is_authorized(genuine), f"the {label} attempt disturbed the singleton"
 
-    for label, derived in (
-        ("deep copy", copy.deepcopy(genuine)),
-        # the point is that what comes back out is refused.
-        ("pickle round-trip", pickle.loads(pickle.dumps(genuine))),  # noqa: S301
+
+def test_no_distinct_object_is_ever_admitted() -> None:
+    """The property underneath the copy refusal, stated directly.
+
+    Every object that is not *this* object is refused, whatever it carries and
+    however it was made -- so a copy operation that somehow produced one would be
+    refused too.
+    """
+    genuine = bp._BINDING_PREFLIGHT_AUTHORIZATION
+    for candidate in (
+        object.__new__(bp._BindingAuthorization),
+        StructuralLookalike(),
+        BorrowedFieldLookalike(),
     ):
-        assert type(derived) is bp._BindingAuthorization
-        assert not bp._is_authorized(derived), f"a {label} was admitted"
+        assert candidate is not genuine
+        assert not bp._is_authorized(candidate)
         harness = Harness()
         with pytest.raises(bp.BindingPreflightError):
-            harness.run(authorization=derived)
-        assert harness.stages.order == [], f"a {label} reached a stage"
+            harness.run(authorization=candidate)
+        assert harness.stages.order == []
 
 
-def test_only_a_minted_capability_is_admitted() -> None:
-    genuine = bp._mint_binding_authorization()
+def test_serialisation_produces_no_object_either() -> None:
+    """Pickling refuses, so nothing can be unpickled into a second bearer."""
+    import pickle
+
+    with pytest.raises(TypeError, match="may not be serialised"):
+        pickle.dumps(bp._BINDING_PREFLIGHT_AUTHORIZATION)
+
+
+def test_admission_is_identity_and_reads_no_field() -> None:
+    """Isolating: the check must be identity, not exact-type-plus-field.
+
+    The capability carries no ``_mint`` at all now, so a field-based check could
+    not even be written against the real object -- and this asserts the absence
+    rather than trusting it.
+    """
+    genuine = bp._BINDING_PREFLIGHT_AUTHORIZATION
+    assert not hasattr(genuine, "_mint")
+    assert bp._BindingAuthorization.__slots__ == ()
+    assert not hasattr(bp, "_AUTHORIZATION_MINT")
+    assert not hasattr(bp, "_mint_binding_authorization")
+
+    source = _executable(ENTRY_POINT)
+    assert "candidate is _BINDING_PREFLIGHT_AUTHORIZATION" in source
+    assert "_mint" not in source, "admission still reads a copyable field"
+
+
+def test_only_the_singleton_is_admitted() -> None:
+    genuine = bp._BINDING_PREFLIGHT_AUTHORIZATION
     assert bp._is_authorized(genuine)
     harness = Harness()
     harness.run(authorization=genuine)
     assert harness.stages.order[0] == "profile"
 
 
+def test_the_parser_path_hands_over_exactly_that_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What ``main`` passes, after the flag parses, **is** the singleton.
+
+    Behavioural rather than structural: the preflight is replaced by a spy that
+    records the object it was given, so this checks what the flag actually
+    produces rather than what the source appears to say.
+    """
+    handed: list[Any] = []
+
+    def spy(**kwargs: Any) -> Any:
+        handed.append(kwargs["authorization"])
+        raise bp.BindingPreflightError(bp.PreflightOutcome.REFUSED_PROFILE)
+
+    monkeypatch.setattr(bp, "run_binding_preflight", spy)
+    assert bp.main([bp.BINDING_AUTHORIZATION_FLAG]) == 1
+    assert handed == [bp._BINDING_PREFLIGHT_AUTHORIZATION]
+    assert handed[0] is bp._BINDING_PREFLIGHT_AUTHORIZATION
+
+
 def test_the_capability_and_its_mint_are_not_exported() -> None:
     """Not in ``__all__``, and every name is private by convention as well."""
     exported = getattr(bp, "__all__", ())
-    for name in ("_BindingAuthorization", "_AUTHORIZATION_MINT", "_mint_binding_authorization"):
+    for name in ("_BindingAuthorization", "_BINDING_PREFLIGHT_AUTHORIZATION"):
         assert name not in exported
         assert name.startswith("_"), f"{name} is not a private name"
 
 
-def test_only_main_mints_an_authorization() -> None:
-    """One call site, inside the branch the flag has already been checked in."""
+def test_only_main_hands_over_the_authorization() -> None:
+    """One place reads the singleton to pass it on, and it is inside ``main``.
+
+    ``_is_authorized`` also names it, to compare against -- that is the check,
+    not a hand-over, so the function that *passes* it is the one asserted here.
+    """
     tree = _tree(ENTRY_POINT)
-    call_sites = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_mint_binding_authorization"
-    ]
-    assert len(call_sites) == 1, "the mint is called from more than one place"
-    minting_functions = [
+    handing_over = [
         node.name
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
+        and node.name != "_is_authorized"
         and any(
-            isinstance(inner, ast.Call)
-            and isinstance(inner.func, ast.Name)
-            and inner.func.id == "_mint_binding_authorization"
+            isinstance(inner, ast.Name) and inner.id == "_BINDING_PREFLIGHT_AUTHORIZATION"
             for inner in ast.walk(node)
         )
     ]
-    assert minting_functions == ["main"]
+    assert handing_over == ["main"]
 
 
 def test_the_capability_repr_carries_nothing() -> None:
-    assert repr(bp._mint_binding_authorization()) == "<binding-preflight authorization>"
+    assert repr(bp._BINDING_PREFLIGHT_AUTHORIZATION) == "<binding-preflight authorization>"
 
 
 def test_the_authorization_flag_is_unmistakable_and_the_habitual_ones_are_refused() -> None:

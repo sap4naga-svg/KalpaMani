@@ -85,31 +85,42 @@ fails loudly rather than doing something.
 **It authorizes a binding preflight and nothing further.** It does not mint, imply or stand in for
 authorization to execute a qualification run, and no code path consumes it as one.
 
-### The authorization is a minted capability, not a boolean
+### The authorization is one object, admitted by identity
 
-This ADR's first revision specified `binding_authorized: bool`, checked as `is True`. **That was not
-an authorization.** A caller who imported `run_binding_preflight` and passed `True` reached the
-profile, identity and bucket stages with the flag never parsed — and a boolean is the one value every
-caller already has.
+Two revisions of this ADR got this wrong, and the second is the more instructive.
 
-`run_binding_preflight` now takes a **capability this module mints, only after the exact flag
-parses**:
+**The first specified `binding_authorized: bool`, checked as `is True`.** A caller who imported
+`run_binding_preflight` and passed `True` reached the profile, identity and bucket stages with the
+flag never parsed — and a boolean is the one value every caller already has.
+
+**The second specified an exact type carrying a module-private mint field**, admitted on type plus
+the field's identity. **A field is copyable.** `copy.copy` returned a *distinct* object holding the
+same field, and admission accepted it — so copying manufactured a second bearer of authority, which
+is exactly what the capability existed to prevent. Worse, the slice's own closeout asserted both
+*"copying cannot forge one"* and *"a shallow copy stays genuine because it holds the same sentinel"*.
+Those cannot both be true. **Review caught it, not a test**, which is itself the finding: the claim
+had no guard behind it.
+
+`run_binding_preflight` now takes **one module-level object, admitted by identity alone**:
 
 | | |
 |---|---|
-| **No public constructor** | `__init__` refuses any mint but a module-private sentinel |
-| **No subclassing** | a subclass instance would satisfy `isinstance` while never having been minted |
-| **Exact type *and* mint identity** | so a structural lookalike, a lookalike carrying a *borrowed* mint, an uninitialised `object.__new__` instance, a deep copy and a pickle round-trip are all refused |
-| **Not exported** | neither the class, the sentinel, nor the minting function |
-| **One mint call site** | inside `main`, in the branch the flag has already been checked in |
+| **Identity, not type-plus-field** | `candidate is _BINDING_PREFLIGHT_AUTHORIZATION`. No type check is written, deliberately: a type check beside a copyable field is what admitted the copy |
+| **Nothing to copy** | `__slots__` is empty. There is no field for a copy to carry across |
+| **No second construction** | `__new__` refuses once the singleton is bound |
+| **No copy at all** | `__copy__` and `__deepcopy__` refuse, so a copy operation yields **no object**. Returning the singleton would also have been sound; refusing was chosen because it fails loudly |
+| **No serialisation** | `__reduce__` refuses, so nothing can be unpickled into a second bearer |
+| **No subclassing** | a subclass instance is a different object |
+| **Not exported** | neither the class nor the object |
+| **One hand-over site** | inside `main`, in the branch the flag has already been checked in |
 
-A **shallow copy** stays authorized, and that is correct rather than a hole: it holds the same
-sentinel this module made, and copying an authorization manufactures no authority.
+An `object.__new__` instance can still be built — that bypasses `__new__` — and it is refused for
+the reason that matters: **it is not this object**.
 
-**What that claims, precisely.** No caller can construct or forge one through ordinary construction,
-subclassing, copying, deserialisation or a structural lookalike. It is **not** a claim about hostile
-runtime introspection: a process that can reach a module's private names can build one, as it can in
-any Python program, and this ADR does not pretend otherwise.
+**What that claims, precisely.** No caller can obtain a second admitted authorization through
+construction, copying, deep copying, serialisation, subclassing, a structural lookalike or a
+borrowed field. It is **not** a claim about hostile runtime introspection: a process that can reach
+a module's private names already holds the singleton, and this ADR does not pretend otherwise.
 
 ### The order, which is the security property
 
@@ -281,13 +292,16 @@ Enforced by test, not by review:
 |---|---|
 | import does nothing | AST over module-level statements; no SDK, verifier, `os` or `urllib` import at module scope |
 | invocation without the flag refuses before any stage | the stage recorder is empty, and the secrets client was never asked |
-| authorization cannot be forged | sixteen cases: `True`, `False`, `1`, `0`, a string, the flag spelled as a string, an enum member, a float, a list, a mapping, a bare object, a truthy lookalike, a structural lookalike, a lookalike carrying a *borrowed* mint, the class itself, and the minting function |
-| the capability has no public constructor | direct construction with any other mint raises |
+| authorization cannot be forged | fifteen cases: `True`, `False`, `1`, `0`, a string, the flag spelled as a string, an enum member, a float, a list, a mapping, a bare object, a truthy lookalike, a structural lookalike, a lookalike carrying a `_mint` field, and the class itself |
+| the capability cannot be constructed a second time | calling the class raises, repeatedly |
 | the capability refuses subclassing | class creation raises |
-| an uninitialised instance is refused | `object.__new__` skips `__init__`, so no mint is carried |
-| a copy is genuine, a deep copy and a pickle round-trip are not | all three exercised end to end |
-| the mint has exactly one call site | AST over the module |
-| the capability, mint and minting function are unexported | `__all__` and private-name assertions |
+| copying produces no object | `copy.copy` and `copy.deepcopy` each raise, and the singleton is unchanged after |
+| serialisation produces no object | `pickle.dumps` raises, so nothing can be unpickled into a bearer |
+| no distinct object is ever admitted | an `object.__new__` instance, a structural lookalike and a `_mint`-bearing lookalike, each refused and each stopped before any stage |
+| admission is identity and reads no field | the object has no `_mint`, `__slots__` is empty, and the module names neither a mint nor a minting function |
+| the parser hands over exactly that object | the preflight is spied on; what `main` passes **is** the singleton |
+| the authorization is handed over at one place | AST over the module, excluding the admission check itself |
+| the capability and the object are unexported | `__all__` and private-name assertions |
 | a profile mismatch refuses before the identity call | stages recorded: `["profile"]` |
 | an identity failure refuses before state, secret or composition | stages recorded: `["profile", "identity"]` |
 | a bucket failure refuses before secret retrieval | stages recorded: `["profile", "identity", "bucket"]`; secret calls `0` |

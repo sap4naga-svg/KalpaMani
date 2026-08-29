@@ -1193,18 +1193,25 @@ def _entry_point_exports() -> tuple[str, ...]:
     return ()
 
 
-def _mint_call_sites() -> int:
-    """How many places call the minting function. Expected: one, inside ``main``."""
+def _authorization_handover_sites() -> list[str]:
+    """Every function that reads the authorization singleton to pass it on.
+
+    ``_is_authorized`` names it too, to compare against -- that is the check
+    rather than a hand-over, so it is excluded. Expected: ``main`` alone.
+    """
     if not BINDING_PREFLIGHT.is_file():
-        return 0
+        return []
     tree = ast.parse(read(BINDING_PREFLIGHT), filename=str(BINDING_PREFLIGHT))
-    return sum(
-        1
+    return [
+        node.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_mint_binding_authorization"
-    )
+        if isinstance(node, ast.FunctionDef)
+        and node.name != "_is_authorized"
+        and any(
+            isinstance(inner, ast.Name) and inner.id == "_BINDING_PREFLIGHT_AUTHORIZATION"
+            for inner in ast.walk(node)
+        )
+    ]
 
 
 def _argv_secret_identifier_options() -> list[str]:
@@ -6110,10 +6117,11 @@ def main() -> int:
         )
         f.check(
             "ADR-0015 records the boolean-authorization defect and its replacement",
-            "The authorization is a minted capability, not a boolean" in flat15
+            "The authorization is one object, admitted by identity" in flat15
             and "a boolean is the one value every" in flat15
-            and "only after the exact flag parses" in flat15,
-            "an authorization any caller can supply is not an authorization",
+            and "A field is copyable" in flat15
+            and "copying manufactured a second bearer of authority" in flat15,
+            "an authorization any caller can supply, or copy, is not an authorization",
         )
         f.check(
             "ADR-0015 scopes the capability claim away from runtime introspection",
@@ -6241,12 +6249,34 @@ def main() -> int:
             "a minted capability; a boolean is the one value every caller already has",
         )
         f.check(
-            "the authorization is a minted capability, not a boolean",
+            "the authorization is one object, admitted by identity",
             "class _BindingAuthorization" in binding
-            and "_AUTHORIZATION_MINT" in binding
-            and "type(candidate) is _BindingAuthorization" in binding
-            and "is _AUTHORIZATION_MINT" in binding,
-            "exact type and mint identity; a lookalike, copy or subclass must not admit",
+            and "candidate is _BINDING_PREFLIGHT_AUTHORIZATION" in binding,
+            "identity against the single instance; a copy is a different object",
+        )
+        f.check(
+            "admission reads no copyable field",
+            "_mint" not in binding and "_AUTHORIZATION_MINT" not in binding,
+            "a field is copyable, and copy.copy admitted a distinct bearer through one",
+        )
+        f.check(
+            "the capability carries no state to copy",
+            "__slots__ = ()" in binding,
+            "no state means no field for a copy to carry across",
+        )
+        f.check(
+            "every route to a second instance is closed",
+            all(
+                closure in binding
+                for closure in (
+                    "def __new__",
+                    "def __copy__",
+                    "def __deepcopy__",
+                    "def __reduce__",
+                    "def __init_subclass__",
+                )
+            ),
+            "construction, copying, deep copying, pickling and subclassing each refuse",
         )
         f.check(
             "no boolean authorization parameter survives anywhere in the entry point",
@@ -6254,26 +6284,33 @@ def main() -> int:
             "the first revision took a bool, so any importer could pass True",
         )
         f.check(
-            "the capability refuses subclassing and any other mint",
-            "may not be subclassed" in read(BINDING_PREFLIGHT)
-            and "if mint is not _AUTHORIZATION_MINT:" in binding,
-            "a subclass instance would satisfy isinstance while never having been minted",
-        )
-        f.check(
-            "the capability, its mint and its minting function are not exported",
+            "the capability refuses subclassing, copying and serialisation",
             all(
-                name not in _entry_point_exports()
-                for name in (
-                    "_BindingAuthorization",
-                    "_AUTHORIZATION_MINT",
-                    "_mint_binding_authorization",
+                refusal in read(BINDING_PREFLIGHT)
+                for refusal in (
+                    "may not be subclassed",
+                    "may not be copied",
+                    "may not be serialised",
                 )
             ),
-            "an exported mint is a public constructor by another name",
+            "each is a route to a second object, and a second object is a second bearer",
         )
         f.check(
-            "the authorization is minted at exactly one call site",
-            _mint_call_sites() == 1,
+            "the capability class and the authorization object are not exported",
+            all(
+                name not in _entry_point_exports()
+                for name in ("_BindingAuthorization", "_BINDING_PREFLIGHT_AUTHORIZATION")
+            )
+            # The retired field-based names must not come back either.
+            and all(
+                name not in read(BINDING_PREFLIGHT)
+                for name in ("_AUTHORIZATION_MINT", "_mint_binding_authorization")
+            ),
+            "an exported authorization is a public constructor by another name",
+        )
+        f.check(
+            "the authorization is handed over at exactly one place",
+            _authorization_handover_sites() == ["main"],
             "one site, inside the branch the flag has already been checked in",
         )
         f.check(
@@ -6440,14 +6477,18 @@ def main() -> int:
                 "test_invocation_without_an_authorization_refuses_before_any_stage",
             ),
             ("unforgeable authorization", "test_authorization_cannot_be_forged"),
-            ("no public constructor", "test_the_capability_has_no_public_constructor"),
+            ("no second construction", "test_the_capability_cannot_be_constructed_a_second_time"),
             ("refused subclassing", "test_the_capability_refuses_subclassing"),
             ("an uninitialised instance", "test_an_uninitialised_instance_is_not_an_authorization"),
+            ("copying producing no object", "test_copying_produces_no_object_at_all"),
+            ("no distinct object admitted", "test_no_distinct_object_is_ever_admitted"),
+            ("refused serialisation", "test_serialisation_produces_no_object_either"),
+            ("identity admission with no field", "test_admission_is_identity_and_reads_no_field"),
             (
-                "copies and deserialised capabilities",
-                "test_a_copy_stays_authorized_and_a_deserialised_one_does_not",
+                "the parser handing over that object",
+                "test_the_parser_path_hands_over_exactly_that_object",
             ),
-            ("one mint call site", "test_only_main_mints_an_authorization"),
+            ("one hand-over site", "test_only_main_hands_over_the_authorization"),
             (
                 "a refused command-line identifier",
                 "test_a_command_line_secret_identifier_is_refused_by_name",
@@ -6515,9 +6556,18 @@ def main() -> int:
             "the standing 'no credential source exists' claim is no longer true as written",
         )
         f.check(
-            f"{name} records the minted capability that replaced the boolean",
-            "A minted capability, not a boolean" in flat and "any importer could pass" in flat,
-            "the first revision's authorization was a value every caller already had",
+            f"{name} records the two authorization defects and the identity replacement",
+            "One object, admitted by identity" in flat
+            and "any importer could pass" in flat
+            and "a field is copyable" in flat.lower()
+            and "copying manufactured a second bearer" in flat,
+            "a boolean any caller has, and a field any caller can copy, are both forgeable",
+        )
+        f.check(
+            f"{name} records that no route to a second object survives",
+            "Nothing to copy, and no route to a second" in flat
+            and "yield no object at all" in flat,
+            "construction, copying, deep copying, pickling and subclassing each refuse",
         )
         f.check(
             f"{name} records that the secret identifier never enters argv",
