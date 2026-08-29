@@ -903,7 +903,7 @@ BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
 #:
 #: The row said "NOT AUTHORIZED -- none exists, and a static test keeps it that
 #: way". A credential-source boundary does exist, the operator entry point is the
-#: one place permitted to construct an SDK client, and it has been invoked twice.
+#: one place permitted to construct an SDK client, and it has been invoked three times.
 #: The row has to separate **architectural existence** from **operational
 #: execution**, because the old wording denied both at once.
 BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
@@ -1125,6 +1125,86 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
+
+#: The two facts the old combined creation/read line ran together.
+#:
+#: "Secrets Manager secret created or read: NONE" was one sentence about two
+#: different subjects. Owner-side creation is now attested and happened outside
+#: this repository; reads *by* this repository remain zero. One line could report
+#: the second correctly only by denying the first.
+SECRET_CREATION_AND_READ_FACTS: Final[tuple[str, ...]] = (
+    "owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
+    "Secrets Manager secret reads by this repository: ZERO",
+)
+
+#: The superseded combined line, refused wherever it reappears.
+#:
+#: The name trips ruff's hardcoded-password heuristic. It is a superseded
+#: status sentence from a status document, suppressed per line rather than by
+#: renaming it to something less accurate about what it matches.
+STALE_SECRET_CREATED_OR_READ: Final = "Secrets Manager secret created or read: NONE"  # noqa: S105
+
+#: The first-cell subject of the corrected top-level authorization row.
+CREDENTIAL_SETUP_ROW_SUBJECT: Final = "Owner-side credential setup"
+
+#: What that row must state, once owner-side setup is a fact and access is not.
+#:
+#: Five separate statuses, because the old row had one: it labelled setup, provider
+#: access and ingestion "NOT AUTHORIZED" together, and owner-side setup has since
+#: happened. A single verdict over three subjects goes stale the moment any one of
+#: them moves.
+CREDENTIAL_SETUP_ROW_FACTS: Final[tuple[str, ...]] = (
+    "OWNER-SIDE SHARADAR SECRET CREATION AND IDENTIFIER CONFIGURATION",
+    "OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
+    "APPLICATION CREDENTIAL RETRIEVAL NOT AUTHORIZED",
+    "PROVIDER API ACCESS NOT AUTHORIZED",
+    "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The superseded collective row, refused by its exact first cell.
+#:
+#: Matched as the row's own subject rather than as free text, so the narrative may
+#: still quote what the row used to say when explaining why it changed.
+STALE_CREDENTIAL_SETUP_ROW_SUBJECT: Final = (
+    "Credential setup · provider API access · Services Data ingestion"
+)
+
+#: The first line of the CLAUDE.md NOT AUTHORIZED stanza, and its indent.
+#:
+#: A top-level stanza, so its continuations sit at fifteen -- the same shape the
+#: ENVIRONMENT guard needed, and the same reason the default of twenty-four would
+#: silently reduce the stanza to its header line.
+NOT_AUTHORIZED_STANZA_LINE: Final = "NOT AUTHORIZED application credential retrieval"
+NOT_AUTHORIZED_STANZA_INDENT: Final = 15
+
+#: What the stanza must forbid, now that owner-side setup has happened.
+#:
+#: The stanza forbade "credential retrieval, setup, configuration or binding" and
+#: "a CONFIGURED credential source". Both were accurate while no secret existed.
+#: Each now denies something the same matrix's ENVIRONMENT stanza reports as done,
+#: and a matrix that contradicts itself teaches a reader to trust neither half. The
+#: replacements move the boundary from *setup* to *use*, which is where it actually
+#: sits: the application may not retrieve the credential, and only a separately
+#: authorized attempt may construct a client.
+NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
+    "application credential retrieval",
+    "Secrets Manager client construction or use, except during a separately authorized "
+    "ADR-0015 binding-preflight attempt",
+    "real credential binding NONE",
+    "real bucket binding NONE",
+    "SDK/client construction outside the ADR-0015 operator boundary",
+    "a fourth binding-preflight attempt",
+    "ANY provider API call",
+    "an authenticated qualification run",
+)
+
+#: Stanza wording that forbids owner-side setup that has since happened.
+STALE_NOT_AUTHORIZED_CLAUSES: Final[tuple[str, ...]] = (
+    "credential retrieval, setup, configuration or binding",
+    "a CONFIGURED credential source",
+)
+
 
 #: Claims the owner's post-attempt credential setup does not support.
 #:
@@ -7450,15 +7530,39 @@ def main() -> int:
             "a private identifier on the command line is disclosed before anything runs",
         )
         f.check(
-            f"{name} records that no secret or bucket binding was performed",
-            all(
-                token in body
-                for token in (
-                    "Secrets Manager secret created or read: NONE",
-                    "real bucket binding performed: NONE",
-                )
-            ),
+            f"{name} records that no bucket binding was performed",
+            "real bucket binding performed: NONE" in body,
             "implementing a path is not walking it",
+        )
+        f.check(
+            f"{name} separates owner-side secret creation from reads by this repository",
+            all(fact in body for fact in SECRET_CREATION_AND_READ_FACTS),
+            "one sentence reported two subjects, and could only be right about one",
+        )
+        f.check(
+            f"{name} no longer carries the combined secret creation-or-read line",
+            STALE_SECRET_CREATED_OR_READ not in body,
+            "owner-side creation is attested; that line denies it to report the read count",
+        )
+        f.check(
+            f"{name} states the corrected top-level credential-setup row",
+            bool(_phase_status_rows(body, CREDENTIAL_SETUP_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, CREDENTIAL_SETUP_ROW_SUBJECT)
+                for fact in CREDENTIAL_SETUP_ROW_FACTS
+            ),
+            "one verdict over setup, access and ingestion goes stale when any one moves",
+        )
+        f.check(
+            f"{name} no longer carries the collective credential-setup row",
+            not [
+                row
+                for row in body.splitlines()
+                if row.lstrip().startswith("|")
+                and STALE_CREDENTIAL_SETUP_ROW_SUBJECT in row.split("|")[1]
+            ],
+            "owner-side setup has happened; a row labelling it NOT AUTHORIZED is false",
         )
         f.check(
             f"{name} records the scoped counts the three attempts left at zero",
@@ -7477,7 +7581,7 @@ def main() -> int:
                 )
                 for phrase in ADR_0015_SECTION_HISTORY
             ),
-            "implementation-time inactivity and two later operator runs are different facts",
+            "implementation-time inactivity and three later operator runs are different facts",
         )
         f.check(
             f"{name} makes no stale zero-AWS or never-run claim in the ADR-0015 section",
@@ -7511,7 +7615,7 @@ def main() -> int:
                 for row in _current_status_rows(body, "ADR-0015")
                 for phrase in ADR_0015_ROW_HISTORY
             ),
-            "a row claiming zero AWS activity survived two runs that produced some",
+            "a row claiming zero AWS activity survived three runs that produced some",
         )
         f.check(
             f"{name} makes no stale operational claim in the ADR-0015 row",
@@ -7685,26 +7789,30 @@ def main() -> int:
                 for claim in STALE_PREFLIGHT_CLAIMS
                 if claim in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE).upper()
             ],
-            "two authorized attempts happened; a compact entry may be short, not false",
+            "three authorized attempts happened; a compact entry may be short, not false",
         )
         f.check(
-            "the unauthorized list no longer forbids the credential source ADR-0015 built",
-            "a CONFIGURED credential source" in claude_body
-            and "SDK client construction anywhere but the ADR-0015 operator entry point"
-            in claude_body,
-            "a slice that implemented a refusing credential source makes the bare wording stale",
-        )
-        f.check(
-            "the unauthorized list still forbids every binding operation",
+            "the unauthorized stanza forbids use rather than owner-side setup",
             all(
-                token in claude_body
-                for token in (
-                    "credential retrieval, setup, configuration or binding",
-                    "real credential or bucket binding",
-                    "an authenticated qualification run",
+                clause
+                in _matrix_entry(
+                    claude_body, NOT_AUTHORIZED_STANZA_LINE, NOT_AUTHORIZED_STANZA_INDENT
                 )
+                for clause in NOT_AUTHORIZED_STANZA_CLAUSES
             ),
-            "narrowing a claim that went stale must not relax the operations it governed",
+            "the boundary sits at use; a stanza forbidding setup contradicts ENVIRONMENT",
+        )
+        f.check(
+            "the unauthorized stanza no longer forbids setup that has since happened",
+            not [
+                clause
+                for clause in STALE_NOT_AUTHORIZED_CLAUSES
+                if clause
+                in _matrix_entry(
+                    claude_body, NOT_AUTHORIZED_STANZA_LINE, NOT_AUTHORIZED_STANZA_INDENT
+                )
+            ],
+            "a matrix that contradicts itself teaches a reader to trust neither half",
         )
 
     # -- 23. ADR-0016: the corrected private-binding failure boundaries -------
@@ -8282,7 +8390,7 @@ def main() -> int:
                 for claim in STALE_BINDING_ABSENCE_CLAIMS
                 if claim in " ".join(row.replace("**", "").split()).upper()
             ],
-            "'none exists' denied an architecture that ADR-0015 built and twice ran",
+            "'none exists' denied an architecture that ADR-0015 built and ran three times",
         )
         f.check(
             f"{name} carries exactly one ADR-0016 current-status row",

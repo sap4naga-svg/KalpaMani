@@ -316,7 +316,7 @@ live brokerage execution, real-money operation.
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
 | Stage 3A A2 / A3 — subscription / purchase | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, for qualification only |
-| Credential setup · provider API access · Services Data ingestion | **NOT AUTHORIZED** |
+| Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**. Application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** — a subscription existing is not permission to use it, and a configured secret is not permission to read it |
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
@@ -910,7 +910,8 @@ Secrets Manager network requests: ZERO
 S3 client constructions: ZERO   ·   S3 object operations: ZERO
 provider transport constructions: ZERO   ·   Sharadar/provider requests: ZERO
 credential retrieval: NONE   ·   qualification runs: ZERO
-Secrets Manager secret created or read: NONE
+owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT
+Secrets Manager secret reads by this repository: ZERO
 real bucket binding performed: NONE
 qualification-run execution surface: NONE
 provider-fetch operation: NONE   ·   object-publication operation: NONE

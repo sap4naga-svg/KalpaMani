@@ -404,7 +404,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
-| **Credential setup · provider API access · Services Data ingestion** | **NOT AUTHORIZED** — a subscription existing is not permission to use it |
+| **Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion** | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**. Application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** — a subscription existing is not permission to use it, and a configured secret is not permission to read it |
 | **PHASE 3B** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
@@ -929,7 +929,8 @@ Secrets Manager network requests: ZERO
 S3 client constructions: ZERO   ·   S3 object operations: ZERO
 provider transport constructions: ZERO   ·   Sharadar/provider requests: ZERO
 credential retrieval: NONE   ·   qualification runs: ZERO
-Secrets Manager secret created or read: NONE
+owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT
+Secrets Manager secret reads by this repository: ZERO
 real bucket binding performed: NONE
 qualification-run execution surface: NONE
 provider-fetch operation: NONE   ·   object-publication operation: NONE
@@ -1227,9 +1228,11 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                         ATTEMPT NOT AUTHORIZED, NEVER USED TO RETRIEVE A CREDENTIAL
                         OR RUN QUALIFICATION
 
-NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
-               a CONFIGURED credential source · real credential or bucket binding
-               SDK client construction anywhere but the ADR-0015 operator entry point,
+NOT AUTHORIZED application credential retrieval
+               Secrets Manager client construction or use, except during a separately
+                        authorized ADR-0015 binding-preflight attempt
+               real credential binding NONE · real bucket binding NONE
+               SDK/client construction outside the ADR-0015 operator boundary,
                         which has constructed none
                a qualification-run execution surface on the composition root
                a second composition root
@@ -1241,7 +1244,7 @@ NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets 
                further dependency installation or environment resynchronization --
                         separately gated; the declared range stays as declared and no
                         manifest or lock is changed
-               another binding-preflight attempt -- three have occurred and all refused;
+               a fourth binding-preflight attempt -- three have occurred and all refused;
                         neither correcting what a refusal says nor configuring a secret
                         is permission to produce another one
                broker/LEAN activity · Paper expansion · live trading
