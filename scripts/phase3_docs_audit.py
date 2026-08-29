@@ -1168,6 +1168,38 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
 )
 
+#: The environment-history prohibitions ADR-0016's forbidden-claims list gave up.
+#:
+#: Listed rather than counted in prose, so the number in that list's comment is
+#: derived from something checkable. The comment previously said "five" and
+#: enumerated six.
+RETIRED_ENVIRONMENT_PROHIBITIONS: Final[tuple[str, ...]] = (
+    "THE ENVIRONMENT WAS REPAIRED",
+    "THE ENVIRONMENT HAS BEEN REPAIRED",
+    "BOTO3 WAS INSTALLED",
+    "BOTO3 HAS BEEN INSTALLED",
+    "THE SDK WAS INSTALLED",
+    "THE DEPENDENCY WAS INSTALLED",
+)
+
+#: Number words this audit may write about itself. Small on purpose: the point is
+#: to derive the word from a length, not to build a spelling library.
+COUNT_WORDS: Final[dict[int, str]] = {4: "Four", 5: "Five", 6: "Six", 7: "Seven"}
+
+#: The prohibitions that survived, and must keep surviving.
+SURVIVING_PROHIBITIONS: Final[tuple[str, ...]] = (
+    "THE BINDING PREFLIGHT COMPLETED",
+    "THE BINDING PREFLIGHT SUCCEEDED",
+    "A CREDENTIAL WAS RETRIEVED",
+    "THE CREDENTIAL WAS RETRIEVED",
+    "GETSECRETVALUE WAS ISSUED",
+    "GETSECRETVALUE SUCCEEDED",
+    "A SECRET WAS READ",
+    "AUTHENTICATED QUALIFICATION IS AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION IS NOW AUTHORIZED",
+)
+
+
 #: What a usable environment must never be read as granting.
 #:
 #: "Technically ready" is a fact about a machine. Every entry here is a fact
@@ -1210,6 +1242,15 @@ STALE_ENVIRONMENT_CLAIMS: Final[tuple[str, ...]] = (
 
 #: The CLAUDE.md matrix stanza recording the environment.
 ENVIRONMENT_MATRIX_LINE: Final = "ENVIRONMENT    operational .venv and AWS SDK PRESENT / VERIFIED"
+
+#: The continuation indent of that stanza.
+#:
+#: A top-level stanza header sits at column zero and its continuations at
+#: fifteen, where an ADR entry *inside* a stanza sits at fifteen and continues at
+#: twenty-four. Passing the wrong one silently truncates the stanza to its header
+#: line, which is exactly how the first revision of the guard below came to
+#: search the whole document instead.
+ENVIRONMENT_MATRIX_INDENT: Final = 15
 
 #: What that stanza must state.
 ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
@@ -1344,9 +1385,11 @@ ADR_0016_BLANKET_COUNT_CLAIMS: Final[tuple[str, ...]] = (
 #: "another binding-preflight attempt: NOT AUTHORIZED" is required while "the
 #: binding preflight completed" is refused.
 ADR_0016_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
-    # Five environment-repair entries stood here and are gone: "the environment
-    # was repaired" / "has been repaired", "boto3 was installed" / "has been
-    # installed", "the SDK was installed" and "the dependency was installed".
+    # Six environment-repair entries stood here and are gone -- the six named in
+    # `RETIRED_ENVIRONMENT_PROHIBITIONS`. The first revision of this comment said
+    # "five" and then listed six, which is why the count is now derived from that
+    # tuple rather than written by hand.
+    #
     # Each was refused because it would have been false; a separately authorized
     # action has since made the installation true, and a guard that forbids a
     # true statement is answered by writing a vaguer one. The dangerous claims --
@@ -1559,14 +1602,27 @@ def _document_section(text: str, heading: str) -> str:
     return text[start:] if end == -1 else text[start:end]
 
 
-def _matrix_entry(text: str, first_line: str) -> str:
-    """One ``IN FORCE`` matrix entry, its continuation lines joined onto it.
+def _matrix_entry(text: str, first_line: str, continuation_indent: int = 24) -> str:
+    """One matrix entry or stanza, its continuation lines joined onto it.
 
-    Entries begin at fifteen spaces and continue at twenty-four, so the
-    continuation test is an indentation test rather than a guess at where the
-    next entry starts. Returns ``""`` when the entry is missing **or**
-    duplicated -- a duplicated status line is its own defect, and a guard that
-    silently read the first of two would not see it.
+    Returns ``""`` when the entry is missing **or** duplicated -- a duplicated
+    status line is its own defect, and a guard that silently read the first of
+    two would not see it.
+
+    ``continuation_indent`` exists because the matrix holds two shapes, and the
+    default is the one this helper was written for:
+
+    * an **ADR entry inside a stanza** begins at fifteen spaces and continues at
+      twenty-four -- ADR-0015 and ADR-0016, and the default serves them
+      unchanged;
+    * a **top-level stanza** begins at column zero and continues at fifteen --
+      ``ENVIRONMENT``, whose continuations the twenty-four-space test rejects,
+      so the guard for it read only its header line and every clause below was
+      invisible to it.
+
+    The parameter is additive and defaulted: both existing callers pass nothing
+    and get byte-identical results. Reindenting the stanza instead was not open
+    -- ``CLAUDE.md`` is byte-identical across this correction by construction.
     """
     lines = text.splitlines()
     starts = [index for index, line in enumerate(lines) if line.strip().startswith(first_line)]
@@ -1574,7 +1630,7 @@ def _matrix_entry(text: str, first_line: str) -> str:
         return ""
     collected = [lines[starts[0]].strip()]
     for line in lines[starts[0] + 1 :]:
-        if not line.startswith(" " * 24) or not line.strip():
+        if not line.startswith(" " * continuation_indent) or not line.strip():
             break
         collected.append(line.strip())
     return " ".join(collected)
@@ -7404,9 +7460,24 @@ def main() -> int:
             claude_body.count(ENVIRONMENT_MATRIX_LINE) == 1,
             "two stanzas for one machine is two places for it to go stale",
         )
+        environment_stanza = _matrix_entry(
+            claude_body, ENVIRONMENT_MATRIX_LINE, ENVIRONMENT_MATRIX_INDENT
+        )
+        f.check(
+            "the environment stanza is extractable as a bounded entry",
+            bool(environment_stanza),
+            "an unbounded stanza cannot be told apart from the rest of the document",
+        )
         f.check(
             "the environment stanza records the fingerprint and what stays gated",
-            all(clause in claude_body for clause in ENVIRONMENT_MATRIX_CLAUSES),
+            # Scoped to the stanza, not to `claude_body`. The first revision of
+            # this guard searched the whole document, and several of these
+            # clauses also appear in the narrative environment section -- so a
+            # clause could vanish from the matrix while its duplicate elsewhere
+            # kept the guard green. That is the failure the entry-scoped ADR-0015
+            # and ADR-0016 guards were already written to avoid.
+            bool(environment_stanza)
+            and all(clause in environment_stanza for clause in ENVIRONMENT_MATRIX_CLAUSES),
             "the matrix states the boundary beside the state, or it states half a fact",
         )
         f.check(
@@ -8178,6 +8249,17 @@ def main() -> int:
             not [claim for claim in ADR_0016_FORBIDDEN_CLAIMS if claim in upper],
             "each is an affirmative claim about something that has not happened",
         )
+
+    f.check(
+        "the retired-prohibition count this audit states about itself is derived, not written",
+        (
+            f"{COUNT_WORDS[len(RETIRED_ENVIRONMENT_PROHIBITIONS)]} environment-repair entries "
+            "stood here and are gone" in read(Path(__file__).resolve())
+        )
+        and not [p for p in RETIRED_ENVIRONMENT_PROHIBITIONS if p in ADR_0016_FORBIDDEN_CLAIMS]
+        and all(p in ADR_0016_FORBIDDEN_CLAIMS for p in SURVIVING_PROHIBITIONS),
+        "the comment said five and listed six; the word now comes from the tuple's length",
+    )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
