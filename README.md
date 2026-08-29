@@ -338,7 +338,7 @@ live brokerage execution, real-money operation.
 | Real bucket binding · SDK client construction · credential source | Real bucket binding **NONE**, operational secret-identifier configuration **UNKNOWN**, Secrets Manager client constructions **ZERO**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked twice under separate authorization, and neither invocation constructed a client or created a binding. Another binding-preflight attempt **NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
 | [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Two separately authorized attempts occurred and both refused**, so **AWS identity-gate activity occurred** and total AWS activity was not zero. Operational secret-identifier configuration **UNKNOWN**; Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, S3 object operations **ZERO**, Sharadar/provider requests **ZERO**, credential retrieval **NONE**, qualification runs **ZERO**, real bucket binding **NONE**. Another attempt and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
-| [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, real credential retrieval **NONE**, operational environment synchronization **NOT AUTHORIZED**, another binding-preflight attempt **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
+| [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, real credential retrieval **NONE**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, another binding-preflight attempt **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
 | Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -756,7 +756,8 @@ Secrets Manager network requests: ZERO
 S3 object operations: ZERO   ·   Sharadar/provider requests: ZERO
 AWS identity-gate activity: OCCURRED -- total AWS activity was not zero
 real credential retrieval: NONE
-operational environment synchronized: NOT DONE, NOT AUTHORIZED
+operational environment synchronized: DONE AND VERIFIED -- see the environment section
+Python dependency lock: ABSENT   ·   environment: RANGE-CONFORMANT, NOT LOCK-CONFORMANT
 another binding-preflight attempt: NOT AUTHORIZED
 ```
 
@@ -787,9 +788,12 @@ which had already passed on that attempt.
 **Two findings, and only one belongs in this repository.** The absent SDK is an operational-environment
 drift finding, recorded as evidence; the declared `boto3>=1.36.0,<2.0` runtime dependency is unchanged
 and was already correct. The mislabelling is the implementation defect, and it is what is corrected.
-**The dependency was deliberately not installed** — installing it would have made the symptom
-disappear and left the defect in place, on a path that only runs when something has already gone
-wrong. Synchronizing that environment is a separate action under separate authorization.
+**The dependency was deliberately not installed *by this correction*** — installing it would have
+made the symptom disappear and left the defect in place, on a path that only runs when something has
+already gone wrong. That was the right order, and it has since been followed: a **separately
+authorized environment action installed the AWS SDK afterwards**, and a later synchronization review
+installed nothing. Both are recorded in *The operational environment* above; neither changes anything
+this ADR decided.
 
 **Nothing else moved.** Secret-identifier access, SDK construction and credential retrieval all still
 sit behind the identity and bucket gates. The guarded secrets-boundary import runs before the
@@ -801,6 +805,77 @@ path, `reveal()` at **zero** during preflight, offline composition only, no prov
 and no object-publication operation are all unchanged. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**,
 ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live
 trading **HARD-DISABLED**.
+
+### The operational environment — synchronized and verified, and not reproducibly locked
+
+The local operational `.venv` exists and is usable, and the AWS SDK this repository has declared since
+[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) is **present and
+locally verified**. That is a new fact: the second authorized binding-preflight attempt refused
+precisely because this environment lacked it.
+
+```
+operational .venv                     EXISTS AND USABLE
+interpreter                           Python 3.11.9
+boto3                                 1.43.83   (declared range >=1.36.0,<2.0)
+botocore                              1.43.83   (boto3 requires >=1.43.83,<1.44.0)
+importable and mutually compatible    YES
+pip check                             no broken requirements
+boto3.client                          EXISTS AND CALLABLE -- not invoked during verification
+synthetic/local validation suite      PASSED in full
+Python dependency lock                ABSENT
+conformance                           RANGE-CONFORMANT, NOT LOCK-CONFORMANT
+one future bounded attempt            TECHNICALLY READY FOR SEPARATE AUTHORIZATION
+```
+
+**The chronology matters, and these are four different events.** Collapsing them is how a status
+document starts asserting that an installation nobody authorized took place, or that a review did
+work it deliberately did not do.
+
+| | |
+|---|---|
+| **the historical refusal** | the second authorized binding-preflight attempt refused because this environment lacked the AWS SDK. That was true then, ADR-0016 records it, and it is not rewritten |
+| **an earlier, separately authorized environment action** | installed the AWS SDK using the range already declared in `pyproject.toml`, resolving `boto3 1.43.83` and `botocore 1.43.83` with five transitive packages. It changed no repository file |
+| **the latest environment-synchronization review** | **installed nothing.** Its authorization required a frozen/locked operation, and this repository has no Python dependency lock, so that path was not executable. It verified the already-populated environment and made **no change** |
+| **now** | the environment is verified and usable — and **not reproducible from tracked metadata** |
+
+**No Python dependency lock currently exists.** The installed environment is therefore
+**range-conformant, not lock-conformant**: every version satisfies what `pyproject.toml` declares, and
+nothing pins which version a rebuild would choose. A clean rebuild on another date could resolve
+different, still-compatible package versions.
+
+**Introducing a Python dependency lock is DEFERRED to a separately reviewed dependency-governance
+slice.** No lock, manifest or dependency declaration is changed here, and the missing lock is
+**not** resolved by recording it. For **one** future bounded binding-preflight diagnostic, the exact
+validated fingerprint above may be treated as **provisionally acceptable**. That provisional
+acceptance is **not** approval for production qualification, ingestion, CONTROL publication or live
+operation.
+
+**A usable environment is not a permission.** Everything the earlier slices established is unchanged,
+and the boundaries below are restated rather than relaxed:
+
+```
+binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOUNDARY
+real bucket binding: NONE   ·   operational secret-identifier configuration: UNKNOWN
+Secrets Manager client constructions: ZERO   ·   get_secret_value invocations: ZERO
+Secrets Manager network requests: ZERO   ·   S3 object operations: ZERO
+Sharadar/provider requests: ZERO   ·   credential retrieved: NONE   ·   qualification runs: ZERO
+AWS credential-provider chain invoked during environment verification: NONE
+AWS requests during environment verification: ZERO
+binding preflight or composition preflight run: NEITHER
+another binding-preflight attempt: NOT AUTHORIZED
+credential access: NOT AUTHORIZED   ·   authenticated qualification: NOT AUTHORIZED
+further dependency installation or environment resynchronization: SEPARATELY GATED
+```
+
+Environment verification imported `boto3` and `botocore` with socket constructors replaced by raising
+stubs and `builtins.open` recording every path opened: **no socket was created, no file under an
+`.aws` directory was opened, `boto3.DEFAULT_SESSION` stayed `None`**, and `boto3.client` was checked
+for existence by attribute lookup and never called. No environment-variable value, AWS profile, SSO
+cache, credential, account identifier, bucket value or secret identifier was read.
+
+**TECHNICALLY READY FOR SEPARATE AUTHORIZATION** — and that is a statement about the machine, not a
+permission. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**,
+Phase 3 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
 
 ### The Sharadar private-binding preflight — refused by default, and twice refused in operation
 
