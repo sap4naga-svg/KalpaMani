@@ -28,7 +28,9 @@ client construction, composition validation or qualification execution.
     third attempt       REFUSED_SECRET_IDENTIFIER at the identifier source
     fourth attempt      REFUSED_IDENTITY at the AWS identity gate
     AWS activity        NOT ZERO identity-gate activity occurred on the attempts
-    fourth-attempt AWS network requests: UNKNOWN -- no diagnosis in the attempt
+    fourth-attempt identity-gate invocations: ONE -- the gate runs its own STS
+    fourth-attempt standalone diagnostic commands: ZERO
+    fourth-attempt AWS network requests: UNKNOWN -- no numeric count established
     post-fourth identity diagnosis: COMPLETED
                                  REFUSED_SSO_SESSION_MISSING_OR_EXPIRED, one
                                  command, exit 255, its own network count
@@ -103,13 +105,22 @@ revealed.**
 
 **Whether the fourth attempt sent an AWS network request is UNKNOWN.** The gate
 was invoked once and did not pass; a gate can fail before anything leaves the
-machine, so neither zero nor one may be claimed here. **No diagnosis was
-performed during the attempt itself** -- it made no ``sts:GetCallerIdentity``
-probe and no SSO inspection -- so nothing *the attempt did* establishes why its
-own gate refused.
+machine, so neither zero nor one may be claimed here.
 
-**A separately authorized diagnosis has since answered that, and it is a
-distinct event** from the one that followed the first attempt. Run after the
+**No standalone diagnosis was performed as part of attempt 4** -- and that is
+narrower than an earlier revision of this docstring claimed. **Its governed
+identity gate invoked its own STS identity operation once**:
+``identity_gate()`` in ``scripts/aws_foundation_verify.py`` runs
+``sts get-caller-identity`` itself, so it is false to say the attempt made no
+STS identity call. What it did **not** do is run an *additional* diagnostic
+command or any SSO inspection, and no authentication repair occurred during it.
+Nothing the attempt did **beyond its own gate** establishes why that gate
+refused, and the gate's internal operation is **not** the later standalone
+diagnosis.
+
+**A separately authorized diagnosis has since answered that. It is an
+additional standalone command** -- neither the gate's own STS operation above,
+nor the diagnosis that followed the first attempt. Run after the
 fourth attempt, it invoked one process and one ``aws sts get-caller-identity``
 command, which exited **255** and classified as
 **REFUSED_SSO_SESSION_MISSING_OR_EXPIRED**: the governed SSO session or cached
@@ -124,7 +135,10 @@ authentication-repair actions zero, fifth binding-preflight attempts zero.**
 That diagnosis pinned the governed profile in its **child** process, from the
 ``EXPECTED_PROFILE`` constant below, because a shell-level pin does not survive
 across separate tool invocations and an unpinned call would fall back to an
-unrelated default profile. The value was never printed or written down.
+unrelated default profile. That constant already existed in tracked executable
+source, so the claim is narrow: the diagnosis did not print, log, disclose or
+newly write the value; it used the governed constant already present in tracked
+source.
 
 **Further** AWS authentication diagnosis is not authorized, and an AWS SSO
 refresh or login is separately gated: classifying a session is not permission to

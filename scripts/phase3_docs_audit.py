@@ -1001,7 +1001,9 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
     "REFUSED_IDENTITY",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
     "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ARE UNKNOWN",
-    "POST-FOURTH AWS IDENTITY DIAGNOSIS HAS SINCE COMPLETED",
+    "POST-FOURTH STANDALONE AWS IDENTITY DIAGNOSIS HAS SINCE COMPLETED",
+    "NO STANDALONE DIAGNOSIS WAS PERFORMED AS PART OF THE ATTEMPT",
+    "INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
     "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "REACHED NEITHER LICENSED-BUCKET RESOLUTION NOR THE SECRET-IDENTIFIER SOURCE",
     "DID NOT READ `KALPAMANI_SHARADAR_SECRET_ID`",
@@ -1382,7 +1384,10 @@ FOURTH_ATTEMPT_ANCHOR: Final = (
 #: word alone would let a reader assume the run got as far as the third did.
 FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "fourth attempt        REFUSED_IDENTITY at the AWS identity gate",
-    "AWS network requests on the fourth attempt: UNKNOWN -- no diagnosis during the attempt",
+    "identity-gate invocations on the fourth attempt: ONE -- the gate runs its own STS "
+    "identity operation",
+    "standalone diagnostic commands during the fourth attempt: ZERO",
+    "AWS network requests on the fourth attempt: UNKNOWN -- no numeric count is established",
     "owner credential setup occurred AFTER the third attempt and BEFORE the fourth",
     "identifier-source resolutions on the fourth attempt: ZERO",
     "licensed-bucket resolutions on the fourth attempt: ZERO",
@@ -1426,7 +1431,8 @@ CHRONOLOGY_ORDER: Final[tuple[str, ...]] = (
 FOURTH_ATTEMPT_NETWORK_UNKNOWN: Final[tuple[str, ...]] = (
     "Whether the fourth attempt sent an AWS network request is UNKNOWN",
     "neither zero nor one network request may be claimed",
-    "No diagnosis was performed during the attempt itself",
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
 )
 
 #: Definite network-request counts the fourth attempt does not support.
@@ -1604,7 +1610,8 @@ POST_FOURTH_DIAGNOSIS_COUNTS: Final[tuple[str, ...]] = (
 
 #: What the diagnosis narrative must state, not merely tabulate.
 POST_FOURTH_DIAGNOSIS_HISTORY: Final[tuple[str, ...]] = (
-    "A separately authorized diagnosis has since answered that, and it is a distinct event",
+    "A separately authorized diagnosis has since answered that. It is an additional standalone",
+    "neither the gate's own STS operation above, nor the diagnosis that followed the first",
     "one process and one `aws sts get-caller-identity` command, which exited 255",
     "classified as `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
     "It does not distinguish missing from expired",
@@ -1627,7 +1634,9 @@ PROFILE_PIN_FACTS: Final[tuple[str, ...]] = (
     "an unpinned CLI call would have fallen back to an unrelated default profile",
     "statically parsing the repository-owned `EXPECTED_PROFILE` constant",
     "the entry-point module was neither imported nor executed",
-    "not printed, logged or written into any document",
+    "That constant already existed in tracked executable source",
+    "not print, log, disclose or newly write it",
+    "added it to no document, comment, output or new file",
     "This is the governed profile, not an alternate one",
 )
 
@@ -1699,16 +1708,93 @@ DIAGNOSIS_OVERCLAIMS: Final[tuple[str, ...]] = (
 #: What the entry point's own documentation must say about the diagnosis.
 BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
     "post-fourth identity diagnosis: COMPLETED",
-    "No diagnosis was performed during the attempt itself",
-    "A separately authorized diagnosis has since answered that, and it is a distinct event",
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
+    "A separately authorized diagnosis has since answered that. It is an additional",
+    "standalone command",
     "one process and one ``aws sts get-caller-identity`` command, which exited 255",
     "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "It does not distinguish missing from expired",
     "SSO-login invocations zero, authentication-repair actions zero, fifth binding-preflight "
     "attempts zero.",
     "because a shell-level pin does not survive across separate tool invocations",
-    "The value was never printed or written down.",
+    "That constant already existed in tracked executable source",
+    "did not print, log, disclose or newly write the value",
     "Further AWS authentication diagnosis is not authorized",
+)
+
+#: The gate's own STS operation, kept apart from the standalone diagnosis.
+#:
+#: ``identity_gate()`` in ``scripts/aws_foundation_verify.py`` runs
+#: ``sts get-caller-identity`` itself. Attempt 4 invoked that gate once, so the
+#: attempt **did** make an STS identity call -- what it did not make was an
+#: *additional* diagnostic command. An earlier revision wrote the stronger claim
+#: and it was false against the repository's own unchanged verifier.
+GATE_VERSUS_DIAGNOSIS: Final[tuple[str, ...]] = (
+    "No standalone diagnosis was performed as part of attempt 4",
+    "Its governed identity gate invoked its own STS identity operation once",
+    "`identity_gate()` in `scripts/aws_foundation_verify.py` runs `sts get-caller-identity` itself",
+    "it is false to say the attempt made no STS identity call",
+    "run an *additional* diagnostic command or any SSO inspection",
+    "the gate's internal operation is not the later standalone diagnosis",
+)
+
+#: Claims the governed verifier's own source contradicts.
+#:
+#: Every entry asserts that attempt 4 issued no STS identity operation at all.
+#: The gate issues one by construction, so each is refuted by
+#: ``scripts/aws_foundation_verify.py`` -- which this correction does not edit,
+#: because it is the evidence.
+#:
+#: The accurate scoped statements are required by :data:`GATE_VERSUS_DIAGNOSIS`
+#: and are deliberately not matched here: "no *standalone* diagnosis" stays
+#: sayable, and only the unqualified forms are refused.
+STALE_GATE_PROBE_CLAIMS: Final[tuple[str, ...]] = (
+    "IT MADE NO `STS:GETCALLERIDENTITY` PROBE",
+    "IT MADE NO ``STS:GETCALLERIDENTITY`` PROBE",
+    "MADE NO STS:GETCALLERIDENTITY PROBE",
+    "NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF",
+    "THE IDENTITY GATE MADE NO STS",
+    "THE GATE MADE NO STS IDENTITY CALL",
+    "NO STS COMMAND OCCURRED DURING ATTEMPT 4",
+    "NO STS IDENTITY OPERATION OCCURRED DURING ATTEMPT 4",
+    "ATTEMPT 4 ISSUED NO STS",
+    "THE FOURTH ATTEMPT MADE NO STS",
+)
+
+#: Wording that merges the gate's operation with the standalone diagnosis, or
+#: that adds them into a number.
+#:
+#: They are two operations with two scopes and no shared count. A total would be
+#: a numeric claim about AWS traffic that neither event establishes.
+GATE_DIAGNOSIS_CONFLATIONS: Final[tuple[str, ...]] = (
+    "THE IDENTITY GATE WAS THE DIAGNOSIS",
+    "THE GATE'S STS CALL WAS THE DIAGNOSIS",
+    "THE GATE OPERATION IS THE STANDALONE DIAGNOSIS",
+    "TWO STANDALONE DIAGNOSES OCCURRED AFTER THE FOURTH",
+    "TWO STANDALONE POST-FOURTH DIAGNOSES",
+    "TOTAL AWS NETWORK REQUESTS: TWO",
+    "TOTAL AWS NETWORK REQUESTS: ONE",
+    "COMBINED AWS NETWORK REQUESTS",
+    "TWO AWS NETWORK REQUESTS IN TOTAL",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ONE",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ZERO",
+)
+
+#: The superseded unqualified profile-disclosure sentence.
+#:
+#: ``EXPECTED_PROFILE`` already existed in tracked executable source before the
+#: diagnosis ran, so "never written down" was false about the repository. What the
+#: diagnosis did -- and did not -- do is the narrower supportable claim.
+STALE_PROFILE_DISCLOSURE_CLAIMS: Final[tuple[str, ...]] = (
+    "THE VALUE WAS NEVER PRINTED OR WRITTEN DOWN",
+    "THE VALUE WAS NEVER WRITTEN DOWN",
+    "THE VALUE HAS NEVER BEEN WRITTEN DOWN",
+    "THE PROFILE VALUE APPEARS NOWHERE",
+    "THE PROFILE VALUE EXISTS NOWHERE IN TRACKED SOURCE",
+    "NOT PRINTED, LOGGED OR WRITTEN INTO ANY DOCUMENT",
+    "THE DIAGNOSIS WROTE THE PROFILE VALUE",
+    "THE DIAGNOSIS NEWLY WROTE THE VALUE",
 )
 
 #: What must stay unauthorized now that a fourth attempt has happened.
@@ -1724,7 +1810,9 @@ BINDING_SOURCE_FOURTH: Final[tuple[str, ...]] = (
     "invoked four times under separate authorization",
     "the fourth refused at the AWS identity gate, reaching neither",
     "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
-    "fourth-attempt AWS network requests: UNKNOWN -- no diagnosis in the attempt",
+    "fourth-attempt identity-gate invocations: ONE -- the gate runs its own STS",
+    "fourth-attempt standalone diagnostic commands: ZERO",
+    "fourth-attempt AWS network requests: UNKNOWN -- no numeric count established",
     "Four later, separately authorized operator attempts did execute it, and all four refused",
     "Whether the fourth attempt sent an AWS network request is UNKNOWN.",
     "neither zero nor one may be claimed here",
@@ -1932,7 +2020,8 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
     "FOUR AUTHORIZED ATTEMPTS TO DATE, ALL REFUSED",
     "FOURTH ATTEMPT REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
-    "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN -- NO DIAGNOSIS DURING THE ATTEMPT",
+    "FOURTH-ATTEMPT IDENTITY-GATE INVOCATIONS ONE -- THE GATE RUNS ITS OWN STS IDENTITY "
+    "OPERATION; STANDALONE DIAGNOSTIC COMMANDS ZERO; AWS NETWORK REQUESTS UNKNOWN",
     # Three clauses rather than one long one: the stanza is joined before it is
     # searched, so each is independently required and each fails on its own.
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
@@ -7956,6 +8045,33 @@ def main() -> int:
             "one diagnosis ran; only a further one is gated",
         )
         f.check(
+            "the entry point claims no absent STS identity call for attempt 4",
+            not [
+                claim
+                for claim in STALE_GATE_PROBE_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "its own gate runs sts get-caller-identity; the docstring may not deny it",
+        )
+        f.check(
+            "the entry point neither merges the two operations nor totals them",
+            not [
+                claim
+                for claim in GATE_DIAGNOSIS_CONFLATIONS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "the gate's call and the standalone command are separate, uncounted events",
+        )
+        f.check(
+            "the entry point makes no unqualified profile-disclosure claim",
+            not [
+                claim
+                for claim in STALE_PROFILE_DISCLOSURE_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "EXPECTED_PROFILE already existed in tracked source before the diagnosis ran",
+        )
+        f.check(
             "the entry point carries no stale three-attempt claim",
             not [
                 claim
@@ -8472,9 +8588,30 @@ def main() -> int:
             "one has completed; the attempt-time statement stays and the blanket one cannot",
         )
         f.check(
-            f"{name} still records that no diagnosis ran during attempt 4 itself",
-            "No diagnosis was performed during the attempt itself" in flat,
-            "the attempt made no probe, and that remains true after a later diagnosis",
+            f"{name} scopes the attempt-time statement to standalone diagnosis",
+            "No standalone diagnosis was performed as part of attempt 4" in flat
+            and "Its governed identity gate invoked its own STS identity operation once" in flat,
+            "the gate runs sts get-caller-identity itself; only an extra command was absent",
+        )
+        f.check(
+            f"{name} distinguishes the gate's own STS operation from the standalone diagnosis",
+            all(phrase in binding_flat for phrase in GATE_VERSUS_DIAGNOSIS),
+            "one is the gate's, one is a separate command, and neither is the other",
+        )
+        f.check(
+            f"{name} claims no absent STS identity call for attempt 4",
+            not [claim for claim in STALE_GATE_PROBE_CLAIMS if claim in flat.upper()],
+            "the governed verifier issues one by construction; the source refutes it",
+        )
+        f.check(
+            f"{name} neither merges the two operations nor totals them",
+            not [claim for claim in GATE_DIAGNOSIS_CONFLATIONS if claim in flat.upper()],
+            "two scopes, no shared count, and no number either establishes",
+        )
+        f.check(
+            f"{name} makes no unqualified claim about the profile value never being written",
+            not [claim for claim in STALE_PROFILE_DISCLOSURE_CLAIMS if claim in flat.upper()],
+            "the governed constant predates the diagnosis in tracked source",
         )
         f.check(
             f"{name} claims nothing the diagnosis did not establish",
