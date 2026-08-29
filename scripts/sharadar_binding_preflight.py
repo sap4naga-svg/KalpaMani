@@ -10,10 +10,10 @@ SDK clients, and nothing else under ``src/`` or ``scripts/`` may.
 That is a statement about *where* those dependencies may be resolved, not a claim
 that none of it exists. It was written, reviewed and tested while refused by
 default, rather than under pressure beside an authorization to run -- and it has
-since been **invoked twice under separate authorization**. The second attempt
-**reached bucket resolution**; neither attempt reached secret-identifier reading,
-Secrets Manager client construction, composition validation or qualification
-execution.
+since been **invoked three times under separate authorization**. The second
+attempt **reached bucket resolution**; the third **reached the fixed
+secret-identifier source** and refused there. No attempt reached Secrets Manager
+client construction, composition validation or qualification execution.
 
 ::
 
@@ -22,21 +22,24 @@ execution.
     authorization       ONE      --i-am-the-operator-authorizing-binding-preflight
     what it authorizes  BINDING PREFLIGHT ONLY -- never a qualification run
     operations reached  preflight_qualification_composition, and nothing else
-    authorized attempts TWO      both refused; neither reached a Secrets Manager
+    authorized attempts THREE    all refused; none reached a Secrets Manager
                                  client, S3, Sharadar, the composition or a run
+    third attempt       REFUSED_SECRET_IDENTIFIER at the identifier source
     AWS activity        NOT ZERO identity-gate activity occurred on the attempts
     Secrets Manager     ZERO     client constructions, get_secret_value
                                  invocations and network requests
     S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
+    S3 clients          ZERO     constructed  ·  provider transports: ZERO
     credential          NONE     retrieved  ·  qualification runs: ZERO
+    secret identifier   OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT
 
 What has actually happened, and what has not
 ============================================
 
-**Writing and merging this file executed nothing.** Two later, separately
-authorized operator attempts did execute it, and both refused. They are different
-facts and this docstring keeps them apart -- an earlier revision said only "never
-run", which was true of the merge and false of the operation.
+**Writing and merging this file executed nothing.** Three later, separately
+authorized operator attempts did execute it, and all three refused. They are
+different facts and this docstring keeps them apart -- an earlier revision said
+only "never run", which was true of the merge and false of the operation.
 
 ======================================  ====================================
 event                                   outcome
@@ -51,24 +54,46 @@ AWS SSO login                           bucket resolution, then refused
                                         **before constructing a Secrets
                                         Manager client** -- the project
                                         environment lacked the AWS SDK
+separately authorized environment       installed and verified the AWS SDK;
+action                                  no repository file changed
+third authorized attempt                passed authorization, the profile
+                                        contract, the identity gate and
+                                        licensed-bucket resolution, reached
+                                        the fixed secret-identifier source
+                                        **exactly once** and refused with
+                                        ``REFUSED_SECRET_IDENTIFIER``
+owner credential setup, after the       a Secrets Manager secret created for
+third attempt                           the existing Sharadar API key, and
+                                        ``KALPAMANI_SHARADAR_SECRET_ID``
+                                        configured -- owner-attested, and
+                                        **not verified by this entry point**
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
 What stayed at zero is narrower, and is stated in scope: Secrets Manager client
 constructions, ``get_secret_value`` invocations and Secrets Manager network
-requests; S3 object operations; Sharadar and provider requests. Neither attempt
-reached composition validation or a qualification run, and **no credential was
-retrieved or revealed.**
+requests; S3 client constructions and object operations; provider transport
+constructions; Sharadar and provider requests. No attempt reached composition
+validation or a qualification run, and **no credential was retrieved or
+revealed.**
 
-Whether ``KALPAMANI_SHARADAR_SECRET_ID`` is operationally configured is
-**UNKNOWN**: the second attempt refused on the dependency path without reading
-it.
+``KALPAMANI_SHARADAR_SECRET_ID`` is **OWNER-CONFIGURED / NOT YET VERIFIED BY THE
+ENTRY POINT**. It was **UNKNOWN** at the second attempt, which refused on the
+dependency path without reading it, and still UNKNOWN at the third, which
+resolved the fixed source exactly once and refused because no usable identifier
+came back. The owner created the secret and configured the variable **only
+afterwards**, so no attempt could have seen it. Owner attestation is not
+verification by this file: it has not resolved the identifier, has not
+constructed a Secrets Manager client, has not invoked ``get_secret_value`` and
+has retrieved no credential.
 
-**Private credential setup**, **another binding preflight** and an
+**Credential access by this application**, **a fourth binding preflight** and an
 **authenticated qualification run** remain three separate decisions, each still
-**NOT AUTHORIZED**. This file existing does not create a secret, does not read
-one, and cannot execute a qualification run -- there is no code here that could,
-and a static guard keeps it that way.
+**NOT AUTHORIZED**, and each requires separate written authorization. This file
+existing does not create a secret, does not read one, and cannot execute a
+qualification run -- there is no code here that could, and a static guard keeps
+it that way. Owner-side secret creation happened outside this repository and
+grants none of the three.
 
 Refusing by default, and why the flag is spelled like that
 ==========================================================

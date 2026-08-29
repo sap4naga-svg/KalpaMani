@@ -903,14 +903,17 @@ BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
 #:
 #: The row said "NOT AUTHORIZED -- none exists, and a static test keeps it that
 #: way". A credential-source boundary does exist, the operator entry point is the
-#: one place permitted to construct an SDK client, and it has been invoked twice.
+#: one place permitted to construct an SDK client, and it has been invoked three times.
 #: The row has to separate **architectural existence** from **operational
 #: execution**, because the old wording denied both at once.
 BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
     "REAL BUCKET BINDING NONE",
-    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
+    "BY THE ENTRY POINT",
     "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
     "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
+    "INVOKED THREE TIMES UNDER SEPARATE AUTHORIZATION",
+    "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
     "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
@@ -940,9 +943,10 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
     "by injection and cannot discover an ambient one",
     "This file is the sole boundary that can",
     "not a claim that none of it exists",
-    "invoked twice under separate authorization",
+    "invoked three times under separate authorization",
     "reached bucket resolution",
-    "neither attempt reached secret-identifier reading",
+    "reached the fixed secret-identifier source",
+    "No attempt reached Secrets Manager client construction",
 )
 
 
@@ -954,8 +958,8 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
 #: must never reach `docs/decisions/`, where an accepted ADR's text is immutable
 #: and legitimately records what was true when it was written.
 ADR_0015_SECTION_HEADING: Final = (
-    "### The Sharadar private-binding preflight — refused by default, and twice refused in "
-    "operation"
+    "### The Sharadar private-binding preflight — refused by default, and three times refused "
+    "in operation"
 )
 ADR_0016_SECTION_HEADING: Final = (
     "### The private-binding failure boundaries — corrected, and the environment that is not"
@@ -989,13 +993,18 @@ STALE_PREFLIGHT_CLAIMS: Final[tuple[str, ...]] = (
 #: The registry pins that ADR-0015 merged. This pins the operational history the
 #: merge did not create and two later attempts did.
 ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
-    "TWO SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND BOTH REFUSED",
+    "THREE SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND ALL THREE REFUSED",
+    "REFUSED_SECRET_IDENTIFIER",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
-    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
+    "BY THE ENTRY POINT",
+    "OWNER SETUP HAVING OCCURRED AFTER THE THIRD ATTEMPT",
     "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
     "INVOCATIONS ZERO",
     "SECRETS MANAGER NETWORK REQUESTS ZERO",
+    "S3 CLIENT CONSTRUCTIONS ZERO",
     "S3 OBJECT OPERATIONS ZERO",
+    "PROVIDER TRANSPORT CONSTRUCTIONS ZERO",
     "SHARADAR/PROVIDER REQUESTS ZERO",
     "CREDENTIAL RETRIEVAL NONE",
     "QUALIFICATION RUNS ZERO",
@@ -1003,13 +1012,19 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
 
 #: The scoped counts the ADR-0015 section's fenced block must carry.
 ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
-    "authorized attempts   TWO",
+    "authorized attempts   THREE",
+    "third attempt         REFUSED_SECRET_IDENTIFIER",
     "AWS identity-gate activity: OCCURRED",
-    "operational secret-identifier configuration: UNKNOWN",
+    "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
+    "BY THE ENTRY POINT",
+    "owner credential setup occurred AFTER the third attempt",
+    "identifier-source resolutions on the third attempt: ONE",
     "Secrets Manager client constructions: ZERO",
     "get_secret_value invocations: ZERO",
     "Secrets Manager network requests: ZERO",
+    "S3 client constructions: ZERO",
     "S3 object operations: ZERO",
+    "provider transport constructions: ZERO",
     "Sharadar/provider requests: ZERO",
     "credential retrieval: NONE",
     "qualification runs: ZERO",
@@ -1017,12 +1032,17 @@ ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
 
 #: The history the ADR-0015 section's prose must state, not merely tabulate.
 ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
-    "Two later, separately authorized operator attempts",
+    "Three later, separately authorized operator attempts",
     "reached the AWS identity gate and refused there",
     "sts:GetCallerIdentity",
     "refused before constructing a Secrets Manager client",
+    "reached the fixed secret-identifier source exactly once",
+    "refused there with `REFUSED_SECRET_IDENTIFIER`",
     "AWS identity-gate activity occurred, so total AWS activity was not zero",
-    "remains UNKNOWN",
+    "UNKNOWN at the time of the second attempt",
+    "still UNKNOWN at the time of the third attempt",
+    "the owner attests that",
+    "Owner-attested is not entry-point verified",
     "A real binding preflight is no longer a purely future event",
     "Authenticated qualification remains NOT AUTHORIZED and has never run",
 )
@@ -1030,7 +1050,10 @@ ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
 #: What the corrected ADR-0015 IN FORCE matrix entry must state.
 ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING PREFLIGHT ONLY",
-    "TWO SEPARATELY AUTHORIZED ATTEMPTS, BOTH REFUSED",
+    "THREE SEPARATELY AUTHORIZED ATTEMPTS, ALL REFUSED",
+    "THE THIRD WITH REFUSED_SECRET_IDENTIFIER AT THE SECRET-IDENTIFIER SOURCE",
+    "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
+    "SET UP AFTER THE THIRD ATTEMPT",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
     "NO SECRETS MANAGER CLIENT, CREDENTIAL, S3 OBJECT OPERATION, SHARADAR REQUEST OR "
     "QUALIFICATION RUN",
@@ -1038,12 +1061,16 @@ ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
 
 #: What the entry point's own documentation must state about what has happened.
 BINDING_SOURCE_HISTORY: Final[tuple[str, ...]] = (
-    "authorized attempts TWO",
+    "authorized attempts THREE",
+    "third attempt REFUSED_SECRET_IDENTIFIER at the identifier source",
     "AWS activity NOT ZERO",
-    "Two later, separately authorized operator attempts did execute it",
+    "Three later, separately authorized operator attempts did execute it",
     "before constructing a Secrets Manager client",
+    "reached the fixed secret-identifier source exactly once",
     "total AWS activity was not zero",
-    "is operationally configured is",
+    "OWNER-CONFIGURED / NOT YET VERIFIED BY THE",
+    "so no attempt could have seen it",
+    "each requires separate written authorization",
 )
 
 
@@ -1099,6 +1126,218 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
 
+#: The first-cell subject of the corrected provider-credential-state row.
+PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credential state"
+
+#: What that row must state, independently.
+#:
+#: The old row put credential *existence*, repository *consumption* and provider
+#: *access* under one verdict. They are three subjects with three different
+#: answers now: the owner holds a key, this repository has never consumed it, and
+#: access is still unauthorized. A single NOT AUTHORIZED over all three denied the
+#: first while reporting the third.
+#:
+#: Existence is owner-attested and stays that way in the wording: nothing here has
+#: seen the key, and a row that dropped the qualifier would be claiming a
+#: verification no run performed.
+PROVIDER_CREDENTIAL_ROW_FACTS: Final[tuple[str, ...]] = (
+    "OWNER API KEY EXISTS / OWNER-ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
+    "REPOSITORY/APPLICATION CREDENTIAL RETRIEVAL OR CONSUMPTION NONE / NOT AUTHORIZED",
+    "PROVIDER API ACCESS NOT AUTHORIZED",
+    "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The superseded unscoped first cell, refused as a row subject.
+#:
+#: Matched as the row's own subject rather than as free text, so the narrative may
+#: still quote what the row used to say when explaining why it changed.
+STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API access / Services Data"
+
+#: The three future actions the ADR-0015 fenced blocks ran together.
+#:
+#: "another attempt · environment synchronization · authenticated qualification"
+#: was one verdict over three, and one of the three has since happened: an
+#: environment synchronization was separately authorized and performed. Only a
+#: *further* one is gated, and the word carries the whole difference.
+FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
+    "fourth binding-preflight attempt: NOT AUTHORIZED",
+    "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
+    "authenticated qualification: NOT AUTHORIZED",
+)
+
+#: The superseded combined future-action line, refused in the ADR-0015 section.
+STALE_FUTURE_ACTION_LINE: Final = (
+    "another attempt · environment synchronization · authenticated qualification: NOT AUTHORIZED"
+)
+
+#: Wording that would deny the environment synchronization that did happen.
+#:
+#: Distinct from :data:`STALE_ENVIRONMENT_CLAIMS`, which covers the SDK's absence.
+#: These are about the *event*: it occurred, under its own authorization, and the
+#: chronology in the environment section is the record of it.
+DENIED_SYNCHRONIZATION_CLAIMS: Final[tuple[str, ...]] = (
+    "ENVIRONMENT SYNCHRONIZATION: NOT AUTHORIZED",
+    "ENVIRONMENT SYNCHRONIZATION NEVER OCCURRED",
+    "NO ENVIRONMENT SYNCHRONIZATION HAS OCCURRED",
+    "ENVIRONMENT SYNCHRONIZATION HAS NOT OCCURRED",
+)
+
+
+#: The two facts the old combined creation/read line ran together.
+#:
+#: "Secrets Manager secret created or read: NONE" was one sentence about two
+#: different subjects. Owner-side creation is now attested and happened outside
+#: this repository; reads *by* this repository remain zero. One line could report
+#: the second correctly only by denying the first.
+SECRET_CREATION_AND_READ_FACTS: Final[tuple[str, ...]] = (
+    "owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
+    "Secrets Manager secret reads by this repository: ZERO",
+)
+
+#: The superseded combined line, refused wherever it reappears.
+#:
+#: The name trips ruff's hardcoded-password heuristic. It is a superseded
+#: status sentence from a status document, suppressed per line rather than by
+#: renaming it to something less accurate about what it matches.
+STALE_SECRET_CREATED_OR_READ: Final = "Secrets Manager secret created or read: NONE"  # noqa: S105
+
+#: The first-cell subject of the corrected top-level authorization row.
+CREDENTIAL_SETUP_ROW_SUBJECT: Final = "Owner-side credential setup"
+
+#: What that row must state, once owner-side setup is a fact and access is not.
+#:
+#: Five separate statuses, because the old row had one: it labelled setup, provider
+#: access and ingestion "NOT AUTHORIZED" together, and owner-side setup has since
+#: happened. A single verdict over three subjects goes stale the moment any one of
+#: them moves.
+CREDENTIAL_SETUP_ROW_FACTS: Final[tuple[str, ...]] = (
+    "OWNER-SIDE SHARADAR SECRET CREATION AND IDENTIFIER CONFIGURATION",
+    "OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
+    "APPLICATION CREDENTIAL RETRIEVAL NOT AUTHORIZED",
+    "PROVIDER API ACCESS NOT AUTHORIZED",
+    "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The superseded collective row, refused by its exact first cell.
+#:
+#: Matched as the row's own subject rather than as free text, so the narrative may
+#: still quote what the row used to say when explaining why it changed.
+STALE_CREDENTIAL_SETUP_ROW_SUBJECT: Final = (
+    "Credential setup · provider API access · Services Data ingestion"
+)
+
+#: The first line of the CLAUDE.md NOT AUTHORIZED stanza, and its indent.
+#:
+#: A top-level stanza, so its continuations sit at fifteen -- the same shape the
+#: ENVIRONMENT guard needed, and the same reason the default of twenty-four would
+#: silently reduce the stanza to its header line.
+NOT_AUTHORIZED_STANZA_LINE: Final = "NOT AUTHORIZED application credential retrieval"
+NOT_AUTHORIZED_STANZA_INDENT: Final = 15
+
+#: What the stanza must forbid, now that owner-side setup has happened.
+#:
+#: The stanza forbade "credential retrieval, setup, configuration or binding" and
+#: "a CONFIGURED credential source". Both were accurate while no secret existed.
+#: Each now denies something the same matrix's ENVIRONMENT stanza reports as done,
+#: and a matrix that contradicts itself teaches a reader to trust neither half. The
+#: replacements move the boundary from *setup* to *use*, which is where it actually
+#: sits: the application may not retrieve the credential, and only a separately
+#: authorized attempt may construct a client.
+NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
+    "application credential retrieval",
+    "Secrets Manager client construction or use, except during a separately authorized "
+    "ADR-0015 binding-preflight attempt",
+    "real credential binding NONE",
+    "real bucket binding NONE",
+    "SDK/client construction outside the ADR-0015 operator boundary",
+    "a fourth binding-preflight attempt",
+    "ANY provider API call",
+    "an authenticated qualification run",
+)
+
+#: Stanza wording that forbids owner-side setup that has since happened.
+STALE_NOT_AUTHORIZED_CLAUSES: Final[tuple[str, ...]] = (
+    "credential retrieval, setup, configuration or binding",
+    "a CONFIGURED credential source",
+)
+
+
+#: Claims the owner's post-attempt credential setup does not support.
+#:
+#: The owner created a Secrets Manager secret and configured the identifier
+#: **after** the third attempt had already refused. That is an attestation about
+#: the owner's AWS account; it is not an observation this repository made. Nothing
+#: here resolved the identifier, constructed a client, called the backend or held a
+#: credential, so every affirmative below would be a claim no run can support.
+#:
+#: Each is the *affirmative* form. The status documents state the same list as
+#: noun phrases -- "construction of a Secrets Manager client" rather than "a
+#: Secrets Manager client was constructed" -- so the sentence that denies these
+#: cannot itself trip the guard. A denylist answered by deleting the denial would
+#: be worse than none.
+OWNER_SETUP_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
+    "THE IDENTIFIER WAS VERIFIED",
+    "THE IDENTIFIER IS VERIFIED",
+    "THE SECRET WAS VERIFIED",
+    "THE SECRET IS VERIFIED",
+    "THE SECRET WAS READ",
+    "THE SECRET HAS BEEN READ",
+    "VERIFIED BY AWS",
+    "AWS-VERIFIED",
+    "REPOSITORY-VERIFIED",
+    "SUCCESSFULLY CONSUMED",
+    "THE ENTRY POINT RESOLVED THE IDENTIFIER",
+    "THE PROCESS INHERITED THE VARIABLE",
+    "A SECRETS MANAGER CLIENT WAS CONSTRUCTED",
+    "GET_SECRET_VALUE WAS INVOKED",
+    "THE CREDENTIAL WAS RETRIEVED",
+    "CREDENTIAL RETRIEVAL SUCCEEDED",
+    "THE CREDENTIAL WORKS WITH SHARADAR",
+    "THE BINDING IS VERIFIED",
+)
+
+#: Current-status wording that still calls the identifier configuration unknown.
+#:
+#: Scoped to current-status rows, matrix entries and the section's fenced count
+#: block -- never to prose. The narrative must still be able to say it *was*
+#: unknown at the second and third attempts, because it was, and an owner setting
+#: a secret up afterwards does not reach back and change what those runs saw.
+STALE_IDENTIFIER_UNKNOWN_CLAIMS: Final[tuple[str, ...]] = (
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION: UNKNOWN",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "SECRET-IDENTIFIER CONFIGURATION REMAINS UNKNOWN",
+    "IS OPERATIONALLY CONFIGURED REMAINS UNKNOWN",
+    "IS OPERATIONALLY CONFIGURED IS UNKNOWN",
+    "CONFIGURATION UNKNOWN;",
+)
+
+#: The exact fenced-block form, refused inside the ADR-0015 section.
+STALE_SECTION_IDENTIFIER_LINE: Final = "operational secret-identifier configuration: UNKNOWN"
+
+#: What the ADR-0015 row must still hold open after three refusals.
+#:
+#: A configured secret is the thing a reader is most likely to mistake for
+#: permission. It is not: the fourth attempt, the application's access to the
+#: credential and an authenticated run are three separate decisions and none has
+#: been taken.
+ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
+    "A FOURTH ATTEMPT",
+    "CREDENTIAL ACCESS BY THE APPLICATION",
+    "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
+)
+
+#: The two chronology anchors whose order carries the meaning.
+#:
+#: Owner setup happened **after** the third attempt refused, which is why no
+#: attempt could have seen the identifier. A document that prints them the other
+#: way round says the third attempt refused with a configured secret available --
+#: a different and much worse finding, and a false one.
+THIRD_ATTEMPT_ANCHOR: Final = "still UNKNOWN at the time of the third attempt"
+OWNER_SETUP_ANCHOR: Final = "The owner created the secret and configured the variable only after"
+
+
 #: The heading of the operational-environment section in both status documents.
 ENVIRONMENT_SECTION_HEADING: Final = (
     "### The operational environment — synchronized and verified, and not reproducibly locked"
@@ -1151,7 +1390,9 @@ ENVIRONMENT_LOCK_LIMITATION: Final[tuple[str, ...]] = (
 ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOUNDARY",
     "real bucket binding: NONE",
-    "operational secret-identifier configuration: UNKNOWN",
+    "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
+    "BY THE ENTRY POINT",
+    "authorized binding-preflight attempts to date: THREE -- all refused",
     "Secrets Manager client constructions: ZERO",
     "get_secret_value invocations: ZERO",
     "Secrets Manager network requests: ZERO",
@@ -1161,7 +1402,8 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "qualification runs: ZERO",
     "AWS credential-provider chain invoked during environment verification: NONE",
     "AWS requests during environment verification: ZERO",
-    "binding preflight or composition preflight run: NEITHER",
+    "binding preflight or composition preflight run during environment verification: NEITHER",
+    "composition preflight run: NEVER",
     "another binding-preflight attempt: NOT AUTHORIZED",
     "credential access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
@@ -4518,14 +4760,14 @@ def main() -> int:
             "the commercial state must be discoverable where a reader looks first",
         )
         f.check(
-            f"{name} keeps credentialing, API access and Services Data unauthorized",
-            re.search(
-                r"credential(ing|s)?[^|\n]*(API|Services Data)[^|\n]*\|\s*\*\*NOT AUTHORIZED",
-                body,
-                re.I,
-            )
-            is not None,
-            "a subscription existing is not permission to use it",
+            f"{name} no longer carries the unscoped provider-credentialing row",
+            not [
+                row
+                for row in body.splitlines()
+                if row.lstrip().startswith("|")
+                and STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT in row.split("|")[1]
+            ],
+            "one verdict over key existence, consumption and access goes stale when one moves",
         )
         f.check(
             f"{name} no longer calls Q7 and Q8 open pre-purchase blockers",
@@ -7139,7 +7381,7 @@ def main() -> int:
             "the downstream components cannot discover a binding; this file can resolve one",
         )
         f.check(
-            "the entry point documents the two authorized attempts and their scope",
+            "the entry point documents the three authorized attempts and their scope",
             all(
                 phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
                 for phrase in BINDING_SOURCE_HISTORY
@@ -7154,6 +7396,24 @@ def main() -> int:
                 if claim in " ".join(read(BINDING_PREFLIGHT).split()).upper()
             ],
             "the source documentation is a current-status surface like any other",
+        )
+        f.check(
+            "the entry point claims nothing about the owner's setup that it established",
+            not [
+                claim
+                for claim in OWNER_SETUP_FORBIDDEN_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "this file has resolved no identifier, built no client and retrieved no credential",
+        )
+        f.check(
+            "the entry point does not still call the identifier configuration unknown",
+            not [
+                claim
+                for claim in STALE_IDENTIFIER_UNKNOWN_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "its docstring is a current-status surface, and the owner has since configured it",
         )
         f.check(
             "the entry point does not touch the private harness",
@@ -7328,18 +7588,70 @@ def main() -> int:
             "a private identifier on the command line is disclosed before anything runs",
         )
         f.check(
-            f"{name} records that no secret or bucket binding was performed",
-            all(
-                token in body
-                for token in (
-                    "Secrets Manager secret created or read: NONE",
-                    "real bucket binding performed: NONE",
-                )
-            ),
+            f"{name} records that no bucket binding was performed",
+            "real bucket binding performed: NONE" in body,
             "implementing a path is not walking it",
         )
         f.check(
-            f"{name} records the scoped counts the two attempts left at zero",
+            f"{name} separates owner-side secret creation from reads by this repository",
+            all(fact in body for fact in SECRET_CREATION_AND_READ_FACTS),
+            "one sentence reported two subjects, and could only be right about one",
+        )
+        f.check(
+            f"{name} no longer carries the combined secret creation-or-read line",
+            STALE_SECRET_CREATED_OR_READ not in body,
+            "owner-side creation is attested; that line denies it to report the read count",
+        )
+        f.check(
+            f"{name} states the corrected top-level credential-setup row",
+            bool(_phase_status_rows(body, CREDENTIAL_SETUP_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, CREDENTIAL_SETUP_ROW_SUBJECT)
+                for fact in CREDENTIAL_SETUP_ROW_FACTS
+            ),
+            "one verdict over setup, access and ingestion goes stale when any one moves",
+        )
+        f.check(
+            f"{name} states the corrected provider-credential-state row",
+            bool(_phase_status_rows(body, PROVIDER_CREDENTIAL_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, PROVIDER_CREDENTIAL_ROW_SUBJECT)
+                for fact in PROVIDER_CREDENTIAL_ROW_FACTS
+            ),
+            "an owner-held key is not repository access, and the row must say both",
+        )
+        f.check(
+            f"{name} scopes the three remaining future actions separately",
+            all(
+                boundary in _document_section(body, ADR_0015_SECTION_HEADING)
+                for boundary in FUTURE_ACTION_BOUNDARIES
+            ),
+            "one of the three has happened; a shared verdict cannot report that",
+        )
+        f.check(
+            f"{name} no longer carries the combined future-action line",
+            STALE_FUTURE_ACTION_LINE not in body,
+            "a synchronization was authorized and performed; only a further one is gated",
+        )
+        f.check(
+            f"{name} does not deny the environment synchronization that occurred",
+            not [claim for claim in DENIED_SYNCHRONIZATION_CLAIMS if claim in flat.upper()],
+            "the chronology records it; a current-status line may not contradict it",
+        )
+        f.check(
+            f"{name} no longer carries the collective credential-setup row",
+            not [
+                row
+                for row in body.splitlines()
+                if row.lstrip().startswith("|")
+                and STALE_CREDENTIAL_SETUP_ROW_SUBJECT in row.split("|")[1]
+            ],
+            "owner-side setup has happened; a row labelling it NOT AUTHORIZED is false",
+        )
+        f.check(
+            f"{name} records the scoped counts the three attempts left at zero",
             all(
                 token in _document_section(body, ADR_0015_SECTION_HEADING)
                 for token in ADR_0015_SECTION_COUNTS
@@ -7347,7 +7659,7 @@ def main() -> int:
             "the zeros are Secrets Manager, S3 and Sharadar -- not AWS as a whole",
         )
         f.check(
-            f"{name} records the operational history of the two authorized attempts",
+            f"{name} records the operational history of the three authorized attempts",
             all(
                 phrase
                 in " ".join(
@@ -7355,7 +7667,7 @@ def main() -> int:
                 )
                 for phrase in ADR_0015_SECTION_HISTORY
             ),
-            "implementation-time inactivity and two later operator runs are different facts",
+            "implementation-time inactivity and three later operator runs are different facts",
         )
         f.check(
             f"{name} makes no stale zero-AWS or never-run claim in the ADR-0015 section",
@@ -7382,14 +7694,14 @@ def main() -> int:
             "the same unscoped wording was copied into the correction's own section",
         )
         f.check(
-            f"{name} states in the ADR-0015 row what the two attempts did and did not reach",
+            f"{name} states in the ADR-0015 row what the three attempts did and did not reach",
             bool(_current_status_rows(body, "ADR-0015"))
             and all(
                 phrase in " ".join(row.replace("**", "").split()).upper()
                 for row in _current_status_rows(body, "ADR-0015")
                 for phrase in ADR_0015_ROW_HISTORY
             ),
-            "a row claiming zero AWS activity survived two runs that produced some",
+            "a row claiming zero AWS activity survived three runs that produced some",
         )
         f.check(
             f"{name} makes no stale operational claim in the ADR-0015 row",
@@ -7400,6 +7712,56 @@ def main() -> int:
                 if claim in " ".join(row.replace("**", "").split()).upper()
             ],
             "'credential source configured NONE' and 'AWS requests ZERO' are both stale",
+        )
+        f.check(
+            f"{name} does not still call the identifier configuration unknown in a status row",
+            not [
+                claim
+                for row in (
+                    _current_status_rows(body, "ADR-0015")
+                    + _phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)
+                )
+                for claim in STALE_IDENTIFIER_UNKNOWN_CLAIMS
+                if claim in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "the owner configured it after the third attempt; a row saying UNKNOWN is stale",
+        )
+        binding_section = _document_section(body, ADR_0015_SECTION_HEADING)
+        binding_flat = " ".join(binding_section.replace("**", "").split())
+        f.check(
+            f"{name} does not call the identifier configuration unknown in the count block",
+            STALE_SECTION_IDENTIFIER_LINE not in binding_section,
+            "the fenced block is a current-status surface, not the historical narrative",
+        )
+        f.check(
+            f"{name} still records that the identifier was unknown to the earlier attempts",
+            all(
+                phrase in binding_flat
+                for phrase in ("UNKNOWN at the time of the second attempt", THIRD_ATTEMPT_ANCHOR)
+            ),
+            "a secret configured afterwards does not change what those runs saw",
+        )
+        f.check(
+            f"{name} places the owner's credential setup after the third attempt",
+            THIRD_ATTEMPT_ANCHOR in binding_flat
+            and OWNER_SETUP_ANCHOR in binding_flat
+            and binding_flat.index(THIRD_ATTEMPT_ANCHOR) < binding_flat.index(OWNER_SETUP_ANCHOR),
+            "printed the other way round, the third attempt refused with a secret available",
+        )
+        f.check(
+            f"{name} claims nothing about the owner's setup that no run established",
+            not [claim for claim in OWNER_SETUP_FORBIDDEN_CLAIMS if claim in flat.upper()],
+            "owner attestation is not resolution, construction, invocation or retrieval",
+        )
+        f.check(
+            f"{name} keeps the fourth attempt, credential access and qualification gated",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                phrase in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+                for phrase in ADR_0015_STILL_GATED
+            ),
+            "a configured secret is the thing most easily mistaken for permission",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
@@ -7499,7 +7861,7 @@ def main() -> int:
             "in force without a pull request is a status a reader cannot check",
         )
         f.check(
-            "the in-force matrix records what ADR-0015's two attempts reached",
+            "the in-force matrix records what ADR-0015's three attempts reached",
             all(
                 clause in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE)
                 for clause in ADR_0015_MATRIX_CLAUSES
@@ -7513,26 +7875,30 @@ def main() -> int:
                 for claim in STALE_PREFLIGHT_CLAIMS
                 if claim in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE).upper()
             ],
-            "two authorized attempts happened; a compact entry may be short, not false",
+            "three authorized attempts happened; a compact entry may be short, not false",
         )
         f.check(
-            "the unauthorized list no longer forbids the credential source ADR-0015 built",
-            "a CONFIGURED credential source" in claude_body
-            and "SDK client construction anywhere but the ADR-0015 operator entry point"
-            in claude_body,
-            "a slice that implemented a refusing credential source makes the bare wording stale",
-        )
-        f.check(
-            "the unauthorized list still forbids every binding operation",
+            "the unauthorized stanza forbids use rather than owner-side setup",
             all(
-                token in claude_body
-                for token in (
-                    "credential retrieval, setup, configuration or binding",
-                    "real credential or bucket binding",
-                    "an authenticated qualification run",
+                clause
+                in _matrix_entry(
+                    claude_body, NOT_AUTHORIZED_STANZA_LINE, NOT_AUTHORIZED_STANZA_INDENT
                 )
+                for clause in NOT_AUTHORIZED_STANZA_CLAUSES
             ),
-            "narrowing a claim that went stale must not relax the operations it governed",
+            "the boundary sits at use; a stanza forbidding setup contradicts ENVIRONMENT",
+        )
+        f.check(
+            "the unauthorized stanza no longer forbids setup that has since happened",
+            not [
+                clause
+                for clause in STALE_NOT_AUTHORIZED_CLAUSES
+                if clause
+                in _matrix_entry(
+                    claude_body, NOT_AUTHORIZED_STANZA_LINE, NOT_AUTHORIZED_STANZA_INDENT
+                )
+            ],
+            "a matrix that contradicts itself teaches a reader to trust neither half",
         )
 
     # -- 23. ADR-0016: the corrected private-binding failure boundaries -------
@@ -8110,7 +8476,7 @@ def main() -> int:
                 for claim in STALE_BINDING_ABSENCE_CLAIMS
                 if claim in " ".join(row.replace("**", "").split()).upper()
             ],
-            "'none exists' denied an architecture that ADR-0015 built and twice ran",
+            "'none exists' denied an architecture that ADR-0015 built and ran three times",
         )
         f.check(
             f"{name} carries exactly one ADR-0016 current-status row",
