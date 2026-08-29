@@ -1126,6 +1126,64 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
 
+#: The first-cell subject of the corrected provider-credential-state row.
+PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credential state"
+
+#: What that row must state, independently.
+#:
+#: The old row put credential *existence*, repository *consumption* and provider
+#: *access* under one verdict. They are three subjects with three different
+#: answers now: the owner holds a key, this repository has never consumed it, and
+#: access is still unauthorized. A single NOT AUTHORIZED over all three denied the
+#: first while reporting the third.
+#:
+#: Existence is owner-attested and stays that way in the wording: nothing here has
+#: seen the key, and a row that dropped the qualifier would be claiming a
+#: verification no run performed.
+PROVIDER_CREDENTIAL_ROW_FACTS: Final[tuple[str, ...]] = (
+    "OWNER API KEY EXISTS / OWNER-ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
+    "REPOSITORY/APPLICATION CREDENTIAL RETRIEVAL OR CONSUMPTION NONE / NOT AUTHORIZED",
+    "PROVIDER API ACCESS NOT AUTHORIZED",
+    "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The superseded unscoped first cell, refused as a row subject.
+#:
+#: Matched as the row's own subject rather than as free text, so the narrative may
+#: still quote what the row used to say when explaining why it changed.
+STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API access / Services Data"
+
+#: The three future actions the ADR-0015 fenced blocks ran together.
+#:
+#: "another attempt · environment synchronization · authenticated qualification"
+#: was one verdict over three, and one of the three has since happened: an
+#: environment synchronization was separately authorized and performed. Only a
+#: *further* one is gated, and the word carries the whole difference.
+FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
+    "fourth binding-preflight attempt: NOT AUTHORIZED",
+    "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
+    "authenticated qualification: NOT AUTHORIZED",
+)
+
+#: The superseded combined future-action line, refused in the ADR-0015 section.
+STALE_FUTURE_ACTION_LINE: Final = (
+    "another attempt · environment synchronization · authenticated qualification: NOT AUTHORIZED"
+)
+
+#: Wording that would deny the environment synchronization that did happen.
+#:
+#: Distinct from :data:`STALE_ENVIRONMENT_CLAIMS`, which covers the SDK's absence.
+#: These are about the *event*: it occurred, under its own authorization, and the
+#: chronology in the environment section is the record of it.
+DENIED_SYNCHRONIZATION_CLAIMS: Final[tuple[str, ...]] = (
+    "ENVIRONMENT SYNCHRONIZATION: NOT AUTHORIZED",
+    "ENVIRONMENT SYNCHRONIZATION NEVER OCCURRED",
+    "NO ENVIRONMENT SYNCHRONIZATION HAS OCCURRED",
+    "ENVIRONMENT SYNCHRONIZATION HAS NOT OCCURRED",
+)
+
+
 #: The two facts the old combined creation/read line ran together.
 #:
 #: "Secrets Manager secret created or read: NONE" was one sentence about two
@@ -4702,14 +4760,14 @@ def main() -> int:
             "the commercial state must be discoverable where a reader looks first",
         )
         f.check(
-            f"{name} keeps credentialing, API access and Services Data unauthorized",
-            re.search(
-                r"credential(ing|s)?[^|\n]*(API|Services Data)[^|\n]*\|\s*\*\*NOT AUTHORIZED",
-                body,
-                re.I,
-            )
-            is not None,
-            "a subscription existing is not permission to use it",
+            f"{name} no longer carries the unscoped provider-credentialing row",
+            not [
+                row
+                for row in body.splitlines()
+                if row.lstrip().startswith("|")
+                and STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT in row.split("|")[1]
+            ],
+            "one verdict over key existence, consumption and access goes stale when one moves",
         )
         f.check(
             f"{name} no longer calls Q7 and Q8 open pre-purchase blockers",
@@ -7553,6 +7611,34 @@ def main() -> int:
                 for fact in CREDENTIAL_SETUP_ROW_FACTS
             ),
             "one verdict over setup, access and ingestion goes stale when any one moves",
+        )
+        f.check(
+            f"{name} states the corrected provider-credential-state row",
+            bool(_phase_status_rows(body, PROVIDER_CREDENTIAL_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, PROVIDER_CREDENTIAL_ROW_SUBJECT)
+                for fact in PROVIDER_CREDENTIAL_ROW_FACTS
+            ),
+            "an owner-held key is not repository access, and the row must say both",
+        )
+        f.check(
+            f"{name} scopes the three remaining future actions separately",
+            all(
+                boundary in _document_section(body, ADR_0015_SECTION_HEADING)
+                for boundary in FUTURE_ACTION_BOUNDARIES
+            ),
+            "one of the three has happened; a shared verdict cannot report that",
+        )
+        f.check(
+            f"{name} no longer carries the combined future-action line",
+            STALE_FUTURE_ACTION_LINE not in body,
+            "a synchronization was authorized and performed; only a further one is gated",
+        )
+        f.check(
+            f"{name} does not deny the environment synchronization that occurred",
+            not [claim for claim in DENIED_SYNCHRONIZATION_CLAIMS if claim in flat.upper()],
+            "the chronology records it; a current-status line may not contradict it",
         )
         f.check(
             f"{name} no longer carries the collective credential-setup row",

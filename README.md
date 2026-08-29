@@ -342,7 +342,7 @@ live brokerage execution, real-money operation.
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
 | Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
-| Provider credentialing / API access / Services Data | **NOT AUTHORIZED** |
+| Provider credential state · repository consumption · provider API access · Services Data | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / NOT VERIFIED BY THE ENTRY POINT**; repository/application credential retrieval or consumption **NONE / NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; authenticated qualification **NOT AUTHORIZED** — an owner-held key is not repository access, and a subscription existing is not permission to use it |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
 | Strategies / Brain / AI / portfolio / risk | **NOT IMPLEMENTED / NOT AUTHORIZED** |
@@ -916,7 +916,9 @@ real bucket binding performed: NONE
 qualification-run execution surface: NONE
 provider-fetch operation: NONE   ·   object-publication operation: NONE
 runner, task, image, scheduler or service: NONE
-another attempt · environment synchronization · authenticated qualification: NOT AUTHORIZED
+fourth binding-preflight attempt: NOT AUTHORIZED
+further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED
+authenticated qualification: NOT AUTHORIZED
 ```
 
 **Implementing and merging it executed nothing. Three later, separately authorized operator
@@ -958,8 +960,8 @@ compatibility of the credential with Sharadar. **Credential access by the applic
 remains NOT AUTHORIZED**, and so does a fourth binding-preflight attempt.
 
 **A real binding preflight is no longer a purely future event.** Three occurred. What remains
-future, and separately authorized: another attempt, environment synchronization, credential access,
-and an authenticated Sharadar qualification run. **Authenticated qualification remains NOT AUTHORIZED and
+future, and separately authorized: a fourth attempt, further environment resynchronization,
+application credential access, and an authenticated Sharadar qualification run. **Authenticated qualification remains NOT AUTHORIZED and
 has never run.**
 
 | | |
