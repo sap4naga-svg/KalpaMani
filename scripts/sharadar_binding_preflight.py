@@ -13,17 +13,53 @@ rather than written under pressure beside an authorization to run.
     authorization       ONE      --i-am-the-operator-authorizing-binding-preflight
     what it authorizes  BINDING PREFLIGHT ONLY -- never a qualification run
     operations reached  preflight_qualification_composition, and nothing else
-    real bindings used  NONE     this has never been run against AWS or Sharadar
-    AWS requests        ZERO     ·  provider requests: ZERO  ·  S3 object calls: ZERO
+    authorized attempts TWO      both refused; neither reached a Secrets Manager
+                                 client, S3, Sharadar, the composition or a run
+    AWS activity        NOT ZERO identity-gate activity occurred on the attempts
+    Secrets Manager     ZERO     client constructions, get_secret_value
+                                 invocations and network requests
+    S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
+    credential          NONE     retrieved  ·  qualification runs: ZERO
 
-Three separate future events
-============================
+What has actually happened, and what has not
+============================================
 
-**Private credential setup**, **a real binding preflight** and an **authenticated
-qualification run** are three decisions, not one. Implementing this path is none
-of them. This file existing does not create a secret, does not read one, does not
-touch AWS, and cannot execute a qualification run -- there is no code here that
-could, and a static guard keeps it that way.
+**Writing and merging this file executed nothing.** Two later, separately
+authorized operator attempts did execute it, and both refused. They are different
+facts and this docstring keeps them apart -- an earlier revision said only "never
+run", which was true of the merge and false of the operation.
+
+======================================  ====================================
+event                                   outcome
+======================================  ====================================
+implementation and merge                no attempt; code and synthetic
+                                        validation only
+first authorized attempt                refused at the AWS identity gate
+separately authorized diagnosis         one ``sts:GetCallerIdentity`` request;
+                                        session missing or expired
+second authorized attempt, after an     passed the identity gate and licensed
+AWS SSO login                           bucket resolution, then refused
+                                        **before constructing a Secrets
+                                        Manager client** -- the project
+                                        environment lacked the AWS SDK
+======================================  ====================================
+
+**So AWS identity-gate activity occurred and total AWS activity was not zero.**
+What stayed at zero is narrower, and is stated in scope: Secrets Manager client
+constructions, ``get_secret_value`` invocations and Secrets Manager network
+requests; S3 object operations; Sharadar and provider requests. Neither attempt
+reached composition validation or a qualification run, and **no credential was
+retrieved or revealed.**
+
+Whether ``KALPAMANI_SHARADAR_SECRET_ID`` is operationally configured is
+**UNKNOWN**: the second attempt refused on the dependency path without reading
+it.
+
+**Private credential setup**, **another binding preflight** and an
+**authenticated qualification run** remain three separate decisions, each still
+**NOT AUTHORIZED**. This file existing does not create a secret, does not read
+one, and cannot execute a qualification run -- there is no code here that could,
+and a static guard keeps it that way.
 
 Refusing by default, and why the flag is spelled like that
 ==========================================================
@@ -827,8 +863,11 @@ def main(argv: list[str] | None = None) -> int:
 
     **The real factories are constructed here and only here**, inside the
     authorized branch. This is the one place ADR-0015 permits an AWS SDK session
-    or client to be built -- and it has never been executed against AWS, which is
-    a fact about this repository rather than a property of the code.
+    or client to be built. Two separately authorized attempts have run this
+    function; **neither reached this construction** -- the first refused at the
+    identity gate and the second refused on the missing AWS SDK -- so no Secrets
+    Manager client has been built. That is a fact about what happened, not a
+    property of the code.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -877,8 +916,14 @@ def main(argv: list[str] | None = None) -> int:
 # ---------------------------------------------------------------------------
 #
 # Each imports what it needs inside the function body, so importing this module
-# imports no SDK, reads no environment and touches no state. Every one of them is
-# a future operational event that is separately gated, and none has been run.
+# imports no SDK, reads no environment and touches no state.
+#
+# `_ambient_profile`, `_governed_identity_gate` and `_governed_licensed_bucket`
+# HAVE run, on the two separately authorized attempts -- the identity gate is
+# where AWS activity occurred. `_environment_secret_id`, `_secrets_client`,
+# `_s3_client` and `_transport` have not: the second attempt refused inside
+# `_secrets_client` before a client existed, and nothing past it was reached.
+# Every further operational event remains separately gated.
 
 
 def _ambient_profile() -> str:
