@@ -891,6 +891,61 @@ ADR_0015_STALE_SENTENCE: Final = (
 #: missing from the in-force list reads as a decision that did not merge.
 ADR_0015_MATRIX_LINE: Final = "ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --"
 
+#: The first-cell subject of the binding status row in both status documents.
+#:
+#: Matched with :func:`_phase_status_rows`, which is a first-cell matcher that
+#: skips ADR-link rows -- exactly the scoping this row needs. The ADR-0015 row
+#: also says "real bucket binding NONE", and matching it here would hold two
+#: rows to one contract.
+BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
+
+#: What the binding status row must state, now that ADR-0015 has merged and run.
+#:
+#: The row said "NOT AUTHORIZED -- none exists, and a static test keeps it that
+#: way". A credential-source boundary does exist, the operator entry point is the
+#: one place permitted to construct an SDK client, and it has been invoked twice.
+#: The row has to separate **architectural existence** from **operational
+#: execution**, because the old wording denied both at once.
+BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
+    "REAL BUCKET BINDING NONE",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
+    "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
+)
+
+#: Claims that no credential source, bucket resolution or construction path exists.
+#:
+#: Scoped to the binding row and the entry point's own documentation, never to a
+#: whole document: ADR-0011's and ADR-0012's sections say comparable things about
+#: *their* modules and are still accurate, and `docs/decisions/` is immutable.
+STALE_BINDING_ABSENCE_CLAIMS: Final[tuple[str, ...]] = (
+    "NONE EXISTS, AND A STATIC TEST KEEPS IT THAT WAY",
+    "NO CREDENTIAL SOURCE, NO BUCKET RESOLUTION, NO CONSTRUCTED AWS CLIENT",
+    "NO CREDENTIAL SOURCE EXISTS",
+    "NO BUCKET RESOLUTION EXISTS",
+    "NO CONSTRUCTED AWS CLIENT",
+    "NO SDK CLIENT CONSTRUCTION PATH EXISTS",
+    "HAS EVER HAD A WAY TO OBTAIN ONE",
+    "WILL EVENTUALLY SUPPLY THEM",
+)
+
+#: What the entry point's opening docstring must distinguish.
+#:
+#: Two different facts: the downstream components cannot discover a binding, and
+#: this file is the one boundary that may resolve one. Collapsing them into "none
+#: of it exists" is what made the old wording false once this file had run.
+BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
+    "by injection and cannot discover an ambient one",
+    "This file is the sole boundary that can",
+    "not a claim that none of it exists",
+    "invoked twice under separate authorization",
+    "reached bucket resolution",
+    "neither attempt reached secret-identifier reading",
+)
+
+
 #: The two status-document sections whose operational claims this round corrected.
 #:
 #: Scoped deliberately. The stale-phrase guards below must not sweep other
@@ -6876,6 +6931,24 @@ def main() -> int:
             "a private identifier in a tracked file is a public one",
         )
         f.check(
+            "the entry point scopes what is injected against what it alone may construct",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_SCOPE
+            ),
+            "'no credential source, no bucket resolution, no constructed AWS client' denied "
+            "the boundary this file is",
+        )
+        f.check(
+            "the entry point claims no absent credential source or construction path",
+            not [
+                claim
+                for claim in STALE_BINDING_ABSENCE_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "the downstream components cannot discover a binding; this file can resolve one",
+        )
+        f.check(
             "the entry point documents the two authorized attempts and their scope",
             all(
                 phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
@@ -7798,6 +7871,31 @@ def main() -> int:
             f"{name} records the tightened identifier grammar",
             "a well-formed secret name or a complete secret ARN" in flat,
             "the earlier rule admitted shapes a client rejects locally, after the call began",
+        )
+        f.check(
+            f"{name} carries exactly one binding status row",
+            len(_phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)) == 1,
+            "two rows for one subject is two places for it to go stale",
+        )
+        f.check(
+            f"{name} separates the binding boundary's existence from its execution",
+            bool(_phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)
+                for fact in BINDING_ROW_FACTS
+            ),
+            "a credential-source boundary exists and has been invoked; the row must say both",
+        )
+        f.check(
+            f"{name} claims no absent credential source, bucket resolution or SDK path",
+            not [
+                claim
+                for row in _phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)
+                for claim in STALE_BINDING_ABSENCE_CLAIMS
+                if claim in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "'none exists' denied an architecture that ADR-0015 built and twice ran",
         )
         f.check(
             f"{name} carries exactly one ADR-0016 current-status row",

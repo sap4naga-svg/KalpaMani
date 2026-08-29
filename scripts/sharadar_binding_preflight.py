@@ -1,10 +1,19 @@
 """The operator binding preflight for the authenticated Sharadar stack.
 
-ADR-0015. Every accepted slice takes its private bindings by injection and none
-of them has ever had a way to obtain one: no credential source, no bucket
-resolution, no constructed AWS client. This is the path that will eventually
-supply them -- written, reviewed and tested while it is still refused by default,
-rather than written under pressure beside an authorization to run.
+ADR-0015. The qualification runtime and the composition root take their private
+bindings **by injection and cannot discover an ambient one**: neither resolves a
+credential, a bucket or an AWS client for itself, and neither has any code that
+could. **This file is the sole boundary that can** -- it pins the profile, reads
+the governed licensed bucket, reads the secret identifier and constructs the AWS
+SDK clients, and nothing else under ``src/`` or ``scripts/`` may.
+
+That is a statement about *where* those dependencies may be resolved, not a claim
+that none of it exists. It was written, reviewed and tested while refused by
+default, rather than under pressure beside an authorization to run -- and it has
+since been **invoked twice under separate authorization**. The second attempt
+**reached bucket resolution**; neither attempt reached secret-identifier reading,
+Secrets Manager client construction, composition validation or qualification
+execution.
 
 ::
 
