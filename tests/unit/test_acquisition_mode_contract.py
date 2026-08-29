@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 
+from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.entities import IngestionRun
 from kalpamani.data.contracts.errors import (
     AcquisitionIncompleteError,
@@ -38,11 +39,16 @@ from kalpamani.data.contracts.vocabulary import (
 )
 from kalpamani.data.ingest.bronze import (
     ACQUISITION_COMPLETE,
+    ACQUISITION_MODE_FIELD,
     ACQUISITION_PENDING,
     BronzeStore,
     RetrievalMetadata,
     _acquisition_body,
+    _record_shape_problems,
     build_ingestion_run,
+)
+from kalpamani.data.ingest.bronze import (
+    ACQUISITION_RECORD_FIELDS as LOCAL_ACQUISITION_RECORD_FIELDS,
 )
 from kalpamani.data.ingest.publication import (
     ACQUISITION_RECORD_FIELDS,
@@ -441,21 +447,48 @@ def test_the_same_local_identity_with_a_different_mode_is_refused(tmp_path: Path
     assert path.read_bytes() == before, "the refused attempt must leave the record untouched"
 
 
-def test_the_object_store_refuses_the_same_change(tmp_path: Path) -> None:
+def object_store_snapshot(store: InMemoryResearchObjectStore) -> dict[str, tuple[bytes, str]]:
+    """Every stored object as (payload, admitted digest), keyed by logical name.
+
+    The payload alone would not be a complete snapshot: the store admits an object
+    under a digest and serves reads against it, so a changed digest with unchanged
+    bytes is a real difference this must be able to see.
+    """
+    return {
+        name: (payload, store.stored_digest(name) or "")
+        for name, payload in store.snapshot().items()
+    }
+
+
+def test_the_object_store_refuses_the_same_change() -> None:
     """The same property on the other storage path, so neither is the only one
-    that holds it."""
+    that holds it -- and the store is unchanged afterwards.
+
+    The ADR claims a contradictory attempt leaves the stored record alone on
+    **both** paths. Asserting only that the call raises would leave that claim
+    resting on the exception, which says nothing about what the store did before
+    reaching it: a publication appends a claim, a payload and an acquisition
+    record, so a partial write is exactly the failure worth ruling out.
+    """
     store = InMemoryResearchObjectStore()
     publish_bronze_payload(
         store=store,
         payload=SYNTHETIC_PAYLOAD,
         retrieval=retrieval(AcquisitionMode.QUALIFICATION),
     )
+    before = object_store_snapshot(store)
+    assert before, "the first publication must have stored something to compare against"
+
     with pytest.raises(ObjectAlreadyExistsError):
         publish_bronze_payload(
             store=store,
             payload=SYNTHETIC_PAYLOAD,
             retrieval=retrieval(AcquisitionMode.BACKFILL),
         )
+
+    after = object_store_snapshot(store)
+    assert set(after) == set(before), "the refused attempt added or removed an object"
+    assert after == before, "the refused attempt changed stored bytes or a stored digest"
 
 
 #: What both stores must agree on. Everything else is envelope.
@@ -498,6 +531,245 @@ def test_the_two_stores_agree_on_the_shared_acquisition_fields(
         assert local[field] == remote[field], f"{field} disagrees between the two stores"
     assert local["acquisition_mode"] == remote["acquisition_mode"] == mode.value
     assert "is_backfill" not in local and "is_backfill" not in remote
+
+
+# ---------------------------------------------------------------------------
+# Completeness verification, which round 1 left fail-open
+# ---------------------------------------------------------------------------
+#
+# Round 1 put the mode into the record. It did not make anything *check* the
+# record. `_require_same_retrieval` compares the mode only during a republish, so
+# a COMPLETE record already on disk could carry no mode, an unknown one, a
+# non-string one, the retired key instead of the new field, or both keys at once,
+# and `require_complete()` would still pass it. Malformed durable metadata has to
+# be discoverable by reading the store, not by writing to it again.
+
+
+def record_path(store: BronzeStore, mode: AcquisitionMode, run_id: str) -> Path:
+    """The on-disk acquisition record for one synthetic write."""
+    return store.acquisition_path(
+        provider="synthetic",
+        dataset="stocks",
+        ingest_date=INGEST_DATE,
+        digest=sha256_hex(SYNTHETIC_PAYLOAD),
+        ingestion_run_id=run_id,
+    )
+
+
+def completed(
+    tmp_path: Path, mode: AcquisitionMode = AcquisitionMode.QUALIFICATION
+) -> tuple[BronzeStore, Path, bytes]:
+    """A store holding one valid COMPLETE acquisition, and that record's exact bytes."""
+    store, path = local_write(tmp_path, mode)
+    return store, path, path.read_bytes()
+
+
+def verify(store: BronzeStore) -> None:
+    store.require_complete(provider="synthetic", dataset="stocks", ingest_date=INGEST_DATE)
+
+
+def audit(store: BronzeStore) -> tuple[str, ...]:
+    return store.audit_acquisitions(provider="synthetic", dataset="stocks", ingest_date=INGEST_DATE)
+
+
+def rewrite(path: Path, mutate: Any) -> None:
+    """Tamper with the durable record in place, exactly as a bad writer would."""
+    record = json.loads(path.read_text(encoding="utf-8"))
+    mutate(record)
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+@pytest.mark.parametrize("mode", list(AcquisitionMode))
+def test_verification_accepts_a_valid_complete_record_for_every_mode(
+    mode: AcquisitionMode, tmp_path: Path
+) -> None:
+    store, _, _ = completed(tmp_path, mode)
+    assert audit(store) == ()
+    verify(store)  # must not raise
+
+
+def test_a_record_with_no_acquisition_mode_is_refused(tmp_path: Path) -> None:
+    """The exact defect round 1 left behind: a record written before the mode
+    existed would have verified clean forever."""
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.pop(ACQUISITION_MODE_FIELD))
+
+    problems = audit(store)
+    assert problems, "a record with no acquisition mode must be an audit problem"
+    assert any("missing required field" in problem for problem in problems)
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+#: Every way a durable mode can be wrong, each refused on its own.
+#:
+#: ``"qualification"`` and ``"QUALIFICATION "`` are the two near-misses that a
+#: forgiving reader would normalise; they are refusals here, because a reader that
+#: repairs its input decides what the record meant.
+INVALID_MODES: tuple[tuple[str, Any], ...] = (
+    ("unknown-token", "UNKNOWN"),
+    ("wrong-case", "qualification"),
+    ("trailing-space", "QUALIFICATION "),
+    ("false", False),
+    ("null", None),
+    ("integer", 1),
+)
+
+
+@pytest.mark.parametrize(("label", "value"), INVALID_MODES, ids=[case[0] for case in INVALID_MODES])
+def test_each_invalid_durable_mode_is_refused_on_its_own(
+    label: str, value: Any, tmp_path: Path
+) -> None:
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__(ACQUISITION_MODE_FIELD, value))
+
+    assert audit(store), f"{label} was accepted by the audit"
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+def test_a_str_subclass_mode_is_refused_where_it_could_arrive() -> None:
+    """JSON never yields a ``str`` subclass, so this cannot reach the verifier
+    through a file -- which is exactly why the check is on the shape helper
+    rather than only on decoded input. A subclass compares equal to its token and
+    would otherwise pass an ``in`` test while being a different type.
+    """
+
+    class Hostile(str):
+        pass
+
+    valid = _acquisition_body(retrieval(), "0" * 64, 1, INGEST_DATE, status=ACQUISITION_COMPLETE)
+    assert _record_shape_problems(valid) == []
+
+    tampered = dict(valid)
+    tampered[ACQUISITION_MODE_FIELD] = Hostile("QUALIFICATION")
+    assert tampered[ACQUISITION_MODE_FIELD] == "QUALIFICATION"
+    assert _record_shape_problems(tampered), "a str subclass is not an exact built-in str"
+
+
+def test_a_valid_mode_beside_the_retired_key_is_refused(tmp_path: Path) -> None:
+    """A dual-written record is refused rather than read past.
+
+    Two representations of one fact is the dual-write ADR-0013 rejected, and the
+    case that matters is the one where they disagree.
+    """
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__("is_backfill", False))
+
+    assert audit(store), "acquisition_mode plus the retired key must be refused"
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+def test_the_retired_key_alone_is_refused(tmp_path: Path) -> None:
+    """A record written entirely under the retired schema. There is no reader for
+    it, and none is added: it is republished, not translated."""
+    store, path, _ = completed(tmp_path)
+
+    def retire(record: dict[str, Any]) -> None:
+        record.pop(ACQUISITION_MODE_FIELD)
+        record["is_backfill"] = False
+
+    rewrite(path, retire)
+
+    problems = audit(store)
+    assert any("missing required field" in problem for problem in problems)
+    assert any("does not define" in problem for problem in problems)
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+def test_an_arbitrary_undefined_field_is_refused(tmp_path: Path) -> None:
+    """The allowlist is closed, so the retired key needs no special case: it is
+    refused as one undefined field among any others."""
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__("synthetic_extra", "value"))
+
+    assert any("does not define" in problem for problem in audit(store))
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+def test_the_allowlist_is_the_exact_written_shape_and_excludes_the_retired_key() -> None:
+    written = set(
+        _acquisition_body(retrieval(), "0" * 64, 1, INGEST_DATE, status=ACQUISITION_COMPLETE)
+    )
+    assert written == set(LOCAL_ACQUISITION_RECORD_FIELDS)
+    assert "is_backfill" not in LOCAL_ACQUISITION_RECORD_FIELDS
+    assert ACQUISITION_MODE_FIELD in LOCAL_ACQUISITION_RECORD_FIELDS
+
+
+def test_a_malformed_record_is_refused_without_any_republish_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verification must not depend on writing.
+
+    Before this round the only thing that compared the mode ran inside
+    :meth:`BronzeStore.write`, so discovering a bad record meant attempting to
+    publish over it. Here ``write`` is made to explode: if verification reaches
+    it, the test fails loudly rather than passing for the wrong reason.
+    """
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__(ACQUISITION_MODE_FIELD, "UNKNOWN"))
+
+    def forbidden(*_: Any, **__: Any) -> None:
+        raise AssertionError("verification attempted a republish")
+
+    monkeypatch.setattr(BronzeStore, "write", forbidden)
+
+    assert audit(store)
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+
+def test_restoring_the_exact_record_makes_verification_pass_again(tmp_path: Path) -> None:
+    """The refusal is a property of the bytes on disk, not a latch."""
+    store, path, original = completed(tmp_path)
+    verify(store)
+
+    rewrite(path, lambda record: record.__setitem__(ACQUISITION_MODE_FIELD, "UNKNOWN"))
+    with pytest.raises(AcquisitionIncompleteError):
+        verify(store)
+
+    path.write_bytes(original)
+    assert path.read_bytes() == original
+    assert audit(store) == ()
+    verify(store)
+
+
+#: A value no message may repeat. Distinctive enough that a substring test is
+#: meaningful, and shaped like the thing that would actually hurt.
+LEAK_CANARY = "CANARY-a1b2c3-do-not-echo"
+
+
+def test_a_malformed_mode_value_never_reaches_the_audit_or_the_exception(
+    tmp_path: Path,
+) -> None:
+    """A durable record can hold anything a bad writer put there, so the value is
+    the one piece of text a verification message must not repeat."""
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__(ACQUISITION_MODE_FIELD, LEAK_CANARY))
+
+    problems = audit(store)
+    assert problems
+    assert not any(LEAK_CANARY in problem for problem in problems)
+
+    with pytest.raises(AcquisitionIncompleteError) as raised:
+        verify(store)
+    assert LEAK_CANARY not in str(raised.value)
+
+
+def test_an_undefined_field_name_is_counted_rather_than_repeated(tmp_path: Path) -> None:
+    """A key this store did not write is uncontrolled text too, not only a value."""
+    store, path, _ = completed(tmp_path)
+    rewrite(path, lambda record: record.__setitem__(LEAK_CANARY, "x"))
+
+    problems = audit(store)
+    assert any("does not define" in problem for problem in problems)
+    assert not any(LEAK_CANARY in problem for problem in problems)
+    with pytest.raises(AcquisitionIncompleteError) as raised:
+        verify(store)
+    assert LEAK_CANARY not in str(raised.value)
 
 
 def test_the_two_envelopes_differ_deliberately_and_the_difference_is_named() -> None:

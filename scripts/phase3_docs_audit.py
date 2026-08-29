@@ -201,6 +201,9 @@ ADR_ACQUISITION_MODE = DECISIONS / "ADR-0013-introduce-acquisition-mode-and-reti
 VOCABULARY = REPO_ROOT / "src" / "kalpamani" / "data" / "contracts" / "vocabulary.py"
 #: the *filesystem* Bronze writer -- the store the first revision of ADR-0013 left behind.
 LOCAL_BRONZE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "bronze.py"
+#: the behavioural suite for the mode contract, including the completeness
+#: verifier the second revision left fail-open.
+ACQUISITION_MODE_TESTS = REPO_ROOT / "tests" / "unit" / "test_acquisition_mode_contract.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -4536,6 +4539,48 @@ def main() -> int:
             "a neutral caller must be able to state a mode; only this runtime may not",
         )
         f.check(
+            "ADR-0013 records that completeness verification enforces the mode",
+            "exactly one active mode field" in flat13
+            and "exact built-in `str`" in flat13
+            and "exactly one of three tokens" in flat13,
+            "writing the mode is not checking it; a bad record must be refusable by reading",
+        )
+        f.check(
+            "ADR-0013 records the closed field allowlist for the filesystem record",
+            "a closed field allowlist" in flat13
+            and "must equal the durable shape exactly" in flat13,
+            "a shape that admits extra or missing fields is a suggestion",
+        )
+        f.check(
+            "ADR-0013 records that verification offers no legacy-reader path",
+            "no alias, fallback, conversion, inference, default or dual-read" in flat13
+            and "republished, never translated" in flat13,
+            "a compatibility reader would manufacture a claim nobody made",
+        )
+        f.check(
+            "ADR-0013 records that no republish is needed to find a bad record",
+            "no republish required" in flat13
+            and "rather than by attempting to write to it again" in flat13,
+            "discovering malformed metadata by writing over it is not verification",
+        )
+        f.check(
+            "ADR-0013 records that the retired key is refused by absence",
+            "refused by absence, not by a check that names it" in flat13,
+            "the allowlist refuses every undefined field, not one anticipated name",
+        )
+        f.check(
+            "ADR-0013 records that verification echoes no record-controlled text",
+            "No record-controlled text reaches a message" in flat13
+            and "counted rather than named" in flat13,
+            "a malformed value is the text least safe to repeat into a traceback",
+        )
+        f.check(
+            "ADR-0013 discloses the fail-open verification defect too",
+            "Writing the mode is not checking it" in flat13
+            and "a property enforced on one path and assumed on another" in flat13,
+            "the same mistake twice is worth naming as a pattern, not as an incident",
+        )
+        f.check(
             "ADR-0013 discloses the defect its own first revision contained",
             "recorded no mode at all" in flat13
             and "accepted rather than refused" in flat13
@@ -4601,6 +4646,74 @@ def main() -> int:
         and '"acquisition_mode": str(retrieval.acquisition_mode.value),' in read(LOCAL_BRONZE),
         "the first revision updated the object-store record and left this store behind",
     )
+    if LOCAL_BRONZE.is_file():
+        local_bronze = read(LOCAL_BRONZE)
+        f.check(
+            "the filesystem store declares a closed acquisition-record shape",
+            "ACQUISITION_RECORD_FIELDS: Final[frozenset[str]]" in local_bronze
+            and "ACQUISITION_MODE_FIELD," in local_bronze,
+            "an open shape cannot refuse a field written under a retired schema",
+        )
+        f.check(
+            "the filesystem completeness audit verifies the record shape",
+            "_record_shape_problems(record)" in local_bronze
+            and "def audit_acquisitions" in local_bronze,
+            "a record already on disk was never republished, so nothing else checks it",
+        )
+        f.check(
+            "the filesystem verifier requires an exact str and a permitted token",
+            "if type(mode) is not str:" in local_bronze
+            and "mode not in _ACQUISITION_MODE_TOKENS" in local_bronze,
+            "a str subclass compares equal to its token while being a different type",
+        )
+        f.check(
+            "the filesystem verifier derives its tokens from the vocabulary",
+            "str(member.value) for member in AcquisitionMode" in local_bronze,
+            "a restated list is a second place for the vocabulary to be wrong",
+        )
+        f.check(
+            "the filesystem verifier echoes no record-controlled text",
+            "not repeated here" in local_bronze
+            and "undefined = len(keys - ACQUISITION_RECORD_FIELDS)" in local_bronze,
+            "a malformed value, and an unrecognised key, are both uncontrolled text",
+        )
+
+    if ACQUISITION_MODE_TESTS.is_file():
+        mode_tests = read(ACQUISITION_MODE_TESTS)
+        for label, needle in (
+            ("a missing mode", "test_a_record_with_no_acquisition_mode_is_refused"),
+            ("every malformed value", "test_each_invalid_durable_mode_is_refused_on_its_own"),
+            ("a str subclass", "test_a_str_subclass_mode_is_refused_where_it_could_arrive"),
+            ("a dual-written record", "test_a_valid_mode_beside_the_retired_key_is_refused"),
+            ("the retired key alone", "test_the_retired_key_alone_is_refused"),
+            ("an undefined field", "test_an_arbitrary_undefined_field_is_refused"),
+            (
+                "refusal without a republish",
+                "test_a_malformed_record_is_refused_without_any_republish_attempt",
+            ),
+            (
+                "the restored record",
+                "test_restoring_the_exact_record_makes_verification_pass_again",
+            ),
+            (
+                "a leaked value",
+                "test_a_malformed_mode_value_never_reaches_the_audit_or_the_exception",
+            ),
+            (
+                "a leaked field name",
+                "test_an_undefined_field_name_is_counted_rather_than_repeated",
+            ),
+        ):
+            f.check(
+                f"a filesystem verification test covers {label}",
+                needle in mode_tests,
+                "the ADR's verification table must name tests that exist",
+            )
+        f.check(
+            "the object-store contradiction test compares a whole-store snapshot",
+            "def object_store_snapshot" in mode_tests and "store.stored_digest(name)" in mode_tests,
+            "an exception says nothing about what the store did before reaching it",
+        )
     f.check(
         "no acquisition mode is assigned conditionally anywhere under src/",
         not _conditional_mode_sites(),

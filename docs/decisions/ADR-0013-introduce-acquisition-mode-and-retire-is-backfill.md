@@ -151,6 +151,37 @@ authoritative than the other.
 * claim → payload → acquisition-record ordering, append-only behaviour, payload bytes,
   classification, object-store security and CONTROL deferral are all untouched.
 
+### Verification refuses what publication would have refused
+
+**A record already on disk must be refusable by reading it.** Writing the mode is not the same as
+checking it: the comparison that catches a contradiction runs during a *republish*, and a record
+that is already wrong was never republished. So filesystem completeness verification —
+`BronzeStore.audit_acquisitions`, and therefore `require_complete` — enforces the durable shape
+itself:
+
+| | |
+|---|---|
+| **exactly one active mode field** | `acquisition_mode`, present on every record |
+| **exact built-in `str`** | not a `bool`, an `int`, a null or a `str` *subclass*. A subclass compares equal to its token and would otherwise pass an `in` test while being a different type |
+| **exactly one of three tokens** | `QUALIFICATION`, `BACKFILL`, `UPDATE`. Wrong case, surrounding whitespace and unknown tokens are refusals, not near-misses to be normalised |
+| **a closed field allowlist** | the record's key set must equal the durable shape exactly. A missing field is incomplete; an undefined field was written by something this repository does not know about |
+| **no legacy-reader path** | no alias, fallback, conversion, inference, default or dual-read. A record written under the retired schema is **republished, never translated** |
+| **no republish required** | the check runs on every record, before any early exit, so malformed durable metadata is discovered by reading the store rather than by attempting to write to it again |
+
+**The retired key is refused by absence, not by a check that names it.** It is simply not in the
+allowlist, so it lands among undefined fields — which is the stronger arrangement, because the
+allowlist refuses *every* field it does not define rather than one anticipated name. What keeps it
+out of the allowlist is the separate repository-wide guard forbidding the retired identifier
+anywhere under `src/`. The two compose: the allowlist refuses what it does not define, and that
+guard refuses any attempt to define the retired name. A record carrying the retired key alone, or
+carrying it *beside* a valid `acquisition_mode`, is refused either way — the dual-written case
+being the disagreement no validation could resolve after the fact.
+
+**No record-controlled text reaches a message.** A malformed field's value is exactly what is least
+safe to repeat into a log or a traceback, and an unrecognised field's *name* is uncontrolled too, so
+undefined fields are counted rather than named. Everything a verification reason does name — the
+required fields, the permitted tokens — comes from a module constant.
+
 **There is no acquisition-metadata schema-version field, and `source_schema_version` is not one.**
 That field describes the *provider's payload* schema, and repurposing it would make one value answer
 two unrelated questions. Rather than invent an unrelated version field, this ADR records the
@@ -234,6 +265,13 @@ Enforced by test, not by review:
 | the publication result does not duplicate it | field-set assertion |
 | exact durable JSON for each of the three modes | whole-record pinning per store, plus an explicit comparison of the nine shared acquisition fields between a real filesystem record and an object-store record |
 | the two envelopes differ only as intended | the filesystem-only and object-store-only field sets are named and asserted, not assumed equal |
+| completeness verification refuses a missing mode | the field removed from a real record on disk; audit reports it and `require_complete` raises |
+| every malformed durable mode is refused on its own | `"UNKNOWN"`, `"qualification"`, `"QUALIFICATION "`, `false`, `null`, `1`, each independently; a `str` subclass against the shape helper, where it is the only thing that can arrive |
+| the retired key is refused alone and beside a valid mode | both records written to disk and refused |
+| the field allowlist is closed | an arbitrary undefined field is refused, and the allowlist is asserted equal to the shape actually written |
+| refusal needs no republish | `BronzeStore.write` is replaced with a raising stub for the duration; verification must not reach it |
+| the refusal is a property of the bytes | restoring the exact original record byte-for-byte makes verification pass again |
+| no record-controlled text is echoed | a canary value, and a canary *field name*, absent from both the audit reasons and the exception |
 | the filesystem record carries the mode in both states | `PENDING` and `COMPLETE` bodies, read back from disk |
 | the serialised value is a plain `str` | `type(...) is str` plus a JSON round-trip |
 | the retired key is refused, alone and alongside the new one | allowlist assertions |
@@ -244,7 +282,7 @@ Enforced by test, not by review:
 | the qualification runtime emits only `QUALIFICATION` | published records inspected; `BACKFILL`/`UPDATE` absent from its code |
 | the qualification runtime's mode is unreachable from `QualificationPlan` and from the runtime's execute caller | dataclass fields and constructor signatures |
 | a neutral synthetic caller can construct all three | parametrised publication |
-| same identity, changed mode → refused; same mode → idempotent | both storage paths, both directions, with the refused attempt leaving the record byte-identical |
+| same identity, changed mode → refused; same mode → idempotent | both storage paths, both directions. The filesystem record is compared byte-for-byte before and after; the object store is snapshotted whole — every logical key, its payload and its admitted digest — and compared after the refusal |
 | write ordering, `LICENSED` classification and PIT rules survive | unchanged assertions, re-run for every mode |
 
 **Every test is synthetic and offline. Nothing here contacts a provider, AWS or a network, and no
@@ -272,3 +310,23 @@ The fix is one field, because the machinery that refuses the contradiction alrea
 needed the mode to be present to compare. The tests are the substantive part: a real `BronzeStore`
 on disk, records read back as bytes rather than as builder output, the shared fields compared across
 the two stores, the envelope difference named, and the changed-mode refusal proven on both paths.
+
+### 5.2 A second defect, in the same shape
+
+Writing the mode is not checking it, and the second revision fixed the writer without noticing that
+**nothing verified**. `audit_acquisitions` — and therefore `require_complete` — validated JSON,
+status, digest linkage, byte count and partition identity, and said nothing whatever about
+acquisition metadata. A COMPLETE record on disk could carry no mode, an unknown or non-string mode,
+the retired key instead of the new field, or both keys at once, and completeness verification passed
+it.
+
+**The failure mode is the same one twice: a property enforced on one path and assumed on another.**
+First the object-store record was updated and the filesystem record was not; then the filesystem
+record was written correctly and nothing read it back. In both cases the contract was stated in the
+ADR and true of exactly one code path.
+
+The correction is the closed allowlist and the mode checks described in §2 above, running on every
+record before any early exit. What makes it more than a third instance of the same mistake is that
+the refusal no longer depends on a second party doing the right thing: verification reads the bytes
+that are actually there, and a test replaces `BronzeStore.write` with a raising stub to prove the
+refusal never routes through publication.

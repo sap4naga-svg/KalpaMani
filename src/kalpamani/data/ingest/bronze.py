@@ -72,7 +72,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.entities import IngestionRun
@@ -95,6 +95,54 @@ ACQUISITION_PENDING = "PENDING"
 
 #: The content object landed and this retrieval is fully recorded.
 ACQUISITION_COMPLETE = "COMPLETE"
+
+#: The durable acquisition-mode field, named once.
+ACQUISITION_MODE_FIELD: Final = "acquisition_mode"
+
+#: The exact durable shape of one filesystem acquisition record.
+#:
+#: A **closed** allowlist, not a minimum. A record missing a field is
+#: incomplete, and a record carrying a field this shape does not define was
+#: written by something this repository does not know about. Neither is
+#: provenance, and admitting either would make the shape a suggestion.
+#:
+#: This is also how the key ADR-0013 retired -- the acquisition boolean -- is
+#: refused: not by a check that names it, but by not being in this set. That is
+#: the stronger of the two, because it refuses every undefined field rather than
+#: one anticipated name, and because the repository-wide guard forbidding the
+#: retired identifier anywhere under ``src/`` is what stops a later change from
+#: quietly adding it back here. The two compose: this set refuses what it does
+#: not define, and that guard refuses any attempt to define the retired name.
+#:
+#: This is the *filesystem* shape and is deliberately not the object-store one:
+#: this record additionally carries ``status``, ``ingest_date`` and ``notes``,
+#: because it completes in two steps and is repaired in place, while the
+#: object-store record carries ``classification`` and has no free-text field.
+ACQUISITION_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "status",
+        "content_sha256",
+        "byte_count",
+        "provider",
+        "dataset",
+        "ingest_date",
+        "requested_range",
+        "retrieved_at",
+        "source_schema_version",
+        "ingestion_run_id",
+        ACQUISITION_MODE_FIELD,
+        "notes",
+    }
+)
+
+#: The three permitted durable mode tokens, as plain strings.
+#:
+#: Derived from the vocabulary rather than restated, so a member added there
+#: cannot be silently absent here. Compared against the *token*, never against
+#: the member: what a later reader gets back out of JSON is a plain ``str``.
+_ACQUISITION_MODE_TOKENS: Final[frozenset[str]] = frozenset(
+    str(member.value) for member in AcquisitionMode
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -363,11 +411,17 @@ class BronzeStore:
     ) -> tuple[str, ...]:
         """Acquisition records that do not check out, as human-readable reasons.
 
-        Verifies JSON validity, acquisition status, digest linkage, byte count,
-        the provider, dataset, date and run identity the record claims, and that
-        the content object it names exists and hashes correctly. A record nothing
-        can corroborate is not provenance, and a record still PENDING is a
-        retrieval that never finished.
+        Verifies JSON validity, the closed durable record shape and its
+        acquisition-mode contract (:func:`_record_shape_problems`), acquisition
+        status, digest linkage, byte count, the provider, dataset, date and run
+        identity the record claims, and that the content object it names exists
+        and hashes correctly. A record nothing can corroborate is not provenance,
+        and a record still PENDING is a retrieval that never finished.
+
+        The shape check runs on every record and before any early exit, so a
+        record whose acquisition mode is missing, malformed, unknown, retired or
+        dual-written is reported here -- and therefore refused by
+        :meth:`require_complete` -- with no republish attempt involved.
         """
         partition = self._acquisition_partition(provider, dataset, ingest_date)
         if not partition.is_dir():
@@ -382,6 +436,10 @@ class BronzeStore:
             if not isinstance(record, Mapping):
                 problems.append(f"{path.name}: not a JSON object")
                 continue
+            # The durable shape first, and unconditionally. Every branch below may
+            # `continue`, and a malformed mode must be reported whether or not the
+            # content object the record names happens to exist.
+            problems.extend(f"{path.name}: {reason}" for reason in _record_shape_problems(record))
             digest = str(record.get("content_sha256", ""))
             expected_name = f"{digest}.{record.get('ingestion_run_id', '')}.json"
             if path.name != expected_name:
@@ -469,6 +527,70 @@ class BronzeStore:
             + "\nRepair by re-running the acquisition, or refuse the partition. A payload "
             "nothing can explain is worse than no payload, because it looks like evidence."
         )
+
+
+def _record_shape_problems(record: Mapping[str, Any]) -> list[str]:
+    """Reasons this acquisition record's durable shape cannot be accepted.
+
+    Verification, not publication. Until this existed, a COMPLETE record could
+    pass :meth:`BronzeStore.require_complete` while carrying no acquisition mode
+    at all, an unknown or non-string mode, the retired ``is_backfill`` key instead
+    of the new field, or both keys at once -- because the only thing that ever
+    compared the mode was :func:`_require_same_retrieval`, which runs during a
+    *republish*. Malformed durable metadata must be discoverable by reading the
+    store, not by attempting to write to it again.
+
+    **Nothing is translated.** There is no alias, fallback, conversion,
+    inference, default or dual-read path. A record written under the retired
+    schema is refused and republished, which is possible precisely because no
+    real Services Data was ever ingested under it (ADR-0013).
+
+    **The retired key is refused by absence, not by a check that names it.**
+    :data:`ACQUISITION_RECORD_FIELDS` does not define it, so it lands in the
+    undefined-field count along with anything else this store did not write. The
+    repository-wide guard forbidding that identifier anywhere under ``src/`` is
+    what keeps it out of the allowlist, so the refusal cannot be undone by
+    editing this module alone.
+
+    **No record-controlled text is echoed.** A malformed field's *value* is
+    exactly what is least safe to repeat into a log or a traceback, and an
+    unrecognised field's *name* is uncontrolled too -- so undefined fields are
+    counted rather than named. Everything these reasons do name comes from a
+    module constant.
+    """
+    problems: list[str] = []
+    keys = set(record)
+
+    missing = sorted(ACQUISITION_RECORD_FIELDS - keys)
+    if missing:
+        problems.append(f"is missing required field(s) {missing}")
+
+    undefined = len(keys - ACQUISITION_RECORD_FIELDS)
+    if undefined:
+        problems.append(
+            f"carries {undefined} field(s) the durable shape does not define -- a record "
+            "written under a schema this repository has retired, or by something it does "
+            "not know about. Their names are not repeated here, because a key this store "
+            "did not write is uncontrolled text"
+        )
+
+    if ACQUISITION_MODE_FIELD in keys:
+        mode = record[ACQUISITION_MODE_FIELD]
+        if type(mode) is not str:
+            problems.append(
+                f"declares an {ACQUISITION_MODE_FIELD} that is not an exact built-in str. A "
+                "bool, an int, a null and a str subclass are each a different value from the "
+                "plain token a later reader must match. The value is not repeated here"
+            )
+        elif mode not in _ACQUISITION_MODE_TOKENS:
+            problems.append(
+                f"declares an {ACQUISITION_MODE_FIELD} outside the closed vocabulary "
+                f"{sorted(_ACQUISITION_MODE_TOKENS)}. Wrong case, surrounding whitespace and "
+                "unknown tokens are refusals, not near-misses to be normalised. The value is "
+                "not repeated here"
+            )
+
+    return problems
 
 
 def _read_record(path: Path) -> dict[str, Any] | None:
