@@ -92,6 +92,16 @@ URL carrying the key (`PSR-SHD-109`), a bucket name, a backend error string and 
 arbitrary exception have no parameter to enter through: every failure is one
 member of :class:`QualificationFailure`, and exceptions are raised ``from None``.
 
+**Every retrieval is a ``QUALIFICATION``.** ADR-0013 replaced the neutral
+``is_backfill`` boolean with a closed
+:class:`~kalpamani.data.contracts.vocabulary.AcquisitionMode`, which gave a
+bounded provider-validation retrieval its own name instead of forcing it to claim
+to be a production backfill or an incremental update. This runtime performs
+exactly one kind of retrieval, so it passes
+:attr:`~kalpamani.data.contracts.vocabulary.AcquisitionMode.QUALIFICATION`
+directly: there is no plan field, no parameter and no override, because there is
+nothing here to choose.
+
 **Point-in-time consequences are enforced, not documented.** The plan's profile is
 already held to ``PROVIDER_REALISTIC_PIT``; this module records the same on every
 outcome and never emits ``PUBLIC_PIT``. It resolves neither Q7, nor Q8, nor the
@@ -114,6 +124,7 @@ from kalpamani.data.contracts.errors import (
     PointInTimeError,
 )
 from kalpamani.data.contracts.vocabulary import (
+    AcquisitionMode,
     DataClassification,
     InformationSetProfile,
     closed_member,
@@ -137,21 +148,6 @@ from kalpamani.data.ingest.sharadar.qualification import (
 )
 from kalpamani.data.ingest.sharadar.redaction import SharadarRequestError
 from kalpamani.data.objectstore import ResearchObjectStore
-
-#: What a qualification retrieval records for ``is_backfill``.
-#:
-#: **Fixed, and not a caller's choice.** An earlier revision took a raw boolean on
-#: the plan, which would have let a caller label qualification evidence as a
-#: production backfill by passing ``True`` -- turning a metadata field into an
-#: authorization claim nobody made.
-#:
-#: ``False`` is the conservative reading: it is the value that cannot be mistaken
-#: for authoritative historical loading. It is **not a perfect fit**, and saying so
-#: is the honest position: the neutral contract describes this field as
-#: distinguishing "a vendor backfill from an update", and a qualification
-#: retrieval of an explicit historical window is neither. See ADR-0012 §4 and the
-#: finding recorded there.
-QUALIFICATION_IS_BACKFILL: Final = False
 
 #: A content address, as the neutral layer spells one.
 _DIGEST: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -786,7 +782,11 @@ class QualificationRuntime:
                     retrieved_at=retrieved_at,
                     ingestion_run_id=identity,
                     source_schema_version=plan.source_schema_version,
-                    is_backfill=QUALIFICATION_IS_BACKFILL,
+                    # **Fixed, and not reachable from a plan or a caller.** This
+                    # runtime performs exactly one kind of retrieval, and
+                    # ADR-0013 gave that kind its own name -- so there is nothing
+                    # left to choose and no parameter through which to choose it.
+                    acquisition_mode=AcquisitionMode.QUALIFICATION,
                 )
             except ObjectAlreadyExistsError:
                 # A name is held by different content. Never overwritten: this is
@@ -972,7 +972,6 @@ def refused_result(
 
 
 __all__ = [
-    "QUALIFICATION_IS_BACKFILL",
     "AcquisitionDisposition",
     "QualificationClock",
     "QualificationFailure",

@@ -588,12 +588,20 @@ def test_the_execution_identity_has_no_default() -> None:
         )
 
 
-def test_the_plan_carries_no_caller_controlled_backfill_flag() -> None:
-    """A raw boolean would have let a caller label qualification evidence as a
-    production backfill, turning a metadata field into an authorization claim."""
+def test_the_plan_carries_no_caller_controlled_acquisition_mode() -> None:
+    """A plan field would let a caller label qualification evidence as a
+    production backfill, turning governed intent into a caller's choice.
+
+    The retired boolean is checked for too: it must not reappear under its old
+    name any more than under the new one (ADR-0013).
+    """
     import dataclasses
 
-    assert "is_backfill" not in {f.name for f in dataclasses.fields(QualificationPlan)}
+    names = {f.name for f in dataclasses.fields(QualificationPlan)}
+    assert "acquisition_mode" not in names
+    assert "is_backfill" not in names
+    with pytest.raises(TypeError):
+        snapshot(acquisition_mode="BACKFILL")
     with pytest.raises(TypeError):
         snapshot(is_backfill=True)
 

@@ -194,6 +194,16 @@ PROVIDER_PACKAGE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharad
 #: this ADR narrowed a claim rather than adding one: something in this repository
 #: now calls the object store, and the checkable control moved from "nothing calls
 #: it" to "nothing can build a real one to call".
+#: The acquisition-mode contract correction (ADR-0013). Section 20 exists because
+#: this ADR *removed* a field rather than adding one, and the guard that matters
+#: most is an absence: no alias, no converter, no default, no dual-write.
+ADR_ACQUISITION_MODE = DECISIONS / "ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md"
+VOCABULARY = REPO_ROOT / "src" / "kalpamani" / "data" / "contracts" / "vocabulary.py"
+#: the *filesystem* Bronze writer -- the store the first revision of ADR-0013 left behind.
+LOCAL_BRONZE = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest" / "bronze.py"
+#: the behavioural suite for the mode contract, including the completeness
+#: verifier the second revision left fail-open.
+ACQUISITION_MODE_TESTS = REPO_ROOT / "tests" / "unit" / "test_acquisition_mode_contract.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
 QUALIFICATION_RUNTIME = PROVIDER_PACKAGE / "runtime.py"
@@ -621,6 +631,51 @@ def _has_a_loop(path: Path) -> bool:
     return any(isinstance(node, ast.While | ast.For | ast.AsyncFor) for node in ast.walk(tree))
 
 
+def _legacy_identifier_sites() -> list[str]:
+    """Every executable use of the retired ``is_backfill`` name under ``src/``.
+
+    Docstrings are stripped, so the three places that *explain* the retirement do
+    not weaken the guard -- and a negative assertion cannot be mistaken for a
+    live use.
+    """
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        code = _executable_python(path)
+        for name in ("is_backfill", "QUALIFICATION_IS_BACKFILL"):
+            if name in code:
+                offenders.append(f"{path.relative_to(REPO_ROOT)} names {name}")
+    return offenders
+
+
+def _conditional_mode_sites() -> list[str]:
+    """Every place an acquisition mode is assigned from a conditional expression.
+
+    Structural rather than textual: "derive it from the data" is written as an
+    ``if`` expression, and a word search would have to guess at every phrasing of
+    a range check, a count comparison or a coverage lookup.
+    """
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(read(path), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.keyword) and node.arg == "acquisition_mode":
+                if isinstance(node.value, ast.IfExp):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.value.lineno}")
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.IfExp):
+                for target in node.targets:
+                    named = isinstance(target, ast.Name) and target.id == "acquisition_mode"
+                    attributed = (
+                        isinstance(target, ast.Attribute) and target.attr == "acquisition_mode"
+                    )
+                    if named or attributed:
+                        offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    return offenders
+
+
 def _executable_python(path: Path) -> str:
     """A Python module's code with every docstring removed.
 
@@ -706,7 +761,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/19] Closed vocabularies are defined where they are used")
+    print("[1/20] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -730,7 +785,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/19] Source and derived envelopes stay disjoint")
+    print("\n[2/20] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -765,7 +820,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/19] Every declared temporal semantics has its required anchor")
+    print("\n[3/20] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -782,7 +837,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/19] Exact and bound derivations name the correct fields")
+    print("\n[4/20] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -809,7 +864,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/19] Normative rules use the current resolved model")
+    print("\n[5/20] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -855,7 +910,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/19] Entities keep source and derived rows apart")
+    print("\n[6/20] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -925,7 +980,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/19] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/20] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -987,7 +1042,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/19] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/20] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -1092,7 +1147,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/19] Resolved-timing wording, closure rules and current status")
+    print("\n[9/20] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -1197,7 +1252,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/19] No document refers to a retired field name")
+    print("\n[10/20] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -1241,7 +1296,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/19] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/20] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -1398,7 +1453,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/19] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/20] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -1490,7 +1545,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/19] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/20] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -2128,7 +2183,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/19] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/20] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -2362,7 +2417,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/19] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/20] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -2752,7 +2807,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/19] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/20] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -3107,7 +3162,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/19] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/20] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -3495,7 +3550,7 @@ def main() -> int:
         )
 
     # ------------------- 18. No status document carries a superseded current state
-    print("\n[18/19] The status documents describe the current governance state, not a past one")
+    print("\n[18/20] The status documents describe the current governance state, not a past one")
 
     for name, path in (
         ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
@@ -3671,7 +3726,7 @@ def main() -> int:
     )
 
     # ------------------- 19. The qualification runtime exists, and cannot be run
-    print("\n[19/19] The Sharadar qualification runtime core is dormant, and says so precisely")
+    print("\n[19/20] The Sharadar qualification runtime core is dormant, and says so precisely")
     f.check(
         "ADR-0012 exists",
         ADR_RUNTIME.is_file(),
@@ -4107,14 +4162,14 @@ def main() -> int:
             "a denylist admits every name the vendor has not invented yet",
         )
         f.check(
-            "the plan carries no caller-controlled backfill flag",
-            "is_backfill" not in plan_source,
-            "a raw boolean would let a caller label evidence as a production backfill",
+            "the plan carries no caller-controlled acquisition mode",
+            "acquisition_mode" not in plan_source and "is_backfill" not in plan_source,
+            "a plan field would let a caller label evidence as a production backfill",
         )
         f.check(
-            "the runtime passes the fixed qualification backfill value",
-            "is_backfill=QUALIFICATION_IS_BACKFILL" in runtime_source,
-            "the value must not be reachable from a plan",
+            "the runtime names the qualification mode directly",
+            "acquisition_mode=AcquisitionMode.QUALIFICATION" in runtime_source,
+            "the mode must be fixed here and unreachable from a plan or a caller",
         )
         f.check(
             "the runtime checks byte headroom before sending a request",
@@ -4229,11 +4284,9 @@ def main() -> int:
             "a ceiling that does not say what it counts is a number, not a bound",
         )
         f.check(
-            f"{name} records the backfill value as a placeholder and a blocker",
-            "is_backfill` is a placeholder" in body
-            and "pre-execution blocker" in flat
-            and "no evidence that the retrieval is an update" in flat.lower(),
-            "a placeholder read as a finding is the failure this guard exists for",
+            f"{name} records the acquisition mode the runtime uses",
+            "AcquisitionMode.QUALIFICATION" in body and "declared, never inferred" in flat.lower(),
+            "a mode read as a derivation is the failure this guard exists for",
         )
         f.check(
             f"{name} records the result-integrity invariants",
@@ -4343,6 +4396,426 @@ def main() -> int:
             "the runtime names the total for completion rather than storage",
             "completed_payload_bytes" in round3_source,
             "it counts acquisitions that completed, including ones that wrote nothing",
+        )
+
+    # ------------------- 20. Acquisition mode replaced a boolean, completely
+    print("\n[20/20] Acquisition mode is a closed vocabulary, and the boolean is gone")
+    f.check(
+        "ADR-0013 exists",
+        ADR_ACQUISITION_MODE.is_file(),
+        f"missing: {ADR_ACQUISITION_MODE}",
+    )
+    if ADR_ACQUISITION_MODE.is_file():
+        adr13 = read(ADR_ACQUISITION_MODE)
+        flat13 = " ".join(
+            " ".join(line.lstrip("> ") for line in adr13.replace("**", "").splitlines()).split()
+        )
+
+        f.check(
+            "ADR-0013 is accepted on merge and not before",
+            "Accepted \u2014 effective on the merge" in adr13 and "carries no authority" in adr13,
+            "the ADR must carry no authority until its pull request merges",
+        )
+        for member, meaning in (
+            ("QUALIFICATION", "bounded provider-validation retrieval"),
+            ("BACKFILL", "Historical production loading"),
+            ("UPDATE", "Incremental production refresh"),
+        ):
+            f.check(
+                f"ADR-0013 defines {member} exactly",
+                member in adr13 and meaning in flat13,
+                "a vocabulary whose members are not defined is three spellings of nothing",
+            )
+        f.check(
+            "ADR-0013 gives the production-scoped reason a qualification run is not an UPDATE",
+            "not an `UPDATE` because it is not an incremental production refresh" in flat13
+            and "does not advance an approved production dataset" in flat13,
+            "the distinction is whether an approved production dataset advances",
+        )
+        f.check(
+            "ADR-0013 does not rest that reason on the retrieval extending no prior state",
+            "It extends no prior state, so it is not an update" not in flat13,
+            "a qualification run may write evidence, and a first UPDATE extends nothing either",
+        )
+        f.check(
+            "ADR-0013 records this as a breaking pre-data correction",
+            "breaking pre-data correction" in flat13,
+            "the change is total precisely because nothing was ever written under the old schema",
+        )
+        f.check(
+            "ADR-0013 records that no real Services Data exists under the retired schema",
+            "No real Services Data has ever been ingested under the retired schema" in flat13,
+            "no data means no migration and no compatibility reader",
+        )
+        f.check(
+            "ADR-0013 forbids default, conversion, inference, alias, reader and dual-write",
+            "No default, no boolean-to-mode conversion, no inference, no alias, no deprecated"
+            in flat13,
+            "each would keep the retired representation alive under another name",
+        )
+        f.check(
+            "ADR-0013 records that the mode is declared and never inferred",
+            "never inferred" in flat13
+            and "not from dates, ranges, record counts" in flat13.lower(),
+            "a mode derived from the data is an observation wearing a declaration's name",
+        )
+        f.check(
+            "ADR-0013 records that the mode proves nothing on its own",
+            "proves nothing on its own" in flat13
+            and "does not grant earlier PIT availability" in flat13,
+            "PIT admissibility is decided by the availability envelope, not by a label",
+        )
+        f.check(
+            "ADR-0013 keeps the historical-coverage observation separate",
+            "historical-coverage observation stays separate" in flat13,
+            "an earlier revision let the coverage rule set the flag, conflating the two",
+        )
+        f.check(
+            "ADR-0013 records that the dormant runtime always uses QUALIFICATION",
+            "passes `AcquisitionMode.QUALIFICATION` directly" in adr13,
+            "there is one kind of retrieval here, so there is nothing to choose",
+        )
+        f.check(
+            "ADR-0013 authorizes neither production mode",
+            "authorizes neither production operation" in flat13,
+            "naming BACKFILL and UPDATE is not permission to perform either",
+        )
+        f.check(
+            "ADR-0013 closes the metadata blocker only on merge and on verified removal",
+            "closes only when this ADR becomes effective on merge and the complete removal is "
+            "verified" in flat13,
+            "a blocker that closes on intention rather than on evidence has not closed",
+        )
+        f.check(
+            "ADR-0013 states that closing the blocker authorizes no real run",
+            "does not authorize or execute a real qualification run" in flat13
+            and "remains NOT" in adr13,
+            "removing an obstacle to asking is not being answered",
+        )
+        f.check(
+            "ADR-0013 changes no gate",
+            all(
+                token in adr13
+                for token in ("G1 OPEN", "G2 OPEN", "G4 OPEN", "G5 OPEN", "G6 OPEN", "G7 OPEN")
+            )
+            and "INC-0002 remains" in adr13
+            and "ADR-0005 remains" in adr13,
+            "a contract correction resolves no decision gate",
+        )
+        f.check(
+            "ADR-0013 supersedes only the live boolean semantics",
+            "live `is_backfill` contract semantics only" in adr13
+            and "Accepted ADRs are not rewritten" in flat13,
+            "historical ADR text is evidence and is never edited",
+        )
+        f.check(
+            "ADR-0013 claims agreement on the shared acquisition fields, not whole records",
+            "agree on the shared acquisition fields" in flat13 and "field for field" not in flat13,
+            "the two envelopes differ on purpose, so whole-record equality would be false",
+        )
+        f.check(
+            "ADR-0013 names the envelope difference instead of hiding it",
+            "Their envelopes are deliberately not identical" in flat13
+            and all(
+                token in flat13
+                for token in ("`status`, `ingest_date` and `notes`", "carries `classification`")
+            ),
+            "a difference that is stated can be reviewed; one that is implied cannot",
+        )
+        f.check(
+            "ADR-0013 records that the filesystem record is read back from a real store",
+            "not from the builder that wrote it" in flat13,
+            "comparing a builder against itself is what missed the omission in the first place",
+        )
+        f.check(
+            "ADR-0013 records the changed-mode refusal as proven on both storage paths",
+            "fails closed on both storage paths, proven against each" in flat13,
+            "one path holding the property says nothing about the other",
+        )
+        f.check(
+            "ADR-0013 scopes the unreachable-mode claim to the qualification runtime",
+            "the qualification runtime's mode is unreachable from `QualificationPlan` and from "
+            "the runtime's execute caller" in flat13,
+            "a neutral caller must be able to state a mode; only this runtime may not",
+        )
+        f.check(
+            "ADR-0013 records that completeness verification enforces the mode",
+            "exactly one active mode field" in flat13
+            and "exact built-in `str`" in flat13
+            and "exactly one of three tokens" in flat13,
+            "writing the mode is not checking it; a bad record must be refusable by reading",
+        )
+        f.check(
+            "ADR-0013 records the closed field allowlist for the filesystem record",
+            "a closed field allowlist" in flat13
+            and "must equal the durable shape exactly" in flat13,
+            "a shape that admits extra or missing fields is a suggestion",
+        )
+        f.check(
+            "ADR-0013 records that verification offers no legacy-reader path",
+            "no alias, fallback, conversion, inference, default or dual-read" in flat13
+            and "republished, never translated" in flat13,
+            "a compatibility reader would manufacture a claim nobody made",
+        )
+        f.check(
+            "ADR-0013 records that no republish is needed to find a bad record",
+            "no republish required" in flat13
+            and "rather than by attempting to write to it again" in flat13,
+            "discovering malformed metadata by writing over it is not verification",
+        )
+        f.check(
+            "ADR-0013 records that the retired key is refused by absence",
+            "refused by absence, not by a check that names it" in flat13,
+            "the allowlist refuses every undefined field, not one anticipated name",
+        )
+        f.check(
+            "ADR-0013 records that verification echoes no record-controlled text",
+            "No record-controlled text reaches a message" in flat13
+            and "counted rather than named" in flat13,
+            "a malformed value is the text least safe to repeat into a traceback",
+        )
+        f.check(
+            "ADR-0013 discloses the fail-open verification defect too",
+            "Writing the mode is not checking it" in flat13
+            and "a property enforced on one path and assumed on another" in flat13,
+            "the same mistake twice is worth naming as a pattern, not as an incident",
+        )
+        f.check(
+            "ADR-0013 discloses the defect its own first revision contained",
+            "recorded no mode at all" in flat13
+            and "accepted rather than refused" in flat13
+            and "a test's *name* is not evidence of its subject" in flat13,
+            "a correction that conceals what it corrected teaches a later reader nothing",
+        )
+        f.check(
+            "ADR-0013 records the durable before and after",
+            '"acquisition_mode": "QUALIFICATION"' in adr13 and '"is_backfill": false' in adr13,
+            "the shape change is the part a later reader most needs stated",
+        )
+        f.check(
+            "ADR-0013 refuses to repurpose the payload schema version",
+            "`source_schema_version` is not one" in adr13,
+            "one value answering two unrelated questions is how a schema field goes wrong",
+        )
+
+    # -- the vocabulary and the contract, as code ----------------------------
+    if VOCABULARY.is_file():
+        vocabulary_source = read(VOCABULARY)
+        f.check(
+            "the vocabulary defines exactly the three members",
+            'QUALIFICATION = "QUALIFICATION"' in vocabulary_source
+            and 'BACKFILL = "BACKFILL"' in vocabulary_source
+            and 'UPDATE = "UPDATE"' in vocabulary_source,
+            "three members, and the meanings are recorded beside them",
+        )
+        f.check(
+            "the vocabulary has no escape-hatch member",
+            not re.search(
+                r"^\s+(UNKNOWN|NONE|OTHER|HISTORICAL|DEFAULT)\s*=",
+                vocabulary_source.split("class AcquisitionMode")[1].split("class ")[0]
+                if "class AcquisitionMode" in vocabulary_source
+                else "",
+                re.M,
+            ),
+            "a member meaning 'we did not say' would be chosen by whatever did not decide",
+        )
+        f.check(
+            "the vocabulary is exported from the neutral surface",
+            '"AcquisitionMode",' in vocabulary_source,
+            "a contract type nobody can import is a contract nobody can use",
+        )
+
+    f.check(
+        "no executable module under src/ names the retired identifier",
+        not _legacy_identifier_sites(),
+        "an alias, a property, a parameter or a serialized field would keep it alive",
+    )
+    f.check(
+        "the durable field allowlist names the mode and refuses the retired key",
+        '"acquisition_mode",' in read(PUBLICATION) and '"is_backfill",' not in read(PUBLICATION),
+        "the allowlist is what refuses a record carrying the old key, or carrying both",
+    )
+    f.check(
+        "the neutral publisher reads the mode only from the retrieval",
+        "str(retrieval.acquisition_mode.value)" in read(PUBLICATION),
+        "a second source would be a second place to state one fact",
+    )
+    f.check(
+        "the filesystem acquisition record carries the mode, from the retrieval",
+        LOCAL_BRONZE.is_file()
+        and '"acquisition_mode": str(retrieval.acquisition_mode.value),' in read(LOCAL_BRONZE),
+        "the first revision updated the object-store record and left this store behind",
+    )
+    if LOCAL_BRONZE.is_file():
+        local_bronze = read(LOCAL_BRONZE)
+        f.check(
+            "the filesystem store declares a closed acquisition-record shape",
+            "ACQUISITION_RECORD_FIELDS: Final[frozenset[str]]" in local_bronze
+            and "ACQUISITION_MODE_FIELD," in local_bronze,
+            "an open shape cannot refuse a field written under a retired schema",
+        )
+        f.check(
+            "the filesystem completeness audit verifies the record shape",
+            "_record_shape_problems(record)" in local_bronze
+            and "def audit_acquisitions" in local_bronze,
+            "a record already on disk was never republished, so nothing else checks it",
+        )
+        f.check(
+            "the filesystem verifier requires an exact str and a permitted token",
+            "if type(mode) is not str:" in local_bronze
+            and "mode not in _ACQUISITION_MODE_TOKENS" in local_bronze,
+            "a str subclass compares equal to its token while being a different type",
+        )
+        f.check(
+            "the filesystem verifier derives its tokens from the vocabulary",
+            "str(member.value) for member in AcquisitionMode" in local_bronze,
+            "a restated list is a second place for the vocabulary to be wrong",
+        )
+        f.check(
+            "the filesystem verifier echoes no record-controlled text",
+            "not repeated here" in local_bronze
+            and "undefined = len(keys - ACQUISITION_RECORD_FIELDS)" in local_bronze,
+            "a malformed value, and an unrecognised key, are both uncontrolled text",
+        )
+
+    if ACQUISITION_MODE_TESTS.is_file():
+        mode_tests = read(ACQUISITION_MODE_TESTS)
+        for label, needle in (
+            ("a missing mode", "test_a_record_with_no_acquisition_mode_is_refused"),
+            ("every malformed value", "test_each_invalid_durable_mode_is_refused_on_its_own"),
+            ("a str subclass", "test_a_str_subclass_mode_is_refused_where_it_could_arrive"),
+            ("a dual-written record", "test_a_valid_mode_beside_the_retired_key_is_refused"),
+            ("the retired key alone", "test_the_retired_key_alone_is_refused"),
+            ("an undefined field", "test_an_arbitrary_undefined_field_is_refused"),
+            (
+                "refusal without a republish",
+                "test_a_malformed_record_is_refused_without_any_republish_attempt",
+            ),
+            (
+                "the restored record",
+                "test_restoring_the_exact_record_makes_verification_pass_again",
+            ),
+            (
+                "a leaked value",
+                "test_a_malformed_mode_value_never_reaches_the_audit_or_the_exception",
+            ),
+            (
+                "a leaked field name",
+                "test_an_undefined_field_name_is_counted_rather_than_repeated",
+            ),
+        ):
+            f.check(
+                f"a filesystem verification test covers {label}",
+                needle in mode_tests,
+                "the ADR's verification table must name tests that exist",
+            )
+        f.check(
+            "the object-store contradiction test compares a whole-store snapshot",
+            "def object_store_snapshot" in mode_tests and "store.stored_digest(name)" in mode_tests,
+            "an exception says nothing about what the store did before reaching it",
+        )
+    f.check(
+        "no acquisition mode is assigned conditionally anywhere under src/",
+        not _conditional_mode_sites(),
+        "deriving the mode from the data is the conflation this correction removed",
+    )
+
+    # -- the current documentation --------------------------------------------
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        if not path.is_file():
+            continue
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split())
+        f.check(
+            f"{name} records the three-member vocabulary and ADR-0013",
+            "ADR-0013" in body
+            and all(token in body for token in ("QUALIFICATION", "BACKFILL", "UPDATE")),
+            "the contract a session must not re-derive belongs where a session looks first",
+        )
+        f.check(
+            f"{name} records that the mode is declared and never inferred",
+            "Declared, never inferred" in body,
+            "counts, ranges and coverage are observations, not declarations",
+        )
+        f.check(
+            f"{name} records that the mode proves nothing on its own",
+            "proves nothing on its own" in flat and "grants no earlier PIT availability" in flat,
+            "a label that granted PIT availability would be a leak with a governance name",
+        )
+        f.check(
+            f"{name} keeps the historical-coverage check separate from the mode",
+            "observes" in flat and "without setting, confirming or contradicting it" in flat,
+            "the coverage rule records what arrived; the mode records what was asked for",
+        )
+        f.check(
+            f"{name} closes the metadata blocker only on merge",
+            "blocker is CLOSED effective on merge" in flat
+            and "only if the complete removal is accepted" in flat,
+            "a blocker closed by intention rather than by evidence has not closed",
+        )
+        f.check(
+            f"{name} states beside that closure that a real run is still unauthorized",
+            "Real Sharadar qualification remains NOT AUTHORIZED and has never run" in flat,
+            "the two statements must be read together or the first misleads",
+        )
+        f.check(
+            f"{name} authorizes neither production mode",
+            "neither production operation is authorized" in flat,
+            "naming BACKFILL and UPDATE is not permission to perform either",
+        )
+
+    plan_path = PHASE3 / "implementation-plan.md"
+    if plan_path.is_file():
+        plan_body = read(plan_path)
+        f.check(
+            "the implementation plan describes the ingestion run's declared mode",
+            "declared `acquisition_mode`" in plan_body
+            and "never inferred from what arrived" in plan_body,
+            "the plan is where the durable ingestion_run shape is described",
+        )
+        f.check(
+            "the implementation plan no longer says the run records whether it was a backfill",
+            "whether the run was a backfill" not in plan_body,
+            "a two-valued description of a three-member field is the retired contract",
+        )
+
+    quality_path = PHASE3 / "data-quality-plan.md"
+    if quality_path.is_file():
+        quality_flat = " ".join(read(quality_path).replace("**", "").split())
+        f.check(
+            "the data-quality plan does not call an unsatisfied condition a finding",
+            "both are findings" not in quality_flat,
+            "4.2.4 emits a finding only when its coverage-extension condition holds",
+        )
+        f.check(
+            "the data-quality plan states when 4.2.4 actually emits a finding",
+            "emits a finding only when its historical-coverage-extension condition is satisfied"
+            in quality_flat
+            and "Neither observation rewrites or contradicts the declared acquisition mode"
+            in quality_flat,
+            "an observation that sits oddly beside the mode does not overrule it",
+        )
+
+    for label, path in (
+        ("the conceptual schema", PHASE3 / "conceptual-schema.md"),
+        ("the data-quality plan", PHASE3 / "data-quality-plan.md"),
+    ):
+        if not path.is_file():
+            continue
+        contract = read(path)
+        f.check(
+            f"{label} names acquisition_mode rather than the retired boolean",
+            "acquisition_mode" in contract,
+            "a current contract document is where the live field is looked up",
+        )
+        f.check(
+            f"{label} records that counts and coverage do not determine the mode",
+            "Neither determines `acquisition_mode`" in contract
+            or "does **not** set, confirm or contradict `acquisition_mode`" in contract,
+            "record counts and coverage extension are observations",
         )
 
     # ---------------------------------------------------------------- verdict

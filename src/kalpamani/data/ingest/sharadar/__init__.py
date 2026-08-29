@@ -104,7 +104,6 @@ from kalpamani.data.ingest.sharadar.redaction import (
     redact,
 )
 from kalpamani.data.ingest.sharadar.runtime import (
-    QUALIFICATION_IS_BACKFILL,
     AcquisitionDisposition,
     QualificationClock,
     QualificationFailure,
@@ -142,7 +141,6 @@ __all__ = [
     "PERMITTED_PROFILE",
     "PLAN_PARAMETER_ALLOWLIST",
     "PROVIDER",
-    "QUALIFICATION_IS_BACKFILL",
     "QUERY_PARAMETER_ALLOWLIST",
     "REFUSED_PROFILE",
     "RETRYABLE_CODES",

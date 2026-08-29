@@ -325,7 +325,8 @@ live brokerage execution, real-money operation.
 | [ADR-0009](docs/decisions/ADR-0009-sharadar-provider-realistic-implementation.md) — Sharadar provider-realistic implementation | **ACCEPTED / IN FORCE** — PR #13 merged |
 | [ADR-0010](docs/decisions/ADR-0010-accept-bounded-sharadar-semantics-and-authorize-qualification-subscription.md) — bounded Sharadar semantics, qualification subscription | **ACCEPTED / IN FORCE (2026-08-28)** — PR #15 merged |
 | [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store | **ACCEPTED / IN FORCE** — PR #16 merged |
-| [ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md) — dormant Sharadar qualification runtime core | **ACCEPTED EFFECTIVE ON MERGE OF PR #17** — carries no authority before it |
+| [ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md) — dormant Sharadar qualification runtime core | **ACCEPTED / IN FORCE** — PR #17 merged |
+| [ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) — acquisition mode, `is_backfill` retired | **ACCEPTED EFFECTIVE ON MERGE OF THE PR INTRODUCING IT** — carries no authority before it |
 | G1 provider selection · G2 production information-set profile | **OPEN** |
 | G3 vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | G4 analyst revisions · G5 historical borrow | **OPEN** |
@@ -656,6 +657,49 @@ publication remains **separately unauthorized**. **G1 and G2 stay OPEN**, ADR-00
 
 ---
 
+### The acquisition-mode contract — `is_backfill` retired
+
+[ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) replaced the
+provider-neutral `is_backfill: bool` with a closed **`AcquisitionMode`** vocabulary of exactly three
+members. **Accepted on merge of the PR introducing it**, and carrying no authority before.
+
+| | |
+|---|---|
+| `QUALIFICATION` | a bounded provider-validation retrieval |
+| `BACKFILL` | historical production loading |
+| `UPDATE` | incremental production refresh |
+
+The boolean could express only two of the three, so a qualification retrieval had to claim to be a
+production backfill or an incremental update — and it is neither. This is an **intentional breaking
+pre-data correction**: no real Services Data has ever been ingested under the retired schema, so
+there is nothing to migrate. **No default, no boolean conversion, no inference, no alias, no legacy
+reader and no dual-write** exists, and the retired key is refused by the durable field allowlist.
+
+**Declared, never inferred.** Not from dates, ranges, record counts, payload contents, first-seen
+times, prior coverage, the provider or the dataset. `record_count` and `new_record_count` do not
+determine it, and the §4.2.4 historical-coverage check **observes** late-arriving or newly-covered
+data without setting, confirming or contradicting it.
+
+**It proves nothing on its own** — not PIT admissibility, public availability, provider availability,
+row chronology, or whether a provider silently supplied revised historical rows. `BACKFILL` grants
+no earlier PIT availability; `UPDATE` does not establish that the rows carry no historical
+revisions; `QUALIFICATION` neither selects a provider nor qualifies the data.
+
+**Single source of truth.** `RetrievalMetadata.acquisition_mode` is required and has no default.
+`IngestionRun` derives it, `BronzePublication` does not duplicate it, the Sharadar bridge requires it
+explicitly, and the dormant runtime passes `QUALIFICATION` with no override. Durable records carry
+`"acquisition_mode": "QUALIFICATION"` as a plain exact string; `"is_backfill"` is gone.
+
+**The `is_backfill` metadata blocker is CLOSED effective on merge**, and only if the complete
+removal is accepted. **Real Sharadar qualification remains NOT AUTHORIZED and has never run** —
+closing this blocker removed one obstacle in front of *asking* for authorization, and changed
+nothing else: no credential, no composition root, no client, no bucket binding, no runner.
+`BACKFILL` and `UPDATE` exist as production modes and **neither production operation is
+authorized**.
+
+**G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3
+**NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
+
 ### The Sharadar qualification runtime core — dormant, and what that means exactly
 
 [ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md)
@@ -702,7 +746,7 @@ says.
 | **Unknown durable state** | a publication that raises may have committed some of its three appends, and an ambiguous backend failure may not prove whether any committed. The result carries `publication_state_unknown` and **claims to know nothing more** |
 | **Run-byte ceiling** | bounds **successful provider payload bytes handed to the runtime**, counted the moment they arrive and before publication — not HTTP framing, failed-response bodies or wire traffic, none of which the client exposes. Enforced as *headroom* before each request, so the run never asks for an answer it cannot afford |
 | **Result integrity** | a result must describe one valid execution: unique acquisition identities, unique request coordinates, every counter and both byte totals re-derived from the outcomes, and `HALTED` requiring strictly fewer completed than planned |
-| **`is_backfill` is a placeholder** | fixed `False` for this dormant slice, to stop qualification data being represented as an authoritative historical backfill. It is **no evidence that the retrieval is an update**, and it is a **pre-execution blocker**: no real qualification or Services Data publication may be authorized until the neutral acquisition contract can represent a qualification retrieval accurately, under its own governed decision |
+| **Acquisition mode** | the runtime records `AcquisitionMode.QUALIFICATION` — a bounded provider-validation retrieval, with its own name rather than a borrowed one ([ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)). Fixed, with no plan field and no caller override. The mode is **declared, never inferred** from counts, ranges, payloads or prior coverage, and it **proves nothing on its own** about PIT availability or row chronology |
 | **Nothing leaks** | every failure is one closed `StrEnum` member, raised `from None`. A response body, a URL carrying the key, a bucket name and a backend error string have no parameter to arrive through |
 | **PIT is in the type** | `PROVIDER_REALISTIC_PIT` is the only admitted profile; `PUBLIC_PIT` is refused and is not named in the runtime at all |
 | **`permaticker` is untouched** | never named, never derived from. Payloads are opaque bytes and are never parsed |

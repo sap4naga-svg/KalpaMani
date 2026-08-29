@@ -210,12 +210,23 @@ Leakage is impossible. Lateness is merely inconvenient — unless something live
 | 4.2.1b | Late arrival, **system-observed** | **not applicable** — there is no external delivery to be late. `ing − seen > write_budget` is checked instead, as a pipeline-health signal | **INFO**, escalating |
 | 4.2.2 | Live freshness breach | dataset is live-facing **and** `now − seen > freshness_bound(dataset)` | **BLOCKING** |
 | 4.2.3 | Borrow staleness | `as_of − smp > borrow_freshness_bound` | **BLOCKING** |
-| 4.2.4 | Backfill detected | an `ingestion_run` delivered rows whose **valid-time coverage** (`observation_time` / `effective_date` / `sample_time`) extends earlier than the prior run's minimum for that dataset, **or** whose `anchor` predates it | **INFO** — and sets `is_backfill`, which §4.3 then polices |
+| 4.2.4 | Historical-coverage extension observed | an `ingestion_run` delivered rows whose **valid-time coverage** (`observation_time` / `effective_date` / `sample_time`) extends earlier than the prior run's minimum for that dataset, **or** whose `anchor` predates it | **INFO** — an *observation* recorded as an issue. It does **not** set, confirm or contradict `acquisition_mode` |
 
-Revision 3 detected backfills through `pub` alone, so a backfill of proprietary or
+Revision 3 detected this through `pub` alone, so an extension covering proprietary or
 system-observed rows — precisely the ones whose provider timing is least trustworthy — was
 invisible. Detection is now origin-aware and keyed on **coverage plus anchor**, so it fires
 whatever kind of row arrived.
+
+**§4.2.4 observes; it does not declare.** An earlier revision had this check *set* `is_backfill`,
+which conflated two different things: what a run delivered, and what the run was. Since
+[ADR-0013](../decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) the
+declared operation is `acquisition_mode` — `QUALIFICATION`, `BACKFILL` or `UPDATE` — stated by
+whoever governs the retrieval and **never inferred from the data**. This check records that
+late-arriving or newly-covered historical data appeared, which is worth knowing whatever the run
+was called, and is equally worth knowing when it sits oddly beside the declared mode. A
+`BACKFILL` may extend no coverage, and an `UPDATE` may extend substantial historical coverage.
+Neither observation rewrites or contradicts the declared acquisition mode; §4.2.4 emits a finding
+only when its historical-coverage-extension condition is satisfied.
 
 ### 4.3 Information-set profile
 

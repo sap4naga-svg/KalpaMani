@@ -121,15 +121,21 @@ class RecordingStore:
         """An empty store with an empty call log."""
         self._store = InMemoryResearchObjectStore()
         self.put_keys: list[str] = []
+        self._bodies: dict[str, bytes] = {}
 
     def put_if_absent(self, *, key: ObjectKey, payload: bytes) -> PutOutcome:
-        """Record the logical key, then delegate."""
+        """Record the logical key and the bytes, then delegate."""
         self.put_keys.append(key.logical_key)
+        self._bodies.setdefault(key.logical_key, payload)
         return self._store.put_if_absent(key=key, payload=payload)
 
     def exists(self, *, key: ObjectKey) -> bool:
         """Delegate."""
         return self._store.exists(key=key)
+
+    def body_of(self, logical_key: str) -> bytes:
+        """The exact bytes stored under a logical key. For assertions only."""
+        return self._bodies[logical_key]
 
     @property
     def call_count(self) -> int:

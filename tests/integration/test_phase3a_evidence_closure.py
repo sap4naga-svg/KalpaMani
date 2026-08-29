@@ -52,6 +52,7 @@ from kalpamani.data.contracts.profiles import (
 from kalpamani.data.contracts.row_identity import row_fingerprint, source_row_identity
 from kalpamani.data.contracts.vocabulary import (
     RAW,
+    AcquisitionMode,
     AdjustmentMode,
     AdjustmentPolicy,
     BarResolution,
@@ -1131,6 +1132,7 @@ def _retrieval(run_id: str = "ing-closure-0001") -> RetrievalMetadata:
         retrieved_at=phase3a.INGESTION_TIME,
         source_schema_version="synthetic/1",
         ingestion_run_id=run_id,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
     )
 
 

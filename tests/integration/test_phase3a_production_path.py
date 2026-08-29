@@ -52,6 +52,7 @@ from kalpamani.data.contracts.profiles import DatasetGapResolution, ProfileResol
 from kalpamani.data.contracts.resolution import decision_available_time
 from kalpamani.data.contracts.vocabulary import (
     RAW,
+    AcquisitionMode,
     AdjustmentConvention,
     AdjustmentMode,
     AdjustmentPolicy,
@@ -150,6 +151,7 @@ def _retrieval(run_id: str | None = None) -> RetrievalMetadata:
         retrieved_at=phase3a.utc(2026, 8, 26, 11, 0),
         source_schema_version="synthetic/1",
         ingestion_run_id=run_id or phase3a.INGESTION_RUN_ID,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
     )
 
 

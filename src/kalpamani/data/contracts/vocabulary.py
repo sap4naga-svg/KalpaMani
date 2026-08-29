@@ -591,6 +591,47 @@ class ObjectStoreFailure(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class AcquisitionMode(StrEnum):
+    """What a retrieval **was**: the governed intent of the operation.
+
+    Three members, and deliberately no fourth. There is no ``UNKNOWN``, no
+    ``NONE``, no generic historical mode and no extension point, because each
+    would be a place for a caller who had not decided to record that they had
+    not decided -- and a durable record whose mode means "we did not say" is
+    worse than one that could not be written at all.
+
+    ``QUALIFICATION``
+        A bounded provider-validation retrieval. Evidence gathered to judge
+        whether a provider's data behaves as documented.
+    ``BACKFILL``
+        Historical production loading.
+    ``UPDATE``
+        Incremental production refresh.
+
+    **It states intent, and is never inferred.** Not from dates, ranges, record
+    counts, payload contents, first-seen times, prior coverage, the provider or
+    the dataset. A run that happened to return old rows is not thereby a
+    backfill; a run that returned few rows is not thereby an update. Those are
+    observations about what arrived, and this field is a statement about what
+    was asked for.
+
+    **It proves nothing on its own.** Not point-in-time admissibility, not
+    public availability, not provider availability, not row chronology, and not
+    whether a provider silently supplied revised historical rows. ``BACKFILL``
+    does not grant earlier PIT availability. ``UPDATE`` does not establish that
+    the returned rows contain no historical revisions. ``QUALIFICATION`` does
+    not select a provider and does not qualify the data.
+
+    It replaced a boolean ``is_backfill`` (ADR-0013), which could express only
+    two of the three and forced a qualification retrieval to claim to be one of
+    them.
+    """
+
+    QUALIFICATION = "QUALIFICATION"
+    BACKFILL = "BACKFILL"
+    UPDATE = "UPDATE"
+
+
 class DataClassification(StrEnum):
     """Which private research store an object belongs in (ADR-0007).
 
@@ -624,6 +665,7 @@ __all__ = [
     "EXACT_PUBLIC_DERIVATIONS",
     "RAW",
     "SOURCE_ORIGINS",
+    "AcquisitionMode",
     "AdjustmentConvention",
     "AdjustmentMode",
     "AdjustmentPolicy",

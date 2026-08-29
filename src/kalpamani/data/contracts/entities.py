@@ -35,6 +35,7 @@ from kalpamani.data.contracts.envelope import DerivedEnvelope, SourceEnvelope
 from kalpamani.data.contracts.instants import normalize_instant
 from kalpamani.data.contracts.resolution import PitRecord
 from kalpamani.data.contracts.vocabulary import (
+    AcquisitionMode,
     AdjustmentConvention,
     AdjustmentPolicy,
     BarConstruction,
@@ -474,8 +475,12 @@ class UniverseMembership(DerivedArtifact):
 class IngestionRun:
     """The act that fetched something. Immutable once written.
 
-    ``is_backfill`` is what distinguishes a vendor backfill from an update, and
-    the distinction is what the profile model exists to act on.
+    ``acquisition_mode`` states what the run **was** -- a bounded provider
+    validation, a historical production load, or an incremental refresh. It is
+    the governed intent of the operation, copied from the retrieval that produced
+    the run rather than restated, and it is **never inferred**: neither
+    ``record_count`` nor ``new_record_count`` nor the requested range determines
+    it. A run that returned many old rows is not thereby a ``BACKFILL``.
     """
 
     ingestion_run_id: str
@@ -487,13 +492,19 @@ class IngestionRun:
     requested_range: str
     record_count: int
     new_record_count: int
-    is_backfill: bool
+    acquisition_mode: AcquisitionMode
     bronze_artifact_hashes: tuple[str, ...]
     code_commit_sha: str
     config_version: str
 
     def __post_init__(self) -> None:
         _normalize_instants(self, "started_at", "completed_at")
+        if type(self.acquisition_mode) is not AcquisitionMode:
+            raise ValueError(
+                "IngestionRun.acquisition_mode must be an exact AcquisitionMode member. "
+                "It states the governed intent of the run, and a value that merely "
+                "compares equal to one is not a statement anybody made."
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -67,7 +67,10 @@ schema plus an explicitly keyed cache.
 
 **Bronze** holds the vendor payload byte-for-byte, gzipped, named by the SHA-256 of its
 contents, with an `ingestion_run` row recording provider, dataset, requested range, retrieval
-time, original schema version, hash, and whether the run was a backfill. It is **append-only**.
+time, original schema version, hash, and the run's declared `acquisition_mode` —
+`QUALIFICATION`, `BACKFILL` or `UPDATE`
+([ADR-0013](../decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)), stated
+by whoever governs the retrieval and never inferred from what arrived. It is **append-only**.
 A re-fetch returning different bytes is a *new* artifact, not a replacement — which is what
 makes a vendor backfill visible instead of silent, and what lets the profile model
 (§[contract 3.3](pit-data-contract.md)) decide what to do about it.

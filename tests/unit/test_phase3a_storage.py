@@ -41,7 +41,7 @@ from kalpamani.data.contracts.serde import (
     encode_security_attribute,
     encode_ticker_history,
 )
-from kalpamani.data.contracts.vocabulary import StorageLayer
+from kalpamani.data.contracts.vocabulary import AcquisitionMode, StorageLayer
 from kalpamani.data.ingest.bronze import BronzeStore, RetrievalMetadata, build_ingestion_run
 from kalpamani.data.storage import DEFAULT_DATA_ROOT, LocalTableStore
 
@@ -58,6 +58,7 @@ def _retrieval(run_id: str = "ing-synthetic-0001") -> RetrievalMetadata:
         retrieved_at=datetime(2026, 8, 26, 11, 0, tzinfo=UTC),
         source_schema_version="synthetic/1",
         ingestion_run_id=run_id,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
     )
 
 
@@ -119,6 +120,7 @@ def test_an_acquisition_without_an_ingestion_run_id_is_refused() -> None:
             retrieved_at=datetime(2026, 8, 26, 11, 0, tzinfo=UTC),
             source_schema_version="synthetic/1",
             ingestion_run_id="",
+            acquisition_mode=AcquisitionMode.QUALIFICATION,
         )
 
 
@@ -213,7 +215,6 @@ def test_an_ingestion_run_records_every_bronze_hash(tmp_path: Path) -> None:
         artifacts=(artifact,),
         record_count=5,
         new_record_count=5,
-        is_backfill=True,
         code_commit_sha="0123456789abcdef0123456789abcdef01234567",
         config_version="research/synthetic.a1",
     )
