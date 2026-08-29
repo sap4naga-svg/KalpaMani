@@ -83,8 +83,33 @@ from habit on the wrong terminal; each is **refused by name**, with its reason, 
 fails loudly rather than doing something.
 
 **It authorizes a binding preflight and nothing further.** It does not mint, imply or stand in for
-authorization to execute a qualification run, and no code path consumes it as one. The check is for
-exact `True` — a truthy string, a `1` or a lookalike object authorizes nothing.
+authorization to execute a qualification run, and no code path consumes it as one.
+
+### The authorization is a minted capability, not a boolean
+
+This ADR's first revision specified `binding_authorized: bool`, checked as `is True`. **That was not
+an authorization.** A caller who imported `run_binding_preflight` and passed `True` reached the
+profile, identity and bucket stages with the flag never parsed — and a boolean is the one value every
+caller already has.
+
+`run_binding_preflight` now takes a **capability this module mints, only after the exact flag
+parses**:
+
+| | |
+|---|---|
+| **No public constructor** | `__init__` refuses any mint but a module-private sentinel |
+| **No subclassing** | a subclass instance would satisfy `isinstance` while never having been minted |
+| **Exact type *and* mint identity** | so a structural lookalike, a lookalike carrying a *borrowed* mint, an uninitialised `object.__new__` instance, a deep copy and a pickle round-trip are all refused |
+| **Not exported** | neither the class, the sentinel, nor the minting function |
+| **One mint call site** | inside `main`, in the branch the flag has already been checked in |
+
+A **shallow copy** stays authorized, and that is correct rather than a hole: it holds the same
+sentinel this module made, and copying an authorization manufactures no authority.
+
+**What that claims, precisely.** No caller can construct or forge one through ordinary construction,
+subclassing, copying, deserialisation or a structural lookalike. It is **not** a claim about hostile
+runtime introspection: a process that can reach a module's private names can build one, as it can in
+any Python program, and this ADR does not pretend otherwise.
 
 ### The order, which is the security property
 
@@ -121,7 +146,7 @@ value is the least authority that does the job.
 | | |
 |---|---|
 | **Injected, like everything else** | a `boto3` client satisfies it structurally; **no module under `src/` imports the SDK**, so importing the data platform still opens no socket and performs no ambient credential discovery |
-| **Nothing is compiled in** | no secret name, ARN, account, bucket, region or endpoint. The identifier is supplied by the operator and is never printed back |
+| **Nothing is compiled in** | no secret name, ARN, account, bucket, region or endpoint |
 | **`SecretString` only** | `SecretBinary` is **refused, not decoded**. An API key is printable text; guessing at an encoding is how a wrong value reaches a request |
 | **No fallback of any kind** | no JSON parsing, no key guessing, no alias, no default, no conversion. The secret's value *is* the credential; a secret holding something else is a configuration error to fix at the source |
 | **Straight into the credential** | the value is handed immediately to `SharadarCredential` and is never bound to a surviving local, logged, returned or included in a refusal |
@@ -129,6 +154,33 @@ value is the least authority that does the job.
 | **`from None`, always** | a backend exception quotes the secret name, usually the ARN and often the account. Suppressing the cause keeps it out of the traceback too |
 
 `SharadarCredential` is unchanged, and no second credential representation is introduced.
+
+### The secret identifier never travels in argv
+
+This ADR's first revision specified `--secret-id`. **A private identifier on the command line enters
+shell history and every process listing on the machine**, whether or not the program prints it —
+redacting output does not help once the value is in `argv`.
+
+The identifier now comes from an **injected zero-argument source**, invoked **once**, only after
+authorization, profile, identity and bucket resolution have all passed, and immediately before the
+credential is retrieved. A private identifier must not be resolved on a path that is going to refuse.
+
+The production source reads **one fixed, non-secret environment-variable name**,
+`KALPAMANI_SHARADAR_SECRET_ID`. The *name* is a constant and is committed; the *value* is private and
+is never printed, logged, returned or included in a refusal. `os` is imported inside the factory
+body, so an ordinary import and every refusal path perform no environment lookup of it at all.
+
+`--secret-id`, `--secret-name`, `--secretid`, `--secret-arn` and `--secret` are **refused by name**
+with their reason, rather than silently ignored — an unrecognised-argument error teaches nothing and
+invites a second spelling. A missing, blank, non-string, `str`-subclassed or raising source becomes
+the closed `REFUSED_CREDENTIAL` outcome, raised `from None`, naming nothing.
+
+**One honest limit.** "Zero environment lookups on the default path" would be false, and this ADR
+does not claim it: `argparse` reads `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`, `COLUMNS` and
+`LINES` while formatting its own output, whatever the program does. Those are locale and terminal
+width, not secrets. What is claimed and tested is the property that matters — **the default path and
+every earlier refusal read no credential-bearing variable at all**, and specifically never
+`KALPAMANI_SHARADAR_SECRET_ID` or `AWS_PROFILE`.
 
 ### Offline composition only
 
@@ -229,7 +281,13 @@ Enforced by test, not by review:
 |---|---|
 | import does nothing | AST over module-level statements; no SDK, verifier, `os` or `urllib` import at module scope |
 | invocation without the flag refuses before any stage | the stage recorder is empty, and the secrets client was never asked |
-| authorization cannot be forged | `1`, `"yes"`, `"true"`, `"True"`, a non-empty list, a `__bool__` lookalike and `1.0`, each refused |
+| authorization cannot be forged | sixteen cases: `True`, `False`, `1`, `0`, a string, the flag spelled as a string, an enum member, a float, a list, a mapping, a bare object, a truthy lookalike, a structural lookalike, a lookalike carrying a *borrowed* mint, the class itself, and the minting function |
+| the capability has no public constructor | direct construction with any other mint raises |
+| the capability refuses subclassing | class creation raises |
+| an uninitialised instance is refused | `object.__new__` skips `__init__`, so no mint is carried |
+| a copy is genuine, a deep copy and a pickle round-trip are not | all three exercised end to end |
+| the mint has exactly one call site | AST over the module |
+| the capability, mint and minting function are unexported | `__all__` and private-name assertions |
 | a profile mismatch refuses before the identity call | stages recorded: `["profile"]` |
 | an identity failure refuses before state, secret or composition | stages recorded: `["profile", "identity"]` |
 | a bucket failure refuses before secret retrieval | stages recorded: `["profile", "identity", "bucket"]`; secret calls `0` |
@@ -238,6 +296,11 @@ Enforced by test, not by review:
 | every backend exception is sanitized and raised `from None` | `__cause__ is None` and `__suppress_context__ is True` |
 | every unusable secret response is refused | ten cases: empty, binary-only, blank, empty string, null, integer, bytes, whitespace-bearing, control character, not a mapping |
 | a malformed secret identifier is refused before the backend | `None`, empty, blank, non-`str`, a space, a newline — with the backend call count at `0` |
+| no secret option exists on the command line | six spellings refused by name, the equals form included, and the parser exposes no such destination |
+| the identifier is untouched by every earlier refusal | authorization, profile, identity and bucket refusals each leave the source call count at `0` |
+| the identifier is resolved once, in order | after the bucket and before the backend, counted |
+| a raising or unusable source is a sanitized refusal | seven cases, including a `str` subclass |
+| the default path reads no credential-bearing variable | the environment is replaced by a recorder; only stdlib formatting variables appear |
 | the licensed bucket is used and CONTROL is structurally refused | the output key is named; `control_bucket_name`, `control_bucket` and `CONTROL` are absent from the module |
 | the composition preflight is invoked exactly once | spied and counted |
 | provider transport calls | **zero** |

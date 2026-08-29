@@ -1172,6 +1172,75 @@ def _store_construction_sites() -> list[Path]:
     return sites
 
 
+def _entry_point_exports() -> tuple[str, ...]:
+    """The entry point's ``__all__``, or every module-level public name.
+
+    The capability, its mint and its minting function must appear in neither.
+    """
+    if not BINDING_PREFLIGHT.is_file():
+        return ()
+    tree = ast.parse(read(BINDING_PREFLIGHT), filename=str(BINDING_PREFLIGHT))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+        ):
+            if isinstance(node.value, ast.List):
+                return tuple(
+                    element.value
+                    for element in node.value.elts
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str)
+                )
+    return ()
+
+
+def _mint_call_sites() -> int:
+    """How many places call the minting function. Expected: one, inside ``main``."""
+    if not BINDING_PREFLIGHT.is_file():
+        return 0
+    tree = ast.parse(read(BINDING_PREFLIGHT), filename=str(BINDING_PREFLIGHT))
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_mint_binding_authorization"
+    )
+
+
+def _argv_secret_identifier_options() -> list[str]:
+    """Every ``add_argument`` in the entry point that would put a secret in argv.
+
+    A private identifier on the command line enters shell history and every
+    process listing on the machine, whether or not the program prints it -- so
+    this is checked at the parser, where the option would be declared, rather
+    than by searching prose.
+    """
+    if not BINDING_PREFLIGHT.is_file():
+        return []
+    forbidden = ("secret", "credential", "api_key", "apikey", "token", "password")
+    offenders: list[str] = []
+    tree = ast.parse(read(BINDING_PREFLIGHT), filename=str(BINDING_PREFLIGHT))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "add_argument":
+            continue
+        names = [
+            argument.value
+            for argument in node.args
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+        ]
+        names += [
+            keyword.value.value
+            for keyword in node.keywords
+            if keyword.arg == "dest"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        ]
+        offenders += [name for name in names if any(bad in name.lower() for bad in forbidden)]
+    return offenders
+
+
 def _emitted_preflight_sentences(path: Path) -> str:
     """Every string value in the entry point's output vocabulary, joined.
 
@@ -6040,6 +6109,32 @@ def main() -> int:
             "a path that does work on an ordinary invocation is not dormant",
         )
         f.check(
+            "ADR-0015 records the boolean-authorization defect and its replacement",
+            "The authorization is a minted capability, not a boolean" in flat15
+            and "a boolean is the one value every" in flat15
+            and "only after the exact flag parses" in flat15,
+            "an authorization any caller can supply is not an authorization",
+        )
+        f.check(
+            "ADR-0015 scopes the capability claim away from runtime introspection",
+            "not a claim about hostile runtime introspection" in flat15.lower(),
+            "a process that can reach private names can build one, in any Python program",
+        )
+        f.check(
+            "ADR-0015 records the argv secret-identifier defect and its replacement",
+            "The secret identifier never travels in argv" in flat15
+            and "shell history and every process listing" in flat15
+            and "injected zero-argument source" in flat15,
+            "redacting output does not help once the value is on the command line",
+        )
+        f.check(
+            "ADR-0015 scopes the environment claim honestly",
+            "One honest limit" in flat15
+            and "would be false, and this ADR does not claim it" in flat15
+            and "no credential-bearing variable" in flat15,
+            "argparse reads locale and width variables whatever the program does",
+        )
+        f.check(
             "ADR-0015 records the authorizing flag and what it does not authorize",
             "i-am-the-operator-authorizing-binding-preflight" in adr15
             and "does not mint, imply or stand in for authorization to execute" in flat15,
@@ -6142,8 +6237,77 @@ def main() -> int:
             "the entry point refuses without an explicit operator authorization",
             "BINDING_AUTHORIZATION_FLAG" in binding
             and "i-am-the-operator-authorizing-binding-preflight" in binding
-            and "binding_authorized is not True" in binding,
-            "exact True; a truthy stand-in must authorize nothing",
+            and "if not _is_authorized(authorization):" in binding,
+            "a minted capability; a boolean is the one value every caller already has",
+        )
+        f.check(
+            "the authorization is a minted capability, not a boolean",
+            "class _BindingAuthorization" in binding
+            and "_AUTHORIZATION_MINT" in binding
+            and "type(candidate) is _BindingAuthorization" in binding
+            and "is _AUTHORIZATION_MINT" in binding,
+            "exact type and mint identity; a lookalike, copy or subclass must not admit",
+        )
+        f.check(
+            "no boolean authorization parameter survives anywhere in the entry point",
+            "binding_authorized" not in binding,
+            "the first revision took a bool, so any importer could pass True",
+        )
+        f.check(
+            "the capability refuses subclassing and any other mint",
+            "may not be subclassed" in read(BINDING_PREFLIGHT)
+            and "if mint is not _AUTHORIZATION_MINT:" in binding,
+            "a subclass instance would satisfy isinstance while never having been minted",
+        )
+        f.check(
+            "the capability, its mint and its minting function are not exported",
+            all(
+                name not in _entry_point_exports()
+                for name in (
+                    "_BindingAuthorization",
+                    "_AUTHORIZATION_MINT",
+                    "_mint_binding_authorization",
+                )
+            ),
+            "an exported mint is a public constructor by another name",
+        )
+        f.check(
+            "the authorization is minted at exactly one call site",
+            _mint_call_sites() == 1,
+            "one site, inside the branch the flag has already been checked in",
+        )
+        f.check(
+            "no secret identifier is accepted on the command line",
+            not _argv_secret_identifier_options(),
+            "a private identifier in argv enters shell history and every process listing",
+        )
+        f.check(
+            "the command-line secret spellings are refused by name",
+            all(
+                option in binding
+                for option in ("--secret-id", "--secret-name", "--secretid", "--secret-arn")
+            ),
+            "silently ignoring a spelling invites a second attempt with another",
+        )
+        f.check(
+            "the secret identifier comes from an injected source, resolved late",
+            "secret_id_source: Callable[[], str]" in read(BINDING_PREFLIGHT)
+            and "secret_id = secret_id_source()" in binding,
+            "a private identifier must not be resolved on a path that will refuse",
+        )
+        f.check(
+            "the production identifier source reads one fixed variable name",
+            "SECRET_ID_ENV_VAR" in binding and binding.count("os.environ") <= 2,
+            "one name, on the authorized path, and nothing ambient anywhere else",
+        )
+        f.check(
+            "the entry point imports os only inside a factory body",
+            not any(
+                node_line.strip() == "import os"
+                for node_line in read(BINDING_PREFLIGHT).splitlines()
+                if not node_line.startswith(" ")
+            ),
+            "a module-level os import would make an ordinary import read an environment",
         )
         f.check(
             "the entry point refuses the habitual flags by name",
@@ -6272,10 +6436,34 @@ def main() -> int:
         for label, needle in (
             ("import doing nothing", "test_importing_the_entry_point_runs_nothing"),
             (
-                "refusal without the flag",
-                "test_invocation_without_the_flag_refuses_before_any_stage",
+                "refusal without an authorization",
+                "test_invocation_without_an_authorization_refuses_before_any_stage",
             ),
             ("unforgeable authorization", "test_authorization_cannot_be_forged"),
+            ("no public constructor", "test_the_capability_has_no_public_constructor"),
+            ("refused subclassing", "test_the_capability_refuses_subclassing"),
+            ("an uninitialised instance", "test_an_uninitialised_instance_is_not_an_authorization"),
+            (
+                "copies and deserialised capabilities",
+                "test_a_copy_stays_authorized_and_a_deserialised_one_does_not",
+            ),
+            ("one mint call site", "test_only_main_mints_an_authorization"),
+            (
+                "a refused command-line identifier",
+                "test_a_command_line_secret_identifier_is_refused_by_name",
+            ),
+            (
+                "the identifier untouched by earlier refusals",
+                "test_the_identifier_source_is_untouched_by_every_earlier_refusal",
+            ),
+            (
+                "one identifier resolution, in order",
+                "test_the_identifier_source_is_called_exactly_once_in_order",
+            ),
+            (
+                "no credential-bearing default lookup",
+                "test_the_default_path_reads_no_credential_bearing_environment_variable",
+            ),
             ("a profile mismatch", "test_a_profile_mismatch_refuses_before_the_identity_call"),
             (
                 "an identity failure",
@@ -6325,6 +6513,17 @@ def main() -> int:
             f"{name} records the dormant private-binding preflight",
             "ADR-0015" in flat and "default behaviour     REFUSE" in body,
             "the standing 'no credential source exists' claim is no longer true as written",
+        )
+        f.check(
+            f"{name} records the minted capability that replaced the boolean",
+            "A minted capability, not a boolean" in flat and "any importer could pass" in flat,
+            "the first revision's authorization was a value every caller already had",
+        )
+        f.check(
+            f"{name} records that the secret identifier never enters argv",
+            "The secret identifier never enters argv" in flat
+            and "shell history and every process listing" in flat,
+            "a private identifier on the command line is disclosed before anything runs",
         )
         f.check(
             f"{name} records that nothing real is configured or read",

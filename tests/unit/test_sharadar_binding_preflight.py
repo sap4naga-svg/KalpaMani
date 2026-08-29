@@ -25,6 +25,7 @@ import inspect
 import re
 import sys
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
@@ -70,6 +71,10 @@ CANARIES: Final = (
 )
 
 INSTANT = datetime(2026, 8, 29, 12, 0, 0, tzinfo=UTC)
+
+#: "mint me a genuine capability" -- distinct from every value a test might pass
+#: as a forgery, including ``None``.
+_MINT: Final = object()
 
 
 def _load_entry_point() -> Any:
@@ -166,6 +171,8 @@ class Harness:
         profile_raises: bool = False,
         identity_raises: bool = False,
         bucket_raises: bool = False,
+        secret_id_raises: bool = False,
+        secret_id_value: Any = CANARY_SECRET_ID,
     ) -> None:
         self.stages = Stages()
         self.profile = profile
@@ -177,6 +184,9 @@ class Harness:
         self.secrets = secrets_client or CountingSecretsClient()
         self.s3 = CountingS3Client()
         self.transport = CountingTransport()
+        self.secret_id_calls = 0
+        self.secret_id_raises = secret_id_raises
+        self.secret_id_value: Any = secret_id_value
 
     def profile_of(self) -> str:
         self.stages.record("profile")
@@ -196,6 +206,18 @@ class Harness:
             raise RuntimeError(CANARY_BUCKET)
         return self.bucket
 
+    def secret_id_source(self) -> Any:
+        """The private identifier, resolved only on the authorized path.
+
+        Counted, because *when* it is asked for is the property: a private
+        identifier must not be resolved on a path that is going to refuse.
+        """
+        self.stages.record("secret-id")
+        self.secret_id_calls += 1
+        if self.secret_id_raises:
+            raise RuntimeError(CANARY_SECRET_ID)
+        return self.secret_id_value
+
     def secrets_factory(self) -> CountingSecretsClient:
         self.stages.record("secret")
         return self.secrets
@@ -211,19 +233,21 @@ class Harness:
     def run(
         self,
         *,
-        authorized: Any = True,
-        secret_id: Any = CANARY_SECRET_ID,
+        authorization: Any = _MINT,
         subjects: Any = ("SYNTH",),
         execution_id: str | None = "synthetic-execution-0001",
     ) -> Any:
+        """Drive the preflight. ``authorization`` defaults to a genuine capability."""
         return bp.run_binding_preflight(
-            binding_authorized=authorized,
-            secret_id=secret_id,
+            authorization=(
+                bp._mint_binding_authorization() if authorization is _MINT else authorization
+            ),
             subjects=subjects,
             execution_id=execution_id,
             profile_of=self.profile_of,
             identity_gate=self.identity_gate,
             resolve_licensed_bucket=self.resolve_bucket,
+            secret_id_source=self.secret_id_source,
             secrets_client_factory=self.secrets_factory,
             s3_client_factory=self.s3_factory,
             transport_factory=self.transport_factory,
@@ -276,9 +300,29 @@ def test_importing_the_entry_point_runs_nothing() -> None:
         if isinstance(node, ast.Expr):
             assert isinstance(node.value, ast.Constant), "import-time expression"
         if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
-            assert isinstance(node.value, ast.Constant | ast.Dict | ast.Attribute | ast.Name), (
-                f"import-time call at line {node.lineno}"
+            value = node.value
+            # `object()` is the one permitted import-time call: it mints the
+            # private authorization sentinel and does no work -- no lookup, and
+            # no construction of anything that could reach a service.
+            bare_sentinel = (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "object"
+                and not value.args
+                and not value.keywords
             )
+            # `__all__` is a language convention rather than state: nothing
+            # reads it at run time, and mutating it changes an export list, not
+            # a run.
+            exports = any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            )
+            assert (
+                bare_sentinel
+                or exports
+                or isinstance(value, ast.Constant | ast.Dict | ast.Attribute | ast.Name)
+            ), f"import-time call at line {node.lineno}"
         if isinstance(node, ast.If):
             # Only the `__main__` guard, which pytest never takes.
             assert "__main__" in ast.unparse(node.test)
@@ -302,13 +346,14 @@ def test_importing_the_entry_point_reads_no_environment_or_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_invocation_without_the_flag_refuses_before_any_stage() -> None:
+def test_invocation_without_an_authorization_refuses_before_any_stage() -> None:
     harness = Harness()
     with pytest.raises(bp.BindingPreflightError) as raised:
-        harness.run(authorized=False)
+        harness.run(authorization=None)
     assert raised.value.outcome is bp.PreflightOutcome.REFUSED_NOT_AUTHORIZED
     assert harness.stages.order == [], "a stage ran before authorization was checked"
     assert harness.secrets.calls == 0
+    assert harness.secret_id_calls == 0
 
 
 class TruthyLookalike:
@@ -316,18 +361,173 @@ class TruthyLookalike:
         return True
 
 
-@pytest.mark.parametrize(
-    "forged",
-    [1, "yes", "true", "True", [1], TruthyLookalike(), 1.0],
-    ids=["int", "yes", "true", "True", "list", "lookalike", "float"],
+class StructuralLookalike:
+    """Everything the capability has, except having been minted by the module."""
+
+    __slots__ = ("_mint",)
+
+    def __init__(self) -> None:
+        self._mint = object()
+
+    def __repr__(self) -> str:
+        return "<binding-preflight authorization>"
+
+
+class BorrowedMintLookalike:
+    """A lookalike carrying the *genuine* mint, but of the wrong type.
+
+    Separated from :class:`StructuralLookalike` because it isolates the exact-type
+    half of the check: identity of the mint alone would admit this.
+    """
+
+    __slots__ = ("_mint",)
+
+    def __init__(self) -> None:
+        self._mint = getattr(bp._mint_binding_authorization(), "_mint", None)
+
+
+class ForgedEnum(StrEnum):
+    AUTHORIZED = "AUTHORIZED"
+
+
+#: Everything that must not authorize a binding preflight.
+#:
+#: The first revision took a ``bool``, so ``True`` alone would have admitted --
+#: which is why it leads this list rather than sitting among the near-misses.
+FORGERIES: tuple[tuple[str, Any], ...] = (
+    ("True", True),
+    ("False", False),
+    ("one", 1),
+    ("zero", 0),
+    ("string", "yes"),
+    ("flag-spelled string", "--i-am-the-operator-authorizing-binding-preflight"),
+    ("enum member", ForgedEnum.AUTHORIZED),
+    ("float", 1.0),
+    ("list", [1]),
+    ("mapping", {"authorized": True}),
+    ("bare object", object()),
+    ("truthy lookalike", TruthyLookalike()),
+    ("structural lookalike", StructuralLookalike()),
+    ("borrowed-mint lookalike", BorrowedMintLookalike()),
+    ("the class itself", bp._BindingAuthorization),
+    ("the mint function", bp._mint_binding_authorization),
 )
-def test_authorization_cannot_be_forged(forged: Any) -> None:
-    """Exact ``True``. A truthy stand-in must not authorize a binding preflight."""
+
+
+@pytest.mark.parametrize(("label", "forged"), FORGERIES, ids=[case[0] for case in FORGERIES])
+def test_authorization_cannot_be_forged(label: str, forged: Any) -> None:
+    """A capability minted by this module, or nothing at all.
+
+    ``True`` is the case this round exists for: the first revision checked
+    ``binding_authorized is True``, so any importer could authorize a binding
+    preflight without the operator flag ever being parsed.
+    """
     harness = Harness()
     with pytest.raises(bp.BindingPreflightError) as raised:
-        harness.run(authorized=forged)
+        harness.run(authorization=forged)
     assert raised.value.outcome is bp.PreflightOutcome.REFUSED_NOT_AUTHORIZED
+    assert harness.stages.order == [], f"{label} reached a stage"
+    assert harness.secret_id_calls == 0, f"{label} reached the secret identifier"
+
+
+def test_the_capability_has_no_public_constructor() -> None:
+    """Direct construction, with anything but the private mint, raises."""
+    for attempted in (object(), None, True, "mint", 1):
+        with pytest.raises(TypeError):
+            bp._BindingAuthorization(attempted)
+
+
+def test_the_capability_refuses_subclassing() -> None:
+    with pytest.raises(TypeError):
+
+        class Widened(bp._BindingAuthorization):  # type: ignore[misc, name-defined]
+            pass
+
+
+def test_an_uninitialised_instance_is_not_an_authorization() -> None:
+    """``object.__new__`` skips ``__init__``, so the instance carries no mint."""
+    hollow = object.__new__(bp._BindingAuthorization)
+    assert not bp._is_authorized(hollow)
+    harness = Harness()
+    with pytest.raises(bp.BindingPreflightError):
+        harness.run(authorization=hollow)
     assert harness.stages.order == []
+
+
+def test_a_copy_stays_authorized_and_a_deserialised_one_does_not() -> None:
+    """Three outcomes, and each is the right one for what it does to the mint.
+
+    A **shallow copy** shares the *same* sentinel object, so it is still genuine.
+    That is correct rather than a hole: the mint it carries is one this module
+    made, and copying an authorization does not manufacture authority.
+
+    A **deep copy** clones the sentinel, and a **pickle round-trip** reconstructs
+    it as a new ``object()``. Neither result carries the mint, so both are
+    refused. Note the claim: not "serialising raises" -- it does not -- but that
+    the product of serialising is not an authorization.
+    """
+    import copy
+    import pickle
+
+    genuine = bp._mint_binding_authorization()
+    assert bp._is_authorized(copy.copy(genuine)), "a shallow copy shares the genuine mint"
+
+    for label, derived in (
+        ("deep copy", copy.deepcopy(genuine)),
+        # the point is that what comes back out is refused.
+        ("pickle round-trip", pickle.loads(pickle.dumps(genuine))),  # noqa: S301
+    ):
+        assert type(derived) is bp._BindingAuthorization
+        assert not bp._is_authorized(derived), f"a {label} was admitted"
+        harness = Harness()
+        with pytest.raises(bp.BindingPreflightError):
+            harness.run(authorization=derived)
+        assert harness.stages.order == [], f"a {label} reached a stage"
+
+
+def test_only_a_minted_capability_is_admitted() -> None:
+    genuine = bp._mint_binding_authorization()
+    assert bp._is_authorized(genuine)
+    harness = Harness()
+    harness.run(authorization=genuine)
+    assert harness.stages.order[0] == "profile"
+
+
+def test_the_capability_and_its_mint_are_not_exported() -> None:
+    """Not in ``__all__``, and every name is private by convention as well."""
+    exported = getattr(bp, "__all__", ())
+    for name in ("_BindingAuthorization", "_AUTHORIZATION_MINT", "_mint_binding_authorization"):
+        assert name not in exported
+        assert name.startswith("_"), f"{name} is not a private name"
+
+
+def test_only_main_mints_an_authorization() -> None:
+    """One call site, inside the branch the flag has already been checked in."""
+    tree = _tree(ENTRY_POINT)
+    call_sites = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_mint_binding_authorization"
+    ]
+    assert len(call_sites) == 1, "the mint is called from more than one place"
+    minting_functions = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "_mint_binding_authorization"
+            for inner in ast.walk(node)
+        )
+    ]
+    assert minting_functions == ["main"]
+
+
+def test_the_capability_repr_carries_nothing() -> None:
+    assert repr(bp._mint_binding_authorization()) == "<binding-preflight authorization>"
 
 
 def test_the_authorization_flag_is_unmistakable_and_the_habitual_ones_are_refused() -> None:
@@ -381,23 +581,269 @@ def test_a_secret_failure_refuses_before_composition() -> None:
     with pytest.raises(bp.BindingPreflightError) as raised:
         harness.run()
     assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
-    assert harness.stages.order == ["profile", "identity", "bucket", "secret"]
+    assert harness.stages.order == ["profile", "identity", "bucket", "secret-id", "secret"]
     assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
 
 
 def test_a_missing_secret_identifier_refuses_before_the_backend_is_asked() -> None:
-    harness = Harness()
     for missing in (None, "", "   ", 7):
+        harness = Harness(secret_id_value=missing)
         with pytest.raises(bp.BindingPreflightError) as raised:
-            harness.run(secret_id=missing)
+            harness.run()
         assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
-    assert harness.secrets.calls == 0
+        assert harness.secrets.calls == 0, "a bad identifier reached the backend"
 
 
 def test_the_full_ordering_is_exact_on_the_authorized_path() -> None:
     harness = Harness()
     harness.run()
-    assert harness.stages.order == ["profile", "identity", "bucket", "secret", "s3", "transport"]
+    assert harness.stages.order == [
+        "profile",
+        "identity",
+        "bucket",
+        "secret-id",
+        "secret",
+        "s3",
+        "transport",
+    ]
+    assert harness.secret_id_calls == 1, "the identifier was resolved more than once"
+
+
+# ---------------------------------------------------------------------------
+# The secret identifier: out of argv, and resolved late
+# ---------------------------------------------------------------------------
+#
+# The first revision took `--secret-id`. A private identifier on the command line
+# enters shell history and every process listing on the machine, whether or not
+# the program prints it -- so redacting output does not help. It now comes from an
+# injected zero-argument source, called once, after every gate has passed.
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--secret-id", "--secret-name", "--secretid", "--secret-arn", "--secret", "--secret-value"],
+)
+def test_a_command_line_secret_identifier_is_refused_by_name(
+    option: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Refused, not silently ignored -- an unrecognised-argument error teaches
+    nothing and invites a second spelling."""
+    assert bp.main([option, "x"]) == 2
+    captured = capsys.readouterr()
+    assert bp.PreflightOutcome.REFUSED_OPTION.value in captured.out
+    assert option in captured.out
+    assert "x" not in captured.out.replace(option, ""), "the attempted value was echoed"
+
+
+def test_the_equals_form_of_a_secret_option_is_refused_too(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert bp.main([f"--secret-id={CANARY_SECRET_ID}"]) == 2
+    captured = capsys.readouterr()
+    assert bp.PreflightOutcome.REFUSED_OPTION.value in captured.out
+    assert CANARY_SECRET_ID not in captured.out, "the attempted identifier was echoed"
+
+
+def test_the_parser_exposes_no_secret_option_at_all() -> None:
+    destinations = {action.dest for action in bp.build_parser()._actions if action.option_strings}
+    for forbidden in ("secret_id", "secret_name", "secret", "api_key", "token"):
+        assert forbidden not in destinations
+
+
+@pytest.mark.parametrize(
+    ("label", "harness"),
+    [
+        ("authorization", Harness()),
+        ("profile", Harness(profile="default")),
+        ("identity", Harness(identity_reason="mismatch")),
+        ("bucket", Harness(bucket_raises=True)),
+    ],
+)
+def test_the_identifier_source_is_untouched_by_every_earlier_refusal(
+    label: str, harness: Harness
+) -> None:
+    """A private identifier must not be resolved on a path that is going to
+    refuse, so the source is asked only after every gate has passed."""
+    with pytest.raises(bp.BindingPreflightError):
+        harness.run(authorization=None if label == "authorization" else _MINT)
+    assert harness.secret_id_calls == 0, f"the identifier was resolved after a {label} refusal"
+
+
+def test_the_identifier_source_is_called_exactly_once_in_order() -> None:
+    harness = Harness()
+    harness.run()
+    assert harness.secret_id_calls == 1
+    order = harness.stages.order
+    assert order.index("bucket") < order.index("secret-id") < order.index("secret")
+
+
+def test_a_raising_identifier_source_is_a_sanitized_refusal() -> None:
+    harness = Harness(secret_id_raises=True)
+    with pytest.raises(bp.BindingPreflightError) as raised:
+        harness.run()
+    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
+    rendered = f"{raised.value!r} {raised.value!s}"
+    assert CANARY_SECRET_ID not in rendered
+    assert harness.secrets.calls == 0
+
+
+class HostileString(str):
+    """A ``str`` subclass. Exact-type checks must refuse it."""
+
+
+@pytest.mark.parametrize(
+    ("label", "value"),
+    [
+        ("None", None),
+        ("empty", ""),
+        ("blank", "   "),
+        ("integer", 7),
+        ("bytes", b"abc"),
+        ("list", ["x"]),
+        ("str subclass", HostileString("synthetic-subclassed-identifier")),
+    ],
+)
+def test_an_unusable_identifier_is_refused_before_the_backend(label: str, value: Any) -> None:
+    harness = Harness(secret_id_value=value)
+    with pytest.raises(bp.BindingPreflightError) as raised:
+        harness.run()
+    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    assert harness.secrets.calls == 0, f"a {label} identifier reached the backend"
+
+
+def test_the_identifier_never_appears_in_any_observable_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    harness = Harness()
+    result = harness.run()
+    captured = capsys.readouterr()
+    rendered = f"{result!r} {result!s} {captured.out} {captured.err}"
+    assert CANARY_SECRET_ID not in rendered
+    assert bp.SECRET_ID_ENV_VAR not in rendered, "even the variable name is not printed"
+
+
+#: Variables the standard library reads while formatting a message, whatever the
+#: program does. `argparse` consults these for locale and terminal width, and
+#: none is a credential lookup.
+STDLIB_FORMATTING_VARIABLES = frozenset(
+    {"LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG", "COLUMNS", "LINES", "TERM"}
+)
+
+
+def test_the_default_path_reads_no_credential_bearing_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No flag, no credential lookup -- stated as what actually holds.
+
+    A literal "zero environment lookups" would be false and this test says so:
+    ``argparse`` reads ``LANGUAGE``, ``LC_ALL``, ``LC_MESSAGES``, ``LANG``,
+    ``COLUMNS`` and ``LINES`` while formatting its own output, whatever the
+    program does. Those are locale and terminal width, not secrets, and the only
+    way to have none of them would be to not use ``argparse``.
+
+    What is checked is the property that matters and is true: **the secret
+    identifier's variable is never read on the default path**, and neither is any
+    variable outside that stdlib formatting set.
+    """
+    import os
+
+    observed: list[str] = []
+    real = os.environ
+
+    class RecordingEnviron(dict[str, str]):
+        def get(self, key: Any = None, default: Any = None) -> Any:
+            observed.append(str(key))
+            return real.get(str(key), default)
+
+        def __getitem__(self, key: str) -> str:
+            observed.append(key)
+            return real[key]
+
+        def __contains__(self, key: object) -> bool:
+            observed.append(str(key))
+            return key in real
+
+    monkeypatch.setattr(os, "environ", RecordingEnviron())
+    assert bp.main([]) == 1
+
+    assert bp.SECRET_ID_ENV_VAR not in observed, "the default path read the secret identifier"
+    assert "AWS_PROFILE" not in observed, "the default path read the AWS profile"
+    unexpected = sorted(set(observed) - STDLIB_FORMATTING_VARIABLES)
+    assert unexpected == [], f"the default path read {unexpected}"
+
+
+def test_no_earlier_refusal_path_reads_the_secret_identifier_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same property one layer in: a refusal at any gate resolves nothing."""
+    import os
+
+    observed: list[str] = []
+    real = os.environ
+
+    class RecordingEnviron(dict[str, str]):
+        def get(self, key: Any = None, default: Any = None) -> Any:
+            observed.append(str(key))
+            return real.get(str(key), default)
+
+        def __getitem__(self, key: str) -> str:
+            observed.append(key)
+            return real[key]
+
+    monkeypatch.setattr(os, "environ", RecordingEnviron())
+    for harness in (
+        Harness(profile="default"),
+        Harness(identity_reason="mismatch"),
+        Harness(bucket_raises=True),
+    ):
+        with pytest.raises(bp.BindingPreflightError):
+            harness.run()
+    assert bp.SECRET_ID_ENV_VAR not in observed
+
+
+def test_the_production_identifier_source_reads_one_fixed_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The name is a constant and is not a secret; the value is, and it is
+    returned to the caller rather than printed."""
+    import os
+
+    monkeypatch.setitem(os.environ, bp.SECRET_ID_ENV_VAR, CANARY_SECRET_ID)
+    assert bp._environment_secret_id() == CANARY_SECRET_ID
+
+    monkeypatch.delitem(os.environ, bp.SECRET_ID_ENV_VAR, raising=False)
+    with pytest.raises(LookupError):
+        bp._environment_secret_id()
+
+
+def test_the_environment_variable_name_holds_no_identifier() -> None:
+    """A *name*, committed; the value it holds is private and is not."""
+    assert bp.SECRET_ID_ENV_VAR == "KALPAMANI_SHARADAR_SECRET_ID"  # noqa: S105 -- a name
+    assert "arn:aws:" not in bp.SECRET_ID_ENV_VAR
+    source = ENTRY_POINT.read_text(encoding="utf-8")
+    assert "secretsmanager:" not in source
+
+
+def test_the_entry_point_reads_the_environment_only_inside_a_factory() -> None:
+    """``os`` is imported inside function bodies, so an import and every refusal
+    path perform no environment lookup at all."""
+    tree = _tree(ENTRY_POINT)
+    module_level = {
+        alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names
+    }
+    assert "os" not in module_level
+    importers = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(inner, ast.Import) and any(a.name == "os" for a in inner.names)
+            for inner in ast.walk(node)
+        )
+    ]
+    assert sorted(importers) == ["_ambient_profile", "_environment_secret_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +1150,7 @@ def test_a_refused_option_is_reported_by_name(
 def test_an_equals_form_of_a_refused_option_is_refused_too(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert bp.main(["--api-key=whatever"]) == 2
+    assert bp.main(["--api-key=synthetic-refused-value"]) == 2
     assert bp.PreflightOutcome.REFUSED_OPTION.value in capsys.readouterr().out
 
 
@@ -855,4 +1301,4 @@ def test_the_entry_point_reuses_the_governed_gate_rather_than_reimplementing_it(
         "get_caller_identity",
     ):
         assert reimplementation not in source, f"the entry point reimplements {reimplementation!r}"
-    assert re.search(r"sts", source) is None, "the entry point calls sts directly"
+    assert re.search(r"\bsts\b", source) is None, "the entry point calls sts directly"

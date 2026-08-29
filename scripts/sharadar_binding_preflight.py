@@ -39,6 +39,34 @@ be meant.
 imply or stand in for authorization to execute a qualification run, and no code
 path here consumes it as one.
 
+Two defects this file's first revision contained
+================================================
+
+**A boolean could forge the authorization.** The check was ``binding_authorized is True``, so a
+caller who imported :func:`run_binding_preflight` and passed ``True`` reached the profile, identity
+and bucket stages without the flag ever being parsed. A boolean is the one value every caller
+already has; an authorization that any caller can supply is not an authorization.
+
+The parameter is now a **capability minted only by this module, only after the exact flag parses**.
+It has no public constructor: its ``__init__`` refuses any mint but a module-private sentinel, it
+refuses subclassing, and admission is by exact type *and* by that sentinel's identity. It is not
+exported, and neither is the sentinel or the minting function.
+
+*What that claims, exactly:* no caller can construct or forge one through ordinary construction,
+subclassing, copying, deserialisation or a structural lookalike. It is **not** a claim about hostile
+runtime introspection -- a process that can reach a module's private names can reach anything, and
+this file does not pretend otherwise.
+
+**A private secret identifier travelled in argv.** ``--secret-id`` put it in shell history and in
+every process listing on the machine, whether or not this program ever printed it. Redacting output
+does not help once the value is on the command line.
+
+The identifier now comes from an **injected zero-argument source**, called once, only after
+authorization, profile, identity and bucket resolution have all passed, and immediately before the
+credential is retrieved. The production source reads **one fixed, non-secret environment-variable
+name** on that authorized path. ``--secret-id``, ``--secret-name`` and their near spellings are
+refused by name rather than silently ignored.
+
 The order, and why nothing may be reordered
 ===========================================
 
@@ -97,6 +125,90 @@ REPO_ROOT_MARKER: Final = "scripts"
 #: below, so a wrong reflex fails loudly instead of doing something.
 BINDING_AUTHORIZATION_FLAG: Final = "--i-am-the-operator-authorizing-binding-preflight"
 
+#: The one fixed, non-secret environment-variable *name* the production source
+#: reads on the authorized path. The name is not a secret; the value is, and it
+#: is never printed, logged or included in a refusal.
+#: Ruff flags the *name* on its hardcoded-password heuristic. This is the name of
+#: an environment variable, not a value: the identifier it holds is private, this
+#: constant is not, and renaming it to dodge the check would make it less clear
+#: what the constant is.
+SECRET_ID_ENV_VAR: Final = "KALPAMANI_SHARADAR_SECRET_ID"  # noqa: S105
+
+#: The private mint. Reaching it is the only way to build an authorization.
+#:
+#: Not exported, and no public function returns it. A bare ``object()`` rather
+#: than a string or an enum member, because a caller cannot spell one it does not
+#: already hold a reference to.
+_AUTHORIZATION_MINT: Final = object()
+
+
+class _BindingAuthorization:
+    """Proof that the operator flag was parsed. Not constructible by a caller.
+
+    The first revision took a ``bool``, which meant a caller who imported
+    :func:`run_binding_preflight` and passed ``True`` authorized a binding
+    preflight without the flag existing. **A boolean is the one value every
+    caller already has.**
+
+    This has no public constructor: ``__init__`` refuses any mint but
+    :data:`_AUTHORIZATION_MINT`, subclassing raises, and there is no default,
+    converter, alias or fallback. Admission is by exact type *and* by the mint's
+    identity, so a structural lookalike, a copy, a subclass instance and a
+    deserialised object are all refused.
+
+    **What that does not claim.** A process that can reach this module's private
+    names can build one. That is true of every capability in Python and this
+    class does not pretend otherwise; the property implemented and tested is that
+    **no ordinary construction, subclassing, copying, deserialisation or
+    lookalike admits**.
+    """
+
+    __slots__ = ("_mint",)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing.
+
+        A subclass instance would satisfy an ``isinstance`` check while being a
+        type this module never minted, which is precisely the forgery the exact
+        type check exists to prevent.
+        """
+        raise TypeError("_BindingAuthorization may not be subclassed.")
+
+    def __init__(self, mint: object) -> None:
+        """Refuse any mint but the module-private one.
+
+        Raises:
+            TypeError: for every other value. The message names no caller input.
+        """
+        if mint is not _AUTHORIZATION_MINT:
+            raise TypeError(
+                "a binding authorization is minted by parsing the operator flag, not constructed"
+            )
+        self._mint = mint
+
+    def __repr__(self) -> str:
+        """A constant. The mint is never rendered."""
+        return "<binding-preflight authorization>"
+
+
+def _mint_binding_authorization() -> _BindingAuthorization:
+    """Mint one authorization. Called **only** after the exact flag has parsed."""
+    return _BindingAuthorization(_AUTHORIZATION_MINT)
+
+
+def _is_authorized(candidate: object) -> bool:
+    """Whether ``candidate`` is an authorization this module minted.
+
+    Exact type, then mint identity. ``getattr`` with a default rather than an
+    attribute access, because an instance built through ``object.__new__`` has no
+    ``_mint`` at all and must be refused rather than raise.
+    """
+    return (
+        type(candidate) is _BindingAuthorization
+        and getattr(candidate, "_mint", None) is _AUTHORIZATION_MINT
+    )
+
+
 #: The profile and region the governed foundation is pinned to.
 #:
 #: Read from the verifier that owns them rather than restated, so the pin cannot
@@ -122,6 +234,14 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--force": "nothing here is forceable; a refusal is a refusal",
     "--api-key": "no credential is accepted on the command line, ever",
     "--secret-value": "no credential value is accepted on the command line, ever",
+    "--secret-id": (
+        "a secret identifier is private; on the command line it enters shell history and "
+        "every process listing. It is read from the environment on the authorized path"
+    ),
+    "--secret-name": "same as --secret-id: a private identifier does not travel in argv",
+    "--secretid": "same as --secret-id: a private identifier does not travel in argv",
+    "--secret-arn": "same as --secret-id: a private identifier does not travel in argv",
+    "--secret": "same as --secret-id: a private identifier does not travel in argv",
     "--account": "the account is never supplied; it is compared against the local binding",
     "--bucket": "the licensed bucket is resolved from governed state, never supplied",
     "--endpoint": "no endpoint is accepted; the SDK resolves the governed one",
@@ -198,20 +318,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         BINDING_AUTHORIZATION_FLAG,
-        dest="binding_authorized",
+        # "was the flag present", which is a parse result -- not an
+        # authorization. The authorization is minted from it below, and the
+        # name says which of the two this is.
+        dest="binding_flag_present",
         action="store_true",
         help=(
             "Authorize a binding preflight. This does not authorize, imply or stand in "
             "for authorization to execute a qualification run."
-        ),
-    )
-    parser.add_argument(
-        "--secret-id",
-        dest="secret_id",
-        default=None,
-        help=(
-            "The identifier of the Secrets Manager secret holding the private "
-            "credential. Supplied by the operator; never compiled in, never printed."
         ),
     )
     parser.add_argument(
@@ -245,13 +359,13 @@ def _refused_option(argv: Sequence[str]) -> str | None:
 
 def run_binding_preflight(
     *,
-    binding_authorized: bool,
-    secret_id: str | None,
+    authorization: object,
     subjects: Sequence[str] | None,
     execution_id: str | None,
     profile_of: Callable[[], str],
     identity_gate: Callable[[], str | None],
     resolve_licensed_bucket: Callable[[], str],
+    secret_id_source: Callable[[], str],
     secrets_client_factory: Callable[[], Any],
     s3_client_factory: Callable[[], Any],
     transport_factory: Callable[[], Any],
@@ -263,6 +377,16 @@ def run_binding_preflight(
     ``os.environ``, opens a file, constructs a client or resolves a name. The
     real factories are supplied by :func:`main`, and this slice never calls it
     with real ones.
+
+    ``authorization`` is a capability minted by :func:`main` after the exact
+    operator flag parses. It is **not** a boolean: an earlier revision took one,
+    which meant an importer could pass ``True`` and reach the profile, identity
+    and bucket stages with no flag involved.
+
+    ``secret_id_source`` is a zero-argument callable rather than a value, and it
+    is invoked **once**, after every gate has passed and immediately before the
+    credential is retrieved. A private identifier must not be resolved on a path
+    that is going to refuse.
 
     The order in the module docstring is the security property, and it is
     enforced here by sequence rather than described: a later stage cannot run
@@ -278,9 +402,9 @@ def run_binding_preflight(
             cause is always suppressed: a backend exception quotes a secret name,
             an ARN or a bucket, and a plan refusal can quote a subject.
     """
-    # 1. Authorization. Exact `True`, not merely truthy: a non-empty string, a 1
-    #    or a lookalike object must not authorize anything.
-    if binding_authorized is not True:
+    # 1. Authorization. A capability this module minted after parsing the flag --
+    #    not a boolean, which is the one value every caller already has.
+    if not _is_authorized(authorization):
         raise BindingPreflightError(PreflightOutcome.REFUSED_NOT_AUTHORIZED) from None
 
     # 2. The profile, before any AWS call is attempted at all.
@@ -310,10 +434,15 @@ def run_binding_preflight(
     if type(licensed_bucket) is not str or not licensed_bucket.strip():
         raise BindingPreflightError(PreflightOutcome.REFUSED_BUCKET) from None
 
-    # 5. The private credential. Imported here rather than at module scope so an
-    #    import of this file pulls in no provider code at all.
+    # 5. The secret identifier, resolved **here** and nowhere earlier. It is
+    #    private, so every refusal above must complete without asking for it --
+    #    which is why it is a source rather than an argument.
     from kalpamani.data.ingest.sharadar.secrets import sharadar_credential_from_secret
 
+    try:
+        secret_id = secret_id_source()
+    except Exception:
+        raise BindingPreflightError(PreflightOutcome.REFUSED_CREDENTIAL) from None
     if type(secret_id) is not str or not secret_id.strip():
         raise BindingPreflightError(PreflightOutcome.REFUSED_CREDENTIAL) from None
     try:
@@ -403,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parsed = build_parser().parse_args(argv)
 
-    if not parsed.binding_authorized:
+    if not parsed.binding_flag_present:
         # The default path. Nothing above this line looked anything up,
         # constructed anything, or opened anything.
         _emit(PreflightOutcome.REFUSED_NOT_AUTHORIZED)
@@ -413,13 +542,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_binding_preflight(
-            binding_authorized=True,
-            secret_id=parsed.secret_id,
+            # Minted here, and only here: the flag has parsed.
+            authorization=_mint_binding_authorization(),
             subjects=parsed.subjects,
             execution_id=parsed.execution_id,
             profile_of=_ambient_profile,
             identity_gate=_governed_identity_gate,
             resolve_licensed_bucket=_governed_licensed_bucket,
+            secret_id_source=_environment_secret_id,
             secrets_client_factory=_secrets_client,
             s3_client_factory=_s3_client,
             transport_factory=_transport,
@@ -448,6 +578,28 @@ def _ambient_profile() -> str:
     import os
 
     return os.environ.get("AWS_PROFILE", "")
+
+
+def _environment_secret_id() -> str:
+    """The secret identifier, from one fixed environment-variable name.
+
+    Called only on the authorized path, after every gate has passed. The
+    *name* is a constant and is not a secret; the *value* is, and it is never
+    printed, logged, returned to a caller or included in a refusal.
+
+    ``os`` is imported inside the body, so an ordinary import of this module --
+    and every refusal path above -- performs no environment lookup at all.
+
+    Raises:
+        LookupError: if the variable is unset or blank. Converted by the caller
+            into the closed ``REFUSED_CREDENTIAL`` outcome, which names nothing.
+    """
+    import os
+
+    value = os.environ.get(SECRET_ID_ENV_VAR, "")
+    if not value.strip():
+        raise LookupError("the secret identifier environment variable is unset")
+    return value
 
 
 def _governed_identity_gate() -> str | None:
@@ -488,6 +640,25 @@ def _transport() -> Any:
     from kalpamani.data.ingest.sharadar.transport import UrllibTransport
 
     return UrllibTransport()
+
+
+#: The public surface, stated so it can be checked rather than inferred.
+#:
+#: The authorization capability, its mint and its minting function are all
+#: absent, deliberately: an exported mint is a public constructor by another
+#: name. An audit guard asserts their absence, which is only meaningful
+#: because this list exists to be absent from.
+__all__ = [
+    "BINDING_AUTHORIZATION_FLAG",
+    "REFUSED_OPTIONS",
+    "SECRET_ID_ENV_VAR",
+    "BindingPreflightError",
+    "PreflightOutcome",
+    "SystemClock",
+    "build_parser",
+    "main",
+    "run_binding_preflight",
+]
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through main()
