@@ -81,16 +81,55 @@ The order, and why nothing may be reordered
 2. the exact AWS profile
 3. the AWS account identity gate
 4. governed licensed-bucket resolution
-5. private credential retrieval
-6. client and dependency construction
-7. the accepted offline composition preflight
-8. a closed result
+5. the secret-identifier source, and its structural validation
+6. Secrets Manager SDK and client construction
+7. one credential retrieval through ``GetSecretValue``
+8. the remaining dependency construction
+9. the accepted offline composition preflight
+10. a closed result
 
 Each stage runs only if every earlier one passed. The order is the security
 property: identity is established before any state is read, the bucket is
 resolved before a secret is fetched, and the secret is fetched before anything is
 constructed -- so a wrong-account session never reaches a secret, and a failed
 gate never reaches a credential.
+
+Stages 5, 6 and 7 were one stage, and that was a defect
+=======================================================
+
+ADR-0016. The first revision resolved the identifier, constructed the client and
+retrieved the credential inside one ``try`` whose every failure became
+``REFUSED_CREDENTIAL``. Two authorized operator attempts were made against the
+real foundation. The first refused at the identity gate. The second passed
+identity and bucket resolution and reported ``REFUSED_CREDENTIAL`` -- and the
+operational virtual environment contained no ``boto3`` at all, so
+``_secrets_client`` had raised ``ModuleNotFoundError`` **inside the constructor**
+and **no ``GetSecretValue`` request was ever issued.**
+
+The command reported a private-credential failure for a missing local package.
+An operator reading it would go looking at Secrets Manager, at IAM, at the secret
+itself -- at everything except the one thing that was actually wrong. Worse, the
+report implied a request had been sent to AWS when none had been, and whether the
+secret identifier was even configured stayed unknown, because nothing had
+distinguished that stage either.
+
+They are three stages with three closed outcomes now, and each is refused before
+the next begins:
+
+======================================  ==========  ==========  ================
+outcome                                 identifier  client      GetSecretValue
+======================================  ==========  ==========  ================
+authorization / profile / identity /             0           0                 0
+bucket refusal
+``REFUSED_SECRET_IDENTIFIER``                    1           0                 0
+``REFUSED_DEPENDENCY`` at the client             1           1                 0
+``REFUSED_CREDENTIAL``                           1           1                 1
+a completed offline preflight                    1           1                 1
+======================================  ==========  ==========  ================
+
+The counts are not decoration. They are what the synthetic suite asserts, with
+factories and a client that count what was asked of them -- so "no request was
+sent" is observed rather than argued from which line raised.
 
 Nothing here reimplements a gate. ``AWS_PROFILE`` pinning, the account-binding
 comparison and the Terraform-state read all come from
@@ -294,18 +333,73 @@ class PreflightOutcome(StrEnum):
     reports a qualification verdict, provider suitability or readiness to run --
     those are not facts this command establishes, and a word implying one would
     be read as permission.
+
+    **Three of them are the correction ADR-0016 records.** A single
+    ``REFUSED_CREDENTIAL`` once covered the identifier source, the local SDK and
+    client construction, and the one ``GetSecretValue`` call. An operator running
+    this against a machine with no SDK installed was told the private credential
+    could not be retrieved -- when nothing had asked for one, and no AWS request
+    had been sent. The three are separate members now:
+
+    ``REFUSED_SECRET_IDENTIFIER``
+        the configured source was unavailable, raised, or produced something the
+        identifier boundary refuses. **No client was built and no request was
+        sent.**
+    ``REFUSED_DEPENDENCY``
+        a local dependency -- the SDK, the client factory, the client itself, or
+        anything constructed after the credential -- was not usable. **No request
+        was sent by this stage.**
+    ``REFUSED_CREDENTIAL``
+        the one ``GetSecretValue`` attempt raised or was refused, or what came
+        back was not a credential. **This is the only outcome that follows an
+        attempted retrieval**, and every earlier refusal has its own member so it
+        cannot be mistaken for one.
     """
 
     REFUSED_NOT_AUTHORIZED = "binding preflight refused: no operator authorization was given"
     REFUSED_PROFILE = "binding preflight refused: the AWS profile is not the governed one"
     REFUSED_IDENTITY = "binding preflight refused: the AWS identity gate did not pass"
     REFUSED_BUCKET = "binding preflight refused: the licensed bucket could not be resolved"
+    # Ruff's hardcoded-password heuristic fires on the member *name*. This is a
+    # refusal sentence in a closed operator vocabulary, and renaming it to dodge
+    # the check would make the vocabulary less accurate about what was refused --
+    # which is the whole subject of ADR-0016. Suppressed per line, as in the
+    # secrets boundary, not by disabling the rule.
+    REFUSED_SECRET_IDENTIFIER = (
+        "binding preflight refused: no usable secret identifier was resolved"  # noqa: S105
+    )
+    REFUSED_DEPENDENCY = "binding preflight refused: a required local dependency was not usable"
     REFUSED_CREDENTIAL = "binding preflight refused: the private credential could not be retrieved"
-    REFUSED_DEPENDENCIES = "binding preflight refused: a dependency was not usable"
     REFUSED_PLAN = "binding preflight refused: the qualification plan did not validate"
     REFUSED_OPTION = "binding preflight refused: an option this command does not accept"
     COMPLETED = "binding preflight completed"
     VALIDATION_COMPLETED = "offline validation completed"
+
+
+#: What each closed secrets-boundary failure means to an operator.
+#:
+#: Keyed by the ``SecretRetrievalFailure`` member's own token rather than by the
+#: member, so this file still imports nothing at module scope: the default,
+#: refusing invocation must stay runnable on a machine where the data platform
+#: is not importable, which is exactly the class of machine the defect was found
+#: on.
+#:
+#: **Total over that vocabulary**, and a test asserts it is: a failure member
+#: with no entry here would be swept into "the credential failed" by a default,
+#: which is the defect ADR-0016 corrects rather than a way to express it. Two of
+#: the six are refusals the boundary reaches *before* it calls the backend, and
+#: they map to the stages that own them -- not to the credential.
+SECRET_FAILURE_OUTCOME: Final[dict[str, PreflightOutcome]] = {
+    # Refused before the one request. No AWS request was sent.
+    "CLIENT_UNUSABLE": PreflightOutcome.REFUSED_DEPENDENCY,
+    "SECRET_IDENTIFIER_MALFORMED": PreflightOutcome.REFUSED_SECRET_IDENTIFIER,
+    # Reached only by attempting the one request, or by inspecting what it
+    # returned. These are the genuine credential boundary.
+    "BACKEND_REFUSED": PreflightOutcome.REFUSED_CREDENTIAL,
+    "RESPONSE_MALFORMED": PreflightOutcome.REFUSED_CREDENTIAL,
+    "SECRET_BINARY_REFUSED": PreflightOutcome.REFUSED_CREDENTIAL,
+    "SECRET_VALUE_UNUSABLE": PreflightOutcome.REFUSED_CREDENTIAL,
+}
 
 
 class BindingPreflightError(Exception):
@@ -320,9 +414,30 @@ class BindingPreflightError(Exception):
     def __init__(self, outcome: PreflightOutcome) -> None:
         """Carry one allowlisted outcome, and render it as that sentence alone."""
         self.outcome = (
-            outcome if type(outcome) is PreflightOutcome else PreflightOutcome.REFUSED_DEPENDENCIES
+            outcome if type(outcome) is PreflightOutcome else PreflightOutcome.REFUSED_DEPENDENCY
         )
         super().__init__(self.outcome.value)
+
+
+def _secret_failure_outcome(refusal: object) -> PreflightOutcome:
+    """The operator outcome for one closed secrets-boundary refusal.
+
+    Stage 5 has already validated the identifier against the boundary's own
+    rule and stage 6 has already established that the client can serve the one
+    operation, so neither pre-request member is reachable from the authorized
+    path -- they are mapped anyway, because a mapping that is only correct while
+    two other stages stay correct is a mapping waiting to be wrong.
+
+    An unmapped token falls to ``REFUSED_CREDENTIAL`` for the same structural
+    reason: with both pre-request causes excluded above, anything the boundary
+    can still refuse happened at or after the request. The default is dead code
+    while the totality test holds, and it is the honest answer if it ever runs.
+    """
+    failure = getattr(refusal, "failure", None)
+    token = getattr(failure, "value", None)
+    if type(token) is not str:
+        return PreflightOutcome.REFUSED_CREDENTIAL
+    return SECRET_FAILURE_OUTCOME.get(token, PreflightOutcome.REFUSED_CREDENTIAL)
 
 
 def _emit(outcome: PreflightOutcome) -> None:
@@ -435,10 +550,29 @@ def run_binding_preflight(
     transport's ``get``, or to ``put_object`` or ``head_object`` -- and no code in
     this file could construct one.
 
+    The identifier, the client and the retrieval are **three stages with three
+    outcomes**, not one stage with one. ADR-0016: they were one, and an operator
+    running this on a machine with no ``boto3`` installed was told the private
+    credential could not be retrieved -- when the constructor had raised
+    ``ModuleNotFoundError`` and no request had been sent to AWS at all.
+
     Raises:
         BindingPreflightError: one allowlisted :class:`PreflightOutcome`. The
             cause is always suppressed: a backend exception quotes a secret name,
             an ARN or a bucket, and a plan refusal can quote a subject.
+
+            ``REFUSED_SECRET_IDENTIFIER`` -- the source was unavailable, raised,
+            or produced something :func:`is_usable_secret_identifier` refuses.
+            **Zero clients constructed, zero requests sent.**
+
+            ``REFUSED_DEPENDENCY`` -- the secrets boundary would not import, the
+            SDK or the client factory raised, the constructed client cannot
+            serve the one operation, or a dependency built after the credential
+            failed. **Zero requests sent by the stage that refused.**
+
+            ``REFUSED_CREDENTIAL`` -- and only this -- follows an attempted
+            ``GetSecretValue``: the call raised, the response was unusable, it
+            held binary, or the value was not a credential.
     """
     # 1. Authorization. A capability this module minted after parsing the flag --
     #    not a boolean, which is the one value every caller already has.
@@ -472,35 +606,86 @@ def run_binding_preflight(
     if type(licensed_bucket) is not str or not licensed_bucket.strip():
         raise BindingPreflightError(PreflightOutcome.REFUSED_BUCKET) from None
 
+    # The secrets boundary itself is a local dependency. Imported here rather
+    # than at module scope so an ordinary import of this file still reaches
+    # nothing, and guarded because an import that fails is a dependency fact --
+    # nothing has been asked for an identifier yet, and no request exists to
+    # attribute a failure to.
+    try:
+        from kalpamani.data.ingest.sharadar.secrets import (
+            SecretRetrievalError,
+            is_usable_secret_identifier,
+            sharadar_credential_from_secret,
+        )
+    except Exception:
+        raise BindingPreflightError(PreflightOutcome.REFUSED_DEPENDENCY) from None
+
     # 5. The secret identifier, resolved **here** and nowhere earlier. It is
     #    private, so every refusal above must complete without asking for it --
     #    which is why it is a source rather than an argument.
-    from kalpamani.data.ingest.sharadar.secrets import sharadar_credential_from_secret
-
+    #
+    #    Its own outcome, and not the credential's: an unset variable or a
+    #    malformed identifier is a configuration fact about this machine, and
+    #    reporting it as a credential failure sends an operator to Secrets
+    #    Manager to look for a problem that is not there (ADR-0016). Nothing has
+    #    been constructed at this point and nothing has been sent.
+    #
+    #    The rule is the secrets boundary's own, imported rather than restated:
+    #    two spellings of one rule is how a value this stage admits becomes a
+    #    value the boundary refuses.
     try:
         secret_id = secret_id_source()
     except Exception:
-        raise BindingPreflightError(PreflightOutcome.REFUSED_CREDENTIAL) from None
-    if type(secret_id) is not str or not secret_id.strip():
-        raise BindingPreflightError(PreflightOutcome.REFUSED_CREDENTIAL) from None
+        raise BindingPreflightError(PreflightOutcome.REFUSED_SECRET_IDENTIFIER) from None
+    if not is_usable_secret_identifier(secret_id):
+        raise BindingPreflightError(PreflightOutcome.REFUSED_SECRET_IDENTIFIER) from None
+
+    # 6. The Secrets Manager client. **Local construction only** -- importing the
+    #    SDK, building a session, pinning a region. No AWS request is sent by
+    #    this stage and none may be reported: the operational finding behind
+    #    ADR-0016 is precisely a `ModuleNotFoundError` raised here being reported
+    #    as a credential that could not be retrieved.
+    #
+    #    The dependency's own exception is suppressed like every other: an import
+    #    error names a path, and a client constructor's error can name a profile,
+    #    a region or an endpoint.
     try:
-        credential = sharadar_credential_from_secret(
-            client=secrets_client_factory(), secret_id=secret_id
-        )
+        secrets_client = secrets_client_factory()
     except Exception:
+        raise BindingPreflightError(PreflightOutcome.REFUSED_DEPENDENCY) from None
+    if not callable(getattr(secrets_client, "get_secret_value", None)):
+        # Checked here so the boundary's `CLIENT_UNUSABLE` -- which is a
+        # dependency fact -- cannot arrive at the credential stage and be read
+        # as one.
+        raise BindingPreflightError(PreflightOutcome.REFUSED_DEPENDENCY) from None
+
+    # 7. The one credential retrieval, and the only stage that sends a request.
+    #    Everything that could refuse before the request has refused above, so a
+    #    refusal here is a credential-boundary refusal -- and the closed member
+    #    the boundary raises is mapped rather than assumed.
+    try:
+        credential = sharadar_credential_from_secret(client=secrets_client, secret_id=secret_id)
+    except SecretRetrievalError as refusal:
+        raise BindingPreflightError(_secret_failure_outcome(refusal)) from None
+    except Exception:
+        # Not the boundary's closed vocabulary at all. It escaped from inside
+        # the retrieval, which is the one thing this stage does.
         raise BindingPreflightError(PreflightOutcome.REFUSED_CREDENTIAL) from None
 
-    # 6. The remaining dependencies.
-    from kalpamani.data.ingest.sharadar.client import DEFAULT_RETRY_POLICY, Pacer
-
+    # 8. The remaining dependencies. After the credential, because none of them
+    #    is needed to decide any earlier refusal -- and a dependency failure
+    #    here is still a dependency failure, even though a credential was
+    #    retrieved a moment ago.
     try:
+        from kalpamani.data.ingest.sharadar.client import DEFAULT_RETRY_POLICY, Pacer
+
         s3_client = s3_client_factory()
         transport = transport_factory()
         pacer = Pacer()
     except Exception:
-        raise BindingPreflightError(PreflightOutcome.REFUSED_DEPENDENCIES) from None
+        raise BindingPreflightError(PreflightOutcome.REFUSED_DEPENDENCY) from None
 
-    # 7. The accepted offline composition preflight, and nothing else.
+    # 9. The accepted offline composition preflight, and nothing else.
     from kalpamani.data.ingest.sharadar.composition import preflight_qualification_composition
 
     try:
@@ -689,6 +874,7 @@ def _transport() -> Any:
 __all__ = [
     "BINDING_AUTHORIZATION_FLAG",
     "REFUSED_OPTIONS",
+    "SECRET_FAILURE_OUTCOME",
     "SECRET_ID_ENV_VAR",
     "BindingPreflightError",
     "PreflightOutcome",

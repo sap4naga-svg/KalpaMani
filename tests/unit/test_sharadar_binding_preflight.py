@@ -77,6 +77,10 @@ INSTANT = datetime(2026, 8, 29, 12, 0, 0, tzinfo=UTC)
 #: pass as a forgery, including ``None``.
 _MINT: Final = object()
 
+#: "no override was given" -- distinct from ``None``, which is itself a client a
+#: test may want to inject to prove the dependency stage refuses it.
+_UNSET: Final = object()
+
 
 def _load_entry_point() -> Any:
     """Import the entry point by path, without installing it or adding it to a package.
@@ -112,20 +116,47 @@ class Stages:
 
 
 class CountingSecretsClient:
-    """Answers one secret and counts the asking."""
+    """Answers one secret and counts the asking.
 
-    def __init__(self, response: Any = None, raises: Exception | None = None) -> None:
+    ``calls`` is the witnessed ``GetSecretValue`` count. Every request-count
+    claim in this file reads it rather than inferring "a request must have
+    happened" from which stage raised -- which is the inference ADR-0016 records
+    as having been wrong in production.
+    """
+
+    def __init__(
+        self,
+        response: Any = None,
+        raises: Exception | None = None,
+        stages: Stages | None = None,
+    ) -> None:
         self.response = {"SecretString": CANARY_SECRET} if response is None else response
         self.raises = raises
+        self.stages = stages
         self.calls = 0
         self.secret_ids: list[str] = []
 
     def get_secret_value(self, **kwargs: Any) -> Any:
+        if self.stages is not None:
+            self.stages.record("credential")
         self.calls += 1
         self.secret_ids.append(kwargs.get("SecretId", ""))
         if self.raises is not None:
             raise self.raises
         return self.response
+
+
+class UnusableSecretsClient:
+    """A constructed client that cannot serve the one operation.
+
+    A dependency fact, not a credential one: the object exists, so construction
+    succeeded, but nothing here can send a request through it.
+    """
+
+    # Ruff's hardcoded-password heuristic fires on the attribute *name*. This is
+    # a deliberately non-callable stand-in for the one operation, and renaming it
+    # would stop it standing in for anything.
+    get_secret_value = "not callable"  # noqa: S105
 
 
 class CountingS3Client:
@@ -169,10 +200,12 @@ class Harness:
         identity_reason: str | None = None,
         bucket: str = CANARY_BUCKET,
         secrets_client: CountingSecretsClient | None = None,
+        secrets_client_override: Any = _UNSET,
+        secrets_factory_raises: Exception | None = None,
         profile_raises: bool = False,
         identity_raises: bool = False,
         bucket_raises: bool = False,
-        secret_id_raises: bool = False,
+        secret_id_raises: Exception | None = None,
         secret_id_value: Any = CANARY_SECRET_ID,
     ) -> None:
         self.stages = Stages()
@@ -183,6 +216,10 @@ class Harness:
         self.identity_raises = identity_raises
         self.bucket_raises = bucket_raises
         self.secrets = secrets_client or CountingSecretsClient()
+        self.secrets.stages = self.stages
+        self.secrets_client_override: Any = secrets_client_override
+        self.secrets_factory_raises = secrets_factory_raises
+        self.secrets_factory_calls = 0
         self.s3 = CountingS3Client()
         self.transport = CountingTransport()
         self.secret_id_calls = 0
@@ -215,12 +252,24 @@ class Harness:
         """
         self.stages.record("secret-id")
         self.secret_id_calls += 1
-        if self.secret_id_raises:
-            raise RuntimeError(CANARY_SECRET_ID)
+        if self.secret_id_raises is not None:
+            raise self.secret_id_raises
         return self.secret_id_value
 
-    def secrets_factory(self) -> CountingSecretsClient:
-        self.stages.record("secret")
+    def secrets_factory(self) -> Any:
+        """Construct the Secrets Manager client. **Local work only.**
+
+        Counted separately from the identifier that precedes it and the request
+        that follows it, because the whole of ADR-0016 is that those three were
+        one number and an operator could not tell which had failed. An absent
+        SDK raises here, and nothing has been sent to AWS when it does.
+        """
+        self.stages.record("secrets-client")
+        self.secrets_factory_calls += 1
+        if self.secrets_factory_raises is not None:
+            raise self.secrets_factory_raises
+        if self.secrets_client_override is not _UNSET:
+            return self.secrets_client_override
         return self.secrets
 
     def s3_factory(self) -> CountingS3Client:
@@ -653,7 +702,15 @@ def test_a_secret_failure_refuses_before_composition() -> None:
     with pytest.raises(bp.BindingPreflightError) as raised:
         harness.run()
     assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
-    assert harness.stages.order == ["profile", "identity", "bucket", "secret-id", "secret"]
+    assert harness.stages.order == [
+        "profile",
+        "identity",
+        "bucket",
+        "secret-id",
+        "secrets-client",
+        "credential",
+    ]
+    assert harness.secrets.calls == 1, "the credential outcome must follow a witnessed request"
     assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
 
 
@@ -662,7 +719,8 @@ def test_a_missing_secret_identifier_refuses_before_the_backend_is_asked() -> No
         harness = Harness(secret_id_value=missing)
         with pytest.raises(bp.BindingPreflightError) as raised:
             harness.run()
-        assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+        assert raised.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER
+        assert harness.secrets_factory_calls == 0, "a bad identifier built a client"
         assert harness.secrets.calls == 0, "a bad identifier reached the backend"
 
 
@@ -674,11 +732,14 @@ def test_the_full_ordering_is_exact_on_the_authorized_path() -> None:
         "identity",
         "bucket",
         "secret-id",
-        "secret",
+        "secrets-client",
+        "credential",
         "s3",
         "transport",
     ]
     assert harness.secret_id_calls == 1, "the identifier was resolved more than once"
+    assert harness.secrets_factory_calls == 1, "the client was constructed more than once"
+    assert harness.secrets.calls == 1, "more than one GetSecretValue was attempted"
 
 
 # ---------------------------------------------------------------------------
@@ -746,18 +807,24 @@ def test_the_identifier_source_is_called_exactly_once_in_order() -> None:
     harness.run()
     assert harness.secret_id_calls == 1
     order = harness.stages.order
-    assert order.index("bucket") < order.index("secret-id") < order.index("secret")
+    assert (
+        order.index("bucket")
+        < order.index("secret-id")
+        < order.index("secrets-client")
+        < order.index("credential")
+    )
 
 
 def test_a_raising_identifier_source_is_a_sanitized_refusal() -> None:
-    harness = Harness(secret_id_raises=True)
+    harness = Harness(secret_id_raises=RuntimeError(CANARY_SECRET_ID))
     with pytest.raises(bp.BindingPreflightError) as raised:
         harness.run()
-    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER
     assert raised.value.__cause__ is None
     assert raised.value.__suppress_context__ is True
     rendered = f"{raised.value!r} {raised.value!s}"
     assert CANARY_SECRET_ID not in rendered
+    assert harness.secrets_factory_calls == 0
     assert harness.secrets.calls == 0
 
 
@@ -781,7 +848,8 @@ def test_an_unusable_identifier_is_refused_before_the_backend(label: str, value:
     harness = Harness(secret_id_value=value)
     with pytest.raises(bp.BindingPreflightError) as raised:
         harness.run()
-    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    assert raised.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER
+    assert harness.secrets_factory_calls == 0, f"a {label} identifier built a client"
     assert harness.secrets.calls == 0, f"a {label} identifier reached the backend"
 
 
@@ -919,18 +987,255 @@ def test_the_entry_point_reads_the_environment_only_inside_a_factory() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8, 10 -- the secrets boundary
+# ADR-0016 -- three boundaries where there was one
 # ---------------------------------------------------------------------------
+#
+# Two authorized operator attempts were made against the real foundation. The
+# first refused at the identity gate. The second passed identity and bucket
+# resolution and reported REFUSED_CREDENTIAL -- and the operational virtual
+# environment held no `boto3`, so the constructor had raised ModuleNotFoundError
+# and *no GetSecretValue request was ever issued*. The command reported a
+# private-credential failure for a missing local package.
+#
+# What follows fixes the counts to behaviour. Every assertion about "a request
+# was sent" reads `harness.secrets.calls`, which the synthetic client increments
+# when it is actually called -- never inferred from which line raised.
 
 
-def test_a_secret_string_becomes_a_credential_and_nothing_else() -> None:
-    client = CountingSecretsClient()
-    credential = sharadar_credential_from_secret(client=client, secret_id=CANARY_SECRET_ID)
-    assert type(credential) is SharadarCredential
-    assert repr(credential) == CREDENTIAL_PLACEHOLDER
-    assert client.calls == 1
-    assert client.secret_ids == [CANARY_SECRET_ID]
+class SyntheticBackendError(Exception):
+    """Shaped like a backend error: a message naming things that must not travel."""
 
+
+#: A name-shaped identifier and an ARN-shaped one. Both are ordinary printable
+#: strings, which is the whole of the identifier contract -- no vendor or AWS
+#: naming grammar is inferred, here or in the boundary. The account position
+#: carries a word, not digits, so nothing here is even shaped like a real one.
+VALID_NAME_IDENTIFIER: Final = "synthetic/kalpamani/sharadar-canary"
+VALID_ARN_IDENTIFIER: Final = (
+    "arn:aws:secretsmanager:us-east-1:synthetic-account:secret:synthetic-canary"
+)
+
+
+class BoolLike(int):
+    """``True`` is an ``int``; an exact-type check must still refuse it."""
+
+
+#: Every way the identifier source can fail to produce a usable identifier.
+#:
+#: The ``raises`` cases model a source that is unavailable -- the production one
+#: raises ``LookupError`` when its one fixed variable is unset -- and the value
+#: cases model one that returns something unusable.
+BAD_IDENTIFIERS: tuple[tuple[str, Any, Any], ...] = (
+    ("unavailable source", None, LookupError(CANARY_SECRET_ID)),
+    ("raising source", None, SyntheticBackendError(CANARY_SECRET_ID)),
+    ("None", None, None),
+    ("boolean", True, None),
+    ("boolean subclass", BoolLike(1), None),
+    ("integer", 7, None),
+    ("bytes", b"synthetic", None),
+    ("list", ["synthetic"], None),
+    ("str subclass", HostileString("synthetic-subclassed-identifier"), None),
+    ("empty string", "", None),
+    ("whitespace only", "   ", None),
+    ("malformed name", "synthetic name with spaces", None),
+    ("embedded newline", "synthetic\nsecond-parameter", None),
+    ("malformed ARN shape", "arn:aws:secretsmanager:us-east-1: :secret:synthetic", None),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "raises"), BAD_IDENTIFIERS, ids=[case[0] for case in BAD_IDENTIFIERS]
+)
+def test_an_identifier_failure_is_its_own_outcome_and_sends_nothing(
+    label: str, value: Any, raises: Any
+) -> None:
+    """The identifier stage owns its refusal, and nothing downstream has run.
+
+    Before ADR-0016 every one of these was ``REFUSED_CREDENTIAL`` -- an operator
+    told the private credential could not be retrieved when no client existed
+    and nothing had been asked of AWS.
+    """
+    harness = Harness(secret_id_value=value, secret_id_raises=raises)
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER, label
+    assert harness.secret_id_calls == 1
+    assert harness.secrets_factory_calls == 0, "a client was constructed for a bad identifier"
+    assert harness.secrets.calls == 0, "GetSecretValue was attempted for a bad identifier"
+    assert harness.stages.order == ["profile", "identity", "bucket", "secret-id"]
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "raises"), BAD_IDENTIFIERS, ids=[case[0] for case in BAD_IDENTIFIERS]
+)
+def test_an_identifier_failure_discloses_neither_value_nor_cause(
+    label: str, value: Any, raises: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    harness = Harness(secret_id_value=value, secret_id_raises=raises)
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    captured = capsys.readouterr()
+    rendered = f"{refusal.value!r} {refusal.value!s} {captured.out} {captured.err}"
+    assert refusal.value.__cause__ is None, label
+    assert refusal.value.__suppress_context__ is True
+    for canary in CANARIES:
+        assert canary not in rendered, f"{label} disclosed {canary}"
+    for shape in (VALID_NAME_IDENTIFIER, VALID_ARN_IDENTIFIER, "synthetic"):
+        assert shape not in rendered, f"{label} echoed the identifier it was given"
+
+
+@pytest.mark.parametrize("identifier", [VALID_NAME_IDENTIFIER, VALID_ARN_IDENTIFIER])
+def test_a_usable_identifier_shape_reaches_the_backend_exactly_once(identifier: str) -> None:
+    """A name and an ARN are both accepted, and each yields one request.
+
+    The complement of the refusals above: a guard that refused everything would
+    also satisfy them.
+    """
+    harness = Harness(secret_id_value=identifier)
+    harness.run()
+    assert harness.secret_id_calls == 1
+    assert harness.secrets_factory_calls == 1
+    assert harness.secrets.calls == 1
+    assert harness.secrets.secret_ids == [identifier]
+
+
+# -- the dependency boundary -------------------------------------------------
+#
+# The operational finding, reproduced synthetically. None of these installs,
+# imports or requires the real SDK: an absent `boto3` is a `ModuleNotFoundError`
+# raised by a factory, which is exactly what the real factory does on a machine
+# without it.
+
+#: Every way a local dependency can fail while the client is being constructed.
+DEPENDENCY_FAILURES: tuple[tuple[str, Exception], ...] = (
+    ("absent boto3", ModuleNotFoundError(f"No module named 'boto3' {CANARY_BACKEND}")),
+    ("absent botocore", ModuleNotFoundError(f"No module named 'botocore' {CANARY_BACKEND}")),
+    ("raising SDK import", ImportError(CANARY_BACKEND)),
+    ("factory not callable", TypeError(f"'NoneType' object is not callable {CANARY_BACKEND}")),
+    ("client construction failure", SyntheticBackendError(CANARY_BACKEND)),
+    ("unexpected dependency error", RuntimeError(CANARY_BACKEND)),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), DEPENDENCY_FAILURES, ids=[case[0] for case in DEPENDENCY_FAILURES]
+)
+def test_a_client_construction_failure_is_a_dependency_refusal(
+    label: str, failure: Exception
+) -> None:
+    """**The defect ADR-0016 corrects, stated as a count.**
+
+    An absent SDK produces ``REFUSED_DEPENDENCY`` and *zero* ``GetSecretValue``
+    attempts. The identifier was resolved -- that stage passed -- and nothing
+    beyond the constructor ran.
+    """
+    harness = Harness(secrets_factory_raises=failure)
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY, label
+    assert harness.secret_id_calls == 1
+    assert harness.secrets_factory_calls == 1
+    assert harness.secrets.calls == 0, f"{label} attempted a request"
+    assert harness.stages.order == ["profile", "identity", "bucket", "secret-id", "secrets-client"]
+    assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), DEPENDENCY_FAILURES, ids=[case[0] for case in DEPENDENCY_FAILURES]
+)
+def test_a_dependency_failure_discloses_no_underlying_text(
+    label: str, failure: Exception, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An import error names a path; a client constructor names a profile or a region."""
+    harness = Harness(secrets_factory_raises=failure)
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    captured = capsys.readouterr()
+    rendered = f"{refusal.value!r} {refusal.value!s} {captured.out} {captured.err}"
+    assert refusal.value.__cause__ is None, label
+    assert refusal.value.__suppress_context__ is True
+    assert CANARY_BACKEND not in rendered, f"{label} echoed the dependency exception"
+    for forbidden in ("boto3", "botocore", "No module named", "not callable"):
+        assert forbidden not in rendered, f"{label} named the dependency"
+
+
+@pytest.mark.parametrize(
+    ("label", "client"),
+    [
+        ("no such attribute", object()),
+        ("attribute is not callable", UnusableSecretsClient()),
+        ("client is None", None),
+    ],
+)
+def test_a_constructed_client_that_cannot_serve_the_operation_is_a_dependency_refusal(
+    label: str, client: Any
+) -> None:
+    """Construction succeeded and the object still cannot send a request.
+
+    The secrets boundary calls this ``CLIENT_UNUSABLE``, and that is a fact
+    about a dependency. Routing it to the credential would claim a retrieval no
+    object here could have performed.
+    """
+    harness = Harness(secrets_client_override=client)
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY, label
+    assert harness.secrets_factory_calls == 1
+    assert harness.secrets.calls == 0
+
+
+def test_an_unimportable_secrets_boundary_is_a_dependency_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The boundary module is itself a local dependency.
+
+    Replacing it with an object that does not carry the names the entry point
+    imports makes ``from ... import ...`` raise, without touching the real
+    module: ``monkeypatch`` restores ``sys.modules`` afterwards.
+    """
+    monkeypatch.setitem(sys.modules, "kalpamani.data.ingest.sharadar.secrets", object())
+    harness = Harness()
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY
+    assert harness.secret_id_calls == 0, "an identifier was resolved for an unusable dependency"
+    assert harness.secrets_factory_calls == 0
+    assert harness.secrets.calls == 0
+
+
+def test_a_late_dependency_failure_is_still_a_dependency_refusal() -> None:
+    """Stage 8 runs *after* a successful retrieval and is still not a credential fact.
+
+    The count is the point: one request was genuinely sent here, and the outcome
+    still says what actually failed.
+    """
+
+    def failing_transport() -> Any:
+        raise SyntheticBackendError(CANARY_BACKEND)
+
+    harness = Harness()
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        bp.run_binding_preflight(
+            authorization=bp._BINDING_PREFLIGHT_AUTHORIZATION,
+            subjects=("SYNTH",),
+            execution_id="synthetic-execution-0001",
+            profile_of=harness.profile_of,
+            identity_gate=harness.identity_gate,
+            resolve_licensed_bucket=harness.resolve_bucket,
+            secret_id_source=harness.secret_id_source,
+            secrets_client_factory=harness.secrets_factory,
+            s3_client_factory=harness.s3_factory,
+            transport_factory=failing_transport,
+        )
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY
+    assert harness.secrets.calls == 1
+    assert CANARY_BACKEND not in f"{refusal.value!r} {refusal.value!s}"
+
+
+# -- the credential boundary -------------------------------------------------
+#
+# Reserved for a genuine retrieval: the one request raised, or what came back
+# was not a credential. Every case here witnesses exactly one attempt.
 
 #: Every way a secret response can be unusable, and the closed member each yields.
 BAD_RESPONSES: tuple[tuple[str, Any, SecretRetrievalFailure], ...] = (
@@ -953,6 +1258,209 @@ BAD_RESPONSES: tuple[tuple[str, Any, SecretRetrievalFailure], ...] = (
     ),
     ("not a mapping", 7, SecretRetrievalFailure.RESPONSE_MALFORMED),
 )
+
+#: Backend refusals, named the way an operator would see them.
+BACKEND_REFUSALS: tuple[tuple[str, Exception], ...] = (
+    ("access denied", SyntheticBackendError(f"AccessDeniedException {CANARY_BACKEND}")),
+    ("resource not found", SyntheticBackendError(f"ResourceNotFoundException {CANARY_BACKEND}")),
+    ("expired session", SyntheticBackendError(f"ExpiredTokenException {CANARY_BACKEND}")),
+    ("throttled", SyntheticBackendError(f"ThrottlingException {CANARY_BACKEND}")),
+    ("transient SDK error", SyntheticBackendError(f"EndpointConnectionError {CANARY_BACKEND}")),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), BACKEND_REFUSALS, ids=[case[0] for case in BACKEND_REFUSALS]
+)
+def test_a_backend_refusal_is_a_credential_refusal_after_exactly_one_attempt(
+    label: str, failure: Exception, capsys: pytest.CaptureFixture[str]
+) -> None:
+    harness = Harness(secrets_client=CountingSecretsClient(raises=failure))
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    captured = capsys.readouterr()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL, label
+    assert harness.secrets.calls == 1, f"{label} did not witness exactly one attempt"
+    rendered = f"{refusal.value!r} {refusal.value!s} {captured.out} {captured.err}"
+    assert CANARY_BACKEND not in rendered
+    assert refusal.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    ("label", "response", "failure"), BAD_RESPONSES, ids=[case[0] for case in BAD_RESPONSES]
+)
+def test_an_unusable_response_is_a_credential_refusal_after_exactly_one_attempt(
+    label: str, response: Any, failure: Any
+) -> None:
+    """A malformed response, an absent ``SecretString``, binary, or a value the
+    credential contract refuses -- all reached by asking, all credential facts."""
+    harness = Harness(secrets_client=CountingSecretsClient(response=response))
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL, label
+    assert harness.secrets.calls == 1, f"{label} did not witness exactly one attempt"
+    assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
+
+
+def test_a_valid_synthetic_secret_completes_with_one_attempt() -> None:
+    client = CountingSecretsClient(response={"SecretString": CANARY_SECRET})
+    harness = Harness(secrets_client=client)
+    result = harness.run()
+    assert str(result.status) == "VALIDATED_OFFLINE"
+    assert harness.secrets.calls == 1
+
+
+# -- the closed mapping ------------------------------------------------------
+
+
+def test_every_secrets_boundary_failure_is_classified() -> None:
+    """Total over the boundary's vocabulary, with no default doing the work.
+
+    A member with no entry would fall to the classifier's structural default and
+    be reported as a credential failure -- which is the defect, not a way to
+    express it. Adding one to ``SecretRetrievalFailure`` fails here first.
+    """
+    assert {member.value for member in SecretRetrievalFailure} == set(bp.SECRET_FAILURE_OUTCOME)
+
+
+def test_the_pre_request_failures_are_never_credential_failures() -> None:
+    """The two the boundary raises *before* it calls the backend."""
+    assert bp.SECRET_FAILURE_OUTCOME["CLIENT_UNUSABLE"] is bp.PreflightOutcome.REFUSED_DEPENDENCY
+    assert (
+        bp.SECRET_FAILURE_OUTCOME["SECRET_IDENTIFIER_MALFORMED"]
+        is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER
+    )
+
+
+def test_the_post_request_failures_are_credential_failures() -> None:
+    for token in (
+        "BACKEND_REFUSED",
+        "RESPONSE_MALFORMED",
+        "SECRET_BINARY_REFUSED",
+        "SECRET_VALUE_UNUSABLE",
+    ):
+        assert bp.SECRET_FAILURE_OUTCOME[token] is bp.PreflightOutcome.REFUSED_CREDENTIAL
+
+
+def test_the_outcome_vocabulary_is_exactly_these_members() -> None:
+    """Closed, and closed against an alias too.
+
+    A second spelling of an existing outcome would let one stage's refusal be
+    reported under another stage's name, which is what ADR-0016 corrects.
+    """
+    assert {member.name for member in bp.PreflightOutcome} == {
+        "REFUSED_NOT_AUTHORIZED",
+        "REFUSED_PROFILE",
+        "REFUSED_IDENTITY",
+        "REFUSED_BUCKET",
+        "REFUSED_SECRET_IDENTIFIER",
+        "REFUSED_DEPENDENCY",
+        "REFUSED_CREDENTIAL",
+        "REFUSED_PLAN",
+        "REFUSED_OPTION",
+        "COMPLETED",
+        "VALIDATION_COMPLETED",
+    }
+    assert len({member.value for member in bp.PreflightOutcome}) == len(bp.PreflightOutcome)
+
+
+def test_the_superseded_plural_member_is_gone() -> None:
+    """``REFUSED_DEPENDENCIES`` is renamed, not aliased. No synonym survives."""
+    assert not hasattr(bp.PreflightOutcome, "REFUSED_DEPENDENCIES")
+    assert "REFUSED_DEPENDENCIES" not in ENTRY_POINT.read_text(encoding="utf-8")
+
+
+def test_no_refusal_before_the_request_is_worded_as_a_credential_failure() -> None:
+    """The sentences an operator reads must not point at the wrong system."""
+    for member in (
+        bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER,
+        bp.PreflightOutcome.REFUSED_DEPENDENCY,
+    ):
+        assert "credential" not in member.value
+    assert "credential" in bp.PreflightOutcome.REFUSED_CREDENTIAL.value
+
+
+# -- the request-count table -------------------------------------------------
+
+
+def _counts(harness: Harness) -> tuple[int, int, int]:
+    """Identifier resolutions, client constructions, ``GetSecretValue`` attempts."""
+    return (harness.secret_id_calls, harness.secrets_factory_calls, harness.secrets.calls)
+
+
+def test_every_outcome_has_its_witnessed_call_counts() -> None:
+    """The table in the entry point's docstring, asserted rather than described.
+
+    Each row is produced by driving the preflight, not by reading the source: a
+    count claimed from which stage raised is the inference that produced a false
+    report in production.
+    """
+    unauthorized = Harness()
+    with pytest.raises(bp.BindingPreflightError):
+        unauthorized.run(authorization=None)
+    assert _counts(unauthorized) == (0, 0, 0)
+
+    for label, harness in (
+        ("profile", Harness(profile="default")),
+        ("identity", Harness(identity_reason="mismatch")),
+        ("bucket", Harness(bucket_raises=True)),
+    ):
+        with pytest.raises(bp.BindingPreflightError):
+            harness.run()
+        assert _counts(harness) == (0, 0, 0), label
+
+    identifier = Harness(secret_id_value=None)
+    with pytest.raises(bp.BindingPreflightError) as refused_identifier:
+        identifier.run()
+    assert refused_identifier.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER
+    assert _counts(identifier) == (1, 0, 0)
+
+    dependency = Harness(secrets_factory_raises=ModuleNotFoundError("No module named 'boto3'"))
+    with pytest.raises(bp.BindingPreflightError) as refused_dependency:
+        dependency.run()
+    assert refused_dependency.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY
+    assert _counts(dependency) == (1, 1, 0)
+
+    credential = Harness(secrets_client=CountingSecretsClient(response={}))
+    with pytest.raises(bp.BindingPreflightError) as refused_credential:
+        credential.run()
+    assert refused_credential.value.outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    assert _counts(credential) == (1, 1, 1)
+
+    completed = Harness()
+    completed.run()
+    assert _counts(completed) == (1, 1, 1)
+
+
+def test_the_refusing_default_path_needs_neither_the_sdk_nor_the_package() -> None:
+    """The path an operator hits with no flag must not depend on what is installed.
+
+    Every ``kalpamani`` import in the entry point sits inside a function body, so
+    a refusal on a machine with a broken environment is still a clean refusal
+    rather than a traceback. The defect was found on exactly such a machine.
+    """
+    module_level = ast.unparse(
+        ast.Module(
+            body=[n for n in _tree(ENTRY_POINT).body if isinstance(n, ast.Import | ast.ImportFrom)],
+            type_ignores=[],
+        )
+    )
+    assert "kalpamani" not in module_level
+    assert "boto3" not in module_level
+
+
+# ---------------------------------------------------------------------------
+# 8, 10 -- the secrets boundary
+# ---------------------------------------------------------------------------
+
+
+def test_a_secret_string_becomes_a_credential_and_nothing_else() -> None:
+    client = CountingSecretsClient()
+    credential = sharadar_credential_from_secret(client=client, secret_id=CANARY_SECRET_ID)
+    assert type(credential) is SharadarCredential
+    assert repr(credential) == CREDENTIAL_PLACEHOLDER
+    assert client.calls == 1
+    assert client.secret_ids == [CANARY_SECRET_ID]
 
 
 @pytest.mark.parametrize(
@@ -1246,6 +1754,11 @@ def test_the_entry_point_has_no_execution_or_publication_operation() -> None:
         assert forbidden not in source, f"the entry point names {forbidden!r}"
 
 
+#: Module-level dictionaries that are constants by convention rather than by
+#: type. Named rather than counted, so a third one has to be argued for.
+FROZEN_BY_CONVENTION: Final = frozenset({"REFUSED_OPTIONS", "SECRET_FAILURE_OUTCOME"})
+
+
 def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
     offenders: list[str] = []
     for node in _tree(ENTRY_POINT).body:
@@ -1258,7 +1771,7 @@ def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
                 continue
             if isinstance(value, ast.List | ast.Set):
                 offenders.append(f"{target.id} at line {node.lineno}")
-            if isinstance(value, ast.Dict) and target.id != "REFUSED_OPTIONS":
+            if isinstance(value, ast.Dict) and target.id not in FROZEN_BY_CONVENTION:
                 offenders.append(f"{target.id} at line {node.lineno}")
     assert offenders == [], f"module-level mutable state: {offenders}"
 

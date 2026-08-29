@@ -115,6 +115,32 @@ def _refuse(failure: SecretRetrievalFailure) -> SecretRetrievalError:
     return SecretRetrievalError(failure)
 
 
+def is_usable_secret_identifier(candidate: object) -> bool:
+    """Whether ``candidate`` is a secret identifier this boundary would accept.
+
+    Exported because the operator entry point has to decide *before* it builds a
+    client whether the identifier its source produced is usable at all -- and a
+    second copy of this rule, written slightly differently, is how an identifier
+    the caller admitted becomes an identifier the boundary refuses. One rule,
+    one place, two callers.
+
+    Accepted: an exact :class:`str`, non-blank, printable, carrying no
+    whitespace of any kind. A ``str`` subclass is refused rather than rebuilt --
+    the caller's object could change what it reports between the check and the
+    request. Nothing about vendor or AWS naming is inferred: a name and an ARN
+    are both ordinary printable strings, and guessing at a shape would refuse a
+    legitimate identifier on the day it is first used.
+
+    Whitespace is the one structural refusal, and it is not stylistic: a newline
+    in an identifier is how a second parameter gets smuggled into a request.
+    """
+    return (
+        type(candidate) is str
+        and bool(candidate.strip())
+        and not any(character.isspace() or not character.isprintable() for character in candidate)
+    )
+
+
 def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) -> SharadarCredential:
     """The private Sharadar credential held under ``secret_id``, as a credential.
 
@@ -161,11 +187,7 @@ def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) ->
     if not callable(operation):
         raise _refuse(SecretRetrievalFailure.CLIENT_UNUSABLE) from None
 
-    if (
-        type(secret_id) is not str
-        or not secret_id.strip()
-        or any(character.isspace() or not character.isprintable() for character in secret_id)
-    ):
+    if not is_usable_secret_identifier(secret_id):
         raise _refuse(SecretRetrievalFailure.SECRET_IDENTIFIER_MALFORMED) from None
 
     try:
@@ -208,5 +230,6 @@ __all__ = [
     "SecretRetrievalError",
     "SecretRetrievalFailure",
     "SecretsClient",
+    "is_usable_secret_identifier",
     "sharadar_credential_from_secret",
 ]
