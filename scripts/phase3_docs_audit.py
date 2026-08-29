@@ -760,17 +760,25 @@ def _conditional_mode_sites() -> list[str]:
     return offenders
 
 
+#: One double-quoted span, straight or curly, not crossing a paragraph.
+QUOTED_SPAN: Final = re.compile('["“][^"“”]{0,300}?["”]')
+
+
 def _is_refuted(text: str, start: int, end: int) -> bool:
-    """Whether the span at ``[start, end)`` is quoted *and* explained as false.
+    """Whether the span at ``[start, end)`` sits inside a quotation explained as false.
 
     Both halves are required. Quotation alone would be a general bypass -- a
     current status row could keep its claim and add quotation marks -- so the
     surrounding sentence must also say the phrase was wrong.
+
+    Containment, not adjacency. An earlier revision required the quote marks to
+    touch the match exactly, which failed on a quotation slightly wider than the
+    phrase: quoting *is unreachable when the call returns* encloses one word
+    more than the pattern matches. That is a normal way to quote something, and
+    a guard that mistook it for an assertion would push a writer toward not
+    explaining what they had corrected.
     """
-    quoted = text[max(0, start - 1) : start].endswith(('"', "\u201c")) and text[
-        end : end + 1
-    ].startswith(('"', "\u201d"))
-    if not quoted:
+    if not any(span.start() <= start and end <= span.end() for span in QUOTED_SPAN.finditer(text)):
         return False
     window = text[max(0, start - 400) : end + 400].lower()
     return any(marker in window for marker in REFUTATION_MARKERS)
