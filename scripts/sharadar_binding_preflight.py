@@ -10,9 +10,10 @@ SDK clients, and nothing else under ``src/`` or ``scripts/`` may.
 That is a statement about *where* those dependencies may be resolved, not a claim
 that none of it exists. It was written, reviewed and tested while refused by
 default, rather than under pressure beside an authorization to run -- and it has
-since been **invoked three times under separate authorization**. The second
-attempt **reached bucket resolution**; the third **reached the fixed
-secret-identifier source** and refused there. No attempt reached Secrets Manager
+since been **invoked four times under separate authorization**. The second and
+third attempts **reached bucket resolution**; the third **reached the fixed
+secret-identifier source** and refused there; the fourth **refused at the AWS
+identity gate**, reaching neither. No attempt reached Secrets Manager
 client construction, composition validation or qualification execution.
 
 ::
@@ -22,10 +23,12 @@ client construction, composition validation or qualification execution.
     authorization       ONE      --i-am-the-operator-authorizing-binding-preflight
     what it authorizes  BINDING PREFLIGHT ONLY -- never a qualification run
     operations reached  preflight_qualification_composition, and nothing else
-    authorized attempts THREE    all refused; none reached a Secrets Manager
+    authorized attempts FOUR     all refused; none reached a Secrets Manager
                                  client, S3, Sharadar, the composition or a run
     third attempt       REFUSED_SECRET_IDENTIFIER at the identifier source
+    fourth attempt      REFUSED_IDENTITY at the AWS identity gate
     AWS activity        NOT ZERO identity-gate activity occurred on the attempts
+    fourth-attempt AWS network requests: UNKNOWN -- no diagnosis performed
     Secrets Manager     ZERO     client constructions, get_secret_value
                                  invocations and network requests
     S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
@@ -36,8 +39,8 @@ client construction, composition validation or qualification execution.
 What has actually happened, and what has not
 ============================================
 
-**Writing and merging this file executed nothing.** Three later, separately
-authorized operator attempts did execute it, and all three refused. They are
+**Writing and merging this file executed nothing.** Four later, separately
+authorized operator attempts did execute it, and all four refused. They are
 different facts and this docstring keeps them apart -- an earlier revision said
 only "never run", which was true of the merge and false of the operation.
 
@@ -67,6 +70,15 @@ third attempt                           the existing Sharadar API key, and
                                         ``KALPAMANI_SHARADAR_SECRET_ID``
                                         configured -- owner-attested, and
                                         **not verified by this entry point**
+fourth authorized attempt, after the    passed authorization and the profile
+owner's setup                           contract, invoked the AWS identity
+                                        gate once and refused there with
+                                        ``REFUSED_IDENTITY``; it reached
+                                        neither licensed-bucket resolution
+                                        nor the secret-identifier source, so
+                                        it did not read the environment
+                                        variable, built no client and
+                                        retrieved no credential
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
@@ -77,18 +89,29 @@ constructions; Sharadar and provider requests. No attempt reached composition
 validation or a qualification run, and **no credential was retrieved or
 revealed.**
 
+**Whether the fourth attempt sent an AWS network request is UNKNOWN.** The gate
+was invoked once and did not pass; a gate can fail before anything leaves the
+machine, so neither zero nor one may be claimed here. **No diagnosis was
+performed** -- no ``sts:GetCallerIdentity`` probe and no SSO inspection -- so
+nothing establishes that the AWS SSO session was missing, expired or otherwise
+defective. AWS authentication diagnosis and an SSO refresh are separately gated.
+
 ``KALPAMANI_SHARADAR_SECRET_ID`` is **OWNER-CONFIGURED / NOT YET VERIFIED BY THE
 ENTRY POINT**. It was **UNKNOWN** at the second attempt, which refused on the
 dependency path without reading it, and still UNKNOWN at the third, which
 resolved the fixed source exactly once and refused because no usable identifier
 came back. The owner created the secret and configured the variable **only
-afterwards**, so no attempt could have seen it. Owner attestation is not
+afterwards**, so none of the first three could have seen it -- and the fourth
+refused at the identity gate, two stages before the identifier source, so it did
+not read the variable either. **No attempt has resolved the identifier.** Owner
+attestation is not
 verification by this file: it has not resolved the identifier, has not
 constructed a Secrets Manager client, has not invoked ``get_secret_value`` and
 has retrieved no credential.
 
-**Credential access by this application**, **a fourth binding preflight** and an
-**authenticated qualification run** remain three separate decisions, each still
+**Credential access by this application**, **a fifth binding preflight**, **AWS
+authentication diagnosis or an SSO refresh** and an **authenticated qualification
+run** remain four separate decisions, each still
 **NOT AUTHORIZED**, and each requires separate written authorization. This file
 existing does not create a secret, does not read one, and cannot execute a
 qualification run -- there is no code here that could, and a static guard keeps
@@ -175,8 +198,8 @@ Stages 6, 7 and 8 were one stage, and that was a defect
 
 ADR-0016. The first revision resolved the identifier, constructed the client and
 retrieved the credential inside one ``try`` whose every failure became
-``REFUSED_CREDENTIAL``. Two authorized operator attempts were made against the
-real foundation. The first refused at the identity gate. The second passed
+``REFUSED_CREDENTIAL``. Two authorized operator attempts had been made against
+the real foundation by then. The first refused at the identity gate. The second passed
 identity and bucket resolution and reported ``REFUSED_CREDENTIAL`` -- and the
 operational virtual environment contained no ``boto3`` at all, so
 ``_secrets_client`` had raised ``ModuleNotFoundError`` **inside the constructor**.
@@ -897,9 +920,10 @@ def main(argv: list[str] | None = None) -> int:
 
     **The real factories are constructed here and only here**, inside the
     authorized branch. This is the one place ADR-0015 permits an AWS SDK session
-    or client to be built. Two separately authorized attempts have run this
-    function; **neither reached this construction** -- the first refused at the
-    identity gate and the second refused on the missing AWS SDK -- so no Secrets
+    or client to be built. Four separately authorized attempts have run this
+    function; **none reached this construction** -- the first and the fourth
+    refused at the AWS identity gate, the second refused on the missing AWS SDK,
+    and the third refused at the secret-identifier source -- so no Secrets
     Manager client has been built. That is a fact about what happened, not a
     property of the code.
     """
@@ -952,12 +976,18 @@ def main(argv: list[str] | None = None) -> int:
 # Each imports what it needs inside the function body, so importing this module
 # imports no SDK, reads no environment and touches no state.
 #
-# `_ambient_profile`, `_governed_identity_gate` and `_governed_licensed_bucket`
-# HAVE run, on the two separately authorized attempts -- the identity gate is
-# where AWS activity occurred. `_environment_secret_id`, `_secrets_client`,
-# `_s3_client` and `_transport` have not: the second attempt refused inside
+# `_ambient_profile` and `_governed_identity_gate` HAVE run, on all four
+# separately authorized attempts -- the identity gate is where AWS activity
+# occurred, and it is where the first and the fourth attempts refused.
+# `_governed_licensed_bucket` ran on the second and third attempts only, never
+# on the first or the fourth. `_environment_secret_id` ran exactly once, on the
+# third attempt, which refused there; the fourth never reached it, so it read no
+# environment variable. `_secrets_client`, `_s3_client` and `_transport` have
+# never been constructed by any attempt: the second refused inside
 # `_secrets_client` before a client existed, and nothing past it was reached.
-# Every further operational event remains separately gated.
+# No credential has been retrieved, and no composition preflight or
+# qualification execution has occurred. A fifth attempt, AWS authentication
+# diagnosis and every further operational event remain separately gated.
 
 
 def _ambient_profile() -> str:

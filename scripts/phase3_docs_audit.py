@@ -903,7 +903,7 @@ BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
 #:
 #: The row said "NOT AUTHORIZED -- none exists, and a static test keeps it that
 #: way". A credential-source boundary does exist, the operator entry point is the
-#: one place permitted to construct an SDK client, and it has been invoked three times.
+#: one place permitted to construct an SDK client, and it has been invoked four times.
 #: The row has to separate **architectural existence** from **operational
 #: execution**, because the old wording denied both at once.
 BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
@@ -912,9 +912,10 @@ BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
     "BY THE ENTRY POINT",
     "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
     "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
-    "INVOKED THREE TIMES UNDER SEPARATE AUTHORIZATION",
+    "INVOKED FOUR TIMES UNDER SEPARATE AUTHORIZATION",
     "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
-    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "AWS AUTHENTICATION DIAGNOSIS OR SSO REFRESH SEPARATELY GATED / NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
 
@@ -943,9 +944,10 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
     "by injection and cannot discover an ambient one",
     "This file is the sole boundary that can",
     "not a claim that none of it exists",
-    "invoked three times under separate authorization",
+    "invoked four times under separate authorization",
     "reached bucket resolution",
     "reached the fixed secret-identifier source",
+    "the fourth refused at the AWS identity gate",
     "No attempt reached Secrets Manager client construction",
 )
 
@@ -958,7 +960,7 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
 #: must never reach `docs/decisions/`, where an accepted ADR's text is immutable
 #: and legitimately records what was true when it was written.
 ADR_0015_SECTION_HEADING: Final = (
-    "### The Sharadar private-binding preflight — refused by default, and three times refused "
+    "### The Sharadar private-binding preflight — refused by default, and four times refused "
     "in operation"
 )
 ADR_0016_SECTION_HEADING: Final = (
@@ -991,14 +993,20 @@ STALE_PREFLIGHT_CLAIMS: Final[tuple[str, ...]] = (
 #: What the ADR-0015 current-status row must now state.
 #:
 #: The registry pins that ADR-0015 merged. This pins the operational history the
-#: merge did not create and two later attempts did.
+#: merge did not create and four later attempts did.
 ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
-    "THREE SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND ALL THREE REFUSED",
+    "FOUR SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND ALL FOUR REFUSED",
     "REFUSED_SECRET_IDENTIFIER",
+    "REFUSED_IDENTITY",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ARE UNKNOWN",
+    "REACHED NEITHER LICENSED-BUCKET RESOLUTION NOR THE SECRET-IDENTIFIER SOURCE",
+    "DID NOT READ `KALPAMANI_SHARADAR_SECRET_ID`",
     "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
     "BY THE ENTRY POINT",
     "OWNER SETUP HAVING OCCURRED AFTER THE THIRD ATTEMPT",
+    "AND BEFORE THE FOURTH",
+    "NOT READ BY THE FOURTH",
     "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
     "INVOCATIONS ZERO",
     "SECRETS MANAGER NETWORK REQUESTS ZERO",
@@ -1012,7 +1020,7 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
 
 #: The scoped counts the ADR-0015 section's fenced block must carry.
 ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
-    "authorized attempts   THREE",
+    "authorized attempts   FOUR",
     "third attempt         REFUSED_SECRET_IDENTIFIER",
     "AWS identity-gate activity: OCCURRED",
     "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
@@ -1032,7 +1040,7 @@ ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
 
 #: The history the ADR-0015 section's prose must state, not merely tabulate.
 ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
-    "Three later, separately authorized operator attempts",
+    "Four later, separately authorized operator attempts",
     "reached the AWS identity gate and refused there",
     "sts:GetCallerIdentity",
     "refused before constructing a Secrets Manager client",
@@ -1050,8 +1058,12 @@ ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
 #: What the corrected ADR-0015 IN FORCE matrix entry must state.
 ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING PREFLIGHT ONLY",
-    "THREE SEPARATELY AUTHORIZED ATTEMPTS, ALL REFUSED",
+    "FOUR SEPARATELY AUTHORIZED ATTEMPTS, ALL REFUSED",
     "THE THIRD WITH REFUSED_SECRET_IDENTIFIER AT THE SECRET-IDENTIFIER SOURCE",
+    "AND THE FOURTH WITH REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
+    "SET UP AFTER THE THIRD ATTEMPT AND NOT READ BY THE FOURTH",
+    "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN",
+    "A FIFTH ATTEMPT AND AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
     "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
     "SET UP AFTER THE THIRD ATTEMPT",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
@@ -1061,15 +1073,16 @@ ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
 
 #: What the entry point's own documentation must state about what has happened.
 BINDING_SOURCE_HISTORY: Final[tuple[str, ...]] = (
-    "authorized attempts THREE",
+    "authorized attempts FOUR",
     "third attempt REFUSED_SECRET_IDENTIFIER at the identifier source",
+    "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
     "AWS activity NOT ZERO",
-    "Three later, separately authorized operator attempts did execute it",
+    "Four later, separately authorized operator attempts did execute it",
     "before constructing a Secrets Manager client",
     "reached the fixed secret-identifier source exactly once",
     "total AWS activity was not zero",
     "OWNER-CONFIGURED / NOT YET VERIFIED BY THE",
-    "so no attempt could have seen it",
+    "No attempt has resolved the identifier.",
     "each requires separate written authorization",
 )
 
@@ -1110,7 +1123,7 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "SEPARATES SECRET-IDENTIFIER, LOCAL DEPENDENCY, UNCLASSIFIED AND CREDENTIAL REFUSALS",
     # Scoped to Secrets Manager. The unscoped "AWS NETWORK REQUESTS ZERO" and
     # "NO CLIENT HAS EVER BEEN CONSTRUCTED" that stood here were false once the
-    # identity gate had run on two authorized attempts.
+    # identity gate had run on the authorized attempts.
     "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
     "INVOCATIONS ZERO",
     "SECRETS MANAGER NETWORK REQUESTS ZERO",
@@ -1122,7 +1135,7 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "PYTHON DEPENDENCY LOCK ABSENT",
     "RANGE-CONFORMANT NOT LOCK-CONFORMANT",
     "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
-    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
 
@@ -1161,7 +1174,8 @@ STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API acc
 #: environment synchronization was separately authorized and performed. Only a
 #: *further* one is gated, and the word carries the whole difference.
 FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
-    "fourth binding-preflight attempt: NOT AUTHORIZED",
+    "fifth binding-preflight attempt: NOT AUTHORIZED",
+    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
@@ -1252,7 +1266,8 @@ NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
     "real credential binding NONE",
     "real bucket binding NONE",
     "SDK/client construction outside the ADR-0015 operator boundary",
-    "a fourth binding-preflight attempt",
+    "a fifth binding-preflight attempt",
+    "AWS authentication diagnosis or an SSO refresh -- separately gated",
     "ANY provider API call",
     "an authenticated qualification run",
 )
@@ -1316,14 +1331,15 @@ STALE_IDENTIFIER_UNKNOWN_CLAIMS: Final[tuple[str, ...]] = (
 #: The exact fenced-block form, refused inside the ADR-0015 section.
 STALE_SECTION_IDENTIFIER_LINE: Final = "operational secret-identifier configuration: UNKNOWN"
 
-#: What the ADR-0015 row must still hold open after three refusals.
+#: What the ADR-0015 row must still hold open after four refusals.
 #:
 #: A configured secret is the thing a reader is most likely to mistake for
-#: permission. It is not: the fourth attempt, the application's access to the
-#: credential and an authenticated run are three separate decisions and none has
-#: been taken.
+#: permission. It is not: the fifth attempt, AWS authentication diagnosis, the
+#: application's access to the credential and an authenticated run are four
+#: separate decisions and none has been taken.
 ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
-    "A FOURTH ATTEMPT",
+    "A FIFTH ATTEMPT",
+    "AWS AUTHENTICATION DIAGNOSIS OR AN SSO REFRESH",
     "CREDENTIAL ACCESS BY THE APPLICATION",
     "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
 )
@@ -1336,6 +1352,207 @@ ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
 #: a different and much worse finding, and a false one.
 THIRD_ATTEMPT_ANCHOR: Final = "still UNKNOWN at the time of the third attempt"
 OWNER_SETUP_ANCHOR: Final = "The owner created the secret and configured the variable only after"
+
+#: The fourth attempt's anchor, which must follow the owner's setup.
+#:
+#: The third sits before the setup and the fourth after it, and the order is the
+#: whole finding: attempts one to three ran before the secret existed, and the
+#: fourth ran after it and still never reached the identifier. A document that
+#: printed the fourth before the setup would be describing a run that refused
+#: with no secret configured -- which is the third attempt, not this one.
+FOURTH_ATTEMPT_ANCHOR: Final = (
+    "fourth attempt refused at the AWS identity gate, two stages before the identifier source"
+)
+
+#: The fourth attempt's scoped counts, in the ADR-0015 fenced block.
+#:
+#: Raw rather than flattened, like :data:`ADR_0015_SECTION_COUNTS`: the block is
+#: column-aligned and the alignment is what makes it readable beside the third
+#: attempt's row.
+#:
+#: The two ``ZERO`` resolutions and the ``NO`` read are the point. An outcome
+#: word alone would let a reader assume the run got as far as the third did.
+FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
+    "fourth attempt        REFUSED_IDENTITY at the AWS identity gate",
+    "AWS network requests on the fourth attempt: UNKNOWN -- no diagnosis was performed",
+    "owner credential setup occurred AFTER the third attempt and BEFORE the fourth",
+    "identifier-source resolutions on the fourth attempt: ZERO",
+    "licensed-bucket resolutions on the fourth attempt: ZERO",
+    "KALPAMANI_SHARADAR_SECRET_ID read by the fourth attempt: NO",
+    "offline composition-preflight invocations: ZERO",
+    "fifth binding-preflight attempt: NOT AUTHORIZED",
+    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+)
+
+#: What the fourth attempt's chronology entry must state, not merely tabulate.
+FOURTH_ATTEMPT_HISTORY: Final[tuple[str, ...]] = (
+    "fourth authorized attempt, after that setup",
+    "invoked the application AWS identity gate once",
+    "refused there with `REFUSED_IDENTITY`",
+    "binding preflight refused: the AWS identity gate did not pass",
+    "exit code 1",
+    "never reached licensed-bucket resolution and never reached the secret-identifier source",
+    "did not read `KALPAMANI_SHARADAR_SECRET_ID`",
+    "No retry and no standalone authentication diagnosis followed",
+)
+
+#: The four attempts and the owner's setup, in the order they happened.
+#:
+#: Checked as increasing indices rather than mere presence. A chronology holding
+#: every event in the wrong order is worse than one missing an event: it reads as
+#: a sequence somebody verified.
+CHRONOLOGY_ORDER: Final[tuple[str, ...]] = (
+    "first authorized attempt",
+    "second authorized attempt",
+    "third authorized attempt",
+    "owner credential setup, after the third attempt",
+    "fourth authorized attempt, after that setup",
+)
+
+#: What must stay UNKNOWN about the fourth attempt.
+#:
+#: The identity gate was invoked once and did not pass. A gate can fail before
+#: anything leaves the machine, and **no diagnosis was performed**, so the
+#: network-request count is genuinely unknown -- not zero, and not one.
+FOURTH_ATTEMPT_NETWORK_UNKNOWN: Final[tuple[str, ...]] = (
+    "Whether the fourth attempt sent an AWS network request is UNKNOWN",
+    "neither zero nor one network request may be claimed",
+    "No diagnosis was performed",
+)
+
+#: Definite network-request counts the fourth attempt does not support.
+#:
+#: Every entry is the **affirmative** form, on the rule the other refusal lists
+#: here follow: the documents must be able to say the count is UNKNOWN, which is
+#: a claim about not knowing, while being unable to state a number.
+FOURTH_ATTEMPT_NETWORK_CLAIMS: Final[tuple[str, ...]] = (
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ZERO",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ZERO",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ONE",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ONE",
+    # Not the bare "THE FOURTH ATTEMPT SENT AN AWS NETWORK REQUEST". The
+    # required UNKNOWN sentence contains that span verbatim -- "Whether the
+    # fourth attempt sent an AWS network request is UNKNOWN" -- so the guard
+    # was answered by deleting the one sentence it exists to protect. The
+    # affirmative forms below cannot occur inside it.
+    "THE FOURTH ATTEMPT SENT ONE AWS NETWORK REQUEST",
+    "THE FOURTH ATTEMPT SENT EXACTLY ONE AWS NETWORK REQUEST",
+    "THE FOURTH ATTEMPT DID SEND AN AWS NETWORK REQUEST",
+    "THE FOURTH ATTEMPT SENT NO AWS NETWORK REQUEST",
+    "THE FOURTH ATTEMPT REACHED AWS",
+    "THE FOURTH ATTEMPT DID NOT REACH AWS",
+    "EXACTLY ONE AWS NETWORK REQUEST ON THE FOURTH",
+)
+
+#: Diagnoses of the fourth refusal that no run performed.
+#:
+#: Scoped to the fourth attempt deliberately. The *first* attempt was followed by
+#: a separately authorized ``sts:GetCallerIdentity`` diagnosis that did classify
+#: its session, and that sentence is accurate history which these must not reach.
+#: Nothing diagnosed the fourth, so nothing here may say why its gate refused.
+SSO_INFERENCE_CLAIMS: Final[tuple[str, ...]] = (
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SESSION",
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO",
+    "THE FOURTH ATTEMPT'S SESSION WAS MISSING",
+    "THE FOURTH ATTEMPT'S SESSION WAS EXPIRED",
+    "THE FOURTH ATTEMPT'S SSO SESSION",
+    "A MISSING OR EXPIRED SESSION CAUSED THE FOURTH",
+    "THE SESSION WAS MISSING OR EXPIRED AT THE FOURTH",
+    "THE IDENTITY GATE REFUSED BECAUSE THE SESSION",
+    "THE IDENTITY GATE REFUSED BECAUSE THE SSO",
+)
+
+#: Current-status wording a fourth attempt made false.
+#:
+#: Scoped to the two status documents and the entry point, never to
+#: ``docs/decisions/``, where an accepted ADR legitimately records what was true
+#: when it was written. The documents still state history in attempt-specific
+#: wording -- "at the time of the third attempt" -- which none of these reaches.
+STALE_ATTEMPT_COUNT_CLAIMS: Final[tuple[str, ...]] = (
+    "ALL THREE REFUSED",
+    "THREE SEPARATELY AUTHORIZED ATTEMPTS",
+    "INVOKED THREE TIMES UNDER SEPARATE AUTHORIZATION",
+    "AUTHORIZED BINDING-PREFLIGHT ATTEMPTS TO DATE: THREE",
+    "THREE AUTHORIZED ATTEMPTS TO DATE",
+    "THREE LATER, SEPARATELY AUTHORIZED OPERATOR ATTEMPTS",
+    "THREE OCCURRED.",
+    "FOURTH BINDING-PREFLIGHT ATTEMPT: NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT: NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A FOURTH ATTEMPT, CREDENTIAL ACCESS BY THE APPLICATION",
+)
+
+#: Affirmative claims that put the owner's setup after the fourth attempt.
+#:
+#: The index comparison beside :data:`FOURTH_ATTEMPT_ANCHOR` catches a chronology
+#: whose *entries* move. It does not catch a sentence that leaves both anchors
+#: where they are and reverses the claim between them -- "configured the variable
+#: only after the fourth attempt" reads in document order and is false. A
+#: negative control found exactly that gap, so the ordering guard is paired with
+#: this one rather than trusted alone.
+#:
+#: Affirmative forms only, like every other refusal list here: the documents must
+#: keep saying the setup happened after the *third* attempt and before the fourth.
+REVERSED_CHRONOLOGY_CLAIMS: Final[tuple[str, ...]] = (
+    "CONFIGURED THE VARIABLE ONLY AFTER THE FOURTH",
+    "OWNER SETUP HAVING OCCURRED AFTER THE FOURTH",
+    "SET UP AFTER THE FOURTH ATTEMPT",
+    "OWNER SETUP OCCURRED AFTER THE FOURTH ATTEMPT",
+    "THE FOURTH ATTEMPT RAN BEFORE THE OWNER",
+    "THE FOURTH ATTEMPT PRECEDED THE OWNER",
+    "BEFORE THAT SETUP",
+)
+
+#: What must stay unauthorized now that a fourth attempt has happened.
+FIFTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
+    "fifth binding-preflight attempt: NOT AUTHORIZED",
+    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
+    "authenticated qualification: NOT AUTHORIZED",
+)
+
+#: What the entry point's own documentation must state about the fourth attempt.
+BINDING_SOURCE_FOURTH: Final[tuple[str, ...]] = (
+    "invoked four times under separate authorization",
+    "the fourth refused at the AWS identity gate, reaching neither",
+    "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
+    "fourth-attempt AWS network requests: UNKNOWN -- no diagnosis performed",
+    "Four later, separately authorized operator attempts did execute it, and all four refused",
+    "Whether the fourth attempt sent an AWS network request is UNKNOWN.",
+    "neither zero nor one may be claimed here",
+    "No attempt has resolved the identifier.",
+    "a fifth binding preflight",
+)
+
+#: What ``main``'s docstring must say about which attempts reached construction.
+#:
+#: It described **two** attempts long after four had run, and named the wrong
+#: reason for the fourth by omission. A docstring beside the one authorized SDK
+#: construction is the worst place in the file to carry a stale count.
+BINDING_SOURCE_MAIN_HISTORY: Final[tuple[str, ...]] = (
+    "Four separately authorized attempts have run this",
+    "none reached this construction",
+    "the first and the fourth",
+    "refused at the AWS identity gate, the second refused on the missing AWS SDK,",
+    "and the third refused at the secret-identifier source",
+)
+
+#: What the real-factory commentary must say about which factories have run.
+#:
+#: Per factory, because the answer differs per factory: two ran on every attempt,
+#: one ran on two of them, one ran once, and three have never run at all. The
+#: superseded comment said "the two separately authorized attempts" and put
+#: ``_environment_secret_id`` among the factories that had not run -- which the
+#: third attempt had already made false before the fourth was authorized.
+BINDING_SOURCE_FACTORY_HISTORY: Final[tuple[str, ...]] = (
+    "`_ambient_profile` and `_governed_identity_gate` HAVE run, on all four",
+    "`_governed_licensed_bucket` ran on the second and third attempts only, never",
+    "`_environment_secret_id` ran exactly once, on the",
+    "third attempt, which refused there; the fourth never reached it, so it read no",
+    "never been constructed by any attempt: the second refused inside",
+    "No credential has been retrieved, and no composition preflight or",
+    "qualification execution has occurred. A fifth attempt, AWS authentication",
+    "diagnosis and every further operational event remain separately gated.",
+)
 
 
 #: The heading of the operational-environment section in both status documents.
@@ -1392,7 +1609,7 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "real bucket binding: NONE",
     "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
     "BY THE ENTRY POINT",
-    "authorized binding-preflight attempts to date: THREE -- all refused",
+    "authorized binding-preflight attempts to date: FOUR -- all refused",
     "Secrets Manager client constructions: ZERO",
     "get_secret_value invocations: ZERO",
     "Secrets Manager network requests: ZERO",
@@ -1404,7 +1621,8 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "AWS requests during environment verification: ZERO",
     "binding preflight or composition preflight run during environment verification: NEITHER",
     "composition preflight run: NEVER",
-    "another binding-preflight attempt: NOT AUTHORIZED",
+    "a fifth binding-preflight attempt: NOT AUTHORIZED",
+    "AWS authentication diagnosis or SSO refresh: SEPARATELY GATED / NOT AUTHORIZED",
     "credential access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
@@ -1501,7 +1719,11 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "PYTHON DEPENDENCY LOCK ABSENT",
     "RANGE-CONFORMANT, NOT REPRODUCIBLY LOCKED",
     "TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
-    "another attempt NOT AUTHORIZED",
+    "FOUR AUTHORIZED ATTEMPTS TO DATE, ALL REFUSED",
+    "FOURTH ATTEMPT REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
+    "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN -- NO DIAGNOSIS",
+    "a fifth attempt NOT AUTHORIZED",
+    "AWS authentication diagnosis or SSO refresh SEPARATELY GATED / NOT AUTHORIZED",
     "credential access and authenticated qualification NOT AUTHORIZED",
     "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
 )
@@ -1516,7 +1738,7 @@ ADR_0016_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "CODE AND FAILURE-BOUNDARY CORRECTION ONLY",
     "SECRET-IDENTIFIER / LOCAL-DEPENDENCY / CREDENTIAL REFUSALS SEPARATED",
     "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
-    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "NEVER USED TO RETRIEVE A CREDENTIAL OR RUN QUALIFICATION",
 )
 
@@ -1624,7 +1846,7 @@ ADR_0016_BLANKET_COUNT_CLAIMS: Final[tuple[str, ...]] = (
 #:
 #: Every entry is the **affirmative** form, for the reason the ADR-0015 overclaim
 #: list gives: a current-status document has to *name* what stays absent, so
-#: "another binding-preflight attempt: NOT AUTHORIZED" is required while "the
+#: "a fifth binding-preflight attempt: NOT AUTHORIZED" is required while "the
 #: binding preflight completed" is refused.
 ADR_0016_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
     # Six environment-repair entries stood here and are gone -- the six named in
@@ -7381,12 +7603,60 @@ def main() -> int:
             "the downstream components cannot discover a binding; this file can resolve one",
         )
         f.check(
-            "the entry point documents the three authorized attempts and their scope",
+            "the entry point documents the four authorized attempts and their scope",
             all(
                 phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
                 for phrase in BINDING_SOURCE_HISTORY
             ),
             "'never run' was true of the merge and false of the operation",
+        )
+        f.check(
+            "the entry point documents the fourth attempt and its identity refusal",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_FOURTH
+            ),
+            "the source documentation is a current-status surface like any other",
+        )
+        f.check(
+            "the entry point's main docstring records which attempts reached construction",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_MAIN_HISTORY
+            ),
+            "a stale count beside the one authorized SDK construction is the worst place for one",
+        )
+        f.check(
+            "the entry point records which real factories have run, per factory",
+            all(phrase in read(BINDING_PREFLIGHT) for phrase in BINDING_SOURCE_FACTORY_HISTORY),
+            "two ran on every attempt, one on two, one once, and three have never run",
+        )
+        f.check(
+            "the entry point carries no stale three-attempt claim",
+            not [
+                claim
+                for claim in STALE_ATTEMPT_COUNT_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "a fourth attempt happened; its own docstring may not still say three",
+        )
+        f.check(
+            "the entry point states no definite network-request count for the fourth attempt",
+            not [
+                claim
+                for claim in FOURTH_ATTEMPT_NETWORK_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "neither zero nor one is established by an identity gate that did not pass",
+        )
+        f.check(
+            "the entry point infers no SSO defect from the fourth refusal",
+            not [
+                claim
+                for claim in SSO_INFERENCE_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "no diagnosis was performed, so nothing may say why that gate refused",
         )
         f.check(
             "the entry point makes no stale zero-AWS or never-run claim",
@@ -7623,7 +7893,7 @@ def main() -> int:
             "an owner-held key is not repository access, and the row must say both",
         )
         f.check(
-            f"{name} scopes the three remaining future actions separately",
+            f"{name} scopes the four remaining future actions separately",
             all(
                 boundary in _document_section(body, ADR_0015_SECTION_HEADING)
                 for boundary in FUTURE_ACTION_BOUNDARIES
@@ -7651,7 +7921,7 @@ def main() -> int:
             "owner-side setup has happened; a row labelling it NOT AUTHORIZED is false",
         )
         f.check(
-            f"{name} records the scoped counts the three attempts left at zero",
+            f"{name} records the scoped counts the four attempts left at zero",
             all(
                 token in _document_section(body, ADR_0015_SECTION_HEADING)
                 for token in ADR_0015_SECTION_COUNTS
@@ -7659,7 +7929,7 @@ def main() -> int:
             "the zeros are Secrets Manager, S3 and Sharadar -- not AWS as a whole",
         )
         f.check(
-            f"{name} records the operational history of the three authorized attempts",
+            f"{name} records the operational history of the four authorized attempts",
             all(
                 phrase
                 in " ".join(
@@ -7667,7 +7937,7 @@ def main() -> int:
                 )
                 for phrase in ADR_0015_SECTION_HISTORY
             ),
-            "implementation-time inactivity and three later operator runs are different facts",
+            "implementation-time inactivity and four later operator runs are different facts",
         )
         f.check(
             f"{name} makes no stale zero-AWS or never-run claim in the ADR-0015 section",
@@ -7694,14 +7964,14 @@ def main() -> int:
             "the same unscoped wording was copied into the correction's own section",
         )
         f.check(
-            f"{name} states in the ADR-0015 row what the three attempts did and did not reach",
+            f"{name} states in the ADR-0015 row what the four attempts did and did not reach",
             bool(_current_status_rows(body, "ADR-0015"))
             and all(
                 phrase in " ".join(row.replace("**", "").split()).upper()
                 for row in _current_status_rows(body, "ADR-0015")
                 for phrase in ADR_0015_ROW_HISTORY
             ),
-            "a row claiming zero AWS activity survived three runs that produced some",
+            "a row claiming zero AWS activity survived four runs that produced some",
         )
         f.check(
             f"{name} makes no stale operational claim in the ADR-0015 row",
@@ -7754,7 +8024,7 @@ def main() -> int:
             "owner attestation is not resolution, construction, invocation or retrieval",
         )
         f.check(
-            f"{name} keeps the fourth attempt, credential access and qualification gated",
+            f"{name} keeps the fifth attempt, diagnosis, credential access and qualification gated",
             bool(_current_status_rows(body, "ADR-0015"))
             and all(
                 phrase in " ".join(row.replace("**", "").split()).upper()
@@ -7762,6 +8032,70 @@ def main() -> int:
                 for phrase in ADR_0015_STILL_GATED
             ),
             "a configured secret is the thing most easily mistaken for permission",
+        )
+        f.check(
+            f"{name} records the fourth attempt's REFUSED_IDENTITY outcome",
+            "REFUSED_IDENTITY" in binding_section
+            and bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                "REFUSED_IDENTITY" in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+            ),
+            "the outcome is required in the section and in the row, independently",
+        )
+        f.check(
+            f"{name} records the fourth attempt's scoped counts",
+            all(token in binding_section for token in FOURTH_ATTEMPT_COUNTS),
+            "an outcome word alone reads as a run that got as far as the third did",
+        )
+        f.check(
+            f"{name} records the fourth attempt's operational history",
+            all(phrase in binding_flat for phrase in FOURTH_ATTEMPT_HISTORY),
+            "the stage it reached and the two it did not are the finding",
+        )
+        f.check(
+            f"{name} keeps the four attempts and the owner's setup in order",
+            all(event in binding_flat for event in CHRONOLOGY_ORDER)
+            and [binding_flat.index(event) for event in CHRONOLOGY_ORDER]
+            == sorted(binding_flat.index(event) for event in CHRONOLOGY_ORDER),
+            "a chronology in the wrong order reads as a sequence somebody verified",
+        )
+        f.check(
+            f"{name} places the owner's setup before the fourth attempt",
+            OWNER_SETUP_ANCHOR in binding_flat
+            and FOURTH_ATTEMPT_ANCHOR in binding_flat
+            and binding_flat.index(OWNER_SETUP_ANCHOR) < binding_flat.index(FOURTH_ATTEMPT_ANCHOR),
+            "the fourth ran after the secret existed and still never reached it",
+        )
+        f.check(
+            f"{name} never places the owner's setup after the fourth attempt",
+            not [claim for claim in REVERSED_CHRONOLOGY_CLAIMS if claim in flat.upper()],
+            "a sentence can reverse the claim while leaving both anchors in place",
+        )
+        f.check(
+            f"{name} leaves the fourth attempt's AWS network-request count UNKNOWN",
+            all(phrase in binding_flat for phrase in FOURTH_ATTEMPT_NETWORK_UNKNOWN),
+            "a gate can fail before anything leaves the machine, and none was diagnosed",
+        )
+        f.check(
+            f"{name} states no definite network-request count for the fourth attempt",
+            not [claim for claim in FOURTH_ATTEMPT_NETWORK_CLAIMS if claim in flat.upper()],
+            "neither zero nor one is established by an identity gate that did not pass",
+        )
+        f.check(
+            f"{name} infers no SSO defect from the fourth refusal",
+            not [claim for claim in SSO_INFERENCE_CLAIMS if claim in flat.upper()],
+            "no diagnosis was performed, so nothing may say why that gate refused",
+        )
+        f.check(
+            f"{name} carries no stale three-attempt current status",
+            not [claim for claim in STALE_ATTEMPT_COUNT_CLAIMS if claim in flat.upper()],
+            "a fourth attempt happened; the counts and the next-attempt boundary both moved",
+        )
+        f.check(
+            f"{name} keeps a fifth attempt and AWS authentication diagnosis unauthorized",
+            all(boundary in binding_section for boundary in FIFTH_ATTEMPT_BOUNDARIES),
+            "a refusal is a completed diagnostic result, not permission to repair and retry",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
@@ -7861,7 +8195,7 @@ def main() -> int:
             "in force without a pull request is a status a reader cannot check",
         )
         f.check(
-            "the in-force matrix records what ADR-0015's three attempts reached",
+            "the in-force matrix records what ADR-0015's four attempts reached",
             all(
                 clause in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE)
                 for clause in ADR_0015_MATRIX_CLAUSES
@@ -7875,7 +8209,7 @@ def main() -> int:
                 for claim in STALE_PREFLIGHT_CLAIMS
                 if claim in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE).upper()
             ],
-            "three authorized attempts happened; a compact entry may be short, not false",
+            "four authorized attempts happened; a compact entry may be short, not false",
         )
         f.check(
             "the unauthorized stanza forbids use rather than owner-side setup",
@@ -8537,7 +8871,7 @@ def main() -> int:
             f"{name} records the environment as synchronized and verified, and still gated",
             "operational environment synchronized: DONE AND VERIFIED" in body
             and "Python dependency lock: ABSENT" in body
-            and "another binding-preflight attempt: NOT AUTHORIZED" in body,
+            and "a fifth binding-preflight attempt: NOT AUTHORIZED" in body,
             "the drift was real evidence; a separately authorized action has since fixed it",
         )
         f.check(
