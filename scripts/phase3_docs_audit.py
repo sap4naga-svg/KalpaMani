@@ -760,6 +760,35 @@ def _conditional_mode_sites() -> list[str]:
     return offenders
 
 
+#: What a merged ADR's current-status row must say, by ADR number.
+#:
+#: An ADR whose status line reads "accepted, effective on the merge of the pull
+#: request that introduces this" is stating a *condition*. Once that pull request
+#: merges, the condition is satisfied and the current-status tables have to say
+#: so -- otherwise a session reads a merged decision as one carrying no
+#: authority, which is exactly backwards.
+#:
+#: Merged main carried both failure modes at once: README.md had **two** ADR-0013
+#: rows, the correct one and a stale duplicate still claiming the pre-merge
+#: status, and CLAUDE.md had only the stale one. Neither was caught, because
+#: nothing checked the rows.
+MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
+    ("ADR-0013", "PR #18 merged"),
+    ("ADR-0014", "PR #19 merged"),
+)
+
+#: Wording that states a status which has not been reached yet.
+#:
+#: Legitimate in an ADR's own immutable status line and in historical prose --
+#: neither of which is a current-status table row -- and never legitimate in one.
+PRE_MERGE_STATUS_WORDING: Final[tuple[str, ...]] = (
+    "ACCEPTED EFFECTIVE ON MERGE",
+    "carries no authority before it",
+    "ACCEPTED ON MERGE",
+    "EFFECTIVE ON THE MERGE",
+)
+
+
 #: One double-quoted span, straight or curly, not crossing a paragraph.
 QUOTED_SPAN: Final = re.compile('["“][^"“”]{0,300}?["”]')
 
@@ -782,6 +811,63 @@ def _is_refuted(text: str, start: int, end: int) -> bool:
         return False
     window = text[max(0, start - 400) : end + 400].lower()
     return any(marker in window for marker in REFUTATION_MARKERS)
+
+
+def _current_status_rows(text: str, adr: str) -> list[str]:
+    """Every current-status **table row** whose subject is ``adr``.
+
+    Two narrowings, and both matter.
+
+    A **table row**: a line starting with ``|``. An ADR's own status line and any
+    explanatory prose are out of scope, which is the whole design -- the
+    immutable ADR documents legitimately say "accepted, effective on merge", and
+    a guard that could not tell a table row from a decision document would force
+    one of them to lie.
+
+    Whose **subject** is the ADR: the link appears in the row's *first cell*. A
+    first draft matched any row mentioning the ADR anywhere, which swept in the
+    feature tables that cite it inside a description -- rows that are not status
+    claims and have no business being held to one.
+    """
+    rows: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("|"):
+            continue
+        cells = stripped.split("|")
+        if len(cells) > 1 and f"[{adr}](" in cells[1]:
+            rows.append(line)
+    return rows
+
+
+def _stale_adr_status_defects(name: str, text: str) -> list[str]:
+    """Every way ``text``'s ADR current-status rows misstate a merged decision.
+
+    Four separate failures, reported separately because they need different
+    repairs: a missing row, a duplicated row, a row that does not say the
+    decision is in force, and a row that names the wrong pull request.
+    """
+    defects: list[str] = []
+    for adr, merged_in in MERGED_ADR_STATUS:
+        rows = _current_status_rows(text, adr)
+        if not rows:
+            defects.append(f"{name}: no current-status row for {adr}")
+            continue
+        if len(rows) > 1:
+            defects.append(f"{name}: {len(rows)} current-status rows for {adr}, expected 1")
+            continue
+        row = rows[0]
+        flat = " ".join(row.replace("**", "").split())
+        upper = flat.upper()
+        if "ACCEPTED / IN FORCE" not in upper:
+            defects.append(f"{name}: the {adr} row does not state ACCEPTED / IN FORCE")
+        if merged_in.lower() not in flat.lower():
+            defects.append(f"{name}: the {adr} row does not name {merged_in!r}")
+        for wording in PRE_MERGE_STATUS_WORDING:
+            if wording.upper() in upper:
+                defects.append(f"{name}: the {adr} row still says {wording!r}")
+                break
+    return defects
 
 
 def _composition_overclaims(text: str) -> list[str]:
@@ -5124,6 +5210,11 @@ def main() -> int:
             "the ADR must carry no authority until its pull request merges",
         )
         f.check(
+            "ADR-0014 keeps its own accepted-on-merge status line",
+            "Accepted \u2014 effective on the merge" in adr14,
+            "the ADR states the condition that made it effective; only tables state the result",
+        )
+        f.check(
             "ADR-0014 records the owner's authorization boundary verbatim",
             "Scope is limited to: code; tests; documentation; audits; and synthetic/local"
             in flat14,
@@ -5562,6 +5653,37 @@ def main() -> int:
             f"{name} keeps the first authenticated run separately gated",
             "The first authenticated qualification run remains separately gated" in flat,
             "the wiring must never read as an approach to running",
+        )
+        f.check(
+            f"{name} states each merged ADR as in force, once, naming its pull request",
+            not _stale_adr_status_defects(name, body),
+            "a merged decision shown as pre-merge reads as carrying no authority",
+        )
+        for adr, merged_in in MERGED_ADR_STATUS:
+            f.check(
+                f"{name} has exactly one current-status row for {adr}",
+                len(_current_status_rows(body, adr)) == 1,
+                "two rows for one decision is two answers to one question",
+            )
+            f.check(
+                f"{name} records {adr} as ACCEPTED / IN FORCE, {merged_in}",
+                any(
+                    "ACCEPTED / IN FORCE" in row.replace("**", "").upper()
+                    and merged_in.lower() in row.lower()
+                    for row in _current_status_rows(body, adr)
+                ),
+                "the merge condition is satisfied, so the table must say so",
+            )
+        f.check(
+            f"{name} keeps pre-merge wording out of its ADR status rows",
+            not [
+                wording
+                for adr, _ in MERGED_ADR_STATUS
+                for row in _current_status_rows(body, adr)
+                for wording in PRE_MERGE_STATUS_WORDING
+                if wording.upper() in row.replace("**", "").upper()
+            ],
+            "an ADR's own status line may say it; a current-status row may not",
         )
         f.check(
             f"{name} records that the caller keeps ownership of what it passed in",
