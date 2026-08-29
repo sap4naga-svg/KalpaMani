@@ -79,22 +79,53 @@ class SecretRetrievalFailure(StrEnum):
     SECRET_BINARY_REFUSED = "SECRET_BINARY_REFUSED"  # noqa: S105
     SECRET_VALUE_UNUSABLE = "SECRET_VALUE_UNUSABLE"  # noqa: S105
 
+    #: The category of "this is not a category I know".
+    #:
+    #: Never raised by this module: every refusal below names a real cause. It
+    #: exists so :class:`SecretRetrievalError` has somewhere to put a value that
+    #: is not a member of this vocabulary at all -- see that class for why the
+    #: previous answer, ``RESPONSE_MALFORMED``, was a defect (ADR-0016,
+    #: correction round 2).
+    UNCLASSIFIED = "UNCLASSIFIED"
+
 
 class SecretRetrievalError(PointInTimeError):
     """A private credential could not be retrieved. Carries one closed member.
 
     Nothing else has a home here: no secret name, no ARN, no account, no region,
     no backend message and no attempted value.
+
+    **A non-member normalises to** :attr:`SecretRetrievalFailure.UNCLASSIFIED`.
+    It used to normalise to ``RESPONSE_MALFORMED`` (ADR-0016, correction round
+    2), and that was the last credential-default path in the stack: the operator
+    entry point maps ``RESPONSE_MALFORMED`` to a credential refusal because that
+    member is only reachable *after* an admitted ``get_secret_value``
+    invocation. So anything wrong, unknown or future handed to this constructor
+    -- a bare string, a ``str`` subclass, ``None``, an integer, an object of any
+    other kind -- silently acquired a member that asserts an invocation nobody
+    witnessed. The round-1 invariant said that could not happen; this
+    constructor was the way it still could.
+
+    **Normalising rather than raising is deliberate.** A refusal type whose
+    constructor can raise turns a handled failure into an unhandled one at the
+    worst possible moment: inside the ``except`` block that was about to report
+    it. The value is therefore always an exact member, and the member for "I do
+    not know" says exactly that.
     """
 
     __slots__ = ("failure",)
 
     def __init__(self, failure: SecretRetrievalFailure) -> None:
-        """Carry one failure category, and render it as its token alone."""
+        """Carry one failure category, and render it as its token alone.
+
+        The check is ``type(...) is``, not ``isinstance``: an enum carrying
+        members cannot be subclassed, so this reads the real type and a
+        credential-shaped stand-in has nothing to stand in as.
+        """
         self.failure = (
             failure
             if type(failure) is SecretRetrievalFailure
-            else SecretRetrievalFailure.RESPONSE_MALFORMED
+            else SecretRetrievalFailure.UNCLASSIFIED
         )
         super().__init__(f"sharadar credential retrieval refused: {self.failure.value}")
 
@@ -147,15 +178,45 @@ _AWS_REGION: Final = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
 #: An account component: ASCII digits, and exactly twelve of them.
 _AWS_ACCOUNT: Final = re.compile(r"[0-9]{12}")
 
-#: The suffix structure Secrets Manager appends when it generates an ARN: a
-#: hyphen and six alphanumeric characters.
+#: The suffix Secrets Manager appends when it generates an ARN: six ASCII
+#: alphanumeric characters, separated from the name by a hyphen.
 #:
-#: This is what separates a **complete** ARN from a partial one. It checks that
-#: the structure is *present*; it cannot distinguish a name that happens to end
-#: that way from a generated suffix, because nothing can -- the two are
-#: lexically identical, and that is a property of the ARN format rather than a
-#: gap in this check.
-_ARN_GENERATED_SUFFIX: Final = re.compile(r".+-[A-Za-z0-9]{6}")
+#: Its *presence* is what separates a **complete** ARN from a partial one. The
+#: check establishes structure and nothing more: it cannot distinguish a name
+#: that happens to end this way from a suffix AWS actually generated, because
+#: nothing can -- the two are lexically identical, and that is a property of the
+#: ARN format rather than a gap here. **Syntax is not provenance**, and this
+#: module claims none.
+_ARN_GENERATED_SUFFIX: Final = re.compile(r"[A-Za-z0-9]{6}")
+
+#: The generated suffix plus its separating hyphen.
+ARN_SUFFIX_LENGTH: Final = 7
+
+
+def _split_arn_resource(resource: str) -> tuple[str, str] | None:
+    """An ARN resource component as ``(secret name, generated suffix)``.
+
+    ``None`` when the suffix structure is absent, which is what a partial ARN
+    looks like.
+
+    **The split is the correction** (ADR-0016, round 2). The whole resource
+    component used to be measured against the 512-character *name* ceiling --
+    but AWS permits a 512-character name and then appends seven more characters
+    of its own, so a legitimate ARN for a maximum-length secret has a
+    519-character resource and was refused. The ceiling belongs to the name; the
+    structure belongs to the suffix; they are checked separately because they
+    are separate things.
+
+    Nothing is trimmed, normalised or rebuilt: this reads two slices of the
+    caller's string and returns them for inspection.
+    """
+    if len(resource) <= ARN_SUFFIX_LENGTH:
+        # Seven characters or fewer cannot hold a non-empty name *and* the
+        # suffix, so an empty name before a well-formed suffix is refused here.
+        return None
+    if resource[-ARN_SUFFIX_LENGTH] != "-":
+        return None
+    return resource[:-ARN_SUFFIX_LENGTH], resource[-(ARN_SUFFIX_LENGTH - 1) :]
 
 
 def _is_secret_name(candidate: str) -> bool:
@@ -171,24 +232,34 @@ def _is_complete_secret_arn(candidate: str) -> bool:
 
     Seven colon-separated fields, exactly: ``arn``, a recognised partition, the
     service, a Region, a twelve-digit account, the resource type ``secret``, and
-    a name carrying the generated suffix structure. A field count other than
+    a resource carrying the generated suffix structure. A field count other than
     seven refuses a colon-bearing name as well, which is the same defect seen
     from the other side.
+
+    The resource is **split** before it is measured: the 512-character ceiling
+    is the *secret name's*, and AWS appends seven characters after it, so
+    measuring the suffixed resource against the name ceiling refused a
+    legitimate maximum-length secret (ADR-0016, round 2).
     """
     fields = candidate.split(":")
     if len(fields) != 7:
         return False
-    scheme, partition, service, region, account, resource_type, name = fields
-    return (
+    scheme, partition, service, region, account, resource_type, resource = fields
+    if not (
         scheme == "arn"
         and partition in _AWS_PARTITIONS
         and service == "secretsmanager"
         and _AWS_REGION.fullmatch(region) is not None
         and _AWS_ACCOUNT.fullmatch(account) is not None
         and resource_type == "secret"
-        and _is_secret_name(name)
-        and _ARN_GENERATED_SUFFIX.fullmatch(name) is not None
-    )
+    ):
+        return False
+    split = _split_arn_resource(resource)
+    if split is None:
+        return False
+    secret_name, suffix = split
+    # The name ceiling applies to the name, and only to the name.
+    return _is_secret_name(secret_name) and _ARN_GENERATED_SUFFIX.fullmatch(suffix) is not None
 
 
 def is_usable_secret_identifier(candidate: object) -> bool:
@@ -316,6 +387,7 @@ def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) ->
 
 
 __all__ = [
+    "ARN_SUFFIX_LENGTH",
     "MAX_SECRET_ID_LENGTH",
     "MAX_SECRET_NAME_LENGTH",
     "SecretRetrievalError",

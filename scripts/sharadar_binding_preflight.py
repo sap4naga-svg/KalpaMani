@@ -362,19 +362,23 @@ class PreflightOutcome(StrEnum):
 
     **Three of them are the correction ADR-0016 records.** A single
     ``REFUSED_CREDENTIAL`` once covered the identifier source, the local SDK and
-    client construction, and the one ``GetSecretValue`` call. An operator running
-    this against a machine with no SDK installed was told the private credential
-    could not be retrieved -- when nothing had asked for one, and no AWS request
-    had been sent. The three are separate members now:
+    client construction, and the one ``get_secret_value`` call. An operator
+    running this against a machine with no SDK installed was told the private
+    credential could not be retrieved -- when no client existed, so nothing had
+    been invoked and nothing could have reached AWS. The three are separate
+    members now:
 
     ``REFUSED_SECRET_IDENTIFIER``
         the configured source was unavailable, raised, or produced something the
-        identifier boundary refuses. **No client was built and no request was
-        sent.**
+        identifier boundary refuses. **No client is built, so nothing is invoked
+        and nothing can reach AWS.**
     ``REFUSED_DEPENDENCY``
-        a local dependency -- the SDK, the client factory, the client itself, or
-        anything constructed after the credential -- was not usable. **No request
-        was sent by this stage.**
+        a local dependency -- the SDK, the client factory, the client itself, the
+        secrets boundary's own import, or anything constructed after the
+        credential -- was not usable. **This outcome alone determines neither the
+        invocation count nor any network activity**: it occurs both before the
+        client exists (zero invocations) and after a successful retrieval (one).
+        Only the witnessed, stage-specific count says which.
     ``REFUSED_CREDENTIAL``
         the one admitted ``get_secret_value`` invocation raised or was refused,
         or what came back was not a credential. **This is the only outcome that
@@ -420,14 +424,21 @@ class PreflightOutcome(StrEnum):
 #: **Total over that vocabulary**, and a test asserts it is: a failure member
 #: with no entry here would be swept into "the credential failed" by a default,
 #: which is the defect ADR-0016 corrects rather than a way to express it. Two of
-#: the six are refusals the boundary reaches *before* it calls the backend, and
-#: they map to the stages that own them -- not to the credential.
+#: the members are refusals the boundary reaches *before* it invokes the client,
+#: and they map to the stages that own them -- not to the credential.
 SECRET_FAILURE_OUTCOME: Final[dict[str, PreflightOutcome]] = {
-    # Refused before the one request. No AWS request was sent.
+    # Reached before the client is invoked, so no invocation and no network
+    # activity can be attributed to any of them.
     "CLIENT_UNUSABLE": PreflightOutcome.REFUSED_DEPENDENCY,
     "SECRET_IDENTIFIER_MALFORMED": PreflightOutcome.REFUSED_SECRET_IDENTIFIER,
-    # Reached only by attempting the one request, or by inspecting what it
-    # returned. These are the genuine credential boundary.
+    # "I could not tell what this was." Reachable only by handing the boundary's
+    # error type something that is not a member of its vocabulary at all -- which
+    # used to normalise to RESPONSE_MALFORMED, and therefore to a credential
+    # claim (ADR-0016, correction round 2).
+    "UNCLASSIFIED": PreflightOutcome.REFUSED_UNCLASSIFIED,
+    # Reached only by invoking the client, or by inspecting what that invocation
+    # returned. These are the genuine credential boundary. Each establishes an
+    # invocation; none establishes that AWS received anything.
     "BACKEND_REFUSED": PreflightOutcome.REFUSED_CREDENTIAL,
     "RESPONSE_MALFORMED": PreflightOutcome.REFUSED_CREDENTIAL,
     "SECRET_BINARY_REFUSED": PreflightOutcome.REFUSED_CREDENTIAL,
@@ -625,7 +636,10 @@ def run_binding_preflight(
             ``REFUSED_DEPENDENCY`` -- the secrets boundary would not import, the
             SDK or the client factory raised, the constructed client cannot
             serve the one operation, an exception of an unknown type escaped the
-            retrieval, or a dependency built after the credential failed.
+            retrieval, or a dependency built after the credential failed. **The
+            outcome alone fixes no count**: it occurs both before a client exists
+            and after a successful retrieval, so only the witnessed stage count
+            says whether anything was invoked.
 
             ``REFUSED_CREDENTIAL`` -- and only this -- follows an admitted
             ``get_secret_value`` invocation: the call raised, the response was

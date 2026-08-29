@@ -928,6 +928,16 @@ ADR_0016_COUNT_ROWS: Final[tuple[str, ...]] = (
 #: counter therefore establishes an invocation and nothing about the network.
 ADR_0016_INVOCATION_SENTENCE: Final = "A method invocation is not a proven AWS network request."
 
+#: The exact ADR sentence that kept the credential default, refused outright.
+#:
+#: Correction round 1 removed the default; round 2 found the ADR still listing it
+#: as *kept*, in the present tense, in the section a reader consults to learn what
+#: was decided. A decision document contradicting the code it governs is worse
+#: than one that is merely incomplete.
+ADR_0016_KEPT_DEFAULT_SENTENCE: Final = (
+    "**Make `REFUSED_CREDENTIAL` the default for anything unmapped.** Kept"
+)
+
 #: Wording that reads a method counter as proof that AWS was contacted.
 #:
 #: Every entry is the **affirmative** form, like the other two refusal lists
@@ -946,6 +956,37 @@ ADR_0016_INVOCATION_CONFLATIONS: Final[tuple[str, ...]] = (
     "THE COUNTER PROVES A REQUEST",
     "COUNTED AWS REQUESTS",
     "EXACTLY ONE AWS REQUEST",
+    # Round 2. An operator cannot be told a refusal reveals this: the counter
+    # sees a method call, and a client can reject parameters locally after the
+    # method is entered.
+    "WHETHER AWS WAS ASKED FOR ANYTHING",
+    "AN INVOCATION PROVES AWS",
+    "INVOCATION PROVES THAT AWS",
+)
+
+#: The boundary failure tokens the entry point maps to a credential refusal.
+#:
+#: Named here so a guard about what the *error constructor* may normalise into can
+#: be written against the set that matters, rather than against every member.
+CREDENTIAL_MAPPED_FAILURES: Final[tuple[str, ...]] = (
+    "BACKEND_REFUSED",
+    "RESPONSE_MALFORMED",
+    "SECRET_BINARY_REFUSED",
+    "SECRET_VALUE_UNUSABLE",
+)
+
+#: Blanket claims that one outcome fixes a count it does not fix.
+#:
+#: ``REFUSED_DEPENDENCY`` occurs both before a client exists (zero invocations)
+#: and after a successful retrieval (one). A document that reads it as "nothing
+#: was invoked" is wrong half the time, and wrong in the direction that
+#: understates activity.
+ADR_0016_BLANKET_COUNT_CLAIMS: Final[tuple[str, ...]] = (
+    "NO REQUEST WAS SENT BY THIS STAGE",
+    "REFUSED_DEPENDENCY MEANS ZERO",
+    "REFUSED_DEPENDENCY IMPLIES ZERO",
+    "A DEPENDENCY REFUSAL MEANS NOTHING WAS INVOKED",
+    "A DEPENDENCY REFUSAL PROVES ZERO",
 )
 
 #: Affirmative claims about things that have not happened.
@@ -1395,6 +1436,30 @@ def _emitted_preflight_sentences(path: Path) -> str:
             if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Constant):
                 sentences.append(str(statement.value.value))
     return " ".join(sentences)
+
+
+def _method_body(path: Path, class_name: str, method: str) -> str:
+    """One method's executable body, docstring stripped, unparsed.
+
+    Scoped to its class, because a module can hold several ``__init__`` methods
+    and a guard about one of them must not be answered by another.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for statement in node.body:
+            if isinstance(statement, ast.FunctionDef) and statement.name == method:
+                body = list(statement.body)
+                if (
+                    body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    body = body[1:]
+                return ast.unparse(ast.Module(body=body, type_ignores=[]))
+    return ""
 
 
 def _function_body(path: Path, name: str) -> str:
@@ -6940,6 +7005,28 @@ def main() -> int:
             "a smaller version of the mistake this ADR was written to correct",
         )
         f.check(
+            "ADR-0016 no longer lists the credential default as kept",
+            ADR_0016_KEPT_DEFAULT_SENTENCE not in adr16,
+            "round 1 removed the default; a section still calling it kept contradicts the code",
+        )
+        f.check(
+            "ADR-0016 records the alternative as rejected and removed",
+            "**Rejected, and removed**" in adr16 and "circular" in flat16,
+            "an alternative silently reversed is an alternative nobody can review",
+        )
+        f.check(
+            "ADR-0016 records the second correction round",
+            "correction round 2" in flat16.lower()
+            and "last credential-default path" in flat16.lower()
+            and "length boundary" in flat16.lower(),
+            "a correction to a correction is recorded, not silently substituted",
+        )
+        f.check(
+            "ADR-0016 states only what a refusal can establish about AWS",
+            "Not whether AWS received anything" in adr16,
+            "a method counter cannot establish that AWS was contacted",
+        )
+        f.check(
             "ADR-0016 records the first correction round",
             "correction round 1" in flat16.lower()
             and "credential-default" in flat16.lower()
@@ -7025,6 +7112,16 @@ def main() -> int:
                 )
             ),
             "one member for three stages is what misreported a missing package",
+        )
+        f.check(
+            "the entry point makes no blanket claim about what a dependency refusal counts",
+            not [
+                claim
+                for claim in ADR_0016_BLANKET_COUNT_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).split()).upper()
+            ]
+            and "determines neither the" in read(BINDING_PREFLIGHT),
+            "that outcome occurs both before a client exists and after a retrieval",
         )
         f.check(
             "the entry point has a word for a refusal it cannot classify",
@@ -7131,6 +7228,41 @@ def main() -> int:
             "a verdict about a normalised string is a verdict about a different string",
         )
         f.check(
+            "the error constructor cannot normalise into a credential-mapped member",
+            not any(
+                token in _method_body(SECRETS_BOUNDARY, "SecretRetrievalError", "__init__")
+                for token in CREDENTIAL_MAPPED_FAILURES
+            )
+            and "SecretRetrievalFailure.UNCLASSIFIED"
+            in _method_body(SECRETS_BOUNDARY, "SecretRetrievalError", "__init__"),
+            "normalising a non-member to RESPONSE_MALFORMED manufactured a credential claim",
+        )
+        f.check(
+            "the unclassified boundary member exists and is mapped away from the credential",
+            "UNCLASSIFIED = 'UNCLASSIFIED'" in grammar
+            and "'UNCLASSIFIED': PreflightOutcome.REFUSED_UNCLASSIFIED"
+            in _executable_python(BINDING_PREFLIGHT),
+            "the constructor needs somewhere to put a value it cannot recognise",
+        )
+        f.check(
+            "the ARN resource is split before the name ceiling is applied",
+            "_split_arn_resource" in grammar
+            and "_is_secret_name(secret_name)" in grammar
+            and "_is_secret_name(resource)" not in grammar
+            and "_is_secret_name(name)" not in grammar,
+            "the 512 ceiling is the name's; AWS appends seven characters after it",
+        )
+        f.check(
+            "the suffix is measured on its own, not on the whole resource",
+            "_ARN_GENERATED_SUFFIX.fullmatch(suffix)" in grammar and "ARN_SUFFIX_LENGTH" in grammar,
+            "a 512-character secret has a 519-character ARN resource, and it is legitimate",
+        )
+        f.check(
+            "the boundary claims structure rather than provenance for the suffix",
+            "Syntax is not provenance" in read(SECRETS_BOUNDARY),
+            "a name ending that way is lexically identical to a generated suffix",
+        )
+        f.check(
             "the boundary compiles no account, ARN or identifier value",
             not any(marker in read(SECRETS_BOUNDARY) for marker in ("arn:aws:", "amazonaws.com"))
             and re.search(r"\b\d{12}\b", read(SECRETS_BOUNDARY)) is None,
@@ -7213,18 +7345,47 @@ def main() -> int:
             ),
             ("a total classification", "test_every_secrets_boundary_failure_is_classified"),
             (
-                "pre-request failures never credential",
-                "test_the_pre_request_failures_are_never_credential_failures",
+                "pre-invocation failures never credential",
+                "test_the_pre_invocation_failures_are_never_credential_failures",
             ),
             (
-                "post-request failures always credential",
-                "test_the_post_request_failures_are_credential_failures",
+                "post-invocation failures always credential",
+                "test_the_post_invocation_failures_are_credential_failures",
             ),
             ("a closed outcome vocabulary", "test_the_outcome_vocabulary_is_exactly_these_members"),
             ("no surviving plural member", "test_the_superseded_plural_member_is_gone"),
             (
-                "no pre-request refusal worded as a credential failure",
-                "test_no_refusal_before_the_request_is_worded_as_a_credential_failure",
+                "no pre-invocation refusal worded as a credential failure",
+                "test_no_refusal_before_the_invocation_is_worded_as_a_credential_failure",
+            ),
+            (
+                "a non-member failure normalising to unclassified",
+                "test_a_non_member_failure_normalises_to_unclassified",
+            ),
+            (
+                "a non-member failure never becoming a credential refusal",
+                "test_a_non_member_failure_can_never_become_a_credential_refusal",
+            ),
+            (
+                "a non-member construction with no invented count",
+                "test_a_non_member_construction_surfaces_as_unclassified_with_no_invented_count",
+            ),
+            (
+                "a constructor naming no credential-mapped member",
+                "test_the_constructor_never_names_a_credential_mapped_member",
+            ),
+            ("the ARN resource length boundary", "test_the_arn_resource_length_boundary"),
+            (
+                "a maximum-length ARN admitted with the name ceiling still binding",
+                "test_the_maximum_length_arn_is_admitted_and_the_name_ceiling_still_binds",
+            ),
+            (
+                "the SecretId ceiling still binding above the name ceiling",
+                "test_the_secret_id_ceiling_still_binds_above_the_name_ceiling",
+            ),
+            (
+                "a suffix check claiming structure and not provenance",
+                "test_the_suffix_check_claims_structure_and_not_provenance",
             ),
             ("witnessed call counts", "test_every_outcome_has_its_witnessed_call_counts"),
             (
@@ -7343,6 +7504,11 @@ def main() -> int:
             "the earlier rule admitted shapes a client rejects locally, after the call began",
         )
         f.check(
+            f"{name} makes no blanket claim about what a dependency refusal counts",
+            not [claim for claim in ADR_0016_BLANKET_COUNT_CLAIMS if claim in upper],
+            "that outcome occurs both before a client exists and after a retrieval",
+        )
+        f.check(
             f"{name} records that an unclassifiable refusal claims nothing",
             "`REFUSED_UNCLASSIFIED`" in body,
             "the two places that needed a word for 'I do not know' were asserting a boundary",
@@ -7355,7 +7521,8 @@ def main() -> int:
         )
         f.check(
             f"{name} does not describe a missing SDK as a credential failure",
-            "never implies a credential was requested" in flat,
+            "never implies credential retrieval" in flat
+            and "only the witnessed stage-specific count says which" in flat,
             "the dependency outcome must say what it does not mean, or it means the old thing",
         )
         f.check(

@@ -41,6 +41,7 @@ from kalpamani.data.ingest.sharadar.composition import (
 )
 from kalpamani.data.ingest.sharadar.credentials import CREDENTIAL_PLACEHOLDER, SharadarCredential
 from kalpamani.data.ingest.sharadar.secrets import (
+    ARN_SUFFIX_LENGTH,
     MAX_SECRET_ID_LENGTH,
     MAX_SECRET_NAME_LENGTH,
     SecretRetrievalError,
@@ -122,10 +123,12 @@ class Stages:
 class CountingSecretsClient:
     """Answers one secret and counts the asking.
 
-    ``calls`` is the witnessed ``GetSecretValue`` count. Every request-count
-    claim in this file reads it rather than inferring "a request must have
-    happened" from which stage raised -- which is the inference ADR-0016 records
-    as having been wrong in production.
+    ``calls`` is the witnessed ``get_secret_value`` **invocation** count. Every
+    count claim in this file reads it rather than inferring "it must have been
+    invoked" from which stage raised -- the inference ADR-0016 records as having
+    been wrong in production. It witnesses a method call and nothing about the
+    network: a real client can reject parameters locally after the method is
+    entered.
     """
 
     def __init__(
@@ -154,7 +157,7 @@ class UnusableSecretsClient:
     """A constructed client that cannot serve the one operation.
 
     A dependency fact, not a credential one: the object exists, so construction
-    succeeded, but nothing here can send a request through it.
+    succeeded, but nothing here can invoke the one operation through it.
     """
 
     # Ruff's hardcoded-password heuristic fires on the attribute *name*. This is
@@ -263,10 +266,11 @@ class Harness:
     def secrets_factory(self) -> Any:
         """Construct the Secrets Manager client. **Local work only.**
 
-        Counted separately from the identifier that precedes it and the request
-        that follows it, because the whole of ADR-0016 is that those three were
-        one number and an operator could not tell which had failed. An absent
-        SDK raises here, and nothing has been sent to AWS when it does.
+        Counted separately from the identifier that precedes it and the
+        invocation that follows it, because the whole of ADR-0016 is that those
+        three were one number and an operator could not tell which had failed.
+        An absent SDK raises here; no client exists when it does, so there is
+        neither an invocation nor a network request to attribute.
         """
         self.stages.record("secrets-client")
         self.secrets_factory_calls += 1
@@ -714,7 +718,7 @@ def test_a_secret_failure_refuses_before_composition() -> None:
         "secrets-client",
         "credential",
     ]
-    assert harness.secrets.calls == 1, "the credential outcome must follow a witnessed request"
+    assert harness.secrets.calls == 1, "the credential outcome must follow a witnessed invocation"
     assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
 
 
@@ -743,7 +747,7 @@ def test_the_full_ordering_is_exact_on_the_authorized_path() -> None:
     ]
     assert harness.secret_id_calls == 1, "the identifier was resolved more than once"
     assert harness.secrets_factory_calls == 1, "the client was constructed more than once"
-    assert harness.secrets.calls == 1, "more than one GetSecretValue was attempted"
+    assert harness.secrets.calls == 1, "more than one invocation was made"
 
 
 # ---------------------------------------------------------------------------
@@ -998,11 +1002,11 @@ def test_the_entry_point_reads_the_environment_only_inside_a_factory() -> None:
 # first refused at the identity gate. The second passed identity and bucket
 # resolution and reported REFUSED_CREDENTIAL -- and the operational virtual
 # environment held no `boto3`, so the constructor had raised ModuleNotFoundError
-# and *no GetSecretValue request was ever issued*. The command reported a
+# and *no client existed, so nothing was invoked*. The command reported a
 # private-credential failure for a missing local package.
 #
-# What follows fixes the counts to behaviour. Every assertion about "a request
-# was sent" reads `harness.secrets.calls`, which the synthetic client increments
+# What follows fixes the counts to behaviour. Every assertion about "it was
+# invoked" reads `harness.secrets.calls`, which the synthetic client increments
 # when it is actually called -- never inferred from which line raised.
 
 
@@ -1071,7 +1075,7 @@ def test_an_identifier_failure_is_its_own_outcome_and_sends_nothing(
 
     Before ADR-0016 every one of these was ``REFUSED_CREDENTIAL`` -- an operator
     told the private credential could not be retrieved when no client existed
-    and nothing had been asked of AWS.
+    and no client existed to invoke.
     """
     harness = Harness(secret_id_value=value, secret_id_raises=raises)
     with pytest.raises(bp.BindingPreflightError) as refusal:
@@ -1079,7 +1083,7 @@ def test_an_identifier_failure_is_its_own_outcome_and_sends_nothing(
     assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER, label
     assert harness.secret_id_calls == 1
     assert harness.secrets_factory_calls == 0, "a client was constructed for a bad identifier"
-    assert harness.secrets.calls == 0, "GetSecretValue was attempted for a bad identifier"
+    assert harness.secrets.calls == 0, "a bad identifier reached an invocation"
     assert harness.stages.order == ["profile", "identity", "bucket", "secret-id"]
 
 
@@ -1104,7 +1108,7 @@ def test_an_identifier_failure_discloses_neither_value_nor_cause(
 
 @pytest.mark.parametrize("identifier", [VALID_NAME_IDENTIFIER, VALID_ARN_IDENTIFIER])
 def test_a_usable_identifier_shape_reaches_the_backend_exactly_once(identifier: str) -> None:
-    """A name and an ARN are both accepted, and each yields one request.
+    """A name and an ARN are both accepted, and each yields one invocation.
 
     The complement of the refusals above: a guard that refused everything would
     also satisfy them.
@@ -1143,9 +1147,10 @@ def test_a_client_construction_failure_is_a_dependency_refusal(
 ) -> None:
     """**The defect ADR-0016 corrects, stated as a count.**
 
-    An absent SDK produces ``REFUSED_DEPENDENCY`` and *zero* ``GetSecretValue``
-    attempts. The identifier was resolved -- that stage passed -- and nothing
-    beyond the constructor ran.
+    An absent SDK produces ``REFUSED_DEPENDENCY`` and *zero* ``get_secret_value``
+    invocations. The identifier was resolved -- that stage passed -- and nothing
+    beyond the constructor ran, so no client exists to invoke or to reach AWS
+    with.
     """
     harness = Harness(secrets_factory_raises=failure)
     with pytest.raises(bp.BindingPreflightError) as refusal:
@@ -1153,7 +1158,7 @@ def test_a_client_construction_failure_is_a_dependency_refusal(
     assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_DEPENDENCY, label
     assert harness.secret_id_calls == 1
     assert harness.secrets_factory_calls == 1
-    assert harness.secrets.calls == 0, f"{label} attempted a request"
+    assert harness.secrets.calls == 0, f"{label} reached an invocation"
     assert harness.stages.order == ["profile", "identity", "bucket", "secret-id", "secrets-client"]
     assert (harness.s3.put_calls, harness.s3.head_calls, harness.transport.calls) == (0, 0, 0)
 
@@ -1188,7 +1193,7 @@ def test_a_dependency_failure_discloses_no_underlying_text(
 def test_a_constructed_client_that_cannot_serve_the_operation_is_a_dependency_refusal(
     label: str, client: Any
 ) -> None:
-    """Construction succeeded and the object still cannot send a request.
+    """Construction succeeded and the object still cannot serve an invocation.
 
     The secrets boundary calls this ``CLIENT_UNUSABLE``, and that is a fact
     about a dependency. Routing it to the credential would claim a retrieval no
@@ -1224,8 +1229,8 @@ def test_an_unimportable_secrets_boundary_is_a_dependency_refusal(
 def test_a_late_dependency_failure_is_still_a_dependency_refusal() -> None:
     """Stage 8 runs *after* a successful retrieval and is still not a credential fact.
 
-    The count is the point: one request was genuinely sent here, and the outcome
-    still says what actually failed.
+    The count is the point: one invocation genuinely happened here, and the
+    outcome still says what actually failed.
     """
 
     def failing_transport() -> Any:
@@ -1252,7 +1257,7 @@ def test_a_late_dependency_failure_is_still_a_dependency_refusal() -> None:
 
 # -- the credential boundary -------------------------------------------------
 #
-# Reserved for a genuine retrieval: the one request raised, or what came back
+# Reserved for a genuine retrieval: the one invocation raised, or what came back
 # was not a credential. Every case here witnesses exactly one attempt.
 
 #: Every way a secret response can be unusable, and the closed member each yields.
@@ -1341,8 +1346,8 @@ def test_every_secrets_boundary_failure_is_classified() -> None:
     assert {member.value for member in SecretRetrievalFailure} == set(bp.SECRET_FAILURE_OUTCOME)
 
 
-def test_the_pre_request_failures_are_never_credential_failures() -> None:
-    """The two the boundary raises *before* it calls the backend."""
+def test_the_pre_invocation_failures_are_never_credential_failures() -> None:
+    """The two the boundary raises *before* it invokes the client."""
     assert bp.SECRET_FAILURE_OUTCOME["CLIENT_UNUSABLE"] is bp.PreflightOutcome.REFUSED_DEPENDENCY
     assert (
         bp.SECRET_FAILURE_OUTCOME["SECRET_IDENTIFIER_MALFORMED"]
@@ -1350,7 +1355,7 @@ def test_the_pre_request_failures_are_never_credential_failures() -> None:
     )
 
 
-def test_the_post_request_failures_are_credential_failures() -> None:
+def test_the_post_invocation_failures_are_credential_failures() -> None:
     for token in (
         "BACKEND_REFUSED",
         "RESPONSE_MALFORMED",
@@ -1389,7 +1394,7 @@ def test_the_superseded_plural_member_is_gone() -> None:
     assert "REFUSED_DEPENDENCIES" not in ENTRY_POINT.read_text(encoding="utf-8")
 
 
-def test_no_refusal_before_the_request_is_worded_as_a_credential_failure() -> None:
+def test_no_refusal_before_the_invocation_is_worded_as_a_credential_failure() -> None:
     """The sentences an operator reads must not point at the wrong system."""
     for member in (
         bp.PreflightOutcome.REFUSED_SECRET_IDENTIFIER,
@@ -1400,11 +1405,11 @@ def test_no_refusal_before_the_request_is_worded_as_a_credential_failure() -> No
     assert "credential" in bp.PreflightOutcome.REFUSED_CREDENTIAL.value
 
 
-# -- the request-count table -------------------------------------------------
+# -- the invocation-count table -------------------------------------------------
 
 
 def _counts(harness: Harness) -> tuple[int, int, int]:
-    """Identifier resolutions, client constructions, ``GetSecretValue`` attempts."""
+    """Identifier resolutions, client constructions, ``get_secret_value`` invocations."""
     return (harness.secret_id_calls, harness.secrets_factory_calls, harness.secrets.calls)
 
 
@@ -1833,6 +1838,226 @@ def test_the_secrets_module_imports_no_sdk_and_constructs_no_client() -> None:
     assert "get_secret_value" in source
     for never_called in ("list_secrets", "describe_secret", "put_secret_value", "delete_secret"):
         assert never_called not in source
+
+
+# -- the construction contract, adversarially --------------------------------
+#
+# ADR-0016 round 2. `SecretRetrievalError.__init__` normalised any non-member to
+# `RESPONSE_MALFORMED`, and `RESPONSE_MALFORMED` maps to `REFUSED_CREDENTIAL`
+# because that member is only reachable *after* an admitted invocation. So a
+# bare string, a `str` subclass, `None`, an integer or any other object handed to
+# the constructor silently acquired a member asserting an invocation nobody
+# witnessed -- the last credential-default path, sitting behind the round-1
+# invariant that said there were none.
+
+
+class HostileFailureValue:
+    """An object whose every attribute access raises.
+
+    Handed to the constructor, it must be normalised by an exact-type check that
+    never touches it -- not by anything that reads `.value` or `.name`.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        raise SyntheticBackendError(CANARY_BACKEND)
+
+
+#: Every non-member a caller could hand the boundary's error type.
+NON_MEMBER_FAILURES: tuple[tuple[str, Any], ...] = (
+    ("credential-mapped token as a bare string", "RESPONSE_MALFORMED"),
+    ("another credential-mapped token", "BACKEND_REFUSED"),
+    ("a token nobody has defined", "SECRET_SOMETHING_NEW"),
+    ("str subclass of a credential token", HostileString("RESPONSE_MALFORMED")),
+    ("None", None),
+    ("integer", 7),
+    ("bytes", b"RESPONSE_MALFORMED"),
+    ("hostile object", HostileFailureValue()),
+    ("a namespace that looks like a member", SimpleNamespace(value="RESPONSE_MALFORMED")),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), NON_MEMBER_FAILURES, ids=[c[0] for c in NON_MEMBER_FAILURES]
+)
+def test_a_non_member_failure_normalises_to_unclassified(label: str, failure: Any) -> None:
+    """Never to a member that would then be read as a credential claim."""
+    error = SecretRetrievalError(failure)
+    assert error.failure is SecretRetrievalFailure.UNCLASSIFIED, label
+    assert type(error.failure) is SecretRetrievalFailure
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), NON_MEMBER_FAILURES, ids=[c[0] for c in NON_MEMBER_FAILURES]
+)
+def test_a_non_member_failure_can_never_become_a_credential_refusal(
+    label: str, failure: Any
+) -> None:
+    """The round-1 invariant, checked through the constructor this time."""
+    outcome = bp._secret_failure_outcome(SecretRetrievalError(failure))
+    assert outcome is bp.PreflightOutcome.REFUSED_UNCLASSIFIED, label
+    assert outcome is not bp.PreflightOutcome.REFUSED_CREDENTIAL
+
+
+@pytest.mark.parametrize(
+    ("label", "failure"), NON_MEMBER_FAILURES, ids=[c[0] for c in NON_MEMBER_FAILURES]
+)
+def test_a_non_member_failure_discloses_nothing(label: str, failure: Any) -> None:
+    """The rendering is the member token, and the member is `UNCLASSIFIED`."""
+    error = SecretRetrievalError(failure)
+    rendered = f"{error!r} {error!s}"
+    assert "UNCLASSIFIED" in rendered
+    for canary in CANARIES:
+        assert canary not in rendered, f"{label} disclosed {canary}"
+    assert "RESPONSE_MALFORMED" not in rendered, f"{label} acquired a credential-mapped member"
+
+
+def test_a_non_member_construction_surfaces_as_unclassified_with_no_invented_count(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End to end: the exact case that used to fabricate a credential claim.
+
+    The boundary is replaced with one that raises a refusal built from a bare
+    string. Before round 2 the constructor turned that into
+    ``RESPONSE_MALFORMED``, which the entry point maps to
+    ``REFUSED_CREDENTIAL`` -- so an operator was told the credential boundary
+    had refused, while the witnessed invocation count was zero.
+    """
+    harness = Harness()
+
+    def refuse(**_: Any) -> Any:
+        raise SecretRetrievalError("RESPONSE_MALFORMED")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "kalpamani.data.ingest.sharadar.secrets.sharadar_credential_from_secret", refuse
+    )
+    with pytest.raises(bp.BindingPreflightError) as refusal:
+        harness.run()
+    captured = capsys.readouterr()
+    assert refusal.value.outcome is bp.PreflightOutcome.REFUSED_UNCLASSIFIED
+    assert refusal.value.__cause__ is None
+    assert refusal.value.__suppress_context__ is True
+    assert harness.secrets.calls == 0, "the witnessed count is zero and stays zero"
+    rendered = f"{refusal.value!r} {refusal.value!s} {captured.out} {captured.err}"
+    for canary in CANARIES:
+        assert canary not in rendered
+    assert "RESPONSE_MALFORMED" not in rendered
+
+
+def test_the_constructor_never_names_a_credential_mapped_member() -> None:
+    """Structural, because the behavioural cases only prove today's inputs.
+
+    The normalisation target is read out of the constructor's own body: any
+    member the entry point maps to ``REFUSED_CREDENTIAL`` appearing there is the
+    defect, whatever the current tests happen to exercise.
+    """
+    source = inspect.getsource(SecretRetrievalError.__init__)
+    body = source.split('"""')[-1]
+    credential_mapped = {
+        token
+        for token, outcome in bp.SECRET_FAILURE_OUTCOME.items()
+        if outcome is bp.PreflightOutcome.REFUSED_CREDENTIAL
+    }
+    for token in credential_mapped:
+        assert token not in body, f"the constructor can normalise to {token}"
+    assert "SecretRetrievalFailure.UNCLASSIFIED" in body
+
+
+def test_the_unclassified_member_is_never_raised_by_the_boundary_itself() -> None:
+    """It exists for the constructor, not as a cause the boundary can diagnose."""
+    source = _executable(SECRETS_MODULE)
+    assert source.count("SecretRetrievalFailure.UNCLASSIFIED") == 1, (
+        "UNCLASSIFIED is the constructor's normalisation target and nothing else"
+    )
+    assert "_refuse(SecretRetrievalFailure.UNCLASSIFIED)" not in source
+
+
+# -- the ARN resource length boundary ----------------------------------------
+#
+# ADR-0016 round 2. The whole resource component -- secret name *plus* the
+# generated `-XXXXXX` -- was measured against the 512-character *name* ceiling.
+# AWS permits a 512-character name and then appends seven characters of its own,
+# so a legitimate ARN for a maximum-length secret has a 519-character resource
+# and was refused.
+
+#: A generated-suffix-shaped tail. Synthetic: six ASCII alphanumerics.
+SYNTHETIC_SUFFIX: Final = "AbCd12"
+
+
+def _arn_with_resource(resource: str) -> str:
+    """A synthetic ARN carrying an exact resource component."""
+    return f"arn:aws:secretsmanager:us-east-1:{SYNTHETIC_ACCOUNT}:secret:{resource}"
+
+
+#: The name-length boundary, on both sides, with the suffix attached.
+ARN_LENGTH_CASES: tuple[tuple[str, str, bool], ...] = (
+    ("one-character name plus suffix", f"s-{SYNTHETIC_SUFFIX}", True),
+    (
+        "maximum-length name plus suffix",
+        f"{'s' * MAX_SECRET_NAME_LENGTH}-{SYNTHETIC_SUFFIX}",
+        True,
+    ),
+    (
+        "one over the name ceiling plus suffix",
+        f"{'s' * (MAX_SECRET_NAME_LENGTH + 1)}-{SYNTHETIC_SUFFIX}",
+        False,
+    ),
+    ("empty name before the suffix", f"-{SYNTHETIC_SUFFIX}", False),
+    ("suffix alone", SYNTHETIC_SUFFIX, False),
+    ("five-character suffix", "synthetic-AbCd1", False),
+    ("seven-character suffix", "synthetic-AbCd123", False),
+    ("non-alphanumeric suffix", "synthetic-AbCd_1", False),
+    ("no suffix separator", f"synthetic{SYNTHETIC_SUFFIX}", False),
+    ("underscore separator", f"synthetic_{SYNTHETIC_SUFFIX}", False),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "resource", "usable"), ARN_LENGTH_CASES, ids=[c[0] for c in ARN_LENGTH_CASES]
+)
+def test_the_arn_resource_length_boundary(label: str, resource: str, usable: bool) -> None:
+    """The 512 ceiling is the name's. The suffix is seven characters on top."""
+    assert is_usable_secret_identifier(_arn_with_resource(resource)) is usable, label
+
+
+def test_the_maximum_length_arn_is_admitted_and_the_name_ceiling_still_binds() -> None:
+    """The regression, stated as the pair that used to be indistinguishable.
+
+    Both resources are longer than 512 characters. One is a legitimate ARN for a
+    maximum-length secret; the other names a secret one character too long.
+    Measuring the suffixed resource against the name ceiling refused both.
+    """
+    at_ceiling = _arn_with_resource(f"{'s' * MAX_SECRET_NAME_LENGTH}-{SYNTHETIC_SUFFIX}")
+    over_ceiling = _arn_with_resource(f"{'s' * (MAX_SECRET_NAME_LENGTH + 1)}-{SYNTHETIC_SUFFIX}")
+    assert len(at_ceiling.split(":")[-1]) == MAX_SECRET_NAME_LENGTH + ARN_SUFFIX_LENGTH
+    assert is_usable_secret_identifier(at_ceiling) is True
+    assert is_usable_secret_identifier(over_ceiling) is False
+
+
+def test_a_maximum_length_arn_reaches_the_backend_exactly_once() -> None:
+    """Through the preflight, not just the predicate."""
+    identifier = _arn_with_resource(f"{'s' * MAX_SECRET_NAME_LENGTH}-{SYNTHETIC_SUFFIX}")
+    harness = Harness(secret_id_value=identifier)
+    harness.run()
+    assert harness.secrets.calls == 1
+    assert harness.secrets.secret_ids == [identifier]
+
+
+def test_the_secret_id_ceiling_still_binds_above_the_name_ceiling() -> None:
+    """Splitting the resource did not remove the outer bound."""
+    oversized = _arn_with_resource(f"{'s' * MAX_SECRET_ID_LENGTH}-{SYNTHETIC_SUFFIX}")
+    assert len(oversized) > MAX_SECRET_ID_LENGTH
+    assert is_usable_secret_identifier(oversized) is False
+
+
+def test_the_suffix_check_claims_structure_and_not_provenance() -> None:
+    """A name ending in a hyphen and six alphanumerics is lexically a suffix.
+
+    Nothing can tell the two apart, and the module says so rather than implying
+    a check it does not perform.
+    """
+    assert is_usable_secret_identifier(_arn_with_resource("my-secret")) is True
+    source = SECRETS_MODULE.read_text(encoding="utf-8")
+    assert "Syntax is not provenance" in source
 
 
 # ---------------------------------------------------------------------------
