@@ -59,7 +59,11 @@ from typing import Final
 
 from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.errors import PointInTimeError
-from kalpamani.data.contracts.vocabulary import InformationSetProfile, closed_member
+from kalpamani.data.contracts.vocabulary import (
+    AcquisitionMode,
+    InformationSetProfile,
+    closed_member,
+)
 from kalpamani.data.ingest.sharadar.client import MAX_ATTEMPTS_CEILING
 from kalpamani.data.ingest.sharadar.datasets import (
     MAX_PAGE_LIMIT,
@@ -136,6 +140,20 @@ MAX_RETRY_BUDGET: Final = 32
 
 #: The only profile Sharadar-derived evidence may be used under (ADR-0010).
 PERMITTED_PROFILE: Final = InformationSetProfile.PROVIDER_REALISTIC_PIT
+
+#: The one acquisition mode a qualification retrieval can ever record.
+#:
+#: Defined **here, once**, and imported by everything that states it. An
+#: earlier revision had the runtime name ``AcquisitionMode.QUALIFICATION``
+#: directly while the composition root defined its own constant beside it --
+#: two independent statements of one fact, which is a dual-write in every
+#: sense that matters: the interesting case is the one where they disagree,
+#: and nothing could have resolved it.
+#:
+#: A bounded provider-validation retrieval is neither a production backfill
+#: nor an incremental production refresh (ADR-0013). It is fixed: there is no
+#: plan field, no caller parameter, no conditional derivation and no override.
+QUALIFICATION_ACQUISITION_MODE: Final = AcquisitionMode.QUALIFICATION
 
 #: The profile Sharadar-derived evidence may never be represented as. Q7 is
 #: publicly unresolved: no first-party page states whether the daily bars are
@@ -734,6 +752,7 @@ __all__ = [
     "OUT_OF_PHASE_DATASETS",
     "PERMITTED_PROFILE",
     "PLAN_PARAMETER_ALLOWLIST",
+    "QUALIFICATION_ACQUISITION_MODE",
     "REFUSED_PROFILE",
     "DatasetPlan",
     "QualificationDefect",

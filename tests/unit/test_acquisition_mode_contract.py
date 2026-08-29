@@ -879,11 +879,22 @@ def test_no_alias_property_or_converter_exists() -> None:
             assert f"acquisition_mode={converter}" not in code
 
 
-def test_the_qualification_runtime_names_the_mode_directly() -> None:
+def test_the_qualification_runtime_records_the_single_source_mode() -> None:
+    """The runtime states the mode once, through the constant that owns it.
+
+    An earlier revision asserted the runtime named ``AcquisitionMode.QUALIFICATION``
+    *directly*. That was right while the runtime was the only place stating it,
+    and wrong once ADR-0014's composition root stated it too: two independent
+    spellings of one fact is a dual-write, and the interesting case is the one
+    where they disagree. The constant now lives in ``qualification.py``; what
+    this checks is that the runtime uses it and resolves to QUALIFICATION.
+    """
+    from kalpamani.data.ingest.sharadar import qualification
     from kalpamani.data.ingest.sharadar import runtime as module
 
+    assert qualification.QUALIFICATION_ACQUISITION_MODE is AcquisitionMode.QUALIFICATION
     code = _executable(Path(module.__file__))
-    assert "acquisition_mode=AcquisitionMode.QUALIFICATION" in code
+    assert "acquisition_mode=QUALIFICATION_ACQUISITION_MODE" in code
     assert "AcquisitionMode.BACKFILL" not in code
     assert "AcquisitionMode.UPDATE" not in code
 

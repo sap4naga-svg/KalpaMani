@@ -1,4 +1,4 @@
-"""The dormant Sharadar qualification composition root, and offline preflight.
+"""The dormant Sharadar qualification composition, and offline preflight.
 
 ADR-0014. Until this module, five accepted slices sat beside one another with
 nothing joining them: the credential, the transport, the client, the licensed S3
@@ -9,32 +9,45 @@ written was the wiring nobody had checked.
 
 This module writes it, and stops one step short of using it.
 
-What it is
-==========
+One function, no object
+======================
 
-One class, :class:`SharadarQualificationComposition`, that receives every
-dependency explicitly and builds the three accepted components from them. It
-exposes exactly one operation -- :meth:`SharadarQualificationComposition.preflight`
--- which calls :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`
-and returns a small closed result.
+:func:`preflight_qualification_composition` takes every dependency and a plan,
+builds the three accepted components as **local variables**, calls
+:meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`,
+and returns a :class:`QualificationPreflight`. When it returns, the client, the
+store, the runtime, the credential, the transport, the S3 client, the bucket
+string and the clock are all unreachable: nothing holds them.
+
+**The first revision of this slice got that wrong.** It was a class holding
+``_client``, ``_store`` and ``_runtime``, and it claimed that no attribute
+exposed the runtime. That was false. ``composition._runtime.execute(plan)``
+worked, and its own tests reached those attributes to prove the components had
+been built. **A leading underscore is a naming convention, not an execution
+barrier**, and a dormancy claim resting on one is not a claim at all.
+
+A function fixes it structurally rather than by policy. There is no ``self`` to
+attach a runtime to, no instance for a caller to hold, and no attribute to
+reach -- so "no executable component escapes" stops being a rule someone must
+remember and becomes a property of the shape.
 
 ::
 
-    composition root    EXISTS   (this module, and nowhere else)
-    execution surface   NONE     no execute, run, fetch, publish or upload
-    runner              NONE     no CLI, no module entry point, no scheduled task
-    credential source   NONE     nothing here reads an environment or a file
-    bucket binding      NONE     the bucket is a parameter, bound by a caller
-    client construction NONE     the S3 client is a parameter; no SDK is imported
-    provider requests   ZERO
-    AWS requests        ZERO
+    composition           ONE function, and no stateful object
+    execution surface     NONE     validate() only; nothing returns a runtime
+    runner                NONE     no CLI, no module entry point, no task
+    retained state        NONE     no module global, no closure, no instance
+    credential retrieval  NONE     no environment read, no file read, no reveal()
+    real credential binding: NONE  ·  real bucket binding: NONE
+    AWS SDK session or client construction: NONE
+    provider requests     ZERO     ·  AWS requests: ZERO
 
-What it is not
-==============
+What this is not
+================
 
 **It is not authorization to run.** The first authenticated qualification run is
 separately gated and remains unauthorized. Nothing outside this module's own
-synthetic tests constructs this class, and a static guard keeps it that way.
+synthetic tests calls this function, and a static guard keeps it that way.
 
 **It selects no provider.** G1 and G2 stay open; naming an implementation target
 has never been selection, and joining five slices does not become it.
@@ -53,8 +66,8 @@ and takes an explicit mapping, so a future authorized runner can pass
 ``os.environ`` at the one place allowed to. **This module is not that place.** It
 never calls that function, never touches a process environment, and never calls
 :meth:`~kalpamani.data.ingest.sharadar.credentials.SharadarCredential.reveal`.
-The credential arrives already built, is handed to the client, and is not
-retained here.
+The credential arrives already built, is handed to a client that lives for the
+duration of one call, and is unreachable when that call returns.
 
 Nothing at import time does work, and nothing here opens a socket, reads a file,
 parses an argument or names a host, a bucket, an account or an endpoint.
@@ -64,20 +77,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
 
 from kalpamani.data.contracts.vocabulary import (
     AcquisitionMode,
     InformationSetProfile,
 )
 from kalpamani.data.ingest.sharadar.client import (
+    MAX_ATTEMPTS_CEILING,
     Pacer,
     RetryPolicy,
     SharadarClient,
 )
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
 from kalpamani.data.ingest.sharadar.qualification import (
+    MAX_REQUESTS,
+    MAX_RESPONSE_BYTES,
+    MAX_RETRY_BUDGET,
+    MAX_RUN_BYTES,
     PERMITTED_PROFILE,
+    QUALIFICATION_ACQUISITION_MODE,
     QualificationPlan,
 )
 from kalpamani.data.ingest.sharadar.redaction import (
@@ -91,15 +109,6 @@ from kalpamani.data.ingest.sharadar.runtime import (
 )
 from kalpamani.data.ingest.sharadar.transport import SharadarTransport
 from kalpamani.data.storage.s3 import S3Client, S3ResearchObjectStore
-
-#: The acquisition mode this composition can ever record, fixed by the runtime.
-#:
-#: Restated here only so the preflight result can report it. It is **read from
-#: the runtime's contract, not chosen here**: there is no parameter, no plan
-#: field and no caller override, because there is exactly one kind of retrieval
-#: this composition could perform and it is not a production operation
-#: (ADR-0013).
-QUALIFICATION_ACQUISITION_MODE: Final = AcquisitionMode.QUALIFICATION
 
 
 class PreflightStatus(StrEnum):
@@ -131,21 +140,38 @@ def _refuse() -> SharadarRequestError:
     return SharadarRequestError(stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED)
 
 
+def _exact_count(value: object, *, low: int, high: int) -> None:
+    """Refuse ``value`` unless it is an exact ``int`` within ``[low, high]``.
+
+    Exact, because ``True`` is an ``int`` in Python and a count of ``True`` is a
+    count of one that nobody wrote. Bounded, because a preflight reporting a
+    number outside the compiled ceilings would describe a run this system cannot
+    perform.
+    """
+    if type(value) is not int or not low <= value <= high:
+        raise _refuse() from None
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class QualificationPreflight:
     """What an offline preflight establishes. Safe to log in full.
 
-    Every field is a closed vocabulary member or a bounded non-negative count.
-    **There is no credential field, no bucket field, no URL field, no subject
-    field, no payload field and no message field**, so none of those has anywhere
-    to be -- and :meth:`__post_init__` enforces that at runtime rather than
-    leaving it to annotations, which are a static claim.
+    Every field is a closed vocabulary member or a bounded count. **There is no
+    credential field, no bucket field, no URL field, no subject field, no payload
+    field and no message field**, so none of those has anywhere to be -- and
+    :meth:`__post_init__` enforces that at runtime rather than leaving it to
+    annotations, which are a static claim.
 
-    The numbers are *derived*, never restated: the request count comes from the
-    plan's own generator, the attempt ceiling from the injected client's retry
-    policy, and the byte ceilings from the stricter of the client and the plan.
-    A preflight that reported declared intentions instead of effective bounds
-    would describe a run other than the one that would happen.
+    **The result must describe a plan that could actually have passed.** An
+    earlier revision accepted zero for every count while still reporting
+    ``VALIDATED_OFFLINE``, so an independently constructed result could claim
+    that a run of no requests, no attempts and no bytes had been validated. No
+    plan produces those numbers: a plan has at least one request, a client makes
+    at least one attempt, and a ceiling of zero bytes admits no response.
+
+    The bounds are read from the **same compiled constants** the plan and the
+    client are held to, so there is no second set of numbers to drift, and the
+    two cross-field rules are the ones the runtime itself applies.
     """
 
     status: PreflightStatus
@@ -168,12 +194,11 @@ class QualificationPreflight:
         raise TypeError("QualificationPreflight may not be subclassed.")
 
     def __post_init__(self) -> None:
-        """Refuse anything that is not an exact member or an exact count.
+        """Refuse anything that could not describe a validated plan.
 
         Raises:
-            SharadarRequestError: ``BUILD: REQUEST_MALFORMED``. ``True`` is an
-                ``int`` in Python, so an exact type check is what keeps a boolean
-                out of a count; and a bare ``"QUALIFICATION"`` string is refused
+            SharadarRequestError: ``BUILD: REQUEST_MALFORMED``, sanitized and
+                raised ``from None``. A bare ``"QUALIFICATION"`` string is refused
                 where the member belongs, because two spellings of one value in a
                 logged record is how the second one becomes authoritative.
         """
@@ -187,140 +212,123 @@ class QualificationPreflight:
             raise _refuse() from None
         if self.profile is not PERMITTED_PROFILE:
             raise _refuse() from None
-        for count in (
-            self.request_count,
-            self.max_attempts,
-            self.max_response_bytes,
-            self.max_run_bytes,
-            self.retry_budget,
-        ):
-            if type(count) is not int or count < 0:
-                raise _refuse() from None
 
+        _exact_count(self.request_count, low=1, high=MAX_REQUESTS)
+        _exact_count(self.max_attempts, low=1, high=MAX_ATTEMPTS_CEILING)
+        _exact_count(self.max_response_bytes, low=1, high=MAX_RESPONSE_BYTES)
+        _exact_count(self.max_run_bytes, low=1, high=MAX_RUN_BYTES)
+        # A retry budget of zero is legitimate -- `max_attempts=1` means no retry
+        # is ever taken -- so this floor is 0 where the others are 1.
+        _exact_count(self.retry_budget, low=0, high=MAX_RETRY_BUDGET)
 
-class SharadarQualificationComposition:
-    """The wiring, and only the wiring.
-
-    Receives every dependency explicitly -- there is **no default on any
-    parameter**, so nothing here can reach a real transport, a real bucket or a
-    real clock because a caller forgot one. Builds the three accepted components
-    and keeps them private.
-
-    **There is no execution method.** No ``execute``, ``run``, ``fetch``,
-    ``publish``, ``upload`` or any private spelling of one, and no attribute
-    exposing the runtime for a caller to call ``execute`` on. There is also no
-    module-executable entry point: the guard that keeps one out of this package
-    scans raw source, so this module does not spell the dunder even in prose. The distance
-    between this and a live run is a separately gated authorization plus the code
-    that would use it, and neither exists.
-    """
-
-    __slots__ = ("_client", "_runtime", "_store")
-
-    def __init__(
-        self,
-        *,
-        credential: SharadarCredential,
-        transport: SharadarTransport,
-        pacer: Pacer,
-        retry_policy: RetryPolicy,
-        timeout_seconds: float,
-        s3_client: S3Client,
-        licensed_bucket: str,
-        clock: QualificationClock,
-    ) -> None:
-        """Construct the client, the licensed store and the runtime from injections.
-
-        Validation is **delegated**, not duplicated: the credential's exactness,
-        the timeout range, the retry policy's shape, the bucket name's grammar,
-        the S3 client's two operations and the clock's one method are each already
-        enforced by the constructor that owns them, and each refusal is already
-        sanitized. Re-checking them here would create a second, drifting copy of
-        every rule.
-
-        ``pacer`` is the exception, and is required and exactly typed here.
-        :class:`~kalpamani.data.ingest.sharadar.client.SharadarClient` accepts
-        ``None`` and builds its own from :func:`time.monotonic` and
-        :func:`time.sleep` -- a sensible default for a client, and the wrong one
-        here: a composition root that silently acquired an ambient clock would
-        have exactly the kind of unexamined dependency this module exists to make
-        visible.
-
-        Raises:
-            SharadarRequestError: ``BUILD: REQUEST_MALFORMED`` for a pacer that is
-                not an exact :class:`~kalpamani.data.ingest.sharadar.client.Pacer`,
-                and from the client's own constructor for a bad credential,
-                timeout or retry policy.
-            ObjectStoreBackendError: ``BIND: INVALID_CONFIGURATION`` for a bucket
-                name or S3 client the store will not accept. **The refusal never
-                echoes the bucket.**
-            QualificationRuntimeError: ``DEPENDENCY_MALFORMED`` for a clock that
-                cannot answer.
-        """
-        if type(pacer) is not Pacer:
+        if self.max_response_bytes > self.max_run_bytes:
+            # One answer could exhaust the whole run, so the run could never send
+            # even its first request within the ceiling it reports.
             raise _refuse() from None
-        self._client = SharadarClient(
-            credential=credential,
-            transport=transport,
-            pacer=pacer,
-            retry_policy=retry_policy,
-            timeout_seconds=timeout_seconds,
-        )
-        self._store = S3ResearchObjectStore(client=s3_client, licensed_bucket=licensed_bucket)
-        self._runtime = QualificationRuntime(client=self._client, store=self._store, clock=clock)
+        if self.request_count * (self.max_attempts - 1) > self.retry_budget:
+            # The arithmetic `refuse_retry_budget` applies to the plan. A result
+            # whose own numbers fail it describes a validation that could not
+            # have succeeded.
+            raise _refuse() from None
 
-    def __repr__(self) -> str:
-        """A constant. Nothing caller-supplied can appear here.
 
-        The three components it holds each have a constant or numeric ``repr`` of
-        their own, but composing them would still be a decision about what is safe
-        to print. A fixed string needs no such decision.
-        """
-        return "SharadarQualificationComposition(provider=sharadar, surface=preflight)"
+def preflight_qualification_composition(
+    *,
+    credential: SharadarCredential,
+    transport: SharadarTransport,
+    pacer: Pacer,
+    retry_policy: RetryPolicy,
+    timeout_seconds: float,
+    s3_client: S3Client,
+    licensed_bucket: str,
+    clock: QualificationClock,
+    plan: QualificationPlan,
+) -> QualificationPreflight:
+    """Construct the accepted components, validate ``plan`` against them, return facts.
 
-    def preflight(self, plan: QualificationPlan) -> QualificationPreflight:
-        """Validate ``plan`` against the constructed components. **Fetches nothing.**
+    **Nothing survives the call.** The client, the store and the runtime are
+    local variables; the credential, transport, S3 client, bucket string, clock
+    and plan are parameters. When this returns, the only reachable object is the
+    :class:`QualificationPreflight`, which holds counts and closed vocabulary
+    members and no dependency at all. There is no instance, no module global and
+    no closure for an executable component to be reached through.
 
-        Calls :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`
-        and nothing else. That method builds the plan's requests, checks the retry
-        budget against the *injected client's* attempt policy, checks the request
-        count against the plan's ceiling, checks that every request derives a
-        distinct acquisition identity, checks both byte ceilings against what the
-        client could actually return, and probes the clock. **It issues no
-        provider request and no store call**, which is why a composition holding
-        real dependencies is still inert while only this method exists.
+    **Every dependency is a required keyword parameter with no default**, so
+    nothing here can reach a real service because a caller forgot one.
 
-        The returned counts are read back from the plan and the client rather than
-        from the caller, so a preflight cannot report a bound the run would not
-        honour.
+    Validation is **delegated**, not duplicated: the credential's exactness, the
+    transport's callable ``get``, the timeout range, the retry policy's shape,
+    the bucket name's grammar, the S3 client's two operations and the clock's one
+    method are each already enforced by the constructor that owns them, and each
+    refusal is already sanitized. Re-checking them here would create a second,
+    drifting copy of every rule.
 
-        Raises:
-            QualificationPlanError: for any plan defect, including a retry budget
-                the client's policy would exceed.
-            QualificationRuntimeError: for a malformed plan object, an unusable
-                clock, or a byte ceiling the client could exceed.
-        """
-        requests = self._runtime.validate(plan)
-        return QualificationPreflight(
-            status=PreflightStatus.VALIDATED_OFFLINE,
-            request_count=len(requests),
-            max_attempts=self._client.max_attempts,
-            # The stricter of the two, written the same way the runtime writes it
-            # so the numbers cannot drift apart. `validate()` has already refused
-            # a client ceiling above the plan's, so this is the client's -- stated
-            # as a minimum anyway, because a preflight that depended on a check
-            # elsewhere staying exactly as it is would be a bound by coincidence.
-            max_response_bytes=min(self._client.max_response_bytes, plan.limits.max_response_bytes),
-            max_run_bytes=plan.limits.max_run_bytes,
-            retry_budget=plan.limits.retry_budget,
-            acquisition_mode=QUALIFICATION_ACQUISITION_MODE,
-            profile=PERMITTED_PROFILE,
-        )
+    ``pacer`` is the exception, and is required and exactly typed here.
+    :class:`~kalpamani.data.ingest.sharadar.client.SharadarClient` accepts
+    ``None`` and builds its own from :func:`time.monotonic` and
+    :func:`time.sleep` -- a sensible default for a client, and the wrong one
+    here: a composition that silently acquired an ambient clock would have
+    exactly the kind of unexamined dependency this function exists to make
+    visible.
+
+    :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`
+    is the only thing called on the runtime. It builds the plan's requests,
+    checks the retry budget against the *injected client's* attempt policy,
+    checks the request count against the plan's ceiling, checks that every
+    request derives a distinct acquisition identity, checks both byte ceilings
+    against what the client could actually return, and probes the clock. **It
+    issues no provider request and no store call**, which is why this function is
+    inert even when handed real dependencies.
+
+    Raises:
+        SharadarRequestError: ``BUILD: REQUEST_MALFORMED`` for a pacer that is not
+            an exact :class:`~kalpamani.data.ingest.sharadar.client.Pacer`, and
+            from the client's own constructor for a bad credential, transport,
+            timeout or retry policy.
+        ObjectStoreBackendError: ``BIND: INVALID_CONFIGURATION`` for a bucket name
+            or S3 client the store will not accept. **The refusal never echoes
+            the bucket.**
+        QualificationRuntimeError: ``DEPENDENCY_MALFORMED`` for a clock that
+            cannot answer, a plan that is not an exact
+            :class:`~kalpamani.data.ingest.sharadar.qualification.QualificationPlan`,
+            or a byte ceiling the client could exceed.
+        QualificationPlanError: for any plan defect, including a retry budget the
+            client's policy would exceed.
+    """
+    if type(pacer) is not Pacer:
+        raise _refuse() from None
+
+    client = SharadarClient(
+        credential=credential,
+        transport=transport,
+        pacer=pacer,
+        retry_policy=retry_policy,
+        timeout_seconds=timeout_seconds,
+    )
+    store = S3ResearchObjectStore(client=s3_client, licensed_bucket=licensed_bucket)
+    runtime = QualificationRuntime(client=client, store=store, clock=clock)
+
+    requests = runtime.validate(plan)
+
+    return QualificationPreflight(
+        status=PreflightStatus.VALIDATED_OFFLINE,
+        request_count=len(requests),
+        max_attempts=client.max_attempts,
+        # The stricter of the two, written the same way the runtime writes it so
+        # the numbers cannot drift apart. `validate()` has already refused a
+        # client ceiling above the plan's, so this is the client's -- stated as a
+        # minimum anyway, because a bound that depended on a check elsewhere
+        # staying exactly as it is would be a bound by coincidence.
+        max_response_bytes=min(client.max_response_bytes, plan.limits.max_response_bytes),
+        max_run_bytes=plan.limits.max_run_bytes,
+        retry_budget=plan.limits.retry_budget,
+        acquisition_mode=QUALIFICATION_ACQUISITION_MODE,
+        profile=PERMITTED_PROFILE,
+    )
 
 
 __all__ = [
-    "QUALIFICATION_ACQUISITION_MODE",
     "PreflightStatus",
     "QualificationPreflight",
-    "SharadarQualificationComposition",
+    "preflight_qualification_composition",
 ]

@@ -195,10 +195,50 @@ class RetryPolicy:
 DEFAULT_RETRY_POLICY: Final = RetryPolicy(max_attempts=3, backoff_seconds=(2.0, 8.0))
 
 
+def _resolve_response_ceiling(transport: SharadarTransport) -> int:
+    """The transport's declared response ceiling, resolved once and for all.
+
+    Falls back to
+    :data:`~kalpamani.data.ingest.sharadar.transport.MAX_RESPONSE_BYTES_CEILING`
+    when the transport does not declare one, or declares something outside the
+    permitted range. That is the **conservative** direction: a transport that
+    will not say how much it may return is assumed to be able to return the most
+    any transport may, so a caller budgeting against this number cannot
+    under-count. The protocol declares the attribute but the fallback is kept,
+    because refusing here would reject every legitimate stand-in that simply does
+    not narrow the ceiling.
+
+    A *raising* declaration is different from an absent one and is not absorbed:
+    an object whose attribute access raises is not a transport that declined to
+    answer, it is a dependency that cannot be reasoned about at all.
+
+    Raises:
+        SharadarRequestError: ``BUILD: REQUEST_MALFORMED`` if reading the
+            declaration raises. The dependency's own exception text never
+            reaches the refusal.
+    """
+    try:
+        declared = getattr(transport, "max_response_bytes", None)
+    except Exception:
+        raise SharadarRequestError(
+            stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+        ) from None
+    if type(declared) is int and 0 < declared <= MAX_RESPONSE_BYTES_CEILING:
+        return declared
+    return MAX_RESPONSE_BYTES_CEILING
+
+
 class SharadarClient:
     """Fetches exact response bytes for one request. Stores nothing, parses nothing."""
 
-    __slots__ = ("_credential", "_pacer", "_retry_policy", "_timeout", "_transport")
+    __slots__ = (
+        "_credential",
+        "_max_response_bytes",
+        "_pacer",
+        "_retry_policy",
+        "_timeout",
+        "_transport",
+    )
 
     def __init__(
         self,
@@ -240,11 +280,30 @@ class SharadarClient:
             raise SharadarRequestError(
                 stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
             )
+        # A `Protocol` annotation is a static claim. Without this, an object
+        # carrying only a plausible `max_response_bytes` composes and validates
+        # cleanly while being unable to perform a single request -- a dependency
+        # defect discovered at the first fetch instead of at construction, which
+        # is the one place it costs nothing.
+        try:
+            get = getattr(transport, "get", None)
+        except Exception:
+            # A hostile or broken `__getattr__` raises from inside the lookup.
+            # Converted here rather than allowed to propagate with whatever it
+            # chose to put in its message.
+            raise SharadarRequestError(
+                stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+            ) from None
+        if not callable(get):
+            raise SharadarRequestError(
+                stage=SharadarStage.BUILD, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
         self._credential = credential
         self._transport = transport
         self._pacer = pacer if pacer is not None else Pacer()
         self._retry_policy = retry_policy
         self._timeout = timeout_seconds
+        self._max_response_bytes = _resolve_response_ceiling(transport)
 
     def __repr__(self) -> str:
         """Configuration only, and every value in it is a constant or a number.
@@ -275,24 +334,22 @@ class SharadarClient:
 
     @property
     def max_response_bytes(self) -> int:
-        """The largest body one request can return, read from the bound transport.
+        """The largest body one request can return. **Resolved once, at construction.**
 
         **Derived, not duplicated.** The number belongs to the transport, which is
         the thing that actually stops reading; restating it here as a constant
         would create two ceilings that a later edit could move apart.
 
-        Falls back to
-        :data:`~kalpamani.data.ingest.sharadar.transport.MAX_RESPONSE_BYTES_CEILING`
-        when an injected transport does not declare one, or declares something
-        outside the permitted range. That is the **conservative** direction: a
-        transport that will not say how much it may return is assumed to be able
-        to return the most any transport may, so a caller budgeting against this
-        number cannot under-count.
+        **Read once and stored**, rather than consulted on every access. An earlier
+        revision asked the transport each time, which made this a *view of a
+        mutable dependency*: a plan could be validated against one ceiling and
+        then executed against another, because the object that declared it is
+        free to change its mind between the two. A bound is not a bound if the
+        thing it bounds can move it.
+
+        See :func:`_resolve_response_ceiling` for the fallback and its direction.
         """
-        declared = getattr(self._transport, "max_response_bytes", None)
-        if type(declared) is int and 0 < declared <= MAX_RESPONSE_BYTES_CEILING:
-            return declared
-        return MAX_RESPONSE_BYTES_CEILING
+        return self._max_response_bytes
 
     def headers(self) -> Mapping[str, str]:
         """The fixed request headers. Constant, and carrying no credential.

@@ -737,23 +737,40 @@ authorized**.
 [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)
 authorized the wiring the five previous slices deliberately did without: one module that receives
 every dependency explicitly and builds the accepted client, licensed store and qualification runtime
-from them. `data/ingest/sharadar/composition.py`, and no second module.
+from them. `data/ingest/sharadar/composition.py`, and no second module — **one function**,
+`preflight_qualification_composition`, and no stateful object.
 
 **This supersedes the standing "composition root: NONE" claim, and nothing else.** That claim was
 true of every earlier slice and is quoted in their historical text, which is not rewritten. What
 holds now is narrower and is checked rather than declared:
 
 ```
-composition root      EXISTS   one module, named individually, and no second
+composition           ONE function, and no stateful object
 offline preflight     EXISTS   validate() only -- no fetch, no publication
-execution surface     NONE     no execute, run, fetch, publish or upload, public or private
+components            EPHEMERAL LOCALS, built inside one call and unreachable after it
+execution surface     NONE     nothing returns a client, store, runtime or closure
 runner                NONE     no CLI, no entry point, no console script, no task, no image
+retained state        NONE     no module global, no closure, no instance, no attribute
 credential retrieval  NONE     no environment read, no file read, no reveal() call
 real credential binding: NONE   ·   real bucket binding: NONE
-AWS SDK session or client construction: NONE   ·   no module under src/ imports the SDK
-constructed or imported outside its own tests: NEVER
+AWS SDK session / S3-client construction: NONE   ·   no module under src/ imports the SDK
+called or imported outside its own synthetic tests: NEVER
 Sharadar requests: ZERO   ·   AWS requests: ZERO   ·   Services Data: NONE
 ```
+
+**The first revision of this slice was a stateful object, and its dormancy claim was false.** It
+held `_client`, `_store` and `_runtime`, so `composition._runtime.execute(plan)` ran, and its own
+tests reached those attributes to prove the components had been built. **A leading underscore is a
+naming convention, not an execution barrier.** The replacement is a module-level function: there is
+no `self` to attach a runtime to and no instance for a caller to hold, so *no executable component
+escapes* is a property of the shape rather than a rule someone must remember.
+
+**Precisely what the absences mean.** A `SharadarClient`, an `S3ResearchObjectStore` and a
+`QualificationRuntime` **are** constructed — as local variables, inside one call, from values a
+caller hands in — and a synthetic bucket string and synthetic store are constructed in tests. What
+does **not** exist is a *real* bucket binding, a *real* credential binding, any **AWS SDK session or
+S3-client construction**, and any credential source. The credential is held by the client for the
+duration of one call and is unreachable when it returns.
 
 **It constructs from injected values only.** A credential, a transport, a pacer, a retry policy, a
 timeout, an S3 client, a licensed-bucket string and a clock — each a **required keyword parameter
@@ -771,18 +788,20 @@ holding real dependencies is still inert while only this method exists.
 
 | | |
 |---|---|
-| **The result is closed** | frozen, slotted, subclass-refusing: a status, five bounded counts, `AcquisitionMode.QUALIFICATION` and `PROVIDER_REALISTIC_PIT`. **No credential, bucket, URL, region, account, subject, payload, backend-message or free-text field** — none has anywhere to be, and `__post_init__` enforces that rather than the annotations |
+| **The result is closed** | frozen, slotted, subclass-refusing: a status, five bounded counts, the acquisition mode and the profile. **No credential, bucket, URL, region, account, subject, payload, backend-message or free-text field** — none has anywhere to be, and `__post_init__` enforces that rather than the annotations |
+| **The result must be possible** | every count is bounded by the *same compiled constants* the plan and the client are held to, and the two cross-field rules the runtime applies — response ceiling ≤ run ceiling, and `requests × (attempts − 1) ≤ retry budget` — are re-checked. An earlier revision accepted zero for every count while still reporting `VALIDATED_OFFLINE`; no plan produces those numbers |
+| **The transport contract is enforced where it is owned** | `SharadarClient` now requires a callable `get`, so an object carrying only a plausible `max_response_bytes` can no longer compose and validate cleanly while being unable to perform a request. The response ceiling is **resolved once at construction** and stored: a bound read from a mutable dependency on every access is not a bound |
 | **The numbers are derived** | request count from the plan's generator, attempt ceiling from the injected client's retry policy, response ceiling from the stricter of client and plan. A preflight reporting declared intentions would describe a different run |
 | **The status word is a control** | one member, **`VALIDATED_OFFLINE`**. `READY`, `PROCEED`, `APPROVED`, `QUALIFIED` and `AUTHORIZED` are each refused anywhere in the module. **Preflight is not a verdict**: it says a plan is internally consistent, and nothing about the provider, the data, or whether a run should happen |
 | **One member, on purpose** | a *failure* status that can be returned is a failure a caller can ignore. Every refusal raises, in an existing closed vocabulary |
 | **Nothing leaks** | a secret-shaped, bucket-shaped, backend-message-shaped and subject-shaped canary, each proven absent from the result, its fields, both reprs, every refusal and captured output |
 | **Zero activity, counted** | the transport and the S3 client raise if called, and their call counts are asserted at zero through a real `S3ResearchObjectStore`. `reveal()` is counted by patching the credential class |
-| **`QUALIFICATION` is fixed** | no mode parameter on the composition, on preflight, on the plan or on the limits. The result reports the mode; it does not choose it ([ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)) |
+| **`QUALIFICATION` is fixed, once** | `QUALIFICATION_ACQUISITION_MODE` is defined in `qualification.py` and imported by both the runtime and the preflight result — **one statement, not two that could drift**. No mode parameter on the composition, on preflight, on the plan or on the limits ([ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)) |
 
 **The first authenticated qualification run remains separately gated, and this slice does not
 approach it.** What would still be needed: an authorization, a credential source, a real credential,
-a constructed SDK client, a bound bucket, and code that calls something other than `preflight`.
-**None of those exists.**
+a constructed **AWS SDK** client, a real bucket binding, and code that calls something other than
+`preflight_qualification_composition`. **None of those exists.**
 
 **The architecture guards were narrowed, not deleted.** Exactly one module may construct the
 licensed store, the client and the runtime; a second one fails. **SDK construction stays forbidden

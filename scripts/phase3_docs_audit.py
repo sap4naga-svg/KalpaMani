@@ -211,6 +211,7 @@ ADR_COMPOSITION = (
     DECISIONS / "ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md"
 )
 COMPOSITION_ROOT = PROVIDER_PACKAGE / "composition.py"
+PROVIDER_CLIENT = PROVIDER_PACKAGE / "client.py"
 COMPOSITION_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py"
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
 QUALIFICATION_PLAN = PROVIDER_PACKAGE / "qualification.py"
@@ -682,6 +683,62 @@ def _conditional_mode_sites() -> list[str]:
                     if named or attributed:
                         offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return offenders
+
+
+def _composition_state_sites() -> list[str]:
+    """Every place the composition module stores a constructed component durably.
+
+    A local variable is fine -- it is unreachable when the call returns. An
+    attribute on ``self``, a class attribute or a module global is not: the first
+    revision of ADR-0014 stored all three on an instance, and
+    ``composition._runtime.execute(plan)`` worked.
+    """
+    if not COMPOSITION_ROOT.is_file():
+        return []
+    built = {"SharadarClient", "S3ResearchObjectStore", "QualificationRuntime"}
+    offenders: list[str] = []
+    tree = ast.parse(read(COMPOSITION_ROOT), filename=str(COMPOSITION_ROOT))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id in built
+        ):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                offenders.append(f"line {node.lineno}: {ast.unparse(target)}")
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id != "__all__":
+                    offenders.append(f"module-level state: {target.id}")
+    return offenders
+
+
+def _qualification_mode_definitions() -> int:
+    """How many modules assign ``QUALIFICATION_ACQUISITION_MODE``. Expected: one.
+
+    Two independent statements of one fact is a dual-write, and the interesting
+    case is the one where they disagree.
+    """
+    count = 0
+    for path in _src_python_files():
+        for node in ast.walk(ast.parse(read(path), filename=str(path))):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            count += sum(
+                1
+                for target in targets
+                if isinstance(target, ast.Name) and target.id == "QUALIFICATION_ACQUISITION_MODE"
+            )
+    return count
 
 
 def _src_python_files() -> list[Path]:
@@ -4233,12 +4290,24 @@ def main() -> int:
         )
         f.check(
             "the plan carries no caller-controlled acquisition mode",
+            # The module *defines* QUALIFICATION_ACQUISITION_MODE, which is the
+            # single source; what must not exist is a lowercase field, parameter
+            # or keyword a caller could set.
             "acquisition_mode" not in plan_source and "is_backfill" not in plan_source,
             "a plan field would let a caller label evidence as a production backfill",
         )
         f.check(
-            "the runtime names the qualification mode directly",
-            "acquisition_mode=AcquisitionMode.QUALIFICATION" in runtime_source,
+            "the qualification module owns the single-source acquisition mode",
+            "QUALIFICATION_ACQUISITION_MODE: Final = AcquisitionMode.QUALIFICATION" in plan_source
+            and '"QUALIFICATION_ACQUISITION_MODE",' in plan_source,
+            "one fact stated once, and exported so nothing has to restate it",
+        )
+        f.check(
+            "the runtime records the single-source qualification mode",
+            "acquisition_mode=QUALIFICATION_ACQUISITION_MODE" in runtime_source
+            # Docstring-stripped: the module *documents* what the constant
+            # resolves to, and a raw scan would forbid saying so.
+            and "AcquisitionMode.QUALIFICATION" not in _executable_python(QUALIFICATION_RUNTIME),
             "the mode must be fixed here and unreachable from a plan or a caller",
         )
         f.check(
@@ -4945,8 +5014,8 @@ def main() -> int:
         f.check(
             "ADR-0014 records that there is no public execution method",
             "There is no execution surface" in adr14
-            and "no attribute exposing the runtime" in flat14,
-            "a private spelling of execute is still an execution surface",
+            and "no object to hold a runtime and no attribute to reach one through" in flat14,
+            "a private attribute is reachable; only an absent object is not",
         )
         f.check(
             "ADR-0014 records that the first authenticated run stays separately gated",
@@ -4989,6 +5058,42 @@ def main() -> int:
             "historical ADR text is evidence and is never edited",
         )
         f.check(
+            "ADR-0014 discloses the escaping-runtime defect its first revision contained",
+            "A leading underscore is a naming convention, not an execution barrier" in flat14
+            and "composition._runtime.execute(plan)` ran" in flat14,
+            "a correction that conceals what it corrected teaches a later reader nothing",
+        )
+        f.check(
+            "ADR-0014 records the composition as a function, not a stateful object",
+            "as one function" in flat14 and "no stateful object" in flat14,
+            "the non-escape property has to be structural, not a naming convention",
+        )
+        f.check(
+            "ADR-0014 distinguishes local construction from real binding",
+            'Precisely what "no construction" does and does not mean here' in flat14
+            and "AWS SDK session or S3-client construction" in flat14
+            and "real bucket binding" in flat14,
+            "a blanket 'client construction: NONE' was false once a client is built",
+        )
+        f.check(
+            "ADR-0014 records that the result cannot describe an impossible run",
+            "must describe a plan that could actually have passed" in flat14
+            and "same compiled constants" in flat14,
+            "zero requests and zero bytes described a validation that never happened",
+        )
+        f.check(
+            "ADR-0014 records the transport contract at its owning boundary",
+            "The transport contract is enforced where it is owned" in flat14
+            and "A bound is not a bound if the thing it bounds can move it" in flat14,
+            "a Protocol annotation is a static claim, and nothing checked it",
+        )
+        f.check(
+            "ADR-0014 records one acquisition-mode constant in one module",
+            "One acquisition-mode constant, in the module that owns it" in flat14
+            and "defined once" in flat14,
+            "two independent statements of one fact is a dual-write",
+        )
+        f.check(
             "ADR-0014 records the status vocabulary as a control",
             "VALIDATED_OFFLINE" in adr14
             and "Preflight is not a verdict" in flat14
@@ -5018,7 +5123,8 @@ def main() -> int:
         )
         f.check(
             "the composition exposes offline preflight and calls only validate",
-            "def preflight(" in composition and "self._runtime.validate(plan)" in composition,
+            "def preflight_qualification_composition(" in composition
+            and "runtime.validate(plan)" in composition,
             "validate fetches nothing and stores nothing; that is the whole dormancy claim",
         )
         f.check(
@@ -5028,7 +5134,50 @@ def main() -> int:
                 f"def {verb}" in composition
                 for verb in ("run", "fetch", "publish", "upload", "main", "ingest")
             ),
-            "a private spelling hides a method from a reviewer, not from a caller",
+            "a private spelling hides a callable from a reviewer, not from a caller",
+        )
+        f.check(
+            "the composition is a function, holding no state a caller could reach",
+            not _composition_state_sites(),
+            "a leading underscore is a naming convention, not an execution barrier",
+        )
+        f.check(
+            "the composition builds its components as locals only",
+            all(
+                f"    {name} = {name.capitalize() if False else construction}(" in composition
+                for name, construction in (
+                    ("client", "SharadarClient"),
+                    ("store", "S3ResearchObjectStore"),
+                    ("runtime", "QualificationRuntime"),
+                )
+            ),
+            "a local is unreachable when the call returns; an attribute is not",
+        )
+        f.check(
+            "the preflight result is bounded by the compiled constants",
+            all(
+                constant in composition
+                for constant in (
+                    "MAX_REQUESTS",
+                    "MAX_ATTEMPTS_CEILING",
+                    "MAX_RESPONSE_BYTES",
+                    "MAX_RUN_BYTES",
+                    "MAX_RETRY_BUDGET",
+                )
+            ),
+            "a second set of numbers beside the plan's is a second thing to drift",
+        )
+        f.check(
+            "the preflight result refuses counts no validated plan could produce",
+            "if self.max_response_bytes > self.max_run_bytes:" in composition
+            and "self.request_count * (self.max_attempts - 1) > self.retry_budget" in composition,
+            "zero requests and zero bytes described a run that never happened",
+        )
+        f.check(
+            "the composition reads the single-source acquisition mode",
+            "QUALIFICATION_ACQUISITION_MODE" in composition
+            and "AcquisitionMode.QUALIFICATION" not in composition,
+            "two independent spellings of one fact is a dual-write",
         )
         f.check(
             "the composition has no runner, entry point or argument parsing",
@@ -5086,6 +5235,30 @@ def main() -> int:
             "the harness is an owner-run instrument and is not the composition root",
         )
 
+    if PROVIDER_CLIENT.is_file():
+        client_source = _executable_python(PROVIDER_CLIENT)
+        f.check(
+            "the client requires a callable transport get",
+            "if not callable(get):" in client_source,
+            "a Protocol annotation is a static claim; this is the runtime half",
+        )
+        f.check(
+            "the client resolves the response ceiling once, at construction",
+            "self._max_response_bytes = _resolve_response_ceiling(transport)" in client_source
+            and "return self._max_response_bytes" in client_source,
+            "a bound is not a bound if the thing it bounds can move it",
+        )
+        f.check(
+            "the client sanitizes a raising transport declaration",
+            "def _resolve_response_ceiling" in client_source and "from None" in client_source,
+            "a dependency's own exception text must not become the refusal",
+        )
+
+    f.check(
+        "exactly one assignment defines the qualification acquisition mode",
+        _qualification_mode_definitions() == 1,
+        "one fact, one statement; two copies cannot be reconciled after the fact",
+    )
     f.check(
         "exactly one module under src/ constructs the licensed store",
         [path.name for path in _store_construction_sites()] == ["composition.py"],
@@ -5119,8 +5292,26 @@ def main() -> int:
             ("zero provider and S3 calls", "test_a_successful_preflight_touches_no_transport"),
             ("no publication", "test_no_object_store_publication_occurs"),
             ("no credential reveal", "test_the_credential_is_never_revealed"),
-            ("no execution-like method", "test_the_composition_has_no_execution_like_method"),
-            ("no caller anywhere", "test_nothing_constructs_the_composition_outside_this_file"),
+            ("no execution-like callable", "test_the_module_has_no_execution_like_callable"),
+            ("no escaping component", "test_no_executable_component_escapes_the_preflight"),
+            ("no retained state", "test_the_module_holds_no_stateful_composition_object"),
+            (
+                "no durable component assignment",
+                "test_no_assignment_stores_a_constructed_component_anywhere_durable",
+            ),
+            ("no returned component or closure", "test_the_module_returns_no_component_closure"),
+            (
+                "every adversarial result value",
+                "test_the_result_refuses_a_value_no_validated_plan_could_produce",
+            ),
+            ("every legitimate boundary", "test_the_result_accepts_every_legitimate_boundary"),
+            ("a transport without get", "test_a_transport_without_get_is_refused"),
+            ("a frozen response ceiling", "test_the_transport_ceiling_is_read_exactly_once"),
+            (
+                "a mutating transport",
+                "test_changing_the_transport_after_construction_cannot_move_the_ceiling",
+            ),
+            ("no caller anywhere", "test_nothing_calls_the_composition_outside_this_file"),
             ("the leak canaries", "test_no_canary_reaches_the_result_its_repr_or_captured_output"),
         ):
             f.check(
@@ -5140,7 +5331,8 @@ def main() -> int:
         flat = " ".join(body.replace("**", "").split())
         f.check(
             f"{name} records that one dormant composition root exists",
-            "ADR-0014" in flat and "composition root      EXISTS" in body,
+            "ADR-0014" in flat
+            and "composition           ONE function, and no stateful object" in body,
             "the standing 'composition root: NONE' claim is no longer true",
         )
         f.check(
@@ -5158,12 +5350,14 @@ def main() -> int:
             all(
                 token in body
                 for token in (
+                    "components            EPHEMERAL LOCALS",
                     "execution surface     NONE",
                     "runner                NONE",
+                    "retained state        NONE",
                     "credential retrieval  NONE",
                     "real credential binding: NONE",
                     "real bucket binding: NONE",
-                    "AWS SDK session or client construction: NONE",
+                    "AWS SDK session / S3-client construction: NONE",
                 )
             ),
             "each is separately checkable, so each is separately stated",

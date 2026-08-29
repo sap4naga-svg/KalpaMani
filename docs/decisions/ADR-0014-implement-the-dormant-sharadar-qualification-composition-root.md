@@ -52,9 +52,20 @@ validation.
 
 ## 2. Decision
 
-**Implement one composition root, in one module, with one operation, and no way to run anything.**
+**Implement one composition, in one module, as one function, with no way to run anything.**
 
-`src/kalpamani/data/ingest/sharadar/composition.py`, and no second module.
+`src/kalpamani/data/ingest/sharadar/composition.py`, and no second module —
+`preflight_qualification_composition`, and **no stateful object**.
+
+**Why a function and not a class.** The first revision of this ADR specified a class, and the class
+was wrong. It held `_client`, `_store` and `_runtime`, and this ADR claimed no attribute exposed the
+runtime. That was false: `composition._runtime.execute(plan)` ran, and the slice's own tests reached
+those attributes to prove the components had been built. **A leading underscore is a naming
+convention, not an execution barrier**, and a dormancy claim resting on one is not a claim.
+
+A function makes the property structural. There is no `self` to attach a runtime to, no instance for
+a caller to hold, and no attribute to reach — so *no executable component escapes* stops being a
+rule someone must remember and becomes a fact about the shape. §5.1 records the defect in full.
 
 ### What it constructs, and from what
 
@@ -72,8 +83,19 @@ of any kind, and no default that could reach a real service.
 | `licensed_bucket` | a bucket-shaped string, validated by the store that receives it |
 | `clock` | an object satisfying `QualificationClock` |
 
-From those it builds `SharadarClient`, `S3ResearchObjectStore` and `QualificationRuntime`, and keeps
-all three private. **It builds nothing else, and it discovers nothing.**
+It also takes the `plan` to check, because a function that validated nothing would have no reason
+to build anything.
+
+From those it builds `SharadarClient`, `S3ResearchObjectStore` and `QualificationRuntime` as **local
+variables**, and returns only the closed result. **It builds nothing else, and it discovers
+nothing.** When the call returns, the client, the store, the runtime, the credential, the transport,
+the S3 client, the bucket string, the clock and the plan are all unreachable: nothing holds them.
+
+**Precisely what "no construction" does and does not mean here.** A client, a store and a runtime
+**are** constructed — from values a caller hands in — and tests construct a synthetic bucket string
+and a synthetic store. What does not exist anywhere is an **AWS SDK session or S3-client
+construction**, a **real** bucket binding, a **real** credential binding, or any credential source.
+The credential is held by the client for the duration of one call and is unreachable after it.
 
 **Validation is delegated, not duplicated.** The credential's exactness, the timeout range, the
 retry policy's shape, the bucket's grammar, the S3 client's two operations and the clock's one
@@ -113,10 +135,52 @@ no subject field, no payload field, no backend-message field and no free-text fi
 nowhere to be, and `__post_init__` enforces the shape at runtime rather than leaving it to
 annotations, which are a static claim.
 
+**The result must describe a plan that could actually have passed.** The first revision accepted
+zero for every count while still reporting `VALIDATED_OFFLINE`, so an independently constructed
+result could claim a run of no requests, no attempts and no bytes had been validated. No plan
+produces those numbers. Every count is now bounded by the **same compiled constants** the plan and
+the client are held to — `MAX_REQUESTS`, `MAX_ATTEMPTS_CEILING`, `MAX_RESPONSE_BYTES`,
+`MAX_RUN_BYTES`, `MAX_RETRY_BUDGET` — with no second set of numbers to drift, and the two cross-field
+rules the runtime itself applies are re-checked: the response ceiling may not exceed the run ceiling,
+and `requests × (attempts − 1)` may not exceed the retry budget. A retry budget of zero stays
+legitimate, because `max_attempts=1` takes no retry.
+
 The numbers are **derived, never restated**: the request count from the plan's own generator, the
 attempt ceiling from the injected client's retry policy, the response ceiling from the stricter of
 the client and the plan. A preflight reporting declared intentions rather than effective bounds
 would describe a run other than the one that would happen.
+
+### The transport contract is enforced where it is owned
+
+`SharadarClient.__init__` did not check that the injected transport could perform a request. An
+object carrying only a plausible `max_response_bytes` composed and validated cleanly while being
+unable to fetch anything — a `Protocol` annotation is a static claim, and nothing checked it.
+
+The client now requires a **callable `get`**, and converts a missing, non-callable or
+exception-raising member lookup into its existing sanitized `BUILD: REQUEST_MALFORMED` refusal, from
+`None`. The dependency's own exception text never reaches the refusal. This is fixed at the client,
+which is the thing that calls `get`, rather than duplicated in the composition.
+
+The declared response ceiling is now **resolved once, during client construction, and stored**. An
+earlier revision asked the transport on every access, which made the ceiling a *view of a mutable
+dependency*: a plan could be validated against one number and executed against another, because the
+object that declared it is free to change its mind in between. **A bound is not a bound if the thing
+it bounds can move it.** The conservative fallback is kept — a transport that does not declare a
+valid ceiling is assumed able to return the most any transport may, so a caller budgeting against
+this number cannot under-count — but a *raising* declaration is not absorbed: an object whose
+attribute access raises is not one that declined to answer.
+
+### One acquisition-mode constant, in the module that owns it
+
+The first revision defined `QUALIFICATION_ACQUISITION_MODE` in the composition while the runtime
+separately named `AcquisitionMode.QUALIFICATION`, and the composition's comment claimed it read the
+runtime's contract. **It did not.** Two independent statements of one fact is a dual-write in every
+sense that matters, and the interesting case is the one where they disagree.
+
+The constant is now defined **once**, in `qualification.py`, exported from there, and imported by
+the runtime when it records retrieval metadata and by the composition when it reports the mode. A
+test asserts exactly one assignment defines it. There is still no plan field, caller parameter,
+conditional derivation or override.
 
 ### The status word is a control
 
@@ -133,10 +197,11 @@ run should happen.
 
 ### There is no execution surface
 
-No `execute`, `run`, `fetch`, `publish`, `upload` or any private spelling of one; no attribute
-exposing the runtime for a caller to call `execute` on; no CLI, no module entry point, no console
-script, no scheduled task, no ECS task, no Lambda, no Terraform resource, no Docker image. The class
-defines exactly three methods: `__init__`, `__repr__` and `preflight`.
+No `execute`, `run`, `fetch`, `publish`, `upload` or any private spelling of one; **no object to
+hold a runtime and no attribute to reach one through**; no CLI, no module entry point, no console
+script, no scheduled task, no ECS task, no Lambda, no Terraform resource, no Docker image. The
+module defines exactly one public callable, and its only `return` of a constructed value is the
+closed result.
 
 **The module never spells `execute` at all**, which is checked over docstring-stripped code.
 
@@ -233,14 +298,20 @@ Enforced by test, not by review:
 |---|---|
 | every input is required, keyword-only, and has no default | signature inspection, plus a parametrised omission per input |
 | no dependency default can reach a real service | the pacer is required and exactly typed, because the client's own `None` default builds one from `time` |
-| the three accepted components are constructed | exact-type assertions on the private attributes |
-| the components stay private | `__slots__` and the class's public surface, which is exactly `{"preflight"}` |
+| the three accepted components are constructed | observed by what only each could have done: the client resolves the transport ceiling, the store refuses a bad bucket, the runtime probes the clock. **Not** by reaching a private attribute — that reach *was* the defect |
+| no executable component escapes | everything reachable from the result is walked; no client, store, runtime or credential is in it |
+| no component is stored durably | AST: a constructed component may be assigned only to a bare local; no module-level state but `__all__` |
+| no component, closure or bound method is returned | AST over every `return` in the module |
+| there is no stateful composition object | the module's classes are exactly the status enum and the result |
 | preflight calls `validate`, never `execute` | both patched and counted; `execute` raises if reached |
 | a bounded plan yields `VALIDATED_OFFLINE` | end to end on synthetic fakes |
 | the counts are derived from the plan and the client | a changed retry policy moves the reported ceiling; the response ceiling follows the transport |
 | `QUALIFICATION` is fixed and unsupplied | no mode parameter on the composition, on preflight, on the plan or on the limits; a non-qualification mode is refused by the result |
 | the profile is exactly `PROVIDER_REALISTIC_PIT` | identity assertion, and `PUBLIC_PIT` is absent from the module |
-| the result is closed and immutable | frozen, slotted, subclass-refused, near-miss values rejected including `True` as a count |
+| the result is closed and immutable | frozen, slotted, subclass-refused |
+| the result cannot describe an impossible run | 25 adversarial cases — every prohibited zero, every value above its compiled ceiling, a response ceiling above the run ceiling, retry arithmetic above the budget, booleans, negatives, floats, strings, `None`, and a bare token where a member belongs |
+| every legitimate boundary is still accepted | 8 cases including `max_attempts=1` with `retry_budget=0`, equal byte ceilings, and retry arithmetic exactly at the budget |
+| the bounds come from the compiled constants | the five constant names appear in the module |
 | refusal happens before any activity | a bad bucket, timeout, clock, plan or ceiling, each with transport and S3 call counts asserted at zero |
 | provider transport calls | **zero**, counted on a fake that raises if called |
 | S3 `put_object` / `head_object` calls | **zero**, counted the same way, through a real `S3ResearchObjectStore` |
@@ -248,7 +319,11 @@ Enforced by test, not by review:
 | `reveal()` calls | **zero**, measured by patching `SharadarCredential.reveal` |
 | clock reads | exactly one, and only because `validate` probes it |
 | no leak | a secret-shaped, a bucket-shaped, a backend-message-shaped and a subject-shaped canary, each absent from the result, its fields, both reprs, `str`, every refusal and captured output |
-| no execution-like method | regex over the public and private method names, dunders excluded by shape |
+| the transport must be able to perform a request | a missing `get`, a non-callable `get`, a raising lookup and a raising ceiling, each refused and each sanitized |
+| the response ceiling is resolved once | the transport counts its own reads: exactly one, and repeated access does not increase it |
+| a mutating transport cannot move a validated bound | the declaration is changed after construction; the client and the reported preflight are unmoved |
+| one assignment defines the acquisition-mode constant | AST over `src/` |
+| no execution-like callable | regex over the module's public and private callables, dunders excluded by shape |
 | exactly three methods on the class | AST over the class body |
 | the module never names `execute` | docstring-stripped source scan |
 | no entry point, CLI, subprocess, file read or `Path` | docstring-stripped source scan |
@@ -264,3 +339,33 @@ Enforced by test, not by review:
 bucket is a synthetic name, the transport and S3 client raise if called, and the clock is a fixed
 instant. Nothing here contacts a provider, AWS or a network, and no credential, bucket, endpoint or
 real-data path becomes constructible.
+
+### 5.1 Four defects this ADR's first revision contained
+
+Recorded because they are the reason several rows above exist, and because a correction that hides
+what it corrected teaches a later reader nothing.
+
+**An executable runtime escaped.** The composition was a class holding `_client`, `_store` and
+`_runtime`. This ADR claimed no attribute exposed the runtime, that there was no way to run
+anything, and that a first authenticated run would need new execution code. All three were false:
+`composition._runtime.execute(plan)` ran, using only what the object already handed out. The slice's
+own tests reached those attributes with `object.__getattribute__` to prove the components had been
+built — **which was the demonstration of the defect, not evidence of safety**. The correction is a
+module-level function, so the property is structural rather than a convention.
+
+**The result could describe an impossible run.** `__post_init__` accepted zero for every count while
+still reporting `VALIDATED_OFFLINE`. No plan produces zero requests, zero attempts and zero bytes,
+so an independently constructed result could claim a validation that could not have happened.
+
+**A malformed transport passed preflight.** `SharadarClient` never checked that the injected
+transport could perform a request, so an object carrying only a plausible `max_response_bytes`
+composed and validated cleanly. The ceiling was also re-read from the dependency on every access,
+which made a validated bound movable after the fact.
+
+**The acquisition mode was stated twice.** The composition defined its own constant while the runtime
+named the member directly, and a comment claimed the composition read the runtime's contract. It did
+not; they were two independent statements that could drift.
+
+**The shape of all four is the same:** a property asserted in prose and enforced nowhere, or enforced
+on one path and assumed on another. Each correction replaces the assertion with something a test can
+falsify.
