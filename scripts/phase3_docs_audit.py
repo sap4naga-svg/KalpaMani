@@ -902,15 +902,50 @@ PRE_MERGE_STATUS_WORDING: Final[tuple[str, ...]] = (
 )
 
 
-#: The request-count rows a current-status document must carry.
+#: The invocation-count rows a current-status document must carry.
 #:
-#: ADR-0016's correction *is* these counts. A document that describes three
-#: outcomes without them has described three names for one behaviour.
+#: ADR-0016's correction *is* these counts. A document that describes the
+#: outcomes without them has described several names for one behaviour.
+#:
+#: The third column counts calls into the injected client's ``get_secret_value``
+#: method -- which is what a counter can see. It is deliberately **not** headed
+#: "requests": see :data:`ADR_0016_INVOCATION_CONFLATIONS`.
 ADR_0016_COUNT_ROWS: Final[tuple[str, ...]] = (
-    "authorization / profile / identity / bucket            0        0                0",
-    "REFUSED_SECRET_IDENTIFIER                              1        0                0",
-    "REFUSED_DEPENDENCY at client construction              1        1                0",
-    "REFUSED_CREDENTIAL                                     1        1                1",
+    "authorization / profile / identity / bucket            0        0             0",
+    "secrets-boundary import refusal                        0        0             0",
+    "REFUSED_SECRET_IDENTIFIER                              1        0             0",
+    "REFUSED_DEPENDENCY at client construction              1        1             0",
+    "REFUSED_CREDENTIAL                                     1        1             1",
+    "REFUSED_DEPENDENCY after the credential                1        1             1",
+    "completed synthetic offline preflight                  1        1             1",
+)
+
+#: The sentence a current-status document must carry to keep the two claims
+#: apart.
+#:
+#: A ``botocore`` client validates parameters locally and can reject a call after
+#: the method is entered and before anything leaves the machine. The synthetic
+#: counter therefore establishes an invocation and nothing about the network.
+ADR_0016_INVOCATION_SENTENCE: Final = "A method invocation is not a proven AWS network request."
+
+#: Wording that reads a method counter as proof that AWS was contacted.
+#:
+#: Every entry is the **affirmative** form, like the other two refusal lists
+#: here: a document has to be able to say "AWS network requests from this path:
+#: ZERO", which is established by no client ever having existed, while being
+#: unable to say the counter proved a request.
+ADR_0016_INVOCATION_CONFLATIONS: Final[tuple[str, ...]] = (
+    "GETSECRETVALUE REQUESTS ISSUED",
+    "WITNESSED AWS REQUEST",
+    "WITNESSED AWS NETWORK REQUEST",
+    "WITNESSED REQUEST COUNT",
+    "REQUEST COUNTS ARE WITNESSED",
+    "PROVEN AWS REQUEST",
+    "PROVES AN AWS REQUEST",
+    "PROVES THAT AWS RECEIVED",
+    "THE COUNTER PROVES A REQUEST",
+    "COUNTED AWS REQUESTS",
+    "EXACTLY ONE AWS REQUEST",
 )
 
 #: Affirmative claims about things that have not happened.
@@ -1360,6 +1395,29 @@ def _emitted_preflight_sentences(path: Path) -> str:
             if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Constant):
                 sentences.append(str(statement.value.value))
     return " ".join(sentences)
+
+
+def _function_body(path: Path, name: str) -> str:
+    """One function's executable body, docstring stripped, unparsed.
+
+    Scoped to the function so a guard about what a *classifier* may contain is
+    not satisfied or defeated by the module's prose about it. Docstrings are
+    dropped for the reason `_executable_python` gives: a module has to be able
+    to explain the outcome it refuses to return.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            body = list(node.body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            return ast.unparse(ast.Module(body=body, type_ignores=[]))
+    return ""
 
 
 def _outcome_sentence(path: Path, member: str) -> str:
@@ -6862,10 +6920,31 @@ def main() -> int:
             "the environment fact is evidence, and evidence that is not written down is lost",
         )
         f.check(
-            "ADR-0016 states that no GetSecretValue request occurred",
-            "no `GetSecretValue` request could have been issued" in adr16
-            and "requests issued by this repository: zero" in flat16.lower(),
-            "the false implication was that a request had reached AWS; the record must deny it",
+            "ADR-0016 states that no invocation and no AWS network request occurred",
+            "no `get_secret_value` invocation could have occurred" in adr16
+            and "invocations by this repository: zero" in flat16.lower(),
+            "the false implication was that AWS had been contacted; the record must deny it",
+        )
+        f.check(
+            "ADR-0016 keeps a method invocation apart from an AWS network request",
+            ADR_0016_INVOCATION_SENTENCE in adr16,
+            "a counter sees a method call; it does not see the wire",
+        )
+        f.check(
+            "ADR-0016 reads no counter as proof that AWS was contacted",
+            not [
+                claim
+                for claim in ADR_0016_INVOCATION_CONFLATIONS
+                if claim in " ".join(adr16.replace("**", "").split()).upper()
+            ],
+            "a smaller version of the mistake this ADR was written to correct",
+        )
+        f.check(
+            "ADR-0016 records the first correction round",
+            "correction round 1" in flat16.lower()
+            and "credential-default" in flat16.lower()
+            and "identifier grammar" in flat16.lower(),
+            "a correction to a correction is recorded, not silently substituted",
         )
         f.check(
             "ADR-0016 names the incorrect mapping it corrects",
@@ -6948,17 +7027,50 @@ def main() -> int:
             "one member for three stages is what misreported a missing package",
         )
         f.check(
+            "the entry point has a word for a refusal it cannot classify",
+            "REFUSED_UNCLASSIFIED" in boundaries,
+            "not knowing which boundary was reached is not a credential fact",
+        )
+        f.check(
+            "no credential default survives in the classifier",
+            "REFUSED_CREDENTIAL" not in _function_body(BINDING_PREFLIGHT, "_secret_failure_outcome")
+            and "SECRET_FAILURE_OUTCOME.get(token)"
+            in _function_body(BINDING_PREFLIGHT, "_secret_failure_outcome"),
+            "a .get default and a non-string branch both recreated the false claim",
+        )
+        f.check(
+            "an unreadable or unmapped refusal is unclassified, not a credential",
+            _function_body(BINDING_PREFLIGHT, "_secret_failure_outcome").count(
+                "REFUSED_UNCLASSIFIED"
+            )
+            == 3,
+            "hostile attribute access, a non-string token and an unmapped token",
+        )
+        f.check(
+            "an unexpected exception from the retrieval is not a credential claim",
+            "does not establish that `get_secret_value`" in read(BINDING_PREFLIGHT)
+            and "REFUSED_CREDENTIAL"
+            not in _function_body(BINDING_PREFLIGHT, "run_binding_preflight"),
+            "an exception of an unknown type says nothing about what was invoked",
+        )
+        f.check(
+            "the non-member outcome fallback claims nothing either",
+            "else PreflightOutcome.REFUSED_UNCLASSIFIED" in boundaries,
+            "it asserted a dependency failure on evidence that established none",
+        )
+        f.check(
             "the superseded plural member survives nowhere in the entry point",
             "REFUSED_DEPENDENCIES" not in read(BINDING_PREFLIGHT),
             "a rename, not a synonym: an alias would let one stage answer to two names",
         )
         f.check(
-            "neither pre-request refusal is worded as a credential failure",
+            "no refusal short of the invocation is worded as a credential failure",
             not any(
                 "credential" in sentence
                 for sentence in (
                     _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_SECRET_IDENTIFIER"),
                     _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_DEPENDENCY"),
+                    _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_UNCLASSIFIED"),
                 )
             )
             and "credential" in _outcome_sentence(BINDING_PREFLIGHT, "REFUSED_CREDENTIAL"),
@@ -6975,6 +7087,54 @@ def main() -> int:
             "is_usable_secret_identifier(secret_id)" in boundaries
             and "is_usable_secret_identifier" in _executable_python(SECRETS_BOUNDARY),
             "two spellings of one rule disagree about which outcome an operator sees",
+        )
+    if SECRETS_BOUNDARY.is_file():
+        grammar = _executable_python(SECRETS_BOUNDARY)
+        f.check(
+            "the identifier rule is a Secrets Manager grammar, not a printability test",
+            all(
+                token in grammar
+                for token in (
+                    "_is_secret_name",
+                    "_is_complete_secret_arn",
+                    "_AWS_PARTITIONS",
+                    "_AWS_REGION",
+                    "_AWS_ACCOUNT",
+                    "_ARN_GENERATED_SUFFIX",
+                    "MAX_SECRET_ID_LENGTH",
+                    "MAX_SECRET_NAME_LENGTH",
+                )
+            ),
+            "a printable unspaced string reaches a client that rejects it locally",
+        )
+        f.check(
+            "the ARN grammar pins every field it can",
+            all(
+                token in grammar
+                for token in (
+                    # Exact equality, not mere presence: a guard satisfied by the
+                    # *name* appearing anywhere would pass a grammar that had been
+                    # widened to `service in {'secretsmanager', 'ssm'}`.
+                    "service == 'secretsmanager'",
+                    "resource_type == 'secret'",
+                    "len(fields) != 7",
+                )
+            ),
+            "service, resource type and field count, or it is not a complete ARN",
+        )
+        f.check(
+            "the identifier grammar transforms nothing",
+            not any(
+                transform in _function_body(SECRETS_BOUNDARY, "is_usable_secret_identifier")
+                for transform in (".strip()", ".lower()", ".upper()", ".replace(")
+            ),
+            "a verdict about a normalised string is a verdict about a different string",
+        )
+        f.check(
+            "the boundary compiles no account, ARN or identifier value",
+            not any(marker in read(SECRETS_BOUNDARY) for marker in ("arn:aws:", "amazonaws.com"))
+            and re.search(r"\b\d{12}\b", read(SECRETS_BOUNDARY)) is None,
+            "a grammar needs a shape, never an instance",
         )
         f.check(
             "the secrets-boundary failures are classified by a total closed mapping",
@@ -7071,6 +7231,43 @@ def main() -> int:
                 "a refusing path needing neither SDK nor package",
                 "test_the_refusing_default_path_needs_neither_the_sdk_nor_the_package",
             ),
+            (
+                "every well-formed identifier admitted",
+                "test_the_grammar_admits_every_well_formed_identifier",
+            ),
+            (
+                "every malformed identifier refused",
+                "test_the_grammar_refuses_every_malformed_identifier",
+            ),
+            (
+                "a malformed identifier never reaching a client",
+                "test_a_malformed_identifier_never_reaches_a_client",
+            ),
+            ("a grammar that transforms nothing", "test_the_grammar_transforms_nothing"),
+            (
+                "an unclassifiable refusal claiming no credential",
+                "test_an_unclassifiable_refusal_never_claims_a_credential",
+            ),
+            (
+                "an unclassifiable refusal disclosing nothing",
+                "test_an_unclassifiable_refusal_surfaces_without_disclosure",
+            ),
+            (
+                "an unexpected boundary exception as a dependency refusal",
+                "test_an_unexpected_exception_from_the_boundary_is_a_dependency_refusal",
+            ),
+            (
+                "no credential default in the classifier",
+                "test_the_classifier_has_no_credential_default",
+            ),
+            (
+                "credential reachable only from the four mapped members",
+                "test_credential_is_reachable_only_from_the_four_mapped_members",
+            ),
+            (
+                "a non-member outcome claiming no dependency",
+                "test_a_non_member_outcome_is_unclassified_rather_than_a_dependency_claim",
+            ),
         ):
             f.check(
                 f"a failure-boundary test covers {label}",
@@ -7078,11 +7275,17 @@ def main() -> int:
                 "ADR-0016's verification table must name tests that exist",
             )
         f.check(
-            "the request counts are read from counters rather than asserted",
+            "the invocation counts are read from counters rather than asserted",
             "self.secrets_factory_calls += 1" in boundary_tests
             and "self.calls += 1" in boundary_tests
             and "_counts(harness)" in boundary_tests,
             "a count argued from which line raised is the inference that misreported",
+        )
+        f.check(
+            "the synthetic account component is built rather than committed",
+            'SYNTHETIC_ACCOUNT: Final = "9" * 12' in boundary_tests
+            and re.search(r"\b\d{12}\b", boundary_tests) is None,
+            "a grammar test needs twelve digits; a repository does not need the literal",
         )
 
     # -- the current documentation --------------------------------------------
@@ -7113,15 +7316,36 @@ def main() -> int:
             "three stages, three closed outcomes, and a reader must see which is which",
         )
         f.check(
-            f"{name} states the witnessed request-count rules",
+            f"{name} states the witnessed invocation-count rules",
             all(row in body for row in ADR_0016_COUNT_ROWS),
             "the counts are the correction; a document without them describes the old behaviour",
         )
         f.check(
-            f"{name} states that no request was issued and no credential retrieved",
-            "GetSecretValue requests issued: ZERO" in body
+            f"{name} states that nothing was invoked and no credential retrieved",
+            "get_secret_value invocations by this repository: ZERO" in body
+            and "AWS network requests from this path: ZERO" in body
             and "real credential retrieved: NONE" in body,
-            "the defect implied a request had reached AWS; the record must deny it plainly",
+            "the defect implied AWS had been contacted; the record must deny it plainly",
+        )
+        f.check(
+            f"{name} keeps a method invocation apart from an AWS network request",
+            ADR_0016_INVOCATION_SENTENCE in body,
+            "a counter sees a method call; it does not see the wire",
+        )
+        f.check(
+            f"{name} reads no counter as proof that AWS was contacted",
+            not [claim for claim in ADR_0016_INVOCATION_CONFLATIONS if claim in upper],
+            "a smaller version of the mistake this correction exists to remove",
+        )
+        f.check(
+            f"{name} records the tightened identifier grammar",
+            "a well-formed secret name or a complete secret ARN" in flat,
+            "the earlier rule admitted shapes a client rejects locally, after the call began",
+        )
+        f.check(
+            f"{name} records that an unclassifiable refusal claims nothing",
+            "`REFUSED_UNCLASSIFIED`" in body,
+            "the two places that needed a word for 'I do not know' were asserting a boundary",
         )
         f.check(
             f"{name} keeps the operational environment unsynchronized and unauthorized",
@@ -7136,7 +7360,7 @@ def main() -> int:
         )
         f.check(
             f"{name} does not describe an identifier failure as credential retrieval",
-            "No client is built and nothing is asked of AWS." in flat,
+            "No client is built, so nothing is invoked and nothing can reach AWS." in flat,
             "the identifier outcome is refused before anything is constructed or sent",
         )
         f.check(

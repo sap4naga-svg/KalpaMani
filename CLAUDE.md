@@ -740,7 +740,7 @@ authorized**.
 [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) corrects
 one thing ADR-0015 produced, and **supersedes only that**: a single `REFUSED_CREDENTIAL` outcome
 covered the secret-identifier source, the local SDK and client construction, and the one
-`GetSecretValue` call. **ADR-0015 is not edited** — it is the immutable record of the decision that
+`get_secret_value` call. **ADR-0015 is not edited** — it is the immutable record of the decision that
 was accepted.
 
 **Status: PROPOSED — accepted on the merge of the pull request that introduces it, and carrying no
@@ -751,34 +751,51 @@ with `REFUSED_IDENTITY`; the owner refreshed the approved AWS SSO session; the s
 profile pin, the identity gate and licensed-bucket resolution, and refused with `REFUSED_CREDENTIAL`.
 A read-only diagnostic then established that the operational virtual environment contains **neither
 `boto3` nor `botocore`** — so `_secrets_client()` raised `ModuleNotFoundError` inside the constructor,
-inside the same broad exception boundary that mapped every failure in the stage to the credential, and
-**no `GetSecretValue` request could have been issued.**
+inside the same broad exception boundary that mapped every failure in the stage to the credential.
+**No client existed, so there was no `get_secret_value` invocation and no AWS network request.**
 
-The command reported a private-credential failure for a missing local package. That would have sent an
-operator to inspect a secret, a policy and an account for a problem in none of them, and it implied a
-request had reached AWS when none had. Because the identifier source was not separately classified,
-whether it is configured at all **remains unknown** — the run cannot say, and nothing here guesses.
+The command reported a private-credential failure for a missing local package. That would have sent
+an operator to inspect a secret, a policy and an account for a problem in none of them, and it
+implied AWS had been contacted when it had not. Because the identifier source was not separately
+classified, whether it is configured at all **remains unknown** — the run cannot say, and nothing
+here guesses.
 
 ```
-outcome                                       identifier   client   GetSecretValue
-authorization / profile / identity / bucket            0        0                0
-REFUSED_SECRET_IDENTIFIER                              1        0                0
-REFUSED_DEPENDENCY at client construction              1        1                0
-REFUSED_CREDENTIAL                                     1        1                1
-completed synthetic offline preflight                  1        1                1
+outcome                                       identifier   client   invocations
+authorization / profile / identity / bucket            0        0             0
+secrets-boundary import refusal                        0        0             0
+REFUSED_SECRET_IDENTIFIER                              1        0             0
+REFUSED_DEPENDENCY at client construction              1        1             0
+REFUSED_CREDENTIAL                                     1        1             1
+REFUSED_DEPENDENCY after the credential                1        1             1
+completed synthetic offline preflight                  1        1             1
 
-GetSecretValue requests issued: ZERO   ·   real credential retrieved: NONE
+get_secret_value invocations by this repository: ZERO
+AWS network requests from this path: ZERO -- no client has ever been constructed
+real credential retrieved: NONE
 operational environment synchronized: NOT DONE, NOT AUTHORIZED
 another binding-preflight attempt: NOT AUTHORIZED
 ```
 
+**A method invocation is not a proven AWS network request.** The third column counts calls into the
+injected client's `get_secret_value` method, which is what a counter can see. A real client validates
+parameters locally and can reject a call after the method is entered and before anything leaves the
+machine, so `REFUSED_CREDENTIAL` establishes **one admitted invocation** and not that AWS received
+anything. The historical missing-SDK run establishes **zero invocations and zero AWS network
+requests**, because no client existed to make either — a stronger fact, resting on absence rather
+than on a counter.
+
 | | |
 |---|---|
-| **`REFUSED_SECRET_IDENTIFIER`** | the configured source is unavailable, raises, returns the wrong exact type, returns an empty value, or returns a value the existing identifier boundary refuses. **No client is built and nothing is asked of AWS.** The rule is `is_usable_secret_identifier` — the secrets boundary's own, imported rather than restated, because two spellings of one rule is how a value one stage admits becomes a value the next refuses |
-| **`REFUSED_DEPENDENCY`** | the SDK is unavailable, an import fails, the client factory is unavailable or raises, construction fails, the constructed client cannot serve the one operation, the secrets boundary will not import, or a dependency built after the credential fails. **It never implies a credential was requested.** The renamed `REFUSED_DEPENDENCIES` — a rename, not a synonym, and no alias survives |
-| **`REFUSED_CREDENTIAL`** | **and only this** follows an attempted `GetSecretValue`: the call raised or was refused, the response is structurally invalid, `SecretString` is absent, binary came back, or the returned string is empty or invalid under the existing credential contract |
+| **`REFUSED_SECRET_IDENTIFIER`** | the configured source is unavailable, raises, returns the wrong exact type, returns an empty value, or returns a value the identifier grammar refuses. **No client is built, so nothing is invoked and nothing can reach AWS.** The rule is `is_usable_secret_identifier` — the secrets boundary's own, imported rather than restated, because two spellings of one rule is how a value one stage admits becomes a value the next refuses |
+| **`REFUSED_DEPENDENCY`** | the SDK is unavailable, an import fails, the client factory is unavailable or raises, construction fails, the constructed client cannot serve the one operation, the secrets boundary will not import, an exception of an unknown type escapes the retrieval, or a dependency built after the credential fails. **It never implies a credential was requested.** The renamed `REFUSED_DEPENDENCIES` — a rename, not a synonym, and no alias survives |
+| **`REFUSED_CREDENTIAL`** | **and only this** follows an admitted `get_secret_value` invocation: the call raised or was refused, the response is structurally invalid, `SecretString` is absent, binary came back, or the returned string is empty or invalid under the existing credential contract |
+| **`REFUSED_UNCLASSIFIED`** | this program could not work out what the boundary refused — no `failure`, a `failure` with no `value`, a non-string token, an unrecognised token, or attribute access that raises. Added in correction round 1, because the two places that needed a word for *I do not know* were answering `REFUSED_CREDENTIAL` and `REFUSED_DEPENDENCY`, each a positive claim about a boundary that may never have been reached |
+| **No credential default** | `REFUSED_CREDENTIAL` is reachable **only** through an explicit mapping entry naming a member known to follow an admitted invocation. No `.get` default, no `else` branch, no catch-all. A vocabulary member added later by someone who did not run the totality test is `REFUSED_UNCLASSIFIED`, never a credential claim |
+| **A real identifier grammar** | the identifier must be **a well-formed secret name or a complete secret ARN** — name characters exactly `A–Z a–z 0–9 / _ + = . @ -` within 512, or seven ARN fields with a recognised partition, the `secretsmanager` service, a syntactically valid Region, a twelve-digit account, the `secret` resource type and the generated six-character suffix. The earlier rule was "printable, and unspaced", which admitted shapes a client rejects locally *after* the method was entered — one invocation, then read as a credential failure |
+| **Nothing is transformed** | the grammar answers a question about the identifier. It does not trim, normalise, rebuild, return or render it: a verdict about a normalised string is a verdict about a different string |
 | **Counts are witnessed** | the synthetic suite drives the preflight with factories and a client that count what was asked of them, and every count above is read from those counters. A count argued from which line raised is the inference that produced a false report against the real foundation |
-| **The classification is total** | `SECRET_FAILURE_OUTCOME` maps every `SecretRetrievalFailure` member to an outcome and a test asserts it, so a new member cannot arrive and be swept into "the credential failed" by a default. The two the boundary raises *before* it calls the backend map to the dependency and identifier outcomes, never to the credential |
+| **The classification is total** | `SECRET_FAILURE_OUTCOME` maps every `SecretRetrievalFailure` member to an outcome and a test asserts it. The two the boundary raises *before* it calls the backend map to the dependency and identifier outcomes, never to the credential |
 | **Nothing leaks, still** | an import error names a path, a client constructor names a profile or a region, a backend exception quotes the secret name. Every refusal is a closed member raised `from None`, and canaries prove the dependency exception, the identifier and the backend message are absent from every refusal, both reprs, stdout and stderr |
 | **The refusing default path** | needs neither the SDK nor the data platform. Every `kalpamani` import in the entry point sits inside a function body, so a machine with a broken environment still gets a clean refusal rather than a traceback — which is the class of machine this defect was found on |
 
@@ -790,13 +807,15 @@ disappear and left the defect in place, on a path that only runs when something 
 wrong. Synchronizing that environment is a separate action under separate authorization.
 
 **Nothing else moved.** Secret-identifier access, SDK construction and credential retrieval all still
-sit behind the identity and bucket gates. The singleton authorization capability, the operator flag,
-the identifier staying out of `argv`, the fixed environment-variable name, the profile and region
-pins, the governed identity gate and state read, the licensed-bucket output, `SystemClock` in the
-operator path, `reveal()` at **zero** during preflight, offline composition only, no provider-fetch
-operation and no object-publication operation are all unchanged. **G1 OPEN · G2 OPEN · G3 CLOSED ·
-G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL
-**DEFERRED**, live trading **HARD-DISABLED**.
+sit behind the identity and bucket gates. The guarded secrets-boundary import runs before the
+identifier source, which is why an import refusal shows zero identifier resolutions rather than one —
+stated rather than rounded off. The singleton authorization capability, the operator flag, the
+identifier staying out of `argv`, the fixed environment-variable name, the profile and region pins,
+the governed identity gate and state read, the licensed-bucket output, `SystemClock` in the operator
+path, `reveal()` at **zero** during preflight, offline composition only, no provider-fetch operation
+and no object-publication operation are all unchanged. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**,
+ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live
+trading **HARD-DISABLED**.
 
 ### The Sharadar private-binding preflight — dormant, refused by default, never run
 

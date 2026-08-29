@@ -51,8 +51,9 @@ fixed at the source rather than papered over here.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from kalpamani.data.contracts.errors import PointInTimeError
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
@@ -115,6 +116,81 @@ def _refuse(failure: SecretRetrievalFailure) -> SecretRetrievalError:
     return SecretRetrievalError(failure)
 
 
+#: The ``SecretId`` request-parameter ceiling. A longer value is refused here
+#: rather than handed to a client that would reject it locally anyway -- and a
+#: local parameter rejection arriving at the credential stage is exactly the
+#: misclassification ADR-0016 exists to prevent.
+MAX_SECRET_ID_LENGTH: Final = 2048
+
+#: The Secrets Manager secret-name ceiling.
+MAX_SECRET_NAME_LENGTH: Final = 512
+
+#: The character set a Secrets Manager secret name may draw from: ASCII letters
+#: and digits plus ``/``, ``_``, ``+``, ``=``, ``.``, ``@`` and ``-``.
+#:
+#: Deliberately exact rather than "printable and unspaced". Whitespace, control
+#: characters, a colon and every other punctuation mark are excluded -- a colon
+#: because it is the ARN field separator, and the rest because a value carrying
+#: one is not a name this service will accept and must be refused *here*.
+_SECRET_NAME: Final = re.compile(r"[A-Za-z0-9/_+=.@-]+")
+
+#: The AWS partitions this deployment recognises. Closed, because an
+#: unrecognised partition in an identifier is a configuration error, not a
+#: forward-compatibility feature.
+_AWS_PARTITIONS: Final = frozenset({"aws", "aws-cn", "aws-us-gov"})
+
+#: A syntactically valid Region component. Shape only -- whether a Region exists
+#: is not something this boundary can know, and guessing at a list would refuse
+#: a legitimate Region on the day it opens.
+_AWS_REGION: Final = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
+
+#: An account component: ASCII digits, and exactly twelve of them.
+_AWS_ACCOUNT: Final = re.compile(r"[0-9]{12}")
+
+#: The suffix structure Secrets Manager appends when it generates an ARN: a
+#: hyphen and six alphanumeric characters.
+#:
+#: This is what separates a **complete** ARN from a partial one. It checks that
+#: the structure is *present*; it cannot distinguish a name that happens to end
+#: that way from a generated suffix, because nothing can -- the two are
+#: lexically identical, and that is a property of the ARN format rather than a
+#: gap in this check.
+_ARN_GENERATED_SUFFIX: Final = re.compile(r".+-[A-Za-z0-9]{6}")
+
+
+def _is_secret_name(candidate: str) -> bool:
+    """Whether ``candidate`` is a well-formed Secrets Manager secret name."""
+    return (
+        1 <= len(candidate) <= MAX_SECRET_NAME_LENGTH
+        and _SECRET_NAME.fullmatch(candidate) is not None
+    )
+
+
+def _is_complete_secret_arn(candidate: str) -> bool:
+    """Whether ``candidate`` is a complete Secrets Manager secret ARN.
+
+    Seven colon-separated fields, exactly: ``arn``, a recognised partition, the
+    service, a Region, a twelve-digit account, the resource type ``secret``, and
+    a name carrying the generated suffix structure. A field count other than
+    seven refuses a colon-bearing name as well, which is the same defect seen
+    from the other side.
+    """
+    fields = candidate.split(":")
+    if len(fields) != 7:
+        return False
+    scheme, partition, service, region, account, resource_type, name = fields
+    return (
+        scheme == "arn"
+        and partition in _AWS_PARTITIONS
+        and service == "secretsmanager"
+        and _AWS_REGION.fullmatch(region) is not None
+        and _AWS_ACCOUNT.fullmatch(account) is not None
+        and resource_type == "secret"
+        and _is_secret_name(name)
+        and _ARN_GENERATED_SUFFIX.fullmatch(name) is not None
+    )
+
+
 def is_usable_secret_identifier(candidate: object) -> bool:
     """Whether ``candidate`` is a secret identifier this boundary would accept.
 
@@ -124,21 +200,32 @@ def is_usable_secret_identifier(candidate: object) -> bool:
     the caller admitted becomes an identifier the boundary refuses. One rule,
     one place, two callers.
 
-    Accepted: an exact :class:`str`, non-blank, printable, carrying no
-    whitespace of any kind. A ``str`` subclass is refused rather than rebuilt --
-    the caller's object could change what it reports between the check and the
-    request. Nothing about vendor or AWS naming is inferred: a name and an ARN
-    are both ordinary printable strings, and guessing at a shape would refuse a
-    legitimate identifier on the day it is first used.
+    Accepted: an exact :class:`str` within the ``SecretId`` ceiling that is
+    **either** a well-formed secret name **or** a complete secret ARN. A
+    ``str`` subclass is refused rather than rebuilt -- the caller's object could
+    change what it reports between the check and the call.
 
-    Whitespace is the one structural refusal, and it is not stylistic: a newline
-    in an identifier is how a second parameter gets smuggled into a request.
+    **The earlier rule was "printable, and no whitespace", and that was too
+    broad** (ADR-0016, correction round 1). It admitted identifiers no Secrets
+    Manager client would accept, so a local parameter rejection happened *after*
+    ``get_secret_value`` had been entered and was then reported as a credential
+    failure. Refusing the shape here keeps that classification honest.
+
+    A colon routes the decision, because a name may not contain one: anything
+    carrying a colon is being offered as an ARN and is held to the ARN grammar
+    rather than falling back to the looser one.
+
+    **Nothing is transformed.** The identifier is not trimmed, normalised,
+    rebuilt, lowercased, returned or rendered -- this answers a question about
+    it and nothing else.
     """
-    return (
-        type(candidate) is str
-        and bool(candidate.strip())
-        and not any(character.isspace() or not character.isprintable() for character in candidate)
-    )
+    if type(candidate) is not str:
+        return False
+    if not 1 <= len(candidate) <= MAX_SECRET_ID_LENGTH:
+        return False
+    if ":" in candidate:
+        return _is_complete_secret_arn(candidate)
+    return _is_secret_name(candidate)
 
 
 def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) -> SharadarCredential:
@@ -163,9 +250,11 @@ def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) ->
             operation. A ``Protocol`` annotation is a static claim; this is the
             runtime half.
 
-            ``SECRET_IDENTIFIER_MALFORMED`` -- the identifier is not an exact,
-            non-blank, printable, single-line ``str``. A newline in an identifier
-            is how a second parameter gets smuggled into a request.
+            ``SECRET_IDENTIFIER_MALFORMED`` -- the identifier is neither a
+            well-formed secret name nor a complete secret ARN, as
+            :func:`is_usable_secret_identifier` defines those. Refused **before**
+            ``get_secret_value`` is entered, so a shape this service would reject
+            locally can never be reported as a credential failure.
 
             ``BACKEND_REFUSED`` -- the call raised. The cause is suppressed: a
             backend exception quotes the secret name, usually the ARN and often
@@ -227,6 +316,8 @@ def sharadar_credential_from_secret(*, client: SecretsClient, secret_id: str) ->
 
 
 __all__ = [
+    "MAX_SECRET_ID_LENGTH",
+    "MAX_SECRET_NAME_LENGTH",
     "SecretRetrievalError",
     "SecretRetrievalFailure",
     "SecretsClient",
