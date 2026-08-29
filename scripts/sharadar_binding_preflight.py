@@ -28,7 +28,11 @@ client construction, composition validation or qualification execution.
     third attempt       REFUSED_SECRET_IDENTIFIER at the identifier source
     fourth attempt      REFUSED_IDENTITY at the AWS identity gate
     AWS activity        NOT ZERO identity-gate activity occurred on the attempts
-    fourth-attempt AWS network requests: UNKNOWN -- no diagnosis performed
+    fourth-attempt AWS network requests: UNKNOWN -- no diagnosis in the attempt
+    post-fourth identity diagnosis: COMPLETED
+                                 REFUSED_SSO_SESSION_MISSING_OR_EXPIRED, one
+                                 command, exit 255, its own network count
+                                 UNKNOWN, zero SSO logins, zero repair actions
     Secrets Manager     ZERO     client constructions, get_secret_value
                                  invocations and network requests
     S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
@@ -80,6 +84,13 @@ owner's setup                           contract, invoked the AWS identity
                                         ``KALPAMANI_SHARADAR_SECRET_ID``,
                                         built no client and retrieved no
                                         credential
+a second separately authorized          one ``aws sts get-caller-identity``
+diagnosis, after the fourth attempt     command, exit code 255, classified
+                                        ``REFUSED_SSO_SESSION_MISSING_OR_EXPIRED``
+                                        -- missing and expired **not
+                                        distinguished**; its own network
+                                        count UNKNOWN; no SSO login, no
+                                        repair and no fifth attempt followed
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
@@ -93,9 +104,31 @@ revealed.**
 **Whether the fourth attempt sent an AWS network request is UNKNOWN.** The gate
 was invoked once and did not pass; a gate can fail before anything leaves the
 machine, so neither zero nor one may be claimed here. **No diagnosis was
-performed** -- no ``sts:GetCallerIdentity`` probe and no SSO inspection -- so
-nothing establishes that the AWS SSO session was missing, expired or otherwise
-defective. AWS authentication diagnosis and an SSO refresh are separately gated.
+performed during the attempt itself** -- it made no ``sts:GetCallerIdentity``
+probe and no SSO inspection -- so nothing *the attempt did* establishes why its
+own gate refused.
+
+**A separately authorized diagnosis has since answered that, and it is a
+distinct event** from the one that followed the first attempt. Run after the
+fourth attempt, it invoked one process and one ``aws sts get-caller-identity``
+command, which exited **255** and classified as
+**REFUSED_SSO_SESSION_MISSING_OR_EXPIRED**: the governed SSO session or cached
+token was unavailable or expired. **It does not distinguish missing from
+expired**, and nothing here guesses which. It is the first direct diagnostic
+evidence explaining the fourth attempt's identity refusal, and it revises no
+count -- the attempt's own network total stays UNKNOWN, and so does the
+diagnosis command's, because a CLI call may resolve credentials locally and fail
+before anything leaves the machine. **SSO-login invocations zero,
+authentication-repair actions zero, fifth binding-preflight attempts zero.**
+
+That diagnosis pinned the governed profile in its **child** process, from the
+``EXPECTED_PROFILE`` constant below, because a shell-level pin does not survive
+across separate tool invocations and an unpinned call would fall back to an
+unrelated default profile. The value was never printed or written down.
+
+**Further** AWS authentication diagnosis is not authorized, and an AWS SSO
+refresh or login is separately gated: classifying a session is not permission to
+replace it.
 
 ``KALPAMANI_SHARADAR_SECRET_ID`` is **OWNER-CONFIGURED / NOT YET VERIFIED BY THE
 ENTRY POINT**. It was **UNKNOWN** at the second attempt, which refused on the
@@ -110,9 +143,9 @@ verification by this file: it has not resolved the identifier, has not
 constructed a Secrets Manager client, has not invoked ``get_secret_value`` and
 has retrieved no credential.
 
-**Credential access by this application**, **a fifth binding preflight**, **AWS
-authentication diagnosis or an SSO refresh** and an **authenticated qualification
-run** remain four separate decisions, each still
+**Credential access by this application**, **a fifth binding preflight**, **further
+AWS authentication diagnosis**, **an AWS SSO refresh or login** and an
+**authenticated qualification run** remain five separate decisions, each still
 **NOT AUTHORIZED**, and each requires separate written authorization. This file
 existing does not create a secret, does not read one, and cannot execute a
 qualification run -- there is no code here that could, and a static guard keeps
@@ -991,8 +1024,12 @@ def main(argv: list[str] | None = None) -> int:
 # never been constructed by any attempt: the second refused inside
 # `_secrets_client` before a client existed, and nothing past it was reached.
 # No credential has been retrieved, and no composition preflight or
-# qualification execution has occurred. A fifth attempt, AWS authentication
-# diagnosis and every further operational event remain separately gated.
+# qualification execution has occurred. Diagnosis is no longer entirely future:
+# a separately authorized command run after the fourth attempt classified the
+# governed SSO session or cached token as missing or expired, without
+# distinguishing which, and no SSO login or repair followed it. A fifth
+# attempt, any further AWS authentication diagnosis, an SSO refresh and every
+# other operational event remain separately gated.
 
 
 def _ambient_profile() -> str:
