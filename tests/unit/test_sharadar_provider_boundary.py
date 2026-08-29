@@ -323,21 +323,30 @@ def test_importing_the_provider_package_opens_no_socket() -> None:
 #: opener and performs no I/O, which is what lets *dormant* stop meaning
 #: *untested* without letting a real network transport into the runtime.
 TRANSPORT_TEST = TESTS / "unit" / "test_sharadar_transport.py"
+#: The operator binding preflight, ADR-0015: the one production caller
+#: authorized to construct a real transport, inside a branch that refuses by default.
+BINDING_PREFLIGHT = SCRIPTS / "sharadar_binding_preflight.py"
+BINDING_PREFLIGHT_TEST = TESTS / "unit" / "test_sharadar_binding_preflight.py"
 
 
 def test_no_production_module_or_script_constructs_the_concrete_transport() -> None:
-    """Dormancy where it matters. No runner is authorized in this slice, so none exists.
+    """Dormancy where it still matters. Two named files, and nowhere else.
 
-    The rule is narrower than "nowhere", because the earlier version of it made a
-    guarantee nobody could check: an unconstructed class cannot be proven to pin
-    an origin, refuse a redirect or bound a body. Production code, scripts and
-    unattended runners still may not build one; the dedicated synthetic unit test
-    may, with a fake opener.
+    The rule was already narrower than "nowhere", because an unconstructed class
+    cannot be proven to pin an origin, refuse a redirect or bound a body -- so
+    the dedicated synthetic unit test may build one with a fake opener.
+
+    ADR-0015 added the second: the operator binding preflight builds a real
+    transport inside a factory that only its authorized branch calls. That is the
+    point of the slice, and it is the same trade -- a transport nobody can build
+    is a transport nobody can use, and the preflight refuses by default. Every
+    other production module, script and unattended runner still fails here.
     """
+    allowed = {TRANSPORT_TEST, BINDING_PREFLIGHT, BINDING_PREFLIGHT_TEST}
     offenders: list[str] = []
     for root in (PACKAGE_ROOT, SCRIPTS, TESTS):
         for path in python_files(root):
-            if path == TRANSPORT_TEST:
+            if path in allowed:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

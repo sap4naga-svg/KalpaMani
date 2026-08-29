@@ -714,6 +714,71 @@ authorized**.
 **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3
 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
 
+### The Sharadar private-binding preflight — dormant, refused by default, never run
+
+[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) authorized the last piece nobody had written: the path that will eventually
+supply the private bindings every accepted slice takes by injection. One operator entry point,
+`scripts/sharadar_binding_preflight.py`, and one boundary module,
+`data/ingest/sharadar/secrets.py`.
+
+**Status: accepted effective on the merge of the pull request introducing ADR-0015, and carrying no
+authority before it.** Implemented, code and synthetic validation only.
+
+```
+entry points          ONE      scripts/ only; the installed package re-exports nothing
+default behaviour     REFUSE   no flag, no work -- no lookup, no client, no socket, no read
+authorization         ONE      --i-am-the-operator-authorizing-binding-preflight
+what it authorizes    BINDING PREFLIGHT ONLY -- never a qualification run
+real credential source configured: NONE
+Secrets Manager secret created or read: NONE
+real bucket binding performed: NONE
+AWS requests: ZERO   ·   provider requests: ZERO   ·   S3 object calls: ZERO
+qualification-run execution surface: NONE
+provider-fetch operation: NONE   ·   object-publication operation: NONE
+runner, task, image, scheduler or service: NONE
+```
+
+**Three separate future events, and this is none of them.** Private credential setup, a real binding
+preflight, and an authenticated Sharadar qualification run are three decisions. **Authenticated
+qualification remains NOT AUTHORIZED and has never run.**
+
+| | |
+|---|---|
+| **Refused by default** | an ordinary import or invocation performs no environment lookup, no credential lookup, no SDK construction, no state read, no bucket resolution, no socket and no provider or object-store call. The real factories import what they need *inside their own bodies*, so importing the module pulls in no SDK, no verifier and no `os` |
+| **One unmistakable flag** | `--run`, `--live`, `--execute` and `--force` are each **refused by name**, with a reason, so a wrong reflex fails loudly |
+| **One object, admitted by identity** | two revisions got this wrong. The first took `binding_authorized: bool`, so any importer could pass `True`. The second took an object of an exact type carrying a module-private *mint field* — and **a field is copyable**: `copy.copy` returned a distinct object holding the same field, and admission accepted it, so copying manufactured a second bearer. Review caught the closeout claiming both "copying cannot forge one" and "a shallow copy stays genuine", which cannot both be true |
+| **Nothing to copy, and no route to a second** | admission is now identity against **one** module-level object. `__slots__` is empty; `__new__` refuses once the singleton exists; `__copy__`, `__deepcopy__` and `__reduce__` each refuse, so copying and pickling yield **no object at all**; subclassing refuses. An `object.__new__` instance can still be built and is refused for the reason that matters — it is not *this* object. Unexported, handed over at one place. **Not a claim about hostile runtime introspection** — a process that can reach the module's private names already holds the singleton |
+| **The secret identifier never enters argv** | `--secret-id` put a private identifier in shell history and every process listing, whether or not the program printed it. It now comes from an **injected zero-argument source**, called once, after every gate has passed and immediately before the credential. The production source reads one fixed, non-secret variable **name**, `KALPAMANI_SHARADAR_SECRET_ID`; six command-line spellings are refused by name. The default path and every earlier refusal read **no credential-bearing variable** — `argparse` reads locale and terminal-width variables of its own, which is why the claim is scoped rather than "zero lookups" |
+| **Order is the security property** | authorization → profile → identity gate → licensed bucket → credential → dependencies → offline preflight → closed result. No later stage runs after an earlier refusal, so **a wrong-account session never reaches a secret and a failed gate never reaches a credential**. Proven by counting which stages ran |
+| **No gate is reimplemented** | `AWS_PROFILE` pinning, account matching and the state read come from the existing governed verifier. The entry point contains no `sts` call, no `get-caller-identity`, no `allowed_account_ids` parse and no `terraform` invocation of its own |
+| **Licensed, never CONTROL** | one named Terraform output. The control bucket has a different key, and the entry point never names it — nor the word `CONTROL` |
+| **One secrets operation** | `get_secret_value`, injected. No listing, describing, writing, rotating or deleting exists in the shape. **`SecretString` only** — binary is refused rather than decoded — with no JSON parsing, key guessing, alias, default or fallback |
+| **Straight into the credential** | the value is handed immediately to `SharadarCredential`, never logged, returned or included in a refusal. `reveal()` is called **zero** times during preflight |
+| **Fail closed, say nothing** | every refusal is a closed member raised `from None`; a backend exception quotes the secret name, usually the ARN and often the account |
+| **Offline composition only** | it calls `preflight_qualification_composition` and nothing else. No `execute`, no transport `get`, no `put_object`, no `head_object`, no publication helper |
+| **Output is allowlisted** | a fixed set of sentences through one function that takes a vocabulary member, not a string. No credential, secret identifier, bucket, account, ARN, profile, region, Terraform output, URL, subject or empirical result. `READY`, `APPROVED`, `AUTHORIZED`, `PROCEED`, `QUALIFIED` and `BOUND` are refused anywhere in it |
+| **Exit status** | command success or refusal only — never a qualification verdict, never provider suitability |
+| **Five leak canaries** | a key, a secret identifier, a bucket, an account and a backend message, each proven absent from every stage's refusal, the result, both reprs, stdout and stderr |
+
+**The SDK stays out of the platform.** `boto3` remains the only runtime dependency and **no module
+under `src/` imports it**. The one authorized construction lives in the script, inside the authorized
+branch — so importing the data platform still opens no socket and performs no ambient credential
+discovery.
+
+**Three standing claims are narrowed, not deleted.** *"Nothing constructs an SDK client"*, *"no
+credential source exists"* and *"nothing calls the composition preflight"* were each true while no
+binding path was authorized. What holds now: **exactly one module may construct an SDK client,
+exactly one may call the composition, the credential source refuses by default, and none of it has
+ever been run.** Each clause is a test, and the existing dormancy guards were narrowed rather than
+removed.
+
+**Nothing accepted changed.** `AcquisitionMode.QUALIFICATION` · `PROVIDER_REALISTIC_PIT` · Q7 and Q8
+· `permaticker` · append-only S3 semantics · acquisition identity · the response and run ceilings ·
+no-resume semantics · three-write reporting · CONTROL deferral · provider-neutral contracts · every
+production-ingestion boundary. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005
+**PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live trading
+**HARD-DISABLED**.
+
 ### The Sharadar qualification composition root — dormant, and the offline preflight
 
 [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)
@@ -735,10 +800,11 @@ provider-fetch operation: NONE   ·   object-publication operation: NONE
 runner                NONE     no CLI, no entry point, no console script, no task, no image
 retained state        NONE     no module global, no closure, no instance, no attribute
 caller-owned arguments          the caller's, before and after -- unchanged by this
-credential retrieval  NONE     no environment read, no file read, no reveal() call
+credential retrieval  NONE     in this module; the operator entry point is the only
+                               place a credential source exists, and it refuses by default
 real credential binding: NONE   ·   real bucket binding: NONE
-AWS SDK session / S3-client construction: NONE   ·   no module under src/ imports the SDK
-called or imported outside its own synthetic tests: NEVER
+AWS SDK session / S3-client construction: NONE in src/; no module under src/ imports the SDK
+called or imported outside its own synthetic tests and the ADR-0015 operator entry point: NEVER
 Sharadar requests: ZERO   ·   AWS requests: ZERO   ·   Services Data: NONE
 ```
 
@@ -817,7 +883,8 @@ through the neutral Bronze bridge, with an **injected** store. What is still tru
 
 ```
 plan model EXISTS   ·   executor EXISTS   ·   dependencies INJECTED
-credential source: NONE   ·   SDK client construction: NONE   ·   real bucket binding: NONE
+credential source: the ADR-0015 operator entry point ONLY, refused by default
+SDK client construction: that entry point ONLY   ·   real bucket binding: NONE, never performed
 runner: NONE   ·   module entry point in either module: NONE
 constructed only by the dormant composition root (ADR-0014) and its own tests
 Sharadar requests sent: ZERO   ·   AWS requests sent: ZERO
