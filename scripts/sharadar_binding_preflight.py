@@ -76,9 +76,10 @@ owner's setup                           contract, invoked the AWS identity
                                         ``REFUSED_IDENTITY``; it reached
                                         neither licensed-bucket resolution
                                         nor the secret-identifier source, so
-                                        it did not read the environment
-                                        variable, built no client and
-                                        retrieved no credential
+                                        it did not read
+                                        ``KALPAMANI_SHARADAR_SECRET_ID``,
+                                        built no client and retrieved no
+                                        credential
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
@@ -980,9 +981,13 @@ def main(argv: list[str] | None = None) -> int:
 # separately authorized attempts -- the identity gate is where AWS activity
 # occurred, and it is where the first and the fourth attempts refused.
 # `_governed_licensed_bucket` ran on the second and third attempts only, never
-# on the first or the fourth. `_environment_secret_id` ran exactly once, on the
-# third attempt, which refused there; the fourth never reached it, so it read no
-# environment variable. `_secrets_client`, `_s3_client` and `_transport` have
+# on the first or the fourth. `_environment_secret_id` ran exactly once, during
+# the third attempt, which refused there; the fourth never reached it and
+# therefore did not read `KALPAMANI_SHARADAR_SECRET_ID`. The scope is
+# deliberate: `_ambient_profile` reads `AWS_PROFILE` from the process
+# environment and ran on all four attempts, and the fourth passed the governed
+# profile contract, so the secret identifier is the one variable this file may
+# say went unread. `_secrets_client`, `_s3_client` and `_transport` have
 # never been constructed by any attempt: the second refused inside
 # `_secrets_client` before a client existed, and nothing past it was reached.
 # No credential has been retrieved, and no composition preflight or

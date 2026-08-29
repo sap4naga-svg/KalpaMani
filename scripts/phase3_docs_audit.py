@@ -1482,6 +1482,76 @@ STALE_ATTEMPT_COUNT_CLAIMS: Final[tuple[str, ...]] = (
     "A FOURTH ATTEMPT, CREDENTIAL ACCESS BY THE APPLICATION",
 )
 
+#: The banner dividing the entry point's prose from its real-factory section.
+#:
+#: The event table and the factory commentary are two surfaces that must each
+#: name the variable, and a guard over the whole file cannot tell which one it
+#: found. Splitting on the banner scopes each requirement to its own region, so
+#: dropping the name from one of them is caught by that region's guard.
+FACTORY_SECTION_MARKER: Final = (
+    "# The real factories. Referenced by `main`, never called by a test."
+)
+
+#: What the module docstring's event table must say about the fourth attempt.
+#:
+#: The variable is named, rather than described. "The environment variable" was
+#: the original wording and it was wrong in a way only naming can fix -- see
+#: :data:`STALE_ENVIRONMENT_READ_CLAIMS`.
+#:
+#: Named for the *identifier* rather than the secret. Spelling it
+#: ``..._SECRET_SCOPE`` tripped ruff's hardcoded-password heuristic, and the
+#: honest fix was the accurate name: this constant is about the identifier the
+#: fourth attempt never resolved, not about a secret value, which appears
+#: nowhere in this repository.
+EVENT_TABLE_IDENTIFIER_SCOPE: Final = (
+    "nor the secret-identifier source, so it did not read ``KALPAMANI_SHARADAR_SECRET_ID``"
+)
+
+#: The same requirement, scoped to the real-factory commentary.
+FACTORY_IDENTIFIER_SCOPE: Final[tuple[str, ...]] = (
+    "therefore did not read `KALPAMANI_SHARADAR_SECRET_ID`",
+    "`_ambient_profile` reads `AWS_PROFILE` from the process",
+    "the secret identifier is the one variable this file may",
+)
+
+#: Unqualified claims that the fourth attempt read nothing from the environment.
+#:
+#: It read ``AWS_PROFILE``. ``_ambient_profile`` does that on every attempt, and
+#: the fourth passed the governed profile contract -- so it demonstrably ran.
+#: What the fourth attempt did not read is ``KALPAMANI_SHARADAR_SECRET_ID``,
+#: because it refused two stages earlier, and that narrow claim is the only one
+#: the run supports.
+#:
+#: The first revision of this slice wrote both blanket forms. They read as a
+#: stronger absence than any run established, and an operator who believed them
+#: would think the profile stage had been skipped.
+STALE_ENVIRONMENT_READ_CLAIMS: Final[tuple[str, ...]] = (
+    "did not read the environment variable",
+    "read no environment variable",
+    "read no environment variables",
+    "read nothing from the environment",
+    "performed no environment lookup on the fourth",
+)
+
+#: Denials that ``AWS_PROFILE`` was read, which would be the opposite error.
+#:
+#: Correcting an overbroad absence must not manufacture a new one. Nothing here
+#: establishes that the profile variable was missing, unread or invalid -- the
+#: fourth attempt passed the profile contract, so it was read and it was the
+#: governed one. These are the affirmative denials, refused for the same reason
+#: the blanket claims above are.
+PROFILE_READ_DENIALS: Final[tuple[str, ...]] = (
+    "did not read `AWS_PROFILE`",
+    "did not read AWS_PROFILE",
+    "never read `AWS_PROFILE`",
+    "never read AWS_PROFILE",
+    "AWS_PROFILE was not read",
+    "AWS_PROFILE was unread",
+    "AWS_PROFILE was absent",
+    "AWS_PROFILE was invalid",
+    "no AWS_PROFILE was read",
+)
+
 #: Affirmative claims that put the owner's setup after the fourth attempt.
 #:
 #: The index comparison beside :data:`FOURTH_ATTEMPT_ANCHOR` catches a chronology
@@ -1546,8 +1616,8 @@ BINDING_SOURCE_MAIN_HISTORY: Final[tuple[str, ...]] = (
 BINDING_SOURCE_FACTORY_HISTORY: Final[tuple[str, ...]] = (
     "`_ambient_profile` and `_governed_identity_gate` HAVE run, on all four",
     "`_governed_licensed_bucket` ran on the second and third attempts only, never",
-    "`_environment_secret_id` ran exactly once, on the",
-    "third attempt, which refused there; the fourth never reached it, so it read no",
+    "`_environment_secret_id` ran exactly once, during",
+    "the third attempt, which refused there; the fourth never reached it and",
     "never been constructed by any attempt: the second refused inside",
     "No credential has been retrieved, and no composition preflight or",
     "qualification execution has occurred. A fifth attempt, AWS authentication",
@@ -2098,6 +2168,21 @@ def _matrix_entry(text: str, first_line: str, continuation_indent: int = 24) -> 
             break
         collected.append(line.strip())
     return " ".join(collected)
+
+
+def _comment_prose(text: str) -> str:
+    """``text`` with comment markers stripped and line breaks joined out.
+
+    A phrase spanning two comment lines is invisible to a plain flatten: the
+    ``#`` opening the continuation lands in the middle of it. The claim
+    :data:`STALE_ENVIRONMENT_READ_CLAIMS` refuses did exactly that -- it read
+    ``so it read no`` / ``# environment variable`` across a line break -- so the
+    marker comes off before the join, the same shape as the blockquote strip
+    used for licence prose.
+    """
+    return " ".join(
+        " ".join(line.lstrip("# ") for line in text.replace("**", "").splitlines()).split()
+    )
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -7630,6 +7715,42 @@ def main() -> int:
             "the entry point records which real factories have run, per factory",
             all(phrase in read(BINDING_PREFLIGHT) for phrase in BINDING_SOURCE_FACTORY_HISTORY),
             "two ran on every attempt, one on two, one once, and three have never run",
+        )
+        preflight_prose, _, factory_region = read(BINDING_PREFLIGHT).partition(
+            FACTORY_SECTION_MARKER
+        )
+        f.check(
+            "the entry point splits its prose from its real-factory section",
+            bool(factory_region),
+            "without the banner the two surfaces cannot be held to separate requirements",
+        )
+        f.check(
+            "the module event table names the variable the fourth attempt did not read",
+            EVENT_TABLE_IDENTIFIER_SCOPE in " ".join(preflight_prose.replace("**", "").split()),
+            "'the environment variable' is the wording that was wrong; naming it is the fix",
+        )
+        f.check(
+            "the real-factory commentary names that variable and scopes the profile read",
+            all(phrase in factory_region for phrase in FACTORY_IDENTIFIER_SCOPE),
+            "the same correction is needed twice, because it is stated in two places",
+        )
+        f.check(
+            "the entry point claims no blanket environment-read absence",
+            not [
+                claim
+                for claim in STALE_ENVIRONMENT_READ_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT))
+            ],
+            "_ambient_profile read AWS_PROFILE on all four attempts, the fourth included",
+        )
+        f.check(
+            "the entry point denies no AWS_PROFILE read",
+            not [
+                denial
+                for denial in PROFILE_READ_DENIALS
+                if denial in _comment_prose(read(BINDING_PREFLIGHT))
+            ],
+            "correcting an overbroad absence must not manufacture the opposite one",
         )
         f.check(
             "the entry point carries no stale three-attempt claim",
