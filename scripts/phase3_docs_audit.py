@@ -786,6 +786,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0012", "PR #17 merged"),
     ("ADR-0013", "PR #18 merged"),
     ("ADR-0014", "PR #19 merged"),
+    ("ADR-0015", "PR #22 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -829,6 +830,63 @@ MERGED_PHASE_STATUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         ),
     ),
 )
+
+#: What the ADR-0015 current-status row must carry beyond being in force.
+#:
+#: The registry pins *that* the decision merged. This pins what merging it did
+#: **not** do -- because a row reading only "ACCEPTED / IN FORCE -- PR #22
+#: merged" would be true and still misread: the slice implemented the path that
+#: will one day supply private bindings, and a reader who took that as the
+#: binding having happened would have it exactly backwards.
+ADR_0015_ROW_BOUNDARY: Final[tuple[str, ...]] = (
+    "refused by default",
+    "binding preflight only",
+    "separately gated",
+    "NOT AUTHORIZED",
+)
+
+#: Wording in the ADR-0015 row that would claim something already happened.
+#:
+#: Not a general prohibition on the words -- the row has to *name* what stays
+#: absent, so "real bucket binding NONE" is required while "bucket bound" is
+#: refused. Every entry is therefore the **affirmative** form.
+#:
+#: A first draft listed the bare "QUALIFICATION RUN" and failed the very row it
+#: was written for, which says an authenticated qualification run *stays
+#: separately gated*. A guard that a correct row cannot pass would be answered
+#: by weakening the row, which is the opposite of the point.
+ADR_0015_ROW_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "CREDENTIAL RETRIEVED",
+    "CREDENTIAL CONFIGURED",
+    "BUCKET BOUND",
+    "BINDING PERFORMED",
+    "BINDING AUTHORIZED",
+    "QUALIFICATION AUTHORIZED",
+    "QUALIFICATION RUN AUTHORIZED",
+    "QUALIFICATION RUN PERFORMED",
+    "PROVIDER ACCESS AUTHORIZED",
+    "INGESTED",
+)
+
+#: The ADR-0015 status *sentence* in the two status documents.
+#:
+#: A sibling of the table row, and stale in the same way for the same reason:
+#: merged main said "accepted effective on the merge of the pull request
+#: introducing ADR-0015, and carrying no authority before it", after PR #22 had
+#: merged. It is prose, so no table-row guard reaches it -- which is exactly why
+#: it needs one of its own.
+ADR_0015_STATUS_SENTENCE: Final = "**Status: ACCEPTED / IN FORCE — PR #22 merged.**"
+
+#: The superseded sentence, refused outright.
+ADR_0015_STALE_SENTENCE: Final = (
+    "accepted effective on the merge of the pull request introducing ADR-0015"
+)
+
+#: The line in the CLAUDE.md IN FORCE matrix that records ADR-0015.
+#:
+#: A third surface, and the one most easily left behind: a merged decision
+#: missing from the in-force list reads as a decision that did not merge.
+ADR_0015_MATRIX_LINE: Final = "ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --"
 
 #: Wording that states a status which has not been reached yet.
 #:
@@ -6603,11 +6661,79 @@ def main() -> int:
             "the three future events stay separate, and none is approached here",
         )
         f.check(
+            f"{name} records ADR-0015 as in force in a merge-stable sentence",
+            ADR_0015_STATUS_SENTENCE in body,
+            "a merged decision described as conditional reads as carrying no authority",
+        )
+        f.check(
+            f"{name} no longer carries the superseded ADR-0015 status sentence",
+            ADR_0015_STALE_SENTENCE not in flat,
+            "the ADR file's own status line may say it; a current-status document may not",
+        )
+        f.check(
+            f"{name} states in the ADR-0015 row what merging it did not authorize",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                phrase.upper() in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+                for phrase in ADR_0015_ROW_BOUNDARY
+            ),
+            "in force is the status; dormant and unbound is the boundary, and both are the claim",
+        )
+        f.check(
+            f"{name} claims nothing bound or run in the ADR-0015 row",
+            not [
+                overclaim
+                for row in _current_status_rows(body, "ADR-0015")
+                for overclaim in ADR_0015_ROW_OVERCLAIMS
+                if overclaim in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "implementing the path that will supply a binding is not performing one",
+        )
+        f.check(
             f"{name} states that this slice's three claims were narrowed, not removed",
             # ADR-0014's section already says "narrowed, not deleted" about the
             # architecture guards, so the bare phrase proves nothing here.
             "Three standing claims are narrowed, not deleted" in flat,
             "a guard removed to accommodate a slice is a guard that stopped guarding",
+        )
+
+    claude_md = REPO_ROOT / "CLAUDE.md"
+    if claude_md.is_file():
+        claude_body = read(claude_md)
+        f.check(
+            "the CLAUDE.md in-force matrix records ADR-0015",
+            ADR_0015_MATRIX_LINE in claude_body,
+            "a merged decision absent from the in-force list reads as one that did not merge",
+        )
+        f.check(
+            "the in-force matrix names the pull request that put ADR-0015 in force",
+            "PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING" in claude_body,
+            "in force without a pull request is a status a reader cannot check",
+        )
+        f.check(
+            "the in-force matrix keeps ADR-0015 dormant and never run",
+            "PREFLIGHT ONLY, NEVER RUN" in claude_body,
+            "the matrix states the boundary beside the status, or it states half a fact",
+        )
+        f.check(
+            "the unauthorized list no longer forbids the credential source ADR-0015 built",
+            "a CONFIGURED credential source" in claude_body
+            and "SDK client construction anywhere but the ADR-0015 operator entry point"
+            in claude_body,
+            "a slice that implemented a refusing credential source makes the bare wording stale",
+        )
+        f.check(
+            "the unauthorized list still forbids every binding operation",
+            all(
+                token in claude_body
+                for token in (
+                    "credential retrieval, setup, configuration or binding",
+                    "real credential or bucket binding",
+                    "an authenticated qualification run",
+                )
+            ),
+            "narrowing a claim that went stale must not relax the operations it governed",
         )
 
     # ---------------------------------------------------------------- verdict
