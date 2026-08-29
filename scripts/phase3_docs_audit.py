@@ -777,6 +777,34 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0014", "PR #19 merged"),
 )
 
+#: What a merged *phase* row must say, keyed by the subject text of its first
+#: table cell.
+#:
+#: The merged-ADR guard covers rows whose subject is an ADR link. It does not
+#: cover *phase* rows, and merged main carried two that had gone stale the same
+#: way: the Sharadar qualification runtime core still read "ACCEPTED EFFECTIVE ON
+#: MERGE OF PR #17" in both status documents, months after PR #17 merged.
+#:
+#: Explicit, like ``MERGED_ADR_STATUS`` and for the same reason: merge
+#: effectiveness is a fact about a pull request, and inferring it from a
+#: filename, an ADR number, Git history or prose would be guessing at the one
+#: thing this guard exists to pin down.
+#:
+#: Each entry is (subject fragment, required phrases). The subject fragment is
+#: matched in the row's **first cell**, so a feature row that merely cites the
+#: same pull request elsewhere is not swept in.
+MERGED_PHASE_STATUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    (
+        "SHARADAR QUALIFICATION RUNTIME CORE",
+        (
+            "IMPLEMENTED / ACCEPTED",
+            "PR #17 MERGED",
+            "CODE ONLY",
+            "NEVER RUN AGAINST SHARADAR OR AWS",
+        ),
+    ),
+)
+
 #: Wording that states a status which has not been reached yet.
 #:
 #: Legitimate in an ADR's own immutable status line and in historical prose --
@@ -838,6 +866,65 @@ def _current_status_rows(text: str, adr: str) -> list[str]:
         if len(cells) > 1 and f"[{adr}](" in cells[1]:
             rows.append(line)
     return rows
+
+
+def _phase_status_rows(text: str, subject: str) -> list[str]:
+    """Every **phase** status row whose first cell names ``subject``.
+
+    The same first-cell scoping the merged-ADR guard uses, for the same reason: a
+    row that mentions a phase inside a *description* is not a status claim about
+    it, and holding one to a status contract would fail an honest sentence. Case
+    is ignored, because these subjects are written in caps in one document and in
+    sentence case in the other.
+
+    **A first cell carrying an ADR link is not a phase row.** ADR-0012's row
+    describes itself as the "dormant Sharadar qualification runtime core", so a
+    bare text match claimed it too -- and it is already governed by
+    :data:`MERGED_ADR_STATUS`, which requires different wording. One row answering
+    to two registries would make the two contracts fight over it; the split is
+    that ADR rows are the ADR guard's and every other row is this one's.
+    """
+    rows: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("|"):
+            continue
+        cells = stripped.split("|")
+        if len(cells) < 2:
+            continue
+        first = cells[1]
+        if "](docs/decisions/ADR-" in first:
+            continue
+        if subject.upper() in first.upper():
+            rows.append(line)
+    return rows
+
+
+def _stale_phase_status_defects(name: str, text: str) -> list[str]:
+    """Every way ``text``'s merged-phase rows misstate a completed merge.
+
+    Reported one defect at a time, because they need different repairs: a
+    missing row, a duplicated row, a missing required phrase, and a row still
+    carrying a future condition.
+    """
+    defects: list[str] = []
+    for subject, required in MERGED_PHASE_STATUS:
+        rows = _phase_status_rows(text, subject)
+        if not rows:
+            defects.append(f"{name}: no current-status row for {subject}")
+            continue
+        if len(rows) > 1:
+            defects.append(f"{name}: {len(rows)} current-status rows for {subject}, expected 1")
+            continue
+        flat = " ".join(rows[0].replace("**", "").split()).upper()
+        for phrase in required:
+            if phrase.upper() not in flat:
+                defects.append(f"{name}: the {subject} row does not state {phrase!r}")
+        for wording in PRE_MERGE_STATUS_WORDING:
+            if wording.upper() in flat:
+                defects.append(f"{name}: the {subject} row still says {wording!r}")
+                break
+    return defects
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -5673,6 +5760,36 @@ def main() -> int:
                     for row in _current_status_rows(body, adr)
                 ),
                 "the merge condition is satisfied, so the table must say so",
+            )
+        f.check(
+            f"{name} states each merged phase as accepted, once, naming its pull request",
+            not _stale_phase_status_defects(name, body),
+            "a merged phase shown as conditional reads as work that has not landed",
+        )
+        for subject, required in MERGED_PHASE_STATUS:
+            f.check(
+                f"{name} has exactly one current-status row for {subject}",
+                len(_phase_status_rows(body, subject)) == 1,
+                "two rows for one phase is two answers to one question",
+            )
+            for phrase in required:
+                f.check(
+                    f"{name} records {subject} as {phrase}",
+                    any(
+                        phrase.upper() in " ".join(row.replace("**", "").split()).upper()
+                        for row in _phase_status_rows(body, subject)
+                    ),
+                    "the status and the boundary are one claim; dropping half of it misleads",
+                )
+            f.check(
+                f"{name} keeps pre-merge wording out of the {subject} row",
+                not [
+                    wording
+                    for row in _phase_status_rows(body, subject)
+                    for wording in PRE_MERGE_STATUS_WORDING
+                    if wording.upper() in row.replace("**", "").upper()
+                ],
+                "PR #17 merged, so the condition is satisfied and the row must say so",
             )
         f.check(
             f"{name} keeps pre-merge wording out of its ADR status rows",
