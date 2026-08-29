@@ -427,6 +427,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Any AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one |
 | **Real bucket binding · SDK client construction · credential source** | **NOT AUTHORIZED** — none exists, and a static test keeps it that way |
 | **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
+| **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**, and an **authenticated qualification run stays separately gated and NOT AUTHORIZED**. Credential source configured **NONE**, real bucket binding **NONE**, provider and AWS requests **ZERO** |
 | **Ingestion runner · ECS task or image · authenticated qualification run** | **NOT AUTHORIZED** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -740,8 +741,10 @@ supply the private bindings every accepted slice takes by injection. One operato
 `scripts/sharadar_binding_preflight.py`, and one boundary module,
 `data/ingest/sharadar/secrets.py`.
 
-**Status: accepted effective on the merge of the pull request introducing ADR-0015, and carrying no
-authority before it.** Implemented, code and synthetic validation only.
+**Status: ACCEPTED / IN FORCE — PR #22 merged.** Implemented, code and synthetic validation
+only. **Merging it bound nothing**: an authenticated Sharadar qualification run stays separately
+gated and **NOT AUTHORIZED**, and no credential retrieval, AWS binding, provider access,
+qualification or ingestion has occurred.
 
 ```
 entry points          ONE      scripts/ only; the installed package re-exports nothing
@@ -991,9 +994,14 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                ADR-0014 dormant composition root + offline preflight -- ACCEPTED /
                         IN FORCE -- PR #19 MERGED, CODE ONLY, OFFLINE PREFLIGHT ONLY,
                         NO QUALIFICATION-RUN EXECUTION SURFACE, NEVER RUN
+               ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --
+                        PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING
+                        PREFLIGHT ONLY, NEVER RUN
 
 NOT AUTHORIZED credential retrieval, setup, configuration or binding · Secrets Manager use
-               a credential source · real credential or bucket binding · SDK client construction
+               a CONFIGURED credential source · real credential or bucket binding
+               SDK client construction anywhere but the ADR-0015 operator entry point,
+                        which has constructed none
                a qualification-run execution surface on the composition root
                a second composition root
                ANY provider API call · the published test token · Services Data · bulk download
