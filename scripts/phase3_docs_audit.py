@@ -789,6 +789,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0013", "PR #18 merged"),
     ("ADR-0014", "PR #19 merged"),
     ("ADR-0015", "PR #22 merged"),
+    ("ADR-0016", "PR #24 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -889,6 +890,222 @@ ADR_0015_STALE_SENTENCE: Final = (
 #: A third surface, and the one most easily left behind: a merged decision
 #: missing from the in-force list reads as a decision that did not merge.
 ADR_0015_MATRIX_LINE: Final = "ADR-0015 dormant private-binding preflight -- ACCEPTED / IN FORCE --"
+
+#: The first-cell subject of the binding status row in both status documents.
+#:
+#: Matched with :func:`_phase_status_rows`, which is a first-cell matcher that
+#: skips ADR-link rows -- exactly the scoping this row needs. The ADR-0015 row
+#: also says "real bucket binding NONE", and matching it here would hold two
+#: rows to one contract.
+BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
+
+#: What the binding status row must state, now that ADR-0015 has merged and run.
+#:
+#: The row said "NOT AUTHORIZED -- none exists, and a static test keeps it that
+#: way". A credential-source boundary does exist, the operator entry point is the
+#: one place permitted to construct an SDK client, and it has been invoked twice.
+#: The row has to separate **architectural existence** from **operational
+#: execution**, because the old wording denied both at once.
+BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
+    "REAL BUCKET BINDING NONE",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
+    "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
+)
+
+#: Claims that no credential source, bucket resolution or construction path exists.
+#:
+#: Scoped to the binding row and the entry point's own documentation, never to a
+#: whole document: ADR-0011's and ADR-0012's sections say comparable things about
+#: *their* modules and are still accurate, and `docs/decisions/` is immutable.
+STALE_BINDING_ABSENCE_CLAIMS: Final[tuple[str, ...]] = (
+    "NONE EXISTS, AND A STATIC TEST KEEPS IT THAT WAY",
+    "NO CREDENTIAL SOURCE, NO BUCKET RESOLUTION, NO CONSTRUCTED AWS CLIENT",
+    "NO CREDENTIAL SOURCE EXISTS",
+    "NO BUCKET RESOLUTION EXISTS",
+    "NO CONSTRUCTED AWS CLIENT",
+    "NO SDK CLIENT CONSTRUCTION PATH EXISTS",
+    "HAS EVER HAD A WAY TO OBTAIN ONE",
+    "WILL EVENTUALLY SUPPLY THEM",
+)
+
+#: What the entry point's opening docstring must distinguish.
+#:
+#: Two different facts: the downstream components cannot discover a binding, and
+#: this file is the one boundary that may resolve one. Collapsing them into "none
+#: of it exists" is what made the old wording false once this file had run.
+BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
+    "by injection and cannot discover an ambient one",
+    "This file is the sole boundary that can",
+    "not a claim that none of it exists",
+    "invoked twice under separate authorization",
+    "reached bucket resolution",
+    "neither attempt reached secret-identifier reading",
+)
+
+
+#: The two status-document sections whose operational claims this round corrected.
+#:
+#: Scoped deliberately. The stale-phrase guards below must not sweep other
+#: slices' accurate, differently-scoped statements -- ADR-0011's "AWS requests
+#: sent by the adapter: ZERO" is about an adapter and is still true -- and they
+#: must never reach `docs/decisions/`, where an accepted ADR's text is immutable
+#: and legitimately records what was true when it was written.
+ADR_0015_SECTION_HEADING: Final = (
+    "### The Sharadar private-binding preflight — refused by default, and twice refused in "
+    "operation"
+)
+ADR_0016_SECTION_HEADING: Final = (
+    "### The private-binding failure boundaries — corrected, and the environment that is not"
+)
+
+#: Operational claims that two authorized preflight attempts made false.
+#:
+#: Every entry is a form that asserts *no AWS activity at all* or *never run*.
+#: Bare "never run" is deliberately absent: the section still says authenticated
+#: qualification "has never run", which is true, and a guard that could not tell
+#: the two apart would be answered by deleting a correct sentence.
+STALE_PREFLIGHT_CLAIMS: Final[tuple[str, ...]] = (
+    "NEVER BEEN RUN AGAINST AWS",
+    "NEVER RUN AGAINST AWS",
+    "NEVER BEEN EXECUTED AGAINST AWS",
+    "NEVER EXECUTED AGAINST AWS",
+    "NONE HAS BEEN RUN",
+    "AWS REQUESTS: ZERO",
+    "AWS REQUESTS ZERO",
+    "AWS NETWORK REQUESTS: ZERO",
+    "AWS NETWORK REQUESTS ZERO",
+    "CREDENTIAL SOURCE CONFIGURED: NONE",
+    "CREDENTIAL SOURCE CONFIGURED NONE",
+    "NO CLIENT HAS EVER BEEN CONSTRUCTED",
+    "PREFLIGHT ONLY, NEVER RUN",
+    "DORMANT, REFUSED BY DEFAULT, NEVER RUN",
+)
+
+#: What the ADR-0015 current-status row must now state.
+#:
+#: The registry pins that ADR-0015 merged. This pins the operational history the
+#: merge did not create and two later attempts did.
+ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
+    "TWO SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND BOTH REFUSED",
+    "AWS IDENTITY-GATE ACTIVITY OCCURRED",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION UNKNOWN",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
+    "INVOCATIONS ZERO",
+    "SECRETS MANAGER NETWORK REQUESTS ZERO",
+    "S3 OBJECT OPERATIONS ZERO",
+    "SHARADAR/PROVIDER REQUESTS ZERO",
+    "CREDENTIAL RETRIEVAL NONE",
+    "QUALIFICATION RUNS ZERO",
+)
+
+#: The scoped counts the ADR-0015 section's fenced block must carry.
+ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
+    "authorized attempts   TWO",
+    "AWS identity-gate activity: OCCURRED",
+    "operational secret-identifier configuration: UNKNOWN",
+    "Secrets Manager client constructions: ZERO",
+    "get_secret_value invocations: ZERO",
+    "Secrets Manager network requests: ZERO",
+    "S3 object operations: ZERO",
+    "Sharadar/provider requests: ZERO",
+    "credential retrieval: NONE",
+    "qualification runs: ZERO",
+)
+
+#: The history the ADR-0015 section's prose must state, not merely tabulate.
+ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
+    "Two later, separately authorized operator attempts",
+    "reached the AWS identity gate and refused there",
+    "sts:GetCallerIdentity",
+    "refused before constructing a Secrets Manager client",
+    "AWS identity-gate activity occurred, so total AWS activity was not zero",
+    "remains UNKNOWN",
+    "A real binding preflight is no longer a purely future event",
+    "Authenticated qualification remains NOT AUTHORIZED and has never run",
+)
+
+#: What the corrected ADR-0015 IN FORCE matrix entry must state.
+ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
+    "PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING PREFLIGHT ONLY",
+    "TWO SEPARATELY AUTHORIZED ATTEMPTS, BOTH REFUSED",
+    "AWS IDENTITY-GATE ACTIVITY OCCURRED",
+    "NO SECRETS MANAGER CLIENT, CREDENTIAL, S3 OBJECT OPERATION, SHARADAR REQUEST OR "
+    "QUALIFICATION RUN",
+)
+
+#: What the entry point's own documentation must state about what has happened.
+BINDING_SOURCE_HISTORY: Final[tuple[str, ...]] = (
+    "authorized attempts TWO",
+    "AWS activity NOT ZERO",
+    "Two later, separately authorized operator attempts did execute it",
+    "before constructing a Secrets Manager client",
+    "total AWS activity was not zero",
+    "is operationally configured is",
+)
+
+
+#: The ADR-0016 status *sentence* in the two status documents.
+#:
+#: The sibling of its table row, and stale in the same way for the same reason:
+#: ADR-0015's section sentence still read "accepted effective on the merge" long
+#: after PR #22 landed, because prose is not a table row and no row guard reaches
+#: it. This one is pinned before it can drift.
+ADR_0016_STATUS_SENTENCE: Final = "**Status: ACCEPTED / IN FORCE — PR #24 merged.**"
+
+#: The superseded pre-merge sentence, refused in a current-status document.
+#:
+#: ADR-0016's *own* immutable status line legitimately still carries the
+#: accepted-on-merge condition -- that is the decision record, and the merge has
+#: satisfied it. A current-status document may not.
+ADR_0016_STALE_SENTENCE: Final = "accepted on the merge of the pull request that introduces it"
+
+#: ADR-0016's own immutable status line, which a status sync must leave alone.
+#:
+#: Checked as *present* rather than absent: the sync changes what the status
+#: documents say, and an ADR whose accepted-on-merge condition had been edited
+#: away would no longer record the condition the merge satisfied.
+ADR_0016_IMMUTABLE_STATUS: Final = (
+    "**Status:** **Accepted — effective on the merge of the pull request that "
+    "introduces this ADR.**"
+)
+
+#: What the ADR-0016 current-status row must carry beyond being in force.
+#:
+#: Same design as :data:`ADR_0015_ROW_BOUNDARY`: the registry pins *that* the
+#: decision merged, and this pins what merging it did **not** do. A row reading
+#: only "ACCEPTED / IN FORCE -- PR #24 merged" would be true and still misread --
+#: this decision corrected what a refusal *says*, and a reader who took that for
+#: permission to produce another refusal would have it backwards.
+ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
+    "SEPARATES SECRET-IDENTIFIER, LOCAL DEPENDENCY, UNCLASSIFIED AND CREDENTIAL REFUSALS",
+    # Scoped to Secrets Manager. The unscoped "AWS NETWORK REQUESTS ZERO" and
+    # "NO CLIENT HAS EVER BEEN CONSTRUCTED" that stood here were false once the
+    # identity gate had run on two authorized attempts.
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
+    "INVOCATIONS ZERO",
+    "SECRETS MANAGER NETWORK REQUESTS ZERO",
+    "REAL CREDENTIAL RETRIEVAL NONE",
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+)
+
+#: The first line of the CLAUDE.md IN FORCE matrix entry recording ADR-0016.
+ADR_0016_MATRIX_LINE: Final = "ADR-0016 corrected private-binding failure boundaries -- ACCEPTED /"
+
+#: What that matrix entry must state, once its continuation lines are joined.
+ADR_0016_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
+    "IN FORCE -- PR #24 MERGED",
+    "CODE AND FAILURE-BOUNDARY CORRECTION ONLY",
+    "SECRET-IDENTIFIER / LOCAL-DEPENDENCY / CREDENTIAL REFUSALS SEPARATED",
+    "OPERATIONAL ENVIRONMENT SYNCHRONIZATION NOT AUTHORIZED",
+    "ANOTHER BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "NEVER USED TO RETRIEVE A CREDENTIAL OR RUN QUALIFICATION",
+)
+
 
 #: Wording that states a status which has not been reached yet.
 #:
@@ -1192,6 +1409,41 @@ def _registry_coverage_defects(documents: Mapping[str, str]) -> list[str]:
                     f"{first.get(adr)!r} vs {second.get(adr)!r}"
                 )
     return defects
+
+
+def _document_section(text: str, heading: str) -> str:
+    """One ``###`` section of a status document, up to the next ``###`` heading.
+
+    Scoping matters more here than anywhere else in this audit: the stale-claim
+    guards below refuse wording that other slices use accurately about their own
+    surfaces, so they must see one section and not a whole document.
+    """
+    start = text.find(heading)
+    if start == -1:
+        return ""
+    end = text.find("\n### ", start + len(heading))
+    return text[start:] if end == -1 else text[start:end]
+
+
+def _matrix_entry(text: str, first_line: str) -> str:
+    """One ``IN FORCE`` matrix entry, its continuation lines joined onto it.
+
+    Entries begin at fifteen spaces and continue at twenty-four, so the
+    continuation test is an indentation test rather than a guess at where the
+    next entry starts. Returns ``""`` when the entry is missing **or**
+    duplicated -- a duplicated status line is its own defect, and a guard that
+    silently read the first of two would not see it.
+    """
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.strip().startswith(first_line)]
+    if len(starts) != 1:
+        return ""
+    collected = [lines[starts[0]].strip()]
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith(" " * 24) or not line.strip():
+            break
+        collected.append(line.strip())
+    return " ".join(collected)
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -6679,6 +6931,41 @@ def main() -> int:
             "a private identifier in a tracked file is a public one",
         )
         f.check(
+            "the entry point scopes what is injected against what it alone may construct",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_SCOPE
+            ),
+            "'no credential source, no bucket resolution, no constructed AWS client' denied "
+            "the boundary this file is",
+        )
+        f.check(
+            "the entry point claims no absent credential source or construction path",
+            not [
+                claim
+                for claim in STALE_BINDING_ABSENCE_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "the downstream components cannot discover a binding; this file can resolve one",
+        )
+        f.check(
+            "the entry point documents the two authorized attempts and their scope",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_HISTORY
+            ),
+            "'never run' was true of the merge and false of the operation",
+        )
+        f.check(
+            "the entry point makes no stale zero-AWS or never-run claim",
+            not [
+                claim
+                for claim in STALE_PREFLIGHT_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).split()).upper()
+            ],
+            "the source documentation is a current-status surface like any other",
+        )
+        f.check(
             "the entry point does not touch the private harness",
             # Docstring-stripped: the module *says* it leaves the harness alone,
             # and a raw scan would forbid saying so.
@@ -6851,11 +7138,10 @@ def main() -> int:
             "a private identifier on the command line is disclosed before anything runs",
         )
         f.check(
-            f"{name} records that nothing real is configured or read",
+            f"{name} records that no secret or bucket binding was performed",
             all(
                 token in body
                 for token in (
-                    "real credential source configured: NONE",
                     "Secrets Manager secret created or read: NONE",
                     "real bucket binding performed: NONE",
                 )
@@ -6863,19 +7149,67 @@ def main() -> int:
             "implementing a path is not walking it",
         )
         f.check(
-            f"{name} records zero AWS, provider and object-store activity",
-            "AWS requests: ZERO   \u00b7   provider requests: ZERO   \u00b7   S3 object calls: ZERO"
-            in body,
-            "a binding path that had sent one request would be a different slice",
+            f"{name} records the scoped counts the two attempts left at zero",
+            all(
+                token in _document_section(body, ADR_0015_SECTION_HEADING)
+                for token in ADR_0015_SECTION_COUNTS
+            ),
+            "the zeros are Secrets Manager, S3 and Sharadar -- not AWS as a whole",
         )
         f.check(
-            f"{name} keeps authenticated qualification unauthorized",
-            # Specific to this slice's section: the same sentence about a *real*
-            # Sharadar qualification also appears under ADR-0013, and a check
-            # that either occurrence satisfies is a check neither has to pass.
-            "Three separate future events, and this is none of them" in flat
-            and "Authenticated qualification remains NOT AUTHORIZED and has never run" in flat,
-            "the three future events stay separate, and none is approached here",
+            f"{name} records the operational history of the two authorized attempts",
+            all(
+                phrase
+                in " ".join(
+                    _document_section(body, ADR_0015_SECTION_HEADING).replace("**", "").split()
+                )
+                for phrase in ADR_0015_SECTION_HISTORY
+            ),
+            "implementation-time inactivity and two later operator runs are different facts",
+        )
+        f.check(
+            f"{name} makes no stale zero-AWS or never-run claim in the ADR-0015 section",
+            not [
+                claim
+                for claim in STALE_PREFLIGHT_CLAIMS
+                if claim
+                in " ".join(
+                    _document_section(body, ADR_0015_SECTION_HEADING).replace("**", "").split()
+                ).upper()
+            ],
+            "identity-gate activity occurred, so 'no AWS activity' is false as written",
+        )
+        f.check(
+            f"{name} makes no stale zero-AWS claim in the ADR-0016 section",
+            not [
+                claim
+                for claim in STALE_PREFLIGHT_CLAIMS
+                if claim
+                in " ".join(
+                    _document_section(body, ADR_0016_SECTION_HEADING).replace("**", "").split()
+                ).upper()
+            ],
+            "the same unscoped wording was copied into the correction's own section",
+        )
+        f.check(
+            f"{name} states in the ADR-0015 row what the two attempts did and did not reach",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                phrase in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+                for phrase in ADR_0015_ROW_HISTORY
+            ),
+            "a row claiming zero AWS activity survived two runs that produced some",
+        )
+        f.check(
+            f"{name} makes no stale operational claim in the ADR-0015 row",
+            not [
+                claim
+                for row in _current_status_rows(body, "ADR-0015")
+                for claim in STALE_PREFLIGHT_CLAIMS
+                if claim in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "'credential source configured NONE' and 'AWS requests ZERO' are both stale",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
@@ -6915,9 +7249,30 @@ def main() -> int:
             "a guard removed to accommodate a slice is a guard that stopped guarding",
         )
 
+    if ADR_BOUNDARIES.is_file():
+        f.check(
+            "ADR-0016 keeps its own immutable accepted-on-merge status line",
+            ADR_0016_IMMUTABLE_STATUS in read(ADR_BOUNDARIES),
+            "a status sync changes the documents, never the decision record",
+        )
+
     claude_md = REPO_ROOT / "CLAUDE.md"
     if claude_md.is_file():
         claude_body = read(claude_md)
+        f.check(
+            "the CLAUDE.md in-force matrix records ADR-0016 exactly once",
+            claude_body.count(ADR_0016_MATRIX_LINE) == 1
+            and bool(_matrix_entry(claude_body, ADR_0016_MATRIX_LINE)),
+            "a merged decision absent from the in-force list reads as one that did not merge",
+        )
+        f.check(
+            "the ADR-0016 matrix entry names its pull request and its boundary",
+            all(
+                clause in _matrix_entry(claude_body, ADR_0016_MATRIX_LINE)
+                for clause in ADR_0016_MATRIX_CLAUSES
+            ),
+            "the matrix states the boundary beside the status, or it states half a fact",
+        )
         f.check(
             "the CLAUDE.md in-force matrix records ADR-0015",
             ADR_0015_MATRIX_LINE in claude_body,
@@ -6929,9 +7284,21 @@ def main() -> int:
             "in force without a pull request is a status a reader cannot check",
         )
         f.check(
-            "the in-force matrix keeps ADR-0015 dormant and never run",
-            "PREFLIGHT ONLY, NEVER RUN" in claude_body,
+            "the in-force matrix records what ADR-0015's two attempts reached",
+            all(
+                clause in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE)
+                for clause in ADR_0015_MATRIX_CLAUSES
+            ),
             "the matrix states the boundary beside the status, or it states half a fact",
+        )
+        f.check(
+            "the ADR-0015 matrix entry cannot regress to never-run or zero AWS activity",
+            not [
+                claim
+                for claim in STALE_PREFLIGHT_CLAIMS
+                if claim in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE).upper()
+            ],
+            "two authorized attempts happened; a compact entry may be short, not false",
         )
         f.check(
             "the unauthorized list no longer forbids the credential source ADR-0015 built",
@@ -7484,8 +7851,10 @@ def main() -> int:
         f.check(
             f"{name} states that nothing was invoked and no credential retrieved",
             "get_secret_value invocations by this repository: ZERO" in body
-            and "AWS network requests from this path: ZERO" in body
-            and "real credential retrieved: NONE" in body,
+            and "Secrets Manager client constructions: ZERO" in body
+            and "Secrets Manager network requests: ZERO" in body
+            and "AWS identity-gate activity: OCCURRED" in body
+            and "real credential retrieval: NONE" in body,
             "the defect implied AWS had been contacted; the record must deny it plainly",
         )
         f.check(
@@ -7502,6 +7871,76 @@ def main() -> int:
             f"{name} records the tightened identifier grammar",
             "a well-formed secret name or a complete secret ARN" in flat,
             "the earlier rule admitted shapes a client rejects locally, after the call began",
+        )
+        f.check(
+            f"{name} carries exactly one binding status row",
+            len(_phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)) == 1,
+            "two rows for one subject is two places for it to go stale",
+        )
+        f.check(
+            f"{name} separates the binding boundary's existence from its execution",
+            bool(_phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)
+                for fact in BINDING_ROW_FACTS
+            ),
+            "a credential-source boundary exists and has been invoked; the row must say both",
+        )
+        f.check(
+            f"{name} claims no absent credential source, bucket resolution or SDK path",
+            not [
+                claim
+                for row in _phase_status_rows(body, BINDING_STATUS_ROW_SUBJECT)
+                for claim in STALE_BINDING_ABSENCE_CLAIMS
+                if claim in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "'none exists' denied an architecture that ADR-0015 built and twice ran",
+        )
+        f.check(
+            f"{name} carries exactly one ADR-0016 current-status row",
+            len(_current_status_rows(body, "ADR-0016")) == 1,
+            "two rows for one decision is two places for it to go stale",
+        )
+        f.check(
+            f"{name} states ADR-0016 as in force, naming the pull request",
+            all(
+                "ACCEPTED / IN FORCE" in " ".join(row.replace("**", "").split()).upper()
+                and "PR #24 MERGED" in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0016")
+            )
+            and bool(_current_status_rows(body, "ADR-0016")),
+            "in force without a pull request is a status a reader cannot check",
+        )
+        f.check(
+            f"{name} carries no pre-merge wording in the ADR-0016 row",
+            not [
+                wording
+                for row in _current_status_rows(body, "ADR-0016")
+                for wording in (*PRE_MERGE_STATUS_WORDING, "PROPOSED")
+                if wording.upper() in " ".join(row.replace("**", "").split()).upper()
+            ],
+            "a merged decision described as conditional reads as carrying no authority",
+        )
+        f.check(
+            f"{name} states in the ADR-0016 row what merging it did not authorize",
+            bool(_current_status_rows(body, "ADR-0016"))
+            and all(
+                phrase in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0016")
+                for phrase in ADR_0016_ROW_BOUNDARY
+            ),
+            "in force is the status; the boundaries and what stays unauthorized are the claim",
+        )
+        f.check(
+            f"{name} records ADR-0016 as in force in a merge-stable sentence",
+            ADR_0016_STATUS_SENTENCE in body,
+            "prose is not a table row, and no row guard reaches it",
+        )
+        f.check(
+            f"{name} no longer carries the superseded ADR-0016 status sentence",
+            ADR_0016_STALE_SENTENCE not in flat,
+            "the ADR's own status line may say it; a current-status document may not",
         )
         f.check(
             f"{name} makes no blanket claim about what a dependency refusal counts",
