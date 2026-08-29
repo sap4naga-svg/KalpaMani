@@ -39,7 +39,7 @@ import ast
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -773,9 +773,27 @@ def _conditional_mode_sites() -> list[str]:
 #: status, and CLAUDE.md had only the stale one. Neither was caught, because
 #: nothing checked the rows.
 MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
+    ("ADR-0009", "PR #13 merged"),
+    ("ADR-0010", "PR #15 merged"),
+    ("ADR-0011", "PR #16 merged"),
+    ("ADR-0012", "PR #17 merged"),
     ("ADR-0013", "PR #18 merged"),
     ("ADR-0014", "PR #19 merged"),
 )
+
+#: How a current-status row states that its ADR is in force and names the pull
+#: request that made it so.
+#:
+#: Used by the coverage check to *find* rows of this class, never to decide
+#: whether one is true: the row is what claims the ADR merged, and
+#: :data:`MERGED_ADR_STATUS` is what governs the claim. The number is captured so
+#: a mismatch is a mismatch and not merely "both mention some PR".
+IN_FORCE_ROW: Final = re.compile(
+    r"ACCEPTED\s*/\s*IN\s+FORCE.*?\bPR\s*#(?P<pr>\d+)\s+merged", re.IGNORECASE | re.DOTALL
+)
+
+#: The first cell of a current-status row whose subject is an ADR.
+ADR_ROW_SUBJECT: Final = re.compile(r"\[(?P<adr>ADR-\d{4})\]\(docs/decisions/")
 
 #: What a merged *phase* row must say, keyed by the subject text of its first
 #: table cell.
@@ -924,6 +942,76 @@ def _stale_phase_status_defects(name: str, text: str) -> list[str]:
             if wording.upper() in flat:
                 defects.append(f"{name}: the {subject} row still says {wording!r}")
                 break
+    return defects
+
+
+def _in_force_adr_claims(text: str) -> dict[str, str]:
+    """Every ADR that a current-status row claims is in force, and its PR number.
+
+    Read from the **rows**, not from the registry -- that is the point. The
+    registry is the governed mapping; this is what the document actually says, and
+    comparing the two is how an unregistered row becomes visible instead of
+    silently ungoverned.
+
+    Scoped exactly as the other row guards are: the ADR link must be in the row's
+    **first cell**, so a feature row citing an ADR in a description is not a
+    status claim, and an ADR document's own immutable status line is not a table
+    row at all.
+
+    A row is only collected when it states **both** ``ACCEPTED / IN FORCE`` and a
+    ``PR #<n> merged`` reference. ADR-0007 and ADR-0008 say ``ACCEPTED on merge
+    (2026-08-27)`` -- a dated completed event with no pull-request number -- so
+    they are not of this class and are not swept in.
+    """
+    claims: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("|"):
+            continue
+        cells = stripped.split("|")
+        if len(cells) < 3:
+            continue
+        subject = ADR_ROW_SUBJECT.search(cells[1])
+        if subject is None:
+            continue
+        status = IN_FORCE_ROW.search("|".join(cells[2:]).replace("**", ""))
+        if status is None:
+            continue
+        claims[subject.group("adr")] = f"PR #{status.group('pr')} merged"
+    return claims
+
+
+def _registry_coverage_defects(documents: Mapping[str, str]) -> list[str]:
+    """Every in-force ADR claim the explicit registry does not govern, or governs
+    differently, or that the two documents disagree about.
+
+    The registry stays the source of truth. This does not add entries, infer a
+    merge from a filename or an ADR number, or read Git history -- it refuses to
+    let a row of this class exist outside the registry's coverage, which is the
+    failure that let ADR-0009 through ADR-0012 sit unguarded while ADR-0013 and
+    ADR-0014 were checked.
+    """
+    registered = dict(MERGED_ADR_STATUS)
+    defects: list[str] = []
+
+    for name, text in documents.items():
+        for adr, claimed in _in_force_adr_claims(text).items():
+            if adr not in registered:
+                defects.append(f"{name}: {adr} claims {claimed} but is not in MERGED_ADR_STATUS")
+            elif registered[adr].lower() != claimed.lower():
+                defects.append(
+                    f"{name}: {adr} claims {claimed}, the registry governs {registered[adr]!r}"
+                )
+
+    names = sorted(documents)
+    if len(names) == 2:
+        first, second = (_in_force_adr_claims(documents[n]) for n in names)
+        for adr in sorted(set(first) | set(second)):
+            if first.get(adr) != second.get(adr):
+                defects.append(
+                    f"{names[0]} and {names[1]} disagree on {adr}: "
+                    f"{first.get(adr)!r} vs {second.get(adr)!r}"
+                )
     return defects
 
 
@@ -5272,6 +5360,41 @@ def main() -> int:
             "Neither determines `acquisition_mode`" in contract
             or "does **not** set, confirm or contradict `acquisition_mode`" in contract,
             "record counts and coverage extension are observations",
+        )
+
+    status_documents = {
+        name: read(path)
+        for name, path in (
+            ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+            ("README.md", REPO_ROOT / "README.md"),
+        )
+        if path.is_file()
+    }
+    if len(status_documents) == 2:
+        f.check(
+            "the merged-ADR registry covers every in-force ADR row in both documents",
+            not _registry_coverage_defects(status_documents),
+            "a row of this class outside the registry is a row nothing governs",
+        )
+        f.check(
+            "the two status documents agree on every ADR-to-pull-request mapping",
+            all(
+                _in_force_adr_claims(status_documents["CLAUDE.md"]).get(adr)
+                == _in_force_adr_claims(status_documents["README.md"]).get(adr)
+                for adr in set(_in_force_adr_claims(status_documents["CLAUDE.md"]))
+                | set(_in_force_adr_claims(status_documents["README.md"]))
+            ),
+            "two documents naming different pull requests is two answers to one question",
+        )
+        f.check(
+            "the registry is in ascending ADR order",
+            [adr for adr, _ in MERGED_ADR_STATUS] == sorted(adr for adr, _ in MERGED_ADR_STATUS),
+            "an ordered registry is one a reader can check against the decisions directory",
+        )
+        f.check(
+            "the dated completed-event rows are not treated as PR-numbered claims",
+            not {"ADR-0007", "ADR-0008"} & set(_in_force_adr_claims(status_documents["CLAUDE.md"])),
+            "ADR-0007 and ADR-0008 record a date, not a pull request, and are not of this class",
         )
 
     # -- 21. ADR-0014: the dormant composition root and offline preflight ----
