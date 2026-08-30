@@ -1803,8 +1803,6 @@ SSO_LOGIN_ATTEMPT_HISTORY: Final[tuple[str, ...]] = (
     "resolved by statically parsing the tracked `EXPECTED_PROFILE` constant",
     "the entry-point module was neither imported nor executed",
     "pinned in the child process only, never disclosed",
-    "Ambient static AWS credential variables were removed from that child environment",
-    "No credential value was read or displayed.",
     "It timed out after 420 seconds, was terminated, and left no lingering AWS CLI process.",
     "A terminated process returns no status",
     "exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT",
@@ -1949,6 +1947,71 @@ SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE SECRET IDENTIFIER WAS READ",
 )
 
+#: The bounds of the SSO-login narrative inside the ADR-0015 section.
+#:
+#: The environment guards below are scoped to this span and not to the section,
+#: because the section also carries accurate component-scoped statements about
+#: what *earlier* attempts read -- the fourth never reaching
+#: ``KALPAMANI_SHARADAR_SECRET_ID``, the environment verification reading no
+#: profile or SSO cache. A guard about *this runner's* environment copy has no
+#: business reaching those, and a document-wide version would eventually be
+#: answered by weakening a true sentence somewhere else.
+SSO_LOGIN_NARRATIVE_BOUNDS: Final[tuple[str, str]] = (
+    "A separately authorized AWS SSO-login attempt has since been made",
+    "qualification NOT AUTHORIZED.",
+)
+
+#: How the child environment was built, and what that does and does not mean.
+#:
+#: The first revision of this slice wrote "No credential value was read or
+#: displayed", and the reported mechanism does not support it: the runner built
+#: the child environment with ``dict(os.environ)``, and copying a process
+#: environment **transiently materializes every value in it**, credential-bearing
+#: ones included. That is not inspection -- the named static AWS credential
+#: variables were dropped **by name**, never examined -- but "not read" and "not
+#: inspected" are different claims, and only the second is true.
+#:
+#: So the facts required here are the mechanical ones plus the four that are the
+#: actual boundary: not individually inspected, not passed to the child, not
+#: printed or persisted, and the parent environment left alone. An absence stated
+#: more strongly than the mechanism supports is the same defect ADR-0016
+#: corrected, one layer up.
+SSO_LOGIN_ENVIRONMENT_FACTS: Final[tuple[str, ...]] = (
+    "The child environment was built by copying the parent process environment",
+    "that copy transiently materialized the parent environment's values in the runner process",
+    "the credential-bearing ones included",
+    "a mechanical consequence of copying a process environment",
+    "an earlier revision of this section asserted a stronger absence than the mechanism supports",
+    "Copying is not inspection, use, disclosure or persistence",
+    "removed from the child environment before the AWS CLI process was started",
+    "not individually inspected, tested, enumerated or classified",
+    "not passed to, and not used by, the AWS CLI child",
+    "No credential value was printed, logged, disclosed or persisted",
+    "the parent environment itself was not modified",
+    "not deliberately inspected and not used as the profile selection",
+)
+
+#: Absences the environment copy cannot support, and uses it did not make.
+#:
+#: The first four are stronger than the mechanism: values *were* materialized by
+#: the copy, and the parent environment *was* copied. The next two are claims
+#: about the parent environment's contents that nothing observed -- dropping a
+#: key by name establishes neither its absence nor an empty value. The last two
+#: are the opposite error: the removed variables never reached the child, so the
+#: CLI neither received nor used them.
+#:
+#: Scoped to :data:`SSO_LOGIN_NARRATIVE_BOUNDS` only.
+SSO_LOGIN_ENVIRONMENT_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "NO CREDENTIAL VALUE WAS READ",
+    "NO ENVIRONMENT-VARIABLE VALUE WAS READ",
+    "CREDENTIAL VALUES WERE NEVER MATERIALIZED",
+    "THE PARENT ENVIRONMENT WAS NOT COPIED",
+    "CREDENTIAL VARIABLES WERE ABSENT",
+    "CREDENTIAL VALUES WERE EMPTY",
+    "THE AWS CLI RECEIVED THE AMBIENT STATIC CREDENTIALS",
+    "THE AWS CLI USED UNRELATED CREDENTIALS",
+)
+
 #: The chronology anchor for the SSO-login attempt, which must come last.
 SSO_LOGIN_ATTEMPT_ANCHOR: Final = (
     "a separately authorized AWS SSO-login attempt, after that diagnosis and after PR #29 merged"
@@ -2060,6 +2123,7 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF", STALE_GATE_PROBE_CLAIMS),
     ("SSO-LOGIN INVOCATIONS ZERO", STALE_SSO_LOGIN_CLAIMS),
     ("THE GOVERNED PROFILE IS INCORRECT", SSO_LOGIN_OVERCLAIMS),
+    ("NO CREDENTIAL VALUE WAS READ", SSO_LOGIN_ENVIRONMENT_OVERCLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -2764,6 +2828,22 @@ def _audit_prose_excluding_own_fixture(source: str) -> str:
     start, end = _audit_fixture_span(source)
     lines = source.splitlines()
     return "\n".join(lines[: start - 1] + lines[end:])
+
+
+def _sso_login_narrative(section: str) -> str:
+    """The SSO-login narrative alone, flattened, or ``""`` if its bounds fail.
+
+    Fail closed. An unresolvable span returns the empty string, which makes the
+    required-facts guard fail rather than silently guarding nothing -- the same
+    rule :func:`_audit_fixture_span` follows for its own boundary.
+    """
+    start, end = SSO_LOGIN_NARRATIVE_BOUNDS
+    flat = " ".join(section.replace("**", "").split())
+    if flat.count(start) != 1 or flat.count(end) != 1:
+        return ""
+    low = flat.index(start)
+    high = flat.index(end, low) + len(end)
+    return "" if high <= low else flat[low:high]
 
 
 def _governed_profile_value(source: str) -> str:
@@ -9087,6 +9167,26 @@ def main() -> int:
             f"{name} scopes the SSO-login failure as likely, not as a proven AWS defect",
             all(phrase in binding_flat for phrase in SSO_LOGIN_CAUSE_SCOPE),
             "operator handling explains it; nothing inspected an AWS configuration",
+        )
+        sso_narrative = _sso_login_narrative(binding_section)
+        f.check(
+            f"{name} bounds the SSO-login narrative so its guards stay scoped",
+            bool(sso_narrative),
+            "an unresolvable span would guard nothing while reporting a pass",
+        )
+        f.check(
+            f"{name} records how the child environment was built, and what copying is not",
+            all(fact in sso_narrative for fact in SSO_LOGIN_ENVIRONMENT_FACTS),
+            "copying an environment materializes its values; not inspecting them is the claim",
+        )
+        f.check(
+            f"{name} claims no absence the environment copy cannot support",
+            not [
+                claim
+                for claim in SSO_LOGIN_ENVIRONMENT_OVERCLAIMS
+                if claim in sso_narrative.upper()
+            ],
+            "not read, never materialized and not copied are each stronger than what happened",
         )
         f.check(
             f"{name} keeps every boundary a failed login does not move",

@@ -1040,10 +1040,24 @@ one.
 Run after the post-fourth diagnosis and after PR #29 merged, it invoked **one** process and
 **one** `aws sso login --no-cli-pager` command. The governed profile was resolved by **statically
 parsing the tracked `EXPECTED_PROFILE` constant** — the entry-point module was **neither imported
-nor executed** — and pinned **in the child process only**, never disclosed. Ambient static AWS
-credential variables were removed from that child environment so unrelated credentials on this
-workstation could not override the governed profile, which is the §4.24 wrong-account hazard in
-its AWS form. **No credential value was read or displayed.**
+nor executed** — and pinned **in the child process only**, never disclosed. The current ambient
+`AWS_PROFILE` value was **not deliberately inspected and not used as the profile selection**; the
+profile came from that tracked constant.
+
+**The child environment was built by copying the parent process environment, and that copy
+transiently materialized the parent environment's values in the runner process** — the
+credential-bearing ones included. That is a mechanical consequence of copying a process
+environment, and it is stated rather than glossed: an earlier revision of this section asserted a
+stronger absence than the mechanism supports.
+
+**Copying is not inspection, use, disclosure or persistence, and those are what the boundary is
+about.** The named ambient static AWS credential variables were **removed from the child
+environment before the AWS CLI process was started** — by name, so their presence or values were
+**not individually inspected, tested, enumerated or classified**. They were **not passed to, and
+not used by, the AWS CLI child**. **No credential value was printed, logged, disclosed or
+persisted**, and **the parent environment itself was not modified**. The removal exists so
+unrelated credentials held on this workstation for another project could not override the governed
+profile, which is the §4.24 wrong-account hazard in its AWS form.
 
 **It timed out after 420 seconds**, was terminated, and left **no lingering AWS CLI process**. A
 terminated process returns no status, so this is recorded as **exit code: NOT AVAILABLE / PROCESS
