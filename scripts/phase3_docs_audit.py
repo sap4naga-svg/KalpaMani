@@ -916,7 +916,7 @@ BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
     "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
     "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
-    "AWS SSO REFRESH/LOGIN SEPARATELY GATED / NOT AUTHORIZED",
+    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
 
@@ -1070,7 +1070,14 @@ ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN",
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "ONE COMMAND, EXIT CODE 255, MISSING AND EXPIRED NOT DISTINGUISHED",
-    "A FIFTH ATTEMPT AND FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
+    "A FIFTH ATTEMPT, FURTHER AWS AUTHENTICATION DIAGNOSIS AND ANOTHER "
+    "SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
+    "POST-DIAGNOSIS AWS SSO-LOGIN ATTEMPT COMPLETED -- REFUSED_SSO_LOGIN",
+    "ONE COMMAND, TIMED OUT AFTER 420 SECONDS, NO EXIT STATUS RETURNED",
+    "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
+    "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
+    "SSO SESSION STILL UNREFRESHED, EARLIER DIAGNOSIS UNREVISED",
+    "LIKELY CAUSE INTERACTIVE-SURFACE SUPPRESSION -- LIKELY, NOT PROVEN",
     "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
     "SET UP AFTER THE THIRD ATTEMPT",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
@@ -1183,7 +1190,7 @@ STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API acc
 FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
@@ -1276,7 +1283,7 @@ NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
     "SDK/client construction outside the ADR-0015 operator boundary",
     "a fifth binding-preflight attempt",
     "further AWS authentication diagnosis -- one completed after the fourth",
-    "an AWS SSO refresh or login -- separately gated",
+    "another AWS SSO refresh or login -- separately gated",
     "ANY provider API call",
     "an authenticated qualification run",
 )
@@ -1349,7 +1356,7 @@ STALE_SECTION_IDENTIFIER_LINE: Final = "operational secret-identifier configurat
 ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
     "A FIFTH ATTEMPT",
     "FURTHER AWS AUTHENTICATION DIAGNOSIS",
-    "AN AWS SSO REFRESH OR LOGIN",
+    "ANOTHER AWS SSO REFRESH OR LOGIN",
     "CREDENTIAL ACCESS BY THE APPLICATION",
     "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
 )
@@ -1395,7 +1402,7 @@ FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "offline composition-preflight invocations: ZERO",
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
 )
 
 #: What the fourth attempt's chronology entry must state, not merely tabulate.
@@ -1662,7 +1669,7 @@ POST_FOURTH_DIAGNOSIS_COUNTS: Final[tuple[str, ...]] = (
     "diagnosis underlying AWS network requests: UNKNOWN",
     "missing vs expired: NOT DISTINGUISHED by the diagnosis",
     "governed profile: PINNED IN THE CHILD ENVIRONMENT, NEVER DISCLOSED",
-    "SSO-login invocations: ZERO   ·   authentication-repair actions: ZERO",
+    "SSO-login invocations during the diagnosis: ZERO   ·   repair actions during it: ZERO",
     "fifth binding-preflight attempts: ZERO",
 )
 
@@ -1676,9 +1683,9 @@ POST_FOURTH_DIAGNOSIS_HISTORY: Final[tuple[str, ...]] = (
     "It does not distinguish missing from expired",
     "first direct diagnostic evidence explaining the fourth attempt's identity refusal",
     "the attempt's own network-request total stays UNKNOWN",
-    "SSO-login invocations ZERO",
-    "authentication-repair actions ZERO",
-    "fifth binding-preflight attempts ZERO",
+    "At that point SSO-login invocations were ZERO",
+    "authentication-repair actions were ZERO",
+    "fifth binding-preflight attempts were ZERO",
 )
 
 #: How the diagnosis pinned the governed profile, and why that was correct.
@@ -1749,8 +1756,8 @@ DIAGNOSIS_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE SESSION WAS EXPIRED, NOT MISSING",
     "MISSING RATHER THAN EXPIRED",
     "EXPIRED RATHER THAN MISSING",
-    "AWS SSO LOGIN OCCURRED",
-    "AN SSO LOGIN WAS PERFORMED",
+    "A SUCCESSFUL AWS SSO LOGIN OCCURRED",
+    "AN SSO LOGIN WAS SUCCESSFULLY PERFORMED",
     "AUTHENTICATION WAS REPAIRED",
     "AUTHENTICATION HAS BEEN REPAIRED",
     "THE SESSION WAS REFRESHED",
@@ -1764,6 +1771,218 @@ DIAGNOSIS_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE DIAGNOSIS SENT NO AWS NETWORK REQUEST",
 )
 
+#: The fenced-block record of the timed-out post-diagnosis SSO-login attempt.
+#:
+#: One authorized ``aws sso login`` invocation ran after PR #29 merged, and it
+#: did not succeed. The *shape* of that failure is the point: the process was
+#: terminated on a 420-second timeout, so it returned **no status at all**.
+#: Writing a numeric exit code would invent one, which is the class of error
+#: ADR-0016 corrected -- a report naming a boundary the run never reached.
+SSO_LOGIN_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
+    "post-diagnosis AWS SSO-login attempt: COMPLETED -- REFUSED_SSO_LOGIN",
+    "SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager",
+    "SSO-login exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT",
+    "SSO-login timeout: 420 SECONDS   ·   lingering AWS CLI process: NONE",
+    "browser authorization interactions: ZERO   ·   device authorizations completed: ZERO",
+    "successful SSO refreshes: ZERO   ·   SSO session: STILL UNREFRESHED",
+    "SSO-login underlying AWS network requests: UNKNOWN",
+    "identity-confirmation command invocations: ZERO",
+    "likely cause: INTERACTIVE BROWSER/DEVICE-CODE SURFACE SUPPRESSED -- LIKELY, NOT PROVEN",
+    "device URL or code in the undisplayed buffer: UNKNOWN -- NOT INSPECTED",
+)
+
+#: What the attempt's narrative must state, not merely tabulate.
+#:
+#: The counts say what happened; these say what it means and what it left alone.
+#: An attempt recorded only as a row of zeros reads as an event with no bearing
+#: on anything, and this one has a specific bearing: it revised no earlier
+#: finding, verified no identifier, and retrieved nothing.
+SSO_LOGIN_ATTEMPT_HISTORY: Final[tuple[str, ...]] = (
+    "A separately authorized AWS SSO-login attempt has since been made, and it did not succeed.",
+    "it invoked one process and one `aws sso login --no-cli-pager` command",
+    "resolved by statically parsing the tracked `EXPECTED_PROFILE` constant",
+    "the entry-point module was neither imported nor executed",
+    "pinned in the child process only, never disclosed",
+    "Ambient static AWS credential variables were removed from that child environment",
+    "No credential value was read or displayed.",
+    "It timed out after 420 seconds, was terminated, and left no lingering AWS CLI process.",
+    "A terminated process returns no status",
+    "exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT",
+    "never as a numeric exit code",
+    "the closed public outcome is `REFUSED_SSO_LOGIN`",
+    "Browser authorization interactions ZERO",
+    "device authorizations completed ZERO",
+    "successful SSO refreshes ZERO",
+    "identity-confirmation command invocations ZERO",
+    "Its underlying AWS network-request count is UNKNOWN",
+    "The SSO session remains unrefreshed",
+    "the earlier diagnosis stands unrevised at `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
+    "no evidence distinguishing missing from expired",
+    "did not verify or contradict the owner-configured secret identifier",
+    "retrieved no credential",
+)
+
+#: The likely-versus-proven scoping of why the interaction failed.
+#:
+#: Everything here is evidence about the **operator's handling**: output was
+#: captured rather than streamed, nothing reached the owner, and the process
+#: waited its whole timeout. That supports *likely*, and nothing supports
+#: *proven*: the buffer was never inspected and cannot be inspected now, so
+#: whether the CLI even emitted a device URL or code is unknown in both
+#: directions. A procedural explanation promoted to a proven AWS-configuration
+#: defect would send the next session to repair something nobody has shown to
+#: be broken.
+SSO_LOGIN_CAUSE_SCOPE: Final[tuple[str, ...]] = (
+    "The likely cause is procedural, and it is recorded as likely rather than proven.",
+    "stdout and stderr were captured rather than streamed",
+    "no browser appeared, no device URL or code was displayed to the owner",
+    "the process waited the full 420 seconds",
+    "likely caused by suppressing the interactive browser/device-code surface",
+    "an operational-handling explanation, not proof of an AWS configuration defect",
+    "was not inspected and remains UNKNOWN",
+    "no raw output may be inspected now to resolve that uncertainty",
+    "Nothing here establishes a defective AWS SSO configuration",
+    "an incorrect governed profile",
+    "a wrong SSO start URL",
+    "the presence or absence of a generated device code",
+)
+
+#: What stays unauthorized now that one SSO-login attempt has failed.
+#:
+#: Stated as an explicit sentence rather than left to inference. A failed
+#: operation reads as an invitation to repeat it, and the whole point of the
+#: gate is that it is not one.
+SSO_LOGIN_FORWARD_BOUNDARIES: Final[tuple[str, ...]] = (
+    "A failed login attempt is not permission to retry.",
+    "Another AWS SSO-login/refresh attempt NOT AUTHORIZED",
+    "further AWS authentication diagnosis NOT AUTHORIZED",
+    "a fifth binding-preflight attempt NOT AUTHORIZED",
+    "application credential access NOT AUTHORIZED",
+    "authenticated qualification NOT AUTHORIZED",
+)
+
+#: Current-status wording the SSO-login attempt made false.
+#:
+#: Every entry is a **full** superseded form, never a prefix of the corrected
+#: one -- the discipline :data:`STALE_NO_DIAGNOSIS_CLAIMS` documents. The
+#: corrected text says "SSO-login invocations during the diagnosis: ZERO" and
+#: "At that point SSO-login invocations were ZERO", and neither contains the
+#: bare forms below, so a document can be accurate about the diagnosis's own
+#: zeros without tripping a guard about the current total.
+STALE_SSO_LOGIN_CLAIMS: Final[tuple[str, ...]] = (
+    "SSO-LOGIN INVOCATIONS: ZERO",
+    "SSO-LOGIN INVOCATIONS ZERO",
+    "SSO-LOGIN COMMAND INVOCATIONS: ZERO",
+    "AUTHORIZED AWS SSO-LOGIN ATTEMPTS TO DATE: ZERO",
+    "ZERO SSO LOGINS, ZERO REPAIR ACTIONS",
+    "AWS SSO REFRESH/LOGIN: SEPARATELY GATED",
+    "AWS SSO REFRESH/LOGIN SEPARATELY GATED",
+    "NO SSO LOGIN OCCURRED",
+    "NO SSO-LOGIN INVOCATION FOLLOWED",
+    "NO SSO-LOGIN INVOCATION HAS OCCURRED",
+    "NO AWS SSO LOGIN HAS BEEN ATTEMPTED",
+    "NO SSO LOGIN HAS BEEN ATTEMPTED",
+    "AN AWS SSO REFRESH OR LOGIN IS ENTIRELY FUTURE",
+    "ALL SSO-LOGIN ACTIVITY IS FUTURE",
+    "SSO-LOGIN ACTIVITY IS ENTIRELY FUTURE",
+    "AN SSO LOGIN REMAINS ENTIRELY FUTURE",
+)
+
+#: Claims the timed-out attempt does not support, each in the affirmative form.
+#:
+#: Affirmative deliberately, and the documents state the same subjects as noun
+#: phrases -- "a defective AWS SSO configuration", "an incorrect governed
+#: profile" -- so the sentence *denying* each cannot trip the guard denying it.
+#: An earlier draft wrote the denial as "nothing establishes that the governed
+#: profile is incorrect", which contains this list's own entry: the guard would
+#: have been answered by deleting the true disclaimer.
+#:
+#: The numeric exit codes are listed individually. A timeout returns no status,
+#: so any number here is invented, and 255 in particular is the *diagnosis*
+#: command's code -- the nearest wrong answer to hand.
+SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "THE SSO LOGIN SUCCEEDED",
+    "THE SSO-LOGIN ATTEMPT SUCCEEDED",
+    "SSO LOGIN SUCCEEDED",
+    "THE SSO SESSION WAS REFRESHED",
+    "THE SSO SESSION HAS BEEN REFRESHED",
+    "SSO REFRESH COMPLETED",
+    "SUCCESSFUL SSO REFRESHES: ONE",
+    "IDENTITY_CONFIRMED",
+    "IDENTITY WAS CONFIRMED",
+    "THE IDENTITY CONFIRMATION RAN",
+    "THE IDENTITY CONFIRMATION PASSED",
+    "IDENTITY-CONFIRMATION COMMAND INVOCATIONS: ONE",
+    "BROWSER AUTHORIZATION COMPLETED",
+    "BROWSER AUTHENTICATION COMPLETED",
+    "THE OWNER COMPLETED THE BROWSER AUTHORIZATION",
+    "DEVICE AUTHORIZATION COMPLETED",
+    "DEVICE AUTHORIZATIONS COMPLETED: ONE",
+    "A RETRY IS AUTHORIZED",
+    "A RETRY IS NOW AUTHORIZED",
+    "ANOTHER SSO LOGIN IS AUTHORIZED",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT IS AUTHORIZED",
+    "SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ZERO",
+    "SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ONE",
+    "THE SSO-LOGIN ATTEMPT SENT ONE AWS NETWORK REQUEST",
+    "THE SSO-LOGIN ATTEMPT SENT NO AWS NETWORK REQUEST",
+    "SSO-LOGIN EXIT CODE: 0",
+    "SSO-LOGIN EXIT CODE: 1",
+    "SSO-LOGIN EXIT CODE: 255",
+    "SSO-LOGIN EXIT CODE 255",
+    "TIMED OUT WITH EXIT CODE",
+    "EXIT CODE: TIMEOUT",
+    "THE AWS SSO CONFIGURATION IS DEFECTIVE",
+    "THE SSO CONFIGURATION IS DEFECTIVE",
+    "SSO CONFIGURATION IS DEFINITELY DEFECTIVE",
+    "THE GOVERNED PROFILE IS INCORRECT",
+    "THE GOVERNED PROFILE WAS INCORRECT",
+    "THE GOVERNED PROFILE WAS WRONG",
+    "THE SSO START URL IS WRONG",
+    "THE BROWSER FAILED TO LAUNCH BECAUSE",
+    "A DEVICE CODE WAS GENERATED",
+    "NO DEVICE CODE WAS GENERATED",
+    "THE PROVEN CAUSE",
+    "PROVEN TO BE CAUSED BY",
+    "DEFINITELY CAUSED BY",
+    "THE CREDENTIAL WAS RETRIEVED",
+    "THE SECRET IDENTIFIER WAS READ",
+)
+
+#: The chronology anchor for the SSO-login attempt, which must come last.
+SSO_LOGIN_ATTEMPT_ANCHOR: Final = (
+    "a separately authorized AWS SSO-login attempt, after that diagnosis and after PR #29 merged"
+)
+
+#: What the entry point's own documentation must state about the attempt.
+#:
+#: Its docstring is a current-status surface sitting beside the one authorized
+#: SDK-construction path, so an operator reading the file must not have to open
+#: a status document to learn that a login was tried and failed.
+BINDING_SOURCE_SSO_LOGIN: Final[tuple[str, ...]] = (
+    "post-diagnosis SSO-login attempt: COMPLETED REFUSED_SSO_LOGIN",
+    "timed out after 420 seconds, terminated, no exit status returned",
+    "zero browser authorizations, zero device authorizations, zero successful refreshes",
+    "A separately authorized AWS SSO-login attempt has since been made, and it did not succeed.",
+    "it invoked one process and one ``aws sso login --no-cli-pager`` command",
+    "static AST parse of the ``EXPECTED_PROFILE`` constant below",
+    "this module was neither imported nor executed",
+    "pinned in the child environment only, never disclosed",
+    "It timed out after 420 seconds, was terminated and left no lingering AWS CLI process, "
+    "so no exit status was returned",
+    "exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT*, never a numeric one",
+    "the closed public outcome is REFUSED_SSO_LOGIN",
+    "identity-confirmation command invocations zero",
+    "The SSO session remains unrefreshed",
+    "the earlier REFUSED_SSO_SESSION_MISSING_OR_EXPIRED diagnosis stands unrevised",
+    "The likely cause is procedural, and it is recorded as likely rather than proven.",
+    "likely caused by suppressing the interactive browser/device-code surface",
+    "not proof of an AWS configuration defect",
+    "was not inspected and remains UNKNOWN",
+    "Nothing establishes a defective SSO configuration",
+    "a failed login attempt is not permission to retry",
+)
+
 #: What the entry point's own documentation must say about the diagnosis.
 BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
     "post-fourth identity diagnosis: COMPLETED",
@@ -1774,8 +1993,8 @@ BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
     "one process and one ``aws sts get-caller-identity`` command, which exited 255",
     "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "It does not distinguish missing from expired",
-    "SSO-login invocations zero, authentication-repair actions zero, fifth binding-preflight "
-    "attempts zero.",
+    "At that point SSO-login invocations were zero, authentication-repair actions "
+    "were zero and fifth binding-preflight attempts were zero.",
     "because a shell-level pin does not survive across separate tool invocations",
     "That constant already existed in tracked executable source",
     "did not print, log, disclose or newly write the value",
@@ -1839,6 +2058,8 @@ STALE_GATE_PROBE_CLAIMS: Final[tuple[str, ...]] = (
 REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("UNKNOWN -- NO DIAGNOSIS WAS PERFORMED", STALE_NO_DIAGNOSIS_CLAIMS),
     ("NO DIAGNOSIS WAS PERFORMED DURING THE ATTEMPT ITSELF", STALE_GATE_PROBE_CLAIMS),
+    ("SSO-LOGIN INVOCATIONS ZERO", STALE_SSO_LOGIN_CLAIMS),
+    ("THE GOVERNED PROFILE IS INCORRECT", SSO_LOGIN_OVERCLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -1880,7 +2101,7 @@ STALE_PROFILE_DISCLOSURE_CLAIMS: Final[tuple[str, ...]] = (
 FIFTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
 
@@ -1987,6 +2208,8 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
     "BY THE ENTRY POINT",
     "authorized binding-preflight attempts to date: FOUR -- all refused",
+    "authorized AWS SSO-login attempts to date: ONE -- REFUSED_SSO_LOGIN, timed out at 420s",
+    "successful SSO refreshes: ZERO   ·   identity confirmations after it: ZERO",
     "Secrets Manager client constructions: ZERO",
     "get_secret_value invocations: ZERO",
     "Secrets Manager network requests: ZERO",
@@ -2000,7 +2223,7 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "composition preflight run: NEVER",
     "a fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "AWS SSO refresh/login: SEPARATELY GATED / NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
     "credential access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
@@ -2105,10 +2328,15 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     # searched, so each is independently required and each fails on its own.
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "ONE COMMAND, EXIT CODE 255",
-    "ITS OWN NETWORK COUNT UNKNOWN, ZERO SSO LOGINS, ZERO REPAIR ACTIONS",
+    "ITS OWN NETWORK COUNT UNKNOWN, ZERO SSO LOGINS DURING IT, ZERO REPAIR ACTIONS DURING IT",
+    "POST-DIAGNOSIS AWS SSO-LOGIN ATTEMPT COMPLETED -- REFUSED_SSO_LOGIN",
+    "ONE COMMAND, TIMED OUT AFTER 420 SECONDS, NO EXIT STATUS RETURNED",
+    "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
+    "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
+    "SSO SESSION STILL UNREFRESHED, EARLIER DIAGNOSIS UNREVISED",
     "a fifth attempt NOT AUTHORIZED",
     "further AWS authentication diagnosis NOT AUTHORIZED",
-    "AWS SSO refresh/login SEPARATELY GATED / NOT AUTHORIZED",
+    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
     "credential access and authenticated qualification NOT AUTHORIZED",
     "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
 )
@@ -8177,9 +8405,35 @@ def main() -> int:
             "missing or expired, undistinguished, and nothing repaired afterwards",
         )
         f.check(
+            "the entry point records the timed-out SSO-login attempt",
+            all(
+                phrase in _comment_prose(read(BINDING_PREFLIGHT))
+                for phrase in BINDING_SOURCE_SSO_LOGIN
+            ),
+            "an operator opening this file must not need a status document to learn it failed",
+        )
+        f.check(
+            "the entry point carries no stale zero-SSO-login claim",
+            not [
+                claim
+                for claim in STALE_SSO_LOGIN_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "its docstring said an SSO refresh was entirely future; one has been attempted",
+        )
+        f.check(
+            "the entry point claims nothing the SSO-login attempt did not establish",
+            not [
+                claim
+                for claim in SSO_LOGIN_OVERCLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "no success, no identity, no proven cause and no authorized retry",
+        )
+        f.check(
             "the entry point's factory commentary no longer calls all diagnosis future",
             "Diagnosis is no longer entirely future:" in read(BINDING_PREFLIGHT)
-            and "any further AWS authentication diagnosis, an SSO refresh and every"
+            and "any further AWS authentication diagnosis, another SSO refresh and every"
             in read(BINDING_PREFLIGHT),
             "one diagnosis ran; only a further one is gated",
         )
@@ -8806,6 +9060,66 @@ def main() -> int:
             f"{name} claims nothing the diagnosis did not establish",
             not [claim for claim in DIAGNOSIS_OVERCLAIMS if claim in flat.upper()],
             "one closed word: not which of missing or expired, and not a repair",
+        )
+        f.check(
+            f"{name} records the timed-out AWS SSO-login attempt and its counts",
+            all(token in binding_section for token in SSO_LOGIN_ATTEMPT_COUNTS),
+            "an authorized command that ran and failed is current status, not an omission",
+        )
+        f.check(
+            f"{name} states the SSO-login attempt's chronology, not only its counts",
+            all(phrase in binding_flat for phrase in SSO_LOGIN_ATTEMPT_HISTORY),
+            "what it did, what it left unrevised and what it never reached are all the finding",
+        )
+        f.check(
+            f"{name} records the SSO-login exit status as unavailable rather than numeric",
+            "SSO-login exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT" in binding_section
+            and "never as a numeric exit code" in binding_flat,
+            "a terminated process returns no status; any number would be invented",
+        )
+        f.check(
+            f"{name} leaves the SSO-login attempt's AWS network-request count UNKNOWN",
+            "SSO-login underlying AWS network requests: UNKNOWN" in binding_section
+            and "Its underlying AWS network-request count is UNKNOWN" in binding_flat,
+            "a CLI invocation is not one network request, and it may fail before sending any",
+        )
+        f.check(
+            f"{name} scopes the SSO-login failure as likely, not as a proven AWS defect",
+            all(phrase in binding_flat for phrase in SSO_LOGIN_CAUSE_SCOPE),
+            "operator handling explains it; nothing inspected an AWS configuration",
+        )
+        f.check(
+            f"{name} keeps every boundary a failed login does not move",
+            all(phrase in binding_flat for phrase in SSO_LOGIN_FORWARD_BOUNDARIES),
+            "a failed operation reads as an invitation to repeat it unless it is refused",
+        )
+        f.check(
+            f"{name} places the SSO-login attempt after the post-fourth diagnosis",
+            SSO_LOGIN_ATTEMPT_ANCHOR in binding_flat
+            and POST_FOURTH_DIAGNOSIS_ANCHOR in binding_flat
+            and binding_flat.index(POST_FOURTH_DIAGNOSIS_ANCHOR)
+            < binding_flat.index(SSO_LOGIN_ATTEMPT_ANCHOR),
+            "printed first it reads as the login that preceded the second attempt",
+        )
+        f.check(
+            f"{name} records the SSO-login attempt in the ADR-0015 current-status row",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                "REFUSED_SSO_LOGIN" in " ".join(row.replace("**", "").split()).upper()
+                and "TIMED OUT AFTER 420 SECONDS" in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+            ),
+            "the row and the section are independent surfaces, and both are read alone",
+        )
+        f.check(
+            f"{name} carries no stale zero-SSO-login current status",
+            not [claim for claim in STALE_SSO_LOGIN_CLAIMS if claim in flat.upper()],
+            "one login was attempted; a document still reporting none is wrong, not cautious",
+        )
+        f.check(
+            f"{name} claims nothing the SSO-login attempt did not establish",
+            not [claim for claim in SSO_LOGIN_OVERCLAIMS if claim in flat.upper()],
+            "it did not succeed, confirm an identity, prove a cause or authorize a retry",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
