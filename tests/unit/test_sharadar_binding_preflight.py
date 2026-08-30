@@ -2327,11 +2327,23 @@ def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
     assert offenders == [], f"module-level mutable state: {offenders}"
 
 
-def test_the_entry_point_is_the_only_place_that_constructs_an_sdk_client() -> None:
+def test_only_the_two_authorized_entry_points_construct_an_sdk_client() -> None:
+    """ADR-0015 authorized one construction site; ADR-0017 authorized a second.
+
+    Narrowed rather than relaxed. The earlier rule was 'this entry point and
+    nowhere else', which was correct while it was the only operator surface. Both
+    are named here, so a third arriving anywhere under ``src/``, ``scripts/`` or
+    ``tests/`` still fails.
+    """
     # The docs audit and this file both *name* the constructor -- one to forbid it,
     # one to assert its absence. A guard that could not tell a prohibition from a
     # construction would forbid writing the prohibition.
-    scanning = {ENTRY_POINT, Path(__file__).resolve(), SCRIPTS / "phase3_docs_audit.py"}
+    scanning = {
+        ENTRY_POINT,
+        SCRIPTS / "sharadar_authenticated_qualification.py",
+        Path(__file__).resolve(),
+        SCRIPTS / "phase3_docs_audit.py",
+    }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):
         for path in _python_files(root):

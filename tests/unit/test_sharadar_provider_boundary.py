@@ -339,10 +339,19 @@ def test_no_production_module_or_script_constructs_the_concrete_transport() -> N
     ADR-0015 added the second: the operator binding preflight builds a real
     transport inside a factory that only its authorized branch calls. That is the
     point of the slice, and it is the same trade -- a transport nobody can build
-    is a transport nobody can use, and the preflight refuses by default. Every
-    other production module, script and unattended runner still fails here.
+    is a transport nobody can use, and the preflight refuses by default.
+
+    ADR-0017 added the third, on the same terms: the authenticated acquisition
+    entry point builds one inside a factory its authorized branch alone reaches,
+    and it too refuses by default and has never been run. Every other production
+    module, script and unattended runner still fails here.
     """
-    allowed = {TRANSPORT_TEST, BINDING_PREFLIGHT, BINDING_PREFLIGHT_TEST}
+    allowed = {
+        TRANSPORT_TEST,
+        BINDING_PREFLIGHT,
+        BINDING_PREFLIGHT_TEST,
+        SCRIPTS / "sharadar_authenticated_qualification.py",
+    }
     offenders: list[str] = []
     for root in (PACKAGE_ROOT, SCRIPTS, TESTS):
         for path in python_files(root):

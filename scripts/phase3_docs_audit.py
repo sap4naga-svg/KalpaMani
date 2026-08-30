@@ -297,6 +297,15 @@ ADR_BINDING = DECISIONS / "ADR-0015-implement-the-dormant-sharadar-private-bindi
 BINDING_PREFLIGHT = REPO_ROOT / "scripts" / "sharadar_binding_preflight.py"
 SECRETS_BOUNDARY = PROVIDER_PACKAGE / "secrets.py"
 BINDING_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_binding_preflight.py"
+
+#: The ADR-0017 implementation slice: one operator entry point and its two
+#: dedicated synthetic suites. Named as exact paths so a rename has to pass
+#: review rather than merely land in the right folder.
+ADR_0017_ENTRY_POINT = REPO_ROOT / "scripts" / "sharadar_authenticated_qualification.py"
+ADR_0017_ENTRY_TESTS = REPO_ROOT / "tests" / "unit" / "test_sharadar_authenticated_qualification.py"
+ADR_0017_COMPOSITION_TESTS = (
+    REPO_ROOT / "tests" / "unit" / "test_sharadar_acquisition_composition.py"
+)
 #: ADR-0016: the correction that split one credential refusal into three.
 ADR_BOUNDARIES = DECISIONS / ("ADR-0016-correct-private-binding-preflight-failure-boundaries.md")
 ADR_RUNTIME = DECISIONS / "ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md"
@@ -4313,15 +4322,16 @@ ADR_0017_REQUIRED_PROSE: Final[tuple[tuple[str, str], ...]] = (
     ("names the pull request that accepted it", f"pr {ADR_0017_PR} merged"),
     ("names the merge commit", ADR_0017_MERGE_COMMIT),
     ("names the approved ADR head", ADR_0017_APPROVED_HEAD),
+    ("keeps the pre-merge period historically accurate", "carried no authority"),
+    ("records the entry point as implemented", "is now implemented"),
+    ("records it as code only and never run", "code only / never run"),
+    ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
     (
-        "keeps the pre-merge period historically accurate",
-        "carried no authority",
+        "keeps execution separately gated",
+        "execution of the new surface",
     ),
-    ("records that the entry point is not implemented", "has not been implemented"),
-    (
-        "limits what acceptance authorizes",
-        "dormant code-only implementation slice",
-    ),
+    ("keeps the three gates distinct", "three distinct gates"),
+    ("introduces no parser", "no parser"),
     ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
     ("preserves the opaque-payload boundary", "opaque-payload boundary"),
     ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
@@ -4330,12 +4340,6 @@ ADR_0017_REQUIRED_PROSE: Final[tuple[tuple[str, str], ...]] = (
         "keeps evidence in the licensed private Bronze data plane",
         "licensed private bronze data plane",
     ),
-    ("performs no CONTROL publication", "control publication stays zero and forbidden"),
-    (
-        "rejects zero-persistence rather than selecting it",
-        "zero-persistence provider request is rejected",
-    ),
-    ("separates the implementation gate from the execution gate", "does not authorize execution"),
     (
         "keeps the full empirical qualification separate and unexecuted",
         "empirical qualification remains separate and unexecuted",
@@ -4350,6 +4354,10 @@ ADR_0017_REQUIRED_PROSE: Final[tuple[tuple[str, str], ...]] = (
 #: whitespace before matching would throw away exactly that signal, so these are
 #: checked against the unmodified text.
 ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records exactly one implemented authenticated entry point",
+        "authenticated entry points implemented      one",
+    ),
     (
         "records zero authenticated qualification attempts",
         "authenticated qualification attempts        zero",
@@ -4368,14 +4376,9 @@ ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
         "s3 object operations for qualification      zero",
     ),
     (
-        "records zero AWS operations during the inspection",
-        "aws operations during the inspection        zero",
+        "records zero Terraform operations for qualification",
+        "terraform operations for qualification      zero",
     ),
-    (
-        "records zero Secrets Manager operations during it",
-        "secrets manager operations during it        zero",
-    ),
-    ("records zero Terraform operations", "terraform operations                        zero"),
     (
         "leaves the credential-retrieval count at one",
         "credential retrievals                       one",
@@ -4383,10 +4386,6 @@ ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
     (
         "leaves the binding-preflight count at five",
         "binding-preflight attempts                  five",
-    ),
-    (
-        "records that no authenticated entry point is implemented",
-        "authenticated entry points implemented      none",
     ),
 )
 
@@ -4402,53 +4401,60 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
     "the merge activated adr-0017's own acceptance condition",
     "adr-0017 is now accepted and in force",
     "no implementation and no execution followed the merge",
-    "a dormant code-only implementation is the next separately reviewed slice",
+    "the dormant code-only implementation slice",
     "execution remains a later, separate written authorization",
 )
 
-#: Claims that would misdescribe an accepted-but-unimplemented ADR.
+#: Claims that would misdescribe an implemented-but-never-run surface.
 #:
-#: Two kinds, and both matter. Some are *stale*: they were required while PR #33
-#: was open and are false now. The rest are *premature*: they describe an
-#: implementation or a run that has not happened. Deleting the stale ones without
+#: Three kinds, and each matters. Some are *stale*: they were required while the
+#: entry point did not exist and are false now. Some are *premature*: they
+#: describe a run that has not happened. The rest are *overreach*: they claim a
+#: conclusion no acquisition could establish. Deleting the stale ones without
 #: replacing them would leave the reverted claim unguarded, so each is inverted
 #: into a rejection instead.
 #:
-#: 30 claims about an accepted-but-unbuilt surface are listed here, and the number
-#: in that sentence is checked against ``len()`` so an entry cannot leave quietly.
+#: 33 claims about an implemented-but-unrun surface are listed here, and the
+#: number in that sentence is checked against ``len()`` so an entry cannot leave
+#: quietly.
 ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
-    # -- stale: true while PR #33 was open, false now
+    # -- stale: true before ADR-0017 merged, false now
     "adr-0017 is proposed",
     "adr-0017 remains proposed",
     "adr-0017 is not accepted",
     "adr-0017 is not in force",
     "pr #33 is open",
     "pr #33 remains open",
-    "while its pull request is open it is",
     "carries no authority whatsoever",
     "adr-0017 is absent from",
+    # -- stale: true before the implementation slice, false now
+    "no authenticated qualification entry point exists",
+    "no tracked authenticated qualification entry point",
+    "the entry point has not been implemented",
+    "authenticated entry points implemented none",
+    "has no production caller",
     "no authenticated implementation may be built",
-    # -- premature: describes something that has not happened
-    "authenticated qualification entry point exists",
-    "the authenticated qualification surface exists",
-    "bounded authenticated qualification entry point exists",
+    # -- premature: describes a run that has not happened
     "the authenticated qualification has run",
     "authenticated qualification attempts one",
     "provider authentication confirmed",
     "provider authentication is confirmed",
     "sharadar/provider requests one",
     "a provider request occurred",
+    "s3 qualification publication occurred",
     "adr-0017 authorizes execution",
     "adr-0017 permits execution",
     "acceptance authorizes execution",
-    "s3 qualification publication occurred",
+    "execution of the new surface is authorized",
+    # -- overreach: a conclusion no acquisition could establish
     "zero-persistence is the selected design",
-    "zero persistence is the selected design",
     "a fourth acquisition mode",
     "payload parsing is permitted in the acquisition runtime",
     "the acquisition runtime parses",
     "control publication is permitted",
     "a provider is selected",
+    "g1 closed",
+    "g2 closed",
 )
 
 #: The claims that may never leave :data:`ADR_0017_FORBIDDEN`.
@@ -4460,15 +4466,17 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
 #: grow and may be reworded, and these particular claims cannot be dropped
 #: without failing a check that says so by name.
 #:
-#: 10 claims are protected by membership here.
+#: 12 claims are protected by membership here.
 ADR_0017_SURVIVING_CLAIMS: Final[tuple[str, ...]] = (
     "adr-0017 remains proposed",
     "pr #33 remains open",
+    "the entry point has not been implemented",
+    "authenticated entry points implemented none",
     "the authenticated qualification has run",
     "provider authentication is confirmed",
     "a provider request occurred",
-    "acceptance authorizes execution",
     "s3 qualification publication occurred",
+    "acceptance authorizes execution",
     "a fourth acquisition mode",
     "payload parsing is permitted in the acquisition runtime",
     "a provider is selected",
@@ -4528,12 +4536,13 @@ ADR_0017_MATRIX_IN_FORCE: Final[tuple[tuple[str, str], ...]] = (
     ("names the merge commit", ADR_0017_MERGE_COMMIT),
     ("names the approved ADR head", ADR_0017_APPROVED_HEAD),
     ("records that it is no longer proposed", "no longer\n                        proposed"),
-    (
-        "grants only permission to propose and review a code-only slice",
-        "permission to propose and",
-    ),
-    ("names the dormant code-only slice it permits", "dormant code-only"),
-    ("records that the entry point is not implemented", "has not been implemented"),
+    ("states that implementing is not permission to use", "not permission to"),
+    ("keeps execution separately gated", "gated and not authorized"),
+    ("records the entry point as implemented", "is now implemented --"),
+    ("records it as code only and never run", "code only / never run."),
+    ("counts one implemented entry point", "implemented one;"),
+    ("records the composition root as extended", "extended, not duplicated"),
+    ("records exactly one production caller", "production caller."),
 )
 
 ADR_0017_MATRIX_NOT_AUTHORIZED: Final[tuple[tuple[str, str], ...]] = (
@@ -4569,21 +4578,29 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "while its pull request was open it was",
     ),
     (
-        "limits acceptance to a dormant code-only implementation slice",
-        "dormant code-only implementation slice",
+        "records the entry point as implemented, code only, never run",
+        "is now implemented — code only / never run",
     ),
-    ("states acceptance does not authorize execution", "does not authorize execution"),
+    ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
+    ("states the entry point refuses by default", "refuses by default"),
+    (
+        "counts exactly one implemented entry point",
+        "authenticated entry points implemented one",
+    ),
+    ("records the composition root as extended, not duplicated", "extended, not duplicated"),
+    ("records exactly one production caller of execute", "exactly one production caller"),
+    ("states that implementing is not permission to use", "not permission to use it"),
+    (
+        "keeps execution separately gated and unauthorized",
+        "execution of the new surface remains separately gated and not authorized",
+    ),
     (
         "keeps implementation, execution and empirical qualification distinct",
         "three distinct gates",
     ),
-    ("records that the entry point is not implemented", "has not been implemented"),
-    (
-        "does not read the static inspection as a qualification attempt",
-        "was not an authenticated qualification attempt",
-    ),
     ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
     ("preserves the opaque-payload boundary", "opaque-payload boundary"),
+    ("introduces no parser", "no parser introduced"),
     ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
     ("introduces no fourth acquisition mode", "no fourth mode"),
     ("locks one provider request", "one provider request"),
@@ -4605,10 +4622,16 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("invents no extra qualification report", "no extra qualification report"),
     ("performs no CONTROL publication", "no control publication"),
     ("keeps provider authentication unknown", "provider authentication unknown"),
+    ("records zero qualification S3 operations", "s3 qualification operations zero"),
     (
-        "records zero qualification-attributable S3 object operations",
-        "s3 object operations attributable to qualification zero",
+        "records zero qualification Terraform operations",
+        "terraform operations for qualification zero",
     ),
+    (
+        "records zero runtime executions against real services",
+        "qualification-runtime executions against real services zero",
+    ),
+    ("leaves the credential retrieval at one", "credential retrieval remains one"),
     (
         "keeps the empirical qualification separate",
         "empirical qualification remains separate and unexecuted",
@@ -4629,24 +4652,35 @@ ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("names the pull request that accepted it", f"pr {ADR_0017_PR} merged"),
     ("names the merge commit", ADR_0017_MERGE_COMMIT),
     ("names the approved ADR head", ADR_0017_APPROVED_HEAD),
-    ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
-    ("preserves the opaque-payload boundary", "opaque-payload boundary"),
-    ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
-    ("introduces no fourth acquisition mode", "no fourth mode introduced"),
-    ("performs no CONTROL publication", "control publication stays zero and forbidden"),
     (
-        "rejects zero-persistence rather than selecting it",
-        "zero-persistence provider request is rejected",
+        "records the entry point as implemented, code only, never run",
+        "implemented — code only / never run",
     ),
-    ("states acceptance does not authorize execution", "acceptance does not authorize execution"),
+    ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
+    ("states the entry point refuses by default", "refuses by default"),
+    ("records the composition root as extended, not duplicated", "extended, not duplicated"),
+    ("records exactly one production caller of execute", "exactly one production caller"),
+    (
+        "states that implementing a surface is not permission to use it",
+        "implementing an operator surface is not permission to use it",
+    ),
+    (
+        "keeps execution separately gated and unauthorized",
+        "execution of the new surface is separately gated and not authorized",
+    ),
     (
         "keeps the implementation and execution gates uncollapsed",
         "never collapsed into one",
     ),
-    ("records that the entry point is not implemented", "has not been implemented"),
+    ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
+    ("preserves the opaque-payload boundary", "opaque-payload boundary"),
+    ("introduces no parser anywhere in the path", "no parser was introduced"),
+    ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
+    ("introduces no fourth acquisition mode", "no fourth mode introduced"),
+    ("performs no CONTROL publication", "control publication stays zero and forbidden"),
     (
-        "does not read the static inspection as a qualification attempt",
-        "was not an authenticated qualification attempt",
+        "preserves the architecture rather than reinterpreting it",
+        "preserved by the implementation, not reinterpreted",
     ),
     (
         "names the public-test-token harness beside its script",
@@ -4661,7 +4695,6 @@ ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "keeps the empirical qualification separate",
         "empirical qualification remains separate and unexecuted",
     ),
-    ("weakens nothing while synchronizing the status", "weakens and reinterprets none of"),
     ("keeps G1 and G2 open where it resolves nothing", "g1 open · g2 open · g3"),
     ("keeps the remaining gates open", f"g4{EN_DASH}g7 open"),
 )
@@ -9072,13 +9105,20 @@ def main() -> int:
             "validate fetches nothing and stores nothing; that is the whole dormancy claim",
         )
         f.check(
-            "the composition has no qualification-run execution surface",
-            "execute" not in composition
+            "the composition exposes exactly one qualification-run execution surface",
+            # Inverted by ADR-0017, not deleted. The earlier rule was that no such
+            # surface existed, which was correct while offline preflight was the only
+            # operation; deleting it would have left a second, unreviewed one
+            # unguarded. Exactly one is named, and every other execution verb is
+            # still refused -- a private spelling hides a callable from a reviewer,
+            # not from a caller.
+            composition.count("def execute_qualification_acquisition(") == 1
+            and composition.count(".execute(") == 1
             and not any(
                 f"def {verb}" in composition
                 for verb in ("run", "fetch", "publish", "upload", "main", "ingest")
             ),
-            "a private spelling hides a callable from a reviewer, not from a caller",
+            "one authorized execution surface, and no second one under any spelling",
         )
         f.check(
             "the composition is a function, holding no state a caller could reach",
@@ -9255,7 +9295,10 @@ def main() -> int:
             ("zero provider and S3 calls", "test_a_successful_preflight_touches_no_transport"),
             ("no publication", "test_no_object_store_publication_occurs"),
             ("no credential reveal", "test_the_credential_is_never_revealed"),
-            ("no execution-like callable", "test_the_module_has_no_execution_like_callable"),
+            (
+                "exactly one execution-like callable",
+                "test_the_module_has_exactly_one_execution_like_callable",
+            ),
             ("no escaping component", "test_no_executable_component_escapes_the_preflight"),
             ("no retained state", "test_the_module_holds_no_stateful_composition_object"),
             (
@@ -10158,10 +10201,15 @@ def main() -> int:
         )
 
     f.check(
-        "the binding preflight is the only module that constructs an SDK client",
-        [path.name for path in _sdk_client_construction_sites()]
-        == ["sharadar_binding_preflight.py"],
-        "one named module, not a count that could drift",
+        "only the two authorized operator entry points construct an SDK client",
+        # ADR-0015 authorized one; ADR-0017 authorized a second. Both are named,
+        # so a third arriving anywhere fails -- a count could drift, a list cannot.
+        sorted(path.name for path in _sdk_client_construction_sites())
+        == [
+            "sharadar_authenticated_qualification.py",
+            "sharadar_binding_preflight.py",
+        ],
+        "two named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
@@ -10233,8 +10281,8 @@ def main() -> int:
                 "test_the_output_vocabulary_admits_no_permission_bearing_word",
             ),
             (
-                "one SDK constructor",
-                "test_the_entry_point_is_the_only_place_that_constructs_an_sdk",
+                "the two authorized SDK constructors",
+                "test_only_the_two_authorized_entry_points_construct_an_sdk_client",
             ),
         ):
             f.check(
@@ -11936,7 +11984,7 @@ def main() -> int:
         # passes -- so both sentences are written in the source and both numbers
         # come from `len()`, and the two have to be changed deliberately together.
         (
-            f"{len(ADR_0017_FORBIDDEN)} claims about an accepted-but-unbuilt surface "
+            f"{len(ADR_0017_FORBIDDEN)} claims about an implemented-but-unrun surface "
             "are listed here" in read(Path(__file__).resolve())
         )
         and (
@@ -11950,12 +11998,173 @@ def main() -> int:
         # The other half of the membership protection. The size sentence above
         # catches an entry vanishing alone; this catches one deleted together
         # with the number, which is the shape a weakening actually takes.
-        len(ADR_0017_SURVIVING_CLAIMS) == 10
+        len(ADR_0017_SURVIVING_CLAIMS) == 12
         and all(claim in ADR_0017_FORBIDDEN for claim in ADR_0017_SURVIVING_CLAIMS)
         and f"{len(ADR_0017_SURVIVING_CLAIMS)} claims are protected by membership here"
         in read(Path(__file__).resolve()),
         "updating the count beside a deletion is what a weakening looks like",
     )
+
+    # -- the ADR-0017 implementation, structurally ----------------------------
+    #
+    # Source and AST checks only. Executable invariants -- gate ordering, exact
+    # operation counts, the window arithmetic, the exit-code mapping -- belong in
+    # the two dedicated unit suites, and a text search must not pretend to prove
+    # them. What is checked here is what a text search *can* establish: that the
+    # named files exist, that the surface has not widened, and that the
+    # separations the ADR rests on are still visible in the source.
+    f.check(
+        "the ADR-0017 entry point exists at its exact path",
+        ADR_0017_ENTRY_POINT.is_file(),
+        "the status documents name a script that must be readable",
+    )
+    if ADR_0017_ENTRY_POINT.is_file():
+        entry = read(ADR_0017_ENTRY_POINT)
+        entry_exec = _executable_python(ADR_0017_ENTRY_POINT)
+
+        f.check(
+            "the entry point declares the exact authorization flag",
+            f'AUTHORIZATION_FLAG: Final = "{ADR_0017_CLI[0]}"' in entry,
+            "one long, explicit flag; an alias is how a wrong reflex succeeds quietly",
+        )
+        cli_lines = tuple(
+            line.strip().strip('"').strip("',")
+            for line in entry.splitlines()
+            if line.strip().startswith('"--') or line.strip().startswith("AUTHORIZATION_FLAG")
+        )
+        f.check(
+            "the entry point adds exactly the two non-flag arguments",
+            entry.count('parser.add_argument(\n        "--') == 2,
+            f"the CLI is three arguments and no more. Found lines: {len(cli_lines)}",
+        )
+        for spelling in ADR_0017_FORBIDDEN_CLI:
+            f.check(
+                f"the entry point refuses {spelling} by name",
+                f'"{spelling}":' in entry,
+                "an unrecognised flag teaches nothing; a named refusal says why",
+            )
+        f.check(
+            "the entry point calls the accepted composition root",
+            "execute_qualification_acquisition" in entry_exec,
+            "the root is extended and reused, never re-implemented",
+        )
+        f.check(
+            "the entry point constructs no store, client or runtime of its own",
+            not any(
+                name in entry_exec
+                for name in ("S3ResearchObjectStore(", "QualificationRuntime(", "SharadarClient(")
+            ),
+            "a second construction site is a second thing to review",
+        )
+        f.check(
+            "the entry point introduces no parser",
+            not any(
+                name in entry_exec
+                for name in ("csv", "DictReader", "json.loads", "splitlines", ".decode(")
+            ),
+            "the payload is opaque at every layer, and a parser here would end that",
+        )
+        f.check(
+            "the entry point writes no file and names no runtime directory",
+            not any(
+                name in entry_exec
+                for name in (".runtime/", "write_text", "write_bytes", "mkdir", "tempfile")
+            ),
+            "no local staging, and no report beside the acquisition record",
+        )
+        f.check(
+            "the entry point names no CONTROL destination",
+            "control_bucket_name" not in entry_exec,
+            "the licensed bucket has a different output key, and only it is named",
+        )
+        f.check(
+            "the entry point neither imports the public harness nor the binding preflight",
+            "sharadar_private_qualification" not in entry_exec
+            and "sharadar_binding_preflight" not in entry_exec,
+            "both stay separate; reusing either would destroy the evidence of separation",
+        )
+        f.check(
+            "the entry point locks the dataset, the page and the retry policy",
+            'LOCKED_DATASET_NAME: Final = "stocks"' in entry
+            and "PAGE_SKIP: Final = 0" in entry
+            and "RetryPolicy(max_attempts=1, backoff_seconds=())" in entry,
+            "an operator who could choose these could choose a retrieval nobody reviewed",
+        )
+        f.check(
+            "the entry point's page limit ceiling is at most ten",
+            "PAGE_LIMIT_CEILING: Final = 10" in entry,
+            "ADR-0017 fixed the ceiling far below the model's own",
+        )
+        f.check(
+            "the entry point locks a seven-day window",
+            "WINDOW_DAYS: Final = 7" in entry,
+            "deterministic from the injected clock, and never operator-supplied",
+        )
+        f.check(
+            "the entry point states it has never been run",
+            "never been run" in entry,
+            "implementing an operator surface is not permission to use it",
+        )
+
+    f.check(
+        "the composition root exposes exactly one acquisition execution surface",
+        _executable_python(COMPOSITION_ROOT).count("def execute_qualification_acquisition(") == 1
+        and _executable_python(COMPOSITION_ROOT).count(".execute(") == 1,
+        "one authorized surface, one call, and no second under any spelling",
+    )
+    f.check(
+        "the accepted composition root was extended, not duplicated",
+        [path.name for path in _store_construction_sites()] == ["composition.py"],
+        "a second root would widen the single-constructor guard from one file to two",
+    )
+    f.check(
+        "the composition root declares the qualification acquisition mode once",
+        "QUALIFICATION_ACQUISITION_MODE" in _executable_python(COMPOSITION_ROOT),
+        "one statement, not two that could drift",
+    )
+    f.check(
+        "the two dedicated ADR-0017 test suites exist",
+        ADR_0017_ENTRY_TESTS.is_file() and ADR_0017_COMPOSITION_TESTS.is_file(),
+        "executable invariants belong in unit tests, and the audit must not stand in for them",
+    )
+    if ADR_0017_ENTRY_TESTS.is_file():
+        entry_tests = read(ADR_0017_ENTRY_TESTS)
+        for label, needle in (
+            ("import safety", "test_importing_the_entry_point_performs_no_activity"),
+            ("the exact CLI", "test_the_cli_carries_exactly_the_three_approved_arguments"),
+            ("the exact flag", "test_the_authorization_flag_is_exactly_the_approved_spelling"),
+            ("forbidden aliases", "test_every_forbidden_alias_is_absent_from_the_cli"),
+            ("the exit-code mapping", "test_every_outcome_has_an_exact_exit_status"),
+            ("gate ordering", "test_an_identity_refusal_prevents_bucket_resolution"),
+            ("the locked dataset", "test_the_locked_dataset_is_exactly_stocks"),
+            ("the window arithmetic", "test_the_window_is_seven_calendar_days"),
+            ("harness separation", "test_the_script_never_imports_the_public_test_token_harness"),
+            ("preflight separation", "test_the_script_never_invokes_the_binding_preflight"),
+        ):
+            f.check(
+                f"an ADR-0017 entry-point test covers {label}",
+                needle in entry_tests,
+                "the guard this audit names must be a test that exists",
+            )
+    if ADR_0017_COMPOSITION_TESTS.is_file():
+        composition_tests = read(ADR_0017_COMPOSITION_TESTS)
+        for label, needle in (
+            ("one provider request", "test_one_provider_request_is_issued"),
+            ("three PutObject calls", "test_one_ordinary_success_issues_exactly_three_put_object"),
+            ("no preflight HeadObject", "test_an_ordinary_success_issues_no_preflight_head_object"),
+            ("the conditional HeadObject bound", "test_conditional_head_object_calls_never_exceed"),
+            ("zero object-byte reads", "test_no_object_byte_read_occurs"),
+            ("no CONTROL write", "test_no_control_classified_object_is_written"),
+            ("no retry after a failure", "test_a_transport_failure_produces_no_second_request"),
+            ("the qualification mode", "test_the_acquisition_mode_recorded_is_qualification"),
+            ("no parser", "test_the_module_introduces_no_parser"),
+            ("no second root", "test_no_second_composition_module_exists"),
+        ):
+            f.check(
+                f"an ADR-0017 composition test covers {label}",
+                needle in composition_tests,
+                "the guard this audit names must be a test that exists",
+            )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")

@@ -9,13 +9,25 @@ written was the wiring nobody had checked.
 
 This module writes it, and stops one step short of using it.
 
-One function, no object
-======================
+Two functions, no object
+========================
 
 :func:`preflight_qualification_composition` takes every dependency and a plan,
 builds the three accepted components as **local variables**, calls
 :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.validate`,
 and returns a :class:`QualificationPreflight`.
+
+:func:`execute_qualification_acquisition` was added by **ADR-0017**, and is the
+same shape: it builds the same three components as locals and makes **one** call
+to :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.execute`.
+The accepted root was **extended rather than duplicated** -- a second composition
+module would have meant widening the single-constructor guard from one file to
+two, and that guard is the thing holding this architecture together.
+
+**A qualification-run execution surface now exists, and saying otherwise would be
+false.** What has not happened is a *run*: nothing has executed it, no provider
+request has been sent, and executing it is a separate written authorization that
+has not been given.
 
 **What that guarantees, stated exactly.** The client, the store and the runtime
 are not returned, and are not retained in module state, in an instance, in a
@@ -43,12 +55,12 @@ remember and becomes a property of the shape.
 
 ::
 
-    composition           ONE function, and no stateful object
-    exposed operation     offline preflight -- plan validation, and only that
-    qualification-run execution surface     NONE
-    provider-fetch operation                NONE
-    object-publication operation            NONE
-    runner                NONE     no CLI, no module entry point, no task
+    composition           TWO functions, and no stateful object
+    exposed operations    offline preflight, and one bounded acquisition
+    qualification-run execution surface     ONE -- ADR-0017, never run
+    provider-fetch operation                the runtime's, inside execute()
+    object-publication operation            the runtime's, inside execute()
+    runner                NONE     no CLI here, no module entry point, no task
     retained state        NONE     no module global, no closure, no instance
     caller-owned arguments                  the caller's, before and after
     credential retrieval  NONE     no environment read, no file read, no reveal()
@@ -60,8 +72,10 @@ What this is not
 ================
 
 **It is not authorization to run.** The first authenticated qualification run is
-separately gated and remains unauthorized. Nothing outside this module's own
-synthetic tests calls this function, and a static guard keeps it that way.
+separately gated and remains unauthorized. The ADR-0017 operator entry point
+under ``scripts/`` is the **one** production caller of
+:func:`execute_qualification_acquisition`, it refuses by default, and it has
+**never been run**. A static guard keeps the caller count at one.
 
 **It selects no provider.** G1 and G2 stay open; naming an implementation target
 has never been selection, and joining five slices does not become it.
@@ -120,6 +134,7 @@ from kalpamani.data.ingest.sharadar.redaction import (
 )
 from kalpamani.data.ingest.sharadar.runtime import (
     QualificationClock,
+    QualificationRunResult,
     QualificationRuntime,
 )
 from kalpamani.data.ingest.sharadar.transport import SharadarTransport
@@ -353,8 +368,90 @@ def preflight_qualification_composition(
     )
 
 
+def execute_qualification_acquisition(
+    *,
+    credential: SharadarCredential,
+    transport: SharadarTransport,
+    pacer: Pacer,
+    retry_policy: RetryPolicy,
+    timeout_seconds: float,
+    s3_client: S3Client,
+    licensed_bucket: str,
+    clock: QualificationClock,
+    plan: QualificationPlan,
+) -> QualificationRunResult:
+    """Construct the accepted components and execute ``plan`` **exactly once**.
+
+    ADR-0017 authorized this, and authorized it *here*: the module that already
+    constructs the client, the licensed store and the runtime is **extended**
+    rather than duplicated. A second composition module would have meant widening
+    the single-constructor guard from one file to two, and that guard is what
+    stands between this architecture and an unreviewed construction site.
+
+    **It composes; it decides nothing.** Every dependency is a required keyword
+    parameter with no default, the components are locals built from them, and the
+    plan arrives already validated by its own contract. The dataset, the window,
+    the page, the retry policy and the acquisition mode are the *caller's*
+    decisions, locked in the operator entry point that ADR-0017 also authorized --
+    not here, because a composition root that chose them could choose differently.
+
+    **One call to** :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.execute`
+    **and nothing else.** The runtime validates the plan first and refuses a bad
+    one before the first request, publishes each response byte for byte through
+    the licensed Bronze bridge, and returns the record of what happened. This
+    function adds no request, no publication, no retry and no fallback of its own:
+    everything that reaches the provider or the store is the runtime's, under the
+    contract ADR-0012 accepted.
+
+    **The payload is never parsed here.** It is not decoded, sampled, counted or
+    inspected; this function does not touch it at all. The bytes go from the
+    client to the publisher inside the runtime, and the result carries counts and
+    closed vocabulary members rather than content.
+
+    **Nothing is retained.** The client, the store and the runtime are locals; the
+    returned :class:`~kalpamani.data.ingest.sharadar.runtime.QualificationRunResult`
+    holds no dependency, no credential, no bucket and no payload. The caller keeps
+    every object it passed in, before and after.
+
+    Returns:
+        The runtime's own immutable result. A halted run is **returned, not
+        raised**: published objects are immutable and have no rollback, so a
+        caller needs the record of what completed rather than an exception that
+        discards it.
+
+    Raises:
+        SharadarRequestError: ``BUILD: REQUEST_MALFORMED`` for a pacer that is not
+            an exact :class:`~kalpamani.data.ingest.sharadar.client.Pacer`, and
+            from the client's own constructor for a bad credential, transport,
+            timeout or retry policy.
+        ObjectStoreBackendError: ``BIND: INVALID_CONFIGURATION`` for a bucket name
+            or S3 client the store will not accept. **The refusal never echoes
+            the bucket.**
+        QualificationRuntimeError: ``DEPENDENCY_MALFORMED`` for a clock that
+            cannot answer, a plan of the wrong exact type, or a byte ceiling the
+            client could exceed.
+        QualificationPlanError: for any plan defect. **Nothing is fetched and
+            nothing is stored** -- the refusal happens before the first request.
+    """
+    if type(pacer) is not Pacer:
+        raise _refuse() from None
+
+    client = SharadarClient(
+        credential=credential,
+        transport=transport,
+        pacer=pacer,
+        retry_policy=retry_policy,
+        timeout_seconds=timeout_seconds,
+    )
+    store = S3ResearchObjectStore(client=s3_client, licensed_bucket=licensed_bucket)
+    runtime = QualificationRuntime(client=client, store=store, clock=clock)
+
+    return runtime.execute(plan)
+
+
 __all__ = [
     "PreflightStatus",
     "QualificationPreflight",
+    "execute_qualification_acquisition",
     "preflight_qualification_composition",
 ]
