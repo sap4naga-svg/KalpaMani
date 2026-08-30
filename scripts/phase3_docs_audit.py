@@ -4735,14 +4735,21 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
     "no third attempt, retry, diagnosis, sso login or repair followed",
 )
 
-#: Claims that would misdescribe an implemented-but-never-run surface.
+#: Claims that would misdescribe an implemented, twice-attempted surface.
 #:
 #: Three kinds, and each matters. Some are *stale*: they were required while the
-#: entry point did not exist and are false now. Some are *premature*: they
-#: describe a run that has not happened. The rest are *overreach*: they claim a
-#: conclusion no acquisition could establish. Deleting the stale ones without
+#: entry point did not exist, or while it had not been run, and are false now.
+#: Some are *unestablished*: attempt two ran, reached the qualification runtime,
+#: reported one provider request and returned ``COMPLETED`` -- and ``COMPLETED``
+#: is the command's status, not a verdict, so a document may say the run
+#: happened and may never say it *passed*. The rest are *overreach*: they claim
+#: a conclusion no acquisition could establish. Deleting the stale ones without
 #: replacing them would leave the reverted claim unguarded, so each is inverted
 #: into a rejection instead.
+#:
+#: What a completed second attempt did not settle, and what these still refuse:
+#: provider authentication stays UNKNOWN, no provider is selected, G1 and G2 stay
+#: OPEN, and Phase 3 stays NOT COMPLETE.
 #:
 #: 48 claims about an implemented, attempted and refused surface are listed here,
 #: and the number in that sentence is checked against ``len()`` so an entry cannot
@@ -4764,8 +4771,8 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
     "authenticated entry points implemented none",
     "has no production caller",
     "no authenticated implementation may be built",
-    # -- premature: describes a run that has not happened
-    "the authenticated qualification has run",
+    # -- unestablished: more than either run put on the record
+    "the authenticated qualification passed",
     "provider authentication confirmed",
     "provider authentication is confirmed",
     "attempt two s3 qualification operations zero",
@@ -4820,7 +4827,7 @@ ADR_0017_SURVIVING_CLAIMS: Final[tuple[str, ...]] = (
     "pr #33 remains open",
     "the entry point has not been implemented",
     "authenticated entry points implemented none",
-    "the authenticated qualification has run",
+    "the authenticated qualification passed",
     "provider authentication is confirmed",
     "attempt one made a provider request",
     "s3 qualification publication occurred",
