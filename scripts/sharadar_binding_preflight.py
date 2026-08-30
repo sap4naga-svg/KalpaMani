@@ -34,7 +34,17 @@ client construction, composition validation or qualification execution.
     post-fourth identity diagnosis: COMPLETED
                                  REFUSED_SSO_SESSION_MISSING_OR_EXPIRED, one
                                  command, exit 255, its own network count
-                                 UNKNOWN, zero SSO logins, zero repair actions
+                                 UNKNOWN, zero SSO logins during it, zero
+                                 repair actions during it
+    post-diagnosis SSO-login attempt: COMPLETED REFUSED_SSO_LOGIN -- one
+                                 ``aws sso login --no-cli-pager`` command,
+                                 timed out after 420 seconds, terminated,
+                                 no exit status returned, no lingering AWS
+                                 CLI process, zero browser authorizations,
+                                 zero device authorizations, zero
+                                 successful refreshes, zero identity
+                                 confirmations, its own network count
+                                 UNKNOWN, SSO session still unrefreshed
     Secrets Manager     ZERO     client constructions, get_secret_value
                                  invocations and network requests
     S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
@@ -93,6 +103,18 @@ diagnosis, after the fourth attempt     command, exit code 255, classified
                                         distinguished**; its own network
                                         count UNKNOWN; no SSO login, no
                                         repair and no fifth attempt followed
+                                        it under that authorization
+a separately authorized SSO-login       one ``aws sso login --no-cli-pager``
+attempt, after that diagnosis           command; **timed out after 420
+                                        seconds**, terminated, no lingering
+                                        process, so **no exit status was
+                                        returned** -- ``REFUSED_SSO_LOGIN``;
+                                        zero browser authorizations, zero
+                                        device authorizations, zero
+                                        successful refreshes, zero identity
+                                        confirmations; its own network count
+                                        UNKNOWN; the SSO session remains
+                                        unrefreshed
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
@@ -129,8 +151,10 @@ expired**, and nothing here guesses which. It is the first direct diagnostic
 evidence explaining the fourth attempt's identity refusal, and it revises no
 count -- the attempt's own network total stays UNKNOWN, and so does the
 diagnosis command's, because a CLI call may resolve credentials locally and fail
-before anything leaves the machine. **SSO-login invocations zero,
-authentication-repair actions zero, fifth binding-preflight attempts zero.**
+before anything leaves the machine. **At that point SSO-login invocations
+were zero, authentication-repair actions were zero and fifth
+binding-preflight attempts were zero.** The first of those has since moved
+and the other two have not; see the timed-out SSO-login attempt below.
 
 That diagnosis pinned the governed profile in its **child** process, from the
 ``EXPECTED_PROFILE`` constant below, because a shell-level pin does not survive
@@ -140,9 +164,43 @@ source, so the claim is narrow: the diagnosis did not print, log, disclose or
 newly write the value; it used the governed constant already present in tracked
 source.
 
-**Further** AWS authentication diagnosis is not authorized, and an AWS SSO
-refresh or login is separately gated: classifying a session is not permission to
-replace it.
+**Further** AWS authentication diagnosis is not authorized, and **another**
+AWS SSO refresh or login is separately gated: classifying a session was not
+permission to replace it, and a failed login attempt is not permission to
+retry.
+
+**A separately authorized AWS SSO-login attempt has since been made, and it
+did not succeed.** Run after that diagnosis and after PR #29 merged, it
+invoked one process and one ``aws sso login --no-cli-pager`` command, with
+the governed profile resolved by static AST parse of the ``EXPECTED_PROFILE``
+constant below -- this module was neither imported nor executed -- and pinned
+in the child environment only, never disclosed. **It timed out after 420
+seconds**, was terminated and left no lingering AWS CLI process, so **no exit
+status was returned**: the record is *exit code NOT AVAILABLE / PROCESS
+TERMINATED ON TIMEOUT*, never a numeric one, and the closed public outcome is
+**REFUSED_SSO_LOGIN**. **Browser authorization interactions zero, device
+authorizations completed zero, successful SSO refreshes zero,
+identity-confirmation command invocations zero, fifth binding-preflight
+attempts zero.** Its own underlying AWS network-request count is **UNKNOWN**,
+for the reason every count here is: a CLI invocation is not one network
+request. **The SSO session remains unrefreshed**, the earlier
+REFUSED_SSO_SESSION_MISSING_OR_EXPIRED diagnosis stands unrevised, and the
+attempt produced no evidence distinguishing missing from expired, did not
+verify or contradict the owner-configured secret identifier, and retrieved no
+credential.
+
+**The likely cause is procedural, and it is recorded as likely rather than
+proven.** stdout and stderr were captured rather than streamed, no browser
+appeared, no device URL or code was displayed to the owner, and the process
+waited the full 420 seconds -- so the failed interaction was **likely caused
+by suppressing the interactive browser/device-code surface**. That is an
+operational-handling explanation, **not proof of an AWS configuration
+defect**. Whether the AWS CLI emitted a device URL or code into the
+undisplayed buffer was **not inspected and remains UNKNOWN**, and no raw
+output may be inspected now to resolve it. Nothing establishes a defective SSO
+configuration, an incorrect governed profile, a wrong start URL, any particular
+technical reason for a browser not appearing, or the presence or absence of a
+generated device code.
 
 ``KALPAMANI_SHARADAR_SECRET_ID`` is **OWNER-CONFIGURED / NOT YET VERIFIED BY THE
 ENTRY POINT**. It was **UNKNOWN** at the second attempt, which refused on the
@@ -158,7 +216,7 @@ constructed a Secrets Manager client, has not invoked ``get_secret_value`` and
 has retrieved no credential.
 
 **Credential access by this application**, **a fifth binding preflight**, **further
-AWS authentication diagnosis**, **an AWS SSO refresh or login** and an
+AWS authentication diagnosis**, **another AWS SSO refresh or login** and an
 **authenticated qualification run** remain five separate decisions, each still
 **NOT AUTHORIZED**, and each requires separate written authorization. This file
 existing does not create a secret, does not read one, and cannot execute a
@@ -1041,8 +1099,11 @@ def main(argv: list[str] | None = None) -> int:
 # qualification execution has occurred. Diagnosis is no longer entirely future:
 # a separately authorized command run after the fourth attempt classified the
 # governed SSO session or cached token as missing or expired, without
-# distinguishing which, and no SSO login or repair followed it. A fifth
-# attempt, any further AWS authentication diagnosis, an SSO refresh and every
+# distinguishing which. No SSO login or repair followed it under that
+# authorization; a separately authorized `aws sso login` attempt came later,
+# timed out after 420 seconds and refused with REFUSED_SSO_LOGIN, leaving the
+# session unrefreshed and running none of these factories. A fifth attempt,
+# any further AWS authentication diagnosis, another SSO refresh and every
 # other operational event remain separately gated.
 
 
