@@ -339,7 +339,7 @@ live brokerage execution, real-money operation.
 | [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
 | [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused, and a fifth separately authorized attempt then COMPLETED** — the four refusing at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — though its governed identity gate **invoked its own STS identity operation once**. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **The fifth separately authorized attempt then ran exactly once and COMPLETED** — **exit code `0`**, public output exactly `binding preflight completed` and `offline validation completed`, closed outcome **`COMPLETED + VALIDATION_COMPLETED`**, and a last definitively reached stage of **stage 10**: one `preflight_qualification_composition` invocation returning **`VALIDATED_OFFLINE`**. Its conservative counts are identity-gate invocations **ONE, passed**, licensed-bucket resolutions **ONE**, secret-identifier resolutions **ONE**, Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, S3 client constructions **ONE**, S3 object operations **ZERO**, provider transport constructions **ONE**, Sharadar/provider requests **ZERO**, offline composition-preflight invocations **ONE**, qualification executions **ZERO**, and underlying AWS network requests **UNKNOWN**. **A credential was definitively retrieved**: one admitted `get_secret_value` returned a `SecretString` the existing credential contract accepted **structurally**, which was passed into the offline composition and **never displayed, logged, persisted, hashed, fingerprinted, measured or summarized** — *usable* meaning structurally acceptable to that contract, with **Sharadar authentication UNKNOWN** because **no provider request occurred**. The fourth attempt still **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**; operational secret-identifier configuration is **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth attempt, owner setup having occurred **after the third attempt** and **before the fourth**. A **sixth** attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **additional credential or Secrets Manager access**, **Sharadar/provider access**, **any S3 object operation or publication**, **ingestion, backfill and update** and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
 | [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. The corrected boundaries were exercised for the first time by the fifth attempt, which passed the identifier stage rather than refusing at it: Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, Secrets Manager underlying network requests **UNKNOWN**, real credential retrieval **ONE, structurally accepted**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a sixth binding-preflight attempt **NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
-| [ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) — bounded authenticated acquisition qualification | **ACCEPTED / IN FORCE** — PR #33 merged. Merge commit **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**. **The merge acceptance condition has occurred**, so ADR-0017 is **no longer PROPOSED** — while its pull request was open it was **not accepted and carried no authority**, which was true then and is not rewritten. What is in force now is **the architectural decision, and permission to propose and review one separately reviewed dormant code-only implementation slice**. It **does not authorize execution**, and **implementation, execution and empirical qualification remain three distinct gates**. **The dormant authenticated entry point has NOT been implemented**: no entry point exists, no implementation slice has been merged, and `QualificationRuntime.execute` still has **no production caller**. The static governance inspection that preceded the ADR **executed nothing and was not an authenticated qualification attempt** — **AWS operations ZERO, Secrets Manager operations ZERO, S3 operations ZERO, Terraform operations ZERO**. The accepted architecture **preserves one request = one durable acquisition**, keeps the acquisition runtime's **opaque-payload boundary**, declares **`AcquisitionMode.QUALIFICATION`** with **no fourth mode**, locks **one provider request** with **no pagination** and **no automatic retry** over a **seven-day trailing window**, publishes byte for byte through the **licensed private Bronze data plane** only as **three durable artifacts** in **exactly three PutObject operations** with **zero-to-three conditional HeadObject metadata checks only after 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no extra qualification report**, and performs **no CONTROL publication**. Authenticated qualification attempts **ZERO**, Sharadar/provider requests **ZERO**, qualification-runtime executions **ZERO**, provider authentication **UNKNOWN**, S3 object operations attributable to qualification **ZERO**. Full **P1–P9 empirical qualification remains separate and unexecuted**, **no provider is selected**, and **G1 and G2 stay OPEN** |
+| [ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) — bounded authenticated acquisition qualification | **ACCEPTED / IN FORCE** — PR #33 merged. Merge commit **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**. **The merge acceptance condition has occurred**, so ADR-0017 is **no longer PROPOSED** — while its pull request was open it was **not accepted and carried no authority**, which was true then and is not rewritten. **The dormant authenticated acquisition entry point is now IMPLEMENTED — CODE ONLY / NEVER RUN.** `scripts/sharadar_authenticated_qualification.py` exists, **refuses by default**, and the accepted composition root was **extended, not duplicated**: `QualificationRuntime.execute` now has **exactly ONE production caller**, reached only through that entry point's authorized branch. **Authenticated entry points implemented ONE.** **Implementing it is not permission to use it**: **execution of the new surface remains separately gated and NOT AUTHORIZED**, and **implementation, execution and empirical qualification remain three distinct gates**. Authenticated qualification attempts **ZERO**, qualification-runtime executions against real services **ZERO**, Sharadar/provider requests **ZERO**, provider authentication **UNKNOWN**, S3 qualification operations **ZERO**, Terraform operations for qualification **ZERO**; credential retrieval remains **ONE**, from the fifth binding-preflight attempt. The implemented path preserves **one request = one durable acquisition**, keeps the acquisition runtime's **opaque-payload boundary** with **no parser introduced**, declares **`AcquisitionMode.QUALIFICATION`** with **no fourth mode**, locks **one provider request** with **no pagination** and **no automatic retry** over a **seven-day trailing window**, and publishes byte for byte through the **licensed private Bronze data plane** only as **three durable artifacts** in **exactly three PutObject operations** with **zero-to-three conditional HeadObject metadata checks only after 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no extra qualification report**, performing **no CONTROL publication**. Full **P1–P9 empirical qualification remains separate and unexecuted**, **no provider is selected**, and **G1 and G2 stay OPEN** |
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
 | Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
@@ -1513,10 +1513,10 @@ OPEN**, ADR-0005 stays **PROPOSED**, INC-0002 stays **OPEN**, and Phase 3 stays 
 
 ---
 
-### The bounded authenticated acquisition qualification — ACCEPTED, and nothing built
+### The bounded authenticated acquisition qualification — IMPLEMENTED, and never run
 
-[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) is
-**ACCEPTED / IN FORCE**. **PR #33 merged** — merge commit
+[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md)
+**remains ACCEPTED / IN FORCE**. **PR #33 merged** — merge commit
 **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head
 **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**, with exactly those two parents.
 
@@ -1525,23 +1525,59 @@ OPEN**, ADR-0005 stays **PROPOSED**, INC-0002 stays **OPEN**, and Phase 3 stays 
 1. ADR-0017 was **proposed in open PR #33 and carried no authority at that time**. That was true
    then, and it is not rewritten.
 2. **PR #33 merged.**
-3. **The merge activated ADR-0017's own acceptance condition** — *"effective on the merge of the
-   pull request that introduces this ADR"*.
-4. **ADR-0017 is now accepted and in force**, and **no longer PROPOSED**.
-5. **No implementation and no execution followed the merge.**
-6. **A dormant code-only implementation is the next separately reviewed slice.**
-7. **Execution remains a later, separate written authorization.**
+3. **The merge activated ADR-0017's own acceptance condition.**
+4. **ADR-0017 is now accepted and in force.**
+5. **No implementation and no execution followed the merge**, and the status was synchronized on
+   that footing.
+6. **The dormant code-only implementation slice — the next separately reviewed step — has now been
+   written.**
+7. **Execution remains a later, separate written authorization**, and it has not been given.
 
-**What is in force is narrow, and worth stating exactly:** the **architectural decision**, and
-**permission to propose and review one separately reviewed dormant code-only implementation
-slice**. That is the whole of it. **Acceptance does not authorize execution**, and
-**implementation, execution and full empirical qualification remain three distinct gates** that are
-never collapsed into one.
+**The dormant authenticated acquisition entry point is IMPLEMENTED — CODE ONLY / NEVER RUN.**
+`scripts/sharadar_authenticated_qualification.py` exists and **refuses by default**: an ordinary
+import performs no lookup, constructs no client, opens no socket and reads no environment variable.
+Its CLI is **exactly three arguments**, and every credential, dataset, window, page, retry, bucket,
+bulk, ingestion and CONTROL spelling is **refused by name**.
 
-**The dormant authenticated entry point has not been implemented.** No entry point exists, no
-implementation slice has merged, and `QualificationRuntime.execute` still has **no production
-caller** — every call site is a unit test. The three scripts that do exist are unchanged in what
-they are:
+**The accepted composition root was extended, not duplicated.**
+`execute_qualification_acquisition` was added to the same module that already builds the client, the
+store and the runtime — a second root would have meant widening the single-constructor guard from
+one file to two. **`QualificationRuntime.execute` now has exactly ONE production caller**, reachable
+only through the entry point's authorized branch.
+
+**Implementing an operator surface is not permission to use it.**
+
+```
+authenticated entry points implemented      ONE
+authenticated qualification attempts        ZERO
+Sharadar/provider requests                  ZERO
+qualification-runtime executions            ZERO
+provider authentication                     UNKNOWN
+S3 object operations for qualification      ZERO
+Terraform operations for qualification      ZERO
+credential retrievals                       ONE -- the fifth binding-preflight attempt's, unchanged
+binding-preflight attempts                  FIVE -- unchanged
+```
+
+**Implementation, execution and full empirical qualification remain three distinct gates** that are
+never collapsed into one. **Execution of the new surface is separately gated and NOT AUTHORIZED**,
+and so are the AWS identity gate, Terraform, secret retrieval, Secrets Manager access, any provider
+request and any S3 qualification publication arising from it.
+
+**The accepted architecture is preserved by the implementation, not reinterpreted.** ADR-0012's rule
+that **one request = one durable acquisition** holds; the response is published **byte for byte**
+through the licensed Bronze bridge; the acquisition runtime keeps its **opaque-payload boundary**
+and **no parser was introduced** anywhere in the entry point, the composition root, the runtime, the
+transport or the publisher; the mode is **`AcquisitionMode.QUALIFICATION`**, declared and never
+inferred, with **no fourth mode introduced**; the retrieval is **one provider request** with **no
+pagination** and **no automatic retry**, over a deterministic **seven-day trailing window** ending
+the UTC day before invocation; publication is **licensed Bronze** only, creating **three durable
+artifacts** in **exactly three PutObject operations**, with **zero to three conditional HeadObject
+metadata checks only after a 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no
+extra qualification report**; and **CONTROL publication stays ZERO and forbidden**. Each of those is
+a synthetic test that counts what a fake was asked for, not a sentence repeated here.
+
+**The other two scripts are unchanged and still separate.**
 
 | Candidate | What it actually is |
 |---|---|
@@ -1549,43 +1585,14 @@ they are:
 | `scripts/sharadar_binding_preflight.py` | the **offline** binding/composition preflight — terminates at `preflight_qualification_composition` by design |
 | `scripts/sharadar_plan_check.py` | offline plan validation only |
 
-**The static governance inspection that preceded the ADR executed nothing, and was not an
-authenticated qualification attempt.** It read documents and call graphs and stopped.
-
-```
-authenticated qualification attempts        ZERO
-Sharadar/provider requests                  ZERO
-qualification-runtime executions            ZERO
-provider authentication                     UNKNOWN
-S3 object operations for qualification      ZERO
-AWS operations during the inspection        ZERO
-Secrets Manager operations during it        ZERO
-Terraform operations                        ZERO
-credential retrievals                       ONE -- the fifth binding-preflight attempt's, unchanged
-binding-preflight attempts                  FIVE -- unchanged
-authenticated entry points implemented      NONE
-```
-
-**The accepted architecture preserves what was already accepted, and narrows nothing.** ADR-0012's
-rule that **one request = one durable acquisition** is preserved; the response is published **byte
-for byte** through the licensed Bronze bridge; the acquisition runtime keeps its
-**opaque-payload boundary** and parses nothing; the mode is **`AcquisitionMode.QUALIFICATION`**,
-declared and never inferred, with **no fourth mode introduced**; the future retrieval is **one
-provider request** with **no pagination** and **no automatic retry**, over a deterministic
-**seven-day trailing window**; publication is **licensed Bronze** only, creating **three durable
-artifacts** in **exactly three PutObject operations**, with **zero to three conditional HeadObject
-metadata checks only after a 412**, **zero object-byte reads**, **zero `.runtime/` writes** and
-**no extra qualification report**; evidence lands **only in the licensed private Bronze data
-plane**; and **CONTROL publication stays ZERO and forbidden**. A **zero-persistence provider
-request is rejected**, not selected. **Synchronizing this status weakens and reinterprets none of
-it.**
+Neither is imported, invoked, repurposed or changed by the new entry point, and a test asserts it.
 
 **The full P1–P9 empirical qualification remains separate and unexecuted.** It is the
 public-test-token harness, it is not reused as the authenticated runner, and no AI session may run
 it. It is the **third** gate, later than implementation and later than execution.
 
-**Nothing else is resolved by accepting this.** **No provider is selected**, **G1 OPEN · G2 OPEN ·
-G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**,
+**Nothing else is resolved by implementing this.** **No provider is selected**, **G1 OPEN · G2 OPEN
+· G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**,
 CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**. Q7 stays
 **`PUBLICLY_UNRESOLVED`**.
 

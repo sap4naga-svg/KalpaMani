@@ -489,8 +489,15 @@ def test_no_assignment_stores_a_constructed_component_anywhere_durable() -> None
 
 
 def test_the_module_returns_no_component_closure_or_bound_method() -> None:
-    """Every ``return`` in the module yields the closed result or a refusal."""
+    """Every ``return`` yields a closed result, a refusal, or the runtime's own
+    result object -- never a component, a closure or a bound method.
+
+    ADR-0017 added ``runtime.execute(plan)`` as a returned call. It is admitted
+    by name rather than by loosening the rule: an arbitrary call would let a
+    future edit return the runtime itself, which is the escape this guards.
+    """
     permitted = {"QualificationPreflight", "SharadarRequestError"}
+    permitted_methods = {"execute"}
     offenders: list[str] = []
     for node in ast.walk(_tree(COMPOSITION)):
         if not isinstance(node, ast.Return) or node.value is None:
@@ -499,6 +506,9 @@ def test_the_module_returns_no_component_closure_or_bound_method() -> None:
         if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
             if value.func.id not in permitted:
                 offenders.append(f"line {node.lineno}: {value.func.id}")
+        elif isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+            if value.func.attr not in permitted_methods:
+                offenders.append(f"line {node.lineno}: {value.func.attr}")
         elif not isinstance(value, ast.Name | ast.Constant | ast.Attribute):
             offenders.append(f"line {node.lineno}: {ast.unparse(value)}")
         if isinstance(value, ast.Lambda):
@@ -1053,33 +1063,57 @@ def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
-def test_the_module_has_no_execution_like_callable() -> None:
-    """Private spellings included: a leading underscore hides a function from a
-    reviewer skimming, not from a caller who knows the name."""
+def test_the_module_has_exactly_one_execution_like_callable() -> None:
+    """ADR-0017 authorized **one**, and named it. Everything else is still
+    refused, private spellings included: a leading underscore hides a function
+    from a reviewer skimming, not from a caller who knows the name.
+
+    Inverted rather than deleted. The earlier rule was 'none exists', which was
+    correct while offline preflight was the only operation; deleting it would
+    have left a second, unreviewed execution surface unguarded.
+    """
     import kalpamani.data.ingest.sharadar.composition as module
 
-    offenders = [
+    found = [
         name
         for name, member in inspect.getmembers(module)
         if callable(member) and not _is_dunder(name) and EXECUTION_LIKE.match(name)
     ]
-    assert offenders == [], f"an execution-like callable exists: {offenders}"
+    assert found == ["execute_qualification_acquisition"], (
+        f"exactly one authorized execution surface may exist. Found: {found}"
+    )
 
 
-def test_the_module_defines_exactly_one_public_operation() -> None:
+def test_the_module_defines_exactly_two_public_operations() -> None:
+    """Offline preflight, and the ADR-0017 bounded acquisition. A third would
+    be a new surface nobody reviewed."""
     functions = [
         node.name
         for node in _tree(COMPOSITION).body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     ]
-    assert functions == ["_refuse", "_exact_count", "preflight_qualification_composition"]
+    assert functions == [
+        "_refuse",
+        "_exact_count",
+        "preflight_qualification_composition",
+        "execute_qualification_acquisition",
+    ]
     assert [name for name in functions if not name.startswith("_")] == [
-        "preflight_qualification_composition"
+        "preflight_qualification_composition",
+        "execute_qualification_acquisition",
     ]
 
 
-def test_the_module_never_names_execute() -> None:
-    assert "execute" not in _executable(COMPOSITION)
+def test_the_module_names_execute_exactly_where_adr_0017_authorized_it() -> None:
+    """Once as the authorized function name, once as the single call it makes.
+
+    A count rather than a prohibition: the earlier rule was that the word did
+    not appear at all, and dropping it entirely would have let a second call
+    site -- a retry, a fallback, a loop body -- arrive unnoticed."""
+    source = _executable(COMPOSITION)
+    # Twice: the definition, and the `__all__` entry that exports it.
+    assert source.count("execute_qualification_acquisition") == 2
+    assert source.count(".execute(") == 1
 
 
 def test_the_module_has_no_entry_point_cli_or_subprocess() -> None:
@@ -1184,11 +1218,19 @@ def test_nothing_calls_the_composition_outside_this_file() -> None:
 
 
 def test_no_module_imports_the_composition_outside_this_file() -> None:
+    """The composition has a small, named set of importers, and no others.
+
+    ADR-0017 added the authenticated entry point and its tests. Listed by name
+    rather than by relaxing the scan, so a sixth importer still fails here.
+    """
     allowed = {
         Path(__file__).resolve(),
         COMPOSITION,
         BINDING_PREFLIGHT,
         BINDING_PREFLIGHT_TEST,
+        SCRIPTS / "sharadar_authenticated_qualification.py",
+        TESTS / "unit" / "test_sharadar_authenticated_qualification.py",
+        TESTS / "unit" / "test_sharadar_acquisition_composition.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, TESTS):
