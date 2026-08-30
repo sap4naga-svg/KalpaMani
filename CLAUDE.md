@@ -294,7 +294,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 3A — SHARADAR PROVIDER-INTEGRATION SLICE 1: IMPLEMENTED / ACCEPTED — PR #13 MERGED — CODE ONLY.**
 **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / ACCEPTED — PR #16 MERGED — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3A — SHARADAR QUALIFICATION RUNTIME CORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #17 — CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS.**
-**PHASE 3A — BOUNDED AUTHENTICATED ACQUISITION QUALIFICATION: IMPLEMENTED — PR #35 MERGED — ATTEMPTED ONCE UNDER SEPARATE AUTHORIZATION AND REFUSED AT THE AWS IDENTITY GATE (`REFUSED_IDENTITY`, EXIT CODE 6). NO PROVIDER REQUEST, NO CREDENTIAL RETRIEVAL, NO PUBLICATION. A SECOND ATTEMPT NOT AUTHORIZED.**
+**PHASE 3A — BOUNDED AUTHENTICATED ACQUISITION QUALIFICATION: IMPLEMENTED — PR #35 MERGED — ATTEMPTED TWICE UNDER SEPARATE AUTHORIZATIONS. ATTEMPT ONE REFUSED AT THE AWS IDENTITY GATE (`REFUSED_IDENTITY`, EXIT CODE 6), WITH NO PROVIDER REQUEST, NO CREDENTIAL RETRIEVAL AND NO PUBLICATION. ATTEMPT TWO COMPLETED (`COMPLETED`, EXIT CODE 0), REACHED THE QUALIFICATION RUNTIME AND REPORTED ONE PROVIDER REQUEST; ITS S3 QUALIFICATION OPERATIONS ARE NOT ESTABLISHED. COMPLETION IS A COMMAND STATUS — NOT QUALIFICATION PASSED, NOT PROVIDER ACCEPTANCE AND NOT PROVIDER SELECTION. A THIRD ATTEMPT NOT AUTHORIZED.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -405,7 +405,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **PHASE 3 OVERALL** | **NOT COMPLETE** |
 | **Full Stage 3A real-data ingestion** | **NOT AUTHORIZED** |
 | **PHASE 3A — A2 / A3 subscription / purchase** | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, Personal Use, **for qualification only** |
-| **Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion** | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth authorized binding-preflight attempt, which retrieved **one** credential and had it **structurally accepted**. **Additional** application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, a **second** authenticated qualification attempt **NOT AUTHORIZED** — one attempt occurred and refused at the AWS identity gate before reaching any credential; a subscription existing is not permission to use it, a configured secret is not permission to read it again, and a structurally accepted credential is not proof that it authenticates against Sharadar, which stays **UNKNOWN** |
+| **Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion** | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth authorized binding-preflight attempt, which retrieved **one** credential and had it **structurally accepted**. **Additional** application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, a **third** authenticated qualification attempt **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate before reaching any credential and the second completing without establishing that any credential authenticated; a subscription existing is not permission to use it, a configured secret is not permission to read it again, and a structurally accepted credential is not proof that it authenticates against Sharadar, which stays **UNKNOWN** |
 | **PHASE 3B** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3C** | **NOT STARTED / NOT AUTHORIZED** |
 | **PHASE 3D** | **NOT STARTED / NOT AUTHORIZED** |
@@ -428,14 +428,14 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Any further AWS mutation, read, verifier run or Terraform command** | **NOT AUTHORIZED** — implementing a client-shaped adapter is not permission to run one. Five separately authorized binding-preflight attempts, two SSO logins and two identity diagnostics have occurred and are recorded; each was authorized for itself, and none of them authorizes the next |
 | **Licensed bucket · SDK client construction · credential source** | Licensed-bucket resolutions **ONE**, S3 client constructions **ONE**, S3 object operations **ZERO** — the phrase *real bucket binding* is **undefined in this repository**, so the status is those three facts and neither a claimed binding nor a claimed absence. Operational secret-identifier configuration **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT**, Secrets Manager client constructions **ONE**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked five times under separate authorization, the first four refusing without constructing a client and the fifth **COMPLETING** with **one** Secrets Manager client, **one** admitted `get_secret_value`, **one** retrieved and structurally accepted credential, **one** S3 client, **one** provider transport and **one** offline composition preflight returning **`VALIDATED_OFFLINE`**. A corrected AWS SSO login **COMPLETED SUCCESSFULLY** beforehand and **one** sanitized identity confirmation returned **`IDENTITY_CONFIRMED`**, which bound nothing and verified no secret, credential, bucket or provider access. A sixth binding-preflight attempt **NOT AUTHORIZED**, further AWS authentication diagnosis **NOT AUTHORIZED**, another AWS SSO-login/refresh attempt **SEPARATELY GATED / NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
 | **[ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight** | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
-| **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused, and a fifth separately authorized attempt then COMPLETED** — the four refusing at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — while its governed identity gate's own **STS command invocation is UNKNOWN**, because the committed gate has real pre-STS refusal paths and nothing tracked records which branch refused. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **The fifth separately authorized attempt then ran exactly once and COMPLETED** — **exit code `0`**, public output exactly `binding preflight completed` and `offline validation completed`, closed outcome **`COMPLETED + VALIDATION_COMPLETED`**, and a last definitively reached stage of **stage 10**: one `preflight_qualification_composition` invocation returning **`VALIDATED_OFFLINE`**. Its conservative counts are identity-gate invocations **ONE, passed**, licensed-bucket resolutions **ONE**, secret-identifier resolutions **ONE**, Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, S3 client constructions **ONE**, S3 object operations **ZERO**, provider transport constructions **ONE**, Sharadar/provider requests **ZERO**, offline composition-preflight invocations **ONE**, qualification executions **ZERO**, and underlying AWS network requests **UNKNOWN**. **A credential was definitively retrieved**: one admitted `get_secret_value` returned a `SecretString` the existing credential contract accepted **structurally**, which was passed into the offline composition and **never displayed, logged, persisted, hashed, fingerprinted, measured or summarized** — *usable* meaning structurally acceptable to that contract, with **Sharadar authentication UNKNOWN** because **no provider request occurred**. The fourth attempt still **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**; operational secret-identifier configuration is **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth attempt, owner setup having occurred **after the third attempt** and **before the fourth**. A **sixth** attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **additional credential or Secrets Manager access**, **Sharadar/provider access**, **any S3 object operation or publication**, **ingestion, backfill and update** and a **second authenticated qualification attempt stay separately gated and NOT AUTHORIZED** |
-| **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. The corrected boundaries were exercised for the first time by the fifth attempt, which passed the identifier stage rather than refusing at it: Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, Secrets Manager underlying network requests **UNKNOWN**, real credential retrieval **ONE, structurally accepted**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a sixth binding-preflight attempt **NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**, a **second** authenticated qualification attempt **NOT AUTHORIZED** — the one attempt that occurred refused at the AWS identity gate, two stages before this boundary, so these corrected refusals were not exercised by it |
-| **[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) — bounded authenticated acquisition qualification** | **ACCEPTED / IN FORCE** — PR #33 merged. Merge commit **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**. **The merge acceptance condition has occurred**, so ADR-0017 is **no longer PROPOSED** — while its pull request was open it was **not accepted and carried no authority**, which was true then and is not rewritten. **The authenticated acquisition entry point is now IMPLEMENTED, ATTEMPTED ONCE AND REFUSED.** `scripts/sharadar_authenticated_qualification.py` exists, **refuses by default**, and the accepted composition root was **extended, not duplicated**: `QualificationRuntime.execute` now has **exactly ONE production caller**, reached only through that entry point's authorized branch. **Authenticated entry points implemented ONE.** **Implementing it was not permission to use it, and one refused attempt is not permission for a second**: **a second execution of the surface remains separately gated and NOT AUTHORIZED**, and **implementation, execution and empirical qualification remain three distinct gates**. **A separately authorized first execution has since been attempted, in a fresh session, and it REFUSED.** Authenticated qualification attempts **ONE — refused**, entry-point process invocations **ONE**, closed outcome **`REFUSED_IDENTITY`**, exit code **`6`**, last stage definitively reached **stage 5 — the AWS identity gate**, stages 1–4 **PASSED**; AWS identity-gate invocations **ONE, refused**, licensed-bucket resolutions **ZERO**, Terraform command invocations **ZERO**, secret-identifier resolutions **ZERO**, `KALPAMANI_SHARADAR_SECRET_ID` reads **ZERO**, Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, credential retrievals by this attempt **ZERO**, S3 client constructions **ZERO**, provider transport constructions **ZERO**, qualification-runtime executions against real services **ZERO**, application-level provider fetches **ZERO**, Sharadar/provider requests **ZERO**, provider authentication **UNKNOWN**, `PutObject` **ZERO**, conditional `HeadObject` **ZERO**, S3 object-byte reads **ZERO**, S3 qualification operations **ZERO**, CONTROL operations **ZERO**, `.runtime/` writes from this attempt **ZERO**, P1–P9 executions **ZERO**, ingestion and trading operations **ZERO**, and underlying AWS/network interactions **UNKNOWN**; the gate's own STS command invocation is **UNKNOWN** because real pre-STS refusal paths exist, and the **cause of the refusal was not diagnosed and is not inferred**. Cumulative credential retrieval remains **ONE**, from the fifth binding-preflight attempt, and binding-preflight attempts remain **FIVE** — this was **not** a sixth. **A second authenticated attempt, further AWS identity diagnosis and another SSO refresh or login are each NOT AUTHORIZED.** The implemented path preserves **one request = one durable acquisition**, keeps the acquisition runtime's **opaque-payload boundary** with **no parser introduced**, declares **`AcquisitionMode.QUALIFICATION`** with **no fourth mode**, locks **one provider request** with **no pagination** and **no automatic retry** over a **seven-day trailing window**, and publishes byte for byte through the **licensed private Bronze data plane** only as **three durable artifacts** in **exactly three PutObject operations** with **zero-to-three conditional HeadObject metadata checks only after 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no extra qualification report**, performing **no CONTROL publication**. Full **P1–P9 empirical qualification remains separate and unexecuted**, **no provider is selected**, and **G1 and G2 stay OPEN** |
-| **Ingestion runner · ECS task or image · a second authenticated qualification attempt** | **NOT AUTHORIZED** — the first attempt occurred, refused at the AWS identity gate, and authorizes nothing further |
+| **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused, and a fifth separately authorized attempt then COMPLETED** — the four refusing at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — while its governed identity gate's own **STS command invocation is UNKNOWN**, because the committed gate has real pre-STS refusal paths and nothing tracked records which branch refused. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **The fifth separately authorized attempt then ran exactly once and COMPLETED** — **exit code `0`**, public output exactly `binding preflight completed` and `offline validation completed`, closed outcome **`COMPLETED + VALIDATION_COMPLETED`**, and a last definitively reached stage of **stage 10**: one `preflight_qualification_composition` invocation returning **`VALIDATED_OFFLINE`**. Its conservative counts are identity-gate invocations **ONE, passed**, licensed-bucket resolutions **ONE**, secret-identifier resolutions **ONE**, Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, S3 client constructions **ONE**, S3 object operations **ZERO**, provider transport constructions **ONE**, Sharadar/provider requests **ZERO**, offline composition-preflight invocations **ONE**, qualification executions **ZERO**, and underlying AWS network requests **UNKNOWN**. **A credential was definitively retrieved**: one admitted `get_secret_value` returned a `SecretString` the existing credential contract accepted **structurally**, which was passed into the offline composition and **never displayed, logged, persisted, hashed, fingerprinted, measured or summarized** — *usable* meaning structurally acceptable to that contract, with **Sharadar authentication UNKNOWN** because **no provider request occurred**. The fourth attempt still **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**; operational secret-identifier configuration is **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth attempt, owner setup having occurred **after the third attempt** and **before the fourth**. A **sixth** attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **additional credential or Secrets Manager access**, **Sharadar/provider access**, **any S3 object operation or publication**, **ingestion, backfill and update** and a **third authenticated qualification attempt stay separately gated and NOT AUTHORIZED** |
+| **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. The corrected boundaries were exercised for the first time by the fifth attempt, which passed the identifier stage rather than refusing at it: Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, Secrets Manager underlying network requests **UNKNOWN**, real credential retrieval **ONE, structurally accepted**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a sixth binding-preflight attempt **NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**, a **third** authenticated qualification attempt **NOT AUTHORIZED** — of the two attempts that occurred, the first refused at the AWS identity gate, two stages before this boundary, and the second completed, so these corrected refusals were exercised by neither |
+| **[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) — bounded authenticated acquisition qualification** | **ACCEPTED / IN FORCE** — PR #33 merged. Merge commit **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**. **The merge acceptance condition has occurred**, so ADR-0017 is **no longer PROPOSED** — while its pull request was open it was **not accepted and carried no authority**, which was true then and is not rewritten. **The authenticated acquisition entry point is now IMPLEMENTED, ATTEMPTED TWICE — REFUSED, THEN COMPLETED.** `scripts/sharadar_authenticated_qualification.py` exists, **refuses by default**, and the accepted composition root was **extended, not duplicated**: `QualificationRuntime.execute` now has **exactly ONE production caller**, reached only through that entry point's authorized branch. **Authenticated entry points implemented ONE.** **Implementing it was not permission to use it, one refused attempt is not permission for a second, and one completed attempt is not permission for a third**: **a third execution of the surface remains separately gated and NOT AUTHORIZED**, and **implementation, execution and empirical qualification remain three distinct gates**. **Two separately authorized executions have since been attempted, in fresh sessions: the first REFUSED and the second COMPLETED.** Authenticated qualification attempts **TWO — one refused, one completed**, entry-point process invocations **TWO — exactly one per attempt**. **Attempt one:** closed outcome **`REFUSED_IDENTITY`**, exit code **`6`**, last stage definitively reached **stage 5 — the AWS identity gate**, stages 1–4 **PASSED**; AWS identity-gate invocations **ONE, refused**, licensed-bucket resolutions **ZERO**, Terraform command invocations **ZERO**, secret-identifier resolutions **ZERO**, `KALPAMANI_SHARADAR_SECRET_ID` reads **ZERO**, Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, credential retrievals by this attempt **ZERO**, S3 client constructions **ZERO**, provider transport constructions **ZERO**, qualification-runtime executions against real services **ZERO**, application-level provider fetches **ZERO**, Sharadar/provider requests **ZERO**, `PutObject` **ZERO**, conditional `HeadObject` **ZERO**, S3 object-byte reads **ZERO**, S3 qualification operations **ZERO**, CONTROL operations **ZERO**, `.runtime/` writes from this attempt **ZERO**, and underlying AWS/network interactions **UNKNOWN**; the gate's own STS command invocation is **UNKNOWN** because real pre-STS refusal paths exist, and the **cause of the refusal was not diagnosed and is not inferred**. **Attempt two:** entry-point process invocations **ONE**, exit code **`0`**, closed result observed **YES**, closed result **`COMPLETED`**, qualification runtime reached **YES**, qualification-runtime executions **ONE**, provider requests **ONE — reported**, S3 qualification operations **NOT ESTABLISHED**, every attempt-two count the authorized evidence does not state **NOT ESTABLISHED**, and underlying AWS/network interactions **UNKNOWN**. **`COMPLETED` is a command status, not a verdict** — not qualification passed, not the provider accepted, not a provider selected, not a closure of G1 or G2, not a completion of Phase 3, and not production, CONTROL or live-trading readiness. Cumulatively: qualification-runtime executions **ONE**, known provider requests **ONE**, S3 qualification operations **NOT ESTABLISHED — attempt one ZERO, attempt two NOT ESTABLISHED, and NOT ESTABLISHED is never read as ZERO**, provider authentication **UNKNOWN**, P1–P9 executions **ZERO**, ingestion and trading operations **ZERO**. Credential retrievals established by count remain **ONE**, from the fifth binding-preflight attempt, with attempt two's count **NOT ESTABLISHED**, and binding-preflight attempts remain **FIVE** — neither attempt was a sixth. **A third authenticated attempt, further AWS identity diagnosis and another SSO refresh or login are each NOT AUTHORIZED.** The implemented path preserves **one request = one durable acquisition**, keeps the acquisition runtime's **opaque-payload boundary** with **no parser introduced**, declares **`AcquisitionMode.QUALIFICATION`** with **no fourth mode**, locks **one provider request** with **no pagination** and **no automatic retry** over a **seven-day trailing window**, and publishes byte for byte through the **licensed private Bronze data plane** only as **three durable artifacts** in **exactly three PutObject operations** with **zero-to-three conditional HeadObject metadata checks only after 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no extra qualification report**, performing **no CONTROL publication**. Full **P1–P9 empirical qualification remains separate and unexecuted**, **no provider is selected**, and **G1 and G2 stay OPEN** |
+| **Ingestion runner · ECS task or image · a third authenticated qualification attempt** | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
-| **Provider credential state · repository consumption · provider API access · Services Data** | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; a **second** authenticated qualification attempt **NOT AUTHORIZED**, the first having refused at the AWS identity gate and retrieved no credential — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
-| **Real external-data acquisition** | **NOT STARTED** |
+| **Provider credential state · repository consumption · provider API access · Services Data** | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; a **third** authenticated qualification attempt **NOT AUTHORIZED** — the first refused at the AWS identity gate and retrieved no credential, and the second completed with **one provider request reported** and **provider authentication still UNKNOWN** — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
+| **Real external-data acquisition** | **ONE PROVIDER REQUEST REPORTED** by the second authenticated qualification attempt; **durable acquisition NOT ESTABLISHED** — attempt-two S3 qualification operations are **NOT ESTABLISHED** and are never read as ZERO. Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | **Short research** | **NOT AUTHORIZED** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** |
 | **Live trading** | **HARD-DISABLED** |
@@ -794,8 +794,9 @@ operational environment synchronized: DONE AND VERIFIED -- see the environment s
 Python dependency lock: ABSENT   ·   environment: RANGE-CONFORMANT, NOT LOCK-CONFORMANT
 a sixth binding-preflight attempt: NOT AUTHORIZED
 additional credential or Secrets Manager access: NOT AUTHORIZED
-a second authenticated qualification attempt: NOT AUTHORIZED -- one occurred
-    and refused at the AWS identity gate with REFUSED_IDENTITY, exit code 6
+a third authenticated qualification attempt: NOT AUTHORIZED -- two occurred; the
+    first refused at the AWS identity gate with REFUSED_IDENTITY, exit code 6,
+    and the second COMPLETED with exit code 0
 ```
 
 **A method invocation is not a proven AWS network request.** The third column counts calls into the
@@ -906,7 +907,11 @@ identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- future session validit
 identity-confirmation underlying AWS network requests: UNKNOWN
 Secrets Manager client constructions: ONE   ·   get_secret_value invocations: ONE
 Secrets Manager underlying network requests: UNKNOWN   ·   S3 object operations: ZERO
-Sharadar/provider requests: ZERO   ·   credential retrieved: ONE   ·   qualification runs: ZERO
+binding-preflight Sharadar/provider requests: ZERO   ·   credential retrieved: ONE
+binding-preflight qualification runs: ZERO
+authenticated qualification attempts: TWO -- one REFUSED, one COMPLETED
+known provider requests: ONE   ·   provider authentication: UNKNOWN
+attempt-two S3 qualification operations: NOT ESTABLISHED -- never read as ZERO
 credential status: STRUCTURALLY ACCEPTED   ·   Sharadar authentication: UNKNOWN
 AWS credential-provider chain invoked during environment verification: NONE
 AWS requests during environment verification: ZERO
@@ -916,8 +921,9 @@ a sixth binding-preflight attempt: NOT AUTHORIZED
 further AWS authentication diagnosis: NOT AUTHORIZED
 another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
 additional credential or Secrets Manager access: NOT AUTHORIZED
-a second authenticated qualification attempt: NOT AUTHORIZED -- one occurred and
-    refused at the AWS identity gate   ·   Sharadar/provider access: NOT AUTHORIZED
+a third authenticated qualification attempt: NOT AUTHORIZED -- two occurred, the
+    first refusing at the AWS identity gate and the second COMPLETING
+further Sharadar/provider access: NOT AUTHORIZED
 S3 object operations or publication: NOT AUTHORIZED
 ingestion, backfill and update: NOT AUTHORIZED
 CONTROL publication: DEFERRED / NOT AUTHORIZED
@@ -1086,7 +1092,7 @@ Secrets Manager underlying network requests: UNKNOWN
 S3 client constructions: ONE   ·   S3 object operations: ZERO
 provider transport constructions: ONE   ·   Sharadar/provider requests: ZERO
 offline composition-preflight invocations: ONE
-credential retrieval: ONE   ·   qualification runs: ZERO
+credential retrieval: ONE   ·   binding-preflight qualification runs: ZERO
 owner-side Secrets Manager secret creation: ATTESTED, AND READ ONCE BY THE ENTRY POINT
 Secrets Manager secret reads by this repository: ONE
 "real bucket binding": UNDEFINED IN THIS REPOSITORY -- STATED AS BUCKET RESOLUTION ONE,
@@ -1099,9 +1105,10 @@ further AWS authentication diagnosis: NOT AUTHORIZED
 another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
 further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED
 additional credential or Secrets Manager access: NOT AUTHORIZED
-a second authenticated qualification attempt: NOT AUTHORIZED -- one occurred
-    and refused at the AWS identity gate with REFUSED_IDENTITY, exit code 6
-Sharadar/provider access: NOT AUTHORIZED
+a third authenticated qualification attempt: NOT AUTHORIZED -- two occurred; the
+    first refused at the AWS identity gate with REFUSED_IDENTITY, exit code 6,
+    and the second COMPLETED with exit code 0
+further Sharadar/provider access: NOT AUTHORIZED
 S3 object operations or publication: NOT AUTHORIZED
 ingestion, backfill and update: NOT AUTHORIZED
 CONTROL publication: DEFERRED / NOT AUTHORIZED
@@ -1254,7 +1261,7 @@ absence of a generated device code.
 **A failed login attempt is not permission to retry.** **Another AWS SSO-login/refresh attempt
 NOT AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a sixth binding-preflight
 attempt NOT AUTHORIZED · additional credential or Secrets Manager access NOT AUTHORIZED ·
-a second authenticated qualification attempt NOT AUTHORIZED.**
+a third authenticated qualification attempt NOT AUTHORIZED.**
 
 **A corrected, separately authorized SSO login has since completed, and the governed session was
 refreshed.** Run in a new Claude session after PR #30 merged, it invoked **one** process and
@@ -1345,12 +1352,15 @@ occurred — **four refused and the fifth completed** — and **two** SSO-login 
 separately authorized, the first timing out and the second succeeding, with **one sanitized
 identity confirmation** after it. What remains future, and separately authorized: a **sixth**
 attempt, **further** AWS authentication diagnosis, **another** AWS SSO refresh or login, further
-environment resynchronization, **additional** credential or Secrets Manager access, provider
-access, any S3 object operation, and a **second** authenticated Sharadar qualification attempt.
-**A first authenticated qualification attempt has since occurred, separately authorized, and it
-refused at the AWS identity gate with `REFUSED_IDENTITY` and exit code `6` — it was not a sixth
-binding-preflight attempt, it retrieved no credential, it made no provider request, and a second
-attempt is NOT AUTHORIZED.**
+environment resynchronization, **additional** credential or Secrets Manager access, further
+provider access, any further S3 object operation, and a **third** authenticated Sharadar
+qualification attempt.
+**Two authenticated qualification attempts have since occurred, each separately authorized.**
+The first **refused at the AWS identity gate with `REFUSED_IDENTITY` and exit code `6`** — it
+retrieved no credential and made no provider request. The second **COMPLETED with exit code
+`0`**, reached the qualification runtime and **reported one provider request**, with its **S3
+qualification operations NOT ESTABLISHED**. **Neither was a sixth binding-preflight attempt,
+and a third attempt is NOT AUTHORIZED.**
 
 | | |
 |---|---|
@@ -1468,14 +1478,17 @@ holding real dependencies is still inert while only this method exists.
 | **Zero activity, counted** | the transport and the S3 client raise if called, and their call counts are asserted at zero through a real `S3ResearchObjectStore`. `reveal()` is counted by patching the credential class |
 | **`QUALIFICATION` is fixed, once** | `QUALIFICATION_ACQUISITION_MODE` is defined in `qualification.py` and imported by both the runtime and the preflight result — **one statement, not two that could drift**. No mode parameter on the composition, on preflight, on the plan or on the limits ([ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md)) |
 
-**The first authenticated qualification run remains separately gated, and this slice does not
+**A further authenticated qualification run remains separately gated, and this slice does not
 approach it.** What would still be needed: an authorization, a credential source, a real credential,
 a constructed **AWS SDK** client, a resolved licensed bucket, and code that calls something other
 than `preflight_qualification_composition`. **The fifth separately authorized binding-preflight
 attempt supplied the first five, once and offline** — under its own authorization, in the operator
-entry point, not in this module. **The sixth does not exist**: nothing calls anything other than
-`preflight_qualification_composition`, so no qualification execution, provider request or S3 object
-operation has occurred, and the authenticated run stays a separate, unauthorized decision.
+entry point, not in this module. **The sixth was supplied elsewhere**: nothing in *this* module calls anything other than
+`preflight_qualification_composition`, so this module has caused no qualification execution,
+provider request or S3 object operation. The authenticated surface added by
+[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md)
+is a different, separately authorized path; it has been attempted twice — refused, then
+COMPLETED — and a **third** run stays a separate, unauthorized decision.
 
 **The architecture guards were narrowed, not deleted.** Exactly one module may construct the
 licensed store, the client and the runtime; a second one fails. **SDK construction stays forbidden
@@ -1504,8 +1517,9 @@ SDK client construction: that entry point ONLY -- ONE S3 client and ONE Secrets 
                          client, on the fifth authorized attempt
 licensed-bucket resolutions: ONE   ·   S3 object operations: ZERO
 runner: NONE   ·   module entry point in either module: NONE
-constructed only by the dormant composition root (ADR-0014) and its own tests
-Sharadar requests sent: ZERO   ·   AWS requests sent: ZERO
+constructed by the composition root (ADR-0014, extended by ADR-0017) and its own tests
+Sharadar requests sent by these modules themselves: ZERO   ·   AWS requests sent: ZERO
+reached through the ADR-0017 authenticated entry point: TWICE -- REFUSED, then COMPLETED
 ```
 
 That claim once ended *"and no composition root exists"*.
@@ -1516,9 +1530,11 @@ run is a separately gated authorization plus the real private bindings — a cre
 constructed SDK client, a resolved bucket — and code that calls something other than `preflight`.
 **The fifth authorized binding-preflight attempt supplied the first three, once and offline**: a
 credential was retrieved and structurally accepted, an S3 client was constructed, and the governed
-licensed bucket was resolved. **The fourth does not exist**: nothing calls anything other than
-`preflight`, so no qualification execution, provider request or S3 object operation occurred, and
-an authenticated qualification run remains a separate, unauthorized decision.
+licensed bucket was resolved. **The fourth was supplied elsewhere**: nothing on *this* dormant path calls anything other
+than `preflight`, so this path has caused no qualification execution, provider request or S3
+object operation. The separately authorized ADR-0017 surface has been attempted twice —
+refused, then COMPLETED — and a **third** authenticated qualification run remains a separate,
+unauthorized decision.
 
 **Seven ceilings, compiled in, lowerable and never raisable:** 8 subjects · 3 datasets · 4 pages per
 request · 96 requests · the transport's own per-response byte ceiling · 512 MiB per run · 32
@@ -1691,20 +1707,24 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                         PROPOSED; IT CARRIED NO AUTHORITY WHILE PR #33 WAS OPEN,
                         WHICH WAS TRUE THEN AND IS NOT REWRITTEN. THE
                         AUTHENTICATED ACQUISITION ENTRY POINT IS NOW IMPLEMENTED,
-                        ATTEMPTED ONCE AND REFUSED. AUTHENTICATED ENTRY POINTS
+                        ATTEMPTED TWICE -- REFUSED, THEN COMPLETED.
+                        AUTHENTICATED ENTRY POINTS
                         IMPLEMENTED ONE; scripts/sharadar_authenticated_qualification.py
                         REFUSES BY DEFAULT; THE ACCEPTED COMPOSITION ROOT WAS
                         EXTENDED, NOT DUPLICATED, AND
                         QualificationRuntime.execute NOW HAS EXACTLY ONE
                         PRODUCTION CALLER. IMPLEMENTING IT WAS NOT PERMISSION TO
-                        USE IT, AND ONE REFUSED ATTEMPT IS NOT PERMISSION FOR A
-                        SECOND: A SECOND EXECUTION OF THE SURFACE REMAINS
+                        USE IT, ONE REFUSED ATTEMPT IS NOT PERMISSION FOR A
+                        SECOND, AND ONE COMPLETED ATTEMPT IS NOT PERMISSION FOR
+                        A THIRD: A THIRD EXECUTION OF THE SURFACE REMAINS
                         SEPARATELY GATED AND NOT AUTHORIZED, AND IMPLEMENTATION,
                         EXECUTION AND EMPIRICAL QUALIFICATION REMAIN THREE
-                        DISTINCT GATES. A SEPARATELY AUTHORIZED FIRST EXECUTION
-                        WAS ATTEMPTED IN A FRESH SESSION AND REFUSED --
-                        AUTHENTICATED QUALIFICATION ATTEMPTS ONE, REFUSED;
-                        ENTRY-POINT PROCESS INVOCATIONS ONE; CLOSED OUTCOME
+                        DISTINCT GATES. TWO SEPARATELY AUTHORIZED EXECUTIONS
+                        WERE ATTEMPTED IN FRESH SESSIONS -- THE FIRST REFUSED
+                        AND THE SECOND COMPLETED. AUTHENTICATED QUALIFICATION
+                        ATTEMPTS TWO -- ONE REFUSED, ONE COMPLETED;
+                        ENTRY-POINT PROCESS INVOCATIONS TWO, EXACTLY ONE PER
+                        ATTEMPT. ATTEMPT ONE -- CLOSED OUTCOME
                         REFUSED_IDENTITY; EXIT CODE 6; LAST STAGE DEFINITIVELY
                         REACHED STAGE 5, THE AWS IDENTITY GATE; STAGES 1-4
                         PASSED; PUBLIC OUTPUT EXACTLY "authenticated
@@ -1719,22 +1739,41 @@ IN FORCE       ADR-0009 provider-specific code (PR #13 merged)
                         CONSTRUCTIONS ZERO;
                         QUALIFICATION-RUNTIME EXECUTIONS AGAINST REAL SERVICES
                         ZERO; APPLICATION-LEVEL PROVIDER FETCHES ZERO;
-                        SHARADAR/PROVIDER REQUESTS ZERO; PROVIDER
-                        AUTHENTICATION UNKNOWN; PUTOBJECT ZERO; CONDITIONAL
-                        HEADOBJECT ZERO; S3 OBJECT-BYTE READS ZERO; S3
-                        QUALIFICATION OPERATIONS ZERO; CONTROL OPERATIONS ZERO;
-                        .runtime/ WRITES FROM THIS ATTEMPT ZERO; P1-P9
-                        EXECUTIONS ZERO; INGESTION AND TRADING OPERATIONS ZERO;
+                        SHARADAR/PROVIDER REQUESTS ZERO; PUTOBJECT ZERO;
+                        CONDITIONAL HEADOBJECT ZERO; S3 OBJECT-BYTE READS ZERO;
+                        S3 QUALIFICATION OPERATIONS ZERO; CONTROL OPERATIONS
+                        ZERO; .runtime/ WRITES FROM THIS ATTEMPT ZERO;
                         UNDERLYING AWS/NETWORK INTERACTIONS UNKNOWN; THE GATE'S
                         OWN STS COMMAND INVOCATION UNKNOWN, BECAUSE REAL
                         PRE-STS REFUSAL PATHS EXIST; THE CAUSE OF THE REFUSAL
                         UNDIAGNOSED AND NOT INFERRED -- NOT A MISSING SSO
                         SESSION, NOT AN EXPIRED ONE, NOT A CREDENTIAL DEFECT
                         AND NOT A PROVIDER FAILURE; NO RETRY, DIAGNOSIS, SSO
-                        LOGIN OR REPAIR FOLLOWED; THIS WAS NOT A SIXTH
-                        BINDING-PREFLIGHT ATTEMPT AND BINDING-PREFLIGHT
-                        ATTEMPTS REMAIN FIVE. CUMULATIVE CREDENTIAL
-                        RETRIEVALS ONE FROM BINDING ATTEMPT 5. PRESERVES ONE
+                        LOGIN OR REPAIR FOLLOWED IT. ATTEMPT TWO --
+                        ENTRY-POINT PROCESS INVOCATIONS ONE; EXIT CODE 0;
+                        CLOSED RESULT OBSERVED YES; CLOSED RESULT COMPLETED;
+                        QUALIFICATION RUNTIME REACHED YES;
+                        QUALIFICATION-RUNTIME EXECUTIONS ONE; PROVIDER REQUESTS
+                        ONE, REPORTED; S3 QUALIFICATION OPERATIONS NOT
+                        ESTABLISHED; EVERY ATTEMPT-TWO COUNT THE AUTHORIZED
+                        EVIDENCE DOES NOT STATE NOT ESTABLISHED; UNDERLYING
+                        AWS/NETWORK INTERACTIONS UNKNOWN. COMPLETED IS A
+                        COMMAND STATUS, NOT A VERDICT -- NOT QUALIFICATION
+                        PASSED, NOT THE PROVIDER ACCEPTED, NOT A PROVIDER
+                        SELECTED, NOT A CLOSURE OF G1 OR G2, NOT A COMPLETION
+                        OF PHASE 3,
+                        AND NOT PRODUCTION, CONTROL OR LIVE-TRADING READINESS.
+                        CUMULATIVELY -- QUALIFICATION-RUNTIME EXECUTIONS ONE;
+                        KNOWN PROVIDER REQUESTS ONE; S3 QUALIFICATION
+                        OPERATIONS NOT ESTABLISHED, ATTEMPT ONE ZERO AND
+                        ATTEMPT TWO NOT ESTABLISHED, NEVER READ AS ZERO;
+                        PROVIDER AUTHENTICATION UNKNOWN; P1-P9 EXECUTIONS
+                        ZERO; INGESTION AND TRADING OPERATIONS ZERO. NEITHER
+                        WAS A SIXTH BINDING-PREFLIGHT ATTEMPT AND
+                        BINDING-PREFLIGHT ATTEMPTS REMAIN FIVE. CREDENTIAL
+                        RETRIEVALS ESTABLISHED BY COUNT ONE FROM BINDING
+                        ATTEMPT 5, WITH ATTEMPT TWO'S COUNT NOT ESTABLISHED.
+                        PRESERVES ONE
                         REQUEST = ONE DURABLE ACQUISITION, THE OPAQUE-PAYLOAD
                         BOUNDARY WITH NO PARSER INTRODUCED,
                         AcquisitionMode.QUALIFICATION WITH NO FOURTH MODE, ONE
@@ -1764,9 +1803,10 @@ NOT AUTHORIZED additional application credential retrieval -- one occurred, on t
                ANY FURTHER AWS mutation, read, verifier run or terraform command ·
                         ECR/ECS · image builds
                ANY S3 object operation or publication · ANY Sharadar/provider access
-               an ingestion runner · a SECOND authenticated qualification attempt ·
-                        CONTROL publication -- one authenticated attempt occurred and
-                        refused at the AWS identity gate, and it authorizes no other
+               an ingestion runner · a THIRD authenticated qualification attempt ·
+                        CONTROL publication -- two authenticated attempts occurred, the
+                        first refusing at the AWS identity gate and the second
+                        completing, and neither authorizes any other
                further dependency installation or environment resynchronization --
                         separately gated; the declared range stays as declared and no
                         manifest or lock is changed
@@ -1783,14 +1823,16 @@ NOT AUTHORIZED additional application credential retrieval -- one occurred, on t
                         completing successfully, and a completed authorization is not
                         a standing one, any more than a failed login was permission to
                         retry or classifying a session was permission to replace it
-               a SECOND execution of the bounded authenticated acquisition
-                        qualification -- ADR-0017 is ACCEPTED / IN FORCE; one
-                        separately authorized first execution has occurred and
+               a THIRD execution of the bounded authenticated acquisition
+                        qualification -- ADR-0017 is ACCEPTED / IN FORCE; two
+                        separately authorized executions have occurred -- the first
                         REFUSED at the AWS identity gate with REFUSED_IDENTITY and
-                        exit code 6. Acceptance was not permission to run it, and a
-                        refused run is not permission to run it again: the
-                        implementation, execution and empirical-qualification gates
-                        are never collapsed into one
+                        exit code 6, and the second COMPLETED with exit code 0.
+                        Acceptance was not permission to run it, a refused run is
+                        not permission to run it again, and a completed run is not
+                        permission to run it a third time: the implementation,
+                        execution and empirical-qualification gates are never
+                        collapsed into one
                further AWS identity diagnosis of that refusal, any authentication or
                         SSO repair, and any retry -- the cause is UNDIAGNOSED and
                         stays UNKNOWN; a refusal is a completed result, not
@@ -1798,8 +1840,9 @@ NOT AUTHORIZED additional application credential retrieval -- one occurred, on t
                the AWS identity gate, Terraform, secret retrieval, Secrets Manager
                         access, any provider request, any S3 qualification
                         publication and any further authenticated qualification
-                        arising from ADR-0017 -- each stays separately gated, both
-                        after acceptance and after the one refused attempt
+                        arising from ADR-0017 -- each stays separately gated, after
+                        acceptance, after the refused attempt and after the
+                        completed one
                full P1-P9 empirical qualification -- a third distinct gate, later than
                         implementation and later than execution, and still separate
                         and unexecuted
@@ -1872,10 +1915,13 @@ ENVIRONMENT    operational .venv and AWS SDK PRESENT / VERIFIED -- Python 3.11.9
                further AWS authentication diagnosis NOT AUTHORIZED
                ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED
                additional credential or Secrets Manager access NOT AUTHORIZED
-               a second authenticated qualification attempt NOT AUTHORIZED -- one
-               occurred and refused at the AWS identity gate with REFUSED_IDENTITY
-               and exit code 6, and its cause is UNDIAGNOSED and UNKNOWN
-               Sharadar/provider access NOT AUTHORIZED
+               a third authenticated qualification attempt NOT AUTHORIZED -- two
+               occurred; the first refused at the AWS identity gate with
+               REFUSED_IDENTITY and exit code 6, its cause UNDIAGNOSED and UNKNOWN,
+               and the second COMPLETED with exit code 0, reached the qualification
+               runtime and reported ONE PROVIDER REQUEST, with its S3 QUALIFICATION
+               OPERATIONS NOT ESTABLISHED and PROVIDER AUTHENTICATION UNKNOWN
+               further Sharadar/provider access NOT AUTHORIZED
                S3 object operations or publication NOT AUTHORIZED
                ingestion, backfill and update NOT AUTHORIZED
                CONTROL publication DEFERRED / NOT AUTHORIZED
@@ -1929,7 +1975,7 @@ reaches no transport. Static tests prove each of those rather than asserting the
 The vendor was not contacted and the API was not called for either decision; the evidence is public documentation recorded as `PSR-SHD-122`–`PSR-SHD-128` in
 [provider-source-register.md](docs/phase3/provider-source-register.md) §R4–§R5, each table's depth cited to that table's own page.
 
-### The bounded authenticated acquisition qualification — ATTEMPTED ONCE, REFUSED AT THE IDENTITY GATE
+### The bounded authenticated acquisition qualification — ATTEMPTED TWICE, REFUSED THEN COMPLETED
 
 [ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md)
 **remains ACCEPTED / IN FORCE**. **PR #33 merged** — merge commit
@@ -1956,9 +2002,23 @@ The vendor was not contacted and the API was not called for either decision; the
 10. **Stage 5, the existing AWS identity gate, was invoked once and refused.** Exit code **`6`**,
     closed outcome **`REFUSED_IDENTITY`**, public output exactly
     `authenticated qualification refused: the AWS identity gate did not pass`.
-11. **No retry, diagnosis, SSO login, repair or second attempt followed**, and none is authorized.
+11. **No retry, diagnosis, SSO login or repair followed that refusal under its own
+    authorization**, and the status was synchronized on that footing.
+12. **A separately authorized SSO login completed with exit code `0`.** No SSO-login count is
+    revised here: authorized SSO-login attempts remain **TWO**.
+13. **A separately authorized identity diagnosis then returned `IDENTITY_CONFIRMED`** —
+    **expected-account resolution attempts ONE**, **STS command invocations ONE**, **STS exit code
+    `0`**, **structural identity fields present YES**, **account comparison matched YES**.
+14. **A separately authorized second execution was then attempted, and it COMPLETED.** **Exactly
+    one entry-point process was invoked**, the **exit code was `0`**, a **closed result was
+    observed**, and that closed result was **`COMPLETED`**.
+15. **The qualification runtime was reached**, and **one provider request was reported**.
+16. **Attempt two's S3 qualification operations are NOT ESTABLISHED**, and NOT ESTABLISHED is never
+    read as ZERO.
+17. **No third attempt, retry, diagnosis, SSO login or repair followed**, and none is authorized.
 
-**The authenticated acquisition entry point is IMPLEMENTED, ATTEMPTED ONCE AND REFUSED.**
+**The authenticated acquisition entry point is IMPLEMENTED, ATTEMPTED TWICE — REFUSED, THEN
+COMPLETED.**
 `scripts/sharadar_authenticated_qualification.py` exists and **refuses by default**: an ordinary
 import performs no lookup, constructs no client, opens no socket and reads no environment variable.
 Its CLI is **exactly three arguments**, and every credential, dataset, window, page, retry, bucket,
@@ -1970,13 +2030,15 @@ store and the runtime — a second root would have meant widening the single-con
 one file to two. **`QualificationRuntime.execute` now has exactly ONE production caller**, reachable
 only through the entry point's authorized branch.
 
-**Implementing an operator surface was not permission to use it, and one refused attempt is not
-permission to make a second.**
+**Implementing an operator surface was not permission to use it, one refused attempt is not
+permission to make a second, and one completed attempt is not permission to make a third.**
 
 ```
 authenticated entry points implemented      ONE
-authenticated qualification attempts        ONE -- REFUSED
-entry-point process invocations             ONE
+authenticated qualification attempts        TWO -- ONE REFUSED, ONE COMPLETED
+entry-point process invocations             TWO -- exactly one per attempt
+
+ATTEMPT ONE -- REFUSED
 closed outcome                              REFUSED_IDENTITY   ·   exit code: 6
 last stage definitively reached             STAGE 5 -- the AWS identity gate
 stages 1-4                                  PASSED
@@ -1993,37 +2055,78 @@ provider transport constructions            ZERO
 qualification-runtime executions            ZERO
 application-level provider fetches          ZERO
 Sharadar/provider requests                  ZERO
-provider authentication                     UNKNOWN
 PutObject                                   ZERO   ·   conditional HeadObject: ZERO
 S3 object-byte reads                        ZERO
 S3 object operations for qualification      ZERO
 CONTROL operations                          ZERO
 .runtime/ writes from this attempt          ZERO
-P1-P9 executions                            ZERO
-ingestion and trading operations            ZERO
 underlying AWS/network interactions         UNKNOWN -- no count is established
 STS command invocations by the gate         UNKNOWN -- real pre-STS refusal paths exist
 cause of the identity refusal               UNDIAGNOSED -- not inferred, not repaired
-credential retrievals, cumulative           ONE -- the fifth binding-preflight attempt's, unchanged
+
+ATTEMPT TWO -- COMPLETED
+entry-point process invocations             ONE
+entry-point exit code                       0
+closed result observed                      YES   ·   closed result: COMPLETED
+qualification runtime reached               YES
+qualification-runtime executions            ONE
+provider requests                           ONE -- reported; no further call is inferred
+S3 qualification operations                 NOT ESTABLISHED -- never read as ZERO
+every attempt-two count not stated above    NOT ESTABLISHED -- absent from the authorized
+                                            evidence, and never rounded to ZERO
+underlying AWS/network interactions         UNKNOWN -- no count is established
+
+CUMULATIVE
+authenticated qualification attempts        TWO
+qualification-runtime executions            ONE
+known provider requests                     ONE
+S3 qualification operations                 NOT ESTABLISHED -- attempt one ZERO,
+                                            attempt two NOT ESTABLISHED
+provider authentication                     UNKNOWN -- a reported request is not a
+                                            proven authentication
+production provider selected                NONE   ·   G1: OPEN   ·   G2: OPEN
+P1-P9 executions                            ZERO -- separate and unexecuted
+ingestion and trading operations            ZERO
+CONTROL operations                          ZERO
+credential retrievals established by count  ONE -- the fifth binding-preflight attempt's;
+                                            attempt two's count is NOT ESTABLISHED
 binding-preflight attempts                  FIVE -- unchanged
+authorized AWS SSO-login attempts           TWO -- unchanged
+a third authenticated attempt               NOT AUTHORIZED
 ```
 
 **Implementation, execution and full empirical qualification remain three distinct gates** that are
-never collapsed into one. The first two have now been *entered*; **none of the three is closed**. A
-**second** execution of the surface is separately gated and **NOT AUTHORIZED**, and so are a further
+never collapsed into one. The first two have now been *entered*; **none of the three is closed**,
+and a completed execution closes neither the execution gate for a further run nor the empirical one.
+A **third** execution of the surface is separately gated and **NOT AUTHORIZED**, and so are a further
 AWS identity gate invocation, Terraform, secret retrieval, Secrets Manager access, any provider
 request and any S3 qualification publication arising from it.
 
-**What the one attempted execution established, and what it did not.** **The bounded acquisition
-has never completed**, and **the entry point was nonetheless invoked exactly once** — two different
-facts, neither of which substitutes for the other, and the first may never be written so that it
-implies the second. The attempt proves exactly one thing: that at that moment, in that ordered
-sequence, **the governed AWS identity gate did not pass**. It
+**What attempt one established, and what it did not.** It proves exactly one thing: that at that
+moment, in that ordered sequence, **the governed AWS identity gate did not pass**. It
 establishes **nothing** about the secret identifier, the stored secret, the credential, Sharadar
 authentication, the licensed bucket, dataset accessibility, response content, row count, schema,
 subject correspondence, data quality, price-feed provenance, Q7, P1–P9 qualification, provider
 selection, ingestion readiness, or G1 and G2. It equally does **not** establish that the credential,
 the secret or the configuration is faulty: the refusal is **upstream of all of them**.
+
+**What attempt two established, and what it did not.** It establishes that **one entry-point process
+was invoked**, that it **exited `0`**, that a **closed result was observed** and was **`COMPLETED`**,
+that the **qualification runtime was reached**, that **one provider request was reported**, and that
+attempt two's **S3 qualification operations are NOT ESTABLISHED**. Reaching the qualification runtime
+does mean **no earlier stage refused**, because a refusal raises and no later stage runs after an
+earlier refusal — that is what the committed order guarantees, and **it fixes no count**. Every
+attempt-two count the authorized evidence does not state is **NOT ESTABLISHED**, and **NOT
+ESTABLISHED is never read as ZERO** and is never resolved by reading S3 or a private report.
+
+**`COMPLETED` is a command status, not a verdict.** It means the second governed entry-point
+invocation **exited successfully and produced its closed result after reaching the qualification
+runtime**, and it means nothing more. It is **not** qualification passed, **not** the provider
+accepted, **not** a provider selected, **not** a closure of G1, **not** a closure of G2, **not** a
+completion of Phase 3, **not** production readiness, **not** CONTROL readiness and **not** live-trading readiness.
+**Provider authentication stays UNKNOWN** — a reported request is not a proven authentication, and
+the authorized public result does not state one. **No additional provider call is inferred**, and
+**no provider is selected**: a completed qualification request selects nothing.
 
 **The cause was not diagnosed, and is not inferred here.** *The identity gate refused* is not *the
 SSO session was missing*, *the SSO session was expired*, *the credential is defective* or *the
@@ -2043,23 +2146,24 @@ exit code or from any prior attempt. **No STS network-request count is stated, a
 network interactions stay UNKNOWN**, because a CLI or SDK call can resolve locally and fail before
 anything leaves the machine.
 
-**Everything the attempt did not reach is unchanged.** No secret identifier was resolved and
+**Everything attempt one did not reach is unchanged.** No secret identifier was resolved and
 `KALPAMANI_SHARADAR_SECRET_ID` was **not read**; no Secrets Manager client was constructed and
-`get_secret_value` was **not invoked**; **no credential was retrieved by this attempt** — the
-repository's cumulative total stays **ONE**, from binding-preflight attempt 5. No S3 client, no
-provider transport, no qualification-runtime execution, **no provider request**, no `PutObject`, no
-`HeadObject`, no object-byte read, no CONTROL operation, no `.runtime/` write and no P1–P9
-execution. **Provider authentication remains UNKNOWN.**
+`get_secret_value` was **not invoked**; **no credential was retrieved by that attempt**. No S3
+client, no provider transport, no qualification-runtime execution, **no provider request**, no
+`PutObject`, no `HeadObject`, no object-byte read, no CONTROL operation, no `.runtime/` write and no
+P1–P9 execution. **Cumulative credential retrievals established by count remain ONE**, from
+binding-preflight attempt 5, and **attempt two's credential-retrieval count is NOT ESTABLISHED**.
+**Provider authentication remains UNKNOWN.**
 
-**This attempt is not a sixth binding-preflight attempt.** Binding-preflight attempts remain
+**Neither attempt is a sixth binding-preflight attempt.** Binding-preflight attempts remain
 **FIVE**, the fifth of which completed offline validation; that count is untouched by an
 authenticated qualification attempt, which is a different surface under a different authorization.
 
-**A second authenticated qualification attempt is NOT AUTHORIZED · further AWS identity diagnosis is
+**A third authenticated qualification attempt is NOT AUTHORIZED · further AWS identity diagnosis is
 NOT AUTHORIZED · another AWS SSO refresh or login is NOT AUTHORIZED · credential access, Secrets
 Manager access, provider access, any S3 publication and full empirical qualification each remain
 separately gated and NOT AUTHORIZED.** A refusal is a completed result, not permission to repair and
-try again.
+try again — and **a completed run is not permission to run again either**.
 
 **The accepted architecture is preserved by the implementation, not reinterpreted.** ADR-0012's rule
 that **one request = one durable acquisition** holds; the response is published **byte for byte**
@@ -2088,7 +2192,8 @@ Neither is imported, invoked, repurposed or changed by the new entry point, and 
 public-test-token harness, it is not reused as the authenticated runner, and no AI session may run
 it. It is the **third** gate, later than implementation and later than execution.
 
-**Nothing else is resolved by implementing this, or by the one refused attempt.** **No provider is
+**Nothing else is resolved by implementing this, by the refused attempt, or by the completed one.**
+**No provider is
 selected**, **full P1–P9 empirical qualification remains separate and unexecuted**, **G1 OPEN · G2 OPEN
 · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**,
 CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**. Q7 stays
