@@ -4275,6 +4275,354 @@ def strip_hcl_comments(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
+# ---------------------------------------------------------------------------
+# ADR-0017 -- a PROPOSED architecture, and the facts a status document must keep
+# ---------------------------------------------------------------------------
+
+#: The ADR this section governs. Proposed, so it is deliberately absent from
+#: :data:`MERGED_ADR_STATUS`: the in-force registry governs rows that *claim* a
+#: merge, and a proposed ADR must never make that claim.
+ADR_0017: Final = DECISIONS / (
+    "ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md"
+)
+
+#: What both status documents must independently say about ADR-0017, in prose.
+#:
+#: Independently is the point. Merged main has twice carried a fact in one
+#: document and a stale contradiction in the other, so each phrase is required in
+#: *each* file rather than in their concatenation.
+#:
+#: Matched against the document with emphasis removed and whitespace collapsed,
+#: so a rewrap cannot hide a sentence and a bold marker cannot split one.
+ADR_0017_REQUIRED_PROSE: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "names ADR-0017 and links its decision record",
+        "adr-0017](docs/decisions/adr-0017-bounded-authenticated-sharadar-acquisition-qualification",
+    ),
+    (
+        "records ADR-0017 as proposed and without authority",
+        "proposed — not accepted, not in force, carries no authority",
+    ),
+    ("states ADR-0017 carries no authority while its PR is open", "carries no authority"),
+    (
+        "records that no authenticated entry point was found",
+        "no tracked authenticated qualification entry point",
+    ),
+    ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
+    ("preserves the opaque-payload boundary", "opaque-payload boundary"),
+    ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
+    ("introduces no fourth acquisition mode", "no fourth mode"),
+    (
+        "keeps evidence in the licensed private Bronze data plane",
+        "licensed private bronze data plane",
+    ),
+    ("performs no CONTROL publication", "control publication stays zero and forbidden"),
+    (
+        "rejects zero-persistence rather than selecting it",
+        "zero-persistence provider request is rejected",
+    ),
+    ("separates the implementation gate from the execution gate", "does not authorize execution"),
+    (
+        "keeps the full empirical qualification separate and unexecuted",
+        "empirical qualification remains separate and unexecuted",
+    ),
+    ("states the implementation slice is code-only", "code-only implementation slice"),
+    ("keeps G1 and G2 open in the same breath", "g1 open · g2 open · g3 closed"),
+)
+
+#: The same facts as counted lines, matched against the raw document.
+#:
+#: These live in a fenced block whose alignment is the evidence: a count column
+#: that stops lining up is a count somebody edited by hand. Collapsing the
+#: whitespace before matching would throw away exactly that signal, so these are
+#: checked against the unmodified text.
+ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records zero authenticated qualification attempts",
+        "authenticated qualification attempts        zero",
+    ),
+    ("records zero Sharadar/provider requests", "sharadar/provider requests                  zero"),
+    (
+        "records zero qualification-runtime executions",
+        "qualification-runtime executions            zero",
+    ),
+    (
+        "keeps provider authentication UNKNOWN",
+        "provider authentication                     unknown",
+    ),
+    (
+        "records zero AWS operations during the inspection",
+        "aws operations during the inspection        zero",
+    ),
+    (
+        "records zero Secrets Manager operations during it",
+        "secrets manager operations during it        zero",
+    ),
+    ("records zero S3 object operations", "s3 object operations                        zero"),
+    ("records zero Terraform operations", "terraform operations                        zero"),
+    (
+        "leaves the credential-retrieval count at one",
+        "credential retrievals                       one",
+    ),
+    (
+        "leaves the binding-preflight count at five",
+        "binding-preflight attempts                  five",
+    ),
+    (
+        "states no entry point was created by ADR-0017",
+        "entry point created by adr-0017             none",
+    ),
+)
+
+#: Claims that would make a proposed, unimplemented, unexecuted surface sound
+#: like a built or exercised one.
+#:
+#: 28 claims about a surface that does not exist are listed here, and the number
+#: in that sentence is checked against ``len()`` so an entry cannot leave quietly.
+#:
+#: Every entry is an affirmative statement about something that has not happened.
+#: They are matched against the folded lower-case text of each status document,
+#: so a rewrap cannot slip one past, and each is written in its folded form
+#: because a fenced count line loses its alignment once whitespace collapses.
+ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
+    "adr-0017 is accepted",
+    "adr-0017 is in force",
+    "adr-0017 — accepted",
+    "authenticated qualification entry point exists",
+    "the authenticated qualification surface exists",
+    "bounded authenticated qualification entry point exists",
+    "the authenticated qualification has run",
+    "authenticated qualification attempts one",
+    "provider authentication confirmed",
+    "provider authentication is confirmed",
+    "sharadar/provider requests one",
+    "a provider request occurred",
+    "adr-0017 authorizes execution",
+    "adr-0017 permits execution",
+    "zero-persistence is the selected design",
+    "zero persistence is the selected design",
+    "a fourth acquisition mode",
+    "fourth mode is introduced",
+    "payload parsing is permitted in the acquisition runtime",
+    "the acquisition runtime parses",
+    "control publication is permitted",
+    "control publication is authorized",
+    "a provider is selected",
+    "g1 closed",
+    "g2 closed",
+    "full qualification completed",
+    f"p1{EN_DASH}p9 empirical qualification completed",
+    "p1-p9 empirical qualification completed",
+)
+
+#: The heading of the ADR-0017 narrative section in both status documents.
+ADR_0017_SECTION_HEADING: Final = "### The bounded authenticated acquisition qualification"
+
+
+def _adr_0017_row(text: str) -> str:
+    """The ADR-0017 table row, folded. Empty when the row is absent."""
+    for line in text.splitlines():
+        if "ADR-0017-bounded-authenticated" in line and line.lstrip().startswith("|"):
+            return " ".join(line.replace("**", "").split()).lower()
+    return ""
+
+
+def _adr_0017_section(text: str) -> str:
+    """The ADR-0017 narrative section, heading excluded. Empty when absent."""
+    start = text.find(ADR_0017_SECTION_HEADING)
+    if start < 0:
+        return ""
+    rest = text[start + len(ADR_0017_SECTION_HEADING) :]
+    end = len(rest)
+    for marker in ("\n### ", "\n## "):
+        found = rest.find(marker)
+        if found >= 0:
+            end = min(end, found)
+    return rest[:end]
+
+
+#: What the ADR-0017 **row** must carry, checked inside the row itself.
+#:
+#: Scoped rather than document-wide, because a document-wide scan is satisfied by
+#: any copy of the phrase. Merged main has already carried a row that had gone
+#: stale beside a narrative that had not, and a whole-file check reports that as
+#: healthy: the narrative answers for the row. Each fact is required where a
+#: reader of the status table would actually look for it.
+ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records ADR-0017 as proposed and without authority",
+        f"proposed {EM_DASH} not accepted, not in force, carries no authority",
+    ),
+    (
+        "limits the merge to a code-only implementation slice",
+        f"code-only implementation slice {EM_DASH} never execution",
+    ),
+    (
+        "records that no authenticated entry point was found",
+        "no tracked authenticated qualification entry point",
+    ),
+    (
+        "identifies the P1-P9 harness as the public-test-token one",
+        "harness is the public-test-token one",
+    ),
+    (
+        "identifies the binding preflight as terminating at offline composition",
+        "binding preflight terminates at offline composition",
+    ),
+    ("records that the executor has no production caller", "has no production caller"),
+    ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
+    ("preserves the opaque-payload boundary", "opaque-payload boundary"),
+    ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
+    ("introduces no fourth acquisition mode", "no fourth mode"),
+    (
+        "keeps evidence in the licensed private Bronze data plane",
+        "licensed private bronze data plane",
+    ),
+    ("performs no CONTROL publication", "no control publication"),
+    ("keeps the implementation and execution gates separate", "separately gated"),
+    ("keeps provider authentication unknown", "provider authentication unknown"),
+    (
+        "keeps the empirical qualification separate",
+        "empirical qualification remains separate and unexecuted",
+    ),
+    ("selects no provider", "no provider is selected"),
+    ("keeps G1 and G2 open", "g1 and g2 stay open"),
+)
+
+#: What the ADR-0017 **narrative section** must carry, checked inside that section.
+#:
+#: The other half of the same rule. Two of these name a script beside the label
+#: that identifies it, because "public-test-token" appearing somewhere in a long
+#: document does not establish that the harness is still described as one -- a
+#: negative control proved a document-wide scan passes while the table cell says
+#: the harness is the authenticated runner.
+ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("preserves one request = one durable acquisition", "one request = one durable acquisition"),
+    ("preserves the opaque-payload boundary", "opaque-payload boundary"),
+    ("declares the qualification acquisition mode", "acquisitionmode.qualification"),
+    ("introduces no fourth acquisition mode", "no fourth mode introduced"),
+    ("performs no CONTROL publication", "control publication stays zero and forbidden"),
+    (
+        "rejects zero-persistence rather than selecting it",
+        "zero-persistence provider request is rejected",
+    ),
+    ("states ADR-0017 does not authorize execution", "does not authorize execution"),
+    (
+        "keeps the implementation and execution gates uncollapsed",
+        "separate and not collapsed",
+    ),
+    (
+        "names the public-test-token harness beside its script",
+        "sharadar_private_qualification.py` | the public-test-token",
+    ),
+    (
+        "names the binding preflight beside its offline termination",
+        "sharadar_binding_preflight.py` | the offline binding/composition preflight "
+        f"{EM_DASH} terminates at",
+    ),
+    (
+        "keeps the empirical qualification separate",
+        "empirical qualification remains separate and unexecuted",
+    ),
+)
+
+
+#: The claims that may never leave :data:`ADR_0017_FORBIDDEN`.
+#:
+#: The size sentence above catches an entry vanishing on its own. It does not
+#: catch an entry deleted *together with* the number, which is the shape a
+#: weakening actually takes -- one edit removes the guard and a second makes the
+#: arithmetic agree again. These are checked by membership, so the denylist may
+#: grow and may be reworded, and these particular claims cannot be dropped
+#: without failing a check that says so by name.
+#:
+#: 8 claims are protected by membership here.
+ADR_0017_SURVIVING_CLAIMS: Final[tuple[str, ...]] = (
+    "the authenticated qualification has run",
+    "provider authentication is confirmed",
+    "a provider request occurred",
+    "adr-0017 authorizes execution",
+    "zero-persistence is the selected design",
+    "a fourth acquisition mode",
+    "payload parsing is permitted in the acquisition runtime",
+    "control publication is permitted",
+)
+
+#: What ADR-0017's own text must carry. The status documents summarise it; this
+#: is the decision record itself, and a summary that outlives its source is how a
+#: governance document starts asserting something nothing decided.
+ADR_0017_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "ADR-0017 uses the accepted proposed-until-merge convention",
+        "accepted — effective on the merge of the pull request that introduces this adr",
+    ),
+    (
+        "ADR-0017 states it carries no authority before that merge",
+        "until that merge it is proposed and carries no authority",
+    ),
+    ("ADR-0017 supersedes nothing", "supersedes: nothing"),
+    ("ADR-0017 preserves one request is one acquisition", "one request is one acquisition"),
+    ("ADR-0017 preserves byte-for-byte publication", "byte for byte"),
+    ("ADR-0017 preserves the opaque-payload boundary", "never parsed"),
+    ("ADR-0017 declares the qualification mode", "acquisitionmode.qualification"),
+    ("ADR-0017 rejects a fourth acquisition mode", "a fourth acquisition mode for a"),
+    ("ADR-0017 rejects a zero-persistence probe", "zero-persistence authenticated probe"),
+    (
+        "ADR-0017 rejects reusing the public-test-token harness",
+        "public-test-token harness as the authenticated runner",
+    ),
+    ("ADR-0017 rejects reusing the binding preflight", "binding preflight as the runner"),
+    (
+        "ADR-0017 rejects parsing at the provider boundary",
+        "parsing the payload at the provider boundary",
+    ),
+    ("ADR-0017 rejects a second composition root", "separate composition root for execution"),
+    ("ADR-0017 decides the date window", "seven-calendar-day trailing window"),
+    ("ADR-0017 states the exact publication write count", "exactly three"),
+    ("ADR-0017 surfaces the collision head path rather than rounding it away", "zero to three"),
+    ("ADR-0017 refuses control publication", "control bucket operations zero"),
+    ("ADR-0017 keeps the authorization sequence intact", "skips no step"),
+    ("ADR-0017 authorizes implementation only", "it does not authorize execution"),
+    ("ADR-0017 keeps Q7 unresolved", "publicly_unresolved"),
+    (
+        "ADR-0017 locks exactly three CLI arguments",
+        "--i-am-the-operator-authorizing-authenticated-qualification",
+    ),
+)
+
+#: The three CLI arguments the future surface may carry, and no others.
+#:
+#: Written here so a later slice that adds a fourth has to change this tuple in
+#: front of a reviewer, rather than only the script nobody re-reads.
+ADR_0017_CLI: Final[tuple[str, ...]] = (
+    "--i-am-the-operator-authorizing-authenticated-qualification",
+    "--subject",
+    "--execution-id",
+)
+
+#: CLI spellings ADR-0017 forbids the future surface from ever exposing.
+#: 16 forbidden CLI spellings are listed here, and that number is checked
+#: against ``len()`` for the same reason the claim list is.
+ADR_0017_FORBIDDEN_CLI: Final[tuple[str, ...]] = (
+    "--run",
+    "--live",
+    "--force",
+    "--secret-id",
+    "--api-key",
+    "--dataset",
+    "--table",
+    "--endpoint",
+    "--bucket",
+    "--full-history",
+    "--bulk",
+    "--page",
+    "--page-size",
+    "--limit",
+    "--retry",
+    "--retries",
+)
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -4295,7 +4643,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/20] Closed vocabularies are defined where they are used")
+    print("[1/21] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -4319,7 +4667,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/20] Source and derived envelopes stay disjoint")
+    print("\n[2/21] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -4354,7 +4702,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/20] Every declared temporal semantics has its required anchor")
+    print("\n[3/21] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -4371,7 +4719,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/20] Exact and bound derivations name the correct fields")
+    print("\n[4/21] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -4398,7 +4746,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/20] Normative rules use the current resolved model")
+    print("\n[5/21] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -4444,7 +4792,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/20] Entities keep source and derived rows apart")
+    print("\n[6/21] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -4514,7 +4862,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/20] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/21] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -4576,7 +4924,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/20] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/21] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -4681,7 +5029,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/20] Resolved-timing wording, closure rules and current status")
+    print("\n[9/21] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -4786,7 +5134,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/20] No document refers to a retired field name")
+    print("\n[10/21] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -4830,7 +5178,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/20] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/21] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -4987,7 +5335,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/20] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/21] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -5079,7 +5427,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/20] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/21] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -5717,7 +6065,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/20] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/21] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -5951,7 +6299,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/20] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/21] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -6341,7 +6689,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/20] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/21] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -6696,7 +7044,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/20] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/21] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -7090,7 +7438,7 @@ def main() -> int:
         )
 
     # ------------------- 18. No status document carries a superseded current state
-    print("\n[18/20] The status documents describe the current governance state, not a past one")
+    print("\n[18/21] The status documents describe the current governance state, not a past one")
 
     for name, path in (
         ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
@@ -7266,7 +7614,7 @@ def main() -> int:
     )
 
     # ------------------- 19. The qualification runtime exists, and cannot be run
-    print("\n[19/20] The Sharadar qualification runtime core is dormant, and says so precisely")
+    print("\n[19/21] The Sharadar qualification runtime core is dormant, and says so precisely")
     f.check(
         "ADR-0012 exists",
         ADR_RUNTIME.is_file(),
@@ -7951,7 +8299,7 @@ def main() -> int:
         )
 
     # ------------------- 20. Acquisition mode replaced a boolean, completely
-    print("\n[20/20] Acquisition mode is a closed vocabulary, and the boolean is gone")
+    print("\n[20/21] Acquisition mode is a closed vocabulary, and the boolean is gone")
     f.check(
         "ADR-0013 exists",
         ADR_ACQUISITION_MODE.is_file(),
@@ -11307,6 +11655,151 @@ def main() -> int:
             in read(Path(__file__).resolve())
         ),
         "a denylist that quietly loses an entry checks less and reports the same",
+    )
+
+    # ------------------- 21. ADR-0017 proposes an architecture, and builds nothing
+    print("\n[21/21] ADR-0017 is proposed, and nothing is implemented or executed")
+
+    f.check(
+        "ADR-0017 exists as a tracked decision record",
+        ADR_0017.exists(),
+        "both status documents cite a decision record that must be readable",
+    )
+    adr_0017_text = read(ADR_0017) if ADR_0017.exists() else ""
+    adr_0017_flat = " ".join(adr_0017_text.replace("**", "").split()).lower()
+    for name, phrase in ADR_0017_SELF_REQUIRED:
+        f.check(name, phrase in adr_0017_flat, f"missing: {phrase}")
+
+    f.check(
+        "ADR-0017 is absent from the merged-ADR registry",
+        # The registry governs rows claiming a merge. A proposed ADR listed there
+        # would make "ACCEPTED / IN FORCE -- PR #N merged" the *expected* wording
+        # for a decision nobody has merged, which is the inversion the registry
+        # exists to prevent.
+        "ADR-0017" not in {adr for adr, _ in MERGED_ADR_STATUS},
+        "a proposed ADR may not be governed as a merged one",
+    )
+    f.check(
+        "ADR-0017 makes no in-force claim in either status document",
+        not any(
+            adr == "ADR-0017"
+            for path in (REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md")
+            for adr in _in_force_adr_claims(read(path))
+        ),
+        "a proposed ADR that claims a merge would pass the registry by pretending to be merged",
+    )
+
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+    ):
+        body = read(path)
+        flat = " ".join(body.replace("**", "").split()).lower()
+
+        for label, phrase in ADR_0017_REQUIRED_PROSE:
+            f.check(f"{name} {label}", phrase in flat, f"missing: {phrase}")
+
+        present = [claim for claim in ADR_0017_FORBIDDEN if claim in flat]
+        f.check(
+            f"{name} claims no implementation, execution or resolution for ADR-0017",
+            not present,
+            # Each is an affirmative statement about something that has not
+            # happened. A proposal that reads like a built and exercised surface
+            # is exactly the drift these documents exist to prevent.
+            ", ".join(present),
+        )
+
+        # Scoped checks. The document-wide pass above catches a fact that has
+        # left the file entirely; these catch the commoner failure, where a fact
+        # survives in one place and goes stale in the other. Negative controls
+        # proved a whole-file scan passes while the row is deleted and while the
+        # narrative names the wrong script as the runner.
+        row = _adr_0017_row(body)
+        section = _adr_0017_section(body)
+        section_flat = " ".join(section.replace("**", "").split()).lower()
+        section_raw = section.lower()
+
+        f.check(
+            f"{name} carries an ADR-0017 status row",
+            bool(row),
+            "the narrative may not answer for a row a reader looks up in the table",
+        )
+        f.check(
+            f"{name} carries the ADR-0017 narrative section",
+            bool(section),
+            "the row may not answer for the section either",
+        )
+        for label, phrase in ADR_0017_ROW_REQUIRED:
+            f.check(
+                f"{name} ADR-0017 row {label}",
+                phrase in row,
+                f"missing from the row: {phrase}",
+            )
+        for label, phrase in ADR_0017_SECTION_REQUIRED:
+            f.check(
+                f"{name} ADR-0017 section {label}",
+                phrase in section_flat,
+                f"missing from the section: {phrase}",
+            )
+        for label, phrase in ADR_0017_REQUIRED_COUNTS:
+            f.check(
+                f"{name} ADR-0017 section {label}",
+                phrase in section_raw,
+                f"missing count line: {phrase}",
+            )
+
+    # Argument *lines* rather than a substring scan. The ADR names the refused
+    # spellings in prose, inside backticks and mid-sentence, so a scan over the
+    # whole text cannot tell an approved argument from a refused one. A line that
+    # begins with `--` is the argument list and nothing else.
+    adr_0017_arg_lines = tuple(
+        line.strip()
+        for line in adr_0017_text.splitlines()
+        # A Markdown horizontal rule also begins with two dashes, and this file is
+        # full of them. An argument carries a letter; a rule never does.
+        if line.strip().startswith("--") and line.strip().strip("-") != ""
+    )
+    f.check(
+        "ADR-0017 presents exactly the three approved CLI arguments, in order",
+        len(ADR_0017_CLI) == 3 and adr_0017_arg_lines == ADR_0017_CLI,
+        f"argument lines found: {adr_0017_arg_lines}",
+    )
+    f.check(
+        "no forbidden CLI spelling is presented as an approved argument",
+        not [s for s in ADR_0017_FORBIDDEN_CLI if s in adr_0017_arg_lines],
+        "an approved-looking argument line is how a locked surface acquires a switch",
+    )
+    f.check(
+        "ADR-0017 refuses the forbidden CLI concepts by name",
+        "forbidden cli concepts" in adr_0017_flat,
+        "refusing by name is what makes a wrong reflex fail loudly rather than silently",
+    )
+    f.check(
+        "each ADR-0017 denylist states its own size, derived from its tuple",
+        # The membership protection the other slices carry. Deleting an entry
+        # from a denylist leaves no document-side symptom -- a shorter list still
+        # passes -- so both sentences are written in the source and both numbers
+        # come from `len()`, and the two have to be changed deliberately together.
+        (
+            f"{len(ADR_0017_FORBIDDEN)} claims about a surface that does not exist are listed here"
+            in read(Path(__file__).resolve())
+        )
+        and (
+            f"{len(ADR_0017_FORBIDDEN_CLI)} forbidden CLI spellings are listed here"
+            in read(Path(__file__).resolve())
+        ),
+        "a denylist that quietly loses an entry checks less and reports the same",
+    )
+    f.check(
+        "the protected ADR-0017 claims are still on the denylist",
+        # The other half of the membership protection. The size sentence above
+        # catches an entry vanishing alone; this catches one deleted together
+        # with the number, which is the shape a weakening actually takes.
+        len(ADR_0017_SURVIVING_CLAIMS) == 8
+        and all(claim in ADR_0017_FORBIDDEN for claim in ADR_0017_SURVIVING_CLAIMS)
+        and f"{len(ADR_0017_SURVIVING_CLAIMS)} claims are protected by membership here"
+        in read(Path(__file__).resolve()),
+        "updating the count beside a deletion is what a weakening looks like",
     )
 
     # ---------------------------------------------------------------- verdict
