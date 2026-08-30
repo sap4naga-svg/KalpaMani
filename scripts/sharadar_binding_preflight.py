@@ -36,7 +36,8 @@ client construction, composition validation or qualification execution.
                                  command, exit 255, its own network count
                                  UNKNOWN, zero SSO logins during it, zero
                                  repair actions during it
-    post-diagnosis SSO-login attempt: COMPLETED REFUSED_SSO_LOGIN -- one
+    first post-diagnosis SSO-login attempt: COMPLETED
+                                 REFUSED_SSO_LOGIN -- one
                                  ``aws sso login --no-cli-pager`` command,
                                  timed out after 420 seconds, terminated,
                                  no exit status returned, no lingering AWS
@@ -45,6 +46,39 @@ client construction, composition validation or qualification execution.
                                  successful refreshes, zero identity
                                  confirmations, its own network count
                                  UNKNOWN, SSO session still unrefreshed
+                                 after it
+    corrected SSO-login attempt: COMPLETED SUCCESSFUL -- one
+                                 ``aws sso login --no-cli-pager`` command
+                                 in a new Claude session, live console with
+                                 inherited stdin, stdout and stderr,
+                                 nothing captured, piped, redirected,
+                                 buffered or written to a file, interactive
+                                 browser/device flow completed, exit code
+                                 0, no lingering AWS CLI process,
+                                 successful governed SSO refreshes ONE, a
+                                 minimal allowlisted child environment
+                                 built key-by-key, no whole-environment
+                                 copy, no credential-bearing ambient
+                                 variable copied or inspected, governed
+                                 profile from a static AST parse of
+                                 ``EXPECTED_PROFILE`` and never disclosed,
+                                 verification URL and one-time device code
+                                 transient in the live console only, its
+                                 own network count UNKNOWN
+    identity confirmation        ONE, SUCCESSFUL -- one
+                                 ``aws sts get-caller-identity
+                                 --no-cli-pager --output json`` command,
+                                 exit code 0, non-empty UserId, Account and
+                                 Arn structurally present, raw response and
+                                 private identity values neither displayed
+                                 nor persisted, classified
+                                 IDENTITY_CONFIRMED, captured buffers
+                                 cleared after classification, its own
+                                 network count UNKNOWN
+    identity status     CONFIRMED at the time of that command; current or
+                                 future session validity NOT GUARANTEED
+    fifth attempts      ZERO     secret-identifier reads by either SSO
+                                 operation or the confirmation: NONE
     Secrets Manager     ZERO     client constructions, get_secret_value
                                  invocations and network requests
     S3 object ops       ZERO     ·  Sharadar/provider requests: ZERO
@@ -113,8 +147,46 @@ attempt, after that diagnosis           command; **timed out after 420
                                         device authorizations, zero
                                         successful refreshes, zero identity
                                         confirmations; its own network count
-                                        UNKNOWN; the SSO session remains
+                                        UNKNOWN; the SSO session remained
                                         unrefreshed
+a corrected, separately authorized      one ``aws sso login --no-cli-pager``
+SSO-login attempt, in a new Claude      command on a **live console with
+session                                 inherited stdin, stdout and
+                                        stderr** -- nothing captured, piped,
+                                        redirected, buffered or written to a
+                                        file; the **interactive
+                                        browser/device flow completed**,
+                                        **exit code 0**, no lingering AWS
+                                        CLI process, **successful governed
+                                        SSO refreshes ONE**; a **minimal,
+                                        allowlisted child environment built
+                                        key-by-key**, **no whole-environment
+                                        copy**, **no credential-bearing
+                                        ambient variable copied or
+                                        inspected**; the governed profile
+                                        from a static AST parse of
+                                        ``EXPECTED_PROFILE``, never
+                                        disclosed; the verification URL and
+                                        one-time device code transient in
+                                        the live console only, not repeated
+                                        and not persisted; its own network
+                                        count UNKNOWN
+one conditional identity                one ``aws sts get-caller-identity
+confirmation, because that login        --no-cli-pager --output json``
+exited 0                                command, **exit code 0**; non-empty
+                                        ``UserId``, ``Account`` and ``Arn``
+                                        structurally present; the raw
+                                        response and the private identity
+                                        values **neither displayed nor
+                                        persisted**; classified
+                                        **IDENTITY_CONFIRMED**; captured
+                                        buffers cleared after
+                                        classification; its own network
+                                        count UNKNOWN; **not** a fifth
+                                        binding-preflight attempt, and it
+                                        verified no secret identifier,
+                                        secret, credential, bucket or
+                                        provider access
 ======================================  ====================================
 
 **So AWS identity-gate activity occurred and total AWS activity was not zero.**
@@ -153,8 +225,9 @@ count -- the attempt's own network total stays UNKNOWN, and so does the
 diagnosis command's, because a CLI call may resolve credentials locally and fail
 before anything leaves the machine. **At that point SSO-login invocations
 were zero, authentication-repair actions were zero and fifth
-binding-preflight attempts were zero.** The first of those has since moved
-and the other two have not; see the timed-out SSO-login attempt below.
+binding-preflight attempts were zero.** The first two of those have since
+moved -- two SSO logins have now been attempted, and the second refreshed the
+governed session -- and the third has not; see the SSO-login attempts below.
 
 That diagnosis pinned the governed profile in its **child** process, from the
 ``EXPECTED_PROFILE`` constant below, because a shell-level pin does not survive
@@ -183,7 +256,7 @@ authorizations completed zero, successful SSO refreshes zero,
 identity-confirmation command invocations zero, fifth binding-preflight
 attempts zero.** Its own underlying AWS network-request count is **UNKNOWN**,
 for the reason every count here is: a CLI invocation is not one network
-request. **The SSO session remains unrefreshed**, the earlier
+request. **The SSO session remained unrefreshed**, the earlier
 REFUSED_SSO_SESSION_MISSING_OR_EXPIRED diagnosis stands unrevised, and the
 attempt produced no evidence distinguishing missing from expired, did not
 verify or contradict the owner-configured secret identifier, and retrieved no
@@ -201,6 +274,66 @@ output may be inspected now to resolve it. Nothing establishes a defective SSO
 configuration, an incorrect governed profile, a wrong start URL, any particular
 technical reason for a browser not appearing, or the presence or absence of a
 generated device code.
+
+**A corrected, separately authorized SSO login has since completed, and the
+governed session was refreshed.** Run in a new Claude session after PR #30
+merged, it invoked one process and one ``aws sso login --no-cli-pager`` command
+on a **live console with inherited stdin, stdout and stderr** -- nothing
+captured, piped, redirected, buffered or written to a file. The **interactive
+browser/device flow completed**, the command **exited 0**, no lingering AWS CLI
+process remained, and **successful governed SSO refreshes became ONE**.
+
+**Output handling was one deliberate correction, and the evidence stops short
+of a cause.** The first attempt captured stdout and stderr; the corrected
+attempt used a live console with inherited stdin, stdout and stderr, and it
+completed successfully. Streaming the interactive surface was a deliberate
+corrective measure, chosen because a browser/device flow has to be able to
+reach the person completing it. That sequence is consistent with the
+interactive surface contributing to the earlier timeout, and it establishes
+nothing further: the undisplayed buffer was never inspected, and capture is not
+established as the sole, necessary, sufficient or definitive cause. The earlier
+finding stands exactly where it was recorded -- likely, not proven.
+
+**The two attempts differed in more than output handling, which is why no cause
+is claimed.** They ran in different Claude sessions; the first copied the whole
+parent process environment while the corrected one built a minimal allowlisted
+child environment key-by-key; and the point-in-time SSO state may itself have
+differed. Nothing here claims the two runs were otherwise identical, and the
+second attempt's success does not establish why the first failed.
+
+The governed profile came from a **static AST parse of the ``EXPECTED_PROFILE``
+constant below** -- this module was neither imported nor executed -- and was
+never disclosed. A **minimal, allowlisted child environment was built
+key-by-key**: there was **no whole-environment copy**, and **no
+credential-bearing ambient variable was copied or inspected**. The verification
+URL and the one-time device code appeared **only transiently in the live AWS
+console**, and were **not repeated and not persisted**. Its own underlying AWS
+network-request count is **UNKNOWN**.
+
+**Because that login exited 0, exactly one identity confirmation ran.** One
+``aws sts get-caller-identity --no-cli-pager --output json`` command, which
+**exited 0**. The response **structurally contained non-empty UserId, Account
+and Arn fields**, and that structural check is the whole of what was read from
+it; the **raw response and the private identity values were neither displayed
+nor persisted**, the outcome was classified **IDENTITY_CONFIRMED**, and the
+**captured buffers were cleared after classification**. Its own network-request
+count is **UNKNOWN**, for the reason every count here is.
+
+**A successful identity confirmation is a historical session fact and nothing
+more.** Identity was **confirmed at the time of that command**, and **no current
+or future session validity is guaranteed** by it. It **verified no secret
+identifier, no secret, no API key, no bucket and no provider access**: it did
+not read ``KALPAMANI_SHARADAR_SECRET_ID``, construct a Secrets Manager or S3
+client, invoke ``get_secret_value``, retrieve a credential or bind a bucket. It
+is **not** a fifth binding-preflight attempt, and **fifth binding-preflight
+attempts remain at zero**.
+
+**A completed authorization is not a standing one.** Two SSO-login attempts have
+now been separately authorized -- the first refused, the second succeeded -- and
+each was authorized for itself. Another AWS SSO refresh or login is separately
+gated and not authorized, and so are a fifth binding-preflight attempt, further
+AWS authentication diagnosis, application credential access and an authenticated
+qualification run.
 
 ``KALPAMANI_SHARADAR_SECRET_ID`` is **OWNER-CONFIGURED / NOT YET VERIFIED BY THE
 ENTRY POINT**. It was **UNKNOWN** at the second attempt, which refused on the
@@ -1102,7 +1235,15 @@ def main(argv: list[str] | None = None) -> int:
 # distinguishing which. No SSO login or repair followed it under that
 # authorization; a separately authorized `aws sso login` attempt came later,
 # timed out after 420 seconds and refused with REFUSED_SSO_LOGIN, leaving the
-# session unrefreshed and running none of these factories. A fifth attempt,
+# session unrefreshed after it and running none of these factories. A
+# corrected second `aws sso login` attempt, separately authorized and run on a
+# live console in a new Claude session, then completed successfully with exit
+# code 0, taking successful governed SSO refreshes to one; one sanitized
+# `aws sts get-caller-identity` confirmation followed it, exited 0 and
+# classified IDENTITY_CONFIRMED without displaying or persisting the response.
+# Neither ran any of these factories, neither read
+# `KALPAMANI_SHARADAR_SECRET_ID`, and neither verified the secret, the
+# credential, the bucket or provider access. A fifth attempt,
 # any further AWS authentication diagnosis, another SSO refresh and every
 # other operational event remain separately gated.
 
