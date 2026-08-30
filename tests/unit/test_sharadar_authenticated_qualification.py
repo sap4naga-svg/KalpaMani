@@ -1185,19 +1185,41 @@ def test_the_module_records_one_refused_attempt_and_one_completed_attempt() -> N
     for fact in (
         "the second attempt completed",
         "the qualification runtime was reached",
-        "one provider request was reported",
-        "attempt two's s3 qualification operations are not established",
-        "not established is never read as zero",
+        "one provider request was made",
         "attempt two -- qualification runtime reached: yes · runtime executions: one",
-        "attempt two -- provider requests: one, reported",
+        "attempt two -- provider requests: one",
         "cumulative -- qualification-runtime executions: one · provider requests: one",
     ):
         assert fact in module_doc, f"missing from the module docstring: {fact}"
 
+    # The closed token's committed meaning: bounded, and bounded exactly. These are
+    # read from the code contracts, not from AWS -- which is why they may be stated
+    # at all, and why the two ends of each bound are asserted rather than one.
+    for bound in (
+        "attempt two -- putobject invocations: exactly three",
+        "attempt two -- conditional headobject invocations: zero to three",
+        "attempt two -- s3 qualification operations: three to six",
+        "attempt two -- publication state unknown: no",
+        "attempt two -- complete acquisition record: exists",
+    ):
+        assert bound in module_doc, f"missing from the module docstring: {bound}"
+
+    # What the token does not fix stays unfixed. A bound is not a count, and the
+    # split between new and already-present objects is the count it never gives.
+    for unestablished in (
+        "attempt two -- newly written objects: not established",
+        "attempt two -- already-present identical objects: not established",
+    ):
+        assert unestablished in module_doc, f"missing from the module docstring: {unestablished}"
+
     # A command status is not a verdict, and the module has to say so.
     assert "``completed`` is a command status, not a verdict" in module_doc
-    assert "provider authentication stays unknown" in module_doc
     assert "not a selection of a provider" in module_doc
+
+    # Authentication is two fields, and collapsing them is the error this guards.
+    assert "exact-request authentication: established" in module_doc
+    assert "provider-wide authentication: unknown" in module_doc
+    assert "provider-wide authentication stays unknown" in module_doc
 
     # A completed authorization is not a standing one.
     assert "authorization for another request" in module_doc
@@ -1213,6 +1235,8 @@ def test_the_module_records_one_refused_attempt_and_one_completed_attempt() -> N
         "authorized attempts zero",
         "the bounded acquisition has never completed",
         "no provider request has ever been made from here",
+        "attempt two's s3 qualification operations are not established",
+        "attempt two -- s3 qualification operations: not established",
     ):
         assert stale not in module_doc, f"stale claim in the module docstring: {stale}"
         assert stale not in main_doc, f"stale claim in main's docstring: {stale}"

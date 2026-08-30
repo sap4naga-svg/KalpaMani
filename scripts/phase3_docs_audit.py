@@ -2922,12 +2922,44 @@ FIRST_ATTEMPT_REQUIRED_FACTS: Final[tuple[tuple[str, str], ...]] = (
     ("records that exactly one process was invoked", "exactly one entry-point process was invoked"),
     ("records that the attempt refused", "was invoked once and refused"),
     (
-        "records that attempt two reached the runtime and reported one request",
-        "The qualification runtime was reached, and one provider request was reported.",
+        "records that attempt two reached the runtime and made one request",
+        "The qualification runtime was reached, and one provider request was made.",
     ),
     (
-        "keeps attempt two's S3 operations unestablished",
-        "Attempt two's S3 qualification operations are NOT ESTABLISHED",
+        "bounds attempt two's PutObject invocations exactly",
+        "PutObject invocations EXACTLY THREE",
+    ),
+    (
+        "bounds attempt two's conditional HeadObject invocations",
+        "conditional HeadObject invocations ZERO TO THREE",
+    ),
+    (
+        "bounds attempt two's total S3 qualification operations",
+        "S3 qualification operations THREE TO SIX",
+    ),
+    (
+        "records that attempt two's publication state is not unknown",
+        "publication state unknown NO",
+    ),
+    (
+        "records that a complete retained acquisition record exists",
+        "complete acquisition record EXISTS",
+    ),
+    (
+        "keeps the newly-written object count unestablished",
+        "newly written objects NOT ESTABLISHED",
+    ),
+    (
+        "keeps the already-present object count unestablished",
+        "already-present identical objects NOT ESTABLISHED",
+    ),
+    (
+        "records exact-request authentication as established",
+        "exact-request authentication ESTABLISHED",
+    ),
+    (
+        "keeps provider-wide authentication unknown",
+        "provider-wide authentication UNKNOWN",
     ),
     (
         "refuses to read a completed command as a verdict",
@@ -4663,8 +4695,8 @@ ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("records zero Sharadar/provider requests", "sharadar/provider requests                  zero"),
     (
-        "keeps provider authentication UNKNOWN",
-        "provider authentication                     unknown",
+        "keeps provider-wide authentication UNKNOWN",
+        "provider-wide authentication                unknown",
     ),
     ("records zero PutObject operations", "putobject                                   zero"),
     ("records zero S3 object-byte reads", "s3 object-byte reads                        zero"),
@@ -4731,7 +4763,7 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
     "a separately authorized identity diagnosis then returned `identity_confirmed`",
     "a separately authorized second execution was then attempted, and it completed",
     "the qualification runtime was reached",
-    "attempt two's s3 qualification operations are not established",
+    "attempt two's s3 qualification operations are bounded at three to six",
     "no third attempt, retry, diagnosis, sso login or repair followed",
 )
 
@@ -4740,18 +4772,20 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
 #: Three kinds, and each matters. Some are *stale*: they were required while the
 #: entry point did not exist, or while it had not been run, and are false now.
 #: Some are *unestablished*: attempt two ran, reached the qualification runtime,
-#: reported one provider request and returned ``COMPLETED`` -- and ``COMPLETED``
-#: is the command's status, not a verdict, so a document may say the run
-#: happened and may never say it *passed*. The rest are *overreach*: they claim
+#: made one provider request and returned ``COMPLETED`` -- and ``COMPLETED`` is
+#: the command's status, not a verdict, so a document may say the run happened,
+#: may state the S3 bounds that token fixes, and may never say it *passed*. The
+#: rest are *overreach*: they claim
 #: a conclusion no acquisition could establish. Deleting the stale ones without
 #: replacing them would leave the reverted claim unguarded, so each is inverted
 #: into a rejection instead.
 #:
 #: What a completed second attempt did not settle, and what these still refuse:
-#: provider authentication stays UNKNOWN, no provider is selected, G1 and G2 stay
-#: OPEN, and Phase 3 stays NOT COMPLETE.
+#: provider-wide authentication stays UNKNOWN, how many objects were newly written
+#: stays unestablished, no provider is selected, G1 and G2 stay OPEN, and Phase 3
+#: stays NOT COMPLETE.
 #:
-#: 48 claims about an implemented, attempted and refused surface are listed here,
+#: 48 claims about an implemented, twice-attempted surface are listed here,
 #: and the number in that sentence is checked against ``len()`` so an entry cannot
 #: leave quietly.
 ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
@@ -5077,7 +5111,7 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records zero .runtime/ writes", "zero `.runtime/` writes"),
     ("invents no extra qualification report", "no extra qualification report"),
     ("performs no CONTROL publication", "no control publication"),
-    ("keeps provider authentication unknown", "provider authentication unknown"),
+    ("keeps provider-wide authentication unknown", "provider-wide authentication unknown"),
     ("records zero qualification S3 operations", "s3 qualification operations zero"),
     ("records zero Terraform command invocations", "terraform command invocations zero"),
     (
@@ -5224,7 +5258,7 @@ ADR_0017_ENTRY_POINT_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "aws identity-gate invocations: one, refused",
     ),
     ("counts zero credential retrievals", "credential retrievals: zero"),
-    ("keeps provider authentication unknown", "provider authentication: unknown"),
+    ("keeps provider-wide authentication unknown", "provider-wide authentication: unknown"),
     (
         "keeps the underlying AWS network total unknown",
         "underlying aws network interactions: unknown -- no count is established",
@@ -5242,8 +5276,17 @@ ADR_0017_ENTRY_POINT_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "this function has been run exactly twice",
     ),
     (
-        "keeps attempt two's S3 qualification operations unestablished",
-        "attempt two's s3 qualification operations are not established",
+        "bounds attempt two's S3 qualification operations from the closed token",
+        "exactly three putobject invocations, zero to three conditional headobject "
+        "invocations, and three to six s3 qualification operations in total",
+    ),
+    (
+        "keeps the newly-written object count unestablished",
+        "newly written is not established",
+    ),
+    (
+        "separates exact-request from provider-wide authentication",
+        "exact-request authentication: established",
     ),
     (
         "refuses to read a completed command as a verdict",
@@ -5332,8 +5375,32 @@ ADR_0017_STATUS_TEST_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "asserts a completed command status is not a verdict",
         "``completed`` is a command status, not a verdict",
     ),
-    ("asserts one reported provider request", '"one provider request was reported"'),
-    ("asserts no S3 qualification publication", "s3 qualification operations: zero"),
+    ("asserts one provider request", '"one provider request was made"'),
+    ("asserts attempt one published nothing", "s3 qualification operations: zero"),
+    (
+        "asserts attempt two's exact PutObject count",
+        "attempt two -- putobject invocations: exactly three",
+    ),
+    (
+        "asserts attempt two's conditional HeadObject bound",
+        "attempt two -- conditional headobject invocations: zero to three",
+    ),
+    (
+        "asserts attempt two's total S3 operation bound",
+        "attempt two -- s3 qualification operations: three to six",
+    ),
+    (
+        "asserts the newly-written count stays unestablished",
+        "attempt two -- newly written objects: not established",
+    ),
+    (
+        "asserts exact-request authentication is established",
+        "exact-request authentication: established",
+    ),
+    (
+        "asserts provider-wide authentication stays unknown",
+        "provider-wide authentication: unknown",
+    ),
     (
         "asserts a third attempt is unauthorized",
         "a third attempt · aws identity diagnosis · sso refresh: not authorized",
@@ -12641,8 +12708,8 @@ def main() -> int:
         # passes -- so both sentences are written in the source and both numbers
         # come from `len()`, and the two have to be changed deliberately together.
         (
-            f"{len(ADR_0017_FORBIDDEN)} claims about an implemented, attempted and "
-            "refused surface are listed here" in read(Path(__file__).resolve())
+            f"{len(ADR_0017_FORBIDDEN)} claims about an implemented, twice-attempted "
+            "surface are listed here" in read(Path(__file__).resolve())
         )
         and (
             f"{len(ADR_0017_FORBIDDEN_CLI)} forbidden CLI spellings are listed here"
