@@ -2936,6 +2936,90 @@ FIRST_ATTEMPT_REQUIRED_FACTS: Final[tuple[tuple[str, str], ...]] = (
     ),
 )
 
+#: The attempt-4 facts the binding preflight's own documentation must carry.
+#:
+#: Correction round 1 fixed both status documents and then *dropped* this
+#: requirement rather than replacing it, because the source file was outside that
+#: authorization's scope. Dropping a guard leaves the claim unguarded, so the
+#: requirement is restored here against the corrected wording -- and against the
+#: file's own documentation surface, not its executable strings.
+BINDING_SOURCE_ATTEMPT4_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records one identity-gate invocation that did not pass",
+        "identity-gate invocations are ONE, which did not pass",
+    ),
+    ("leaves the STS command invocation unknown", "its STS command invocation is UNKNOWN"),
+    (
+        "leaves the underlying network interactions unknown",
+        "underlying AWS network interactions are UNKNOWN",
+    ),
+    (
+        "keeps the network total unknown in its own sentence",
+        "Whether the fourth attempt sent an AWS network request is UNKNOWN",
+    ),
+    (
+        "states that a gate invocation is not proof of an STS call",
+        "A gate invocation is therefore not proof of an STS command invocation",
+    ),
+    (
+        "separates the proven pre-STS condition from the unproven one",
+        "One of the two pre-STS conditions is proven for attempt 4, and the other is not",
+    ),
+    ("names the mechanically proven condition", "The profile condition holds mechanically"),
+    ("names the unproven condition", "account-binding condition is unproven"),
+    ("keeps the outcome unchanged", "Its outcome is unchanged: REFUSED_IDENTITY"),
+    (
+        "keeps the gate apart from the standalone diagnosis",
+        "The gate's internal path is not the later standalone diagnosis",
+    ),
+    (
+        "infers no SSO conclusion from attempt 4",
+        "no missing or expired SSO session may be inferred from attempt 4",
+    ),
+)
+
+#: Attempt-4 conclusions the binding preflight's documentation may not state.
+#:
+#: Both directions, because both are numbers: the gate refuses before its own
+#: ``sts get-caller-identity`` call on two paths, so ONE is unsupported and so is
+#: ZERO. The SSO entries refuse reading the later standalone diagnosis backwards
+#: into the attempt, and the conflation entries refuse merging the two events.
+#:
+#: 25 attempt-4 STS and SSO claims are refused here, and the number in that
+#: sentence is checked against ``len()`` so an entry cannot leave quietly.
+BINDING_SOURCE_ATTEMPT4_FORBIDDEN: Final[tuple[str, ...]] = (
+    # -- STS definitely ran
+    "IDENTITY GATE INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
+    "INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
+    "IT IS FALSE TO SAY THE ATTEMPT MADE NO STS IDENTITY CALL",
+    "THE GATE RUNS ITS OWN STS IDENTITY OPERATION",
+    "RUNS ``STS GET-CALLER-IDENTITY`` ITSELF",
+    "THE ATTEMPT DID MAKE AN STS IDENTITY CALL",
+    "ATTEMPT 4 MADE ONE STS IDENTITY CALL",
+    "THE GATE'S OWN STS OPERATION ABOVE",
+    "STS COMMAND INVOCATION IS ONE",
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT: ONE",
+    # -- STS definitely did not run
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT: ZERO",
+    "THE ATTEMPT MADE NO STS IDENTITY CALL",
+    "THE GATE MADE NO STS IDENTITY CALL",
+    "ATTEMPT 4 ISSUED NO STS",
+    "THE FOURTH ATTEMPT MADE NO STS",
+    # -- a number for the network total
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ZERO",
+    "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT: ONE",
+    "THE FOURTH ATTEMPT SENT ONE AWS NETWORK REQUEST",
+    "THE FOURTH ATTEMPT SENT NO AWS NETWORK REQUEST",
+    # -- an SSO conclusion drawn from the refusal
+    "ATTEMPT 4 PROVES THE SSO SESSION WAS MISSING",
+    "ATTEMPT 4 PROVES THE SSO SESSION WAS EXPIRED",
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO SESSION WAS MISSING",
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO SESSION WAS EXPIRED",
+    # -- the gate merged with the standalone diagnosis
+    "THE IDENTITY GATE WAS THE DIAGNOSIS",
+    "THE GATE OPERATION IS THE STANDALONE DIAGNOSIS",
+)
+
 #: Each refused phrase paired with the denylist that must still contain it.
 #:
 #: The companion guard used to ask whether these strings occurred *anywhere* in
@@ -2971,6 +3055,12 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("THE ENTRY POINT WAS NEVER INVOKED", ATTEMPT_INVOCATION_DENIALS),
     ("THE BOUNDED ACQUISITION COMPLETED", ATTEMPT_INVOCATION_DENIALS),
     ("A SECOND AUTHENTICATED ATTEMPT IS AUTHORIZED", ATTEMPT_INVOCATION_DENIALS),
+    ("INVOKED ITS OWN STS IDENTITY OPERATION ONCE", BINDING_SOURCE_ATTEMPT4_FORBIDDEN),
+    (
+        "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT: ZERO",
+        BINDING_SOURCE_ATTEMPT4_FORBIDDEN,
+    ),
+    ("ATTEMPT 4 PROVES THE SSO SESSION WAS EXPIRED", BINDING_SOURCE_ATTEMPT4_FORBIDDEN),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -3869,6 +3959,34 @@ def _comment_prose(text: str) -> str:
         re.sub(r"^[ \t]*#:?[ \t]?", "", line) for line in text.replace("**", "").splitlines()
     )
     return " ".join(" ".join(stripped).split())
+
+
+def _documentation_surface(path: Path) -> str:
+    """The genuine comments and docstrings of a Python source file, normalized.
+
+    Narrower than :func:`_comment_prose`, which flattens the whole file: this
+    takes module, class and function docstrings from the AST and comments from
+    the tokenizer, so an **executable string literal is not documentation**
+    here. A refusal vocabulary, an allowlisted output sentence or a denylist
+    entry living in the source cannot answer a question about what the file
+    *says about itself*.
+
+    Emphasis markers come off and whitespace is collapsed before the join, so a
+    claim wrapped across two docstring lines -- or two comment lines -- reads
+    identically to one written on a single line. Restoring a stale sentence in
+    either shape is a negative control, and both must fail.
+    """
+    source = read(path)
+    pieces: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            doc = ast.get_docstring(node)
+            if doc:
+                pieces.append(doc)
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            pieces.append(re.sub(r"^#:?[ \t]?", "", token.string))
+    return " ".join(" ".join(pieces).replace("**", "").split())
 
 
 def _stale_adr_status_defects(name: str, text: str) -> list[str]:
@@ -10397,6 +10515,29 @@ def main() -> int:
                 for phrase in BINDING_SOURCE_DIAGNOSIS
             ),
             "its docstring is a current-status surface, and diagnosis is no longer future",
+        )
+        binding_docs = _documentation_surface(BINDING_PREFLIGHT)
+        for label, phrase in BINDING_SOURCE_ATTEMPT4_REQUIRED:
+            f.check(
+                f"the binding preflight's own documentation {label}",
+                phrase in binding_docs,
+                f"missing from the binding preflight's documentation: {phrase}",
+            )
+        stale_binding_source = [
+            claim for claim in BINDING_SOURCE_ATTEMPT4_FORBIDDEN if claim in binding_docs.upper()
+        ]
+        f.check(
+            "the binding preflight's own documentation fixes no STS, network or SSO conclusion",
+            not stale_binding_source,
+            ", ".join(stale_binding_source),
+        )
+        f.check(
+            "the attempt-4 source denylist states its own size, derived from its tuple",
+            (
+                f"{len(BINDING_SOURCE_ATTEMPT4_FORBIDDEN)} attempt-4 STS and SSO claims "
+                "are refused here" in read(Path(__file__).resolve())
+            ),
+            "a denylist that quietly loses an entry checks less and reports the same",
         )
         f.check(
             "the entry point carries no stale claim that no diagnosis occurred",

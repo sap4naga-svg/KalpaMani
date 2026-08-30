@@ -286,19 +286,38 @@ called zero times.
 was invoked once and did not pass; a gate can fail before anything leaves the
 machine, so neither zero nor one may be claimed here.
 
-**No standalone diagnosis was performed as part of attempt 4** -- and that is
-narrower than an earlier revision of this docstring claimed. **Its governed
-identity gate invoked its own STS identity operation once**:
-``identity_gate()`` in ``scripts/aws_foundation_verify.py`` runs
-``sts get-caller-identity`` itself, so it is false to say the attempt made no
-STS identity call. What it did **not** do is run an *additional* diagnostic
-command or any SSO inspection, and no authentication repair occurred during it.
-Nothing the attempt did **beyond its own gate** establishes why that gate
-refused, and the gate's internal operation is **not** the later standalone
-diagnosis.
+**No standalone diagnosis was performed as part of attempt 4**, and what its
+governed identity gate did internally is **UNKNOWN**. ``identity_gate()`` in
+``scripts/aws_foundation_verify.py`` does run ``sts get-caller-identity`` -- but
+only after two checks that can refuse before it is reached: an ``AWS_PROFILE``
+that does not equal the governed constant, and an ``expected_account()`` that
+returns ``None`` from a local, git-ignored ``terraform.tfvars``, which is a plain
+file read. **A gate invocation is therefore not proof of an STS command
+invocation**, and an earlier revision of this docstring asserted one anyway.
+
+**One of the two pre-STS conditions is proven for attempt 4, and the other is
+not.** The profile condition holds mechanically: this module's own stage 2
+compares ``AWS_PROFILE`` against a constant whose literal value equals the
+verifier's, attempt 4 passed that stage in order to reach the gate at stage 3,
+both reads happen in one process, and nothing here assigns into ``os.environ``
+between them. The **account-binding condition is unproven**: the file
+``expected_account()`` reads is git-ignored, so no tracked history records its
+state; the gate's reason string is consumed as pass/fail and is never printed or
+persisted; and nothing tracked records which internal branch refused. Attempts 3
+and 5 passed the gate on either side of attempt 4, and bracketing is not evidence
+of that file's state at attempt 4 itself.
+
+**So the fourth attempt's identity-gate invocations are ONE, which did not pass;
+its STS command invocation is UNKNOWN; and its underlying AWS network
+interactions are UNKNOWN.** Its outcome is unchanged: **REFUSED_IDENTITY**. What
+it did **not** do is run an *additional* diagnostic command or any SSO
+inspection, and no authentication repair occurred during it. The gate's internal
+path is **not** the later standalone diagnosis, and **no missing or expired SSO
+session may be inferred from attempt 4** -- neither that later diagnosis nor the
+later successful refresh is retrospective proof of what attempt 4 reached.
 
 **A separately authorized diagnosis has since answered that. It is an
-additional standalone command** -- neither the gate's own STS operation above,
+additional standalone command** -- neither the gate's own internal path above,
 nor the diagnosis that followed the first attempt. Run after the
 fourth attempt, it invoked one process and one ``aws sts get-caller-identity``
 command, which exited **255** and classified as
