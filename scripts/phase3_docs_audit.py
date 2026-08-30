@@ -899,7 +899,7 @@ ADR_0015_MATRIX_LINE: Final = "ADR-0015 dormant private-binding preflight -- ACC
 #: skips ADR-link rows -- exactly the scoping this row needs. The ADR-0015 row
 #: also says "real bucket binding NONE", and matching it here would hold two
 #: rows to one contract.
-BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
+BINDING_STATUS_ROW_SUBJECT: Final = "Licensed bucket"
 
 #: What the binding status row must state, now that ADR-0015 has merged and run.
 #:
@@ -908,24 +908,60 @@ BINDING_STATUS_ROW_SUBJECT: Final = "Real bucket binding"
 #: one place permitted to construct an SDK client, and it has been invoked four times.
 #: The row has to separate **architectural existence** from **operational
 #: execution**, because the old wording denied both at once.
+#: What a status document must say about the licensed bucket, now that the fifth
+#: attempt resolved it and built a real S3 client against it.
+#:
+#: "real bucket binding performed: NONE" was the shape this guard required, and it
+#: stopped being answerable. The repository never fixed the threshold that phrase
+#: names: the composition root reports ``real bucket binding: NONE`` while
+#: constructing a store from a caller-supplied bucket string, and the ADR-0011
+#: section lists *a constructed SDK client* and *a bound bucket* as two separate
+#: absent items without naming the act that produces the second. Claiming a real
+#: binding and claiming its absence are therefore both unsupported, so the guard
+#: requires the three counts a reader can check and the statement that the term
+#: itself is undefined here.
+BUCKET_FACTS_NOT_A_VERDICT: Final[tuple[str, ...]] = (
+    "licensed-bucket resolutions on the fifth attempt: ONE",
+    "fifth attempt S3 client constructions: ONE",
+    "fifth attempt S3 client constructions: ONE   ·   S3 object operations: ZERO",
+    '"real bucket binding": UNDEFINED IN THIS REPOSITORY -- STATED AS BUCKET RESOLUTION ONE,',
+    "S3 CLIENT CONSTRUCTION ONE, S3 OBJECT OPERATIONS ZERO",
+    "claims **neither a real binding nor its absence**",
+)
+
+
 BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
-    "REAL BUCKET BINDING NONE",
-    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
+    # The row's subject changed with the fifth attempt. "Real bucket binding" was
+    # a verdict this repository never defined: the composition root reports it
+    # NONE while constructing a store from a caller-supplied bucket string, and
+    # the ADR-0011 section lists a constructed SDK client and a bound bucket as
+    # two separate absent items without naming the act that produces the second.
+    # The row states the three facts a reader can check instead.
+    "LICENSED-BUCKET RESOLUTIONS ONE",
+    "S3 CLIENT CONSTRUCTIONS ONE",
+    "S3 OBJECT OPERATIONS ZERO",
+    "IS UNDEFINED IN THIS REPOSITORY",
+    "NEITHER A CLAIMED BINDING NOR A CLAIMED ABSENCE",
+    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED, AND RESOLVED ONCE "
     "BY THE ENTRY POINT",
-    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ONE",
     "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
-    "INVOKED FOUR TIMES UNDER SEPARATE AUTHORIZATION",
-    "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
+    "INVOKED FIVE TIMES UNDER SEPARATE AUTHORIZATION",
+    "THE FIRST FOUR REFUSING WITHOUT CONSTRUCTING A CLIENT AND THE FIFTH COMPLETING",
+    "ONE ADMITTED `GET_SECRET_VALUE`",
+    "ONE RETRIEVED AND STRUCTURALLY ACCEPTED CREDENTIAL",
+    "ONE OFFLINE COMPOSITION PREFLIGHT RETURNING `VALIDATED_OFFLINE`",
     # The corrected SSO refresh and the one identity confirmation belong in this
     # row for the same reason the attempt counts do: the row is read alone, and
     # a boundary described only by what it has refused reads as one nothing has
     # succeeded against. Both clauses say what the events did *not* move.
-    "A CORRECTED AWS SSO LOGIN HAS SINCE COMPLETED SUCCESSFULLY",
+    "A CORRECTED AWS SSO LOGIN COMPLETED SUCCESSFULLY",
     "ONE SANITIZED IDENTITY CONFIRMATION RETURNED `IDENTITY_CONFIRMED`",
     "WHICH BOUND NOTHING AND VERIFIED NO SECRET, CREDENTIAL, BUCKET OR PROVIDER ACCESS",
-    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
     "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED / NOT AUTHORIZED",
+    "ADDITIONAL CREDENTIAL OR SECRETS MANAGER ACCESS NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
 
@@ -954,11 +990,11 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
     "by injection and cannot discover an ambient one",
     "This file is the sole boundary that can",
     "not a claim that none of it exists",
-    "invoked four times under separate authorization",
+    "invoked five times under separate authorization",
     "reached bucket resolution",
     "reached the fixed secret-identifier source",
     "the fourth refused at the AWS identity gate",
-    "No attempt reached Secrets Manager client construction",
+    "None of those four reached Secrets Manager client construction",
 )
 
 
@@ -970,8 +1006,8 @@ BINDING_SOURCE_SCOPE: Final[tuple[str, ...]] = (
 #: must never reach `docs/decisions/`, where an accepted ADR's text is immutable
 #: and legitimately records what was true when it was written.
 ADR_0015_SECTION_HEADING: Final = (
-    "### The Sharadar private-binding preflight — refused by default, and four times refused "
-    "in operation"
+    "### The Sharadar private-binding preflight — refused by default, four times refused, "
+    "then completed"
 )
 ADR_0016_SECTION_HEADING: Final = (
     "### The private-binding failure boundaries — corrected, and the environment that is not"
@@ -1005,7 +1041,8 @@ STALE_PREFLIGHT_CLAIMS: Final[tuple[str, ...]] = (
 #: The registry pins that ADR-0015 merged. This pins the operational history the
 #: merge did not create and four later attempts did.
 ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
-    "FOUR SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND ALL FOUR REFUSED",
+    "FOUR SEPARATELY AUTHORIZED ATTEMPTS OCCURRED AND ALL FOUR REFUSED, AND A FIFTH "
+    "SEPARATELY AUTHORIZED ATTEMPT THEN COMPLETED",
     "REFUSED_SECRET_IDENTIFIER",
     "REFUSED_IDENTITY",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
@@ -1016,39 +1053,205 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
     "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "REACHED NEITHER LICENSED-BUCKET RESOLUTION NOR THE SECRET-IDENTIFIER SOURCE",
     "DID NOT READ `KALPAMANI_SHARADAR_SECRET_ID`",
-    "OPERATIONAL SECRET-IDENTIFIER CONFIGURATION OWNER-CONFIGURED / NOT YET VERIFIED "
-    "BY THE ENTRY POINT",
+    "OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT",
     "OWNER SETUP HAVING OCCURRED AFTER THE THIRD ATTEMPT",
     "AND BEFORE THE FOURTH",
-    "NOT READ BY THE FOURTH",
-    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
-    "INVOCATIONS ZERO",
-    "SECRETS MANAGER NETWORK REQUESTS ZERO",
-    "S3 CLIENT CONSTRUCTIONS ZERO",
-    "S3 OBJECT OPERATIONS ZERO",
-    "PROVIDER TRANSPORT CONSTRUCTIONS ZERO",
-    "SHARADAR/PROVIDER REQUESTS ZERO",
-    "CREDENTIAL RETRIEVAL NONE",
-    "QUALIFICATION RUNS ZERO",
 )
 
 #: The scoped counts the ADR-0015 section's fenced block must carry.
+#: The fifth attempt's counts, in the fenced current-status block of both
+#: status documents.
+#:
+#: Separate from :data:`ADR_0015_SECTION_COUNTS` on purpose. That tuple carries
+#: the standing counts a reader checks; this one carries the run that moved
+#: them, and each entry fails on its own. A count stated only in narrative prose
+#: cannot answer either -- both are matched against the fenced block.
+FIFTH_ATTEMPT_FACTS: Final[tuple[str, ...]] = (
+    "fifth binding-preflight attempt: COMPLETED -- run later, under its own authorization",
+    "fifth attempt process invocations: ONE   ·   exit code: 0",
+    "fifth attempt public output: binding preflight completed / offline validation completed",
+    "fifth attempt closed outcome: COMPLETED + VALIDATION_COMPLETED",
+    "fifth attempt last stage definitively reached: STAGE 10 -- offline composition preflight",
+    "fifth attempt composition status: VALIDATED_OFFLINE",
+    "fifth attempt identity-gate invocations: ONE -- PASSED",
+    "fifth attempt licensed-bucket resolutions: ONE",
+    "fifth attempt secret-identifier resolutions: ONE",
+    "fifth attempt Secrets Manager client constructions: ONE",
+    "fifth attempt get_secret_value invocations: ONE -- ADMITTED",
+    "fifth attempt S3 client constructions: ONE   ·   S3 object operations: ZERO",
+    "fifth attempt provider transport constructions: ONE   ·   Sharadar/provider requests: ZERO",
+    "fifth attempt offline composition-preflight invocations: ONE",
+    "fifth attempt qualification executions: ZERO",
+    "fifth attempt underlying AWS network requests: UNKNOWN",
+    "fifth attempt credential: RETRIEVED -- ONE SecretString, STRUCTURALLY ACCEPTED",
+    "credential display, log, persistence, hash, fingerprint or measurement: NONE",
+    '"usable" means: STRUCTURALLY ACCEPTABLE TO THE EXISTING CREDENTIAL CONTRACT',
+    "Sharadar authentication by that credential: UNKNOWN -- NO PROVIDER REQUEST WAS MADE",
+)
+
+#: The nine chronology steps, required **in order**.
+#:
+#: Order is the claim. The same nine facts printed in a different sequence read
+#: as a different history -- an identity confirmation before the refresh that
+#: caused it, or a completed attempt before the refusals it followed -- so the
+#: guard checks the indices are sorted, not merely that each phrase is present.
+#: The list numbers are part of each anchor: they are what makes "step 4" a
+#: position rather than a sentence that could be moved.
+FIFTH_ATTEMPT_CHRONOLOGY: Final[tuple[str, ...]] = (
+    "1. Four separately authorized binding-preflight attempts occurred and all four refused.",
+    "2. Attempt 4 refused at the AWS identity gate with `REFUSED_IDENTITY`.",
+    "3. The later standalone diagnosis classified the SSO session "
+    "`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`, without distinguishing missing from expired.",
+    "4. A later corrected SSO refresh completed successfully.",
+    "5. A sanitized identity-confirmation command returned `IDENTITY_CONFIRMED`, without "
+    "guaranteeing future session validity.",
+    "6. The fifth separately authorized binding-preflight attempt then ran exactly once.",
+    "7. It exited `0` and emitted exactly `binding preflight completed` and "
+    "`offline validation completed`.",
+    "8. Its closed outcome was `COMPLETED + VALIDATION_COMPLETED`.",
+    "9. Its last definitively reached stage was stage 10: one "
+    "`preflight_qualification_composition` invocation that returned `VALIDATED_OFFLINE`.",
+)
+
+#: What the fifth attempt establishes about the credential, and what it does not.
+#:
+#: The two halves are one guard because separating them is how the dangerous
+#: sentence gets written: "a credential was retrieved" is true, and reads as
+#: provider access unless the same passage says the acceptance was structural
+#: and Sharadar authentication is unknown.
+FIFTH_ATTEMPT_CREDENTIAL_SCOPE: Final[tuple[str, ...]] = (
+    "A credential was retrieved, and that is not provider authentication.",
+    "One admitted `get_secret_value` returned a `SecretString`",
+    "the existing credential contract accepted it structurally",
+    "it was passed into the offline composition",
+    "No credential or fragment was displayed, logged, persisted, hashed, fingerprinted, "
+    "measured or summarized.",
+    "structurally acceptable to the existing contract",
+    "whether it authenticates successfully against Sharadar remains UNKNOWN",
+    "because no Sharadar or provider request occurred",
+    "Owner attestation and successful repository retrieval are not the same as provider "
+    "authentication.",
+)
+
+#: The fifth attempt in the ADR-0015 current-status row, which is read alone.
+#:
+#: A row guard, not a document guard: the same facts appear in the section, and
+#: a narrative duplicate must not answer for a missing row clause. That is the
+#: failure the entry-scoped guards elsewhere in this file were written against.
+FIFTH_ATTEMPT_ROW_FACTS: Final[tuple[str, ...]] = (
+    "THE FIFTH SEPARATELY AUTHORIZED ATTEMPT THEN RAN EXACTLY ONCE AND COMPLETED",
+    "EXIT CODE `0`",
+    "PUBLIC OUTPUT EXACTLY `BINDING PREFLIGHT COMPLETED` AND `OFFLINE VALIDATION COMPLETED`",
+    "CLOSED OUTCOME `COMPLETED + VALIDATION_COMPLETED`",
+    "LAST DEFINITIVELY REACHED STAGE OF STAGE 10",
+    "RETURNING `VALIDATED_OFFLINE`",
+    "IDENTITY-GATE INVOCATIONS ONE, PASSED",
+    "LICENSED-BUCKET RESOLUTIONS ONE",
+    "SECRET-IDENTIFIER RESOLUTIONS ONE",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ONE",
+    "`GET_SECRET_VALUE` INVOCATIONS ONE, ADMITTED",
+    "S3 CLIENT CONSTRUCTIONS ONE",
+    "S3 OBJECT OPERATIONS ZERO",
+    "PROVIDER TRANSPORT CONSTRUCTIONS ONE",
+    "SHARADAR/PROVIDER REQUESTS ZERO",
+    "OFFLINE COMPOSITION-PREFLIGHT INVOCATIONS ONE",
+    "QUALIFICATION EXECUTIONS ZERO",
+    "UNDERLYING AWS NETWORK REQUESTS UNKNOWN",
+    "A CREDENTIAL WAS DEFINITIVELY RETRIEVED",
+    "THE EXISTING CREDENTIAL CONTRACT ACCEPTED STRUCTURALLY",
+    "NEVER DISPLAYED, LOGGED, PERSISTED, HASHED, FINGERPRINTED, MEASURED OR SUMMARIZED",
+    "SHARADAR AUTHENTICATION UNKNOWN",
+    "NO PROVIDER REQUEST OCCURRED",
+)
+
+#: Current claims the fifth attempt made false, and overclaims it does not support.
+#:
+#: Both directions in one denylist because both are the same defect: a status
+#: line that does not match what happened. The stale half is a document that
+#: never got the memo; the overstated half is one that read a completed offline
+#: preflight as provider access, an authorization, or a proven request count.
+#:
+#: 37 stale-or-overstated fifth-attempt claims are listed here, and a self-guard
+#: below derives that number from the tuple rather than trusting this sentence.
+#: Without it, a denylist can be weakened by deleting an entry -- there is no
+#: document-side symptom, because a denylist that checks nothing passes.
+STALE_FIFTH_ATTEMPT_CLAIMS: Final[tuple[str, ...]] = (
+    "ONLY FOUR ATTEMPTS OCCURRED",
+    "FOUR AUTHORIZED ATTEMPTS TO DATE, ALL REFUSED",
+    "AUTHORIZED BINDING-PREFLIGHT ATTEMPTS TO DATE: FOUR",
+    "ALL FIVE REFUSED",
+    "ALL FIVE ATTEMPTS REFUSED",
+    "FIFTH BINDING-PREFLIGHT ATTEMPTS: ZERO",
+    "FIFTH BINDING-PREFLIGHT ATTEMPTS REMAIN ZERO",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT: NOT AUTHORIZED",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A FIFTH ATTEMPT NOT AUTHORIZED",
+    "NO SUCCESSFUL BINDING PREFLIGHT",
+    "NO BINDING PREFLIGHT HAS COMPLETED",
+    "THE BINDING PREFLIGHT HAS NEVER COMPLETED",
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS: ZERO",
+    "GET_SECRET_VALUE INVOCATIONS: ZERO",
+    "CREDENTIAL RETRIEVAL: NONE",
+    "REAL CREDENTIAL RETRIEVAL: NONE",
+    "CREDENTIAL RETRIEVED: NONE",
+    "S3 CLIENT CONSTRUCTIONS: ZERO",
+    "PROVIDER TRANSPORT CONSTRUCTIONS: ZERO",
+    "OFFLINE COMPOSITION-PREFLIGHT INVOCATIONS: ZERO",
+    "COMPOSITION PREFLIGHT RUN: NEVER",
+    "NOT YET VERIFIED BY THE ENTRY POINT",
+    # The other direction.
+    "SHARADAR AUTHENTICATION: CONFIRMED",
+    "THE CREDENTIAL IS VALID FOR SHARADAR",
+    "SHARADAR AUTHENTICATION CONFIRMED",
+    "A SHARADAR REQUEST OCCURRED",
+    "A PROVIDER REQUEST OCCURRED",
+    "AN S3 OBJECT OPERATION OCCURRED",
+    "QUALIFICATION EXECUTIONS: ONE",
+    "A QUALIFICATION RUN OCCURRED",
+    "UNDERLYING AWS NETWORK REQUESTS: ZERO",
+    "UNDERLYING AWS NETWORK REQUESTS: ONE",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT IS AUTHORIZED",
+    "A SIXTH ATTEMPT IS AUTHORIZED",
+    "ADDITIONAL CREDENTIAL ACCESS IS AUTHORIZED",
+    "CURRENT SESSION VALIDITY IS GUARANTEED",
+)
+
+#: The fifth attempt in the entry point's own source documentation.
+BINDING_SOURCE_FIFTH: Final[tuple[str, ...]] = (
+    "invoked five times under separate authorization",
+    "The fifth completed: it resolved the identifier once, built one Secrets Manager client",
+    "retrieved one credential the existing contract accepted structurally",
+    "made one offline ``preflight_qualification_composition`` invocation that returned "
+    "``VALIDATED_OFFLINE``",
+    "No provider request, no S3 object operation and no qualification execution occurred",
+    "whether that credential authenticates against Sharadar is UNKNOWN",
+    "fifth attempt COMPLETED + VALIDATION_COMPLETED -- exit code 0,",
+    "the fifth authorized attempt",
+    "what the fifth did not establish",
+    "sixth attempt NOT AUTHORIZED",
+)
+
+
 ADR_0015_SECTION_COUNTS: Final[tuple[str, ...]] = (
-    "authorized attempts   FOUR",
+    "authorized attempts   FIVE",
+    "first four attempts   REFUSED",
+    "fifth attempt         COMPLETED + VALIDATION_COMPLETED -- exit code 0",
     "third attempt         REFUSED_SECRET_IDENTIFIER",
     "AWS identity-gate activity: OCCURRED",
-    "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
+    "operational secret-identifier configuration: OWNER-CONFIGURED, AND RESOLVED ONCE "
     "BY THE ENTRY POINT",
     "owner credential setup occurred AFTER the third attempt",
     "identifier-source resolutions on the third attempt: ONE",
-    "Secrets Manager client constructions: ZERO",
-    "get_secret_value invocations: ZERO",
-    "Secrets Manager network requests: ZERO",
-    "S3 client constructions: ZERO",
+    "identifier-source resolutions on the fifth attempt: ONE",
+    "Secrets Manager client constructions: ONE",
+    "get_secret_value invocations: ONE",
+    "Secrets Manager underlying network requests: UNKNOWN",
+    "S3 client constructions: ONE",
     "S3 object operations: ZERO",
-    "provider transport constructions: ZERO",
+    "provider transport constructions: ONE",
     "Sharadar/provider requests: ZERO",
-    "credential retrieval: NONE",
+    "offline composition-preflight invocations: ONE",
+    "credential retrieval: ONE",
     "qualification runs: ZERO",
 )
 
@@ -1064,48 +1267,69 @@ ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
     "UNKNOWN at the time of the second attempt",
     "still UNKNOWN at the time of the third attempt",
     "the owner attests that",
-    "Owner-attested is not entry-point verified",
-    "A real binding preflight is no longer a purely future event",
+    "The fifth separately authorized attempt then completed",
+    "The first four refusals remain refusals",
+    "A credential was retrieved, and that is not provider authentication",
+    "What entry-point resolution did and did not establish",
+    "A real binding preflight is no longer a future event at all",
     "Authenticated qualification remains NOT AUTHORIZED and has never run",
 )
 
 #: What the corrected ADR-0015 IN FORCE matrix entry must state.
 ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "PR #22 MERGED, CODE ONLY, REFUSED BY DEFAULT, BINDING PREFLIGHT ONLY",
-    "FOUR SEPARATELY AUTHORIZED ATTEMPTS, ALL REFUSED",
+    "FIVE SEPARATELY AUTHORIZED ATTEMPTS, THE FIRST FOUR REFUSED",
     "THE THIRD WITH REFUSED_SECRET_IDENTIFIER AT THE SECRET-IDENTIFIER SOURCE",
     "AND THE FOURTH WITH REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
-    "SET UP AFTER THE THIRD ATTEMPT AND NOT READ BY THE FOURTH",
+    "SET UP AFTER THE THIRD ATTEMPT, NOT READ BY THE FOURTH",
+    "AND RESOLVED ONCE BY THE ENTRY POINT ON THE FIFTH",
     "FOURTH-ATTEMPT AWS NETWORK REQUESTS UNKNOWN",
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "ONE COMMAND, EXIT CODE 255, MISSING AND EXPIRED NOT DISTINGUISHED",
-    "A FIFTH ATTEMPT, FURTHER AWS AUTHENTICATION DIAGNOSIS AND ANOTHER "
-    "SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED",
+    "A SIXTH ATTEMPT, FURTHER AWS AUTHENTICATION DIAGNOSIS, ANOTHER "
+    "SSO-LOGIN/REFRESH ATTEMPT AND ADDITIONAL CREDENTIAL OR SECRETS MANAGER "
+    "ACCESS SEPARATELY GATED AND NOT AUTHORIZED",
     "POST-DIAGNOSIS AWS SSO-LOGIN ATTEMPT COMPLETED -- REFUSED_SSO_LOGIN",
     "ONE COMMAND, TIMED OUT AFTER 420 SECONDS, NO EXIT STATUS RETURNED",
     "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
     "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
     "SSO SESSION STILL UNREFRESHED AFTER IT, EARLIER DIAGNOSIS UNREVISED",
     "LIKELY CAUSE INTERACTIVE-SURFACE SUPPRESSION -- LIKELY, NOT PROVEN",
-    "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
+    "SECRET IDENTIFIER OWNER-CONFIGURED",
     "SET UP AFTER THE THIRD ATTEMPT",
     "AWS IDENTITY-GATE ACTIVITY OCCURRED",
-    "NO SECRETS MANAGER CLIENT, CREDENTIAL, S3 OBJECT OPERATION, SHARADAR REQUEST OR "
-    "QUALIFICATION RUN",
+    "ACROSS THE FIRST FOUR ATTEMPTS NO SECRETS MANAGER CLIENT, CREDENTIAL, S3 "
+    "OBJECT OPERATION, SHARADAR REQUEST OR QUALIFICATION RUN",
+    # The fifth attempt, in the compact entry a reader consults on its own.
+    "FIFTH BINDING-PREFLIGHT ATTEMPTS ZERO AT THAT POINT",
+    "THE FIFTH SEPARATELY AUTHORIZED ATTEMPT THEN RAN EXACTLY ONCE AND COMPLETED -- EXIT CODE 0",
+    "CLOSED OUTCOME COMPLETED + VALIDATION_COMPLETED",
+    "LAST STAGE DEFINITIVELY REACHED STAGE 10 WITH ONE "
+    "preflight_qualification_composition INVOCATION RETURNING VALIDATED_OFFLINE",
+    "IDENTITY-GATE INVOCATIONS ONE AND PASSED, LICENSED-BUCKET RESOLUTIONS ONE, "
+    "SECRET-IDENTIFIER RESOLUTIONS ONE, SECRETS MANAGER CLIENT CONSTRUCTIONS ONE, "
+    "GET_SECRET_VALUE INVOCATIONS ONE AND ADMITTED, S3 CLIENT CONSTRUCTIONS ONE, "
+    "S3 OBJECT OPERATIONS ZERO, PROVIDER TRANSPORT CONSTRUCTIONS ONE, "
+    "SHARADAR/PROVIDER REQUESTS ZERO, OFFLINE COMPOSITION-PREFLIGHT INVOCATIONS ONE, "
+    "QUALIFICATION EXECUTIONS ZERO, UNDERLYING AWS NETWORK REQUESTS UNKNOWN",
+    "ONE CREDENTIAL RETRIEVED AND STRUCTURALLY ACCEPTED, PASSED INTO THE OFFLINE "
+    "COMPOSITION AND NEVER DISPLAYED, LOGGED, PERSISTED, HASHED, FINGERPRINTED, "
+    "MEASURED OR SUMMARIZED, WITH SHARADAR AUTHENTICATION UNKNOWN AND NO PROVIDER "
+    "REQUEST MADE",
 )
 
 #: What the entry point's own documentation must state about what has happened.
 BINDING_SOURCE_HISTORY: Final[tuple[str, ...]] = (
-    "authorized attempts FOUR",
+    "authorized attempts FIVE",
     "third attempt REFUSED_SECRET_IDENTIFIER at the identifier source",
     "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
     "AWS activity NOT ZERO",
-    "Four later, separately authorized operator attempts did execute it",
+    "Five later, separately authorized operator attempts did execute it",
     "before constructing a Secrets Manager client",
     "reached the fixed secret-identifier source exactly once",
     "total AWS activity was not zero",
-    "OWNER-CONFIGURED / NOT YET VERIFIED BY THE",
-    "No attempt has resolved the identifier.",
+    "OWNER-CONFIGURED, AND RESOLVED ONCE BY THIS ENTRY POINT",
+    "The fifth resolved it exactly once",
     "each requires separate written authorization",
 )
 
@@ -1144,13 +1368,13 @@ ADR_0016_IMMUTABLE_STATUS: Final = (
 #: permission to produce another refusal would have it backwards.
 ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "SEPARATES SECRET-IDENTIFIER, LOCAL DEPENDENCY, UNCLASSIFIED AND CREDENTIAL REFUSALS",
-    # Scoped to Secrets Manager. The unscoped "AWS NETWORK REQUESTS ZERO" and
-    # "NO CLIENT HAS EVER BEEN CONSTRUCTED" that stood here were false once the
-    # identity gate had run on the authorized attempts.
-    "SECRETS MANAGER CLIENT CONSTRUCTIONS ZERO",
-    "INVOCATIONS ZERO",
-    "SECRETS MANAGER NETWORK REQUESTS ZERO",
-    "REAL CREDENTIAL RETRIEVAL NONE",
+    # Scoped to Secrets Manager, and moved off zero by the fifth attempt: the
+    # corrected boundaries were exercised for the first time by a run that
+    # passed the identifier stage instead of refusing at it.
+    "SECRETS MANAGER CLIENT CONSTRUCTIONS ONE",
+    "INVOCATIONS ONE, ADMITTED",
+    "SECRETS MANAGER UNDERLYING NETWORK REQUESTS UNKNOWN",
+    "REAL CREDENTIAL RETRIEVAL ONE, STRUCTURALLY ACCEPTED",
     # The environment clause used to read "SYNCHRONIZATION NOT AUTHORIZED",
     # which two separately authorized events made false. What replaces it says
     # what happened *and* what is still gated.
@@ -1158,7 +1382,8 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "PYTHON DEPENDENCY LOCK ABSENT",
     "RANGE-CONFORMANT NOT LOCK-CONFORMANT",
     "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
-    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "ADDITIONAL CREDENTIAL OR SECRETS MANAGER ACCESS NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
 )
 
@@ -1177,8 +1402,11 @@ PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credential state"
 #: seen the key, and a row that dropped the qualifier would be claiming a
 #: verification no run performed.
 PROVIDER_CREDENTIAL_ROW_FACTS: Final[tuple[str, ...]] = (
-    "OWNER API KEY EXISTS / OWNER-ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
-    "REPOSITORY/APPLICATION CREDENTIAL RETRIEVAL OR CONSUMPTION NONE / NOT AUTHORIZED",
+    "OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND "
+    "STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR",
+    "REPOSITORY/APPLICATION CREDENTIAL RETRIEVAL ONE, ON THE FIFTH AUTHORIZED "
+    "BINDING-PREFLIGHT ATTEMPT",
+    "ANY ADDITIONAL RETRIEVAL NOT AUTHORIZED",
     "PROVIDER API ACCESS NOT AUTHORIZED",
     "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
@@ -1197,11 +1425,17 @@ STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API acc
 #: environment synchronization was separately authorized and performed. Only a
 #: *further* one is gated, and the word carries the whole difference.
 FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
-    "fifth binding-preflight attempt: NOT AUTHORIZED",
+    "sixth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
+    "additional credential or Secrets Manager access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
+    "Sharadar/provider access: NOT AUTHORIZED",
+    "S3 object operations or publication: NOT AUTHORIZED",
+    "ingestion, backfill and update: NOT AUTHORIZED",
+    "CONTROL publication: DEFERRED / NOT AUTHORIZED",
+    "broker, LEAN, Paper and live trading: NOT AUTHORIZED -- live trading HARD-DISABLED",
 )
 
 #: The superseded combined future-action line, refused in the ADR-0015 section.
@@ -1229,8 +1463,8 @@ DENIED_SYNCHRONIZATION_CLAIMS: Final[tuple[str, ...]] = (
 #: this repository; reads *by* this repository remain zero. One line could report
 #: the second correctly only by denying the first.
 SECRET_CREATION_AND_READ_FACTS: Final[tuple[str, ...]] = (
-    "owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT",
-    "Secrets Manager secret reads by this repository: ZERO",
+    "owner-side Secrets Manager secret creation: ATTESTED, AND READ ONCE BY THE ENTRY POINT",
+    "Secrets Manager secret reads by this repository: ONE",
 )
 
 #: The superseded combined line, refused wherever it reappears.
@@ -1251,8 +1485,8 @@ CREDENTIAL_SETUP_ROW_SUBJECT: Final = "Owner-side credential setup"
 #: them moves.
 CREDENTIAL_SETUP_ROW_FACTS: Final[tuple[str, ...]] = (
     "OWNER-SIDE SHARADAR SECRET CREATION AND IDENTIFIER CONFIGURATION",
-    "OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
-    "APPLICATION CREDENTIAL RETRIEVAL NOT AUTHORIZED",
+    "OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT",
+    "ADDITIONAL APPLICATION CREDENTIAL RETRIEVAL NOT AUTHORIZED",
     "PROVIDER API ACCESS NOT AUTHORIZED",
     "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
     "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
@@ -1271,7 +1505,7 @@ STALE_CREDENTIAL_SETUP_ROW_SUBJECT: Final = (
 #: A top-level stanza, so its continuations sit at fifteen -- the same shape the
 #: ENVIRONMENT guard needed, and the same reason the default of twenty-four would
 #: silently reduce the stanza to its header line.
-NOT_AUTHORIZED_STANZA_LINE: Final = "NOT AUTHORIZED application credential retrieval"
+NOT_AUTHORIZED_STANZA_LINE: Final = "NOT AUTHORIZED additional application credential retrieval"
 NOT_AUTHORIZED_STANZA_INDENT: Final = 15
 
 #: What the stanza must forbid, now that owner-side setup has happened.
@@ -1284,16 +1518,18 @@ NOT_AUTHORIZED_STANZA_INDENT: Final = 15
 #: sits: the application may not retrieve the credential, and only a separately
 #: authorized attempt may construct a client.
 NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
-    "application credential retrieval",
-    "Secrets Manager client construction or use, except during a separately authorized "
-    "ADR-0015 binding-preflight attempt",
-    "real credential binding NONE",
-    "real bucket binding NONE",
+    "additional application credential retrieval",
+    "additional Secrets Manager client construction or use, except during a separately "
+    "authorized ADR-0015 binding-preflight attempt",
+    "licensed-bucket resolutions ONE",
+    "S3 object operations ZERO",
+    "undefined in this repository",
     "SDK/client construction outside the ADR-0015 operator boundary",
-    "a fifth binding-preflight attempt",
+    "a sixth binding-preflight attempt",
     "further AWS authentication diagnosis -- one completed after the fourth",
     "another AWS SSO refresh or login -- separately gated",
     "ANY provider API call",
+    "ANY S3 object operation or publication",
     "an authenticated qualification run",
 )
 
@@ -1363,10 +1599,13 @@ STALE_SECTION_IDENTIFIER_LINE: Final = "operational secret-identifier configurat
 #: application's access to the credential and an authenticated run are four
 #: separate decisions and none has been taken.
 ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
-    "A FIFTH ATTEMPT",
+    "A SIXTH ATTEMPT",
     "FURTHER AWS AUTHENTICATION DIAGNOSIS",
     "ANOTHER AWS SSO REFRESH OR LOGIN",
-    "CREDENTIAL ACCESS BY THE APPLICATION",
+    "ADDITIONAL CREDENTIAL OR SECRETS MANAGER ACCESS",
+    "SHARADAR/PROVIDER ACCESS",
+    "ANY S3 OBJECT OPERATION OR PUBLICATION",
+    "INGESTION, BACKFILL AND UPDATE",
     "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
 )
 
@@ -1408,8 +1647,8 @@ FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "identifier-source resolutions on the fourth attempt: ZERO",
     "licensed-bucket resolutions on the fourth attempt: ZERO",
     "KALPAMANI_SHARADAR_SECRET_ID read by the fourth attempt: NO",
-    "offline composition-preflight invocations: ZERO",
-    "fifth binding-preflight attempt: NOT AUTHORIZED",
+    "offline composition-preflight invocations: ONE",
+    "sixth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
 )
@@ -1608,9 +1847,10 @@ EVENT_TABLE_IDENTIFIER_SCOPE: Final = (
 
 #: The same requirement, scoped to the real-factory commentary.
 FACTORY_IDENTIFIER_SCOPE: Final[tuple[str, ...]] = (
-    "therefore did not read `KALPAMANI_SHARADAR_SECRET_ID`",
-    "`_ambient_profile` reads `AWS_PROFILE` from the process",
-    "the secret identifier is the one variable this file may",
+    "The fourth never reached it and therefore did not read",
+    "`KALPAMANI_SHARADAR_SECRET_ID`. The scope is deliberate:",
+    "`_ambient_profile`\n# reads `AWS_PROFILE` from the process environment",
+    "is the one variable the fourth may be said to have left unread",
 )
 
 #: Unqualified claims that the fourth attempt read nothing from the environment.
@@ -1689,7 +1929,7 @@ POST_FOURTH_DIAGNOSIS_COUNTS: Final[tuple[str, ...]] = (
     "missing vs expired: NOT DISTINGUISHED by the diagnosis",
     "governed profile: PINNED IN THE CHILD ENVIRONMENT, NEVER DISCLOSED",
     "SSO-login invocations during the diagnosis: ZERO   ·   repair actions during it: ZERO",
-    "fifth binding-preflight attempts: ZERO",
+    "fifth binding-preflight attempts at that point: ZERO",
 )
 
 #: What the diagnosis narrative must state, not merely tabulate.
@@ -1881,8 +2121,8 @@ SSO_LOGIN_FORWARD_BOUNDARIES: Final[tuple[str, ...]] = (
     "A failed login attempt is not permission to retry.",
     "Another AWS SSO-login/refresh attempt NOT AUTHORIZED",
     "further AWS authentication diagnosis NOT AUTHORIZED",
-    "a fifth binding-preflight attempt NOT AUTHORIZED",
-    "application credential access NOT AUTHORIZED",
+    "a sixth binding-preflight attempt NOT AUTHORIZED",
+    "additional credential or Secrets Manager access NOT AUTHORIZED",
     "authenticated qualification NOT AUTHORIZED",
 )
 
@@ -2082,7 +2322,7 @@ CORRECTED_SSO_REFRESH_COUNTS: Final[tuple[str, ...]] = (
     "identity status: CONFIRMED AT THE TIME OF THAT COMMAND",
     "current or future session validity: NOT GUARANTEED BY THAT HISTORICAL CONFIRMATION",
     "KALPAMANI_SHARADAR_SECRET_ID reads by the corrected SSO session: ZERO",
-    "fifth binding-preflight attempts after the corrected refresh: ZERO",
+    "fifth binding-preflight attempts immediately after the corrected refresh: ZERO",
 )
 
 #: What the corrected attempt's narrative must state, not merely tabulate.
@@ -2241,7 +2481,7 @@ IDENTITY_CONFIRMATION_FACTS: Final[tuple[str, ...]] = (
     "no current or future session validity is guaranteed",
     "verified no secret identifier, no secret, no API key, no bucket and no provider access",
     "It is not a fifth binding-preflight attempt",
-    "fifth binding-preflight attempts remain at ZERO",
+    "the fifth attempt came later, under its own separate authorization, and is recorded below",
 )
 
 #: What stays gated now that one SSO login has succeeded.
@@ -2254,9 +2494,11 @@ CORRECTED_SSO_FORWARD_BOUNDARIES: Final[tuple[str, ...]] = (
     "Two SSO-login attempts have now been separately authorized",
     "the first refused, the second succeeded",
     "each was authorized for itself, not for the next one",
+    "The same holds for the five binding-preflight attempts, the fifth and successful "
+    "one included.",
     "Another AWS SSO refresh or login is SEPARATELY GATED and NOT AUTHORIZED",
-    "a fifth binding-preflight attempt NOT AUTHORIZED",
-    "application credential access NOT AUTHORIZED",
+    "a sixth binding-preflight attempt NOT AUTHORIZED",
+    "additional credential or Secrets Manager access NOT AUTHORIZED",
     "an authenticated qualification run NOT AUTHORIZED",
 )
 
@@ -2326,7 +2568,6 @@ CORRECTED_SSO_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE CREDENTIAL HAS BEEN VERIFIED",
     "THE IDENTITY CONFIRMATION WAS THE FIFTH ATTEMPT",
     "THE FIFTH ATTEMPT WAS THE IDENTITY CONFIRMATION",
-    "A FIFTH BINDING-PREFLIGHT ATTEMPT HAS OCCURRED",
     "IDENTITY CONFIRMATIONS: TWO",
     "SUCCESSFUL GOVERNED SSO REFRESHES: TWO",
     "CORRECTED SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ZERO",
@@ -2354,8 +2595,8 @@ CORRECTED_SSO_OVERCLAIMS: Final[tuple[str, ...]] = (
     "CREDENTIAL-BEARING AMBIENT VARIABLES WERE COPIED",
     "CREDENTIAL-BEARING AMBIENT VARIABLES WERE INSPECTED",
     "ANOTHER SSO REFRESH IS AUTHORIZED",
-    "A FIFTH ATTEMPT IS NOW AUTHORIZED",
-    "CREDENTIAL ACCESS IS NOW AUTHORIZED",
+    "A SIXTH ATTEMPT IS NOW AUTHORIZED",
+    "ADDITIONAL CREDENTIAL ACCESS IS NOW AUTHORIZED",
 )
 
 #: The bounds of the corrected-refresh narrative inside the ADR-0015 section.
@@ -2435,7 +2676,6 @@ ADR_0015_ROW_CORRECTED: Final[tuple[str, ...]] = (
     "CLASSIFIED `IDENTITY_CONFIRMED`",
     "NO GUARANTEE OF CURRENT OR FUTURE SESSION VALIDITY",
     "VERIFYING NO SECRET IDENTIFIER, SECRET, CREDENTIAL, BUCKET OR PROVIDER ACCESS",
-    "FIFTH BINDING-PREFLIGHT ATTEMPTS REMAIN ZERO",
 )
 
 #: What both CLAUDE.md status matrices must carry about the corrected events.
@@ -2457,7 +2697,6 @@ MATRIX_CORRECTED_SSO_CLAUSES: Final[tuple[str, ...]] = (
     "CLASSIFIED IDENTITY_CONFIRMED, CAPTURED BUFFERS CLEARED AFTER CLASSIFICATION",
     "IDENTITY CONFIRMED AT THE TIME OF THAT COMMAND WITH NO GUARANTEE OF CURRENT OR "
     "FUTURE SESSION VALIDITY",
-    "FIFTH BINDING-PREFLIGHT ATTEMPTS ZERO",
 )
 
 #: What the entry point's own documentation must say about the corrected events.
@@ -2647,26 +2886,27 @@ STALE_PROFILE_DISCLOSURE_CLAIMS: Final[tuple[str, ...]] = (
 )
 
 #: What must stay unauthorized now that a fourth attempt has happened.
-FIFTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
-    "fifth binding-preflight attempt: NOT AUTHORIZED",
+SIXTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
+    "sixth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
+    "additional credential or Secrets Manager access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
 
 #: What the entry point's own documentation must state about the fourth attempt.
 BINDING_SOURCE_FOURTH: Final[tuple[str, ...]] = (
-    "invoked four times under separate authorization",
+    "invoked five times under separate authorization",
     "the fourth refused at the AWS identity gate, reaching neither",
     "fourth attempt REFUSED_IDENTITY at the AWS identity gate",
     "fourth-attempt identity-gate invocations: ONE -- the gate runs its own STS",
     "fourth-attempt standalone diagnostic commands: ZERO",
     "fourth-attempt AWS network requests: UNKNOWN -- no numeric count established",
-    "Four later, separately authorized operator attempts did execute it, and all four refused",
+    "the first four refused and the fifth completed",
     "Whether the fourth attempt sent an AWS network request is UNKNOWN.",
     "neither zero nor one may be claimed here",
-    "No attempt has resolved the identifier.",
-    "a fifth binding preflight",
+    "the fourth refused at the identity gate, two stages before the identifier source",
+    "a sixth binding preflight",
 )
 
 #: What ``main``'s docstring must say about which attempts reached construction.
@@ -2675,11 +2915,14 @@ BINDING_SOURCE_FOURTH: Final[tuple[str, ...]] = (
 #: reason for the fourth by omission. A docstring beside the one authorized SDK
 #: construction is the worst place in the file to carry a stale count.
 BINDING_SOURCE_MAIN_HISTORY: Final[tuple[str, ...]] = (
-    "Four separately authorized attempts have run this",
-    "none reached this construction",
+    "Five separately authorized attempts have run this",
+    "The first four never reached this construction",
     "the first and the fourth",
     "refused at the AWS identity gate, the second refused on the missing AWS SDK,",
     "and the third refused at the secret-identifier source",
+    "The fifth reached all of it",
+    "one offline composition preflight that returned ``VALIDATED_OFFLINE`` with exit code ``0``",
+    "a sixth attempt is not authorized",
 )
 
 #: What the real-factory commentary must say about which factories have run.
@@ -2690,15 +2933,18 @@ BINDING_SOURCE_MAIN_HISTORY: Final[tuple[str, ...]] = (
 #: ``_environment_secret_id`` among the factories that had not run -- which the
 #: third attempt had already made false before the fourth was authorized.
 BINDING_SOURCE_FACTORY_HISTORY: Final[tuple[str, ...]] = (
-    "`_ambient_profile` and `_governed_identity_gate` HAVE run, on all four",
-    "`_governed_licensed_bucket` ran on the second and third attempts only, never",
-    "`_environment_secret_id` ran exactly once, during",
-    "the third attempt, which refused there; the fourth never reached it and",
-    "never been constructed by any attempt: the second refused inside",
-    "No credential has been retrieved, and no composition preflight or",
-    "qualification execution has occurred. Diagnosis is no longer entirely future:",
+    "`_ambient_profile` and `_governed_identity_gate` HAVE run, on all five",
+    "`_governed_licensed_bucket` ran on the second, third and fifth attempts,",
+    "`_environment_secret_id` ran twice: on the",
+    "third attempt, which refused there, and on the fifth, which resolved it and",
+    "`_secrets_client`, `_s3_client` and `_transport` were never constructed by",
+    "the first four attempts",
+    "constructed exactly once by the fifth",
+    "No provider request, no S3 object",
+    "operation and no qualification execution has occurred",
+    "Diagnosis is no longer entirely future:",
     "governed SSO session or cached token as missing or expired, without",
-    "other operational event remain separately gated.",
+    "other operational event remain separately",
 )
 
 
@@ -2721,7 +2967,10 @@ ENVIRONMENT_FINGERPRINT: Final[tuple[str, ...]] = (
     "boto3.client                          EXISTS AND CALLABLE -- not invoked during verification",
     "Python dependency lock                ABSENT",
     "conformance                           RANGE-CONFORMANT, NOT LOCK-CONFORMANT",
-    "one future bounded attempt            TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
+    # The bounded attempt this fingerprint was validated for has been run.
+    # "TECHNICALLY READY FOR SEPARATE AUTHORIZATION" described a machine waiting
+    # for a decision that has since been taken and consumed.
+    "one future bounded attempt            AUTHORIZED, RUN AND COMPLETED -- the fifth attempt",
 )
 
 #: The four events the chronology must keep distinct.
@@ -2746,41 +2995,55 @@ ENVIRONMENT_LOCK_LIMITATION: Final[tuple[str, ...]] = (
     "range-conformant, not lock-conformant",
     "could resolve different, still-compatible package versions",
     "DEFERRED to a separately reviewed dependency-governance slice",
-    "provisionally acceptable",
+    # The provisional acceptance was granted for one bounded diagnostic. That one
+    # ran, so the required wording is that it is spent rather than available.
+    "the provisional acceptance is spent",
     "not approval for production qualification, ingestion, CONTROL publication or live operation",
+    "it is not approval for a sixth attempt",
 )
 
 #: The boundaries the environment section must restate rather than relax.
 ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOUNDARY",
-    "real bucket binding: NONE",
-    "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
+    "licensed-bucket resolutions: ONE",
+    "S3 client constructions: ONE",
+    "S3 object operations: ZERO",
+    '"real bucket binding": UNDEFINED IN THIS REPOSITORY -- STATED AS THE THREE FACTS ABOVE',
+    "operational secret-identifier configuration: OWNER-CONFIGURED, AND RESOLVED ONCE "
     "BY THE ENTRY POINT",
-    "authorized binding-preflight attempts to date: FOUR -- all refused",
+    "authorized binding-preflight attempts to date: FIVE -- the first four refused, "
+    "the fifth completed",
+    "fifth attempt: COMPLETED + VALIDATION_COMPLETED -- exit code 0, stage 10, VALIDATED_OFFLINE",
     "authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded",
     "first AWS SSO-login attempt: REFUSED_SSO_LOGIN, timed out at 420s",
     "corrected AWS SSO-login attempt: SUCCESSFUL -- live console, exit code 0",
-    "successful governed SSO refreshes: ONE   ·   "
+    "successful governed SSO refreshes: ONE",
     "sanitized identity confirmations after it: ONE, SUCCESSFUL",
     "identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- "
     "future session validity NOT GUARANTEED",
     "identity-confirmation underlying AWS network requests: UNKNOWN",
-    "Secrets Manager client constructions: ZERO",
-    "get_secret_value invocations: ZERO",
-    "Secrets Manager network requests: ZERO",
-    "S3 object operations: ZERO",
+    "Secrets Manager client constructions: ONE",
+    "get_secret_value invocations: ONE",
+    "Secrets Manager underlying network requests: UNKNOWN",
     "Sharadar/provider requests: ZERO",
-    "credential retrieved: NONE",
+    "credential retrieved: ONE",
+    "credential status: STRUCTURALLY ACCEPTED",
+    "Sharadar authentication: UNKNOWN",
     "qualification runs: ZERO",
     "AWS credential-provider chain invoked during environment verification: NONE",
     "AWS requests during environment verification: ZERO",
     "binding preflight or composition preflight run during environment verification: NEITHER",
-    "composition preflight run: NEVER",
-    "a fifth binding-preflight attempt: NOT AUTHORIZED",
+    "composition preflight run: ONCE -- by the fifth binding-preflight attempt, offline",
+    "a sixth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
-    "credential access: NOT AUTHORIZED",
+    "additional credential or Secrets Manager access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
+    "Sharadar/provider access: NOT AUTHORIZED",
+    "S3 object operations or publication: NOT AUTHORIZED",
+    "ingestion, backfill and update: NOT AUTHORIZED",
+    "CONTROL publication: DEFERRED / NOT AUTHORIZED",
+    "broker, LEAN, Paper and live trading: NOT AUTHORIZED -- live trading HARD-DISABLED",
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
 )
 
@@ -2789,6 +3052,26 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
 #: Listed rather than counted in prose, so the number in that list's comment is
 #: derived from something checkable. The comment previously said "five" and
 #: enumerated six.
+#: Prohibitions the fifth binding-preflight attempt made true, and which are
+#: therefore retired rather than kept.
+#:
+#: The same rule the environment-repair entries were retired under: a guard that
+#: forbids a true statement is answered by writing a vaguer one, which is worse
+#: than the guard is good. Each of these named something that had not happened
+#: and now has -- once, offline, under a separate authorization. What replaces
+#: them in `SURVIVING_PROHIBITIONS` is the set of claims the fifth attempt still
+#: does not support: a provider request, an S3 object operation, a credential
+#: proven against Sharadar, and a sixth attempt.
+RETIRED_PREFLIGHT_PROHIBITIONS: Final[tuple[str, ...]] = (
+    "THE BINDING PREFLIGHT COMPLETED",
+    "THE BINDING PREFLIGHT SUCCEEDED",
+    "A CREDENTIAL WAS RETRIEVED",
+    "THE CREDENTIAL WAS RETRIEVED",
+    "GETSECRETVALUE WAS ISSUED",
+    "GETSECRETVALUE SUCCEEDED",
+    "A SECRET WAS READ",
+)
+
 RETIRED_ENVIRONMENT_PROHIBITIONS: Final[tuple[str, ...]] = (
     "THE ENVIRONMENT WAS REPAIRED",
     "THE ENVIRONMENT HAS BEEN REPAIRED",
@@ -2803,16 +3086,16 @@ RETIRED_ENVIRONMENT_PROHIBITIONS: Final[tuple[str, ...]] = (
 COUNT_WORDS: Final[dict[int, str]] = {4: "Four", 5: "Five", 6: "Six", 7: "Seven"}
 
 #: The prohibitions that survived, and must keep surviving.
+#: 6 prohibitions survive here, and the self-guard below derives that number
+#: from this tuple. Retiring an entry from `ADR_0016_FORBIDDEN_CLAIMS` *and*
+#: from this list would otherwise leave no symptom at all.
 SURVIVING_PROHIBITIONS: Final[tuple[str, ...]] = (
-    "THE BINDING PREFLIGHT COMPLETED",
-    "THE BINDING PREFLIGHT SUCCEEDED",
-    "A CREDENTIAL WAS RETRIEVED",
-    "THE CREDENTIAL WAS RETRIEVED",
-    "GETSECRETVALUE WAS ISSUED",
-    "GETSECRETVALUE SUCCEEDED",
-    "A SECRET WAS READ",
     "AUTHENTICATED QUALIFICATION IS AUTHORIZED",
     "AUTHENTICATED QUALIFICATION IS NOW AUTHORIZED",
+    "A SHARADAR REQUEST WAS MADE",
+    "AN S3 OBJECT OPERATION WAS PERFORMED",
+    "SHARADAR AUTHENTICATION CONFIRMED",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT IS AUTHORIZED",
 )
 
 
@@ -2874,8 +3157,8 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "boto3 1.43.83, botocore 1.43.83, pip check clean",
     "PYTHON DEPENDENCY LOCK ABSENT",
     "RANGE-CONFORMANT, NOT REPRODUCIBLY LOCKED",
-    "TECHNICALLY READY FOR SEPARATE AUTHORIZATION",
-    "FOUR AUTHORIZED ATTEMPTS TO DATE, ALL REFUSED",
+    "the one future bounded attempt AUTHORIZED, RUN AND COMPLETED -- THE FIFTH",
+    "FIVE AUTHORIZED ATTEMPTS TO DATE -- THE FIRST FOUR REFUSED, THE FIFTH COMPLETED",
     "FOURTH ATTEMPT REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
     "FOURTH-ATTEMPT IDENTITY-GATE INVOCATIONS ONE -- THE GATE RUNS ITS OWN STS IDENTITY "
     "OPERATION; STANDALONE DIAGNOSTIC COMMANDS ZERO; AWS NETWORK REQUESTS UNKNOWN",
@@ -2889,10 +3172,31 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
     "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
     "SSO SESSION STILL UNREFRESHED AFTER IT, EARLIER DIAGNOSIS UNREVISED",
-    "a fifth attempt NOT AUTHORIZED",
+    # The fifth attempt, stated in the stanza a reader consults on its own.
+    "FIFTH BINDING-PREFLIGHT ATTEMPT COMPLETED -- ONE PROCESS INVOCATION, EXIT CODE 0, "
+    "CLOSED OUTCOME COMPLETED + VALIDATION_COMPLETED, LAST STAGE DEFINITIVELY REACHED "
+    "STAGE 10, COMPOSITION STATUS VALIDATED_OFFLINE",
+    "FIFTH-ATTEMPT COUNTS -- IDENTITY-GATE INVOCATIONS ONE AND PASSED, LICENSED-BUCKET "
+    "RESOLUTIONS ONE, SECRET-IDENTIFIER RESOLUTIONS ONE, SECRETS MANAGER CLIENT "
+    "CONSTRUCTIONS ONE, GET_SECRET_VALUE INVOCATIONS ONE AND ADMITTED, S3 CLIENT "
+    "CONSTRUCTIONS ONE, S3 OBJECT OPERATIONS ZERO, PROVIDER TRANSPORT CONSTRUCTIONS ONE, "
+    "SHARADAR/PROVIDER REQUESTS ZERO, OFFLINE COMPOSITION-PREFLIGHT INVOCATIONS ONE, "
+    "QUALIFICATION EXECUTIONS ZERO, UNDERLYING AWS NETWORK REQUESTS UNKNOWN",
+    "ONE CREDENTIAL RETRIEVED AND STRUCTURALLY ACCEPTED -- NEVER DISPLAYED, LOGGED, "
+    "PERSISTED, HASHED, FINGERPRINTED, MEASURED OR SUMMARIZED; SHARADAR AUTHENTICATION "
+    "UNKNOWN, NO PROVIDER REQUEST MADE",
+    "SECRET IDENTIFIER OWNER-CONFIGURED, NOT READ BY THE FOURTH ATTEMPT, AND RESOLVED "
+    "ONCE BY THE ENTRY POINT ON THE FIFTH",
+    "a sixth attempt NOT AUTHORIZED",
     "further AWS authentication diagnosis NOT AUTHORIZED",
     "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED",
-    "credential access and authenticated qualification NOT AUTHORIZED",
+    "additional credential or Secrets Manager access NOT AUTHORIZED",
+    "authenticated qualification NOT AUTHORIZED",
+    "Sharadar/provider access NOT AUTHORIZED",
+    "S3 object operations or publication NOT AUTHORIZED",
+    "ingestion, backfill and update NOT AUTHORIZED",
+    "CONTROL publication DEFERRED / NOT AUTHORIZED",
+    "broker, LEAN, Paper and live trading NOT AUTHORIZED -- live trading HARD-DISABLED",
     "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
 )
 
@@ -2906,8 +3210,9 @@ ADR_0016_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "CODE AND FAILURE-BOUNDARY CORRECTION ONLY",
     "SECRET-IDENTIFIER / LOCAL-DEPENDENCY / CREDENTIAL REFUSALS SEPARATED",
     "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
-    "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
-    "NEVER USED TO RETRIEVE A CREDENTIAL OR RUN QUALIFICATION",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
+    "FIRST EXERCISED PAST THE IDENTIFIER STAGE BY THE FIFTH ATTEMPT",
+    "WHICH RETRIEVED ONE STRUCTURALLY ACCEPTED CREDENTIAL AND RAN NO QUALIFICATION",
 )
 
 
@@ -3022,21 +3327,21 @@ ADR_0016_FORBIDDEN_CLAIMS: Final[tuple[str, ...]] = (
     # "five" and then listed six, which is why the count is now derived from that
     # tuple rather than written by hand.
     #
-    # Each was refused because it would have been false; a separately authorized
-    # action has since made the installation true, and a guard that forbids a
-    # true statement is answered by writing a vaguer one. The dangerous claims --
-    # about the preflight, the credential and qualification -- all remain, and
-    # `ENVIRONMENT_FORBIDDEN_CLAIMS` adds what a *usable* environment must never
-    # be read as granting.
-    "THE BINDING PREFLIGHT COMPLETED",
-    "THE BINDING PREFLIGHT SUCCEEDED",
-    "A CREDENTIAL WAS RETRIEVED",
-    "THE CREDENTIAL WAS RETRIEVED",
-    "GETSECRETVALUE WAS ISSUED",
-    "GETSECRETVALUE SUCCEEDED",
-    "A SECRET WAS READ",
+    # Seven preflight entries stood here and are gone -- the seven named in
+    # `RETIRED_PREFLIGHT_PROHIBITIONS`. Each was refused because it would have
+    # been false; the fifth separately authorized binding-preflight attempt made
+    # each of them true, once and offline, and a guard that forbids a true
+    # statement is answered by writing a vaguer one.
+    #
+    # What remains is what the fifth attempt still does not support, plus what a
+    # *usable* environment must never be read as granting, which
+    # `ENVIRONMENT_FORBIDDEN_CLAIMS` adds.
     "AUTHENTICATED QUALIFICATION IS AUTHORIZED",
     "AUTHENTICATED QUALIFICATION IS NOW AUTHORIZED",
+    "A SHARADAR REQUEST WAS MADE",
+    "AN S3 OBJECT OPERATION WAS PERFORMED",
+    "SHARADAR AUTHENTICATION CONFIRMED",
+    "A SIXTH BINDING-PREFLIGHT ATTEMPT IS AUTHORIZED",
 )
 
 
@@ -3771,6 +4076,57 @@ def _binding_stage_order(source: str) -> list[str]:
     """
     found = [(source.index(call), call) for call in BINDING_STAGE_CALLS if call in source]
     return [call for _, call in sorted(found)]
+
+
+def _accepted_cli_options(path: Path) -> tuple[tuple[str, ...], ...]:
+    """Every option string the entry point's parser accepts, in declaration order.
+
+    Resolved statically. A ``Name`` argument -- the authorization flag is declared
+    through its module constant -- is looked up among the module's own top-level
+    string assignments, so the guard sees the spelling the parser will register
+    rather than the identifier that carries it.
+
+    Fail closed: an ``add_argument`` call whose option string cannot be resolved
+    to a literal contributes the sentinel ``("<unresolved>",)``, which no expected
+    surface matches. Silently dropping it would let an unreadable declaration
+    widen the surface while the guard reported a pass.
+    """
+    module = ast.parse(read(path))
+    constants: dict[str, str] = {}
+    for node in module.body:
+        target = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0].id
+        if (
+            target is not None
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            constants[target] = node.value.value
+
+    surface: list[tuple[str, ...]] = []
+    for node in ast.walk(module):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_argument"
+        ):
+            options: list[str] = []
+            for argument in node.args:
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                    options.append(argument.value)
+                elif isinstance(argument, ast.Name) and argument.id in constants:
+                    options.append(constants[argument.id])
+                else:
+                    options.append("<unresolved>")
+            surface.append(tuple(options))
+    return tuple(surface)
 
 
 def _module_level_imports(path: Path) -> str:
@@ -6708,12 +7064,15 @@ def main() -> int:
         )
         f.check(
             f"{name} states that the control is absence rather than care, and scopes it",
-            "retrieved, inspected, created, configured or bound anywhere in this repository" in flat
-            and "no bucket identifier is bound to the adapter" in flat
-            # ADR-0014 narrowed this. A *client* is constructed now -- the Sharadar
-            # one, from an injected transport -- so the true claim is about the AWS
-            # SDK client, which nothing builds because no credential source exists.
-            and "no module constructs an SDK client" in flat,
+            "retrieved, inspected, created, configured or bound anywhere under `src/`" in flat
+            and "no bucket identifier is recorded here" in flat
+            # ADR-0014 narrowed this once; the fifth binding-preflight attempt
+            # narrowed it again. A *client* is constructed now -- the Sharadar one
+            # from an injected transport, and one real AWS SDK client inside the
+            # ADR-0015 operator entry point -- so the true claim is scoped to the
+            # platform: no module under `src/` builds one.
+            and "no module under `src/` constructs an SDK client" in flat
+            and "One boundary outside `src/` has now supplied real values, once." in flat,
             "the store is safe because nothing binds it to AWS -- said as a claim about this "
             "repository, not as a claim about the owner's account",
         )
@@ -8971,7 +9330,49 @@ def main() -> int:
         f.check(
             "the entry point records which real factories have run, per factory",
             all(phrase in read(BINDING_PREFLIGHT) for phrase in BINDING_SOURCE_FACTORY_HISTORY),
-            "two ran on every attempt, one on two, one once, and three have never run",
+            "two ran on every attempt, one on three, one twice, and three ran once",
+        )
+        f.check(
+            "the entry point accepts exactly the authorization flag, --subject and --execution-id",
+            # Read from the parser, not from a fingerprint. A fingerprint says the
+            # file changed; this says what the program accepts, so renaming or
+            # adding an option fails here with the reason rather than as a hash
+            # mismatch somebody has to interpret.
+            _accepted_cli_options(BINDING_PREFLIGHT)
+            == (
+                ("--i-am-the-operator-authorizing-binding-preflight",),
+                ("--subject",),
+                ("--execution-id",),
+            ),
+            "the operator surface is three options; a fourth, a rename or an "
+            "unresolvable declaration all widen what can be asked of it",
+        )
+        f.check(
+            "the entry point documents the fifth attempt and what it did not establish",
+            all(
+                phrase in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split())
+                for phrase in BINDING_SOURCE_FIFTH
+            ),
+            "the source documentation is a current-status surface, and it is read alone",
+        )
+        f.check(
+            "the entry point carries no stale or overstated fifth-attempt claim",
+            not [
+                claim
+                for claim in STALE_FIFTH_ATTEMPT_CLAIMS
+                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ],
+            "the file that ran is the last place a superseded count should survive",
+        )
+        f.check(
+            "the entry point's required documentation stays out of executable source",
+            not [
+                phrase
+                for phrase in BINDING_SOURCE_FIFTH
+                if phrase in " ".join(_executable_python(BINDING_PREFLIGHT).split())
+            ],
+            "a required sentence moved into a string literal would satisfy the guard while "
+            "changing what the program is",
         )
         preflight_prose, _, factory_region = read(BINDING_PREFLIGHT).partition(
             FACTORY_SECTION_MARKER
@@ -9106,7 +9507,7 @@ def main() -> int:
         f.check(
             "the entry point's factory commentary no longer calls all diagnosis future",
             "Diagnosis is no longer entirely future:" in read(BINDING_PREFLIGHT)
-            and "any further AWS authentication diagnosis, another SSO refresh and every"
+            and "further AWS authentication diagnosis, another SSO refresh, additional"
             in read(BINDING_PREFLIGHT),
             "one diagnosis ran; only a further one is gated",
         )
@@ -9411,9 +9812,19 @@ def main() -> int:
             "a private identifier on the command line is disclosed before anything runs",
         )
         f.check(
-            f"{name} records that no bucket binding was performed",
-            "real bucket binding performed: NONE" in body,
-            "implementing a path is not walking it",
+            f"{name} states the bucket facts rather than a binding verdict",
+            # "real bucket binding performed: NONE" was the wrong shape once the
+            # fifth attempt resolved the governed bucket and built a real S3
+            # client. The repository never defined the threshold that phrase
+            # names -- the composition root reports it NONE while constructing a
+            # store from a caller-supplied bucket string, and the ADR-0011
+            # section lists a constructed SDK client and a bound bucket as two
+            # separate absent items without naming the act that produces the
+            # second. So the guard requires the three checkable facts and
+            # refuses a claim in either direction.
+            all(fact in body for fact in BUCKET_FACTS_NOT_A_VERDICT),
+            "the term is undefined here; bucket resolution, client construction and "
+            "object operations are the facts",
         )
         f.check(
             f"{name} separates owner-side secret creation from reads by this repository",
@@ -9649,9 +10060,49 @@ def main() -> int:
             "a fourth attempt happened; the counts and the next-attempt boundary both moved",
         )
         f.check(
-            f"{name} keeps a fifth attempt and AWS authentication diagnosis unauthorized",
-            all(boundary in binding_section for boundary in FIFTH_ATTEMPT_BOUNDARIES),
+            f"{name} keeps a sixth attempt and AWS authentication diagnosis unauthorized",
+            all(boundary in binding_section for boundary in SIXTH_ATTEMPT_BOUNDARIES),
             "a refusal is a completed diagnostic result, not permission to repair and retry",
+        )
+        f.check(
+            f"{name} records the fifth attempt's outcome and conservative counts",
+            all(token in binding_section for token in FIFTH_ATTEMPT_FACTS),
+            "a completed attempt absent from the count block reads as one that never ran",
+        )
+        f.check(
+            f"{name} states the five-attempt chronology in order",
+            all(step in binding_flat for step in FIFTH_ATTEMPT_CHRONOLOGY)
+            and [binding_flat.index(step) for step in FIFTH_ATTEMPT_CHRONOLOGY]
+            == sorted(binding_flat.index(step) for step in FIFTH_ATTEMPT_CHRONOLOGY),
+            "an identity confirmation printed before the refresh that caused it is a "
+            "different history",
+        )
+        f.check(
+            f"{name} keeps the first four refusals as refusals",
+            "The first four refusals remain refusals." in binding_flat
+            and "the fifth attempt's completion converts none of them into a success"
+            in binding_flat,
+            "a later success does not rewrite what the earlier runs did",
+        )
+        f.check(
+            f"{name} separates the retrieved credential from provider authentication",
+            all(fact in binding_flat for fact in FIFTH_ATTEMPT_CREDENTIAL_SCOPE),
+            "structurally accepted is what happened; authenticating against Sharadar is not",
+        )
+        f.check(
+            f"{name} records the fifth attempt in the ADR-0015 current-status row",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                fact in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+                for fact in FIFTH_ATTEMPT_ROW_FACTS
+            ),
+            "the row and the section are independent surfaces, and both are read alone",
+        )
+        f.check(
+            f"{name} carries no stale or overstated fifth-attempt claim",
+            not [claim for claim in STALE_FIFTH_ATTEMPT_CLAIMS if claim in flat.upper()],
+            "a zero the attempt moved, and an access it never made, are the same defect",
         )
         f.check(
             f"{name} records the post-fourth AWS identity diagnosis and its counts",
@@ -10599,13 +11050,22 @@ def main() -> int:
             "the counts are the correction; a document without them describes the old behaviour",
         )
         f.check(
-            f"{name} states that nothing was invoked and no credential retrieved",
-            "get_secret_value invocations by this repository: ZERO" in body
-            and "Secrets Manager client constructions: ZERO" in body
-            and "Secrets Manager network requests: ZERO" in body
+            f"{name} states the one invocation and the one retrieval, and their limits",
+            # The zeros this guard once required were true of the first four
+            # attempts and false after the fifth. What replaces them keeps the
+            # correction's point: a method invocation is still not a proven
+            # network request, so the network count is UNKNOWN and not one.
+            "get_secret_value invocations by this repository: ONE -- admitted, on the fifth attempt"
+            in body
+            and "Secrets Manager client constructions: ONE -- on the fifth attempt" in body
+            and "Secrets Manager underlying network requests: UNKNOWN" in body
             and "AWS identity-gate activity: OCCURRED" in body
-            and "real credential retrieval: NONE" in body,
-            "the defect implied AWS had been contacted; the record must deny it plainly",
+            and "real credential retrieval: ONE -- STRUCTURALLY ACCEPTED" in body
+            and "Sharadar authentication by that credential: UNKNOWN -- NO PROVIDER "
+            "REQUEST WAS MADE"
+            in body,
+            "one invocation is not a proven request, and a structurally accepted secret "
+            "is not a provider-authenticated credential",
         )
         f.check(
             f"{name} keeps a method invocation apart from an AWS network request",
@@ -10714,7 +11174,7 @@ def main() -> int:
                 for clause in (
                     "operational environment synchronized: DONE AND VERIFIED",
                     "Python dependency lock: ABSENT",
-                    "a fifth binding-preflight attempt: NOT AUTHORIZED",
+                    "a sixth binding-preflight attempt: NOT AUTHORIZED",
                 )
             ),
             "the drift was real evidence; a separately authorized action has since fixed it",
@@ -10771,10 +11231,13 @@ def main() -> int:
             "a session can expire between one command and the next, and the block is read alone",
         )
         f.check(
-            f"{name} separates technical readiness from authorization",
+            f"{name} separates what the machine did from what is authorized next",
             "A usable environment is not a permission." in flat
-            and "that is a statement about the machine, not a permission" in flat,
-            "TECHNICALLY READY is a fact about a machine, never about a decision",
+            and "That is a statement about what happened on this machine, not a permission "
+            "for the next thing."
+            in flat,
+            "the one attempt this environment was ready for has been run; readiness is "
+            "still a fact about a machine, never about a decision",
         )
         f.check(
             f"{name} makes no stale environment-absence claim",
@@ -10812,6 +11275,38 @@ def main() -> int:
         and not [p for p in RETIRED_ENVIRONMENT_PROHIBITIONS if p in ADR_0016_FORBIDDEN_CLAIMS]
         and all(p in ADR_0016_FORBIDDEN_CLAIMS for p in SURVIVING_PROHIBITIONS),
         "the comment said five and listed six; the word now comes from the tuple's length",
+    )
+    f.check(
+        "the retired preflight-prohibition count is derived, and its survivors are kept",
+        # The same membership protection the environment retirements carry. A
+        # denylist may only be weakened beside a tuple naming what left it and a
+        # tuple naming what must stay, both checked here -- otherwise "the fifth
+        # attempt made it true" becomes a way to delete any guard at all.
+        (
+            f"{COUNT_WORDS[len(RETIRED_PREFLIGHT_PROHIBITIONS)]} preflight entries "
+            "stood here and are gone" in read(Path(__file__).resolve())
+        )
+        and not [p for p in RETIRED_PREFLIGHT_PROHIBITIONS if p in ADR_0016_FORBIDDEN_CLAIMS]
+        and all(p in ADR_0016_FORBIDDEN_CLAIMS for p in SURVIVING_PROHIBITIONS),
+        "a prohibition the fifth attempt made true is retired by name, never quietly dropped",
+    )
+    f.check(
+        "each denylist this slice touches states its own size, derived from its tuple",
+        # The membership protection the retirement rule needs on its other side.
+        # Retiring an entry by name is guarded above; *deleting* one from the
+        # tuple and from its membership list together leaves no document-side
+        # symptom, because a denylist with one fewer entry still passes. Both
+        # sentences are written in the source and both numbers come from
+        # `len()`, so the two have to be changed deliberately and together.
+        (
+            f"{len(STALE_FIFTH_ATTEMPT_CLAIMS)} stale-or-overstated fifth-attempt claims "
+            "are listed here" in read(Path(__file__).resolve())
+        )
+        and (
+            f"{len(SURVIVING_PROHIBITIONS)} prohibitions survive here"
+            in read(Path(__file__).resolve())
+        ),
+        "a denylist that quietly loses an entry checks less and reports the same",
     )
 
     # ---------------------------------------------------------------- verdict

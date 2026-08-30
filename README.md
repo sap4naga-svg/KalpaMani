@@ -316,7 +316,7 @@ live brokerage execution, real-money operation.
 | Phase 3 overall | **NOT COMPLETE** |
 | Full Stage 3A real-data ingestion | **NOT AUTHORIZED** |
 | Stage 3A A2 / A3 — subscription / purchase | **AUTHORIZED AND PURCHASED (2026-08-28, ADR-0010)** — one month, Full History Bundle, for qualification only |
-| Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**. Application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** — a subscription existing is not permission to use it, and a configured secret is not permission to read it |
+| Owner-side credential setup · application credential retrieval · provider API access · Services Data ingestion | Owner-side Sharadar secret creation and identifier configuration **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth authorized binding-preflight attempt, which retrieved **one** credential and had it **structurally accepted**. **Additional** application credential retrieval **NOT AUTHORIZED**, provider API access **NOT AUTHORIZED**, Services Data access and ingestion **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** — a subscription existing is not permission to use it, a configured secret is not permission to read it again, and a structurally accepted credential is not proof that it authenticates against Sharadar, which stays **UNKNOWN** |
 | Phase 3B / 3C / 3D | **NOT STARTED / NOT AUTHORIZED** |
 | ADR-0005 | **PROPOSED** |
 | ADR-0006 — Blueprint V3.0 adoption | **ACCEPTED (2026-08-27)** |
@@ -334,15 +334,15 @@ live brokerage execution, real-money operation.
 | AWS account | **EXISTING** — pre-dates this work; configured for the KalpaMani foundation 2026-08-27 |
 | AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
 | Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
-| Any AWS mutation, read, verifier run or Terraform command | **NOT AUTHORIZED** — writing a client-shaped adapter is not permission to run one |
-| Real bucket binding · SDK client construction · credential source | Real bucket binding **NONE**, operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, Secrets Manager client constructions **ZERO**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked four times under separate authorization, and no invocation constructed a client or created a binding. A corrected AWS SSO login has since **COMPLETED SUCCESSFULLY** and **one** sanitized identity confirmation returned **`IDENTITY_CONFIRMED`**, which bound nothing and verified no secret, credential, bucket or provider access. A fifth binding-preflight attempt **NOT AUTHORIZED**, further AWS authentication diagnosis **NOT AUTHORIZED**, another AWS SSO-login/refresh attempt **SEPARATELY GATED / NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
+| Any further AWS mutation, read, verifier run or Terraform command | **NOT AUTHORIZED** — writing a client-shaped adapter is not permission to run one. Five separately authorized binding-preflight attempts, two SSO logins and two identity diagnostics have occurred and are recorded; each was authorized for itself, and none of them authorizes the next |
+| Licensed bucket · SDK client construction · credential source | Licensed-bucket resolutions **ONE**, S3 client constructions **ONE**, S3 object operations **ZERO** — the phrase *real bucket binding* is **undefined in this repository**, so the status is those three facts and neither a claimed binding nor a claimed absence. Operational secret-identifier configuration **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT**, Secrets Manager client constructions **ONE**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked five times under separate authorization, the first four refusing without constructing a client and the fifth **COMPLETING** with **one** Secrets Manager client, **one** admitted `get_secret_value`, **one** retrieved and structurally accepted credential, **one** S3 client, **one** provider transport and **one** offline composition preflight returning **`VALIDATED_OFFLINE`**. A corrected AWS SSO login **COMPLETED SUCCESSFULLY** beforehand and **one** sanitized identity confirmation returned **`IDENTITY_CONFIRMED`**, which bound nothing and verified no secret, credential, bucket or provider access. A sixth binding-preflight attempt **NOT AUTHORIZED**, further AWS authentication diagnosis **NOT AUTHORIZED**, another AWS SSO-login/refresh attempt **SEPARATELY GATED / NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
 | [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
-| [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused** — at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — though its governed identity gate **invoked its own STS identity operation once**. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **Fifth binding-preflight attempts remain ZERO.** The fourth attempt **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**. Operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, owner setup having occurred **after the third attempt** and **before the fourth**, and **not read by the fourth**; Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, S3 client constructions **ZERO**, S3 object operations **ZERO**, provider transport constructions **ZERO**, Sharadar/provider requests **ZERO**, credential retrieval **NONE**, qualification runs **ZERO**, real bucket binding **NONE**. A fifth attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **credential access by the application** and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
-| [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, real credential retrieval **NONE**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a fifth binding-preflight attempt **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
+| [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused, and a fifth separately authorized attempt then COMPLETED** — the four refusing at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — though its governed identity gate **invoked its own STS identity operation once**. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **The fifth separately authorized attempt then ran exactly once and COMPLETED** — **exit code `0`**, public output exactly `binding preflight completed` and `offline validation completed`, closed outcome **`COMPLETED + VALIDATION_COMPLETED`**, and a last definitively reached stage of **stage 10**: one `preflight_qualification_composition` invocation returning **`VALIDATED_OFFLINE`**. Its conservative counts are identity-gate invocations **ONE, passed**, licensed-bucket resolutions **ONE**, secret-identifier resolutions **ONE**, Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, S3 client constructions **ONE**, S3 object operations **ZERO**, provider transport constructions **ONE**, Sharadar/provider requests **ZERO**, offline composition-preflight invocations **ONE**, qualification executions **ZERO**, and underlying AWS network requests **UNKNOWN**. **A credential was definitively retrieved**: one admitted `get_secret_value` returned a `SecretString` the existing credential contract accepted **structurally**, which was passed into the offline composition and **never displayed, logged, persisted, hashed, fingerprinted, measured or summarized** — *usable* meaning structurally acceptable to that contract, with **Sharadar authentication UNKNOWN** because **no provider request occurred**. The fourth attempt still **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**; operational secret-identifier configuration is **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth attempt, owner setup having occurred **after the third attempt** and **before the fourth**. A **sixth** attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **additional credential or Secrets Manager access**, **Sharadar/provider access**, **any S3 object operation or publication**, **ingestion, backfill and update** and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
+| [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. The corrected boundaries were exercised for the first time by the fifth attempt, which passed the identifier stage rather than refusing at it: Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, Secrets Manager underlying network requests **UNKNOWN**, real credential retrieval **ONE, structurally accepted**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a sixth binding-preflight attempt **NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
 | Provider purchase — qualification subscription | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
-| Provider credential state · repository consumption · provider API access · Services Data | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / NOT VERIFIED BY THE ENTRY POINT**; repository/application credential retrieval or consumption **NONE / NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; authenticated qualification **NOT AUTHORIZED** — an owner-held key is not repository access, and a subscription existing is not permission to use it |
+| Provider credential state · repository consumption · provider API access · Services Data | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; authenticated qualification **NOT AUTHORIZED** — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
 | Real external-data acquisition | **NOT STARTED** |
 | Short research | **NOT AUTHORIZED** |
 | Strategies / Brain / AI / portfolio / risk | **NOT IMPLEMENTED / NOT AUTHORIZED** |
@@ -644,16 +644,24 @@ implementation of S3's semantics to be wrong about; the synthetic client instead
 conditional put genuinely atomic, so a check-then-write adapter would *fail* the concurrency tests
 rather than pass them by luck.
 
-**The control is absence, not care.** No credential is retrieved, inspected, created, configured
-or bound anywhere in this repository; no bucket identifier is bound to the adapter or recorded
-here; and no module constructs an SDK client. The store **is** called now — by the dormant
-qualification runtime (ADR-0012), on an injected store — and it is now also *constructed*, by the
-dormant composition root
+**The control is absence in the platform, and one authorized boundary outside it.** No credential
+is retrieved, inspected, created, configured or bound anywhere under `src/`; no bucket identifier is
+recorded here; and **no module under `src/` constructs an SDK client**. The store **is** called now
+— by the dormant qualification runtime (ADR-0012), on an injected store — and it is now also
+*constructed*, by the dormant composition root
 ([ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md)),
-from an injected client and a caller-supplied bucket string. **What remains absent is what would
-make either real**: a credential source, a real credential, a constructed SDK client, a bound
-bucket, a runner, and any code that calls something other than the offline preflight. Each is
-verified by a static test rather than asserted here.
+from an injected client and a caller-supplied bucket string. **What is absent from the adapter and
+from the platform is what would make either real there**: a credential source, a real credential, a
+constructed SDK client, a runner, and any code that calls something other than the offline
+preflight. Each is verified by a static test rather than asserted here.
+
+**One boundary outside `src/` has now supplied real values, once.** The ADR-0015 operator entry
+point is the sole permitted construction site, and the **fifth separately authorized
+binding-preflight attempt** ran it: it retrieved **one** credential, constructed **one** S3 client,
+resolved the governed licensed bucket **once**, and made **one** offline composition preflight.
+**It performed zero S3 object operations and sent zero provider requests**, so the adapter's own
+`put_object` and `head_object` have still never run against AWS. That is a fact about the entry
+point, not a relaxation of the platform boundary, which is unchanged.
 
 **What that does and does not claim.** It is a statement about this repository and this slice, not
 about the world: the AWS research foundation and its buckets already exist and were provisioned in
@@ -737,8 +745,9 @@ inside the same broad exception boundary that mapped every failure in the stage 
 The command reported a private-credential failure for a missing local package. That would have sent
 an operator to inspect a secret, a policy and an account for a problem in none of them, and it
 implied AWS had been contacted when it had not. Because the identifier source was not separately
-classified, whether it is configured at all **remains unknown** — the run cannot say, and nothing
-here guesses.
+classified, whether it was configured at all **remained unknown at that point** — that run could
+not say, and nothing here guesses backwards. **The fifth attempt later resolved the identifier
+once**, which is recorded in the binding section and does not revise what this run established.
 
 ```
 outcome                                       identifier   client   invocations
@@ -750,15 +759,19 @@ REFUSED_CREDENTIAL                                     1        1             1
 REFUSED_DEPENDENCY after the credential                1        1             1
 completed synthetic offline preflight                  1        1             1
 
-get_secret_value invocations by this repository: ZERO
-Secrets Manager client constructions: ZERO
-Secrets Manager network requests: ZERO
-S3 object operations: ZERO   ·   Sharadar/provider requests: ZERO
+get_secret_value invocations by this repository: ONE -- admitted, on the fifth attempt
+Secrets Manager client constructions: ONE -- on the fifth attempt
+Secrets Manager underlying network requests: UNKNOWN
+S3 client constructions: ONE   ·   S3 object operations: ZERO
+provider transport constructions: ONE   ·   Sharadar/provider requests: ZERO
 AWS identity-gate activity: OCCURRED -- total AWS activity was not zero
-real credential retrieval: NONE
+real credential retrieval: ONE -- STRUCTURALLY ACCEPTED
+Sharadar authentication by that credential: UNKNOWN -- NO PROVIDER REQUEST WAS MADE
 operational environment synchronized: DONE AND VERIFIED -- see the environment section
 Python dependency lock: ABSENT   ·   environment: RANGE-CONFORMANT, NOT LOCK-CONFORMANT
-a fifth binding-preflight attempt: NOT AUTHORIZED
+a sixth binding-preflight attempt: NOT AUTHORIZED
+additional credential or Secrets Manager access: NOT AUTHORIZED
+authenticated qualification: NOT AUTHORIZED
 ```
 
 **A method invocation is not a proven AWS network request.** The third column counts calls into the
@@ -824,7 +837,7 @@ boto3.client                          EXISTS AND CALLABLE -- not invoked during 
 synthetic/local validation suite      PASSED in full
 Python dependency lock                ABSENT
 conformance                           RANGE-CONFORMANT, NOT LOCK-CONFORMANT
-one future bounded attempt            TECHNICALLY READY FOR SEPARATE AUTHORIZATION
+one future bounded attempt            AUTHORIZED, RUN AND COMPLETED -- the fifth attempt
 ```
 
 **The chronology matters, and these are four different events.** Collapsing them is how a status
@@ -845,36 +858,45 @@ different, still-compatible package versions.
 
 **Introducing a Python dependency lock is DEFERRED to a separately reviewed dependency-governance
 slice.** No lock, manifest or dependency declaration is changed here, and the missing lock is
-**not** resolved by recording it. For **one** future bounded binding-preflight diagnostic, the exact
-validated fingerprint above may be treated as **provisionally acceptable**. That provisional
-acceptance is **not** approval for production qualification, ingestion, CONTROL publication or live
-operation.
+**not** resolved by recording it. The provisional acceptance of the exact validated fingerprint
+above was granted for **one** bounded binding-preflight diagnostic; **that one has since been run —
+the fifth attempt — so the provisional acceptance is spent.** It was **not** approval for
+production qualification, ingestion, CONTROL publication or live operation, and it is not approval
+for a sixth attempt.
 
 **A usable environment is not a permission.** Everything the earlier slices established is unchanged,
 and the boundaries below are restated rather than relaxed:
 
 ```
 binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOUNDARY
-real bucket binding: NONE
-operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT
-authorized binding-preflight attempts to date: FOUR -- all refused
+licensed-bucket resolutions: ONE   ·   S3 client constructions: ONE   ·   S3 object operations: ZERO
+"real bucket binding": UNDEFINED IN THIS REPOSITORY -- STATED AS THE THREE FACTS ABOVE
+operational secret-identifier configuration: OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT
+authorized binding-preflight attempts to date: FIVE -- the first four refused, the fifth completed
+fifth attempt: COMPLETED + VALIDATION_COMPLETED -- exit code 0, stage 10, VALIDATED_OFFLINE
 authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded
 first AWS SSO-login attempt: REFUSED_SSO_LOGIN, timed out at 420s
 corrected AWS SSO-login attempt: SUCCESSFUL -- live console, exit code 0
 successful governed SSO refreshes: ONE   ·   sanitized identity confirmations after it: ONE, SUCCESSFUL
 identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- future session validity NOT GUARANTEED
 identity-confirmation underlying AWS network requests: UNKNOWN
-Secrets Manager client constructions: ZERO   ·   get_secret_value invocations: ZERO
-Secrets Manager network requests: ZERO   ·   S3 object operations: ZERO
-Sharadar/provider requests: ZERO   ·   credential retrieved: NONE   ·   qualification runs: ZERO
+Secrets Manager client constructions: ONE   ·   get_secret_value invocations: ONE
+Secrets Manager underlying network requests: UNKNOWN   ·   S3 object operations: ZERO
+Sharadar/provider requests: ZERO   ·   credential retrieved: ONE   ·   qualification runs: ZERO
+credential status: STRUCTURALLY ACCEPTED   ·   Sharadar authentication: UNKNOWN
 AWS credential-provider chain invoked during environment verification: NONE
 AWS requests during environment verification: ZERO
 binding preflight or composition preflight run during environment verification: NEITHER
-composition preflight run: NEVER
-a fifth binding-preflight attempt: NOT AUTHORIZED
+composition preflight run: ONCE -- by the fifth binding-preflight attempt, offline
+a sixth binding-preflight attempt: NOT AUTHORIZED
 further AWS authentication diagnosis: NOT AUTHORIZED
 another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
-credential access: NOT AUTHORIZED   ·   authenticated qualification: NOT AUTHORIZED
+additional credential or Secrets Manager access: NOT AUTHORIZED
+authenticated qualification: NOT AUTHORIZED   ·   Sharadar/provider access: NOT AUTHORIZED
+S3 object operations or publication: NOT AUTHORIZED
+ingestion, backfill and update: NOT AUTHORIZED
+CONTROL publication: DEFERRED / NOT AUTHORIZED
+broker, LEAN, Paper and live trading: NOT AUTHORIZED -- live trading HARD-DISABLED
 further dependency installation or environment resynchronization: SEPARATELY GATED
 ```
 
@@ -884,11 +906,12 @@ stubs and `builtins.open` recording every path opened: **no socket was created, 
 for existence by attribute lookup and never called. No environment-variable value, AWS profile, SSO
 cache, credential, account identifier, bucket value or secret identifier was read.
 
-**TECHNICALLY READY FOR SEPARATE AUTHORIZATION** — and that is a statement about the machine, not a
-permission. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**,
+**THE ONE AUTHORIZED ATTEMPT THIS ENVIRONMENT WAS READY FOR HAS BEEN RUN** — the fifth, which
+completed. That is a statement about what happened on this machine, not a permission for the next
+thing. **G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**,
 Phase 3 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**.
 
-### The Sharadar private-binding preflight — refused by default, and four times refused in operation
+### The Sharadar private-binding preflight — refused by default, four times refused, then completed
 
 [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) authorized the last piece nobody had written: the path that will eventually
 supply the private bindings every accepted slice takes by injection. One operator entry point,
@@ -896,18 +919,62 @@ supply the private bindings every accepted slice takes by injection. One operato
 `data/ingest/sharadar/secrets.py`.
 
 **Status: ACCEPTED / IN FORCE — PR #22 merged.** **Merging it bound nothing** — but the entry
-point has since been run. Four separately authorized operator attempts occurred and **all four
-refused** — one at the AWS identity gate, one on a missing AWS SDK dependency, one at the fixed
-secret-identifier source, and — after the owner's secret creation and identifier configuration —
-one again at the AWS identity gate with **`REFUSED_IDENTITY`**. No credential was retrieved, no
-bucket was bound, no provider was accessed and no qualification or ingestion occurred.
+point has since been run **five** times. **Four separately authorized operator attempts occurred and
+all four refused** — one at the AWS identity gate, one on a missing AWS SDK dependency, one at the
+fixed secret-identifier source, and — after the owner's secret creation and identifier
+configuration — one again at the AWS identity gate with **`REFUSED_IDENTITY`**. **The fifth
+separately authorized attempt then completed**: **exit code `0`**, closed outcome
+**`COMPLETED + VALIDATION_COMPLETED`**, and one offline `preflight_qualification_composition`
+invocation that returned **`VALIDATED_OFFLINE`**. **A credential was retrieved and structurally
+accepted.** **No provider was accessed, no S3 object operation occurred, and no qualification
+execution or ingestion occurred.**
+
+**The chronology, in order.** Each step was separately authorized, and none of them authorized the
+next:
+
+1. **Four separately authorized binding-preflight attempts occurred and all four refused.**
+2. **Attempt 4 refused at the AWS identity gate** with `REFUSED_IDENTITY`.
+3. **The later standalone diagnosis classified the SSO session
+   `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`**, without distinguishing missing from expired.
+4. **A later corrected SSO refresh completed successfully.**
+5. **A sanitized identity-confirmation command returned `IDENTITY_CONFIRMED`**, without
+   guaranteeing future session validity.
+6. **The fifth separately authorized binding-preflight attempt then ran exactly once.**
+7. **It exited `0`** and emitted exactly `binding preflight completed` and
+   `offline validation completed`.
+8. **Its closed outcome was `COMPLETED + VALIDATION_COMPLETED`.**
+9. **Its last definitively reached stage was stage 10**: one
+   `preflight_qualification_composition` invocation that returned `VALIDATED_OFFLINE`.
+
+**The first four refusals remain refusals.** They are historical facts about what happened on those
+days, and the fifth attempt's completion converts none of them into a success.
+
+**A credential was retrieved, and that is not provider authentication.** One admitted
+`get_secret_value` returned a `SecretString`, the existing credential contract **accepted it
+structurally**, and it was passed into the offline composition. **No credential or fragment was
+displayed, logged, persisted, hashed, fingerprinted, measured or summarized.** *Usable* here means
+**structurally acceptable to the existing contract** and nothing more: **whether it authenticates
+successfully against Sharadar remains UNKNOWN**, because **no Sharadar or provider request
+occurred**. **Owner attestation and successful repository retrieval are not the same as provider
+authentication.**
+
+**The bucket is recorded as facts, not as a binding verdict.** The fifth attempt **resolved the
+governed licensed bucket once** and **constructed one S3 client**, and performed **zero S3 object
+operations**. This repository's phrase *real bucket binding* is **ambiguous**: the composition root
+reports `real bucket binding: NONE` while constructing a store from a caller-supplied bucket string,
+and the ADR-0011 section lists *a constructed SDK client* and *a bound bucket* as two separate
+absent items without ever naming the act that produces the second. Nothing tracked fixes the
+threshold, so the status records **bucket resolutions ONE · S3 client constructions ONE · S3 object
+operations ZERO**, and claims **neither a real binding nor its absence**.
 
 ```
 entry points          ONE      scripts/ only; the installed package re-exports nothing
 default behaviour     REFUSE   no flag, no work -- no lookup, no client, no socket, no read
 authorization         ONE      --i-am-the-operator-authorizing-binding-preflight
 what it authorizes    BINDING PREFLIGHT ONLY -- never a qualification run
-authorized attempts   FOUR     all refused; none reached a Secrets Manager client
+authorized attempts   FIVE     the first four refused; the fifth completed
+first four attempts   REFUSED  none of them reached a Secrets Manager client
+fifth attempt         COMPLETED + VALIDATION_COMPLETED -- exit code 0
 third attempt         REFUSED_SECRET_IDENTIFIER at the fixed secret-identifier source
 fourth attempt        REFUSED_IDENTITY at the AWS identity gate
 AWS identity-gate activity: OCCURRED -- total AWS activity was not zero
@@ -920,7 +987,7 @@ diagnosis underlying AWS network requests: UNKNOWN
 missing vs expired: NOT DISTINGUISHED by the diagnosis
 governed profile: PINNED IN THE CHILD ENVIRONMENT, NEVER DISCLOSED
 SSO-login invocations during the diagnosis: ZERO   ·   repair actions during it: ZERO
-fifth binding-preflight attempts: ZERO
+fifth binding-preflight attempts at that point: ZERO
 authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded
 first post-diagnosis AWS SSO-login attempt: COMPLETED -- REFUSED_SSO_LOGIN
 first SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager
@@ -957,31 +1024,61 @@ identity-confirmation underlying AWS network requests: UNKNOWN
 identity status: CONFIRMED AT THE TIME OF THAT COMMAND
 current or future session validity: NOT GUARANTEED BY THAT HISTORICAL CONFIRMATION
 KALPAMANI_SHARADAR_SECRET_ID reads by the corrected SSO session: ZERO
-fifth binding-preflight attempts after the corrected refresh: ZERO
-operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT
+fifth binding-preflight attempts immediately after the corrected refresh: ZERO
+fifth binding-preflight attempt: COMPLETED -- run later, under its own authorization
+fifth attempt process invocations: ONE   ·   exit code: 0
+fifth attempt public output: binding preflight completed / offline validation completed
+fifth attempt closed outcome: COMPLETED + VALIDATION_COMPLETED
+fifth attempt last stage definitively reached: STAGE 10 -- offline composition preflight
+fifth attempt composition status: VALIDATED_OFFLINE
+fifth attempt identity-gate invocations: ONE -- PASSED
+fifth attempt licensed-bucket resolutions: ONE
+fifth attempt secret-identifier resolutions: ONE
+fifth attempt Secrets Manager client constructions: ONE
+fifth attempt get_secret_value invocations: ONE -- ADMITTED
+fifth attempt S3 client constructions: ONE   ·   S3 object operations: ZERO
+fifth attempt provider transport constructions: ONE   ·   Sharadar/provider requests: ZERO
+fifth attempt offline composition-preflight invocations: ONE
+fifth attempt qualification executions: ZERO
+fifth attempt underlying AWS network requests: UNKNOWN
+fifth attempt credential: RETRIEVED -- ONE SecretString, STRUCTURALLY ACCEPTED
+credential display, log, persistence, hash, fingerprint or measurement: NONE
+"usable" means: STRUCTURALLY ACCEPTABLE TO THE EXISTING CREDENTIAL CONTRACT
+Sharadar authentication by that credential: UNKNOWN -- NO PROVIDER REQUEST WAS MADE
+operational secret-identifier configuration: OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT
 owner credential setup occurred AFTER the third attempt and BEFORE the fourth
 identifier-source resolutions on the third attempt: ONE
 identifier-source resolutions on the fourth attempt: ZERO
+identifier-source resolutions on the fifth attempt: ONE
 licensed-bucket resolutions on the fourth attempt: ZERO
+licensed-bucket resolutions on the fifth attempt: ONE
 KALPAMANI_SHARADAR_SECRET_ID read by the fourth attempt: NO
-Secrets Manager client constructions: ZERO
-get_secret_value invocations: ZERO
-Secrets Manager network requests: ZERO
-S3 client constructions: ZERO   ·   S3 object operations: ZERO
-provider transport constructions: ZERO   ·   Sharadar/provider requests: ZERO
-offline composition-preflight invocations: ZERO
-credential retrieval: NONE   ·   qualification runs: ZERO
-owner-side Secrets Manager secret creation: ATTESTED / NOT VERIFIED BY THE ENTRY POINT
-Secrets Manager secret reads by this repository: ZERO
-real bucket binding performed: NONE
+KALPAMANI_SHARADAR_SECRET_ID read by the fifth attempt: YES -- ONCE, NEVER DISCLOSED
+Secrets Manager client constructions: ONE
+get_secret_value invocations: ONE
+Secrets Manager underlying network requests: UNKNOWN
+S3 client constructions: ONE   ·   S3 object operations: ZERO
+provider transport constructions: ONE   ·   Sharadar/provider requests: ZERO
+offline composition-preflight invocations: ONE
+credential retrieval: ONE   ·   qualification runs: ZERO
+owner-side Secrets Manager secret creation: ATTESTED, AND READ ONCE BY THE ENTRY POINT
+Secrets Manager secret reads by this repository: ONE
+"real bucket binding": UNDEFINED IN THIS REPOSITORY -- STATED AS BUCKET RESOLUTION ONE,
+                       S3 CLIENT CONSTRUCTION ONE, S3 OBJECT OPERATIONS ZERO
 qualification-run execution surface: NONE
 provider-fetch operation: NONE   ·   object-publication operation: NONE
 runner, task, image, scheduler or service: NONE
-fifth binding-preflight attempt: NOT AUTHORIZED
+sixth binding-preflight attempt: NOT AUTHORIZED
 further AWS authentication diagnosis: NOT AUTHORIZED
 another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
 further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED
+additional credential or Secrets Manager access: NOT AUTHORIZED
 authenticated qualification: NOT AUTHORIZED
+Sharadar/provider access: NOT AUTHORIZED
+S3 object operations or publication: NOT AUTHORIZED
+ingestion, backfill and update: NOT AUTHORIZED
+CONTROL publication: DEFERRED / NOT AUTHORIZED
+broker, LEAN, Paper and live trading: NOT AUTHORIZED -- live trading HARD-DISABLED
 ```
 
 **Implementing and merging it executed nothing. Four later, separately authorized operator
@@ -997,18 +1094,26 @@ recorded only the first, which was true of the merge and false of the operation.
 | **second authorized attempt** | **refused before constructing a Secrets Manager client**, because the project environment lacked the required AWS SDK dependency |
 | **a later, separately authorized environment action** | installed and verified the AWS SDK. It changed no repository file — see the environment section |
 | **third authorized attempt** | one process invocation. Passed operator authorization, the governed profile contract, the identity gate and licensed-bucket resolution, **reached the fixed secret-identifier source exactly once**, and refused there with **`REFUSED_SECRET_IDENTIFIER`** — public output `binding preflight refused: no usable secret identifier was resolved`, exit code 1 |
-| **owner credential setup, after the third attempt** | the owner attests that an AWS Secrets Manager secret was created for the existing Sharadar API key and that `KALPAMANI_SHARADAR_SECRET_ID` was configured. **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT** |
+| **owner credential setup, after the third attempt** | the owner attests that an AWS Secrets Manager secret was created for the existing Sharadar API key and that `KALPAMANI_SHARADAR_SECRET_ID` was configured. **OWNER-CONFIGURED, AND NOT YET VERIFIED BY ANY ENTRY-POINT RUN AT THAT TIME** — the fifth attempt, later and separately authorized, is what resolved it |
 | **fourth authorized attempt**, after that setup | one process invocation, from a fresh post-restart process. Passed operator authorization and the governed profile contract, **invoked the application AWS identity gate once**, and refused there with **`REFUSED_IDENTITY`** — public output `binding preflight refused: the AWS identity gate did not pass`, exit code 1. It **never reached licensed-bucket resolution and never reached the secret-identifier source**, so it did not read `KALPAMANI_SHARADAR_SECRET_ID`, constructed no AWS service client and retrieved no credential. **No retry and no standalone authentication diagnosis followed** |
 | **a second, separately authorized diagnosis**, after the fourth attempt and after PR #28 merged | **one** process invocation of **one** `aws sts get-caller-identity` command, exit code **255**, closed outcome **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — the governed SSO session or cached token was classified unavailable or expired, and the classification **does not distinguish missing from expired**. The governed profile was pinned in the child environment and never disclosed; no identity, raw output or error text was disclosed or persisted. Its **own** underlying AWS network-request count is **UNKNOWN**. **Nothing followed it under that authorization: no retry, no `aws sso login`, no authentication repair, no identity-gate invocation and no fifth attempt** |
 | **a separately authorized AWS SSO-login attempt**, after that diagnosis and after PR #29 merged | **one** process invocation of **one** `aws sso login --no-cli-pager` command, the governed profile resolved by static AST parse of the tracked `EXPECTED_PROFILE` constant and pinned in the child environment only, never disclosed. It **timed out after 420 seconds**, was terminated and left **no lingering AWS CLI process**, so **no exit status was returned** — the closed outcome is **`REFUSED_SSO_LOGIN`**. **Browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**; its underlying AWS network-request count is **UNKNOWN**. The SSO session **remained unrefreshed** |
 | **a corrected, separately authorized AWS SSO-login attempt**, in a new Claude session after PR #30 merged | **one** process invocation of **one** `aws sso login --no-cli-pager` command, run on a **live console with inherited stdin, stdout and stderr** — nothing captured, piped, redirected, buffered or written to a file. The **interactive browser/device flow completed**, the command **exited `0`**, **successful governed SSO refreshes became ONE**, and **no lingering AWS CLI process** remained. The governed profile was resolved by **static AST parse of the tracked `EXPECTED_PROFILE` constant** — the entry-point module was **neither imported nor executed** — and its value was **not disclosed**. A **minimal, allowlisted child environment was built key-by-key**: there was **no whole-environment copy**, and **no credential-bearing ambient variable was copied or inspected**. The **verification URL and the one-time device code appeared only transiently in the live AWS console**, and were **not repeated and not persisted**. Its underlying AWS network-request count is **UNKNOWN** |
 | **one conditional identity confirmation**, because that login exited `0` | **exactly one** `aws sts get-caller-identity --no-cli-pager --output json` command, which **exited `0`**. The response **structurally contained non-empty `UserId`, `Account` and `Arn` fields**; the **raw response and the private identity values were neither displayed nor persisted**, the result was classified **`IDENTITY_CONFIRMED`**, and the captured buffers were **cleared after classification**. Identity was **confirmed at the time of that command** — a historical session fact that guarantees **no current or future session validity**. Its underlying AWS network-request count is **UNKNOWN**. It read no `KALPAMANI_SHARADAR_SECRET_ID`, **verified no secret, credential, bucket or provider access**, and is **not a fifth binding-preflight attempt** |
+| **the fifth authorized attempt**, after PR #31 merged | **one** process invocation of the merged entry point, `AWS_PROFILE` pinned from a static AST parse of the tracked `EXPECTED_PROFILE` constant and never disclosed. It passed operator authorization, the governed profile contract, the AWS identity gate, licensed-bucket resolution and the secrets-boundary import, then made **one** secret-identifier resolution, **one** Secrets Manager client construction and **one** admitted `get_secret_value`, constructed **one** S3 client and **one** provider transport, and made **one** offline `preflight_qualification_composition` invocation that returned **`VALIDATED_OFFLINE`**. **Exit code `0`**; public output exactly `binding preflight completed` and `offline validation completed`; closed outcome **`COMPLETED + VALIDATION_COMPLETED`**. **S3 object operations ZERO · Sharadar/provider requests ZERO · qualification executions ZERO**, and its underlying AWS network-request count is **UNKNOWN** |
+| **what the fifth attempt did not establish** | that the retrieved credential authenticates against Sharadar — **UNKNOWN**, because no provider request was made; that any particular number of AWS network requests left the machine — **UNKNOWN**; that the AWS session is valid now or later — **NOT GUARANTEED**. It is **not** authorization for a sixth attempt, for provider access, for an S3 object operation, or for an authenticated qualification run |
 
-**AWS identity-gate activity occurred, so total AWS activity was not zero.** What stayed at zero is
-narrower and is stated in scope: Secrets Manager client constructions, `get_secret_value`
-invocations and Secrets Manager network requests; S3 object operations; Sharadar and provider
-requests; S3 client constructions and provider transport constructions. No attempt reached
-composition validation, and **no credential was retrieved or revealed**.
+**AWS identity-gate activity occurred, so total AWS activity was not zero.** What stayed at zero
+**across the first four attempts** is narrower and is stated in scope: Secrets Manager client
+constructions, `get_secret_value` invocations and Secrets Manager network requests; S3 object
+operations; Sharadar and provider requests; S3 client constructions and provider transport
+constructions. **None of the first four attempts reached composition validation, and none of them
+retrieved or revealed a credential.** **The fifth attempt moved six of those counts to one** —
+Secrets Manager client constructions, `get_secret_value` invocations, S3 client constructions,
+provider transport constructions, offline composition-preflight invocations and credential
+retrievals — and left **S3 object operations, Sharadar and provider requests, and qualification
+executions at ZERO**. Its Secrets Manager **network**-request count is **UNKNOWN**, not one: an
+admitted method invocation is not a proven request. **`reveal()` was still called zero times.**
 
 **Whether the fourth attempt sent an AWS network request is UNKNOWN**, and this document does not
 guess. The identity gate was invoked once and did not pass; a gate can fail before anything leaves
@@ -1102,9 +1207,9 @@ start URL, any particular technical reason for a browser not appearing, or the p
 absence of a generated device code.
 
 **A failed login attempt is not permission to retry.** **Another AWS SSO-login/refresh attempt
-NOT AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a fifth binding-preflight
-attempt NOT AUTHORIZED · application credential access NOT AUTHORIZED · authenticated
-qualification NOT AUTHORIZED.**
+NOT AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a sixth binding-preflight
+attempt NOT AUTHORIZED · additional credential or Secrets Manager access NOT AUTHORIZED ·
+authenticated qualification NOT AUTHORIZED.**
 
 **A corrected, separately authorized SSO login has since completed, and the governed session was
 refreshed.** Run in a new Claude session after PR #30 merged, it invoked **one** process and
@@ -1153,16 +1258,18 @@ by it, because a session can expire between one command and the next. It **verif
 identifier, no secret, no API key, no bucket and no provider access** — it did not read
 `KALPAMANI_SHARADAR_SECRET_ID`, construct a Secrets Manager or S3 client, invoke
 `get_secret_value`, retrieve a credential or bind a bucket. It is **not** a fifth binding-preflight
-attempt, and **fifth binding-preflight attempts remain at ZERO**.
+attempt: **the fifth attempt came later, under its own separate authorization, and is recorded
+below.**
 
 **A completed authorization is not a standing one.** Two SSO-login attempts have now been
 separately authorized — the first refused, the second succeeded — and each was authorized
-for itself, not for the next one. **Another AWS SSO refresh or login is SEPARATELY GATED and NOT
-AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a fifth
-binding-preflight attempt NOT AUTHORIZED · application credential access NOT AUTHORIZED ·
-an authenticated qualification run NOT AUTHORIZED.**
+for itself, not for the next one. **The same holds for the five binding-preflight attempts, the
+fifth and successful one included.** **Another AWS SSO refresh or login is SEPARATELY GATED and NOT
+AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a sixth
+binding-preflight attempt NOT AUTHORIZED · additional credential or Secrets Manager access NOT
+AUTHORIZED · an authenticated qualification run NOT AUTHORIZED.**
 
-**`KALPAMANI_SHARADAR_SECRET_ID` is now OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY
+**`KALPAMANI_SHARADAR_SECRET_ID` is now OWNER-CONFIGURED AND RESOLVED ONCE BY THE ENTRY
 POINT.** It was **UNKNOWN at the time of the second attempt**, which refused on the
 dependency path without reading it — and ADR-0016 exists
 because that refusal was reported as a credential failure, which is what made the two
@@ -1171,26 +1278,31 @@ fixed source exactly once and refused with `REFUSED_SECRET_IDENTIFIER` because n
 came back. **The owner created the secret and configured the variable only after the third
 attempt**, so none of the first three could have seen it — and the **fourth attempt refused at
 the AWS identity gate, two stages before the identifier source**, so it did not read the variable
-either. **No attempt has resolved the identifier.**
+either. **The fifth attempt resolved it exactly once**, and the identifier was admitted by the
+identifier grammar, used to construct one Secrets Manager client, and never disclosed.
 
-**Owner-attested is not entry-point verified.** None of the following is established, and none may
-be claimed: inheritance of the variable by the existing Claude Code process; resolution of the
-identifier by the entry point; that the identifier points to the intended secret; AWS verification
-of the secret through this repository; inspection of the payload format or value; construction of a
-Secrets Manager client; invocation of `get_secret_value`; retrieval of the credential; or
-compatibility of the credential with Sharadar. **Credential access by the application
-remains NOT AUTHORIZED**, and so do a fifth binding-preflight attempt, any **further** AWS
-authentication diagnosis, and **another** AWS SSO refresh or login. **The corrected SSO refresh
-and the identity confirmation changed none of that**: neither read `KALPAMANI_SHARADAR_SECRET_ID`,
-and **neither verified the secret, the credential, the bucket or provider access**.
+**What entry-point resolution did and did not establish.** It establishes that the variable was
+inherited by the invoking process, that the entry point resolved it once, that the value satisfied
+the identifier grammar, and that `get_secret_value` against it returned a `SecretString` the
+existing credential contract **accepted structurally**. It establishes **nothing about Sharadar**:
+the payload's suitability as a provider API key is **UNKNOWN**, because **no provider request was
+made**. The identifier, the secret name, any ARN and the credential itself were **not inspected,
+displayed, logged, hashed, fingerprinted, measured, summarized or persisted** by this repository or
+by any session. **Additional credential or Secrets Manager access remains NOT AUTHORIZED**, and so
+do a sixth binding-preflight attempt, any **further** AWS authentication diagnosis, and **another**
+AWS SSO refresh or login. **The corrected SSO refresh and the identity confirmation still changed
+none of that**: neither read `KALPAMANI_SHARADAR_SECRET_ID`, and **neither verified the secret, the
+credential, the bucket or provider access** — the fifth attempt, later and separately authorized,
+is what read it.
 
-**A real binding preflight is no longer a purely future event, and neither is an SSO login.**
-Four preflight attempts occurred; **two** SSO-login attempts have since been separately authorized
-— the first timed out, the second succeeded — and **one sanitized identity confirmation**
-followed the second. What remains future, and separately authorized: a fifth attempt, **further**
-AWS authentication diagnosis, **another** AWS SSO refresh or login, further environment
-resynchronization, application credential access, and an authenticated Sharadar qualification run. **Authenticated qualification remains NOT AUTHORIZED and
-has never run.**
+**A real binding preflight is no longer a future event at all.** Five preflight attempts have
+occurred — **four refused and the fifth completed** — and **two** SSO-login attempts have been
+separately authorized, the first timing out and the second succeeding, with **one sanitized
+identity confirmation** after it. What remains future, and separately authorized: a **sixth**
+attempt, **further** AWS authentication diagnosis, **another** AWS SSO refresh or login, further
+environment resynchronization, **additional** credential or Secrets Manager access, provider
+access, any S3 object operation, and an authenticated Sharadar qualification run.
+**Authenticated qualification remains NOT AUTHORIZED and has never run.**
 
 | | |
 |---|---|
@@ -1218,9 +1330,11 @@ discovery.
 **Three standing claims are narrowed, not deleted.** *"Nothing constructs an SDK client"*, *"no
 credential source exists"* and *"nothing calls the composition preflight"* were each true while no
 binding path was authorized. What holds now: **exactly one module may construct an SDK client,
-exactly one may call the composition, the credential source refuses by default, and none of it has
-ever been run.** Each clause is a test, and the existing dormancy guards were narrowed rather than
-removed.
+exactly one may call the composition, the credential source refuses by default, and all of it has
+been run exactly once — by the fifth separately authorized attempt, offline.** Each clause is a
+test, and the existing dormancy guards were narrowed rather than removed. **The structural
+guarantees are unchanged by that run**: no second construction site exists, no second caller of the
+composition exists, and the default path still refuses.
 
 **Nothing accepted changed.** `AcquisitionMode.QUALIFICATION` · `PROVIDER_REALISTIC_PIT` · Q7 and Q8
 · `permaticker` · append-only S3 semantics · acquisition identity · the response and run ceilings ·
@@ -1252,7 +1366,7 @@ retained state        NONE     no module global, no closure, no instance, no att
 caller-owned arguments          the caller's, before and after -- unchanged by this
 credential retrieval  NONE     in this module; the operator entry point is the only
                                place a credential source exists, and it refuses by default
-real credential binding: NONE   ·   real bucket binding: NONE
+real credential binding: NONE   ·   real bucket binding: NONE -- in this module
 AWS SDK session / S3-client construction: NONE in src/; no module under src/ imports the SDK
 called or imported outside its own synthetic tests and the ADR-0015 operator entry point: NEVER
 Sharadar requests: ZERO   ·   AWS requests: ZERO   ·   Services Data: NONE
@@ -1308,8 +1422,12 @@ holding real dependencies is still inert while only this method exists.
 
 **The first authenticated qualification run remains separately gated, and this slice does not
 approach it.** What would still be needed: an authorization, a credential source, a real credential,
-a constructed **AWS SDK** client, a real bucket binding, and code that calls something other than
-`preflight_qualification_composition`. **None of those exists.**
+a constructed **AWS SDK** client, a resolved licensed bucket, and code that calls something other
+than `preflight_qualification_composition`. **The fifth separately authorized binding-preflight
+attempt supplied the first five, once and offline** — under its own authorization, in the operator
+entry point, not in this module. **The sixth does not exist**: nothing calls anything other than
+`preflight_qualification_composition`, so no qualification execution, provider request or S3 object
+operation has occurred, and the authenticated run stays a separate, unauthorized decision.
 
 **The architecture guards were narrowed, not deleted.** Exactly one module may construct the
 licensed store, the client and the runtime; a second one fails. **SDK construction stays forbidden
@@ -1334,7 +1452,9 @@ through the neutral Bronze bridge, with an **injected** store. What is still tru
 ```
 plan model EXISTS   ·   executor EXISTS   ·   dependencies INJECTED
 credential source: the ADR-0015 operator entry point ONLY, refused by default
-SDK client construction: that entry point ONLY   ·   real bucket binding: NONE, never performed
+SDK client construction: that entry point ONLY -- ONE S3 client and ONE Secrets Manager
+                         client, on the fifth authorized attempt
+licensed-bucket resolutions: ONE   ·   S3 object operations: ZERO
 runner: NONE   ·   module entry point in either module: NONE
 constructed only by the dormant composition root (ADR-0014) and its own tests
 Sharadar requests sent: ZERO   ·   AWS requests sent: ZERO
@@ -1345,8 +1465,12 @@ That claim once ended *"and no composition root exists"*.
 built one, so the accurate statement is narrower: a dormant composition root constructs this runtime
 from injected values and exposes **offline preflight only**. What still stands between it and a live
 run is a separately gated authorization plus the real private bindings — a credential source, a
-constructed SDK client, a bound bucket — and code that calls something other than `preflight`.
-**Each of those is a separate decision, and none exists.**
+constructed SDK client, a resolved bucket — and code that calls something other than `preflight`.
+**The fifth authorized binding-preflight attempt supplied the first three, once and offline**: a
+credential was retrieved and structurally accepted, an S3 client was constructed, and the governed
+licensed bucket was resolved. **The fourth does not exist**: nothing calls anything other than
+`preflight`, so no qualification execution, provider request or S3 object operation occurred, and
+an authenticated qualification run remains a separate, unauthorized decision.
 
 **Seven ceilings, compiled in, lowerable and never raisable:** 8 subjects · 3 datasets · 4 pages per
 request · 96 requests · the transport's own per-response byte ceiling · 512 MiB per run · 32
