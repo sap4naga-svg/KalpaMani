@@ -807,6 +807,303 @@ def test_a_raw_exception_never_becomes_the_public_outcome() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Disclosure past the credential gate
+# ---------------------------------------------------------------------------
+#
+# The canary block above drives gates 1-9 and stops there. It cannot go further:
+# the real credential contract refuses the fake secrets client, so every one of
+# those runs refuses at gate 9. That left gates 10-12 -- and in particular the
+# `except Exception` wrapping the acquisition, the one handler whose own comment
+# says a provider error can carry a URL that *is* a credential and a store error
+# can quote the bucket -- asserted by source inspection alone. A `print(exc)`
+# there would have leaked an API key and no test would have failed.
+#
+# These reach that handler, still entirely on fakes: the credential and the
+# acquisition are patched on the modules the run imports from at call time, so
+# no AWS client, transport, store or provider request is constructed anywhere.
+
+
+class _SyntheticCredential:
+    """A credential-shaped stand-in. ``reveal`` exists and is never called here."""
+
+    def reveal(self) -> str:  # pragma: no cover - asserted absent, never invoked
+        return SYNTHETIC_KEY
+
+
+def _past_the_credential(monkeypatch: pytest.MonkeyPatch, *, acquisition: Any) -> None:
+    """Let gate 9 succeed and route gates 11-12 to ``acquisition``.
+
+    Both names are imported *inside* ``run_authenticated_qualification``, so
+    patching the owning modules is what the run will actually see. Nothing real
+    is constructed: ``Pacer`` and ``RetryPolicy`` are pure value objects, and the
+    injected S3 client and transport are the recorder's inert sentinels.
+    """
+    from kalpamani.data.ingest.sharadar import composition, secrets
+
+    monkeypatch.setattr(
+        secrets,
+        "sharadar_credential_from_secret",
+        lambda **_kwargs: _SyntheticCredential(),
+    )
+    monkeypatch.setattr(composition, "execute_qualification_acquisition", acquisition)
+
+
+#: Failures the acquisition can raise that carry something disclosive. The first
+#: is the dangerous one: the vendor takes the key in the query string, so a
+#: request URL in an exception message *is* a credential.
+ACQUISITION_FAILURES = [
+    pytest.param(
+        RuntimeError(f"GET https://example.invalid/datasets?api_key={SYNTHETIC_KEY} failed"),
+        id="provider-url-bearing-the-key",
+    ),
+    pytest.param(RuntimeError(SYNTHETIC_BUCKET), id="store-error-quoting-the-bucket"),
+    pytest.param(RuntimeError(SYNTHETIC_BACKEND_MESSAGE), id="backend-message"),
+    pytest.param(RuntimeError(SYNTHETIC_ACCOUNT), id="account-canary"),
+    pytest.param(RuntimeError(SYNTHETIC_SECRET_ID), id="secret-identifier"),
+]
+
+
+@pytest.mark.parametrize("failure", ACQUISITION_FAILURES)
+def test_no_canary_reaches_stdout_when_the_acquisition_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: Exception,
+) -> None:
+    """The acquisition wrapper refuses without echoing what the exception carried."""
+
+    def raising(**_kwargs: Any) -> Any:
+        raise failure
+
+    _past_the_credential(monkeypatch, acquisition=raising)
+    result = _run(Recorder())
+    assert result.outcome is MODULE.AcquisitionOutcome.REFUSED_UNCLASSIFIED
+
+    MODULE._emit(result.outcome)
+    captured = capsys.readouterr()
+    for canary in (
+        SYNTHETIC_KEY,
+        SYNTHETIC_SECRET_ID,
+        SYNTHETIC_BUCKET,
+        SYNTHETIC_ACCOUNT,
+        SYNTHETIC_BACKEND_MESSAGE,
+    ):
+        assert canary not in captured.out
+        assert canary not in captured.err
+        assert canary not in f"{result!r} {result} {result.outcome}"
+
+
+@pytest.mark.parametrize("failure", ACQUISITION_FAILURES)
+def test_the_acquisition_refusal_suppresses_the_exception_chain(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """``from None`` on the wrapper, so a traceback cannot carry the cause either."""
+
+    def raising(**_kwargs: Any) -> Any:
+        raise failure
+
+    _past_the_credential(monkeypatch, acquisition=raising)
+    result = _run(Recorder())
+    assert result.__cause__ is None
+    assert result.__suppress_context__ is True
+
+
+def test_the_acquisition_is_called_exactly_once_and_never_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One call, counted -- the behavioural half of the source-level count."""
+    calls: list[dict[str, Any]] = []
+
+    def recording(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        raise RuntimeError(SYNTHETIC_BACKEND_MESSAGE)
+
+    _past_the_credential(monkeypatch, acquisition=recording)
+    _run(Recorder())
+    assert len(calls) == 1
+
+
+class _CompletedOutcome:
+    """The runtime's own success member, by name -- nothing else is read."""
+
+    name = "COMPLETED"
+
+
+class _CompletedResult:
+    """A run result shaped as the classifier reads it. Carries no payload."""
+
+    outcome = _CompletedOutcome()
+    failure = None
+
+
+def test_a_successful_acquisition_is_called_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One call on the path that *returns*, which is where a retry loop would show.
+
+    The refusal-path count above cannot see a loop: its fake raises, so the body
+    leaves on the first iteration whatever the loop says. A returning fake is the
+    only shape in which ``for _ in range(2)`` would call twice.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def returning(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return _CompletedResult()
+
+    _past_the_credential(monkeypatch, acquisition=returning)
+    outcome = _run(Recorder())
+    assert outcome is MODULE.AcquisitionOutcome.COMPLETED
+    assert len(calls) == 1
+
+
+def test_a_completed_acquisition_discloses_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Success is an allowlisted sentence too, and it names nothing."""
+
+    def returning(**_kwargs: Any) -> Any:
+        return _CompletedResult()
+
+    _past_the_credential(monkeypatch, acquisition=returning)
+    outcome = _run(Recorder())
+    MODULE._emit(outcome)
+    captured = capsys.readouterr()
+    for canary in (
+        SYNTHETIC_KEY,
+        SYNTHETIC_SECRET_ID,
+        SYNTHETIC_BUCKET,
+        SYNTHETIC_ACCOUNT,
+        SYNTHETIC_BACKEND_MESSAGE,
+        SUBJECT,
+    ):
+        assert canary not in captured.out
+        assert canary not in captured.err
+
+
+def test_the_acquisition_receives_the_locked_plan_and_a_one_attempt_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What the wrapper hands the composition root is the locked plan, once."""
+    seen: dict[str, Any] = {}
+
+    def capturing(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError(SYNTHETIC_BACKEND_MESSAGE)
+
+    _past_the_credential(monkeypatch, acquisition=capturing)
+    _run(Recorder())
+    assert seen["retry_policy"].max_attempts == 1
+    assert seen["retry_policy"].backoff_seconds == ()
+    assert seen["licensed_bucket"] == SYNTHETIC_BUCKET
+    plan = seen["plan"]
+    assert len(plan.datasets) == 1
+    assert plan.datasets[0].dataset.value == MODULE.LOCKED_DATASET_NAME
+    assert plan.datasets[0].max_pages == MODULE.MAX_PAGES
+
+
+def test_a_dependency_failure_after_the_credential_is_a_dependency_refusal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Gate 10 refuses as a dependency, and names nothing, after a credential exists."""
+
+    def unreachable(**_kwargs: Any) -> Any:  # pragma: no cover - never reached
+        pytest.fail("the acquisition ran after a dependency failure")
+
+    _past_the_credential(monkeypatch, acquisition=unreachable)
+
+    class Failing(Recorder):
+        def s3_client_factory(self) -> Any:
+            self.s3_clients += 1
+            raise RuntimeError(SYNTHETIC_BUCKET)
+
+    recorder = Failing()
+    result = _run(recorder)
+    assert result.outcome is MODULE.AcquisitionOutcome.REFUSED_DEPENDENCY
+    assert recorder.s3_clients == 1
+
+    MODULE._emit(result.outcome)
+    captured = capsys.readouterr()
+    assert SYNTHETIC_BUCKET not in captured.out
+    assert SYNTHETIC_BUCKET not in captured.err
+    assert SYNTHETIC_BUCKET not in f"{result!r} {result}"
+
+
+#: A subject the plan grammar refuses, shaped so that echoing it would be visible.
+#: Gate 3's own comment says the plan refusal can quote a subject, which makes this
+#: the one early gate with something of the operator's to disclose.
+SYNTHETIC_SUBJECT_CANARY = "synthetic-subject-canary-!!!-not-a-ticker"
+
+
+@pytest.mark.parametrize(
+    ("label", "kwargs", "expected"),
+    [
+        ("not-authorized", {"authorized": False}, "REFUSED_NOT_AUTHORIZED"),
+        ("under-pytest", {"modules": {"pytest": object()}}, "REFUSED_EXECUTION_CONTEXT"),
+        ("malformed-subject", {"subject": SYNTHETIC_SUBJECT_CANARY}, "REFUSED_SUBJECT"),
+    ],
+)
+def test_the_early_gates_refuse_without_echoing_their_input(
+    capsys: pytest.CaptureFixture[str],
+    label: str,
+    kwargs: dict[str, Any],
+    expected: str,
+) -> None:
+    """Gates 1-3 refuse before any private value is read -- and still echo nothing.
+
+    They hold no credential, bucket or identifier, so there is less to leak here
+    than later. The subject is the exception: it is the operator's input, the plan
+    refusal can quote it, and only the closed outcome may survive.
+    """
+    recorder = Recorder()
+    result = _run(recorder, **kwargs)
+    assert result.outcome.name == expected
+
+    MODULE._emit(result.outcome)
+    captured = capsys.readouterr()
+    for canary in (SYNTHETIC_SUBJECT_CANARY, SUBJECT, EXECUTION_ID):
+        assert canary not in captured.out
+        assert canary not in captured.err
+        assert canary not in f"{result!r} {result} {result.outcome}"
+
+    # Refusing early means refusing before anything private was even read.
+    assert recorder.secret_id_calls == 0
+    assert recorder.secrets_clients == 0
+
+
+def test_every_refusal_outcome_the_gates_can_reach_is_canary_covered() -> None:
+    """The gap this section closes, asserted so it cannot silently reopen.
+
+    Six outcomes were reachable by the original canary block; ``REFUSED_SUBJECT``,
+    ``REFUSED_NOT_AUTHORIZED``, ``REFUSED_EXECUTION_CONTEXT`` and
+    ``REFUSED_UNCLASSIFIED`` were not reachable at all -- and the last of those is
+    the handler a provider URL bearing the key would pass through. If a future
+    change adds a gate outcome, this fails until a canary case reaches it.
+    """
+    covered = {
+        "REFUSED_NOT_AUTHORIZED",
+        "REFUSED_EXECUTION_CONTEXT",
+        "REFUSED_SUBJECT",
+        "REFUSED_PROFILE",
+        "REFUSED_IDENTITY",
+        "REFUSED_LICENSED_BUCKET",
+        "REFUSED_SECRET_IDENTIFIER",
+        "REFUSED_DEPENDENCY",
+        "REFUSED_CREDENTIAL",
+        "REFUSED_UNCLASSIFIED",
+    }
+    raised_by_gates = {
+        node.exc.args[0].attr
+        for node in ast.walk(ast.parse(SCRIPT.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "AuthenticatedQualificationError"
+        and isinstance(node.exc.args[0], ast.Attribute)
+    }
+    assert raised_by_gates <= covered, f"uncovered gate outcomes: {raised_by_gates - covered}"
+
+
+# ---------------------------------------------------------------------------
 # Governance semantics
 # ---------------------------------------------------------------------------
 
