@@ -914,9 +914,16 @@ BINDING_ROW_FACTS: Final[tuple[str, ...]] = (
     "ADR-0015 OPERATOR ENTRY POINT IS THE SOLE PERMITTED CONSTRUCTION BOUNDARY",
     "INVOKED FOUR TIMES UNDER SEPARATE AUTHORIZATION",
     "NO INVOCATION CONSTRUCTED A CLIENT OR CREATED A BINDING",
+    # The corrected SSO refresh and the one identity confirmation belong in this
+    # row for the same reason the attempt counts do: the row is read alone, and
+    # a boundary described only by what it has refused reads as one nothing has
+    # succeeded against. Both clauses say what the events did *not* move.
+    "A CORRECTED AWS SSO LOGIN HAS SINCE COMPLETED SUCCESSFULLY",
+    "ONE SANITIZED IDENTITY CONFIRMATION RETURNED `IDENTITY_CONFIRMED`",
+    "WHICH BOUND NOTHING AND VERIFIED NO SECRET, CREDENTIAL, BUCKET OR PROVIDER ACCESS",
     "A FIFTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "FURTHER AWS AUTHENTICATION DIAGNOSIS NOT AUTHORIZED",
-    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
+    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED / NOT AUTHORIZED",
     "OUTSIDE THAT BOUNDARY NOT AUTHORIZED",
 )
 
@@ -1071,12 +1078,12 @@ ADR_0015_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "ONE COMMAND, EXIT CODE 255, MISSING AND EXPIRED NOT DISTINGUISHED",
     "A FIFTH ATTEMPT, FURTHER AWS AUTHENTICATION DIAGNOSIS AND ANOTHER "
-    "SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
+    "SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED",
     "POST-DIAGNOSIS AWS SSO-LOGIN ATTEMPT COMPLETED -- REFUSED_SSO_LOGIN",
     "ONE COMMAND, TIMED OUT AFTER 420 SECONDS, NO EXIT STATUS RETURNED",
     "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
     "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
-    "SSO SESSION STILL UNREFRESHED, EARLIER DIAGNOSIS UNREVISED",
+    "SSO SESSION STILL UNREFRESHED AFTER IT, EARLIER DIAGNOSIS UNREVISED",
     "LIKELY CAUSE INTERACTIVE-SURFACE SUPPRESSION -- LIKELY, NOT PROVEN",
     "SECRET IDENTIFIER OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT",
     "SET UP AFTER THE THIRD ATTEMPT",
@@ -1190,7 +1197,7 @@ STALE_PROVIDER_CREDENTIAL_ROW_SUBJECT: Final = "Provider credentialing / API acc
 FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
@@ -1402,7 +1409,7 @@ FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "offline composition-preflight invocations: ZERO",
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
 )
 
 #: What the fourth attempt's chronology entry must state, not merely tabulate.
@@ -1496,6 +1503,11 @@ STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = (
     # the time it is searched.
     "no diagnosis was performed, so the",
     "nothing here may say why its gate refused",
+    # Added with the corrected refresh. This file's own labels said the session
+    # was still unrefreshed and that no login had ever succeeded; both were true
+    # of the timed-out attempt and false the moment the second one returned.
+    "and no SSO login has succeeded",
+    "the governed session is still unrefreshed",
 )
 
 #: Exact-state, contemporaneous and causal overclaims about the fourth refusal.
@@ -1756,12 +1768,19 @@ DIAGNOSIS_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE SESSION WAS EXPIRED, NOT MISSING",
     "MISSING RATHER THAN EXPIRED",
     "EXPIRED RATHER THAN MISSING",
-    "A SUCCESSFUL AWS SSO LOGIN OCCURRED",
-    "AN SSO LOGIN WAS SUCCESSFULLY PERFORMED",
-    "AUTHENTICATION WAS REPAIRED",
-    "AUTHENTICATION HAS BEEN REPAIRED",
-    "THE SESSION WAS REFRESHED",
-    "THE SESSION HAS BEEN REFRESHED",
+    # Subject-scoped, and that is a correction rather than a relaxation. The
+    # six entries that stood here were bare -- "a successful AWS SSO login
+    # occurred", "the session was refreshed" -- and a corrected second login
+    # has since made every one of them a true statement about a *different*
+    # event. A document-wide ban on a true sentence is answered by writing a
+    # vaguer one, so each now names the diagnosis it is about.
+    "THE DIAGNOSIS PERFORMED AN SSO LOGIN",
+    "AN SSO LOGIN WAS PERFORMED DURING THE DIAGNOSIS",
+    "A SUCCESSFUL AWS SSO LOGIN OCCURRED DURING THE DIAGNOSIS",
+    "THE DIAGNOSIS REPAIRED AUTHENTICATION",
+    "AUTHENTICATION WAS REPAIRED BY THE DIAGNOSIS",
+    "THE DIAGNOSIS REFRESHED THE SESSION",
+    "THE SESSION WAS REFRESHED BY THE DIAGNOSIS",
     "THE FIFTH ATTEMPT OCCURRED",
     "THE FIFTH ATTEMPT RAN",
     "A FIFTH BINDING-PREFLIGHT ATTEMPT OCCURRED",
@@ -1784,11 +1803,12 @@ SSO_LOGIN_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "SSO-login exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT",
     "SSO-login timeout: 420 SECONDS   ·   lingering AWS CLI process: NONE",
     "browser authorization interactions: ZERO   ·   device authorizations completed: ZERO",
-    "successful SSO refreshes: ZERO   ·   SSO session: STILL UNREFRESHED",
+    "SSO refreshes achieved by the first attempt: ZERO   ·   "
+    "SSO session after it: STILL UNREFRESHED",
     "SSO-login underlying AWS network requests: UNKNOWN",
-    "identity-confirmation command invocations: ZERO",
+    "identity-confirmation command invocations after the first attempt: ZERO",
     "likely cause: INTERACTIVE BROWSER/DEVICE-CODE SURFACE SUPPRESSED -- LIKELY, NOT PROVEN",
-    "device URL or code in the undisplayed buffer: UNKNOWN -- NOT INSPECTED",
+    "device URL or code in the first attempt's undisplayed buffer: UNKNOWN -- NOT INSPECTED",
 )
 
 #: What the attempt's narrative must state, not merely tabulate.
@@ -1813,7 +1833,7 @@ SSO_LOGIN_ATTEMPT_HISTORY: Final[tuple[str, ...]] = (
     "successful SSO refreshes ZERO",
     "identity-confirmation command invocations ZERO",
     "Its underlying AWS network-request count is UNKNOWN",
-    "The SSO session remains unrefreshed",
+    "The SSO session remained unrefreshed",
     "the earlier diagnosis stands unrevised at `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
     "no evidence distinguishing missing from expired",
     "did not verify or contradict the owner-configured secret identifier",
@@ -1898,24 +1918,30 @@ STALE_SSO_LOGIN_CLAIMS: Final[tuple[str, ...]] = (
 #: The numeric exit codes are listed individually. A timeout returns no status,
 #: so any number here is invented, and 255 in particular is the *diagnosis*
 #: command's code -- the nearest wrong answer to hand.
+#: The eighteen bare success forms that stood here are gone, and the reason is
+#: the same one :data:`DIAGNOSIS_OVERCLAIMS` records: a corrected second login
+#: succeeded, refreshed the session and was followed by one identity
+#: confirmation, so "the SSO login succeeded", "successful SSO refreshes: ONE"
+#: and ``IDENTITY_CONFIRMED`` are now facts this repository must be able to
+#: state. Each is replaced by a form naming the *first* attempt, which is the
+#: one this list was ever about. What a successful refresh does **not** license
+#: is in :data:`CORRECTED_SSO_OVERCLAIMS`, and what it makes stale is in
+#: :data:`STALE_CORRECTED_SSO_CLAIMS`.
 SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
-    "THE SSO LOGIN SUCCEEDED",
-    "THE SSO-LOGIN ATTEMPT SUCCEEDED",
-    "SSO LOGIN SUCCEEDED",
-    "THE SSO SESSION WAS REFRESHED",
-    "THE SSO SESSION HAS BEEN REFRESHED",
-    "SSO REFRESH COMPLETED",
-    "SUCCESSFUL SSO REFRESHES: ONE",
-    "IDENTITY_CONFIRMED",
-    "IDENTITY WAS CONFIRMED",
-    "THE IDENTITY CONFIRMATION RAN",
-    "THE IDENTITY CONFIRMATION PASSED",
-    "IDENTITY-CONFIRMATION COMMAND INVOCATIONS: ONE",
-    "BROWSER AUTHORIZATION COMPLETED",
-    "BROWSER AUTHENTICATION COMPLETED",
-    "THE OWNER COMPLETED THE BROWSER AUTHORIZATION",
-    "DEVICE AUTHORIZATION COMPLETED",
-    "DEVICE AUTHORIZATIONS COMPLETED: ONE",
+    "THE FIRST SSO LOGIN SUCCEEDED",
+    "THE FIRST SSO-LOGIN ATTEMPT SUCCEEDED",
+    "THE FIRST ATTEMPT SUCCEEDED",
+    "THE TIMED-OUT SSO LOGIN SUCCEEDED",
+    "THE TIMED-OUT ATTEMPT SUCCEEDED",
+    "THE FIRST ATTEMPT REFRESHED THE SSO SESSION",
+    "THE FIRST ATTEMPT REFRESHED THE SESSION",
+    "THE FIRST ATTEMPT COMPLETED A BROWSER AUTHORIZATION",
+    "THE FIRST ATTEMPT COMPLETED A DEVICE AUTHORIZATION",
+    "THE FIRST ATTEMPT CONFIRMED AN IDENTITY",
+    "AN IDENTITY CONFIRMATION FOLLOWED THE FIRST ATTEMPT",
+    "THE FIRST ATTEMPT GENERATED A DEVICE CODE",
+    "THE FIRST ATTEMPT GENERATED NO DEVICE CODE",
+    "FIRST SSO-LOGIN EXIT CODE: 0",
     "A RETRY IS AUTHORIZED",
     "A RETRY IS NOW AUTHORIZED",
     "ANOTHER SSO LOGIN IS AUTHORIZED",
@@ -1924,7 +1950,6 @@ SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
     "SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ONE",
     "THE SSO-LOGIN ATTEMPT SENT ONE AWS NETWORK REQUEST",
     "THE SSO-LOGIN ATTEMPT SENT NO AWS NETWORK REQUEST",
-    "SSO-LOGIN EXIT CODE: 0",
     "SSO-LOGIN EXIT CODE: 1",
     "SSO-LOGIN EXIT CODE: 255",
     "SSO-LOGIN EXIT CODE 255",
@@ -1938,8 +1963,6 @@ SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
     "THE GOVERNED PROFILE WAS WRONG",
     "THE SSO START URL IS WRONG",
     "THE BROWSER FAILED TO LAUNCH BECAUSE",
-    "A DEVICE CODE WAS GENERATED",
-    "NO DEVICE CODE WAS GENERATED",
     "THE PROVEN CAUSE",
     "PROVEN TO BE CAUSED BY",
     "DEFINITELY CAUSED BY",
@@ -2017,6 +2040,336 @@ SSO_LOGIN_ATTEMPT_ANCHOR: Final = (
     "a separately authorized AWS SSO-login attempt, after that diagnosis and after PR #29 merged"
 )
 
+#: The fenced-block record of the corrected AWS SSO-login attempt and the one
+#: identity confirmation that followed it.
+#:
+#: A second login was separately authorized after PR #30 merged, and it
+#: succeeded. Its counts are named apart from the first attempt's -- "first"
+#: against "corrected" -- because an unqualified "SSO-login exit code" line
+#: sitting beside two attempts is a line a reader has to guess at, and guessing
+#: is exactly what the earlier undistinguished blocks forced.
+CORRECTED_SSO_REFRESH_COUNTS: Final[tuple[str, ...]] = (
+    "authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded",
+    "corrected AWS SSO-login attempt: COMPLETED -- SUCCESSFUL",
+    "corrected SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager",
+    "corrected SSO-login session: A NEW CLAUDE SESSION",
+    "corrected SSO-login output handling: LIVE CONSOLE -- INHERITED STDIN, STDOUT AND STDERR",
+    "corrected SSO-login capture, pipe, redirect, buffer or file: NONE",
+    "corrected SSO-login interactive browser/device flow: COMPLETED",
+    "corrected SSO-login exit code: 0   ·   lingering AWS CLI process: NONE",
+    "successful governed SSO refreshes: ONE",
+    "corrected SSO-login underlying AWS network requests: UNKNOWN",
+    "corrected child environment: MINIMAL AND ALLOWLISTED, BUILT KEY-BY-KEY",
+    "whole-environment copy during the corrected attempt: NONE",
+    "credential-bearing ambient variables copied or inspected during it: NONE",
+    "governed profile source: STATIC AST PARSE OF EXPECTED_PROFILE, NEVER DISCLOSED",
+    "entry-point module imported or executed by either SSO operation: NEITHER",
+    "verification URL and one-time device code: TRANSIENT IN THE LIVE CONSOLE ONLY",
+    "sanitized identity confirmations after the corrected refresh: ONE -- SUCCESSFUL",
+    "identity-confirmation command: aws sts get-caller-identity --no-cli-pager --output json",
+    "identity-confirmation exit code: 0   ·   classification: IDENTITY_CONFIRMED",
+    "identity-confirmation response: UserId, Account AND Arn STRUCTURALLY PRESENT AND NON-EMPTY",
+    "raw identity response and private identity values: NOT DISPLAYED, NOT PERSISTED",
+    "captured identity buffers: CLEARED AFTER CLASSIFICATION",
+    "identity-confirmation underlying AWS network requests: UNKNOWN",
+    "identity status: CONFIRMED AT THE TIME OF THAT COMMAND",
+    "current or future session validity: NOT GUARANTEED BY THAT HISTORICAL CONFIRMATION",
+    "KALPAMANI_SHARADAR_SECRET_ID reads by the corrected SSO session: ZERO",
+    "fifth binding-preflight attempts after the corrected refresh: ZERO",
+)
+
+#: What the corrected attempt's narrative must state, not merely tabulate.
+CORRECTED_SSO_REFRESH_HISTORY: Final[tuple[str, ...]] = (
+    "A corrected, separately authorized SSO login has since completed, and the governed "
+    "session was refreshed.",
+    "Run in a new Claude session after PR #30 merged",
+    "it invoked one process and one `aws sso login --no-cli-pager` command",
+    "on a live console with inherited stdin, stdout and stderr",
+    "Nothing was captured, piped, redirected, buffered or written to a file",
+    "The interactive browser/device flow completed",
+    "the command exited `0`",
+    "no lingering AWS CLI process remained",
+    "successful governed SSO refreshes became ONE",
+)
+
+#: The live-console versus captured-output distinction, in one place.
+#:
+#: The first attempt's stdout and stderr were captured; the corrected one's were
+#: inherited. That single difference is the whole operational finding, and a
+#: document recording two attempts without it records two coincidences.
+SSO_OUTPUT_HANDLING_CONTRAST: Final[tuple[str, ...]] = (
+    "stdout and stderr were captured rather than streamed",
+    "on a live console with inherited stdin, stdout and stderr",
+    "Nothing was captured, piped, redirected, buffered or written to a file",
+    "which is the one thing the first attempt got wrong",
+)
+
+#: How the corrected attempt's child environment was built.
+#:
+#: The first attempt copied the parent process environment wholesale, which
+#: transiently materialized every value in it. This one did not, and the claim
+#: is scoped to *this* run rather than backdated onto the earlier one -- the
+#: same discipline :data:`SSO_LOGIN_ENVIRONMENT_FACTS` records for the run that
+#: did copy.
+CORRECTED_CHILD_ENVIRONMENT_FACTS: Final[tuple[str, ...]] = (
+    "The child environment was built the narrow way this time.",
+    "static AST parse of the tracked `EXPECTED_PROFILE` constant",
+    "the entry-point module was neither imported nor executed",
+    "the value was not disclosed",
+    "A minimal, allowlisted child environment was built key-by-key",
+    "there was no whole-environment copy",
+    "no credential-bearing ambient variable was copied or inspected",
+    "That closes the transient materialization the first attempt's whole-environment copy produced",
+    "stated as a property of this run rather than backdated onto the earlier one",
+    "The verification URL and the one-time device code appeared only transiently in the "
+    "live AWS console",
+    "not repeated and not persisted",
+)
+
+#: The one sanitized identity confirmation, and the four things it is not.
+#:
+#: It ran because the corrected login exited zero, it returned zero, and its
+#: response was read **structurally**. What it establishes is a session fact at
+#: one instant; what it does not establish is anything about the secret, the
+#: credential, the bucket, the provider, or any later session.
+IDENTITY_CONFIRMATION_FACTS: Final[tuple[str, ...]] = (
+    "Because that login exited `0`, exactly one identity confirmation ran.",
+    "One `aws sts get-caller-identity --no-cli-pager --output json` command, which exited `0`.",
+    "The response structurally contained non-empty `UserId`, `Account` and `Arn` fields",
+    "that structural check is the whole of what was read from it",
+    "The raw response and the private identity values were neither displayed nor persisted",
+    "the outcome was classified `IDENTITY_CONFIRMED`",
+    "the captured buffers were cleared after classification",
+    "A successful identity confirmation is a historical session fact and nothing more.",
+    "Identity was confirmed at the time of that command",
+    "no current or future session validity is guaranteed",
+    "verified no secret identifier, no secret, no API key, no bucket and no provider access",
+    "It is not a fifth binding-preflight attempt",
+    "fifth binding-preflight attempts remain at ZERO",
+)
+
+#: What stays gated now that one SSO login has succeeded.
+#:
+#: A completed authorization reads as a standing one unless it is refused in
+#: words. That is the same reason :data:`SSO_LOGIN_FORWARD_BOUNDARIES` exists
+#: for the attempt that failed: success and failure both invite a repeat.
+CORRECTED_SSO_FORWARD_BOUNDARIES: Final[tuple[str, ...]] = (
+    "A completed authorization is not a standing one.",
+    "Two SSO-login attempts have now been separately authorized",
+    "the first refused, the second succeeded",
+    "each was authorized for itself, not for the next one",
+    "Another AWS SSO refresh or login is SEPARATELY GATED and NOT AUTHORIZED",
+    "a fifth binding-preflight attempt NOT AUTHORIZED",
+    "application credential access NOT AUTHORIZED",
+    "an authenticated qualification run NOT AUTHORIZED",
+)
+
+#: Current-status wording the corrected refresh and the confirmation made false.
+#:
+#: Full superseded forms, never a prefix of the corrected one -- the discipline
+#: :data:`STALE_NO_DIAGNOSIS_CLAIMS` documents. The documents still say
+#: "SSO refreshes achieved by the first attempt: ZERO" and "successful SSO
+#: refreshes zero" inside the first attempt's own narrative, and neither
+#: contains a colon form below.
+STALE_CORRECTED_SSO_CLAIMS: Final[tuple[str, ...]] = (
+    "SUCCESSFUL SSO REFRESHES: ZERO",
+    "SUCCESSFUL GOVERNED SSO REFRESHES: ZERO",
+    "SUCCESSFUL SSO REFRESHES REMAIN ZERO",
+    "NO SUCCESSFUL SSO REFRESH HAS OCCURRED",
+    "NO SSO REFRESH HAS OCCURRED",
+    "NO AWS SSO REFRESH OR LOGIN HAS OCCURRED",
+    "AN AWS SSO REFRESH OR LOGIN HAS NEVER OCCURRED",
+    "ANOTHER AWS SSO REFRESH OR LOGIN IS ENTIRELY FUTURE",
+    "AUTHORIZED AWS SSO-LOGIN ATTEMPTS TO DATE: ONE",
+    "SSO-LOGIN ATTEMPTS REMAIN ONE",
+    "THE SSO SESSION REMAINS UNREFRESHED",
+    "SSO SESSION: STILL UNREFRESHED",
+    "IDENTITY CONFIRMATIONS: ZERO",
+    "IDENTITY CONFIRMATIONS AFTER IT: ZERO",
+    "IDENTITY-CONFIRMATION COMMAND INVOCATIONS: ZERO",
+    "SANITIZED IDENTITY CONFIRMATIONS: ZERO",
+    "IDENTITY CONFIRMATION HAS NEVER RUN",
+    "NO IDENTITY CONFIRMATION HAS RUN",
+    "NO IDENTITY CONFIRMATION HAS OCCURRED",
+    "THE GOVERNED IDENTITY REMAINS REFUSED",
+    "THE GOVERNED IDENTITY GATE REMAINS REFUSED",
+    "AWS AUTHENTICATION REMAINS UNREPAIRED",
+    "AWS AUTHENTICATION REMAINS UNCONFIRMED",
+    "THE CORRECTED SSO LOGIN TIMED OUT",
+    "THE CORRECTED SSO LOGIN REFUSED",
+    "THE CORRECTED ATTEMPT TIMED OUT",
+    "THE CORRECTED ATTEMPT REFUSED",
+    "THE CORRECTED LOGIN DID NOT SUCCEED",
+    "THE SECOND SSO-LOGIN ATTEMPT TIMED OUT",
+)
+
+#: Claims the corrected refresh and the confirmation do not support.
+#:
+#: Affirmative forms, and deliberately not prefixes of the true denials the
+#: documents carry: "no current or future session validity is guaranteed"
+#: contains the words a careless entry here would refuse, and a guard answered
+#: by deleting the disclaimer is worse than no guard.
+CORRECTED_SSO_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "THE SESSION WILL REMAIN VALID",
+    "THE SESSION IS GUARANTEED TO REMAIN VALID",
+    "FUTURE SESSIONS ARE GUARANTEED VALID",
+    "GUARANTEES CURRENT AND FUTURE SESSION VALIDITY",
+    "CURRENT AND FUTURE SESSION VALIDITY ARE ESTABLISHED",
+    "THE IDENTITY REMAINS CONFIRMED",
+    "IDENTITY IS CURRENTLY CONFIRMED",
+    "THE SESSION IS STILL AUTHENTICATED",
+    "THE IDENTITY CONFIRMATION VERIFIED THE SECRET",
+    "THE IDENTITY CONFIRMATION VERIFIED THE CREDENTIAL",
+    "THE IDENTITY CONFIRMATION VERIFIED THE API KEY",
+    "THE IDENTITY CONFIRMATION VERIFIED THE BUCKET",
+    "THE IDENTITY CONFIRMATION VERIFIED PROVIDER ACCESS",
+    "THE SECRET IDENTIFIER IS VERIFIED",
+    "THE SECRET IDENTIFIER HAS BEEN VERIFIED",
+    "THE SECRET IDENTIFIER WAS VERIFIED BY",
+    "THE CREDENTIAL IS VERIFIED",
+    "THE CREDENTIAL HAS BEEN VERIFIED",
+    "THE IDENTITY CONFIRMATION WAS THE FIFTH ATTEMPT",
+    "THE FIFTH ATTEMPT WAS THE IDENTITY CONFIRMATION",
+    "A FIFTH BINDING-PREFLIGHT ATTEMPT HAS OCCURRED",
+    "IDENTITY CONFIRMATIONS: TWO",
+    "SUCCESSFUL GOVERNED SSO REFRESHES: TWO",
+    "CORRECTED SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ZERO",
+    "CORRECTED SSO-LOGIN UNDERLYING AWS NETWORK REQUESTS: ONE",
+    "IDENTITY-CONFIRMATION UNDERLYING AWS NETWORK REQUESTS: ZERO",
+    "IDENTITY-CONFIRMATION UNDERLYING AWS NETWORK REQUESTS: ONE",
+    "THE CORRECTED ATTEMPT SENT ONE AWS NETWORK REQUEST",
+    "THE CORRECTED ATTEMPT SENT NO AWS NETWORK REQUEST",
+    "THE IDENTITY CONFIRMATION SENT ONE AWS NETWORK REQUEST",
+    "THE IDENTITY CONFIRMATION SENT NO AWS NETWORK REQUEST",
+    "CORRECTED SSO-LOGIN EXIT CODE: 1",
+    "CORRECTED SSO-LOGIN EXIT CODE: 255",
+    "IDENTITY-CONFIRMATION EXIT CODE: 1",
+    "IDENTITY-CONFIRMATION EXIT CODE: 255",
+    "THE RAW IDENTITY RESPONSE WAS DISPLAYED",
+    "THE RAW IDENTITY RESPONSE WAS PERSISTED",
+    "THE PRIVATE IDENTITY VALUES WERE DISPLAYED",
+    "THE ACCOUNT ID WAS DISPLAYED",
+    "THE ARN WAS DISPLAYED",
+    "THE USER ID WAS DISPLAYED",
+    "THE DEVICE CODE WAS PERSISTED",
+    "THE VERIFICATION URL WAS PERSISTED",
+    "A WHOLE-ENVIRONMENT COPY WAS USED",
+    "THE PARENT ENVIRONMENT WAS COPIED WHOLESALE",
+    "CREDENTIAL-BEARING AMBIENT VARIABLES WERE COPIED",
+    "CREDENTIAL-BEARING AMBIENT VARIABLES WERE INSPECTED",
+    "ANOTHER SSO REFRESH IS AUTHORIZED",
+    "A FIFTH ATTEMPT IS NOW AUTHORIZED",
+    "CREDENTIAL ACCESS IS NOW AUTHORIZED",
+)
+
+#: The bounds of the corrected-refresh narrative inside the ADR-0015 section.
+#:
+#: The event table states the same facts in its own row, so a section-wide guard
+#: cannot tell the prose from the table -- and a negative control proved it:
+#: deleting the live-console sentence from the prose left the guard green on the
+#: strength of the row. Both surfaces are required, each in its own scope.
+CORRECTED_SSO_NARRATIVE_BOUNDS: Final[tuple[str, str]] = (
+    "A corrected, separately authorized SSO login has since completed",
+    "an authenticated qualification run NOT AUTHORIZED.",
+)
+
+#: What the corrected-refresh prose must state in its own narrative, not only in
+#: the event table beside it.
+CORRECTED_SSO_NARRATIVE_FACTS: Final[tuple[str, ...]] = (
+    "on a live console with inherited stdin, stdout and stderr",
+    "Nothing was captured, piped, redirected, buffered or written to a file",
+    "which is the one thing the first attempt got wrong",
+    "The interactive browser/device flow completed",
+    "successful governed SSO refreshes became ONE",
+    "A minimal, allowlisted child environment was built key-by-key",
+    "there was no whole-environment copy",
+    "no credential-bearing ambient variable was copied or inspected",
+    "the outcome was classified `IDENTITY_CONFIRMED`",
+    "no current or future session validity is guaranteed",
+)
+
+#: The chronology anchor for the corrected attempt, which follows the failed one.
+CORRECTED_SSO_ANCHOR: Final = (
+    "a corrected, separately authorized AWS SSO-login attempt, in a new Claude session "
+    "after PR #30 merged"
+)
+
+#: The chronology anchor for the identity confirmation, which follows both.
+IDENTITY_CONFIRMATION_ANCHOR: Final = (
+    "one conditional identity confirmation, because that login exited `0`"
+)
+
+#: What the ADR-0015 current-status row must carry about the corrected events.
+ADR_0015_ROW_CORRECTED: Final[tuple[str, ...]] = (
+    "CORRECTED SECOND AWS SSO-LOGIN ATTEMPT HAS SINCE COMPLETED SUCCESSFULLY",
+    "LIVE CONSOLE WITH INHERITED STDIN, STDOUT AND STDERR",
+    "EXIT CODE `0`",
+    "SUCCESSFUL GOVERNED SSO REFRESHES ONE",
+    "NO WHOLE-ENVIRONMENT COPY",
+    "EXACTLY ONE SANITIZED IDENTITY CONFIRMATION RAN",
+    "CLASSIFIED `IDENTITY_CONFIRMED`",
+    "NO GUARANTEE OF CURRENT OR FUTURE SESSION VALIDITY",
+    "VERIFYING NO SECRET IDENTIFIER, SECRET, CREDENTIAL, BUCKET OR PROVIDER ACCESS",
+    "FIFTH BINDING-PREFLIGHT ATTEMPTS REMAIN ZERO",
+)
+
+#: What both CLAUDE.md status matrices must carry about the corrected events.
+#:
+#: One tuple for two stanzas on purpose. They are read alone and each is
+#: extracted as its own bounded entry, so a clause deleted from one is caught by
+#: that stanza's own guard -- while a second, hand-kept list would be a place for
+#: the two to drift apart.
+MATRIX_CORRECTED_SSO_CLAUSES: Final[tuple[str, ...]] = (
+    "CORRECTED SECOND AWS SSO-LOGIN ATTEMPT COMPLETED SUCCESSFULLY -- ONE COMMAND IN A "
+    "NEW CLAUDE SESSION",
+    "LIVE CONSOLE WITH INHERITED STDIN, STDOUT AND STDERR",
+    "NO CAPTURED, PIPED, REDIRECTED, BUFFERED OR FILE OUTPUT",
+    "INTERACTIVE BROWSER/DEVICE FLOW COMPLETED, EXIT CODE 0",
+    "SUCCESSFUL GOVERNED SSO REFRESHES ONE",
+    "MINIMAL ALLOWLISTED CHILD ENVIRONMENT BUILT KEY-BY-KEY, NO WHOLE-ENVIRONMENT COPY",
+    "NO CREDENTIAL-BEARING AMBIENT VARIABLE COPIED OR INSPECTED",
+    "ONE SANITIZED IDENTITY CONFIRMATION FOLLOWED IT",
+    "CLASSIFIED IDENTITY_CONFIRMED, CAPTURED BUFFERS CLEARED AFTER CLASSIFICATION",
+    "IDENTITY CONFIRMED AT THE TIME OF THAT COMMAND WITH NO GUARANTEE OF CURRENT OR "
+    "FUTURE SESSION VALIDITY",
+    "FIFTH BINDING-PREFLIGHT ATTEMPTS ZERO",
+)
+
+#: What the entry point's own documentation must say about the corrected events.
+#:
+#: Its docstring sits beside the one authorized SDK-construction path, so an
+#: operator reading the file must not have to open a status document to learn
+#: that the session was refreshed, that an identity was confirmed once, and that
+#: neither moved a single gate.
+BINDING_SOURCE_CORRECTED_SSO: Final[tuple[str, ...]] = (
+    "corrected SSO-login attempt: COMPLETED SUCCESSFUL",
+    "identity confirmation ONE, SUCCESSFUL",
+    "A corrected, separately authorized SSO login has since completed, and the governed "
+    "session was refreshed.",
+    "Run in a new Claude session after PR #30 merged",
+    "on a live console with inherited stdin, stdout and stderr",
+    "nothing captured, piped, redirected, buffered or written to a file",
+    "The interactive browser/device flow completed",
+    "the command exited 0",
+    "successful governed SSO refreshes became ONE",
+    "static AST parse of the ``EXPECTED_PROFILE`` constant below",
+    "A minimal, allowlisted child environment was built key-by-key",
+    "there was no whole-environment copy",
+    "no credential-bearing ambient variable was copied or inspected",
+    "only transiently in the live AWS console",
+    "not repeated and not persisted",
+    "Because that login exited 0, exactly one identity confirmation ran.",
+    "structurally contained non-empty UserId, Account and Arn fields",
+    "raw response and the private identity values were neither displayed nor persisted",
+    "classified IDENTITY_CONFIRMED",
+    "captured buffers were cleared after classification",
+    "A successful identity confirmation is a historical session fact and nothing more.",
+    "no current or future session validity is guaranteed",
+    "verified no secret identifier, no secret, no API key, no bucket and no provider access",
+    "not a fifth binding-preflight attempt",
+    "A completed authorization is not a standing one.",
+)
+
 #: What the entry point's own documentation must state about the attempt.
 #:
 #: Its docstring is a current-status surface sitting beside the one authorized
@@ -2036,7 +2389,7 @@ BINDING_SOURCE_SSO_LOGIN: Final[tuple[str, ...]] = (
     "exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT*, never a numeric one",
     "the closed public outcome is REFUSED_SSO_LOGIN",
     "identity-confirmation command invocations zero",
-    "The SSO session remains unrefreshed",
+    "The SSO session remained unrefreshed",
     "the earlier REFUSED_SSO_SESSION_MISSING_OR_EXPIRED diagnosis stands unrevised",
     "The likely cause is procedural, and it is recorded as likely rather than proven.",
     "likely caused by suppressing the interactive browser/device-code surface",
@@ -2124,6 +2477,9 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("SSO-LOGIN INVOCATIONS ZERO", STALE_SSO_LOGIN_CLAIMS),
     ("THE GOVERNED PROFILE IS INCORRECT", SSO_LOGIN_OVERCLAIMS),
     ("NO CREDENTIAL VALUE WAS READ", SSO_LOGIN_ENVIRONMENT_OVERCLAIMS),
+    ("SUCCESSFUL SSO REFRESHES: ZERO", STALE_CORRECTED_SSO_CLAIMS),
+    ("THE SESSION WILL REMAIN VALID", CORRECTED_SSO_OVERCLAIMS),
+    ("THE FIRST SSO LOGIN SUCCEEDED", SSO_LOGIN_OVERCLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -2165,7 +2521,7 @@ STALE_PROFILE_DISCLOSURE_CLAIMS: Final[tuple[str, ...]] = (
 FIFTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
     "fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
 )
 
@@ -2272,8 +2628,14 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED "
     "BY THE ENTRY POINT",
     "authorized binding-preflight attempts to date: FOUR -- all refused",
-    "authorized AWS SSO-login attempts to date: ONE -- REFUSED_SSO_LOGIN, timed out at 420s",
-    "successful SSO refreshes: ZERO   ·   identity confirmations after it: ZERO",
+    "authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded",
+    "first AWS SSO-login attempt: REFUSED_SSO_LOGIN, timed out at 420s",
+    "corrected AWS SSO-login attempt: SUCCESSFUL -- live console, exit code 0",
+    "successful governed SSO refreshes: ONE   ·   "
+    "sanitized identity confirmations after it: ONE, SUCCESSFUL",
+    "identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- "
+    "future session validity NOT GUARANTEED",
+    "identity-confirmation underlying AWS network requests: UNKNOWN",
     "Secrets Manager client constructions: ZERO",
     "get_secret_value invocations: ZERO",
     "Secrets Manager network requests: ZERO",
@@ -2287,7 +2649,7 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "composition preflight run: NEVER",
     "a fifth binding-preflight attempt: NOT AUTHORIZED",
     "further AWS authentication diagnosis: NOT AUTHORIZED",
-    "another AWS SSO-login/refresh attempt: NOT AUTHORIZED",
+    "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "credential access: NOT AUTHORIZED",
     "authenticated qualification: NOT AUTHORIZED",
     "further dependency installation or environment resynchronization: SEPARATELY GATED",
@@ -2397,10 +2759,10 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "ONE COMMAND, TIMED OUT AFTER 420 SECONDS, NO EXIT STATUS RETURNED",
     "ZERO BROWSER AUTHORIZATIONS, ZERO DEVICE AUTHORIZATIONS, ZERO SUCCESSFUL "
     "REFRESHES, ZERO IDENTITY CONFIRMATIONS",
-    "SSO SESSION STILL UNREFRESHED, EARLIER DIAGNOSIS UNREVISED",
+    "SSO SESSION STILL UNREFRESHED AFTER IT, EARLIER DIAGNOSIS UNREVISED",
     "a fifth attempt NOT AUTHORIZED",
     "further AWS authentication diagnosis NOT AUTHORIZED",
-    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT NOT AUTHORIZED",
+    "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED",
     "credential access and authenticated qualification NOT AUTHORIZED",
     "SDK/client construction outside the ADR-0015 operator boundary NOT AUTHORIZED",
 )
@@ -2830,20 +3192,39 @@ def _audit_prose_excluding_own_fixture(source: str) -> str:
     return "\n".join(lines[: start - 1] + lines[end:])
 
 
-def _sso_login_narrative(section: str) -> str:
-    """The SSO-login narrative alone, flattened, or ``""`` if its bounds fail.
+def _bounded_narrative(section: str, bounds: tuple[str, str]) -> str:
+    """One narrative span of ``section``, flattened, or ``""`` if its bounds fail.
 
     Fail closed. An unresolvable span returns the empty string, which makes the
     required-facts guard fail rather than silently guarding nothing -- the same
-    rule :func:`_audit_fixture_span` follows for its own boundary.
+    rule :func:`_audit_fixture_span` follows for its own boundary. A boundary
+    that is missing, duplicated or inverted is a failure, never a wider span.
     """
-    start, end = SSO_LOGIN_NARRATIVE_BOUNDS
+    start, end = bounds
     flat = " ".join(section.replace("**", "").split())
     if flat.count(start) != 1 or flat.count(end) != 1:
         return ""
     low = flat.index(start)
     high = flat.index(end, low) + len(end)
     return "" if high <= low else flat[low:high]
+
+
+def _sso_login_narrative(section: str) -> str:
+    """The timed-out SSO-login narrative alone, flattened, or ``""``."""
+    return _bounded_narrative(section, SSO_LOGIN_NARRATIVE_BOUNDS)
+
+
+def _corrected_sso_narrative(section: str) -> str:
+    """The corrected-refresh narrative alone, flattened, or ``""``.
+
+    Scoped for the reason :data:`SSO_LOGIN_NARRATIVE_BOUNDS` gives, and for one
+    more the negative controls found: the corrected attempt's live-console
+    handling is stated twice, in the event table and in the prose, so a
+    section-wide guard passed while the prose sentence was deleted. A fact
+    asserted in two places needs a guard per place, or it has one guard and one
+    unprotected copy.
+    """
+    return _bounded_narrative(section, CORRECTED_SSO_NARRATIVE_BOUNDS)
 
 
 def _governed_profile_value(source: str) -> str:
@@ -8502,13 +8883,39 @@ def main() -> int:
             "its docstring said an SSO refresh was entirely future; one has been attempted",
         )
         f.check(
-            "the entry point claims nothing the SSO-login attempt did not establish",
+            "the entry point claims nothing the timed-out SSO-login attempt did not establish",
             not [
                 claim
                 for claim in SSO_LOGIN_OVERCLAIMS
                 if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
             ],
-            "no success, no identity, no proven cause and no authorized retry",
+            "the first attempt brought no success, no identity and no proven cause",
+        )
+        f.check(
+            "the entry point records the corrected SSO login and the identity confirmation",
+            all(
+                phrase in _comment_prose(read(BINDING_PREFLIGHT))
+                for phrase in BINDING_SOURCE_CORRECTED_SSO
+            ),
+            "an operator opening this file must not need a status document to learn it worked",
+        )
+        f.check(
+            "the entry point carries no stale zero-refresh or never-confirmed claim",
+            not [
+                claim
+                for claim in STALE_CORRECTED_SSO_CLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "its docstring is a current-status surface, and the session has been refreshed",
+        )
+        f.check(
+            "the entry point claims nothing the corrected refresh established",
+            not [
+                claim
+                for claim in CORRECTED_SSO_OVERCLAIMS
+                if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
+            ],
+            "a refreshed session is not a verified secret and not a standing identity",
         )
         f.check(
             "the entry point's factory commentary no longer calls all diagnosis future",
@@ -9217,9 +9624,86 @@ def main() -> int:
             "one login was attempted; a document still reporting none is wrong, not cautious",
         )
         f.check(
-            f"{name} claims nothing the SSO-login attempt did not establish",
+            f"{name} claims nothing the timed-out SSO-login attempt did not establish",
             not [claim for claim in SSO_LOGIN_OVERCLAIMS if claim in flat.upper()],
-            "it did not succeed, confirm an identity, prove a cause or authorize a retry",
+            "the first attempt did not succeed, confirm an identity or prove a cause",
+        )
+        f.check(
+            f"{name} records the corrected AWS SSO refresh and its counts",
+            all(token in binding_section for token in CORRECTED_SSO_REFRESH_COUNTS),
+            "a login that was authorized and worked is current status, not an omission",
+        )
+        f.check(
+            f"{name} states the corrected refresh's chronology, not only its counts",
+            all(phrase in binding_flat for phrase in CORRECTED_SSO_REFRESH_HISTORY),
+            "what it did, and what changed because it worked, are both the finding",
+        )
+        f.check(
+            f"{name} keeps the live-console handling apart from the captured one",
+            all(phrase in binding_flat for phrase in SSO_OUTPUT_HANDLING_CONTRAST),
+            "one difference separates the two attempts, and it is the operational finding",
+        )
+        f.check(
+            f"{name} records how the corrected child environment was built",
+            all(phrase in binding_flat for phrase in CORRECTED_CHILD_ENVIRONMENT_FACTS),
+            "minimal and allowlisted is a claim about this run, never about the first",
+        )
+        corrected_narrative = _corrected_sso_narrative(binding_section)
+        f.check(
+            f"{name} bounds the corrected-refresh narrative so its guards stay scoped",
+            bool(corrected_narrative),
+            "an unresolvable span would guard nothing while reporting a pass",
+        )
+        f.check(
+            f"{name} states the corrected refresh's handling in its own narrative",
+            all(fact in corrected_narrative for fact in CORRECTED_SSO_NARRATIVE_FACTS),
+            "the event table states the same facts, and a row cannot answer for the prose",
+        )
+        f.check(
+            f"{name} records the one sanitized identity confirmation and its limits",
+            all(phrase in binding_flat for phrase in IDENTITY_CONFIRMATION_FACTS),
+            "a session fact at one instant is not a verified secret and not a standing identity",
+        )
+        f.check(
+            f"{name} keeps every boundary a successful refresh does not move",
+            all(phrase in binding_flat for phrase in CORRECTED_SSO_FORWARD_BOUNDARIES),
+            "a completed operation reads as a standing permission unless it is refused",
+        )
+        f.check(
+            f"{name} places the corrected refresh after the timed-out attempt",
+            CORRECTED_SSO_ANCHOR in binding_flat
+            and SSO_LOGIN_ATTEMPT_ANCHOR in binding_flat
+            and binding_flat.index(SSO_LOGIN_ATTEMPT_ANCHOR)
+            < binding_flat.index(CORRECTED_SSO_ANCHOR),
+            "printed first it reads as the login that preceded the timeout",
+        )
+        f.check(
+            f"{name} places the identity confirmation after the corrected refresh",
+            IDENTITY_CONFIRMATION_ANCHOR in binding_flat
+            and CORRECTED_SSO_ANCHOR in binding_flat
+            and binding_flat.index(CORRECTED_SSO_ANCHOR)
+            < binding_flat.index(IDENTITY_CONFIRMATION_ANCHOR),
+            "it ran because that login returned zero; before it, it is a different claim",
+        )
+        f.check(
+            f"{name} records the corrected refresh in the ADR-0015 current-status row",
+            bool(_current_status_rows(body, "ADR-0015"))
+            and all(
+                clause in " ".join(row.replace("**", "").split()).upper()
+                for row in _current_status_rows(body, "ADR-0015")
+                for clause in ADR_0015_ROW_CORRECTED
+            ),
+            "the row and the section are independent surfaces, and both are read alone",
+        )
+        f.check(
+            f"{name} carries no stale zero-refresh or never-confirmed status",
+            not [claim for claim in STALE_CORRECTED_SSO_CLAIMS if claim in flat.upper()],
+            "one login worked and one identity was confirmed; reporting none is wrong",
+        )
+        f.check(
+            f"{name} claims nothing the corrected refresh and the confirmation established",
+            not [claim for claim in CORRECTED_SSO_OVERCLAIMS if claim in flat.upper()],
+            "no standing session, no verified secret, no counted request and no new authority",
         )
         f.check(
             f"{name} records ADR-0015 as in force in a merge-stable sentence",
@@ -9301,6 +9785,20 @@ def main() -> int:
             "the matrix states the boundary beside the state, or it states half a fact",
         )
         f.check(
+            "the environment stanza records the corrected refresh and the confirmation",
+            bool(environment_stanza)
+            and all(clause in environment_stanza for clause in MATRIX_CORRECTED_SSO_CLAUSES),
+            "the stanza is extracted and read alone; a narrative duplicate cannot answer it",
+        )
+        f.check(
+            "the environment stanza carries no stale zero-refresh status",
+            bool(environment_stanza)
+            and not [
+                claim for claim in STALE_CORRECTED_SSO_CLAIMS if claim in environment_stanza.upper()
+            ],
+            "the machine stanza said the session was unrefreshed, and it no longer is",
+        )
+        f.check(
             "the ADR-0016 matrix entry names its pull request and its boundary",
             all(
                 clause in _matrix_entry(claude_body, ADR_0016_MATRIX_LINE)
@@ -9325,6 +9823,23 @@ def main() -> int:
                 for clause in ADR_0015_MATRIX_CLAUSES
             ),
             "the matrix states the boundary beside the status, or it states half a fact",
+        )
+        f.check(
+            "the in-force matrix records the corrected refresh and the confirmation",
+            all(
+                clause in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE)
+                for clause in MATRIX_CORRECTED_SSO_CLAUSES
+            ),
+            "narrative elsewhere cannot answer a guard over the entry a reader consults",
+        )
+        f.check(
+            "the ADR-0015 matrix entry carries no stale zero-refresh status",
+            not [
+                claim
+                for claim in STALE_CORRECTED_SSO_CLAIMS
+                if claim in _matrix_entry(claude_body, ADR_0015_MATRIX_LINE).upper()
+            ],
+            "a compact entry may be short, and it may not be false",
         )
         f.check(
             "the ADR-0015 matrix entry cannot regress to never-run or zero AWS activity",
@@ -10050,6 +10565,14 @@ def main() -> int:
                 for token in ENVIRONMENT_BOUNDARIES
             ),
             "a usable environment is not a permission, and the zeros are unchanged",
+        )
+        f.check(
+            f"{name} separates a confirmed identity from a guaranteed session",
+            "identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- "
+            "future session validity NOT GUARANTEED"
+            in _document_section(body, ENVIRONMENT_SECTION_HEADING)
+            and "no current or future session validity is guaranteed" in flat,
+            "a session can expire between one command and the next, and the block is read alone",
         )
         f.check(
             f"{name} separates technical readiness from authorization",

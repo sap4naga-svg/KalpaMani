@@ -335,9 +335,9 @@ live brokerage execution, real-money operation.
 | AWS research foundation | **PROVISIONED (2026-08-27)** — [status](docs/operations/aws-foundation-status.md) |
 | Cloud spend beyond the idle foundation | **NOT AUTHORIZED** |
 | Any AWS mutation, read, verifier run or Terraform command | **NOT AUTHORIZED** — writing a client-shaped adapter is not permission to run one |
-| Real bucket binding · SDK client construction · credential source | Real bucket binding **NONE**, operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, Secrets Manager client constructions **ZERO**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked four times under separate authorization, and no invocation constructed a client or created a binding. A fifth binding-preflight attempt **NOT AUTHORIZED**, further AWS authentication diagnosis **NOT AUTHORIZED**, another AWS SSO-login/refresh attempt **NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
+| Real bucket binding · SDK client construction · credential source | Real bucket binding **NONE**, operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, Secrets Manager client constructions **ZERO**. A provider-neutral credential-source boundary **exists**, and the **ADR-0015 operator entry point is the sole permitted construction boundary** — invoked four times under separate authorization, and no invocation constructed a client or created a binding. A corrected AWS SSO login has since **COMPLETED SUCCESSFULLY** and **one** sanitized identity confirmation returned **`IDENTITY_CONFIRMED`**, which bound nothing and verified no secret, credential, bucket or provider access. A fifth binding-preflight attempt **NOT AUTHORIZED**, further AWS authentication diagnosis **NOT AUTHORIZED**, another AWS SSO-login/refresh attempt **SEPARATELY GATED / NOT AUTHORIZED**; SDK or client construction outside that boundary **NOT AUTHORIZED** |
 | [ADR-0014](docs/decisions/ADR-0014-implement-the-dormant-sharadar-qualification-composition-root.md) — dormant composition root + offline preflight | **ACCEPTED / IN FORCE** — PR #19 merged. One dormant composition root exists and **offline preflight exists**; **qualification-run execution surface NONE**, **provider-fetch operation NONE**, **object-publication operation NONE**, **runner NONE**, provider and AWS requests **ZERO** |
-| [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused** — at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — though its governed identity gate **invoked its own STS identity operation once**. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. The fourth attempt **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**. Operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, owner setup having occurred **after the third attempt** and **before the fourth**, and **not read by the fourth**; Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, S3 client constructions **ZERO**, S3 object operations **ZERO**, provider transport constructions **ZERO**, Sharadar/provider requests **ZERO**, credential retrieval **NONE**, qualification runs **ZERO**, real bucket binding **NONE**. A fifth attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login**, **credential access by the application** and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
+| [ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused** — at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — though its governed identity gate **invoked its own STS identity operation once**. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **Fifth binding-preflight attempts remain ZERO.** The fourth attempt **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**. Operational secret-identifier configuration **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT**, owner setup having occurred **after the third attempt** and **before the fourth**, and **not read by the fourth**; Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, S3 client constructions **ZERO**, S3 object operations **ZERO**, provider transport constructions **ZERO**, Sharadar/provider requests **ZERO**, credential retrieval **NONE**, qualification runs **ZERO**, real bucket binding **NONE**. A fifth attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **credential access by the application** and an **authenticated qualification run stay separately gated and NOT AUTHORIZED** |
 | [ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, Secrets Manager network requests **ZERO**, real credential retrieval **NONE**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a fifth binding-preflight attempt **NOT AUTHORIZED**, authenticated qualification **NOT AUTHORIZED** |
 | Ingestion runner · ECS task or image · authenticated qualification run | **NOT AUTHORIZED** |
 | CONTROL-classification publication | **DEFERRED / NOT AUTHORIZED** |
@@ -858,8 +858,12 @@ binding-preflight entry point         SOLE PERMITTED SDK/CLIENT-CONSTRUCTION BOU
 real bucket binding: NONE
 operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT
 authorized binding-preflight attempts to date: FOUR -- all refused
-authorized AWS SSO-login attempts to date: ONE -- REFUSED_SSO_LOGIN, timed out at 420s
-successful SSO refreshes: ZERO   ·   identity confirmations after it: ZERO
+authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded
+first AWS SSO-login attempt: REFUSED_SSO_LOGIN, timed out at 420s
+corrected AWS SSO-login attempt: SUCCESSFUL -- live console, exit code 0
+successful governed SSO refreshes: ONE   ·   sanitized identity confirmations after it: ONE, SUCCESSFUL
+identity status: CONFIRMED AT THE TIME OF THAT COMMAND -- future session validity NOT GUARANTEED
+identity-confirmation underlying AWS network requests: UNKNOWN
 Secrets Manager client constructions: ZERO   ·   get_secret_value invocations: ZERO
 Secrets Manager network requests: ZERO   ·   S3 object operations: ZERO
 Sharadar/provider requests: ZERO   ·   credential retrieved: NONE   ·   qualification runs: ZERO
@@ -869,7 +873,7 @@ binding preflight or composition preflight run during environment verification: 
 composition preflight run: NEVER
 a fifth binding-preflight attempt: NOT AUTHORIZED
 further AWS authentication diagnosis: NOT AUTHORIZED
-another AWS SSO-login/refresh attempt: NOT AUTHORIZED
+another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
 credential access: NOT AUTHORIZED   ·   authenticated qualification: NOT AUTHORIZED
 further dependency installation or environment resynchronization: SEPARATELY GATED
 ```
@@ -917,16 +921,43 @@ missing vs expired: NOT DISTINGUISHED by the diagnosis
 governed profile: PINNED IN THE CHILD ENVIRONMENT, NEVER DISCLOSED
 SSO-login invocations during the diagnosis: ZERO   ·   repair actions during it: ZERO
 fifth binding-preflight attempts: ZERO
-post-diagnosis AWS SSO-login attempt: COMPLETED -- REFUSED_SSO_LOGIN
-SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager
-SSO-login exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT
-SSO-login timeout: 420 SECONDS   ·   lingering AWS CLI process: NONE
-browser authorization interactions: ZERO   ·   device authorizations completed: ZERO
-successful SSO refreshes: ZERO   ·   SSO session: STILL UNREFRESHED
-SSO-login underlying AWS network requests: UNKNOWN
-identity-confirmation command invocations: ZERO
-likely cause: INTERACTIVE BROWSER/DEVICE-CODE SURFACE SUPPRESSED -- LIKELY, NOT PROVEN
-device URL or code in the undisplayed buffer: UNKNOWN -- NOT INSPECTED
+authorized AWS SSO-login attempts to date: TWO -- the first refused, the second succeeded
+first post-diagnosis AWS SSO-login attempt: COMPLETED -- REFUSED_SSO_LOGIN
+first SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager
+first SSO-login exit code: NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT
+first SSO-login timeout: 420 SECONDS   ·   lingering AWS CLI process: NONE
+first attempt browser authorization interactions: ZERO   ·   device authorizations completed: ZERO
+SSO refreshes achieved by the first attempt: ZERO   ·   SSO session after it: STILL UNREFRESHED
+first SSO-login underlying AWS network requests: UNKNOWN
+identity-confirmation command invocations after the first attempt: ZERO
+first attempt likely cause: INTERACTIVE BROWSER/DEVICE-CODE SURFACE SUPPRESSED -- LIKELY, NOT PROVEN
+device URL or code in the first attempt's undisplayed buffer: UNKNOWN -- NOT INSPECTED
+corrected AWS SSO-login attempt: COMPLETED -- SUCCESSFUL
+corrected SSO-login command invocations: ONE   ·   command: aws sso login --no-cli-pager
+corrected SSO-login session: A NEW CLAUDE SESSION
+corrected SSO-login output handling: LIVE CONSOLE -- INHERITED STDIN, STDOUT AND STDERR
+corrected SSO-login capture, pipe, redirect, buffer or file: NONE
+corrected SSO-login interactive browser/device flow: COMPLETED
+corrected SSO-login exit code: 0   ·   lingering AWS CLI process: NONE
+successful governed SSO refreshes: ONE
+corrected SSO-login underlying AWS network requests: UNKNOWN
+corrected child environment: MINIMAL AND ALLOWLISTED, BUILT KEY-BY-KEY
+whole-environment copy during the corrected attempt: NONE
+credential-bearing ambient variables copied or inspected during it: NONE
+governed profile source: STATIC AST PARSE OF EXPECTED_PROFILE, NEVER DISCLOSED
+entry-point module imported or executed by either SSO operation: NEITHER
+verification URL and one-time device code: TRANSIENT IN THE LIVE CONSOLE ONLY -- NOT REPEATED, NOT PERSISTED
+sanitized identity confirmations after the corrected refresh: ONE -- SUCCESSFUL
+identity-confirmation command: aws sts get-caller-identity --no-cli-pager --output json
+identity-confirmation exit code: 0   ·   classification: IDENTITY_CONFIRMED
+identity-confirmation response: UserId, Account AND Arn STRUCTURALLY PRESENT AND NON-EMPTY
+raw identity response and private identity values: NOT DISPLAYED, NOT PERSISTED
+captured identity buffers: CLEARED AFTER CLASSIFICATION
+identity-confirmation underlying AWS network requests: UNKNOWN
+identity status: CONFIRMED AT THE TIME OF THAT COMMAND
+current or future session validity: NOT GUARANTEED BY THAT HISTORICAL CONFIRMATION
+KALPAMANI_SHARADAR_SECRET_ID reads by the corrected SSO session: ZERO
+fifth binding-preflight attempts after the corrected refresh: ZERO
 operational secret-identifier configuration: OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT
 owner credential setup occurred AFTER the third attempt and BEFORE the fourth
 identifier-source resolutions on the third attempt: ONE
@@ -948,7 +979,7 @@ provider-fetch operation: NONE   ·   object-publication operation: NONE
 runner, task, image, scheduler or service: NONE
 fifth binding-preflight attempt: NOT AUTHORIZED
 further AWS authentication diagnosis: NOT AUTHORIZED
-another AWS SSO-login/refresh attempt: NOT AUTHORIZED
+another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED
 further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED
 authenticated qualification: NOT AUTHORIZED
 ```
@@ -969,7 +1000,9 @@ recorded only the first, which was true of the merge and false of the operation.
 | **owner credential setup, after the third attempt** | the owner attests that an AWS Secrets Manager secret was created for the existing Sharadar API key and that `KALPAMANI_SHARADAR_SECRET_ID` was configured. **OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY POINT** |
 | **fourth authorized attempt**, after that setup | one process invocation, from a fresh post-restart process. Passed operator authorization and the governed profile contract, **invoked the application AWS identity gate once**, and refused there with **`REFUSED_IDENTITY`** — public output `binding preflight refused: the AWS identity gate did not pass`, exit code 1. It **never reached licensed-bucket resolution and never reached the secret-identifier source**, so it did not read `KALPAMANI_SHARADAR_SECRET_ID`, constructed no AWS service client and retrieved no credential. **No retry and no standalone authentication diagnosis followed** |
 | **a second, separately authorized diagnosis**, after the fourth attempt and after PR #28 merged | **one** process invocation of **one** `aws sts get-caller-identity` command, exit code **255**, closed outcome **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — the governed SSO session or cached token was classified unavailable or expired, and the classification **does not distinguish missing from expired**. The governed profile was pinned in the child environment and never disclosed; no identity, raw output or error text was disclosed or persisted. Its **own** underlying AWS network-request count is **UNKNOWN**. **Nothing followed it under that authorization: no retry, no `aws sso login`, no authentication repair, no identity-gate invocation and no fifth attempt** |
-| **a separately authorized AWS SSO-login attempt**, after that diagnosis and after PR #29 merged | **one** process invocation of **one** `aws sso login --no-cli-pager` command, the governed profile resolved by static AST parse of the tracked `EXPECTED_PROFILE` constant and pinned in the child environment only, never disclosed. It **timed out after 420 seconds**, was terminated and left **no lingering AWS CLI process**, so **no exit status was returned** — the closed outcome is **`REFUSED_SSO_LOGIN`**. **Browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**; its underlying AWS network-request count is **UNKNOWN**. The SSO session **remains unrefreshed** |
+| **a separately authorized AWS SSO-login attempt**, after that diagnosis and after PR #29 merged | **one** process invocation of **one** `aws sso login --no-cli-pager` command, the governed profile resolved by static AST parse of the tracked `EXPECTED_PROFILE` constant and pinned in the child environment only, never disclosed. It **timed out after 420 seconds**, was terminated and left **no lingering AWS CLI process**, so **no exit status was returned** — the closed outcome is **`REFUSED_SSO_LOGIN`**. **Browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**; its underlying AWS network-request count is **UNKNOWN**. The SSO session **remained unrefreshed** |
+| **a corrected, separately authorized AWS SSO-login attempt**, in a new Claude session after PR #30 merged | **one** process invocation of **one** `aws sso login --no-cli-pager` command, run on a **live console with inherited stdin, stdout and stderr** — nothing captured, piped, redirected, buffered or written to a file. The **interactive browser/device flow completed**, the command **exited `0`**, **successful governed SSO refreshes became ONE**, and **no lingering AWS CLI process** remained. The governed profile was resolved by **static AST parse of the tracked `EXPECTED_PROFILE` constant** — the entry-point module was **neither imported nor executed** — and its value was **not disclosed**. A **minimal, allowlisted child environment was built key-by-key**: there was **no whole-environment copy**, and **no credential-bearing ambient variable was copied or inspected**. The **verification URL and the one-time device code appeared only transiently in the live AWS console**, and were **not repeated and not persisted**. Its underlying AWS network-request count is **UNKNOWN** |
+| **one conditional identity confirmation**, because that login exited `0` | **exactly one** `aws sts get-caller-identity --no-cli-pager --output json` command, which **exited `0`**. The response **structurally contained non-empty `UserId`, `Account` and `Arn` fields**; the **raw response and the private identity values were neither displayed nor persisted**, the result was classified **`IDENTITY_CONFIRMED`**, and the captured buffers were **cleared after classification**. Identity was **confirmed at the time of that command** — a historical session fact that guarantees **no current or future session validity**. Its underlying AWS network-request count is **UNKNOWN**. It read no `KALPAMANI_SHARADAR_SECRET_ID`, **verified no secret, credential, bucket or provider access**, and is **not a fifth binding-preflight attempt** |
 
 **AWS identity-gate activity occurred, so total AWS activity was not zero.** What stayed at zero is
 narrower and is stated in scope: Secrets Manager client constructions, `get_secret_value`
@@ -1001,8 +1034,9 @@ identity refusal**, and it revises no count: the attempt's own network-request t
 **UNKNOWN**, and so does the diagnosis command's, because a CLI call may resolve credentials
 locally and fail before anything leaves the machine. **At that point SSO-login invocations were
 ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were
-ZERO**; the first of those has since moved and the other two have not — see the timed-out
-SSO-login attempt below. Further AWS authentication diagnosis is **NOT AUTHORIZED**, and
+ZERO**; the first two of those have since moved — two SSO logins have now been attempted, and
+the second refreshed the governed session — and the third has not — see the SSO-login
+attempts below. Further AWS authentication diagnosis is **NOT AUTHORIZED**, and
 **another AWS SSO refresh or login** is **NOT AUTHORIZED**.
 
 **The diagnosis pinned the governed profile itself, and that was a correction rather than a
@@ -1049,7 +1083,7 @@ fifth binding-preflight attempts ZERO.** Its underlying AWS network-request coun
 for the reason every count here is: a CLI invocation is not one network request, and a call may
 resolve locally and fail before anything leaves the machine.
 
-**The SSO session remains unrefreshed**, and the earlier diagnosis stands unrevised at
+**The SSO session remained unrefreshed**, and the earlier diagnosis stands unrevised at
 **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`**. This attempt produced **no evidence distinguishing
 missing from expired**, **did not verify or contradict the owner-configured secret identifier**,
 and **retrieved no credential**. Every Secrets Manager, S3, provider and qualification zero
@@ -1072,6 +1106,49 @@ NOT AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a fifth
 attempt NOT AUTHORIZED · application credential access NOT AUTHORIZED · authenticated
 qualification NOT AUTHORIZED.**
 
+**A corrected, separately authorized SSO login has since completed, and the governed session was
+refreshed.** Run in a new Claude session after PR #30 merged, it invoked **one** process and
+**one** `aws sso login --no-cli-pager` command — this time on a **live console with inherited
+stdin, stdout and stderr**. Nothing was captured, piped, redirected, buffered or written to a
+file, which is the one thing the first attempt got wrong: the browser and device-code surface has
+to be able to reach the owner. The **interactive browser/device flow completed**, the command
+**exited `0`**, **no lingering AWS CLI process remained**, and **successful governed SSO refreshes
+became ONE**.
+
+**The child environment was built the narrow way this time.** The governed profile was resolved by
+**static AST parse of the tracked `EXPECTED_PROFILE` constant** — the entry-point module was
+**neither imported nor executed** — and the value was **not disclosed**. A **minimal,
+allowlisted child environment was built key-by-key**: there was **no whole-environment copy**, and
+**no credential-bearing ambient variable was copied or inspected**. That closes the transient
+materialization the first attempt's whole-environment copy produced, and it is stated as a
+property of **this** run rather than backdated onto the earlier one, which is recorded above
+exactly as it happened. The **verification URL and the one-time device code appeared only
+transiently in the live AWS console**, and were **not repeated and not persisted** — not here,
+not in a log, and not in any file.
+
+**Because that login exited `0`, exactly one identity confirmation ran.** One
+`aws sts get-caller-identity --no-cli-pager --output json` command, which **exited `0`**. The
+response **structurally contained non-empty `UserId`, `Account` and `Arn` fields**, and that
+structural check is the whole of what was read from it. The **raw response and the private
+identity values were neither displayed nor persisted**, the outcome was classified
+**`IDENTITY_CONFIRMED`**, and the **captured buffers were cleared after classification**. Its
+underlying AWS network-request count is **UNKNOWN**, for the reason every count here is.
+
+**A successful identity confirmation is a historical session fact and nothing more.** Identity was
+**confirmed at the time of that command**; **no current or future session validity is guaranteed**
+by it, because a session can expire between one command and the next. It **verified no secret
+identifier, no secret, no API key, no bucket and no provider access** — it did not read
+`KALPAMANI_SHARADAR_SECRET_ID`, construct a Secrets Manager or S3 client, invoke
+`get_secret_value`, retrieve a credential or bind a bucket. It is **not** a fifth binding-preflight
+attempt, and **fifth binding-preflight attempts remain at ZERO**.
+
+**A completed authorization is not a standing one.** Two SSO-login attempts have now been
+separately authorized — the first refused, the second succeeded — and each was authorized
+for itself, not for the next one. **Another AWS SSO refresh or login is SEPARATELY GATED and NOT
+AUTHORIZED · further AWS authentication diagnosis NOT AUTHORIZED · a fifth
+binding-preflight attempt NOT AUTHORIZED · application credential access NOT AUTHORIZED ·
+an authenticated qualification run NOT AUTHORIZED.**
+
 **`KALPAMANI_SHARADAR_SECRET_ID` is now OWNER-CONFIGURED / NOT YET VERIFIED BY THE ENTRY
 POINT.** It was **UNKNOWN at the time of the second attempt**, which refused on the
 dependency path without reading it — and ADR-0016 exists
@@ -1090,12 +1167,15 @@ of the secret through this repository; inspection of the payload format or value
 Secrets Manager client; invocation of `get_secret_value`; retrieval of the credential; or
 compatibility of the credential with Sharadar. **Credential access by the application
 remains NOT AUTHORIZED**, and so do a fifth binding-preflight attempt, any **further** AWS
-authentication diagnosis, and **another** AWS SSO refresh or login.
+authentication diagnosis, and **another** AWS SSO refresh or login. **The corrected SSO refresh
+and the identity confirmation changed none of that**: neither read `KALPAMANI_SHARADAR_SECRET_ID`,
+and **neither verified the secret, the credential, the bucket or provider access**.
 
 **A real binding preflight is no longer a purely future event, and neither is an SSO login.**
-Four preflight attempts occurred, and one authorized SSO-login attempt has since been made and
-timed out. What remains future, and separately authorized: a fifth attempt, **further** AWS
-authentication diagnosis, **another** AWS SSO refresh or login, further environment
+Four preflight attempts occurred; **two** SSO-login attempts have since been separately authorized
+— the first timed out, the second succeeded — and **one sanitized identity confirmation**
+followed the second. What remains future, and separately authorized: a fifth attempt, **further**
+AWS authentication diagnosis, **another** AWS SSO refresh or login, further environment
 resynchronization, application credential access, and an authenticated Sharadar qualification run. **Authenticated qualification remains NOT AUTHORIZED and
 has never run.**
 
