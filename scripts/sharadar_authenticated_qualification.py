@@ -7,27 +7,38 @@ path all existed and were tested, and
 :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.execute` had
 **no production caller**. This module is that caller, and only that.
 
-**It has been attempted exactly once, and that attempt refused.** A separately
-authorized first execution invoked one process, passed stages 1-4, and refused at
-stage 5 -- the existing AWS identity gate, invoked once, which did not pass. The
-closed outcome was ``REFUSED_IDENTITY`` and the exit code was ``6``. No secret
-identifier was resolved, no credential was retrieved, no client was constructed,
-no provider request was made and nothing was published. **Why the gate refused was
-not diagnosed and remains UNKNOWN**, and the refusal proves nothing about the
-credential, the secret, the bucket or the provider.
+**It has been attempted exactly twice: the first refused and the second
+completed.** A separately authorized first execution invoked one process, passed
+stages 1-4, and refused at stage 5 -- the existing AWS identity gate, invoked
+once, which did not pass. The closed outcome was ``REFUSED_IDENTITY`` and the exit
+code was ``6``. No secret identifier was resolved, no credential was retrieved, no
+client was constructed, no provider request was made and nothing was published.
+**Why the gate refused was not diagnosed and remains UNKNOWN**, and the refusal
+proves nothing about the credential, the secret, the bucket or the provider.
 
-**The bounded acquisition has never completed.** Stage 5 refused seven stages
-before the single ``QualificationRuntime.execute`` call at stage 12, so the
-qualification runtime at stage 12 was never reached, no provider request has ever
-been made from here, and no acquisition record exists. Those are claims about the
-*acquisition*, not about this module: the entry point **was** invoked, once, and
-it refused.
+**The second attempt completed.** A separately authorized second execution invoked
+one process and exited ``0``; a closed result was observed and that result was
+``COMPLETED``; the qualification runtime was reached; and **one provider request
+was reported**. **Attempt two's S3 qualification operations are NOT ESTABLISHED**,
+and NOT ESTABLISHED is never read as ZERO. Every attempt-two count the authorized
+evidence does not state is **NOT ESTABLISHED** too, and none of them is resolved
+by reading S3 or a private report.
 
-Implementing an operator surface is not permission to use it, and one refused
-attempt is not permission to make another: a second bounded authenticated
-acquisition qualification is a **separate** written authorization, and none has
-been given. Further AWS identity diagnosis and another SSO refresh or login are
-each separately gated and unauthorized too.
+**``COMPLETED`` is a command status, not a verdict.** It says the second governed
+invocation exited successfully and produced its closed result after reaching the
+qualification runtime, and it says nothing else. It is not qualification passed,
+not the provider accepted, not a selection of a provider, not a closure of G1 or
+G2, not a completion of Phase 3, and not production, CONTROL or live-trading
+readiness.
+**Provider authentication stays UNKNOWN**: a reported request is not a proven
+authentication, and the authorized public result does not state one.
+
+Implementing an operator surface is not permission to use it, one refused attempt
+is not permission to make another, and one completed attempt is not permission to
+make a third: a third bounded authenticated acquisition qualification is a
+**separate** written authorization, and none has been given. Further AWS identity
+diagnosis and another SSO refresh or login are each separately gated and
+unauthorized too.
 
 ::
 
@@ -35,17 +46,29 @@ each separately gated and unauthorized too.
     default behaviour     REFUSE   no flag, no work -- no lookup, no client, no socket
     authorization         ONE      --i-am-the-operator-authorizing-authenticated-qualification
     what it authorizes    ONE BOUNDED ACQUISITION QUALIFICATION -- never a second
-    authorized attempts   ONE      refused: REFUSED_IDENTITY, exit code 6, stage 5
-    entry-point process invocations: ONE   ·   provider requests: ZERO
-    AWS identity-gate invocations: ONE, refused   ·   stages 1-4: PASSED
-    licensed-bucket resolutions: ZERO   ·   terraform command invocations: ZERO
-    secret-identifier resolutions: ZERO   ·   secrets-manager clients: ZERO
-    get_secret_value invocations: ZERO   ·   credential retrievals: ZERO
-    S3 clients: ZERO   ·   provider transports: ZERO   ·   PutObject: ZERO
-    qualification-runtime executions against real services: ZERO
-    provider authentication: UNKNOWN   ·   S3 qualification operations: ZERO
+    authorized attempts   TWO      one refused, one completed
+    entry-point process invocations: TWO -- exactly one per attempt
+
+    attempt one -- refused: REFUSED_IDENTITY, exit code 6, stage 5
+    attempt one -- provider requests: ZERO
+    attempt one -- AWS identity-gate invocations: ONE, refused · stages 1-4: PASSED
+    attempt one -- licensed-bucket resolutions: ZERO · terraform commands: ZERO
+    attempt one -- secret-identifier resolutions: ZERO · secrets-manager clients: ZERO
+    attempt one -- get_secret_value invocations: ZERO · credential retrievals: ZERO
+    attempt one -- S3 clients: ZERO · provider transports: ZERO · PutObject: ZERO
+    attempt one -- qualification-runtime executions against real services: ZERO
+    attempt one -- S3 qualification operations: ZERO
+
+    attempt two -- COMPLETED, exit code 0, closed result observed
+    attempt two -- qualification runtime reached: YES · runtime executions: ONE
+    attempt two -- provider requests: ONE, reported; no further call is inferred
+    attempt two -- S3 qualification operations: NOT ESTABLISHED, never read as ZERO
+    attempt two -- every count not stated above: NOT ESTABLISHED
+
+    cumulative -- qualification-runtime executions: ONE · provider requests: ONE
+    provider authentication: UNKNOWN   ·   production provider selection: NONE
     underlying AWS network interactions: UNKNOWN -- no count is established
-    a second attempt · AWS identity diagnosis · SSO refresh: NOT AUTHORIZED
+    a third attempt · AWS identity diagnosis · SSO refresh: NOT AUTHORIZED
 
 What one future run may establish
 =================================
@@ -55,9 +78,15 @@ that the locked dataset was accessible at that moment, that one response was
 returned, and that it was durably acquired under the accepted licensed Bronze
 contract.
 
-**The one attempted run established none of that.** It refused at the AWS identity
-gate, three stages before the credential and four before any provider contact, so
-provider authentication stays **UNKNOWN** and no acquisition exists.
+**Attempt one established none of that.** It refused at the AWS identity gate,
+three stages before the credential and four before any provider contact.
+
+**Attempt two established less than all of it.** One process exited ``0``, a closed
+``COMPLETED`` result was observed, the qualification runtime was reached and one
+provider request was reported. **Provider authentication still stays UNKNOWN** --
+the authorized public result does not state it -- and attempt two's S3
+qualification operations, and every other count that result does not state, are
+**NOT ESTABLISHED**.
 
 It establishes **nothing** about: full P1-P9 empirical qualification ·
 provider-wide authentication · access to every Sharadar dataset · full-history or
@@ -711,13 +740,17 @@ def main(argv: list[str] | None = None) -> int:
     schema, or whether a further run should happen.
 
     **The real factories are constructed here and only here**, inside the
-    authorized branch. This function has been run **exactly once**, under a
-    separate written authorization, and that run refused at the AWS identity gate
-    with ``REFUSED_IDENTITY`` and exit code ``6`` -- before any secret identifier,
-    credential, client, provider request or publication. Implementing it was not
-    authorization to use it, and one refused attempt is not authorization for a
-    second: another bounded authenticated qualification remains a separate written
-    authorization that has not been given.
+    authorized branch. This function has been run **exactly twice**, each time
+    under its own separate written authorization. The first run refused at the AWS
+    identity gate with ``REFUSED_IDENTITY`` and exit code ``6`` -- before any
+    secret identifier, credential, client, provider request or publication. The
+    second run returned ``0`` with a closed ``COMPLETED`` result, having reached
+    the qualification runtime and reported one provider request; its S3
+    qualification operations are **NOT ESTABLISHED**. Implementing it was not
+    authorization to use it, one refused attempt is not authorization for a
+    second, and one completed attempt is not authorization for a third: another
+    bounded authenticated qualification remains a separate written authorization
+    that has not been given.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 

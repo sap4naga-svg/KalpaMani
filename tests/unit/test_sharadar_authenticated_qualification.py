@@ -1143,7 +1143,7 @@ def _function_docstring(tree: ast.Module, name: str) -> str:
     return ""
 
 
-def test_the_module_records_one_refused_attempt_and_no_completed_acquisition() -> None:
+def test_the_module_records_one_refused_attempt_and_one_completed_attempt() -> None:
     """The module's own status must match what the one attempt actually did.
 
     This replaces a bare ``"never been run" in doc`` assertion. That check was
@@ -1151,11 +1151,11 @@ def test_the_module_records_one_refused_attempt_and_no_completed_acquisition() -
     invoked: any sentence containing those three words satisfied it, including a
     true one about a different subject. What follows asserts the facts instead.
 
-    The two easiest to conflate are asserted apart from each other. *The bounded
-    acquisition never completed* is true; *the entry point was never invoked* is
-    false; and the second is exactly what a careless summary of the first would
-    imply. One is required and the other is refused, in the same test, so neither
-    can drift into the other unnoticed.
+    The two easiest to conflate are asserted apart from each other. *Attempt one
+    refused* and *attempt two completed* are both true, and a summary that reports
+    only one of them misdescribes the surface. Both are required here, together
+    with the boundary that a completed command status is not a qualification
+    verdict, so none of the three can drift out unnoticed.
     """
     tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
     module_doc = _folded(ast.get_docstring(tree) or "")
@@ -1164,37 +1164,45 @@ def test_the_module_records_one_refused_attempt_and_no_completed_acquisition() -
     assert module_doc, "the module docstring is the status surface asserted against here"
     assert main_doc, "main's own docstring must say what main has done"
 
-    # Invoked once, and refused -- where, with which outcome, and with which code.
+    # Attempt one: refused -- where, with which outcome, and with which code.
     for fact in (
-        "it has been attempted exactly once, and that attempt refused",
+        "it has been attempted exactly twice: the first refused and the second completed",
         "refused at stage 5",
         "the existing aws identity gate",
         "the closed outcome was ``refused_identity``",
         "the exit code was ``6``",
-        "authorized attempts one refused: refused_identity, exit code 6, stage 5",
+        "authorized attempts two one refused, one completed",
+        "attempt one -- refused: refused_identity, exit code 6, stage 5",
+        "attempt one -- provider requests: zero",
+        "attempt one -- qualification-runtime executions against real services: zero",
+        "attempt one -- s3 qualification operations: zero",
     ):
         assert fact in module_doc, f"missing from the module docstring: {fact}"
-    assert "this function has been run exactly once" in main_doc
+    assert "this function has been run exactly twice" in main_doc
     assert "refused at the aws identity gate" in main_doc
 
-    # What that refusal stopped short of, stated as the acquisition's status.
+    # Attempt two: completed, and exactly what that does and does not establish.
     for fact in (
-        "the qualification runtime at stage 12 was never reached",
-        "the bounded acquisition has never completed",
-        "no provider request has ever been made from here",
-        "no acquisition record exists",
-        "qualification-runtime executions against real services: zero",
-        "s3 qualification operations: zero",
+        "the second attempt completed",
+        "the qualification runtime was reached",
+        "one provider request was reported",
+        "attempt two's s3 qualification operations are not established",
+        "not established is never read as zero",
+        "attempt two -- qualification runtime reached: yes · runtime executions: one",
+        "attempt two -- provider requests: one, reported",
+        "cumulative -- qualification-runtime executions: one · provider requests: one",
     ):
         assert fact in module_doc, f"missing from the module docstring: {fact}"
 
-    # Never completed is not never invoked, and the module has to say so.
-    assert "not about this module: the entry point was invoked, once, and it refused" in module_doc
+    # A command status is not a verdict, and the module has to say so.
+    assert "``completed`` is a command status, not a verdict" in module_doc
+    assert "provider authentication stays unknown" in module_doc
+    assert "not a selection of a provider" in module_doc
 
     # A completed authorization is not a standing one.
     assert "authorization for another request" in module_doc
-    assert "a second attempt · aws identity diagnosis · sso refresh: not authorized" in module_doc
-    assert "a second bounded authenticated acquisition qualification is a separate" in module_doc
+    assert "a third attempt · aws identity diagnosis · sso refresh: not authorized" in module_doc
+    assert "a third bounded authenticated acquisition qualification is a separate" in module_doc
 
     # The claims the one attempt makes false, absent from both docstrings.
     for stale in (
@@ -1203,6 +1211,8 @@ def test_the_module_records_one_refused_attempt_and_no_completed_acquisition() -
         "the entry point has never been run",
         "the entry point was never invoked",
         "authorized attempts zero",
+        "the bounded acquisition has never completed",
+        "no provider request has ever been made from here",
     ):
         assert stale not in module_doc, f"stale claim in the module docstring: {stale}"
         assert stale not in main_doc, f"stale claim in main's docstring: {stale}"
