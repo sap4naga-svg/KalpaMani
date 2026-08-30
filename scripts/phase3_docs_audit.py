@@ -1059,7 +1059,8 @@ ADR_0015_ROW_HISTORY: Final[tuple[str, ...]] = (
     "AWS NETWORK REQUESTS ON THE FOURTH ATTEMPT ARE UNKNOWN",
     "POST-FOURTH STANDALONE AWS IDENTITY DIAGNOSIS HAS SINCE COMPLETED",
     "NO STANDALONE DIAGNOSIS WAS PERFORMED AS PART OF THE ATTEMPT",
-    "INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
+    "STS COMMAND INVOCATION IS UNKNOWN",
+    "REAL PRE-STS REFUSAL PATHS",
     "REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
     "REACHED NEITHER LICENSED-BUCKET RESOLUTION NOR THE SECRET-IDENTIFIER SOURCE",
     "DID NOT READ `KALPAMANI_SHARADAR_SECRET_ID`",
@@ -1651,8 +1652,8 @@ FOURTH_ATTEMPT_ANCHOR: Final = (
 #: word alone would let a reader assume the run got as far as the third did.
 FOURTH_ATTEMPT_COUNTS: Final[tuple[str, ...]] = (
     "fourth attempt        REFUSED_IDENTITY at the AWS identity gate",
-    "identity-gate invocations on the fourth attempt: ONE -- the gate runs its own STS "
-    "identity operation",
+    "identity-gate invocations on the fourth attempt: ONE -- it did not pass",
+    "STS command invocations on the fourth attempt: UNKNOWN -- real pre-STS refusal paths exist",
     "standalone diagnostic commands during the fourth attempt: ZERO",
     "AWS network requests on the fourth attempt: UNKNOWN -- no numeric count is established",
     "owner credential setup occurred AFTER the third attempt and BEFORE the fourth",
@@ -1705,7 +1706,7 @@ FOURTH_ATTEMPT_NETWORK_UNKNOWN: Final[tuple[str, ...]] = (
     "Whether the fourth attempt sent an AWS network request is UNKNOWN",
     "neither zero nor one network request may be claimed",
     "No standalone diagnosis was performed as part of attempt 4",
-    "Its governed identity gate invoked its own STS identity operation once",
+    "A gate invocation is therefore not proof of an STS command invocation",
 )
 
 #: Definite network-request counts the fourth attempt does not support.
@@ -1947,7 +1948,7 @@ POST_FOURTH_DIAGNOSIS_COUNTS: Final[tuple[str, ...]] = (
 #: What the diagnosis narrative must state, not merely tabulate.
 POST_FOURTH_DIAGNOSIS_HISTORY: Final[tuple[str, ...]] = (
     "A separately authorized diagnosis has since answered that. It is an additional standalone",
-    "neither the gate's own STS operation above, nor the diagnosis that followed the first",
+    "neither the gate's own internal path above, nor the diagnosis that followed the first",
     "one process and one `aws sts get-caller-identity` command, which exited 255",
     "classified as `REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`",
     "the governed SSO session or cached token was unavailable or expired",
@@ -2779,7 +2780,6 @@ BINDING_SOURCE_SSO_LOGIN: Final[tuple[str, ...]] = (
 BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
     "post-fourth identity diagnosis: COMPLETED",
     "No standalone diagnosis was performed as part of attempt 4",
-    "Its governed identity gate invoked its own STS identity operation once",
     "A separately authorized diagnosis has since answered that. It is an additional",
     "standalone command",
     "one process and one ``aws sts get-caller-identity`` command, which exited 255",
@@ -2793,28 +2793,41 @@ BINDING_SOURCE_DIAGNOSIS: Final[tuple[str, ...]] = (
     "Further AWS authentication diagnosis is not authorized",
 )
 
-#: The gate's own STS operation, kept apart from the standalone diagnosis.
+#: The gate's internal path, kept apart from the standalone diagnosis.
 #:
-#: ``identity_gate()`` in ``scripts/aws_foundation_verify.py`` runs
-#: ``sts get-caller-identity`` itself. Attempt 4 invoked that gate once, so the
-#: attempt **did** make an STS identity call -- what it did not make was an
-#: *additional* diagnostic command. An earlier revision wrote the stronger claim
-#: and it was false against the repository's own unchanged verifier.
+#: ``identity_gate()`` in ``scripts/aws_foundation_verify.py`` does run
+#: ``sts get-caller-identity`` -- but only after two checks that can refuse
+#: before it: an unpinned ``AWS_PROFILE``, and an ``expected_account()`` that
+#: returns ``None`` from a git-ignored ``terraform.tfvars``, which is a plain
+#: file read. **A gate invocation is therefore not proof of an STS command
+#: invocation.** For attempt 4 the profile condition is mechanically proven and
+#: the account-binding condition is not, so the STS invocation is UNKNOWN.
+#:
+#: Two revisions have now been wrong here in opposite directions: one claimed no
+#: STS call at all, the next claimed exactly one. Neither is supported, and the
+#: documents must be able to say so without being able to state a number.
 GATE_VERSUS_DIAGNOSIS: Final[tuple[str, ...]] = (
     "No standalone diagnosis was performed as part of attempt 4",
-    "Its governed identity gate invoked its own STS identity operation once",
-    "`identity_gate()` in `scripts/aws_foundation_verify.py` runs `sts get-caller-identity` itself",
-    "it is false to say the attempt made no STS identity call",
+    "A gate invocation is therefore not proof of an STS command invocation",
+    "`identity_gate()` in `scripts/aws_foundation_verify.py` does run `sts get-caller-identity`",
+    "One of the two pre-STS conditions is proven for attempt 4, and the other is not",
+    "The profile condition holds mechanically",
+    "account-binding condition is unproven",
+    "bracketing is not evidence of that file's state at attempt 4 itself",
+    "So the fourth attempt's STS command invocation is UNKNOWN",
+    "neither that diagnosis nor the later successful refresh is retrospective proof",
     "run an *additional* diagnostic command or any SSO inspection",
-    "the gate's internal operation is not the later standalone diagnosis",
+    "The gate's internal path is not the later standalone diagnosis",
 )
 
-#: Claims the governed verifier's own source contradicts.
+#: Claims that attempt 4 issued no STS identity operation at all.
 #:
-#: Every entry asserts that attempt 4 issued no STS identity operation at all.
-#: The gate issues one by construction, so each is refuted by
-#: ``scripts/aws_foundation_verify.py`` -- which this correction does not edit,
-#: because it is the evidence.
+#: Refused because ZERO is a number, and no tracked evidence establishes one:
+#: the gate may well have reached its ``sts get-caller-identity`` call, and
+#: nothing records which internal branch refused. An earlier revision refused
+#: these on the stronger ground that the gate issues an STS call *by
+#: construction*; that reasoning was wrong -- the gate has pre-STS refusal
+#: paths -- and only the conclusion survives it.
 #:
 #: The accurate scoped statements are required by :data:`GATE_VERSUS_DIAGNOSIS`
 #: and are deliberately not matched here: "no *standalone* diagnosis" stays
@@ -2830,6 +2843,97 @@ STALE_GATE_PROBE_CLAIMS: Final[tuple[str, ...]] = (
     "NO STS IDENTITY OPERATION OCCURRED DURING ATTEMPT 4",
     "ATTEMPT 4 ISSUED NO STS",
     "THE FOURTH ATTEMPT MADE NO STS",
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT: ZERO",
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT ZERO",
+)
+
+#: Numeric STS claims neither attempt supports.
+#:
+#: ``identity_gate()`` refuses before its ``sts get-caller-identity`` call on two
+#: paths, so a gate invocation fixes no STS count in either direction. ONE and
+#: ZERO are both refused, for the two attempts separately: the fourth
+#: binding-preflight attempt and the first authenticated one are different events
+#: under different authorizations, and neither lends the other a number.
+#:
+#: 16 numeric STS claims are refused here, and that number is checked against
+#: ``len()``.
+ATTEMPT_STS_COUNT_CLAIMS: Final[tuple[str, ...]] = (
+    # -- attempt 4, the fourth binding preflight
+    "INVOKED ITS OWN STS IDENTITY OPERATION ONCE",
+    "THE GATE RUNS ITS OWN STS IDENTITY OPERATION",
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT: ONE",
+    "STS COMMAND INVOCATIONS ON THE FOURTH ATTEMPT ONE",
+    "THE FOURTH ATTEMPT INVOKED STS ONCE",
+    "ATTEMPT 4 MADE ONE STS IDENTITY CALL",
+    "ATTEMPT 4 REACHED ITS STS CALL",
+    "THE FOURTH ATTEMPT REACHED THE STS CALL",
+    # -- the first authenticated qualification attempt
+    "STS COMMAND INVOCATIONS BY THE GATE ONE",
+    "STS COMMAND INVOCATIONS BY THE GATE: ONE",
+    "STS COMMAND INVOCATIONS BY THE GATE ZERO",
+    "STS COMMAND INVOCATIONS BY THE GATE: ZERO",
+    "THE FIRST AUTHENTICATED ATTEMPT INVOKED STS ONCE",
+    "THE FIRST AUTHENTICATED ATTEMPT MADE NO STS CALL",
+    "THE AUTHENTICATED ATTEMPT REACHED THE STS CALL",
+    "THE AUTHENTICATED ATTEMPT MADE ONE STS IDENTITY CALL",
+)
+
+#: SSO conclusions drawn from an identity refusal rather than from a diagnosis.
+#:
+#: A gate that did not pass says nothing about why. The later standalone
+#: diagnosis returned one closed word about a session, and it is a separate event
+#: under a separate authorization; reading it backwards into either attempt is
+#: the inference this list refuses.
+#:
+#: 10 inferences are refused here, and that number is checked against ``len()``.
+ATTEMPT_SSO_INFERENCES: Final[tuple[str, ...]] = (
+    "ATTEMPT 4 PROVES THE SSO SESSION WAS MISSING",
+    "ATTEMPT 4 PROVES THE SSO SESSION WAS EXPIRED",
+    "THE FOURTH ATTEMPT PROVES A MISSING SSO SESSION",
+    "THE FOURTH ATTEMPT PROVES AN EXPIRED SSO SESSION",
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO SESSION WAS MISSING",
+    "THE FOURTH ATTEMPT REFUSED BECAUSE THE SSO SESSION WAS EXPIRED",
+    "THE FIRST AUTHENTICATED ATTEMPT PROVES THE SSO SESSION WAS MISSING",
+    "THE FIRST AUTHENTICATED ATTEMPT PROVES THE SSO SESSION WAS EXPIRED",
+    "THE IDENTITY REFUSAL PROVES A MISSING SSO SESSION",
+    "THE IDENTITY REFUSAL PROVES AN EXPIRED SSO SESSION",
+)
+
+#: Denials of the one invocation that did happen, and the completion that did not.
+#:
+#: The pair is the point. *The bounded acquisition never completed* is true and
+#: *the entry point was never invoked* is false, and a summary that reaches for
+#: the first to imply the second is the drift this refuses.
+#:
+#: 9 denials are refused here, and that number is checked against ``len()``.
+ATTEMPT_INVOCATION_DENIALS: Final[tuple[str, ...]] = (
+    "THE ENTRY POINT WAS NEVER INVOKED",
+    "THE ENTRY POINT HAS NEVER BEEN INVOKED",
+    "THE FUNCTION HAS NEVER BEEN RUN",
+    "THE FUNCTION WAS NEVER RUN",
+    "AUTHENTICATED ATTEMPTS: ZERO",
+    "AUTHENTICATED ATTEMPTS ZERO",
+    "THE BOUNDED ACQUISITION COMPLETED",
+    "THE BOUNDED ACQUISITION HAS COMPLETED",
+    "A SECOND AUTHENTICATED ATTEMPT IS AUTHORIZED",
+)
+
+#: The first attempt's facts, required in each status document independently.
+FIRST_ATTEMPT_REQUIRED_FACTS: Final[tuple[tuple[str, str], ...]] = (
+    ("records that exactly one process was invoked", "exactly one entry-point process was invoked"),
+    ("records that the attempt refused", "was invoked once and refused"),
+    (
+        "records that the bounded acquisition never completed",
+        "The bounded acquisition has never completed",
+    ),
+    (
+        "keeps never-completed apart from never-invoked",
+        "the entry point was nonetheless invoked exactly once",
+    ),
+    (
+        "refuses to let the first imply the second",
+        "the first may never be written so that it implies the second",
+    ),
 )
 
 #: Each refused phrase paired with the denylist that must still contain it.
@@ -2860,6 +2964,13 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("ALL OTHER EXECUTION CONDITIONS WERE IDENTICAL", SSO_CAUSE_OVERCLAIMS),
     ("THE SINGLE DIFFERENCE", SSO_CAUSE_OVERCLAIMS),
     ("THE WHOLE OPERATIONAL FINDING", SSO_CAUSE_OVERCLAIMS),
+    ("INVOKED ITS OWN STS IDENTITY OPERATION ONCE", ATTEMPT_STS_COUNT_CLAIMS),
+    ("STS COMMAND INVOCATIONS BY THE GATE ONE", ATTEMPT_STS_COUNT_CLAIMS),
+    ("STS COMMAND INVOCATIONS BY THE GATE ZERO", ATTEMPT_STS_COUNT_CLAIMS),
+    ("ATTEMPT 4 PROVES THE SSO SESSION WAS EXPIRED", ATTEMPT_SSO_INFERENCES),
+    ("THE ENTRY POINT WAS NEVER INVOKED", ATTEMPT_INVOCATION_DENIALS),
+    ("THE BOUNDED ACQUISITION COMPLETED", ATTEMPT_INVOCATION_DENIALS),
+    ("A SECOND AUTHENTICATED ATTEMPT IS AUTHORIZED", ATTEMPT_INVOCATION_DENIALS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -3172,8 +3283,9 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "the one future bounded attempt AUTHORIZED, RUN AND COMPLETED -- THE FIFTH",
     "FIVE AUTHORIZED ATTEMPTS TO DATE -- THE FIRST FOUR REFUSED, THE FIFTH COMPLETED",
     "FOURTH ATTEMPT REFUSED_IDENTITY AT THE AWS IDENTITY GATE",
-    "FOURTH-ATTEMPT IDENTITY-GATE INVOCATIONS ONE -- THE GATE RUNS ITS OWN STS IDENTITY "
-    "OPERATION; STANDALONE DIAGNOSTIC COMMANDS ZERO; AWS NETWORK REQUESTS UNKNOWN",
+    "FOURTH-ATTEMPT IDENTITY-GATE INVOCATIONS ONE -- IT DID NOT PASS; ITS OWN STS "
+    "COMMAND INVOCATION UNKNOWN, BECAUSE REAL PRE-STS REFUSAL PATHS EXIST; STANDALONE "
+    "DIAGNOSTIC COMMANDS ZERO; AWS NETWORK REQUESTS UNKNOWN",
     # Three clauses rather than one long one: the stanza is joined before it is
     # searched, so each is independently required and each fails on its own.
     "POST-FOURTH AWS IDENTITY DIAGNOSIS COMPLETED -- REFUSED_SSO_SESSION_MISSING_OR_EXPIRED",
@@ -4997,11 +5109,11 @@ ADR_0017_ENTRY_POINT_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "scopes the never-run claim to the acquisition, not the entry point",
-        "the bounded acquisition itself has never been run to completion",
+        "the bounded acquisition has never completed",
     ),
     (
         "says plainly that the entry point was invoked once",
-        "not a claim that the entry point was never invoked -- it was, once",
+        "not about this module: the entry point was invoked, once, and it refused",
     ),
 )
 
@@ -5058,6 +5170,44 @@ ADR_0017_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "ADR-0017 locks exactly three CLI arguments",
         "--i-am-the-operator-authorizing-authenticated-qualification",
     ),
+)
+
+#: What the entry point's own status test must assert, and what it may not.
+#:
+#: The superseded test asserted only that the module docstring contained the
+#: substring ``never been run``. That was true and required while the surface was
+#: unexecuted, and it kept passing after the surface was invoked -- any sentence
+#: carrying those three words satisfied it, including a true one about a
+#: different subject. A denylist over the documents cannot catch that, because
+#: the weakness was in a test rather than in prose.
+ADR_0017_STATUS_TEST_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "names the corrected status test",
+        "def test_the_module_records_one_refused_attempt_and_no_completed_acquisition",
+    ),
+    ("asserts the one invocation and its refusal", "it has been attempted exactly once"),
+    ("asserts the stage it refused at", '"refused at stage 5"'),
+    ("asserts the closed outcome", "the closed outcome was ``refused_identity``"),
+    ("asserts the exit code", "the exit code was ``6``"),
+    ("asserts the runtime was never reached", "the qualification runtime at stage 12"),
+    ("asserts the acquisition never completed", "the bounded acquisition has never completed"),
+    (
+        "asserts never-completed is not never-invoked",
+        "the entry point was invoked, once, and it refused",
+    ),
+    ("asserts no provider request", "no provider request has ever been made from here"),
+    ("asserts no S3 qualification publication", "s3 qualification operations: zero"),
+    ("asserts a second attempt is unauthorized", "sso refresh: not authorized"),
+    ("refuses the never-invoked claim", '"the entry point was never invoked"'),
+    ("folds whitespace so a rewrap cannot evade it", "def _folded("),
+    ("scopes the function docstring it reads", "def _function_docstring("),
+)
+
+#: The superseded assertion, which may not come back.
+ADR_0017_STATUS_TEST_FORBIDDEN: Final[tuple[str, ...]] = (
+    "def test_the_module_states_that_completion_authorizes_no_second_run",
+    'assert "never been run" in doc',
+    'assert "never been run" in module_doc',
 )
 
 #: The three CLI arguments the future surface may carry, and no others.
@@ -10990,10 +11140,10 @@ def main() -> int:
             "one has completed; the attempt-time statement stays and the blanket one cannot",
         )
         f.check(
-            f"{name} scopes the attempt-time statement to standalone diagnosis",
+            f"{name} scopes the attempt-time statement and leaves the STS call unknown",
             "No standalone diagnosis was performed as part of attempt 4" in flat
-            and "Its governed identity gate invoked its own STS identity operation once" in flat,
-            "the gate runs sts get-caller-identity itself; only an extra command was absent",
+            and "So the fourth attempt's STS command invocation is UNKNOWN" in flat,
+            "an extra command was absent, and whether the gate reached its own is unknown",
         )
         f.check(
             f"{name} distinguishes the gate's own STS operation from the standalone diagnosis",
@@ -11005,6 +11155,27 @@ def main() -> int:
             not [claim for claim in STALE_GATE_PROBE_CLAIMS if claim in flat.upper()],
             "the governed verifier issues one by construction; the source refutes it",
         )
+        f.check(
+            f"{name} states no STS command count for either attempt",
+            not [claim for claim in ATTEMPT_STS_COUNT_CLAIMS if claim in flat.upper()],
+            "the gate refuses before its own STS call on two paths; ONE and ZERO are both numbers",
+        )
+        f.check(
+            f"{name} infers no SSO conclusion from an identity refusal",
+            not [claim for claim in ATTEMPT_SSO_INFERENCES if claim in flat.upper()],
+            "a gate that did not pass says nothing about why, in either attempt",
+        )
+        f.check(
+            f"{name} denies neither the one invocation nor the absent completion",
+            not [claim for claim in ATTEMPT_INVOCATION_DENIALS if claim in flat.upper()],
+            "never completed is true, never invoked is false, and one may not imply the other",
+        )
+        for label, phrase in FIRST_ATTEMPT_REQUIRED_FACTS:
+            f.check(
+                f"{name} {label}",
+                phrase in flat,
+                f"missing: {phrase}",
+            )
         f.check(
             f"{name} neither merges the two operations nor totals them",
             not [claim for claim in GATE_DIAGNOSIS_CONFLATIONS if claim in flat.upper()],
@@ -12462,6 +12633,21 @@ def main() -> int:
     )
     if ADR_0017_ENTRY_TESTS.is_file():
         entry_tests = read(ADR_0017_ENTRY_TESTS)
+        entry_tests_flat = " ".join(entry_tests.split()).lower()
+        for label, phrase in ADR_0017_STATUS_TEST_REQUIRED:
+            f.check(
+                f"the ADR-0017 status test {label}",
+                phrase.lower() in entry_tests_flat,
+                f"missing from the entry-point tests: {phrase}",
+            )
+        stale_assertions = [
+            claim for claim in ADR_0017_STATUS_TEST_FORBIDDEN if claim.lower() in entry_tests_flat
+        ]
+        f.check(
+            "the ADR-0017 status test has not reverted to the bare substring check",
+            not stale_assertions,
+            ", ".join(stale_assertions),
+        )
         for label, needle in (
             ("import safety", "test_importing_the_entry_point_performs_no_activity"),
             ("the exact CLI", "test_the_cli_carries_exactly_the_three_approved_arguments"),

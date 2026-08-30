@@ -16,11 +16,12 @@ no provider request was made and nothing was published. **Why the gate refused w
 not diagnosed and remains UNKNOWN**, and the refusal proves nothing about the
 credential, the secret, the bucket or the provider.
 
-**The bounded acquisition itself has never been run to completion.** The
-qualification runtime has never executed against real services, no provider
-request has ever been made from here, and no acquisition exists. Those are the
-narrow claims the one attempt supports, and they are not a claim that the entry
-point was never invoked -- it was, once.
+**The bounded acquisition has never completed.** Stage 5 refused seven stages
+before the single ``QualificationRuntime.execute`` call at stage 12, so the
+qualification runtime at stage 12 was never reached, no provider request has ever
+been made from here, and no acquisition record exists. Those are claims about the
+*acquisition*, not about this module: the entry point **was** invoked, once, and
+it refused.
 
 Implementing an operator surface is not permission to use it, and one refused
 attempt is not permission to make another: a second bounded authenticated

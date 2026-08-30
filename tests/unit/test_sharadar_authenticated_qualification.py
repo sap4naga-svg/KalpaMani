@@ -1120,10 +1120,92 @@ def test_the_module_claims_no_empirical_qualification_or_data_quality() -> None:
         assert forbidden not in source
 
 
-def test_the_module_states_that_completion_authorizes_no_second_run() -> None:
-    doc = ast.get_docstring(ast.parse(SCRIPT.read_text(encoding="utf-8"))) or ""
-    assert "authorization for another request" in doc
-    assert "never been run" in doc
+def _folded(text: str) -> str:
+    """``text`` with emphasis dropped, whitespace collapsed and case folded.
+
+    Docstrings wrap, and a rewrap is what an editor or a formatter does to a long
+    sentence. Folding first means these assertions are about what the module
+    *says*, not about where its lines happen to break.
+    """
+    return " ".join(text.replace("**", "").split()).lower()
+
+
+def _function_docstring(tree: ast.Module, name: str) -> str:
+    """The docstring of the module-level function ``name``, or ``""``.
+
+    Scoped on purpose. A whole-file search is satisfied by any copy of a phrase
+    anywhere in the script, including inside a different function that a reader
+    of ``main`` would never see.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_docstring(node) or ""
+    return ""
+
+
+def test_the_module_records_one_refused_attempt_and_no_completed_acquisition() -> None:
+    """The module's own status must match what the one attempt actually did.
+
+    This replaces a bare ``"never been run" in doc`` assertion. That check was
+    written while the surface was unexecuted, and it survived the surface being
+    invoked: any sentence containing those three words satisfied it, including a
+    true one about a different subject. What follows asserts the facts instead.
+
+    The two easiest to conflate are asserted apart from each other. *The bounded
+    acquisition never completed* is true; *the entry point was never invoked* is
+    false; and the second is exactly what a careless summary of the first would
+    imply. One is required and the other is refused, in the same test, so neither
+    can drift into the other unnoticed.
+    """
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    module_doc = _folded(ast.get_docstring(tree) or "")
+    main_doc = _folded(_function_docstring(tree, "main"))
+
+    assert module_doc, "the module docstring is the status surface asserted against here"
+    assert main_doc, "main's own docstring must say what main has done"
+
+    # Invoked once, and refused -- where, with which outcome, and with which code.
+    for fact in (
+        "it has been attempted exactly once, and that attempt refused",
+        "refused at stage 5",
+        "the existing aws identity gate",
+        "the closed outcome was ``refused_identity``",
+        "the exit code was ``6``",
+        "authorized attempts one refused: refused_identity, exit code 6, stage 5",
+    ):
+        assert fact in module_doc, f"missing from the module docstring: {fact}"
+    assert "this function has been run exactly once" in main_doc
+    assert "refused at the aws identity gate" in main_doc
+
+    # What that refusal stopped short of, stated as the acquisition's status.
+    for fact in (
+        "the qualification runtime at stage 12 was never reached",
+        "the bounded acquisition has never completed",
+        "no provider request has ever been made from here",
+        "no acquisition record exists",
+        "qualification-runtime executions against real services: zero",
+        "s3 qualification operations: zero",
+    ):
+        assert fact in module_doc, f"missing from the module docstring: {fact}"
+
+    # Never completed is not never invoked, and the module has to say so.
+    assert "not about this module: the entry point was invoked, once, and it refused" in module_doc
+
+    # A completed authorization is not a standing one.
+    assert "authorization for another request" in module_doc
+    assert "a second attempt · aws identity diagnosis · sso refresh: not authorized" in module_doc
+    assert "a second bounded authenticated acquisition qualification is a separate" in module_doc
+
+    # The claims the one attempt makes false, absent from both docstrings.
+    for stale in (
+        "it has never been run.",
+        "this function has never been run",
+        "the entry point has never been run",
+        "the entry point was never invoked",
+        "authorized attempts zero",
+    ):
+        assert stale not in module_doc, f"stale claim in the module docstring: {stale}"
+        assert stale not in main_doc, f"stale claim in main's docstring: {stale}"
 
 
 def test_the_module_keeps_q7_unresolved() -> None:
