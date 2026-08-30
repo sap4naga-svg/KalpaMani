@@ -36,9 +36,11 @@ Run:  .venv/Scripts/python.exe scripts/phase3_docs_audit.py
 from __future__ import annotations
 
 import ast
+import io
 import re
 import subprocess
 import sys
+import tokenize
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2381,6 +2383,36 @@ CORRECTED_SSO_NARRATIVE_FACTS: Final[tuple[str, ...]] = (
     "no current or future session validity is guaranteed",
 )
 
+#: What the entry point's own documentation must say about cause, and not say.
+#:
+#: Correction round 1 fixed the two status documents and deliberately left this
+#: file byte-identical, so the superseded sentence survived here -- wrapped
+#: across two lines, which is exactly why nothing noticed. Round 2 removes it
+#: and pins the replacement, in the file an operator opens before running the
+#: one path permitted to construct an SDK client.
+#:
+#: The wording is the source's own -- double backticks, ``--`` dashes, no
+#: markdown -- rather than the documents', because a fixture copied from another
+#: surface is a fixture that will be satisfied by editing the wrong file.
+BINDING_SOURCE_CAUSE_SCOPE: Final[tuple[str, ...]] = (
+    "Output handling was one deliberate correction, and the evidence stops short of a cause.",
+    "The first attempt captured stdout and stderr",
+    "the corrected attempt used a live console with inherited stdin, stdout and stderr",
+    "and it completed successfully",
+    "Streaming the interactive surface was a deliberate corrective measure",
+    "consistent with the interactive surface contributing to the earlier timeout",
+    "the undisplayed buffer was never inspected",
+    "capture is not established as the sole, necessary, sufficient or definitive cause",
+    "likely, not proven",
+    "The two attempts differed in more than output handling",
+    "They ran in different Claude sessions",
+    "the first copied the whole parent process environment",
+    "the corrected one built a minimal allowlisted child environment key-by-key",
+    "the point-in-time SSO state may itself have differed",
+    "Nothing here claims the two runs were otherwise identical",
+    "the second attempt's success does not establish why the first failed",
+)
+
 #: The chronology anchor for the corrected attempt, which follows the failed one.
 CORRECTED_SSO_ANCHOR: Final = (
     "a corrected, separately authorized AWS SSO-login attempt, in a new Claude session "
@@ -2575,6 +2607,8 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("THE FIRST SSO LOGIN SUCCEEDED", SSO_LOGIN_OVERCLAIMS),
     ("THE ONE THING THE FIRST ATTEMPT GOT WRONG", SSO_CAUSE_OVERCLAIMS),
     ("ALL OTHER EXECUTION CONDITIONS WERE IDENTICAL", SSO_CAUSE_OVERCLAIMS),
+    ("THE SINGLE DIFFERENCE", SSO_CAUSE_OVERCLAIMS),
+    ("THE WHOLE OPERATIONAL FINDING", SSO_CAUSE_OVERCLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -3343,6 +3377,47 @@ def _governed_profile_value(source: str) -> str:
         ):
             return node.value.value
     return ""
+
+
+def _source_documentation(path: Path) -> str:
+    """Every docstring and comment in one module, flattened, or ``""`` on failure.
+
+    :func:`_comment_prose` strips comment markers from *every* line of a file,
+    executable lines included, so a required sentence could be satisfied by a
+    string literal in the code. This reads the two surfaces that are actually
+    documentation -- real docstrings, resolved through :mod:`ast`, and comment
+    tokens, resolved through :mod:`tokenize` -- and nothing else. A sentence
+    moved out of the docstring and into a variable is therefore *gone* as far as
+    this is concerned, which is the property a guard over documentation needs.
+
+    Line wrapping is normalised away before the caller matches anything: the
+    phrase this round removes was invisible for two rounds because it was split
+    as ``which is the one`` / ``thing the first attempt got wrong``, and a guard
+    that cannot see across a wrap is a guard against one particular formatting.
+
+    Fail closed. An unreadable, unparseable or untokenizable file returns the
+    empty string, which makes the required-facts guard fail rather than pass on
+    an empty surface -- the rule :func:`_audit_fixture_span` follows for its own
+    boundary.
+    """
+    try:
+        source = read(path)
+        tree = ast.parse(source, filename=str(path))
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (OSError, SyntaxError, UnicodeDecodeError, tokenize.TokenError):
+        return ""
+    pieces: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            docstring = ast.get_docstring(node, clean=False)
+            if docstring:
+                pieces.append(docstring)
+    pieces.extend(
+        re.sub(r"^#:?[ \t]?", "", token.string)
+        for token in tokens
+        if token.type == tokenize.COMMENT
+    )
+    return " ".join(" ".join(pieces).replace("**", "").split())
 
 
 def _comment_prose(text: str) -> str:
@@ -9011,6 +9086,22 @@ def main() -> int:
                 if claim in _comment_prose(read(BINDING_PREFLIGHT)).upper()
             ],
             "a refreshed session is not a verified secret and not a standing identity",
+        )
+        binding_documentation = _source_documentation(BINDING_PREFLIGHT)
+        f.check(
+            "the entry point's documentation region is extractable",
+            bool(binding_documentation),
+            "an unresolvable region would guard nothing while reporting a pass",
+        )
+        f.check(
+            "the entry point separates the observed contrast from an inferred cause",
+            all(fact in binding_documentation for fact in BINDING_SOURCE_CAUSE_SCOPE),
+            "docstrings and comments only, so executable text cannot answer for them",
+        )
+        f.check(
+            "the entry point claims no proven cause for the first attempt's timeout",
+            not [claim for claim in SSO_CAUSE_OVERCLAIMS if claim in binding_documentation.upper()],
+            "wrapping hid this for two rounds; the region is flattened before it is read",
         )
         f.check(
             "the entry point's factory commentary no longer calls all diagnosis future",
