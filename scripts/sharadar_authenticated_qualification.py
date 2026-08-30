@@ -19,19 +19,42 @@ proves nothing about the credential, the secret, the bucket or the provider.
 **The second attempt completed.** A separately authorized second execution invoked
 one process and exited ``0``; a closed result was observed and that result was
 ``COMPLETED``; the qualification runtime was reached; and **one provider request
-was reported**. **Attempt two's S3 qualification operations are NOT ESTABLISHED**,
-and NOT ESTABLISHED is never read as ZERO. Every attempt-two count the authorized
-evidence does not state is **NOT ESTABLISHED** too, and none of them is resolved
-by reading S3 or a private report.
+was made**.
 
-**``COMPLETED`` is a command status, not a verdict.** It says the second governed
-invocation exited successfully and produced its closed result after reaching the
-qualification runtime, and it says nothing else. It is not qualification passed,
+**``COMPLETED`` is a closed token with a committed meaning, and that meaning is
+read from the code rather than guessed at.** :func:`_classify_result` returns it
+only for ``QualificationOutcome.COMPLETED``, and
+:class:`~kalpamani.data.ingest.sharadar.runtime.QualificationRunResult` refuses
+that outcome unless there is no failure, no partial state,
+``publication_state_unknown`` is ``False``, and every planned request has a
+complete acquisition record. The locked plan holds exactly one request, one
+completed acquisition calls ``publish_bronze_payload`` exactly once, that
+function calls ``put_if_absent`` exactly three times -- claim, payload, record --
+and each ``put_if_absent`` issues exactly one conditional ``PutObject`` with a
+``HeadObject`` only after a ``412``. So the second attempt establishes
+**exactly three PutObject invocations, zero to three conditional HeadObject
+invocations, and three to six S3 qualification operations in total**, with
+**publication state unknown: NO** and **a complete retained acquisition record**.
+
+**What the token does not fix is stated as unestablished, not rounded.** How many
+of the three objects were **newly written** is **NOT ESTABLISHED**, how many were
+**already present and verified identical** is **NOT ESTABLISHED**, and so is the
+exact ``HeadObject`` count within its bound. No object identifier, key, digest,
+size, timestamp or content is established, disclosed or derived here.
+
+**``COMPLETED`` is a command status, not a verdict.** It is not qualification passed,
 not the provider accepted, not a selection of a provider, not a closure of G1 or
 G2, not a completion of Phase 3, and not production, CONTROL or live-trading
-readiness.
-**Provider authentication stays UNKNOWN**: a reported request is not a proven
-authentication, and the authorized public result does not state one.
+readiness. It establishes no data quality, no schema correctness and no P1-P9
+result.
+
+**Authentication is two separate facts.** A request the provider answered with a
+``200`` is **exact-request authentication: ESTABLISHED** -- the governed
+credential was accepted for that one governed request, because
+:meth:`~kalpamani.data.ingest.sharadar.client.SharadarClient.fetch` returns a body
+on no other status. **Provider-wide authentication stays UNKNOWN**, and so does
+subscription-wide entitlement: one answered request is not a claim about every
+dataset, every window or the subscription.
 
 Implementing an operator surface is not permission to use it, one refused attempt
 is not permission to make another, and one completed attempt is not permission to
@@ -61,12 +84,20 @@ unauthorized too.
 
     attempt two -- COMPLETED, exit code 0, closed result observed
     attempt two -- qualification runtime reached: YES · runtime executions: ONE
-    attempt two -- provider requests: ONE, reported; no further call is inferred
-    attempt two -- S3 qualification operations: NOT ESTABLISHED, never read as ZERO
-    attempt two -- every count not stated above: NOT ESTABLISHED
+    attempt two -- provider requests: ONE; no further call is inferred
+    attempt two -- PutObject invocations: EXACTLY THREE
+    attempt two -- conditional HeadObject invocations: ZERO TO THREE, only after a 412
+    attempt two -- S3 qualification operations: THREE TO SIX
+    attempt two -- publication state unknown: NO
+    attempt two -- complete acquisition record: EXISTS
+    attempt two -- newly written objects: NOT ESTABLISHED
+    attempt two -- already-present identical objects: NOT ESTABLISHED
+    attempt two -- object identifiers, keys, digests, sizes, contents: NOT ESTABLISHED
 
     cumulative -- qualification-runtime executions: ONE · provider requests: ONE
-    provider authentication: UNKNOWN   ·   production provider selection: NONE
+    exact-request authentication: ESTABLISHED
+    provider-wide authentication: UNKNOWN · subscription-wide entitlement: UNKNOWN
+    production provider selection: NONE
     underlying AWS network interactions: UNKNOWN -- no count is established
     a third attempt · AWS identity diagnosis · SSO refresh: NOT AUTHORIZED
 
@@ -81,12 +112,14 @@ contract.
 **Attempt one established none of that.** It refused at the AWS identity gate,
 three stages before the credential and four before any provider contact.
 
-**Attempt two established less than all of it.** One process exited ``0``, a closed
-``COMPLETED`` result was observed, the qualification runtime was reached and one
-provider request was reported. **Provider authentication still stays UNKNOWN** --
-the authorized public result does not state it -- and attempt two's S3
-qualification operations, and every other count that result does not state, are
-**NOT ESTABLISHED**.
+**Attempt two established that, for its one governed request.** One process exited
+``0``, a closed ``COMPLETED`` result was observed, the qualification runtime was
+reached, one provider request was made, and the closed token's committed meaning
+fixes **three PutObject invocations, zero to three conditional HeadObject
+invocations, three to six S3 qualification operations** and a **complete retained
+acquisition record**. **Exact-request authentication is ESTABLISHED**;
+**provider-wide authentication stays UNKNOWN**; and how many objects were newly
+written rather than already present is **NOT ESTABLISHED**.
 
 It establishes **nothing** about: full P1-P9 empirical qualification ·
 provider-wide authentication · access to every Sharadar dataset · full-history or
@@ -745,8 +778,10 @@ def main(argv: list[str] | None = None) -> int:
     identity gate with ``REFUSED_IDENTITY`` and exit code ``6`` -- before any
     secret identifier, credential, client, provider request or publication. The
     second run returned ``0`` with a closed ``COMPLETED`` result, having reached
-    the qualification runtime and reported one provider request; its S3
-    qualification operations are **NOT ESTABLISHED**. Implementing it was not
+    the qualification runtime and made one provider request; that closed token
+    fixes **three PutObject invocations, zero to three conditional HeadObject
+    invocations and three to six S3 qualification operations**, while how many of
+    those objects were newly written stays **NOT ESTABLISHED**. Implementing it was not
     authorization to use it, one refused attempt is not authorization for a
     second, and one completed attempt is not authorization for a third: another
     bounded authenticated qualification remains a separate written authorization
