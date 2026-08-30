@@ -1282,7 +1282,8 @@ ADR_0015_SECTION_HISTORY: Final[tuple[str, ...]] = (
     "A credential was retrieved, and that is not provider authentication",
     "What entry-point resolution did and did not establish",
     "A real binding preflight is no longer a future event at all",
-    "Authenticated qualification remains NOT AUTHORIZED and has never run",
+    "A first authenticated qualification attempt has since occurred, separately "
+    "authorized, and it refused at the AWS identity gate",
 )
 
 #: What the corrected ADR-0015 IN FORCE matrix entry must state.
@@ -1394,7 +1395,7 @@ ADR_0016_ROW_BOUNDARY: Final[tuple[str, ...]] = (
     "FURTHER ENVIRONMENT RESYNCHRONIZATION SEPARATELY GATED",
     "A SIXTH BINDING-PREFLIGHT ATTEMPT NOT AUTHORIZED",
     "ADDITIONAL CREDENTIAL OR SECRETS MANAGER ACCESS NOT AUTHORIZED",
-    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+    "A SECOND AUTHENTICATED QUALIFICATION ATTEMPT NOT AUTHORIZED",
 )
 
 #: The first-cell subject of the corrected provider-credential-state row.
@@ -1419,7 +1420,7 @@ PROVIDER_CREDENTIAL_ROW_FACTS: Final[tuple[str, ...]] = (
     "ANY ADDITIONAL RETRIEVAL NOT AUTHORIZED",
     "PROVIDER API ACCESS NOT AUTHORIZED",
     "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
-    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+    "A SECOND AUTHENTICATED QUALIFICATION ATTEMPT NOT AUTHORIZED",
 )
 
 #: The superseded unscoped first cell, refused as a row subject.
@@ -1440,7 +1441,7 @@ FUTURE_ACTION_BOUNDARIES: Final[tuple[str, ...]] = (
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "further environment resynchronization: SEPARATELY GATED / NOT AUTHORIZED",
     "additional credential or Secrets Manager access: NOT AUTHORIZED",
-    "authenticated qualification: NOT AUTHORIZED",
+    "a second authenticated qualification attempt: NOT AUTHORIZED",
     "Sharadar/provider access: NOT AUTHORIZED",
     "S3 object operations or publication: NOT AUTHORIZED",
     "ingestion, backfill and update: NOT AUTHORIZED",
@@ -1499,7 +1500,7 @@ CREDENTIAL_SETUP_ROW_FACTS: Final[tuple[str, ...]] = (
     "ADDITIONAL APPLICATION CREDENTIAL RETRIEVAL NOT AUTHORIZED",
     "PROVIDER API ACCESS NOT AUTHORIZED",
     "SERVICES DATA ACCESS AND INGESTION NOT AUTHORIZED",
-    "AUTHENTICATED QUALIFICATION NOT AUTHORIZED",
+    "A SECOND AUTHENTICATED QUALIFICATION ATTEMPT NOT AUTHORIZED",
 )
 
 #: The superseded collective row, refused by its exact first cell.
@@ -1540,7 +1541,8 @@ NOT_AUTHORIZED_STANZA_CLAUSES: Final[tuple[str, ...]] = (
     "another AWS SSO refresh or login -- separately gated",
     "ANY provider API call",
     "ANY S3 object operation or publication",
-    "an authenticated qualification run",
+    "a SECOND authenticated qualification attempt",
+    "further AWS identity diagnosis of that refusal",
 )
 
 #: Stanza wording that forbids owner-side setup that has since happened.
@@ -1616,7 +1618,7 @@ ADR_0015_STILL_GATED: Final[tuple[str, ...]] = (
     "SHARADAR/PROVIDER ACCESS",
     "ANY S3 OBJECT OPERATION OR PUBLICATION",
     "INGESTION, BACKFILL AND UPDATE",
-    "AUTHENTICATED QUALIFICATION RUN STAY SEPARATELY GATED AND NOT AUTHORIZED",
+    "AUTHENTICATED QUALIFICATION ATTEMPT STAY SEPARATELY GATED AND NOT AUTHORIZED",
 )
 
 #: The two chronology anchors whose order carries the meaning.
@@ -2133,7 +2135,7 @@ SSO_LOGIN_FORWARD_BOUNDARIES: Final[tuple[str, ...]] = (
     "further AWS authentication diagnosis NOT AUTHORIZED",
     "a sixth binding-preflight attempt NOT AUTHORIZED",
     "additional credential or Secrets Manager access NOT AUTHORIZED",
-    "authenticated qualification NOT AUTHORIZED",
+    "a second authenticated qualification attempt NOT AUTHORIZED",
 )
 
 #: Current-status wording the SSO-login attempt made false.
@@ -2238,7 +2240,7 @@ SSO_LOGIN_OVERCLAIMS: Final[tuple[str, ...]] = (
 #: answered by weakening a true sentence somewhere else.
 SSO_LOGIN_NARRATIVE_BOUNDS: Final[tuple[str, str]] = (
     "A separately authorized AWS SSO-login attempt has since been made",
-    "qualification NOT AUTHORIZED.",
+    "qualification attempt NOT AUTHORIZED.",
 )
 
 #: How the child environment was built, and what that does and does not mean.
@@ -2901,7 +2903,7 @@ SIXTH_ATTEMPT_BOUNDARIES: Final[tuple[str, ...]] = (
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "additional credential or Secrets Manager access: NOT AUTHORIZED",
-    "authenticated qualification: NOT AUTHORIZED",
+    "a second authenticated qualification attempt: NOT AUTHORIZED",
 )
 
 #: What the entry point's own documentation must state about the fourth attempt.
@@ -3048,7 +3050,7 @@ ENVIRONMENT_BOUNDARIES: Final[tuple[str, ...]] = (
     "further AWS authentication diagnosis: NOT AUTHORIZED",
     "another AWS SSO-login/refresh attempt: SEPARATELY GATED / NOT AUTHORIZED",
     "additional credential or Secrets Manager access: NOT AUTHORIZED",
-    "authenticated qualification: NOT AUTHORIZED",
+    "a second authenticated qualification attempt: NOT AUTHORIZED",
     "Sharadar/provider access: NOT AUTHORIZED",
     "S3 object operations or publication: NOT AUTHORIZED",
     "ingestion, backfill and update: NOT AUTHORIZED",
@@ -3201,7 +3203,7 @@ ENVIRONMENT_MATRIX_CLAUSES: Final[tuple[str, ...]] = (
     "further AWS authentication diagnosis NOT AUTHORIZED",
     "ANOTHER AWS SSO-LOGIN/REFRESH ATTEMPT SEPARATELY GATED AND NOT AUTHORIZED",
     "additional credential or Secrets Manager access NOT AUTHORIZED",
-    "authenticated qualification NOT AUTHORIZED",
+    "a second authenticated qualification attempt NOT AUTHORIZED",
     "Sharadar/provider access NOT AUTHORIZED",
     "S3 object operations or publication NOT AUTHORIZED",
     "ingestion, backfill and update NOT AUTHORIZED",
@@ -4324,11 +4326,21 @@ ADR_0017_REQUIRED_PROSE: Final[tuple[tuple[str, str], ...]] = (
     ("names the approved ADR head", ADR_0017_APPROVED_HEAD),
     ("keeps the pre-merge period historically accurate", "carried no authority"),
     ("records the entry point as implemented", "is now implemented"),
-    ("records it as code only and never run", "code only / never run"),
+    (
+        "records the one attempt and its refusal",
+        "attempted once and refused",
+    ),
+    ("names the closed outcome of that attempt", "refused_identity"),
+    ("names the exit code of that attempt", "exit code `6`"),
+    ("keeps the cause of the refusal undiagnosed", "not diagnosed"),
     ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
     (
-        "keeps execution separately gated",
-        "execution of the new surface",
+        "keeps a second execution separately gated",
+        "a second execution of the surface",
+    ),
+    (
+        "refuses a further identity diagnosis and another SSO login",
+        "another aws sso refresh or login",
     ),
     ("keeps the three gates distinct", "three distinct gates"),
     ("introduces no parser", "no parser"),
@@ -4359,42 +4371,121 @@ ADR_0017_REQUIRED_COUNTS: Final[tuple[tuple[str, str], ...]] = (
         "authenticated entry points implemented      one",
     ),
     (
-        "records zero authenticated qualification attempts",
-        "authenticated qualification attempts        zero",
+        "records one authenticated qualification attempt, refused",
+        "authenticated qualification attempts        one -- refused",
     ),
-    ("records zero Sharadar/provider requests", "sharadar/provider requests                  zero"),
+    (
+        "records exactly one entry-point process invocation",
+        "entry-point process invocations             one",
+    ),
+    (
+        "names the closed outcome of that attempt",
+        "closed outcome                              refused_identity",
+    ),
+    (
+        "records the last stage definitively reached",
+        "last stage definitively reached             stage 5 -- the aws identity gate",
+    ),
+    ("records that stages 1-4 passed", "stages 1-4                                  passed"),
+    (
+        "records one refused AWS identity-gate invocation",
+        "aws identity-gate invocations               one -- refused",
+    ),
+    (
+        "records zero licensed-bucket resolutions",
+        "licensed-bucket resolutions                 zero",
+    ),
+    (
+        "records zero Terraform command invocations",
+        "terraform command invocations               zero",
+    ),
+    (
+        "records zero secret-identifier resolutions",
+        "secret-identifier resolutions               zero",
+    ),
+    (
+        "records zero reads of the secret-identifier variable",
+        "kalpamani_sharadar_secret_id reads          zero",
+    ),
+    (
+        "records zero Secrets Manager client constructions",
+        "secrets manager client constructions        zero",
+    ),
+    (
+        "records zero get_secret_value invocations",
+        "get_secret_value invocations                zero",
+    ),
+    (
+        "records zero credential retrievals by this attempt",
+        "credential retrievals by this attempt       zero",
+    ),
+    ("records zero S3 client constructions", "s3 client constructions                     zero"),
+    (
+        "records zero provider transport constructions",
+        "provider transport constructions            zero",
+    ),
     (
         "records zero qualification-runtime executions",
         "qualification-runtime executions            zero",
     ),
     (
+        "records zero application-level provider fetches",
+        "application-level provider fetches          zero",
+    ),
+    ("records zero Sharadar/provider requests", "sharadar/provider requests                  zero"),
+    (
         "keeps provider authentication UNKNOWN",
         "provider authentication                     unknown",
     ),
+    ("records zero PutObject operations", "putobject                                   zero"),
+    ("records zero S3 object-byte reads", "s3 object-byte reads                        zero"),
     (
         "records zero S3 object operations for qualification",
         "s3 object operations for qualification      zero",
     ),
+    ("records zero CONTROL operations", "control operations                          zero"),
     (
-        "records zero Terraform operations for qualification",
-        "terraform operations for qualification      zero",
+        "records zero .runtime/ writes from this attempt",
+        ".runtime/ writes from this attempt          zero",
+    ),
+    ("records zero P1-P9 executions", "p1-p9 executions                            zero"),
+    (
+        "records zero ingestion and trading operations",
+        "ingestion and trading operations            zero",
     ),
     (
-        "leaves the credential-retrieval count at one",
-        "credential retrievals                       one",
+        "keeps the underlying AWS/network total UNKNOWN",
+        "underlying aws/network interactions         unknown -- no count is established",
+    ),
+    (
+        "keeps the gate's own STS command invocation UNKNOWN",
+        "sts command invocations by the gate         unknown -- real pre-sts refusal paths exist",
+    ),
+    (
+        "leaves the cause of the refusal undiagnosed",
+        "cause of the identity refusal               undiagnosed -- not inferred, not repaired",
+    ),
+    (
+        "leaves the cumulative credential-retrieval count at one",
+        "credential retrievals, cumulative           one",
     ),
     (
         "leaves the binding-preflight count at five",
-        "binding-preflight attempts                  five",
+        "binding-preflight attempts                  five -- unchanged",
     ),
 )
-
-#: The seven chronology steps, in the order the governance depends on.
+#: The eleven chronology steps, in the order the governance depends on.
 #:
 #: Presence is not enough and never was: a document listing acceptance before the
 #: merge tells a reader that the ADR carried authority while its pull request was
 #: open, which is the one thing this slice must not assert. The audit therefore
 #: checks the *positions*, not the sentences.
+#:
+#: The last four were added when the surface was first executed. Their order is
+#: the whole governance claim: the entry point was unexecuted, then one attempt
+#: was made, then four stages passed, then the fifth refused. A document that
+#: narrates the refusal before the attempt, or the attempt before the merge,
+#: tells a reader something nobody authorized.
 ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
     "proposed in open pr #33 and carried no authority",
     "pr #33 merged.",
@@ -4402,7 +4493,11 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
     "adr-0017 is now accepted and in force",
     "no implementation and no execution followed the merge",
     "the dormant code-only implementation slice",
-    "execution remains a later, separate written authorization",
+    "it had never been executed at that point",
+    "a separately authorized first execution was then attempted",
+    f"stages 1{EN_DASH}4 passed",
+    "the existing aws identity gate, was invoked once and refused",
+    "no retry, diagnosis, sso login, repair or second attempt followed",
 )
 
 #: Claims that would misdescribe an implemented-but-never-run surface.
@@ -4414,9 +4509,9 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
 #: replacing them would leave the reverted claim unguarded, so each is inverted
 #: into a rejection instead.
 #:
-#: 33 claims about an implemented-but-unrun surface are listed here, and the
-#: number in that sentence is checked against ``len()`` so an entry cannot leave
-#: quietly.
+#: 48 claims about an implemented, attempted and refused surface are listed here,
+#: and the number in that sentence is checked against ``len()`` so an entry cannot
+#: leave quietly.
 ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
     # -- stale: true before ADR-0017 merged, false now
     "adr-0017 is proposed",
@@ -4436,7 +4531,6 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
     "no authenticated implementation may be built",
     # -- premature: describes a run that has not happened
     "the authenticated qualification has run",
-    "authenticated qualification attempts one",
     "provider authentication confirmed",
     "provider authentication is confirmed",
     "sharadar/provider requests one",
@@ -4455,6 +4549,25 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
     "a provider is selected",
     "g1 closed",
     "g2 closed",
+    # -- stale: true before the first authenticated attempt, false now
+    "authenticated qualification attempts zero",
+    "the entry point has never been run",
+    "code only / never run",
+    # -- overstated: more than the one refusal established
+    "the authenticated qualification completed",
+    "a credential was retrieved during this attempt",
+    "the sso session was definitely missing",
+    "the sso session was definitely expired",
+    "the identity refusal proves a credential defect",
+    "the identity refusal proves a provider failure",
+    "underlying aws network requests zero",
+    "underlying aws network requests one",
+    # -- permission the refusal did not create
+    "a retry is authorized",
+    "a second authenticated attempt is authorized",
+    "further aws identity diagnosis is authorized",
+    "another sso refresh is authorized",
+    "sso repair is authorized",
 )
 
 #: The claims that may never leave :data:`ADR_0017_FORBIDDEN`.
@@ -4466,7 +4579,7 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
 #: grow and may be reworded, and these particular claims cannot be dropped
 #: without failing a check that says so by name.
 #:
-#: 12 claims are protected by membership here.
+#: 19 claims are protected by membership here.
 ADR_0017_SURVIVING_CLAIMS: Final[tuple[str, ...]] = (
     "adr-0017 remains proposed",
     "pr #33 remains open",
@@ -4480,6 +4593,13 @@ ADR_0017_SURVIVING_CLAIMS: Final[tuple[str, ...]] = (
     "a fourth acquisition mode",
     "payload parsing is permitted in the acquisition runtime",
     "a provider is selected",
+    "authenticated qualification attempts zero",
+    "the entry point has never been run",
+    "the sso session was definitely missing",
+    "the sso session was definitely expired",
+    "underlying aws network requests zero",
+    "underlying aws network requests one",
+    "a retry is authorized",
 )
 
 #: The heading of the ADR-0017 narrative section in both status documents.
@@ -4538,8 +4658,41 @@ ADR_0017_MATRIX_IN_FORCE: Final[tuple[tuple[str, str], ...]] = (
     ("records that it is no longer proposed", "no longer\n                        proposed"),
     ("states that implementing is not permission to use", "not permission to"),
     ("keeps execution separately gated", "gated and not authorized"),
-    ("records the entry point as implemented", "is now implemented --"),
-    ("records it as code only and never run", "code only / never run."),
+    ("records the entry point as implemented", "is now implemented,"),
+    ("records it as attempted once and refused", "attempted once and refused."),
+    (
+        "records one refused attempt",
+        "authenticated qualification attempts one, refused;",
+    ),
+    (
+        "names the closed outcome",
+        "closed outcome\n                        refused_identity;",
+    ),
+    ("names the exit code", "exit code 6;"),
+    (
+        "records that stages 1-4 passed",
+        "stages 1-4\n                        passed;",
+    ),
+    (
+        "keeps the underlying AWS/network total unknown",
+        "underlying aws/network interactions unknown;",
+    ),
+    (
+        "keeps the identity gate own STS command invocation unknown",
+        "own sts command invocation unknown, because real",
+    ),
+    (
+        "leaves the cause of the refusal undiagnosed",
+        "the cause of the refusal\n                        undiagnosed and not inferred",
+    ),
+    (
+        "records that no retry or repair followed",
+        "no retry, diagnosis, sso\n                        login or repair followed",
+    ),
+    (
+        "keeps the binding-preflight count at five",
+        "binding-preflight\n                        attempts remain five",
+    ),
     ("counts one implemented entry point", "implemented one;"),
     ("records the composition root as extended", "extended, not duplicated"),
     ("records exactly one production caller", "production caller."),
@@ -4554,7 +4707,18 @@ ADR_0017_MATRIX_NOT_AUTHORIZED: Final[tuple[tuple[str, str], ...]] = (
         "keeps S3 qualification publication gated",
         "any s3 qualification\n                        publication",
     ),
-    ("keeps authenticated qualification gated", "any authenticated qualification"),
+    (
+        "keeps further authenticated qualification gated",
+        "further authenticated qualification",
+    ),
+    (
+        "refuses a second execution rather than a first",
+        "a second execution of the bounded authenticated",
+    ),
+    (
+        "refuses a diagnosis, a repair and a retry of the refusal",
+        "further aws identity diagnosis of that refusal",
+    ),
     ("keeps full empirical qualification a later gate", "full p1-p9 empirical qualification"),
     ("keeps broker, LEAN, Paper and live trading refused", "broker/lean activity"),
 )
@@ -4578,8 +4742,54 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "while its pull request was open it was",
     ),
     (
-        "records the entry point as implemented, code only, never run",
-        "is now implemented — code only / never run",
+        "records the entry point as implemented, attempted once and refused",
+        "is now implemented, attempted once and refused",
+    ),
+    (
+        "records one attempt, refused",
+        "authenticated qualification attempts one — refused",
+    ),
+    ("names the closed outcome", "closed outcome `refused_identity`"),
+    ("names the exit code", "exit code `6`"),
+    (
+        "names the last stage definitively reached",
+        "last stage definitively reached stage 5 — the aws identity gate",
+    ),
+    ("records that stages 1-4 passed", f"stages 1{EN_DASH}4 passed"),
+    (
+        "records one refused identity-gate invocation",
+        "aws identity-gate invocations one, refused",
+    ),
+    ("records zero licensed-bucket resolutions", "licensed-bucket resolutions zero"),
+    ("records zero secret-identifier resolutions", "secret-identifier resolutions zero"),
+    (
+        "records zero credential retrievals by the attempt",
+        "credential retrievals by this attempt zero",
+    ),
+    (
+        "records zero application-level provider fetches",
+        "application-level provider fetches zero",
+    ),
+    (
+        "keeps the underlying AWS/network total unknown",
+        "underlying aws/network interactions unknown",
+    ),
+    (
+        "keeps the identity gate own STS command invocation unknown",
+        "sts command invocation is unknown because real pre-sts refusal paths exist",
+    ),
+    (
+        "leaves the cause of the refusal undiagnosed and uninferred",
+        "cause of the refusal was not diagnosed and is not inferred",
+    ),
+    (
+        "keeps the binding-preflight count at five",
+        "binding-preflight attempts remain five",
+    ),
+    (
+        "refuses a second attempt, a diagnosis and an SSO refresh",
+        "a second authenticated attempt, further aws identity diagnosis and another sso "
+        "refresh or login are each not authorized",
     ),
     ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
     ("states the entry point refuses by default", "refuses by default"),
@@ -4591,8 +4801,8 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records exactly one production caller of execute", "exactly one production caller"),
     ("states that implementing is not permission to use", "not permission to use it"),
     (
-        "keeps execution separately gated and unauthorized",
-        "execution of the new surface remains separately gated and not authorized",
+        "keeps a second execution separately gated and unauthorized",
+        "a second execution of the surface remains separately gated and not authorized",
     ),
     (
         "keeps implementation, execution and empirical qualification distinct",
@@ -4623,15 +4833,15 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("performs no CONTROL publication", "no control publication"),
     ("keeps provider authentication unknown", "provider authentication unknown"),
     ("records zero qualification S3 operations", "s3 qualification operations zero"),
-    (
-        "records zero qualification Terraform operations",
-        "terraform operations for qualification zero",
-    ),
+    ("records zero Terraform command invocations", "terraform command invocations zero"),
     (
         "records zero runtime executions against real services",
         "qualification-runtime executions against real services zero",
     ),
-    ("leaves the credential retrieval at one", "credential retrieval remains one"),
+    (
+        "leaves the cumulative credential retrieval at one",
+        "cumulative credential retrieval remains one",
+    ),
     (
         "keeps the empirical qualification separate",
         "empirical qualification remains separate and unexecuted",
@@ -4653,20 +4863,59 @@ ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("names the merge commit", ADR_0017_MERGE_COMMIT),
     ("names the approved ADR head", ADR_0017_APPROVED_HEAD),
     (
-        "records the entry point as implemented, code only, never run",
-        "implemented — code only / never run",
+        "records the entry point as implemented, attempted once and refused",
+        "implemented, attempted once and refused",
     ),
     ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
     ("states the entry point refuses by default", "refuses by default"),
     ("records the composition root as extended, not duplicated", "extended, not duplicated"),
     ("records exactly one production caller of execute", "exactly one production caller"),
     (
-        "states that implementing a surface is not permission to use it",
-        "implementing an operator surface is not permission to use it",
+        "states that implementing a surface was not permission to use it",
+        "implementing an operator surface was not permission to use it",
     ),
     (
-        "keeps execution separately gated and unauthorized",
-        "execution of the new surface is separately gated and not authorized",
+        "states that one refused attempt is not permission for a second",
+        "one refused attempt is not permission to make a second",
+    ),
+    (
+        "keeps a second execution separately gated and unauthorized",
+        "a second execution of the surface is separately gated and not authorized",
+    ),
+    ("names the closed outcome of the one attempt", "refused_identity"),
+    ("names its exit code", "exit code `6`"),
+    ("names the stage it refused at", "stage 5, the existing aws identity gate"),
+    (
+        "states what the attempt did not establish",
+        "it establishes nothing about the secret identifier",
+    ),
+    (
+        "refuses to infer a cause from the refusal",
+        "the cause was not diagnosed, and is not inferred here",
+    ),
+    (
+        "records the identity gate own STS invocation as unknown, with the reason",
+        "because a real pre-sts refusal path exists, the sts command invocation for this "
+        "attempt is recorded as unknown",
+    ),
+    (
+        "states no STS network-request count",
+        "no sts network-request count is stated, and underlying aws network interactions "
+        "stay unknown",
+    ),
+    (
+        "keeps the attempt distinct from a binding preflight",
+        "this attempt is not a sixth binding-preflight attempt",
+    ),
+    (
+        "refuses a second attempt, a diagnosis and an SSO refresh together",
+        "a second authenticated qualification attempt is not authorized · further aws "
+        "identity diagnosis is not authorized · another aws sso refresh or login is not "
+        "authorized",
+    ),
+    (
+        "states that a refusal is not permission to try again",
+        "a refusal is a completed result, not permission to repair and try again",
     ),
     (
         "keeps the implementation and execution gates uncollapsed",
@@ -4697,6 +4946,76 @@ ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("keeps G1 and G2 open where it resolves nothing", "g1 open · g2 open · g3"),
     ("keeps the remaining gates open", f"g4{EN_DASH}g7 open"),
+)
+
+#: What the entry point's own comments and docstrings must carry about the one
+#: attempt that has been made.
+#:
+#: The script is the surface an operator reads before running anything, so a
+#: status that is current in two markdown files and stale in the module docstring
+#: is the version most likely to mislead the person at the keyboard.
+#:
+#: Matched against the source with whitespace collapsed and case folded, so a
+#: docstring rewrapped across lines -- which is what black or a hand edit does to
+#: a long sentence -- cannot slip a claim past the guard.
+ADR_0017_ENTRY_POINT_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records that it has been attempted exactly once and refused",
+        "it has been attempted exactly once, and that attempt refused",
+    ),
+    ("names the closed outcome", "refused_identity"),
+    ("names the exit code", "the exit code was ``6``"),
+    (
+        "leaves the cause of the refusal undiagnosed",
+        "why the gate refused was not diagnosed and remains unknown",
+    ),
+    (
+        "counts one attempt, refused, with its stage",
+        "authorized attempts one refused: refused_identity, exit code 6, stage 5",
+    ),
+    (
+        "counts one refused identity-gate invocation",
+        "aws identity-gate invocations: one, refused",
+    ),
+    ("counts zero credential retrievals", "credential retrievals: zero"),
+    ("keeps provider authentication unknown", "provider authentication: unknown"),
+    (
+        "keeps the underlying AWS network total unknown",
+        "underlying aws network interactions: unknown -- no count is established",
+    ),
+    (
+        "refuses a second attempt, a diagnosis and an SSO refresh",
+        "a second attempt · aws identity diagnosis · sso refresh: not authorized",
+    ),
+    (
+        "states the attempted run established none of what a completed one would",
+        "the one attempted run established none of that",
+    ),
+    (
+        "records that main has been run exactly once",
+        "this function has been run exactly once",
+    ),
+    (
+        "scopes the never-run claim to the acquisition, not the entry point",
+        "the bounded acquisition itself has never been run to completion",
+    ),
+    (
+        "says plainly that the entry point was invoked once",
+        "not a claim that the entry point was never invoked -- it was, once",
+    ),
+)
+
+#: Claims the entry point's own text may no longer make.
+#:
+#: Each was true and required while the surface was unexecuted. Deleting the
+#: requirement without inverting it would leave the reverted claim unguarded.
+ADR_0017_ENTRY_POINT_FORBIDDEN: Final[tuple[str, ...]] = (
+    "it has never been run.",
+    "this function has never been run",
+    "the entry point has never been run",
+    "authorized attempts zero",
+    "authenticated qualification attempts zero",
+    "this slice never calls it with real ones",
 )
 
 #: What ADR-0017's own text must carry. The status documents summarise it; this
@@ -8809,7 +9128,9 @@ def main() -> int:
         )
         f.check(
             f"{name} states beside that closure that a real run is still unauthorized",
-            "Real Sharadar qualification remains NOT AUTHORIZED and has never run" in flat,
+            "A real Sharadar qualification run remains NOT AUTHORIZED and has never happened"
+            in flat
+            and "refused at the AWS identity gate, before any provider contact" in flat,
             "the two statements must be read together or the first misleads",
         )
         f.check(
@@ -11920,7 +12241,7 @@ def main() -> int:
         # the positions are what is checked.
         positions = [section_flat.find(step) for step in ADR_0017_CHRONOLOGY]
         f.check(
-            f"{name} carries all seven ADR-0017 chronology steps",
+            f"{name} carries all eleven ADR-0017 chronology steps",
             all(pos >= 0 for pos in positions),
             ", ".join(
                 step for step, pos in zip(ADR_0017_CHRONOLOGY, positions, strict=True) if pos < 0
@@ -11984,8 +12305,8 @@ def main() -> int:
         # passes -- so both sentences are written in the source and both numbers
         # come from `len()`, and the two have to be changed deliberately together.
         (
-            f"{len(ADR_0017_FORBIDDEN)} claims about an implemented-but-unrun surface "
-            "are listed here" in read(Path(__file__).resolve())
+            f"{len(ADR_0017_FORBIDDEN)} claims about an implemented, attempted and "
+            "refused surface are listed here" in read(Path(__file__).resolve())
         )
         and (
             f"{len(ADR_0017_FORBIDDEN_CLI)} forbidden CLI spellings are listed here"
@@ -11998,7 +12319,7 @@ def main() -> int:
         # The other half of the membership protection. The size sentence above
         # catches an entry vanishing alone; this catches one deleted together
         # with the number, which is the shape a weakening actually takes.
-        len(ADR_0017_SURVIVING_CLAIMS) == 12
+        len(ADR_0017_SURVIVING_CLAIMS) == 19
         and all(claim in ADR_0017_FORBIDDEN for claim in ADR_0017_SURVIVING_CLAIMS)
         and f"{len(ADR_0017_SURVIVING_CLAIMS)} claims are protected by membership here"
         in read(Path(__file__).resolve()),
@@ -12100,10 +12421,22 @@ def main() -> int:
             "WINDOW_DAYS: Final = 7" in entry,
             "deterministic from the injected clock, and never operator-supplied",
         )
+        # Whitespace-collapsed, so a docstring rewrapped across lines cannot
+        # evade the guard, and case-folded for the same reason the document
+        # scans are. The script is what an operator reads before running
+        # anything, so its own status may not go stale behind the markdown.
+        entry_flat = " ".join(entry.replace("**", "").split()).lower()
+        for label, phrase in ADR_0017_ENTRY_POINT_REQUIRED:
+            f.check(
+                f"the entry point {label}",
+                phrase in entry_flat,
+                f"missing from the entry point: {phrase}",
+            )
+        stale = [claim for claim in ADR_0017_ENTRY_POINT_FORBIDDEN if claim in entry_flat]
         f.check(
-            "the entry point states it has never been run",
-            "never been run" in entry,
-            "implementing an operator surface is not permission to use it",
+            "the entry point no longer claims it has never been run",
+            not stale,
+            ", ".join(stale),
         )
 
     f.check(

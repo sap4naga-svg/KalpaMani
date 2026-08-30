@@ -7,9 +7,26 @@ path all existed and were tested, and
 :meth:`~kalpamani.data.ingest.sharadar.runtime.QualificationRuntime.execute` had
 **no production caller**. This module is that caller, and only that.
 
-**It has never been run.** Implementing an operator surface is not permission to
-use it: a real bounded authenticated acquisition qualification is a **separate**
-written authorization, and none has been given.
+**It has been attempted exactly once, and that attempt refused.** A separately
+authorized first execution invoked one process, passed stages 1-4, and refused at
+stage 5 -- the existing AWS identity gate, invoked once, which did not pass. The
+closed outcome was ``REFUSED_IDENTITY`` and the exit code was ``6``. No secret
+identifier was resolved, no credential was retrieved, no client was constructed,
+no provider request was made and nothing was published. **Why the gate refused was
+not diagnosed and remains UNKNOWN**, and the refusal proves nothing about the
+credential, the secret, the bucket or the provider.
+
+**The bounded acquisition itself has never been run to completion.** The
+qualification runtime has never executed against real services, no provider
+request has ever been made from here, and no acquisition exists. Those are the
+narrow claims the one attempt supports, and they are not a claim that the entry
+point was never invoked -- it was, once.
+
+Implementing an operator surface is not permission to use it, and one refused
+attempt is not permission to make another: a second bounded authenticated
+acquisition qualification is a **separate** written authorization, and none has
+been given. Further AWS identity diagnosis and another SSO refresh or login are
+each separately gated and unauthorized too.
 
 ::
 
@@ -17,9 +34,17 @@ written authorization, and none has been given.
     default behaviour     REFUSE   no flag, no work -- no lookup, no client, no socket
     authorization         ONE      --i-am-the-operator-authorizing-authenticated-qualification
     what it authorizes    ONE BOUNDED ACQUISITION QUALIFICATION -- never a second
-    authorized attempts   ZERO     ·   provider requests: ZERO
+    authorized attempts   ONE      refused: REFUSED_IDENTITY, exit code 6, stage 5
+    entry-point process invocations: ONE   ·   provider requests: ZERO
+    AWS identity-gate invocations: ONE, refused   ·   stages 1-4: PASSED
+    licensed-bucket resolutions: ZERO   ·   terraform command invocations: ZERO
+    secret-identifier resolutions: ZERO   ·   secrets-manager clients: ZERO
+    get_secret_value invocations: ZERO   ·   credential retrievals: ZERO
+    S3 clients: ZERO   ·   provider transports: ZERO   ·   PutObject: ZERO
     qualification-runtime executions against real services: ZERO
     provider authentication: UNKNOWN   ·   S3 qualification operations: ZERO
+    underlying AWS network interactions: UNKNOWN -- no count is established
+    a second attempt · AWS identity diagnosis · SSO refresh: NOT AUTHORIZED
 
 What one future run may establish
 =================================
@@ -28,6 +53,10 @@ What one future run may establish
 that the locked dataset was accessible at that moment, that one response was
 returned, and that it was durably acquired under the accepted licensed Bronze
 contract.
+
+**The one attempted run established none of that.** It refused at the AWS identity
+gate, three stages before the credential and four before any provider contact, so
+provider authentication stays **UNKNOWN** and no acquisition exists.
 
 It establishes **nothing** about: full P1-P9 empirical qualification ·
 provider-wide authentication · access to every Sharadar dataset · full-history or
@@ -492,8 +521,8 @@ def run_authenticated_qualification(
     Every stage is a parameter, which is what makes this testable without AWS and
     what keeps the ambient environment out of it: nothing here reads
     ``os.environ``, opens a file, constructs a client or resolves a name. The real
-    factories are supplied by :func:`main`, and this slice never calls it with
-    real ones.
+    factories are supplied by :func:`main`, and the one authorized attempt that
+    supplied them refused at stage 5, before any private stage ran.
 
     ``authorization`` is a capability minted by :func:`main` after the exact
     operator flag parses. It is **not** a boolean: a boolean is the one value
@@ -681,9 +710,13 @@ def main(argv: list[str] | None = None) -> int:
     schema, or whether a further run should happen.
 
     **The real factories are constructed here and only here**, inside the
-    authorized branch. This function has **never been run**: implementing it is
-    not authorization to use it, and a bounded authenticated qualification remains
-    a separate written authorization that has not been given.
+    authorized branch. This function has been run **exactly once**, under a
+    separate written authorization, and that run refused at the AWS identity gate
+    with ``REFUSED_IDENTITY`` and exit code ``6`` -- before any secret identifier,
+    credential, client, provider request or publication. Implementing it was not
+    authorization to use it, and one refused attempt is not authorization for a
+    second: another bounded authenticated qualification remains a separate written
+    authorization that has not been given.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
