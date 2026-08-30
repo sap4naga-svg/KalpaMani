@@ -1508,6 +1508,11 @@ STALE_AUDIT_DIAGNOSTICS: Final[tuple[str, ...]] = (
     # of the timed-out attempt and false the moment the second one returned.
     "and no SSO login has succeeded",
     "the governed session is still unrefreshed",
+    # Added with correction round 1. This file asserted a cause the evidence
+    # does not carry: it required the documents to name one attempt's output
+    # handling as its mistake, and its own commentary called that the finding.
+    "which is the one thing the first attempt got wrong",
+    "That single difference is the whole operational finding",
 )
 
 #: Exact-state, contemporaneous and causal overclaims about the fourth refusal.
@@ -2092,16 +2097,105 @@ CORRECTED_SSO_REFRESH_HISTORY: Final[tuple[str, ...]] = (
     "successful governed SSO refreshes became ONE",
 )
 
-#: The live-console versus captured-output distinction, in one place.
+#: The live-console versus captured-output distinction, stated as observation.
 #:
-#: The first attempt's stdout and stderr were captured; the corrected one's were
-#: inherited. That single difference is the whole operational finding, and a
-#: document recording two attempts without it records two coincidences.
+#: The first attempt's stdout and stderr were captured, the corrected one's were
+#: inherited, and the corrected attempt worked. Those are observations, and the
+#: entry that stood beside them was a conclusion: it required the documents to
+#: say the earlier attempt's output handling was the one thing it got wrong.
+#: Nothing in this repository supports that. The two runs differed in more than
+#: output handling -- different sessions, a whole-environment copy against a
+#: minimal allowlisted one, and whatever point-in-time SSO state each met -- and
+#: the earlier buffer was never inspected, so capture is neither established as
+#: the cause nor ruled out as a contributor.
+#:
+#: The contrast is required, because a document recording two attempts without
+#: it records two coincidences. The cause is not required, because it is not
+#: known: see :data:`SSO_CAUSE_EVIDENCE_SCOPE` for what must be said instead and
+#: :data:`SSO_CAUSE_OVERCLAIMS` for what may not.
 SSO_OUTPUT_HANDLING_CONTRAST: Final[tuple[str, ...]] = (
     "stdout and stderr were captured rather than streamed",
     "on a live console with inherited stdin, stdout and stderr",
     "Nothing was captured, piped, redirected, buffered or written to a file",
-    "which is the one thing the first attempt got wrong",
+    "The first attempt captured stdout and stderr",
+    "Output handling was one deliberate correction",
+)
+
+#: Observation held apart from inference, in the corrected-refresh prose.
+#:
+#: Ten facts are established: the first attempt captured its streams, no
+#: interactive surface reached the owner, it timed out at 420 seconds, its
+#: buffer was never inspected, the corrected attempt inherited a live console,
+#: its browser/device flow completed, it exited zero, one identity confirmation
+#: followed and succeeded, and streaming the interactive surface was a
+#: deliberate corrective measure. The tenth is what the other nine do **not**
+#: add up to: they are consistent with capture contributing to the earlier
+#: timeout, and they do not establish it as necessary, sufficient or sole.
+#:
+#: Required inside the bounded corrected-refresh prose rather than the section,
+#: for the reason :data:`CORRECTED_SSO_NARRATIVE_BOUNDS` records: the event row
+#: restates the handling facts, and a row must not answer for the prose.
+SSO_CAUSE_EVIDENCE_SCOPE: Final[tuple[str, ...]] = (
+    "Output handling was one deliberate correction, and the evidence stops short of a cause.",
+    "The first attempt captured stdout and stderr",
+    "the corrected attempt used a live console with inherited stdin, stdout and stderr",
+    "and it completed successfully",
+    "Streaming the interactive surface was a deliberate corrective measure",
+    "consistent with the interactive surface contributing to the earlier timeout",
+    "the earlier buffer was never inspected",
+    "capture is not established as the sole, necessary, sufficient or definitive cause",
+    "likely, not proven",
+    "The two attempts differed in more than output handling",
+    "They ran in different Claude sessions",
+    "the first copied the whole parent process environment",
+    "the corrected one built a minimal allowlisted child environment key-by-key",
+    "the point-in-time SSO state may itself have differed",
+    "Nothing here claims the two runs were otherwise identical",
+    "the second attempt's success does not establish why the first failed",
+)
+
+#: Causal conclusions the two attempts do not support, each affirmative.
+#:
+#: Scoped to the two status documents. The ADR-0015 operator entry point still
+#: carries the superseded sentence in its own docstring; correcting that file is
+#: a separate, separately authorized edit, and this round was scoped to leave it
+#: byte-identical. Widening this list to that file would fail the audit for a
+#: defect nobody was authorized to fix here, which is worse than recording it.
+#:
+#: Every entry is written so the *true* disclaimer beside it cannot match. The
+#: documents say "capture is not established as the sole, necessary, sufficient
+#: or definitive cause" and "Nothing here claims the two runs were otherwise
+#: identical"; an entry that were a substring of either would be answered by
+#: deleting the sentence it exists to protect.
+SSO_CAUSE_OVERCLAIMS: Final[tuple[str, ...]] = (
+    "THE ONE THING THE FIRST ATTEMPT GOT WRONG",
+    "THE SINGLE DIFFERENCE",
+    "THE WHOLE OPERATIONAL FINDING",
+    "OUTPUT HANDLING WAS THE ONLY DIFFERENCE",
+    "THE ONLY DIFFERENCE BETWEEN THE TWO ATTEMPTS",
+    "OUTPUT CAPTURE WAS THE SOLE CAUSE",
+    "CAPTURE WAS THE SOLE CAUSE",
+    "THE SOLE CAUSE OF THE TIMEOUT",
+    "OUTPUT CAPTURE DEFINITIVELY CAUSED",
+    "DEFINITIVELY CAUSED THE TIMEOUT",
+    "CAPTURING OUTPUT CAUSED THE TIMEOUT",
+    "THE TIMEOUT WAS CAUSED BY CAPTURING",
+    "CAPTURE IS ESTABLISHED AS THE SOLE",
+    "CAPTURE WAS NECESSARY AND SUFFICIENT",
+    "CAPTURE WAS SUFFICIENT TO CAUSE",
+    "LIVE STREAMING DEFINITIVELY FIXED",
+    "STREAMING DEFINITIVELY FIXED THE CAUSE",
+    "STREAMING FIXED THE CAUSE",
+    "ALL OTHER EXECUTION CONDITIONS WERE IDENTICAL",
+    "EVERY OTHER EXECUTION CONDITION WAS IDENTICAL",
+    "OTHERWISE IDENTICAL CONDITIONS",
+    "THE TWO RUNS WERE IDENTICAL APART FROM",
+    "SUCCESS ESTABLISHES WHY THE FIRST FAILED",
+    "THE SECOND ATTEMPT PROVES WHY THE FIRST FAILED",
+    "PROVES WHY THE FIRST FAILED",
+    "THE CAUSE IS ESTABLISHED",
+    "THE CAUSE IS PROVEN",
+    "PROVEN CAUSE OF THE TIMEOUT",
 )
 
 #: How the corrected attempt's child environment was built.
@@ -2278,7 +2372,6 @@ CORRECTED_SSO_NARRATIVE_BOUNDS: Final[tuple[str, str]] = (
 CORRECTED_SSO_NARRATIVE_FACTS: Final[tuple[str, ...]] = (
     "on a live console with inherited stdin, stdout and stderr",
     "Nothing was captured, piped, redirected, buffered or written to a file",
-    "which is the one thing the first attempt got wrong",
     "The interactive browser/device flow completed",
     "successful governed SSO refreshes became ONE",
     "A minimal, allowlisted child environment was built key-by-key",
@@ -2480,6 +2573,8 @@ REQUIRED_FIXTURE_MEMBERSHIP: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("SUCCESSFUL SSO REFRESHES: ZERO", STALE_CORRECTED_SSO_CLAIMS),
     ("THE SESSION WILL REMAIN VALID", CORRECTED_SSO_OVERCLAIMS),
     ("THE FIRST SSO LOGIN SUCCEEDED", SSO_LOGIN_OVERCLAIMS),
+    ("THE ONE THING THE FIRST ATTEMPT GOT WRONG", SSO_CAUSE_OVERCLAIMS),
+    ("ALL OTHER EXECUTION CONDITIONS WERE IDENTICAL", SSO_CAUSE_OVERCLAIMS),
 )
 
 #: Wording that merges the gate's operation with the standalone diagnosis, or
@@ -9641,7 +9736,12 @@ def main() -> int:
         f.check(
             f"{name} keeps the live-console handling apart from the captured one",
             all(phrase in binding_flat for phrase in SSO_OUTPUT_HANDLING_CONTRAST),
-            "one difference separates the two attempts, and it is the operational finding",
+            "the observed contrast is required; the cause is not, because it is not known",
+        )
+        f.check(
+            f"{name} claims no proven cause for the first attempt's timeout",
+            not [claim for claim in SSO_CAUSE_OVERCLAIMS if claim in flat.upper()],
+            "a sequence consistent with a cause is not that cause, sole or otherwise",
         )
         f.check(
             f"{name} records how the corrected child environment was built",
@@ -9658,6 +9758,11 @@ def main() -> int:
             f"{name} states the corrected refresh's handling in its own narrative",
             all(fact in corrected_narrative for fact in CORRECTED_SSO_NARRATIVE_FACTS),
             "the event table states the same facts, and a row cannot answer for the prose",
+        )
+        f.check(
+            f"{name} separates the observed contrast from an inferred cause",
+            all(fact in corrected_narrative for fact in SSO_CAUSE_EVIDENCE_SCOPE),
+            "what was observed, what was corrected on purpose, and what stays unknown",
         )
         f.check(
             f"{name} records the one sanitized identity confirmation and its limits",

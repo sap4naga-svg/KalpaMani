@@ -1129,10 +1129,23 @@ qualification NOT AUTHORIZED.**
 refreshed.** Run in a new Claude session after PR #30 merged, it invoked **one** process and
 **one** `aws sso login --no-cli-pager` command — this time on a **live console with inherited
 stdin, stdout and stderr**. Nothing was captured, piped, redirected, buffered or written to a
-file, which is the one thing the first attempt got wrong: the browser and device-code surface has
-to be able to reach the owner. The **interactive browser/device flow completed**, the command
-**exited `0`**, **no lingering AWS CLI process remained**, and **successful governed SSO refreshes
-became ONE**.
+file. The **interactive browser/device flow completed**, the command **exited `0`**, **no
+lingering AWS CLI process remained**, and **successful governed SSO refreshes became ONE**.
+
+**Output handling was one deliberate correction, and the evidence stops short of a cause.** The
+first attempt captured stdout and stderr; the corrected attempt used a live console with inherited
+stdin, stdout and stderr, and it completed successfully. **Streaming the interactive surface was a
+deliberate corrective measure**, chosen because a browser/device flow has to be able to reach the
+person completing it. That sequence is **consistent with the interactive surface contributing to
+the earlier timeout**, and it establishes nothing further: the earlier buffer was never inspected,
+and **capture is not established as the sole, necessary, sufficient or definitive cause**. The
+earlier finding stands exactly where it was recorded — **likely, not proven**.
+
+**The two attempts differed in more than output handling, which is why no cause is claimed.** They
+ran in different Claude sessions; the first copied the whole parent process environment while the
+corrected one built a minimal allowlisted child environment key-by-key; and the point-in-time SSO
+state may itself have differed. **Nothing here claims the two runs were otherwise identical**, and
+**the second attempt's success does not establish why the first failed**.
 
 **The child environment was built the narrow way this time.** The governed profile was resolved by
 **static AST parse of the tracked `EXPECTED_PROFILE` constant** — the entry-point module was
