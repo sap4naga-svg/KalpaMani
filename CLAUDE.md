@@ -431,7 +431,9 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **[ADR-0015](docs/decisions/ADR-0015-implement-the-dormant-sharadar-private-binding-preflight.md) — dormant private-binding preflight** | **ACCEPTED / IN FORCE** — PR #22 merged. One operator entry point exists and is **refused by default**; **binding preflight only**. **Four separately authorized attempts occurred and all four refused, and a fifth separately authorized attempt then COMPLETED** — the four refusing at the identity gate, on a missing local AWS SDK, at the fixed secret-identifier source with **`REFUSED_SECRET_IDENTIFIER`**, and at the identity gate again with **`REFUSED_IDENTITY`** — so **AWS identity-gate activity occurred** and total AWS activity was not zero, while **AWS network requests on the fourth attempt are UNKNOWN** and no **standalone** diagnosis was performed as part of the attempt — while its governed identity gate's own **STS command invocation is UNKNOWN**, because the committed gate has real pre-STS refusal paths and nothing tracked records which branch refused. A **separately authorized post-fourth standalone AWS identity diagnosis has since COMPLETED** with **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** — one process, one `aws sts get-caller-identity` command, exit code **255**, **missing and expired not distinguished**, the governed profile pinned in the child environment and never disclosed, its **own** underlying AWS network-request count **UNKNOWN**, and at that point **SSO-login invocations were ZERO**, **authentication-repair actions were ZERO** and **fifth binding-preflight attempts were ZERO**. A **separately authorized post-diagnosis AWS SSO-login attempt has since COMPLETED** with **`REFUSED_SSO_LOGIN`** — **one** `aws sso login --no-cli-pager` command invocation, **timed out after 420 seconds**, terminated with **no lingering AWS CLI process** and therefore **exit code NOT AVAILABLE / PROCESS TERMINATED ON TIMEOUT**, **browser authorization interactions ZERO**, **device authorizations completed ZERO**, **successful SSO refreshes ZERO**, **identity-confirmation command invocations ZERO**, **fifth binding-preflight attempts ZERO**, its own underlying AWS network-request count **UNKNOWN**, the SSO session **still unrefreshed after it**, the earlier **`REFUSED_SSO_SESSION_MISSING_OR_EXPIRED`** diagnosis **unrevised**, and the likely cause recorded as **suppression of the interactive browser/device-code surface — likely, not proven**. A **corrected second AWS SSO-login attempt has since COMPLETED SUCCESSFULLY** — one `aws sso login --no-cli-pager` command in a new Claude session on a **live console with inherited stdin, stdout and stderr**, **no captured, piped, redirected, buffered or file output**, the **interactive browser/device flow completed**, **exit code `0`**, **no lingering AWS CLI process**, **successful governed SSO refreshes ONE**, a **minimal allowlisted child environment built key-by-key** with **no whole-environment copy** and **no credential-bearing ambient variable copied or inspected**, the governed profile from a **static AST parse of `EXPECTED_PROFILE`** and never disclosed, the **verification URL and one-time device code transient in the live console only**, and its own underlying AWS network-request count **UNKNOWN**. Because that login exited `0`, **exactly one sanitized identity confirmation ran** — `aws sts get-caller-identity --no-cli-pager --output json`, **exit code `0`**, **non-empty `UserId`, `Account` and `Arn` structurally present**, **raw response and private identity values neither displayed nor persisted**, classified **`IDENTITY_CONFIRMED`**, **captured buffers cleared after classification**, its own network-request count **UNKNOWN**, **identity confirmed at the time of that command with no guarantee of current or future session validity**, and **verifying no secret identifier, secret, credential, bucket or provider access**. **The fifth separately authorized attempt then ran exactly once and COMPLETED** — **exit code `0`**, public output exactly `binding preflight completed` and `offline validation completed`, closed outcome **`COMPLETED + VALIDATION_COMPLETED`**, and a last definitively reached stage of **stage 10**: one `preflight_qualification_composition` invocation returning **`VALIDATED_OFFLINE`**. Its conservative counts are identity-gate invocations **ONE, passed**, licensed-bucket resolutions **ONE**, secret-identifier resolutions **ONE**, Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, S3 client constructions **ONE**, S3 object operations **ZERO**, provider transport constructions **ONE**, Sharadar/provider requests **ZERO**, offline composition-preflight invocations **ONE**, qualification executions **ZERO**, and underlying AWS network requests **UNKNOWN**. **A credential was definitively retrieved**: one admitted `get_secret_value` returned a `SecretString` the existing credential contract accepted **structurally**, which was passed into the offline composition and **never displayed, logged, persisted, hashed, fingerprinted, measured or summarized** — *usable* meaning structurally acceptable to that contract, with **Sharadar authentication UNKNOWN** because **no provider request occurred**. The fourth attempt still **reached neither licensed-bucket resolution nor the secret-identifier source** and **did not read `KALPAMANI_SHARADAR_SECRET_ID`**; operational secret-identifier configuration is **OWNER-CONFIGURED, AND RESOLVED ONCE BY THE ENTRY POINT** on the fifth attempt, owner setup having occurred **after the third attempt** and **before the fourth**. A **sixth** attempt, **further AWS authentication diagnosis**, **another AWS SSO refresh or login — separately gated**, **additional credential or Secrets Manager access**, **Sharadar/provider access**, **any S3 object operation or publication**, **ingestion, backfill and update** and a **third authenticated qualification attempt stay separately gated and NOT AUTHORIZED** |
 | **[ADR-0016](docs/decisions/ADR-0016-correct-private-binding-preflight-failure-boundaries.md) — corrected private-binding failure boundaries** | **ACCEPTED / IN FORCE** — PR #24 merged. Separates **secret-identifier**, **local dependency**, **unclassified** and **credential** refusals. The corrected boundaries were exercised for the first time by the fifth attempt, which passed the identifier stage rather than refusing at it: Secrets Manager client constructions **ONE**, `get_secret_value` invocations **ONE, admitted**, Secrets Manager underlying network requests **UNKNOWN**, real credential retrieval **ONE, structurally accepted**. Operational environment **SYNCHRONIZED AND VERIFIED**, Python dependency lock **ABSENT**, environment **RANGE-CONFORMANT NOT LOCK-CONFORMANT**, further environment resynchronization **SEPARATELY GATED**, a sixth binding-preflight attempt **NOT AUTHORIZED**, additional credential or Secrets Manager access **NOT AUTHORIZED**, a **third** authenticated qualification attempt **NOT AUTHORIZED** — of the two attempts that occurred, the first refused at the AWS identity gate, two stages before this boundary, and the second completed, so these corrected refusals were exercised by neither |
 | **[ADR-0017](docs/decisions/ADR-0017-bounded-authenticated-sharadar-acquisition-qualification.md) — bounded authenticated acquisition qualification** | **ACCEPTED / IN FORCE** — PR #33 merged. Merge commit **`4fab37cd9468bc48b62a80e49e5a17a203870926`**, approved ADR head **`679863fd7f540f47ae4f47aee8d5e363d72caffd`**. **The merge acceptance condition has occurred**, so ADR-0017 is **no longer PROPOSED** — while its pull request was open it was **not accepted and carried no authority**, which was true then and is not rewritten. **The authenticated acquisition entry point is now IMPLEMENTED, ATTEMPTED TWICE — REFUSED, THEN COMPLETED.** `scripts/sharadar_authenticated_qualification.py` exists, **refuses by default**, and the accepted composition root was **extended, not duplicated**: `QualificationRuntime.execute` now has **exactly ONE production caller**, reached only through that entry point's authorized branch. **Authenticated entry points implemented ONE.** **Implementing it was not permission to use it, one refused attempt is not permission for a second, and one completed attempt is not permission for a third**: **a third execution of the surface remains separately gated and NOT AUTHORIZED**, and **implementation, execution and empirical qualification remain three distinct gates**. **Two separately authorized executions have since been attempted, in fresh sessions: the first REFUSED and the second COMPLETED.** Authenticated qualification attempts **TWO — one refused, one completed**, entry-point process invocations **TWO — exactly one per attempt**. **Attempt one:** closed outcome **`REFUSED_IDENTITY`**, exit code **`6`**, last stage definitively reached **stage 5 — the AWS identity gate**, stages 1–4 **PASSED**; AWS identity-gate invocations **ONE, refused**, licensed-bucket resolutions **ZERO**, Terraform command invocations **ZERO**, secret-identifier resolutions **ZERO**, `KALPAMANI_SHARADAR_SECRET_ID` reads **ZERO**, Secrets Manager client constructions **ZERO**, `get_secret_value` invocations **ZERO**, credential retrievals by this attempt **ZERO**, S3 client constructions **ZERO**, provider transport constructions **ZERO**, qualification-runtime executions against real services **ZERO**, application-level provider fetches **ZERO**, Sharadar/provider requests **ZERO**, `PutObject` **ZERO**, conditional `HeadObject` **ZERO**, S3 object-byte reads **ZERO**, S3 qualification operations **ZERO**, CONTROL operations **ZERO**, `.runtime/` writes from this attempt **ZERO**, and underlying AWS/network interactions **UNKNOWN**; the gate's own STS command invocation is **UNKNOWN** because real pre-STS refusal paths exist, and the **cause of the refusal was not diagnosed and is not inferred**. **Attempt two:** entry-point process invocations **ONE**, exit code **`0`**, closed result observed **YES**, closed result **`COMPLETED`**, qualification runtime reached **YES**, qualification-runtime executions **ONE**, provider requests **ONE**, `PutObject` invocations **EXACTLY THREE**, conditional `HeadObject` invocations **ZERO TO THREE**, S3 qualification operations **THREE TO SIX**, publication state unknown **NO**, complete acquisition record **EXISTS**, newly written objects **NOT ESTABLISHED**, already-present identical objects **NOT ESTABLISHED**, and underlying AWS/network interactions **UNKNOWN** — the bounds derived from the closed token's committed meaning, not from any S3 or provider inspection. **`COMPLETED` is a command status, not a verdict** — not qualification passed, not the provider accepted, not a provider selected, not a closure of G1 or G2, not a completion of Phase 3, and not production, CONTROL or live-trading readiness. Cumulatively: qualification-runtime executions **ONE**, known provider requests **ONE**, S3 qualification operations **THREE TO SIX — attempt one ZERO, attempt two THREE TO SIX**, exact-request authentication **ESTABLISHED**, provider-wide authentication **UNKNOWN**, subscription-wide entitlement **UNKNOWN**, P1–P9 executions **ZERO**, ingestion and trading operations **ZERO**. Credential retrievals established by count remain **ONE**, from the fifth binding-preflight attempt, with attempt two's count **NOT ESTABLISHED** by count, and binding-preflight attempts remain **FIVE** — neither attempt was a sixth. **A third authenticated attempt, further AWS identity diagnosis and another SSO refresh or login are each NOT AUTHORIZED.** The implemented path preserves **one request = one durable acquisition**, keeps the acquisition runtime's **opaque-payload boundary** with **no parser introduced**, declares **`AcquisitionMode.QUALIFICATION`** with **no fourth mode**, locks **one provider request** with **no pagination** and **no automatic retry** over a **seven-day trailing window**, and publishes byte for byte through the **licensed private Bronze data plane** only as **three durable artifacts** in **exactly three PutObject operations** with **zero-to-three conditional HeadObject metadata checks only after 412**, **zero object-byte reads**, **zero `.runtime/` writes** and **no extra qualification report**, performing **no CONTROL publication**. Full **P1–P9 empirical qualification remains separate and unexecuted**, **no provider is selected**, and **G1 and G2 stay OPEN** |
+| **[ADR-0018](docs/decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) — bounded private empirical Sharadar qualification** | **PROPOSED — NOT ACCEPTED, AND IT CARRIES NO AUTHORITY.** Its status line reads **accepted, effective only upon merge of the pull request introducing it**, and that merge **has not occurred**; until it does, the ADR is a document in an open pull request and nothing in it is permission. **Merging it will approve ARCHITECTURE ONLY** — the evidence inventory, the P1–P9 ceilings, the two-process split, the deterministic private locator, the operation arithmetic, the two least-privilege roles, the parser/evaluator/report boundaries and the deletion-runbook clarification. **Merging it will authorize NO implementation, NO infrastructure mutation and NO execution**: implementation under `src/`, a new entry point, an IAM role, a Terraform plan or apply, a binding preflight, Run A, Run B, an assessment run, a provider request, an S3 operation, a credential retrieval, a private report, a P1–P9 execution, a provider selection and a G1 or G2 decision each stay **separately gated**. **It supersedes nothing** and rewrites neither ADR-0011 nor ADR-0017: ADR-0011's *no read surface* stays true of the store it authorized, and **ADR-0017's exactly-three-`PutObject` accounting is untouched** — the designed surface is a **different** surface with its own accounting and may never be reached through the ADR-0017 entry point. Designed inventory: **eight private subject classes, recorded as classes and never as names**; datasets **`tickers`, `stocks`, `actions`** only; `tickers` **snapshot, no window**; `stocks` and `actions` **1998-01-01 → `T−1`**; page limits **100 / 10,000 / 10,000**; **two pages maximum**, the second a **completeness probe and not an invitation to paginate**; **48 requests per run**; **`max_attempts = 1`, zero provider retries — arithmetically forced**, because 48 requests against the compiled retry budget of 32 leave no room for one; **4 MiB per response**, **64 MiB per run**, **30-second timeout**, **≥1-second pacing**, **sequential only**, **1,800-second wall clock**; **two runs at least eight calendar days apart, each separately authorized with a distinct execution identity**, **96 provider requests maximum across both**. Ceilings: **P1** `PARTIALLY_TESTED` after Run A and **at most `TESTED`** after Run B, information time **bounded regardless**; **P2 at most `PARTIALLY_TESTED`** — sampled existence is **not** proof of the population-wide survivorship claim; **P3** schema question may reach `TESTED`, timing **approximated**; **P4 `DOCUMENTATION_RESOLVED`** — a snapshot table has no time axis to sample; **P5 realistically at most `PARTIALLY_TESTED`**, spinoff limb inconclusive while provider semantics stay undocumented; **P6, P7, P8 `DEFERRED`**; **P9 `DOCUMENTATION_RESOLVED`**, price origin **`PROVIDER_DERIVED`**, **`PUBLIC_PIT` not reachable**. **No aggregate verdict, no provider-selection value and no readiness value exists anywhere in the design.** Locator: **one per execution**, `licensed/qualification/sharadar/locators/<execution-id>.json`, **LICENSED**, **published last**, **append-only and conditional**, **closed schema with no free text**, **≤256 KiB**, binding the plan and private inventory by digest and every claim, payload and record to an exact key, expected digest, byte count and disposition, **never a cross-execution index**, **never listed**, and **a `PARTIAL`, missing, collided, ambiguous or unverified locator fails closed and is refused for evaluation**. Arithmetic, **nominal**: provider requests **48**, provider retries **ZERO**, Bronze `PutObject` **144**, locator `PutObject` **1**, total `PutObject` **145**, conditional `HeadObject` **0–145**, object-byte `GetObject` **ZERO**, listing **ZERO**, CONTROL **ZERO**, total S3 operations **145–290**. **Maximum**, with the locator's **at most two** retries — permitted **only** on `THROTTLED` or `TRANSIENT` and **never** after an ambiguous or unclassified result: locator `PutObject` **≤3**, total `PutObject` **≤147**, conditional `HeadObject` **0–147**, total S3 operations **147–294**; a complete run reports **144 ≤ `PutObject` ≤ 147** as the **real observed invocation count**, never "exactly 145" when a retry occurred. Assessment, exact: `GetObject` **`2R + 1` = 97** — one locator, 48 acquisition records, 48 payloads, **zero claims** — report `PutObject` **1**, conditional `HeadObject` **0–1**, total **98–99**; on a refused locator **`GetObject` 0–1 and every other operation ZERO**. Roles: **two, with separate sessions** — the **acquisition role cannot read object bytes**, the **assessment role can retrieve no credential and reach no provider**, and the **deletion role is unchanged, stays separate and cannot read**. Current state: **empirical-package executions ZERO · provider requests by this package ZERO · S3 operations by this package ZERO · P1–P9 executions by this package ZERO · locators ZERO · private reports ZERO · new IAM roles ZERO · the licensed object-byte read surface DOES NOT EXIST** until separately authorized implementation is merged. **G1 OPEN · G2 OPEN**, no provider selected, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live trading **HARD-DISABLED**, and a **third ADR-0017 attempt NOT AUTHORIZED** |
 | **Ingestion runner · ECS task or image · a third authenticated qualification attempt** | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
+| **ADR-0018 implementation · the licensed object-byte read surface · the `data/qualify/` package · the two new entry points · the two new IAM roles · Run A · Run B · the assessment run** | **NOT AUTHORIZED** — ADR-0018 is **PROPOSED and carries no authority**, and even its merge would approve **architecture only**. **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
 | **Provider credential state · repository consumption · provider API access · Services Data** | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; a **third** authenticated qualification attempt **NOT AUTHORIZED** — the first refused at the AWS identity gate and retrieved no credential, and the second completed with **one provider request** and **provider-wide authentication still UNKNOWN** — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
@@ -2242,6 +2244,257 @@ selected**, **full P1–P9 empirical qualification remains separate and unexecut
 · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, Phase 3 **NOT COMPLETE**,
 CONTROL publication **DEFERRED**, live trading **HARD-DISABLED**. Q7 stays
 **`PUBLICLY_UNRESOLVED`**.
+
+### The bounded private empirical qualification — PROPOSED, and it carries no authority
+
+[ADR-0018](docs/decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) designs
+the package that would actually produce useful P1–P9 evidence. **It is PROPOSED. Its pull request
+is open, it has not been accepted, and nothing in it is permission.**
+
+Its status line reads **accepted, effective only upon merge of the pull request introducing it**.
+That merge **has not occurred**. Until it does, the ADR is a document in an open pull request —
+exactly the state ADR-0017 was in before PR #33 merged, and the same rule applies: a proposed ADR
+carries no authority, and reading one is not being granted one.
+
+**Merging it would approve architecture and nothing else.**
+
+| | |
+|---|---|
+| **Approved on merge** | the evidence inventory · the P1–P9 ceilings · the two-process split · the deterministic private locator · the operation arithmetic · the two least-privilege roles · the parser, evaluator and report boundaries · the deletion-runbook clarification |
+| **NOT approved on merge** | implementation under `src/` · a new entry point · an IAM role · a Terraform plan or apply · a binding preflight · Run A · Run B · an assessment run · a provider request · an S3 operation · a credential retrieval · a private report · a P1–P9 execution · a provider selection · a G1 or G2 decision |
+
+**Implementation, infrastructure mutation and execution are three separate gates, and they are
+never collapsed into one.** That is the rule five binding-preflight attempts and two
+authenticated qualification attempts have each been held to, and this slice inherits it rather
+than restating a weaker version.
+
+**It supersedes nothing, and it rewrites no history.** ADR-0011's statement that the licensed
+store has **no read surface** was true of the store it authorized and stays true of it; the
+designed read component is **separate and narrowly scoped**, for a different actor, and widens
+neither `ResearchObjectStore` nor the writer-side S3 client protocol. **ADR-0017's accounting —
+exactly three `PutObject`, zero to three conditional `HeadObject`, zero object-byte reads — is
+untouched**: the surface designed here is a **different** surface with its own accounting, and it
+may never be reached through the ADR-0017 entry point.
+
+**Why the package exists.** Attempt two under ADR-0017 completed, made one provider request and
+published a single seven-day, single-subject, single-dataset acquisition. That is bounded-plumbing
+evidence and is accepted as such. **It is not empirical provider qualification: no P1–P9 minimum
+is met by one row of one dataset for one subject.** Its retained response also has no digest-free
+locator, and the licensed store has no listing surface — deliberately, because a producer that
+could list the store could enumerate what a vendor sent. **Those three objects will not be located
+or assessed**, they **stay covered by prefix-based deletion**, and that disposition is not
+repaired retroactively.
+
+#### The designed inventory
+
+**Eight private subject classes, recorded as classes and never as names.** Concrete names stay out
+of Git, documentation, command arguments and public output, and arrive later through a
+**git-ignored, owner-only private input** — which securities the owner chose to evaluate is
+evaluation information under the personal-use licence, and a name in a tracked module or on a
+command line would put it in Git history and in every process listing.
+
+```text
+1 active long-history large-cap dividend payer with an in-window split
+2 active spinoff parent            3 active spinoff child
+4 delisted approximately 5 years ago
+5 delisted approximately 10 years ago
+6 delisted approximately 15 years ago
+7 ticker-change or numeric-suffix reassignment case
+8 active small-cap control with no corporate action in the window
+```
+
+| Dataset | Window | page limit | max pages |
+|---|---|---|---|
+| `tickers` | **none — snapshot, a window is refused** | 100 | 2 |
+| `stocks` | **1998-01-01 → `T−1`** | 10,000 | 2 |
+| `actions` | **1998-01-01 → `T−1`** | 10,000 | 2 |
+
+**Page two is a completeness probe, not an invitation to paginate.** Sorting is a forbidden
+request parameter and the row limit defaults to a silent truncation boundary, so an empty second
+page is the only available proof the first was complete; a non-empty second page means truncation,
+and every row-count-dependent conclusion for that pair is refused rather than reported.
+
+```text
+requests per run            48 = 8 subjects x 3 datasets x 2 pages
+provider retry policy       max_attempts = 1 -- ZERO provider retries, ARITHMETICALLY FORCED:
+                            48 requests against the compiled retry budget of 32 leave no room
+max response bytes          4 MiB      max run bytes    64 MiB
+per-request timeout         30 s       pacing           at least 1 s
+execution                   SEQUENTIAL ONLY             wall clock  1,800 s
+runs                        TWO, at least eight calendar days apart
+                            each separately authorized, each a distinct execution identity
+max provider requests       96 across both runs
+```
+
+**Run A and Run B are never one standing authorization**, and neither is a permission for the
+other. Minimum qualification, this package and production backfill stay three separate scales;
+backfill is also a different acquisition mode, and **`BACKFILL` and `UPDATE` remain NOT
+AUTHORIZED**.
+
+#### The honest ceilings
+
+A ceiling is what a run may **at most** report. A run may fall short of one; no run may exceed one.
+
+| | Ceiling |
+|---|---|
+| **P1** | `PARTIALLY_TESTED` after Run A, **at most `TESTED`** after Run B. Information-time resolution **stays bounded regardless of outcome** — the vendor's update column is date-granular, and a date cannot supply an instant |
+| **P2** | **at most `PARTIALLY_TESTED`.** Sampled delisted-history existence **is not proof of the provider's population-wide survivorship claim** |
+| **P3** | the **schema question can reach `TESTED`**; announcement timing **remains approximated** where the field is absent |
+| **P4** | `DOCUMENTATION_RESOLVED` — classification history **cannot become empirically historized from a snapshot table** |
+| **P5** | **realistically at most `PARTIALLY_TESTED`** — split and dividend limbs may be tested, and the **spinoff limb stays inconclusive while the provider's semantics are undocumented** |
+| **P6** | **`DEFERRED` to Phase 3B** |
+| **P7** | **`DEFERRED` to Phase 3B and EDGAR** |
+| **P8** | **`DEFERRED` to Phase 3B and EDGAR** |
+| **P9** | `DOCUMENTATION_RESOLVED` — price information origin stays **`PROVIDER_DERIVED`** and **`PUBLIC_PIT` is not reachable from this evidence** |
+
+**No aggregate verdict exists anywhere in the design** — no aggregate pass, no qualified, no
+approved, no proceed, no ready, no provider-selection value. Provider selection is **G1**, and G1
+is an owner decision taken by a person reading evidence, never a value a program returns.
+
+#### The deterministic private locator
+
+```text
+licensed/qualification/sharadar/locators/<execution-id>.json
+```
+
+**One per execution, published last, and the physical path never appears in public output.** An
+object key here binds a name **and** a content address, and the address comes from the payload —
+which is exactly why attempt two is unaddressable. The locator resolves that by being **the one
+object addressed by name**: it is retrieved from the execution identity alone and validated
+against its closed schema and size ceiling afterwards, while **every object it references is
+retrieved by name and expected digest, with the full-object checksum and byte count verified
+before any parsing**.
+
+```text
+classification         LICENSED        ordering          published LAST
+addressing             from a private execution identity -- NO S3 LISTING, anywhere
+append-only            conditional publication, never overwritten
+schema                 CLOSED, no free-text field       size ceiling  256 KiB
+binds                  the plan and the private inventory, by digest
+binds per object       claim, payload and record -> exact key, expected digest,
+                       byte count, disposition
+records                planned and completed request counts
+                       COMPLETE or PARTIAL, and publication_state_unknown
+never                  a cross-execution index, a bucket, an account, a credential,
+                       a provider URL or a vendor row
+never                  committed, and never handed to an AI session
+deletion               inside the licensed qualification/ prefix
+```
+
+**A `PARTIAL`, missing, collided, ambiguous or unverified locator fails closed**, and the assessor
+refuses to evaluate it — a `PARTIAL` locator preserves accounting and grants no evaluation. There
+is **no fallback that reconstructs evidence by listing, probing or guessing**, because adding one
+would reintroduce the capability this architecture removes. **There is no replay**: a genuine
+re-run reads a new retrieval instant, so the append-only store refuses it, and a refetch needs a
+**new explicit execution identity**.
+
+#### The arithmetic, nominal and maximum
+
+**Nominal** — 48 requests, all complete, locator published on the first attempt:
+
+```text
+provider requests        exactly 48        provider retries        ZERO
+Bronze PutObject         exactly 144       locator PutObject       exactly 1
+total PutObject          exactly 145
+conditional HeadObject   0 to 145 -- only after a 412, at most one per PutObject
+object-byte GetObject    ZERO   ·   S3 listing  ZERO   ·   CONTROL  ZERO
+total S3 operations      145 to 290
+```
+
+**Maximum** — the locator may be retried **at most twice**, and **only** on the closed
+classifications `THROTTLED` and `TRANSIENT`. Every retry is the same conditional write with
+**byte-identical content**, so it can resolve an unresolved condition and can never overwrite,
+duplicate or corrupt. **Retry is forbidden after `ACCESS_DENIED`, `NOT_FOUND`, `INVALID_RESPONSE`,
+`INVALID_CONFIGURATION`, `UNKNOWN` or a genuine collision** — and `INVALID_RESPONSE` and `UNKNOWN`
+are excluded precisely because **no retry may follow an ambiguous or unclassified result**.
+
+```text
+Bronze PutObject         exactly 144 -- Bronze writes are NEVER retried
+locator PutObject        at most 3
+maximum total PutObject  147
+conditional HeadObject   0 to 147 -- derived from the PutObject invocation count
+maximum S3 operations    147 to 294
+```
+
+**A complete run reports `144 <= PutObject <= 147`, as the real observed invocation count.** It is
+**not "exactly 145" when a retry occurred**, and the public counters report what happened rather
+than what was planned.
+
+**Assessment, exact formulas** — for a `COMPLETE` locator over `R` planned requests, `R = 48`:
+
+```text
+provider requests        ZERO      credential retrievals     ZERO
+locator GetObject        1
+acquisition-record GetObject   R = 48       payload GetObject   R = 48
+acquisition-claim GetObject    ZERO -- claims are validated from the locator, not retrieved
+total GetObject          2R + 1 = 97
+report PutObject         1 -- NOT retried    conditional HeadObject  0 to 1
+S3 listing  ZERO   ·   CONTROL  ZERO
+total S3 operations      2R + 2 to 2R + 3 = 98 to 99
+refused locator          GetObject 0 to 1, every other operation ZERO -- NO payload is read
+```
+
+The private report carries a **separate assessment identity** in its key, so an ambiguous report
+write cannot block re-assessment of an execution permanently.
+
+#### Two roles, and what each cannot do
+
+**Two least-privilege roles and separate sessions**, so the separation is a property of the
+identity system and not only of the code.
+
+| | |
+|---|---|
+| **Acquisition role** | one governed secret retrieval · conditional `PutObject` to licensed `bronze/*` and to the locator prefix · metadata-only collision resolution. **No object-byte read**, no listing, no delete, no copy, no CONTROL, no bucket administration, no report publication |
+| **Assessment role** | exact `GetObject` on the locator prefix and on referenced licensed Bronze objects · conditional report publication. **No credential or secret access, and no provider network access**, so it cannot make a provider request at all. No listing, no delete, no copy, no Bronze publication, no CONTROL, no bucket administration |
+| **Deletion role** | **unchanged.** It can list and delete for deletion governance, and it **cannot read object bytes** |
+
+A compromised acquisition path cannot exfiltrate the licensed store, and the assessment path
+cannot contact a provider — so **a provider failure cannot be converted into an assessment
+result**.
+
+#### Parser, report and deletion
+
+The parser and evaluator would live in a **new `data/qualify/sharadar/` package that
+`data/ingest/` cannot import**, so the acquisition path stays parser-free; it **cannot import,
+copy or adapt the public-test-key harness**, which stays untouched and **unauthorized to
+execute**. Strict UTF-8 with **no replacement decoding**, RFC4180 handling, dataset-specific
+schema contracts, **`Decimal` and never binary floating point**, real calendar-date parsing with
+**no coercion of date-only values into instants**, duplicate detection, **delivered order observed
+rather than silently reordered**, missing values distinct from zero, header-only responses valid
+where appropriate, page-two completeness validation, an observed schema digest,
+**`PROVIDER_REALISTIC_PIT` only with `PUBLIC_PIT` not expressible**, closed sanitized failures, and
+**per-test compiled ceilings**.
+
+The canonical private report lives **only** under `licensed/qualification/sharadar/reports/`,
+carries classification, evidence identity, creation time, retention basis and deletion obligation,
+**creates no routine local copy**, **never enters Git, CI, logs, chat, an AI session or CONTROL**,
+and **contains no provider-selection recommendation**.
+
+The deletion runbook gains a **clarification only**: `qualification/sharadar/locators/` and
+`qualification/sharadar/reports/` are named as expected prefixes so their first appearance is not
+recorded as a finding. **Deletion behaviour does not change** — no versioning, no Object Lock, no
+replication, no archival lifecycle, no backup, prefix-wide deletion, separated deletion authority,
+and the deletion role still cannot read. **A locator may be absent, and the deletion procedure
+must never depend on one to discover licensed objects.**
+
+#### What exists today
+
+```text
+empirical-package executions              ZERO
+provider requests by this package         ZERO
+S3 operations by this package             ZERO
+P1-P9 executions by this package          ZERO
+locators created by this package          ZERO
+private reports created by this package   ZERO
+new IAM roles created                     ZERO -- none exists
+licensed object-byte read surface         DOES NOT EXIST -- until separately authorized
+                                          implementation is merged
+```
+
+**G1 OPEN · G2 OPEN · G3 CLOSED · G4–G7 OPEN**, ADR-0005 **PROPOSED**, INC-0002 **OPEN**, no
+provider selected, Phase 3 **NOT COMPLETE**, CONTROL publication **DEFERRED**, live trading
+**HARD-DISABLED**. A **third execution of the ADR-0017 entry point remains NOT AUTHORIZED**, and
+**no live request of any kind is authorized by ADR-0018**.
 
 ### Non-blocking follow-ups carried forward
 

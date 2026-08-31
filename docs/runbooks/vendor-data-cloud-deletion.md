@@ -146,6 +146,26 @@ step 3 deletes.*
    **an unexpected prefix is a finding**, and is deleted, not skipped.
 3. Record object counts and total bytes per prefix. This is the "before" side of the receipt.
 
+**Expected prefixes inside `qualification/`.** Two are reserved by
+[ADR-0018](../decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) and are
+**expected, not findings**, if they ever appear:
+
+```text
+qualification/sharadar/locators/
+qualification/sharadar/reports/
+```
+
+**Deletion behaviour is unchanged by naming them.** Both sit inside `qualification/`, which step 7
+already deletes wholesale. They are listed here so their first appearance is not recorded as an
+unexpected prefix.
+
+**A locator may be absent, and this procedure must never depend on one to discover licensed
+objects.** Deletion is prefix-wide and stays prefix-wide: an object whose locator was never
+published, or whose locator is incomplete, is still deleted with everything else under its prefix.
+A locator is a convenience for the owner's own private assessment, never an inventory this
+runbook trusts — treating one as an inventory would leave behind exactly the objects no locator
+records.
+
 ### Step 4 — Abort every incomplete multipart upload  *(`licensed_data_deletion` role)*
 
 Do this **before** the object deletion, not after.

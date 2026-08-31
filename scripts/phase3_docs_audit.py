@@ -5451,6 +5451,175 @@ ADR_0017_FORBIDDEN_CLI: Final[tuple[str, ...]] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# ADR-0018 -- a PROPOSED architecture, and the facts a status document must keep
+# ---------------------------------------------------------------------------
+
+#: The ADR this section governs. **Proposed, not merged.** It is deliberately
+#: absent from :data:`MERGED_ADR_STATUS`, and the guards below check that absence
+#: rather than assume it: an ADR that is in an open pull request and a status
+#: document that calls it in force is exactly the drift this audit exists to
+#: catch, and it has happened before.
+ADR_0018: Final = DECISIONS / ("ADR-0018-bounded-private-empirical-sharadar-qualification.md")
+
+#: The two future entry points ADR-0018 *designs* and does not create. Their
+#: absence is what makes "architecture only" a checkable fact rather than a
+#: sentence, so the paths are named here and asserted not to exist.
+ADR_0018_ACQUIRE_ENTRY: Final = REPO_ROOT / "scripts" / "sharadar_empirical_qualification.py"
+ADR_0018_ASSESS_ENTRY: Final = REPO_ROOT / "scripts" / "sharadar_qualification_assessment.py"
+
+#: The parser/evaluator package ADR-0018 designs and does not create.
+ADR_0018_QUALIFY_PACKAGE: Final = REPO_ROOT / "src" / "kalpamani" / "data" / "qualify"
+
+#: What ADR-0018 must say about itself, matched with emphasis removed and
+#: whitespace collapsed so a rewrap cannot hide a sentence.
+#:
+#: The first three are the whole governance of the slice: a conditional status, a
+#: statement that the condition has not been met, and a supersession claim of
+#: nothing. The rest pin the numbers, because an arithmetic nobody checks is an
+#: arithmetic that drifts on the next edit.
+ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "carries the exact conditional acceptance status",
+        "status: accepted — effective only upon merge of the pull request introducing this adr.",
+    ),
+    (
+        "says the condition has not been met",
+        "before that merge this adr is proposed and carries no authority.",
+    ),
+    ("supersedes nothing", "supersedes: nothing."),
+    ("approves an architecture and not code", "merging this adr approves an architecture"),
+    # The multiplication sign and the dashes below are the document's own
+    # characters. A guard spelled with ASCII look-alikes would match nothing,
+    # so the ambiguity rule is suppressed per line rather than disabled.
+    ("states the request arithmetic", "48 = 8 subjects × 3 datasets × 2 pages"),  # noqa: RUF001
+    ("states that provider retries are zero", "`max_attempts = 1` — zero provider retries"),
+    ("states the maximum putobject count", "maximum total `putobject` | 147"),
+    ("bounds the locator retry at two", "may be retried at most twice"),
+    (
+        "forbids retry after ambiguity",
+        "no retry may follow an ambiguous or unclassified result.",
+    ),
+    ("states the assessment read formula", "`2r + 1`"),
+    (
+        "states that claims are not retrieved",
+        "acquisition claims are validated structurally from the locator and are not retrieved.",
+    ),
+    ("requires two separated runs", "two, at least eight calendar days apart"),
+    ("uses one locator per execution", "one locator per execution, not per request."),
+    (
+        "fails closed on a bad locator",
+        "a missing, collided, ambiguous or unverified locator fails closed.",
+    ),
+    ("leaves the deletion role alone", "the deletion role is unchanged."),
+)
+
+#: Claims ADR-0018 must never make. Each is false today, and each is the shape a
+#: later edit would take if the slice quietly became an authorization.
+#:
+#: Every phrase is chosen so it cannot appear inside a *negation* of itself --
+#: "authorizes no implementation" does not contain "authorizes implementation" --
+#: because a denylist that fires on an honest sentence gets deleted rather than
+#: fixed.
+ADR_0018_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
+    "accepted / in force",
+    "authorizes implementation",
+    "authorizes execution",
+    "authorizes a provider request",
+    "g1 closed",
+    "g2 closed",
+    "putobject is always exactly 145",
+)
+
+#: Spellings that would mean a concrete subject symbol had been written down.
+#:
+#: The subject list is evaluation information under the personal-use licence, so
+#: it lives in a git-ignored owner-only input and never in a tracked file. A
+#: symbol canary cannot be a regex over capital letters -- "ADR", "CSV", "UTC"
+#: and "MiB" would all match -- so this guards the *shapes that carry one*
+#: instead: a locked-subject constant, a subject command-line option, and a
+#: subject tuple literal.
+ADR_0018_SUBJECT_CARRIERS: Final[tuple[str, ...]] = (
+    "locked_subject",
+    "--subject",
+    "subjects = (",
+    "subjects=(",
+)
+
+#: What **both** status documents must independently say about ADR-0018.
+#:
+#: Independently, and for the reason the ADR-0017 block gives: merged main has
+#: twice carried a fact in one document and a stale contradiction in the other,
+#: so each phrase is required in *each* file rather than in their concatenation.
+ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records it as proposed", "proposed — not accepted, and it carries no authority."),
+    ("records that merging approves architecture", "merging it will approve architecture only"),
+    (
+        "records that merging authorizes nothing further",
+        "merging it will authorize no implementation, no infrastructure mutation and no execution",
+    ),
+    ("records zero package executions", "empirical-package executions zero"),
+    ("records zero provider requests", "provider requests by this package zero"),
+    ("records zero s3 operations", "s3 operations by this package zero"),
+    ("records zero p-test executions", "p1–p9 executions by this package zero"),  # noqa: RUF001
+    ("records zero new roles", "new iam roles zero"),
+    (
+        "records that the read surface does not exist",
+        "the licensed object-byte read surface does not exist",
+    ),
+    ("records the per-run request count", "48 requests per run"),
+    (
+        "records that provider retries are forced to zero",
+        "zero provider retries — arithmetically forced",
+    ),
+    ("records the nominal putobject count", "total `putobject` 145"),
+    ("records the real observed bound", "144 ≤ `putobject` ≤ 147"),
+    ("records the assessment read formula", "`2r + 1` = 97"),
+    (
+        "records that adr-0017's accounting is untouched",
+        "adr-0017's exactly-three-`putobject` accounting is untouched",
+    ),
+    ("keeps the third adr-0017 attempt unauthorized", "a third adr-0017 attempt not authorized"),
+)
+
+#: Ways a status document could overstate ADR-0018. All false today.
+ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "adr-0018 is accepted / in force",
+    "adr-0018 authorizes implementation",
+    "read surface exists",
+    "run a completed",
+    "run b completed",
+    "empirical qualification executed",
+)
+
+#: What the deletion runbook must say after the clarification. Naming a prefix
+#: must not become permission to depend on the artifact that lives there.
+ADR_0018_RUNBOOK_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("names the locator prefix", "qualification/sharadar/locators/"),
+    ("names the report prefix", "qualification/sharadar/reports/"),
+    (
+        "states that deletion behaviour is unchanged",
+        "deletion behaviour is unchanged by naming them.",
+    ),
+    (
+        "refuses to depend on a locator",
+        "a locator may be absent, and this procedure must never depend on one to discover "
+        "licensed objects.",
+    ),
+)
+
+#: What the implementation plan must say once it carries the ceilings.
+ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("links the adr", "adr-0018-bounded-private-empirical-sharadar-qualification.md"),
+    (
+        "records that the adr carries no authority yet",
+        "the adr is proposed and carries no authority until the pull request introducing it merges",
+    ),
+    ("records zero p-test executions", "p1–p9 executions by it are zero."),  # noqa: RUF001
+    ("produces no aggregate verdict", "no aggregate verdict is produced by any of it."),
+)
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -12916,6 +13085,121 @@ def main() -> int:
                 needle in composition_tests,
                 "the guard this audit names must be a test that exists",
             )
+
+    # ------------------------------------------------- ADR-0018, still proposed
+    #
+    # A proposed ADR is the one class of governance document whose *absence* of
+    # authority has to be checked as hard as a merged one's presence. Everything
+    # below is either "the document says the true thing" or "the thing it
+    # designs does not exist yet", and the second half is what stops
+    # "architecture only" from being a sentence nobody can falsify.
+    f.check(
+        "ADR-0018 exists",
+        ADR_0018.is_file(),
+        "the ADR this section governs must be the file it names",
+    )
+    if ADR_0018.is_file():
+        adr_0018_flat = " ".join(read(ADR_0018).replace("**", "").split()).lower()
+        for label, phrase in ADR_0018_SELF_REQUIRED:
+            f.check(
+                f"ADR-0018 {label}",
+                phrase in adr_0018_flat,
+                f"missing from ADR-0018: {phrase}",
+            )
+        overstated = [claim for claim in ADR_0018_SELF_FORBIDDEN if claim in adr_0018_flat]
+        f.check(
+            "ADR-0018 claims no authority it does not have",
+            not overstated,
+            ", ".join(overstated),
+        )
+        carriers = [name for name in ADR_0018_SUBJECT_CARRIERS if name in adr_0018_flat]
+        f.check(
+            "ADR-0018 carries no concrete subject list",
+            not carriers,
+            ", ".join(carriers),
+        )
+
+    adr_0018_documents = {
+        "CLAUDE.md": read(REPO_ROOT / "CLAUDE.md"),
+        "README.md": read(REPO_ROOT / "README.md"),
+    }
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        for label, phrase in ADR_0018_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for ADR-0018",
+                phrase in flat,
+                f"missing from {name}: {phrase}",
+            )
+        overstated = [claim for claim in ADR_0018_STATUS_FORBIDDEN if claim in flat]
+        f.check(
+            f"{name} does not overstate ADR-0018",
+            not overstated,
+            ", ".join(overstated),
+        )
+
+    f.check(
+        "ADR-0018 is not registered as merged",
+        "ADR-0018" not in dict(MERGED_ADR_STATUS),
+        "its pull request is open; registering it would assert an acceptance that has not happened",
+    )
+    f.check(
+        "no status document claims ADR-0018 is in force",
+        all("ADR-0018" not in _in_force_adr_claims(t) for t in adr_0018_documents.values()),
+        "a proposed ADR named as in force is the exact drift the registry guard exists for",
+    )
+
+    for label, phrase in ADR_0018_RUNBOOK_REQUIRED:
+        f.check(
+            f"the deletion runbook {label}",
+            phrase in " ".join(read(DELETION_RUNBOOK).replace("**", "").split()).lower(),
+            f"missing from the deletion runbook: {phrase}",
+        )
+
+    adr_0018_plan = " ".join(
+        read(PHASE3 / "implementation-plan.md").replace("**", "").split()
+    ).lower()
+    for label, phrase in ADR_0018_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label}",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    # The absence half. ADR-0018 authorizes architecture and nothing else, so
+    # every artifact it designs must still be missing -- and "missing" is checked
+    # against the repository rather than asserted in prose.
+    f.check(
+        "the ADR-0018 parser package does not exist yet",
+        not ADR_0018_QUALIFY_PACKAGE.exists(),
+        "implementation is a separate gate, and this directory is what crossing it looks like",
+    )
+    f.check(
+        "the ADR-0018 acquisition entry point does not exist yet",
+        not ADR_0018_ACQUIRE_ENTRY.exists(),
+        "designing an entry point is not creating one",
+    )
+    f.check(
+        "the ADR-0018 assessment entry point does not exist yet",
+        not ADR_0018_ASSESS_ENTRY.exists(),
+        "designing an entry point is not creating one",
+    )
+    # This audit is excluded by name, and only this audit. It is a governance
+    # guard, so it *has* to name the ADR it guards -- but it constructs no client,
+    # sends no request and is not an operational surface. Excluding it by exact
+    # filename rather than by directory keeps every other script in scope,
+    # including the two entry points asserted absent above.
+    f.check(
+        "no operational module names ADR-0018",
+        not [
+            path
+            for path in tracked_files(REPO_ROOT / "src") + tracked_files(REPO_ROOT / "scripts")
+            if path.suffix == ".py"
+            and path.name != "phase3_docs_audit.py"
+            and "ADR-0018" in read(path)
+        ],
+        "a documentation-only slice leaves the operational surface untouched",
+    )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
