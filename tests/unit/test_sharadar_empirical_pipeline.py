@@ -616,10 +616,126 @@ def test_one_day_short_of_the_minimum_separation_is_refused() -> None:
     _assert_refused_pair_envelope(reader, s3)
 
 
+def test_the_pair_rule_compares_the_one_accepted_plan_digest() -> None:
+    """ADR-0018 asks for *the same plan digest*, and that is what is compared.
+
+    Both locators are decoded and their recorded ``plan_digest`` values are read
+    back: two runs of one plan share it, which is precisely why the digest is
+    defined over the plan's stable shape. The unauthorized second digest the
+    candidate had added is gone, and this is the check that replaces it.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from kalpamani.data.qualify.sharadar.locator import decode_locator
+
+    s3 = _acquire_pair()
+    locators = [
+        decode_locator(
+            s3.objects["/".join(locator_key_segments(execution))], execution_id=execution
+        )
+        for execution in (EXECUTION_ID_A, EXECUTION_ID_B)
+    ]
+    run_a, run_b = locators
+    assert run_a.execution_id != run_b.execution_id
+    assert run_a.plan_digest == run_b.plan_digest
+    names = {field.name for field in dataclass_fields(run_a)}
+    assert "plan_digest" in names
+    assert "plan_shape_digest" not in names
+    assert _assess(s3).status is AssessmentStatus.COMPLETED
+
+
+def test_a_matching_plan_digest_alone_admits_nothing() -> None:
+    """Every other pair rule still refuses, with the plan digests equal.
+
+    The digest answers one question -- *were these two runs of the same plan?* -- and
+    the combined assessor asks nine more. Each case below holds the plan digest
+    constant and violates exactly one of the others, so a digest comparison can never
+    stand in for the rest of the admission.
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from kalpamani.data.qualify.sharadar.assessment import validate_locator_pair
+    from kalpamani.data.qualify.sharadar.locator import Completeness, decode_locator
+
+    s3 = _acquire_pair()
+    run_a, run_b = (
+        decode_locator(
+            s3.objects["/".join(locator_key_segments(execution))], execution_id=execution
+        )
+        for execution in (EXECUTION_ID_A, EXECUTION_ID_B)
+    )
+    assert run_a.plan_digest == run_b.plan_digest
+    assert validate_locator_pair(run_a, run_b) >= MIN_RUN_SEPARATION_DAYS
+
+    variants = (
+        # identity: one run twice is not two observations
+        (run_a, run_a),
+        # inventory: two runs over different private inventories
+        (run_a, dataclass_replace(run_b, inventory_digest="f" * 64)),
+        # schema: two runs recorded under different source schemas
+        (run_a, dataclass_replace(run_b, source_schema_version="sharadar-empirical-v2")),
+        # completeness: a PARTIAL locator grants no evaluation
+        (run_a, dataclass_replace(run_b, completeness=Completeness.PARTIAL)),
+        # ambiguity: an unknown publication state refuses
+        (run_a, dataclass_replace(run_b, publication_state_unknown=True)),
+        # counts: a different planned count is a different question asked
+        (run_a, dataclass_replace(run_b, planned_request_count=47)),
+        # counts: completed short of planned is not a complete run
+        (run_a, dataclass_replace(run_b, completed_request_count=47)),
+        # ordering, and therefore separation: Run B before Run A
+        (run_b, run_a),
+    )
+    for first, second in variants:
+        assert first.plan_digest == second.plan_digest
+        with pytest.raises(AssessmentError) as raised:
+            validate_locator_pair(first, second)
+        assert raised.value.status is AssessmentStatus.REFUSED_LOCATOR
+
+
+def test_a_differing_plan_digest_refuses_before_a_record_or_payload_is_read() -> None:
+    # Two runs of two different plans: Run B asks for a different subject inventory,
+    # so its stable plan digest differs. The refusal costs two locator reads and
+    # nothing else -- no acquisition record, no payload, no report.
+    s3 = FakeS3Client()
+    _acquire(s3=s3, execution_id=EXECUTION_ID_A, instant=RUN_INSTANT)
+    other = tuple(f"ZZ-OTHER-{index:02d}" for index in range(1, 9))
+    monotonic = FakeMonotonic()
+    run_empirical_acquisition(
+        credential=credential(),
+        transport=PagedTransport(),
+        monotonic=monotonic,
+        sleeper=monotonic.sleep,
+        s3_client=s3,
+        licensed_bucket=SYNTHETIC_BUCKET,
+        clock=FixedClock(RUN_B_INSTANT),
+        inventory=synthetic_inventory(other),
+        execution_id=EXECUTION_ID_B,
+    )
+    from kalpamani.data.qualify.sharadar.locator import decode_locator
+
+    run_a, run_b = (
+        decode_locator(
+            s3.objects["/".join(locator_key_segments(execution))], execution_id=execution
+        )
+        for execution in (EXECUTION_ID_A, EXECUTION_ID_B)
+    )
+    # The digests genuinely differ, so the refusal below is this rule's and not
+    # another's arriving first.
+    assert run_a.plan_digest != run_b.plan_digest
+
+    failure, reader = _refused(s3)
+    assert failure.status is AssessmentStatus.REFUSED_LOCATOR
+    assert reader.get_object_count == 2
+    _assert_refused_pair_envelope(reader, s3)
+    assert [key for key in s3.get_calls if "/objects/sha256/" in key] == []
+    assert [key for key in s3.get_calls if "/acquisitions/" in key] == []
+
+
 def test_a_mismatched_pair_from_different_inventories_is_refused() -> None:
     s3 = FakeS3Client()
     _acquire(s3=s3, execution_id=EXECUTION_ID_A, instant=RUN_INSTANT)
-    # Run B against a different private inventory: same plan shape, different digest.
+    # Run B against a different private inventory: different subjects, so its
+    # inventory digest differs -- and the inventory rule refuses on that alone.
     other = tuple(f"ZZ-OTHER-{index:02d}" for index in range(1, 9))
     monotonic = FakeMonotonic()
     run_empirical_acquisition(

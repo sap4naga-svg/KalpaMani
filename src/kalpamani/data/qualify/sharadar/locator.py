@@ -144,7 +144,6 @@ LOCATOR_FIELDS: Final[frozenset[str]] = frozenset(
         "acquisition_mode",
         "profile",
         "plan_digest",
-        "plan_shape_digest",
         "inventory_digest",
         "source_schema_version",
         "run_started_at",
@@ -204,55 +203,40 @@ def locator_key_segments(execution_id: str) -> tuple[str, ...]:
 
 
 def plan_digest(plan: EmpiricalPlan) -> str:
-    """A deterministic digest of the plan's own request coordinates and ceilings.
+    """A deterministic digest of the **stable** acquisition plan two runs must share.
 
-    Taken over the generated requests rather than over the plan object, so it binds
-    **what will actually be asked for**. Two plans that generate the same 48
-    requests under the same execution identity bind to the same value; a plan whose
-    window, page limit or subject set differs does not.
+    The accepted locator schema carries exactly one plan digest, and the combined
+    assessment requires Run A and Run B to record *the same* one. So this binds the
+    part of the plan a legitimate pair holds in common:
+
+    - the acquisition mode and the provider;
+    - the dataset inventory, and the subject/request inventory structure;
+    - every page limit and page offset, and the request count;
+    - the schema, response-format and profile identifiers, and both byte ceilings.
+
+    And it deliberately excludes the values a legitimate pair **must** differ in:
+    the execution identity, which is distinct by requirement, and each request's
+    ``requested_range``, which ends at that run's own ``T-1`` and is therefore
+    different for two runs eight calendar days apart. Binding either would make
+    every legitimate pair unsatisfiable, which is the whole reason this digest is
+    defined over the plan's shape rather than over one execution of it.
+
+    **Nothing execution-specific is lost by that exclusion.** The locator binds the
+    execution identity, both run instants, every acquisition identity, every
+    requested range and every object key, digest, byte count and disposition in its
+    own fields -- so the evidence stays bound per execution, and this digest answers
+    the one question the pair rule asks. It is taken over the generated requests
+    rather than over the plan object, so it binds what will actually be asked for.
     """
     document: dict[str, Any] = {
-        "execution_id": plan.plan.execution_id,
+        "acquisition_mode": AcquisitionMode.QUALIFICATION.value,
+        "provider": PROVIDER,
         "source_schema_version": plan.plan.source_schema_version,
         "response_format": plan.plan.response_format.value,
         "profile": plan.plan.profile.value,
         "max_response_bytes": plan.plan.limits.max_response_bytes,
         "max_run_bytes": plan.plan.limits.max_run_bytes,
-        "requests": [
-            {
-                "dataset": request.dataset.value,
-                "subject": request.ticker,
-                "requested_range": request.requested_range,
-                "page_limit": request.page.limit,
-                "page_skip": request.page.skip,
-            }
-            for request in plan.plan.requests()
-        ],
-    }
-    return sha256_hex(canonical_bytes(document))
-
-
-def plan_shape_digest(plan: EmpiricalPlan) -> str:
-    """A digest of everything about the plan that **two runs of it must share**.
-
-    :func:`plan_digest` binds what *one* execution asked for, and it necessarily
-    differs between two runs: the execution identity is different by requirement,
-    and the window ends at each run's own ``T-1``, so a pair eight calendar days
-    apart has two different ranges by design. Requiring those digests to match would
-    make a cross-run pair unsatisfiable.
-
-    This digest is what *is* comparable -- the subjects, the datasets, the page
-    limits, the page offsets, the response format, the profile, the schema version
-    and both byte ceilings -- and the combined assessor compares it. The
-    per-execution digest stays exactly as it was and is recorded per run; the two
-    answer different questions and neither replaces the other.
-    """
-    document: dict[str, Any] = {
-        "source_schema_version": plan.plan.source_schema_version,
-        "response_format": plan.plan.response_format.value,
-        "profile": plan.plan.profile.value,
-        "max_response_bytes": plan.plan.limits.max_response_bytes,
-        "max_run_bytes": plan.plan.limits.max_run_bytes,
+        "request_count": len(plan.plan.requests()),
         "requests": [
             {
                 "dataset": request.dataset.value,
@@ -426,7 +410,6 @@ def build_locator_document(
         "acquisition_mode": AcquisitionMode.QUALIFICATION.value,
         "profile": PERMITTED_PROFILE.value,
         "plan_digest": plan_digest(plan),
-        "plan_shape_digest": plan_shape_digest(plan),
         "inventory_digest": plan.inventory_digest,
         "source_schema_version": plan.plan.source_schema_version,
         "run_started_at": run_started_at.astimezone(UTC).isoformat(),
@@ -533,10 +516,9 @@ class ValidatedLocator:
     """
 
     execution_id: str
+    #: The stable plan digest -- see :func:`plan_digest`. Two runs of one plan share
+    #: it, which is exactly what the combined assessment's pair rule compares.
     plan_digest: str
-    #: The comparable half of the plan -- see :func:`plan_shape_digest`. Two runs of
-    #: one plan share this and cannot share :attr:`plan_digest`.
-    plan_shape_digest: str
     inventory_digest: str
     source_schema_version: str
     completeness: Completeness
@@ -699,7 +681,6 @@ def validate_locator_document(document: object, *, execution_id: str) -> Validat
     return ValidatedLocator(
         execution_id=execution_id,
         plan_digest=_hex_digest(document["plan_digest"]),
-        plan_shape_digest=_hex_digest(document["plan_shape_digest"]),
         inventory_digest=_hex_digest(document["inventory_digest"]),
         source_schema_version=_text(document["source_schema_version"]),
         completeness=completeness,
@@ -752,7 +733,6 @@ __all__ = [
     "locator_object_key",
     "payload_key_for",
     "plan_digest",
-    "plan_shape_digest",
     "serialize_locator",
     "validate_locator_document",
 ]

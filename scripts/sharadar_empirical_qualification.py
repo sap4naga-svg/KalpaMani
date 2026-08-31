@@ -690,10 +690,15 @@ def _s3_client() -> Any:
     SDK's default retry mode does not: it would turn one ``PutObject`` into several
     attempts, each with its own connect and read timeouts, and the ceiling would then
     bound a fraction of what the operation could actually take. So the configuration
-    is explicit and finite -- ``max_attempts`` of one in ``standard`` mode, an
+    is explicit and finite -- ``total_max_attempts`` of one in ``standard`` mode, an
     explicit connect timeout and an explicit read timeout -- and it comes from
     :func:`~kalpamani.data.qualify.sharadar.plan.s3_client_config_kwargs`, the same
     module the ceiling is derived in, so the two cannot drift apart.
+
+    **``total_max_attempts``, not ``max_attempts``.** Botocore's ``max_attempts``
+    counts the retries that follow the first request, so one there would permit a
+    second attempt; ``total_max_attempts`` counts every attempt, so one there is one
+    request. Only the second spelling makes the ceiling above true.
 
     Adaptive and legacy retry modes are not reachable from here: the mode is a
     compiled constant and there is no parameter to change it.

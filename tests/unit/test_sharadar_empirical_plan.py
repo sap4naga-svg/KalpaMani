@@ -12,6 +12,11 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+# The SDK ships no type information. It is imported for one purpose only: to
+# construct a ``Config`` OBJECT offline and read it back. **No client is built**,
+# so no credential, endpoint or region is resolved and no socket is opened.
+from botocore.config import Config  # type: ignore[import-untyped]
+
 from fixtures.sharadar_empirical import RUN_INSTANT, SYNTHETIC_SUBJECTS, synthetic_inventory
 from kalpamani.data.ingest.sharadar.datasets import SharadarDataset
 from kalpamani.data.ingest.sharadar.qualification import (
@@ -265,13 +270,140 @@ def test_the_sdk_configuration_disables_retries_and_states_finite_timeouts() -> 
     )
 
     config = s3_client_config_kwargs()
+    assert set(config) == {"connect_timeout", "read_timeout", "retries"}
     assert config["connect_timeout"] == S3_CONNECT_TIMEOUT_SECONDS
     assert config["read_timeout"] == S3_READ_TIMEOUT_SECONDS
-    # ``max_attempts`` counts total attempts in standard mode, so one means no retry.
-    assert config["retries"] == {"max_attempts": 1, "mode": "standard"}
+    # ``total_max_attempts`` counts EVERY attempt, the first included, so one means
+    # one request and no retry.
+    assert config["retries"] == {"total_max_attempts": 1, "mode": "standard"}
     for value in (config["connect_timeout"], config["read_timeout"]):
         assert isinstance(value, float)
         assert 0 < value < float("inf")
+
+
+def test_the_retry_settings_never_use_botocore_s_max_attempts_spelling() -> None:
+    # The corrected defect, pinned as its own test rather than only as a value in the
+    # dictionary above. In botocore ``max_attempts`` counts the retries that FOLLOW
+    # the first request, so ``max_attempts = 1`` permits a second attempt -- which
+    # would double the worst case ``S3_OPERATION_CEILING_SECONDS`` is derived from.
+    from kalpamani.data.qualify.sharadar.plan import (
+        S3_RETRY_MODE,
+        S3_TOTAL_MAX_ATTEMPTS,
+        s3_client_config_kwargs,
+    )
+
+    retries = s3_client_config_kwargs()["retries"]
+    assert isinstance(retries, dict)
+    assert retries["total_max_attempts"] == 1
+    assert "max_attempts" not in retries
+    assert retries["mode"] == "standard"
+    assert S3_TOTAL_MAX_ATTEMPTS == 1
+    assert S3_RETRY_MODE == "standard"
+
+
+def test_no_sdk_configuration_key_is_spelled_max_attempts_anywhere() -> None:
+    """No ``"max_attempts"`` **key** exists in this package or its entry points.
+
+    An AST check over string literals, not a text search, so the two legitimate
+    appearances of the word are untouched: the provider-side
+    ``RetryPolicy(max_attempts=...)``, which is a keyword argument to KalpaMani's own
+    class and whose ``max_attempts`` genuinely counts total attempts, and the prose
+    that names botocore's spelling in order to say it is not used. A dictionary key
+    is a string literal, and there is none.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    searched = [
+        *sorted((root / "src" / "kalpamani" / "data" / "qualify").rglob("*.py")),
+        root / "scripts" / "sharadar_empirical_qualification.py",
+        root / "scripts" / "sharadar_qualification_assessment.py",
+    ]
+    assert len(searched) >= 12
+    for path in searched:
+        source = path.read_text(encoding="utf-8")
+        # The retired constant name has no legitimate use at all.
+        assert "S3_MAX_ATTEMPTS" not in source
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Constant) and node.value == "max_attempts":
+                pytest.fail("a botocore max_attempts key was reintroduced")
+
+
+def test_the_module_records_why_max_attempts_is_not_used() -> None:
+    # The misleading statement the correction removed said botocore's
+    # ``max_attempts`` counts total attempts. Its replacement says the opposite, in
+    # the module that owns the configuration, so the next reader is not left to
+    # rediscover the distinction from the SDK documentation.
+    from kalpamani.data.qualify.sharadar import plan as plan_module
+
+    text = plan_module.s3_client_config_kwargs.__doc__ or ""
+    assert "``max_attempts`` is not used and must not be reintroduced" in text
+    assert "counts the retries *after* the first request" in text
+    assert "``total_max_attempts`` of one is one attempt in total" in text
+
+
+def test_a_real_botocore_config_object_preserves_one_total_attempt() -> None:
+    """The dictionary is checked against the SDK that will consume it.
+
+    A ``Config`` object is constructed and read back -- **offline, and it is not a
+    client**: it resolves no credential, no endpoint and no region, opens no socket
+    and sends nothing. That is the point of asserting here rather than against a
+    client: it proves botocore itself accepts and keeps the corrected key.
+    """
+    from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs
+
+    config = Config(**s3_client_config_kwargs())
+    assert config.retries is not None
+    assert config.retries["total_max_attempts"] == 1
+    assert "max_attempts" not in config.retries
+    assert config.retries["mode"] == "standard"
+    assert config.connect_timeout == 5.0
+    assert config.read_timeout == 10.0
+
+
+def test_ambient_aws_retry_settings_cannot_override_the_explicit_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The configuration is compiled, so a hostile environment cannot reach it.
+
+    ``AWS_MAX_ATTEMPTS`` and ``AWS_RETRY_MODE`` are the two ambient settings that
+    would otherwise decide a client's retry behaviour. The kwargs come from a pure
+    function that reads no environment, and the ``Config`` botocore builds from them
+    holds the explicit values -- and an explicitly configured ``Config`` is what
+    botocore's own resolution chain prefers over both variables.
+    """
+    from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs
+
+    baseline = s3_client_config_kwargs()
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "10")
+    monkeypatch.setenv("AWS_RETRY_MODE", "adaptive")
+    assert s3_client_config_kwargs() == baseline
+
+    config = Config(**s3_client_config_kwargs())
+    assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+
+
+def test_the_operation_ceiling_covers_one_configured_attempt() -> None:
+    # T_s3 = 20 conservatively covers ONE attempt: connect 5, read 10, and a
+    # 5-second remaining allowance for name resolution, TLS and local SDK work.
+    # It is sound only because the SDK takes no retry -- with one retry the same
+    # invocation could occupy 2 * (5 + 10) and the ceiling would bound nothing.
+    from kalpamani.data.qualify.sharadar.plan import (
+        S3_CONNECT_TIMEOUT_SECONDS,
+        S3_OPERATION_CEILING_SECONDS,
+        S3_READ_TIMEOUT_SECONDS,
+        S3_TOTAL_MAX_ATTEMPTS,
+    )
+
+    assert S3_TOTAL_MAX_ATTEMPTS == 1
+    assert S3_CONNECT_TIMEOUT_SECONDS == 5.0
+    assert S3_READ_TIMEOUT_SECONDS == 10.0
+    assert S3_OPERATION_CEILING_SECONDS == 20.0
+    attempt = S3_CONNECT_TIMEOUT_SECONDS + S3_READ_TIMEOUT_SECONDS
+    assert S3_TOTAL_MAX_ATTEMPTS * attempt == 15.0
+    assert S3_OPERATION_CEILING_SECONDS - S3_TOTAL_MAX_ATTEMPTS * attempt == 5.0
+    assert S3_OPERATION_CEILING_SECONDS >= S3_TOTAL_MAX_ATTEMPTS * attempt
 
 
 def test_the_plan_carries_the_inventory_digest_and_the_deadline() -> None:

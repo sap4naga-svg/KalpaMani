@@ -309,12 +309,12 @@ def validate_locator_pair(first: ValidatedLocator, second: ValidatedLocator) -> 
     - **distinct identities** -- one run twice is not two observations;
     - **both assessable** -- a ``PARTIAL`` or ambiguous locator grants no evaluation
       on its own, and pairing it with a complete one does not repair it;
-    - **the same plan SHAPE digest, inventory digest and source schema version** --
-      two runs of *different* plans measure two different things. The shape digest
-      rather than the per-execution one, because the per-execution digest binds the
-      execution identity and the ``T-1`` window and therefore **must** differ across
-      a pair eight days apart; requiring it to match would make every legitimate
-      pair unsatisfiable;
+    - **the same plan digest, inventory digest and source schema version** -- two
+      runs of *different* plans measure two different things. The accepted locator
+      carries exactly one plan digest, and it is defined over the plan's stable
+      shape precisely so that a legitimate pair can share it: it binds neither the
+      execution identity nor each run's own ``T-1`` window, both of which differ
+      across a pair eight days apart by requirement;
     - **the same planned count, both complete, and matching request inventories** --
       a comparison needs the same questions asked twice;
     - **Run A ordered strictly before Run B**, and **at least eight calendar days**
@@ -331,7 +331,7 @@ def validate_locator_pair(first: ValidatedLocator, second: ValidatedLocator) -> 
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
     if not first.assessable or not second.assessable:
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
-    if first.plan_shape_digest != second.plan_shape_digest:
+    if first.plan_digest != second.plan_digest:
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
     if first.inventory_digest != second.inventory_digest:
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
@@ -569,7 +569,6 @@ def run_combined_assessment(
             run_a_execution_id=run_a_execution_id,
             run_b_execution_id=run_b_execution_id,
             assessment_id=assessment_id,
-            plan_shape_digest=run_a.plan_shape_digest,
             run_a_plan_digest=run_a.plan_digest,
             run_b_plan_digest=run_b.plan_digest,
             inventory_digest=run_a.inventory_digest,

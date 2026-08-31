@@ -502,3 +502,37 @@ def test_neither_command_reimplements_the_identity_gate() -> None:
         assert "allowed_account_ids" not in source
         assert "terraform" not in source.lower()
         assert "from aws_foundation_verify import identity_gate" in source
+
+
+def test_the_acquisition_s3_client_factory_uses_the_compiled_sdk_configuration() -> None:
+    """The one qualification S3 client factory takes its ``Config`` from the plan.
+
+    Checked on the executable source, not on a constructed client: constructing one
+    would resolve credentials and an endpoint, and this suite reaches no AWS. What
+    matters is that the factory passes ``s3_client_config_kwargs()`` straight into
+    ``botocore``'s ``Config`` -- the same module the operation ceiling is derived in,
+    so the two cannot drift apart -- and names no retry setting of its own.
+    """
+    source = ACQUIRE_EXECUTABLE
+    assert "from botocore.config import Config" in source
+    assert "from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs" in source
+    assert "config=Config(**s3_client_config_kwargs())" in source
+    # No literal retry configuration anywhere in either command: the values live in
+    # one compiled place, and a second spelling is how two of them drift apart.
+    for name in ("acquire", "assess"):
+        executable = _EXECUTABLE[name]
+        assert '"retries"' not in executable
+        assert "'retries'" not in executable
+        assert '"max_attempts"' not in executable
+        assert "'max_attempts'" not in executable
+        assert "adaptive" not in executable
+        assert "legacy" not in executable
+
+
+def test_the_acquisition_command_states_the_corrected_botocore_semantics() -> None:
+    # The prose the correction replaced said botocore's ``max_attempts`` of one was
+    # one total attempt. An operator reading the factory now reads the distinction
+    # that actually holds, in the file that builds the client.
+    assert "``total_max_attempts``, not ``max_attempts``" in ACQUIRE_SOURCE
+    assert "counts the retries that follow the first request" in ACQUIRE_SOURCE
+    assert "max_attempts" not in ACQUIRE_EXECUTABLE

@@ -80,7 +80,6 @@ def _report_evidence(**overrides: object) -> ReportEvidence:
         "run_a_execution_id": RUN_A,
         "run_b_execution_id": RUN_B,
         "assessment_id": ASSESSMENT,
-        "plan_shape_digest": "a" * 64,
         "run_a_plan_digest": "d" * 64,
         "run_b_plan_digest": "e" * 64,
         "inventory_digest": "b" * 64,
@@ -191,9 +190,9 @@ def test_the_report_carries_the_accepted_contents() -> None:
 
 def test_the_report_binds_the_evidence_by_digest() -> None:
     evidence = _document()["evidence"]
-    # The shape digest binds what both runs must share; the two per-execution
-    # digests bind what each run actually asked for, and they differ by design.
-    assert evidence["plan_shape_digest"] == "a" * 64
+    # Two distinct values, so a crossed field-to-key mapping would show. The builder
+    # does not enforce the pair rule -- the combined assessor does, and it refuses a
+    # pair whose plan digests differ before any record or payload is read.
     assert evidence["run_a_plan_digest"] == "d" * 64
     assert evidence["run_b_plan_digest"] == "e" * 64
     assert evidence["inventory_digest"] == "b" * 64
@@ -267,7 +266,6 @@ def test_the_report_has_no_free_text_field() -> None:
         "run_a_execution_id",
         "run_b_execution_id",
         "assessment_id",
-        "plan_shape_digest",
         "run_a_plan_digest",
         "run_b_plan_digest",
         "inventory_digest",

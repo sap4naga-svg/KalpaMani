@@ -144,12 +144,10 @@ class ReportEvidence:
     run_a_execution_id: str
     run_b_execution_id: str
     assessment_id: str
-    #: The comparable half of the plan, shared by both runs, and each run's own
-    #: per-execution digest. Three values rather than one, because the
-    #: per-execution digests bind the window and the identity and therefore
-    #: differ by design -- recording only a shared digest would hide what each
-    #: run actually asked for.
-    plan_shape_digest: str
+    #: Each locator's own plan digest, recorded as read rather than as one shared
+    #: value. The combined assessor refuses the pair unless they are equal, so the
+    #: report states both and lets a reader see the equality rather than take it
+    #: on trust -- and the report binds both evidence sets, not one of them twice.
     run_a_plan_digest: str
     run_b_plan_digest: str
     inventory_digest: str
@@ -211,7 +209,6 @@ def build_report_document(
             "run_a_execution_id": evidence.run_a_execution_id,
             "run_b_execution_id": evidence.run_b_execution_id,
             "assessment_id": evidence.assessment_id,
-            "plan_shape_digest": evidence.plan_shape_digest,
             "run_a_plan_digest": evidence.run_a_plan_digest,
             "run_b_plan_digest": evidence.run_b_plan_digest,
             "inventory_digest": evidence.inventory_digest,

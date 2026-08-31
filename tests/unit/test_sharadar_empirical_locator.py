@@ -14,6 +14,9 @@ asserted, because a validator nobody attacked is a validator that has not been t
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -35,6 +38,7 @@ from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import bronze_payload_key
+from kalpamani.data.ingest.sharadar.datasets import ResponseFormat
 from kalpamani.data.qualify.sharadar.acquisition import run_empirical_acquisition
 from kalpamani.data.qualify.sharadar.locator import (
     LOCATOR_ENTRY_FIELDS,
@@ -48,6 +52,7 @@ from kalpamani.data.qualify.sharadar.locator import (
     decode_locator,
     locator_key_segments,
     payload_key_for,
+    plan_digest,
     serialize_locator,
     validate_locator_document,
 )
@@ -109,9 +114,87 @@ def test_the_locator_is_published_last_after_every_acquisition_write() -> None:
     assert locator_key not in s3.put_calls[:-1]
 
 
+#: ADR-0018 section 7.3, transcribed. **Deliberately a literal**, not
+#: :data:`LOCATOR_FIELDS`: comparing the document against the module's own constant
+#: proves only that the two agree, which an unauthorized field added to both would
+#: satisfy. That is exactly how ``plan_shape_digest`` reached the closed schema.
+ACCEPTED_LOCATOR_FIELDS: frozenset[str] = frozenset(
+    {
+        "schema_version",
+        "classification",
+        "provider",
+        "execution_id",
+        "acquisition_mode",
+        "profile",
+        "plan_digest",
+        "inventory_digest",
+        "source_schema_version",
+        "run_started_at",
+        "run_completed_at",
+        "completeness",
+        "publication_state_unknown",
+        "planned_request_count",
+        "completed_request_count",
+        "entries",
+    }
+)
+
+
+def _module_source(module: Any) -> str:
+    """A module's own source text, so a check cannot be satisfied by prose here."""
+    return Path(module.__file__).read_text(encoding="utf-8")
+
+
 def test_the_locator_records_the_accepted_closed_field_set() -> None:
     s3, _ = _acquire()
     assert set(_document(s3)) == LOCATOR_FIELDS
+
+
+def test_the_closed_field_set_is_exactly_the_one_adr_0018_accepted() -> None:
+    # Both directions, so neither an addition nor a removal can pass. The schema is
+    # closed and durable: widening it is an ADR change, not an implementation
+    # detail, and this is the check that says so.
+    s3, _ = _acquire()
+    assert LOCATOR_FIELDS == ACCEPTED_LOCATOR_FIELDS
+    assert set(_document(s3)) == ACCEPTED_LOCATOR_FIELDS
+    assert len(ACCEPTED_LOCATOR_FIELDS) == 16
+
+
+def test_exactly_one_plan_digest_field_exists_and_it_is_named_plan_digest() -> None:
+    s3, _ = _acquire()
+    document = _document(s3)
+    digest_fields = sorted(name for name in document if name.endswith("_digest"))
+    assert digest_fields == ["inventory_digest", "plan_digest"]
+
+
+def test_no_plan_shape_digest_reaches_a_locator_a_model_or_an_export() -> None:
+    """The unauthorized field, absent from every surface it had reached.
+
+    It was in the closed field set, the built document, the validated model, the
+    parser and the module's exports, and the combined assessor compared it. Adding a
+    field to a closed durable schema is a change to the accepted contract, so it is
+    checked out of each of those places rather than out of one.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from kalpamani.data.qualify.sharadar import assessment, locator, report
+
+    s3, _ = _acquire()
+    document = _document(s3)
+    assert "plan_shape_digest" not in document
+    assert "plan_shape_digest" not in _locator_bytes(s3).decode("utf-8")
+
+    parsed = decode_locator(_locator_bytes(s3), execution_id=EXECUTION_ID)
+    assert not hasattr(parsed, "plan_shape_digest")
+    assert "plan_shape_digest" not in {field.name for field in dataclass_fields(parsed)}
+
+    assert not hasattr(locator, "plan_shape_digest")
+    assert "plan_shape_digest" not in locator.__all__
+    assert "plan_shape_digest" not in {
+        field.name for field in dataclass_fields(report.ReportEvidence)
+    }
+    for module in (locator, assessment, report):
+        assert "plan_shape_digest" not in _module_source(module)
 
 
 def test_every_entry_records_the_accepted_closed_field_set() -> None:
@@ -128,6 +211,112 @@ def test_the_locator_binds_the_plan_and_the_inventory_by_digest() -> None:
     )
     assert document["inventory_digest"] == plan.inventory_digest
     assert len(document["plan_digest"]) == 64
+
+
+def test_two_executions_of_one_plan_share_the_plan_digest() -> None:
+    """The pair rule's precondition, and the reason the digest excludes two values.
+
+    ADR-0018 requires Run A and Run B to record **the same plan digest**, and
+    requires them to be distinct executions at least eight calendar days apart. So
+    the digest cannot bind the execution identity or the ``T-1`` window: a digest
+    that did would differ for every legitimate pair, and no pair could ever be
+    admitted.
+    """
+    run_a = build_empirical_plan(
+        inventory=synthetic_inventory(), execution_id="synthetic-empirical-a", instant=RUN_INSTANT
+    )
+    run_b = build_empirical_plan(
+        inventory=synthetic_inventory(),
+        execution_id="synthetic-empirical-b",
+        instant=RUN_INSTANT + timedelta(days=9),
+    )
+    assert run_a.plan.execution_id != run_b.plan.execution_id
+    ranges_a = [request.requested_range for request in run_a.plan.requests()]
+    ranges_b = [request.requested_range for request in run_b.plan.requests()]
+    assert ranges_a != ranges_b
+    assert plan_digest(run_a) == plan_digest(run_b)
+
+
+def test_the_plan_digest_binds_every_stable_plan_property() -> None:
+    """Change one comparable property, and the digest changes.
+
+    Each case alters exactly one thing the two runs of a pair are required to hold
+    in common -- the subject inventory, the schema version, the response format, a
+    page limit, a page count, and each byte ceiling -- and the digest must move for
+    every one of them. A digest that ignored any of these would let the combined
+    assessor admit two runs that asked different questions.
+    """
+    plan = build_empirical_plan(
+        inventory=synthetic_inventory(), execution_id=EXECUTION_ID, instant=RUN_INSTANT
+    )
+    baseline = plan_digest(plan)
+
+    other_subjects = tuple(f"ZZ-OTHER-{index:02d}" for index in range(1, 9))
+    variants = [
+        replace(
+            plan, plan=replace(plan.plan, subjects=synthetic_inventory(other_subjects).subjects)
+        ),
+        replace(plan, plan=replace(plan.plan, source_schema_version="sharadar-empirical-v2")),
+        replace(plan, plan=replace(plan.plan, response_format=ResponseFormat.JSON)),
+        replace(
+            plan,
+            plan=replace(
+                plan.plan,
+                datasets=(
+                    replace(plan.plan.datasets[0], page_limit=99),
+                    *plan.plan.datasets[1:],
+                ),
+            ),
+        ),
+        replace(
+            plan,
+            plan=replace(
+                plan.plan,
+                datasets=(
+                    replace(plan.plan.datasets[0], max_pages=1),
+                    *plan.plan.datasets[1:],
+                ),
+            ),
+        ),
+        replace(
+            plan,
+            plan=replace(
+                plan.plan,
+                limits=replace(plan.plan.limits, max_response_bytes=1024),
+            ),
+        ),
+        replace(
+            plan,
+            plan=replace(plan.plan, limits=replace(plan.plan.limits, max_run_bytes=1024)),
+        ),
+    ]
+    digests = [plan_digest(variant) for variant in variants]
+    assert baseline not in digests
+    assert len(set(digests)) == len(digests)
+
+
+def test_the_plan_digest_ignores_only_the_two_values_a_pair_must_differ_in() -> None:
+    # Stated as its own check so the exclusion is deliberate rather than incidental:
+    # the digest document names neither the execution identity nor a requested range,
+    # and the locator binds both in fields of its own.
+    plan = build_empirical_plan(
+        inventory=synthetic_inventory(), execution_id=EXECUTION_ID, instant=RUN_INSTANT
+    )
+    s3, _ = _acquire()
+    document = _document(s3)
+    assert document["execution_id"] == EXECUTION_ID
+    assert all(entry["requested_range"] for entry in document["entries"])
+
+    only_identity_differs = build_empirical_plan(
+        inventory=synthetic_inventory(), execution_id="synthetic-empirical-b", instant=RUN_INSTANT
+    )
+    only_window_differs = build_empirical_plan(
+        inventory=synthetic_inventory(),
+        execution_id=EXECUTION_ID,
+        instant=RUN_INSTANT + timedelta(days=9),
+    )
+    assert plan_digest(plan) == plan_digest(only_identity_differs)
+    assert plan_digest(plan) == plan_digest(only_window_differs)
 
 
 def test_the_locator_records_the_planned_and_completed_counts() -> None:

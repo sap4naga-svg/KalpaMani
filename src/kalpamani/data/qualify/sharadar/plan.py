@@ -122,13 +122,20 @@ MIN_REQUEST_INTERVAL_SECONDS: Final = 1.0
 #: **Lowering it is a configuration choice; raising it is an ADR change.**
 ACQUISITION_DEADLINE_SECONDS: Final = 1_800.0
 
-#: The two socket timeouts configured on every qualification S3 client, and the
-#: retry settings that stop the SDK from multiplying them. **Retries are disabled**,
-#: so one invocation is one attempt and the application-level locator retry is the
-#: only retry anywhere on this path.
+#: The two socket timeouts configured on every qualification acquisition S3 client,
+#: and the retry settings that stop the SDK from multiplying them. **Retries are
+#: disabled**, so one invocation is one attempt and the application-level locator
+#: retry is the only retry anywhere on this path.
+#:
+#: **``total_max_attempts``, and deliberately not ``max_attempts``.** Botocore
+#: distinguishes the two: ``max_attempts`` counts the retries that follow the first
+#: request, so ``max_attempts = 1`` permits a *second* attempt, while
+#: ``total_max_attempts`` counts every attempt including the first, so one means one
+#: request and no retry. Botocore documents ``total_max_attempts`` as the preferred
+#: setting, and it is the only one of the two that expresses what this path needs.
 S3_CONNECT_TIMEOUT_SECONDS: Final = 5.0
 S3_READ_TIMEOUT_SECONDS: Final = 10.0
-S3_MAX_ATTEMPTS: Final = 1
+S3_TOTAL_MAX_ATTEMPTS: Final = 1
 S3_RETRY_MODE: Final = "standard"
 
 #: ``T_s3`` -- the worst case one qualification S3 invocation may occupy.
@@ -343,19 +350,27 @@ validate_deadline_constants()
 
 
 def s3_client_config_kwargs() -> dict[str, object]:
-    """The botocore ``Config`` keyword arguments every qualification S3 client uses.
+    """The botocore ``Config`` arguments the qualification acquisition client uses.
 
     A plain dictionary, built by a pure function, so the SDK configuration is
     assertable in a test that imports no SDK at all. **Retries are disabled** --
-    ``max_attempts`` counts total attempts in ``standard`` mode, so one means one --
-    and both socket timeouts are explicit and finite. Without both, the SDK's own
+    ``total_max_attempts`` of one is one attempt in total, the first included -- and
+    both socket timeouts are explicit and finite. Without both, the SDK's own
     defaults would multiply a single invocation into several attempts and
     :data:`S3_OPERATION_CEILING_SECONDS` would bound nothing.
+
+    **``max_attempts`` is not used and must not be reintroduced.** In botocore it
+    counts the retries *after* the first request, so ``max_attempts = 1`` allows two
+    attempts and would silently double the worst case this module's ceiling is
+    derived from -- the exact defect this configuration was corrected for.
     """
     return {
         "connect_timeout": S3_CONNECT_TIMEOUT_SECONDS,
         "read_timeout": S3_READ_TIMEOUT_SECONDS,
-        "retries": {"max_attempts": S3_MAX_ATTEMPTS, "mode": S3_RETRY_MODE},
+        "retries": {
+            "total_max_attempts": S3_TOTAL_MAX_ATTEMPTS,
+            "mode": S3_RETRY_MODE,
+        },
     }
 
 
@@ -534,10 +549,10 @@ __all__ = [
     "PROVIDER_MAX_ATTEMPTS",
     "PROVIDER_REQUEST_ADMISSION_SECONDS",
     "S3_CONNECT_TIMEOUT_SECONDS",
-    "S3_MAX_ATTEMPTS",
     "S3_OPERATION_CEILING_SECONDS",
     "S3_READ_TIMEOUT_SECONDS",
     "S3_RETRY_MODE",
+    "S3_TOTAL_MAX_ATTEMPTS",
     "STOCKS_PAGE_LIMIT",
     "TICKERS_PAGE_LIMIT",
     "TIMEOUT_SECONDS",
