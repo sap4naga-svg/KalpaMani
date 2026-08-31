@@ -482,6 +482,50 @@ def test_the_combined_assessment_performs_no_listing_and_no_control_operation() 
     assert not hasattr(s3, "list_objects_v2")
 
 
+def test_the_assessment_counters_are_the_real_client_invocations() -> None:
+    """The accounting is a measurement, not a declaration.
+
+    Each counter is compared against the number of times the fake client's own method
+    was actually entered, so the envelope describes invocations that happened. That is
+    the fact a hidden SDK retry would corrupt: it would turn one counted invocation
+    into several attempts nobody counted, which is why both commands pin
+    ``total_max_attempts`` to one rather than inheriting the SDK's default.
+    """
+    s3 = _acquire_pair()
+    before = (len(s3.get_calls), len(s3.put_calls), len(s3.head_calls))
+    reader = _reader(s3)
+    result = _assess(s3, reader=reader)
+
+    gets, puts, heads = (
+        len(s3.get_calls) - before[0],
+        len(s3.put_calls) - before[1],
+        len(s3.head_calls) - before[2],
+    )
+    assert gets == reader.get_object_count == result.counts.get_object_count == 194
+    assert puts == reader.put_object_count == result.counts.put_object_count == 1
+    assert heads == reader.head_object_count == result.counts.head_object_count == 0
+    assert result.counts.total_s3_operations == gets + puts + heads == 195
+    assert 195 <= result.counts.total_s3_operations <= 196
+
+
+def test_a_failed_report_write_is_not_retried() -> None:
+    # One conditional PutObject for the report, and no second attempt. The remedy for
+    # a failed report is a new assessment identity -- a re-run makes zero provider
+    # requests -- and a retry here would be an operation the envelope never counted.
+    s3 = FakeS3Client(fail_puts={_report_key(): client_error("InternalError")})
+    _acquire(s3=s3, execution_id=EXECUTION_ID_A, instant=RUN_INSTANT)
+    _acquire(s3=s3, execution_id=EXECUTION_ID_B, instant=RUN_B_INSTANT)
+    before = len(s3.put_calls)
+
+    failure, reader = _refused(s3)
+    assert failure.status is AssessmentStatus.REFUSED_REPORT
+    report_attempts = [key for key in s3.put_calls[before:] if "/reports/" in key]
+    assert report_attempts == [_report_key()]
+    assert reader.put_object_count == 1
+    assert reader.head_object_count == 0
+    assert _report_key() not in s3.objects
+
+
 def test_the_combined_assessment_publishes_exactly_one_private_report() -> None:
     s3 = _acquire_pair()
     _assess(s3)

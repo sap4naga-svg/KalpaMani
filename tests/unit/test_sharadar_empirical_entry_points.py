@@ -15,11 +15,18 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import subprocess
+import sys
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+# The SDK ships no type information. It is imported for two purposes only: to replace
+# ``boto3.client`` with a recorder, and to read a ``Config`` OBJECT back. **No client
+# is ever constructed**, so no credential or endpoint is resolved and no socket opens.
+import boto3  # type: ignore[import-untyped]
 import pytest
+from botocore.config import Config  # type: ignore[import-untyped]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "scripts"
@@ -536,3 +543,312 @@ def test_the_acquisition_command_states_the_corrected_botocore_semantics() -> No
     assert "``total_max_attempts``, not ``max_attempts``" in ACQUIRE_SOURCE
     assert "counts the retries that follow the first request" in ACQUIRE_SOURCE
     assert "max_attempts" not in ACQUIRE_EXECUTABLE
+
+
+# -- both qualification S3 clients take exactly one SDK attempt ---------------
+
+
+def _recorded_client_construction(module: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Drive one command's S3 factory with ``boto3.client`` replaced by a recorder.
+
+    **No client is constructed and nothing reaches AWS.** The recorder returns an
+    inert sentinel, so no credential is resolved, no endpoint is looked up and no
+    socket is opened -- and `monkeypatch` restores the SDK afterwards. This is the
+    only way to assert what the factory *actually passes*: a source check can be
+    satisfied by a line that never runs, and a real client cannot be built here.
+    """
+    recorded: dict[str, Any] = {}
+
+    def _recorder(service_name: str, **kwargs: Any) -> object:
+        assert not recorded, "the factory constructed more than one client"
+        recorded["service_name"] = service_name
+        recorded.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(boto3, "client", _recorder)
+    module._s3_client()
+    return recorded
+
+
+@pytest.mark.parametrize("name", ["acquire", "assess"])
+def test_both_qualification_s3_factories_construct_an_explicit_botocore_config(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = _recorded_client_construction(
+        {"acquire": acquire, "assess": assess}[name], monkeypatch
+    )
+    assert recorded["service_name"] == "s3"
+    assert recorded["region_name"] == "us-east-1"
+    # An explicit Config object, not a dictionary and not the SDK's default.
+    assert type(recorded["config"]) is Config
+
+
+@pytest.mark.parametrize("name", ["acquire", "assess"])
+def test_both_qualification_s3_clients_take_one_total_attempt_and_no_retry(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One total SDK attempt per invocation, on both commands.
+
+    Read off the ``Config`` the factory really passed, so this is what the SDK would
+    be given rather than what a docstring says it would be given.
+    """
+    config = _recorded_client_construction(
+        {"acquire": acquire, "assess": assess}[name], monkeypatch
+    )["config"]
+    assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+    assert config.retries["total_max_attempts"] == 1
+    assert "max_attempts" not in config.retries
+    assert config.retries["mode"] == "standard"
+    assert config.retries["mode"] != "adaptive"
+    # Both socket timeouts are finite, so one attempt cannot hang indefinitely.
+    for value in (config.connect_timeout, config.read_timeout):
+        assert type(value) is float
+        assert 0 < value < float("inf")
+
+
+def test_the_two_commands_are_given_the_same_compiled_client_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One shared pure source, so no retry literal is written twice and the two
+    # cannot drift apart. The assessment command previously passed no ``Config`` at
+    # all and therefore inherited the SDK's default retry behaviour.
+    from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs
+
+    acquire_config = _recorded_client_construction(acquire, monkeypatch)["config"]
+    assess_config = _recorded_client_construction(assess, monkeypatch)["config"]
+    expected = s3_client_config_kwargs()
+    for config in (acquire_config, assess_config):
+        assert config.retries == expected["retries"]
+        assert config.connect_timeout == expected["connect_timeout"]
+        assert config.read_timeout == expected["read_timeout"]
+    assert acquire_config.retries == assess_config.retries
+    assert "s3_client_config_kwargs" in ASSESS_EXECUTABLE
+    assert "config=Config(**s3_client_config_kwargs())" in ASSESS_EXECUTABLE
+
+
+@pytest.mark.parametrize("name", ["acquire", "assess"])
+def test_ambient_retry_settings_cannot_override_either_client_configuration(
+    name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A hostile environment and a hostile shared profile change nothing.
+
+    ``AWS_MAX_ATTEMPTS`` and ``AWS_RETRY_MODE``, and the same two settings in a
+    shared-profile file reached through ``AWS_CONFIG_FILE``, are what would otherwise
+    decide a client's retry behaviour. Both are set to values this path forbids, and
+    the ``Config`` the factory passes is unchanged -- because the values come from a
+    pure function that reads no environment, and an explicitly configured ``Config``
+    is what botocore's own resolution chain prefers over either source.
+    """
+    profile = tmp_path / "config"
+    profile.write_text("[default]\nmax_attempts = 10\nretry_mode = adaptive\n", encoding="utf-8")
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "10")
+    monkeypatch.setenv("AWS_RETRY_MODE", "adaptive")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(profile))
+
+    config = _recorded_client_construction(
+        {"acquire": acquire, "assess": assess}[name], monkeypatch
+    )["config"]
+    assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+
+
+def test_constructing_the_client_configuration_reaches_nothing() -> None:
+    """Building the ``Config`` opens no file, no socket and no AWS session.
+
+    In a **fresh interpreter**, because by the time this test runs some earlier test
+    has imported the SDK and this process would say nothing. The SDK is imported
+    first and the guards are installed after, so the probe measures the construction
+    rather than the import.
+    """
+    probe = (
+        "import sys, builtins, socket\n"
+        "from botocore.config import Config\n"
+        "from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs\n"
+        "import boto3\n"
+        "def _forbidden(*a, **k):\n"
+        "    raise AssertionError('network')\n"
+        "socket.socket.connect = _forbidden\n"
+        "socket.create_connection = _forbidden\n"
+        "socket.getaddrinfo = _forbidden\n"
+        "opened = []\n"
+        "real_open = builtins.open\n"
+        "builtins.open = lambda *a, **k: (opened.append(str(a[0])), real_open(*a, **k))[1]\n"
+        "config = Config(**s3_client_config_kwargs())\n"
+        "builtins.open = real_open\n"
+        "print('RETRIES', config.retries['total_max_attempts'], config.retries['mode'])\n"
+        "print('OPENED', opened)\n"
+        "print('SESSION', boto3.DEFAULT_SESSION is None)\n"
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed inline probe
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    lines = completed.stdout.splitlines()
+    assert lines[0] == "RETRIES 1 standard", completed.stdout
+    assert lines[1] == "OPENED []", completed.stdout
+    assert lines[2] == "SESSION True", completed.stdout
+
+
+def test_importing_the_assessment_command_constructs_no_client() -> None:
+    """An ordinary import performs nothing observable, and pulls in no SDK.
+
+    The shared configuration is imported **inside** the factory, so importing the
+    command still reaches neither ``botocore`` nor the data platform. A fresh
+    interpreter again, for the same reason.
+    """
+    probe = (
+        "import sys, builtins, socket\n"
+        "def _forbidden(*a, **k):\n"
+        "    raise AssertionError('network')\n"
+        "socket.socket.connect = _forbidden\n"
+        "socket.create_connection = _forbidden\n"
+        "socket.getaddrinfo = _forbidden\n"
+        "opened = []\n"
+        "real_open = builtins.open\n"
+        "builtins.open = lambda *a, **k: (opened.append(str(a[0])), real_open(*a, **k))[1]\n"
+        "sys.path.insert(0, r'" + str(SCRIPTS) + "')\n"
+        "import sharadar_qualification_assessment as m\n"
+        "builtins.open = real_open\n"
+        "aws = [p for p in opened if '.aws' in p or 'credentials' in p]\n"
+        "print('SDK', 'boto3' in sys.modules or 'botocore' in sys.modules)\n"
+        "print('PKG', 'kalpamani' in sys.modules)\n"
+        "print('AWSFILES', aws)\n"
+        "print('FLAG', m.AUTHORIZATION_FLAG.startswith('--i-am-the-operator'))\n"
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed inline probe
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    assert completed.stdout.split() == [
+        "SDK",
+        "False",
+        "PKG",
+        "False",
+        "AWSFILES",
+        "[]",
+        "FLAG",
+        "True",
+    ], completed.stdout
+
+
+def test_the_assessment_client_factory_stays_dormant_on_the_refusal_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The factory is injected, not called at import and not called before the command
+    # is authorized. Proven by making any client construction fail loudly and then
+    # driving the unauthorized path, which must still refuse cleanly.
+    def _explode(*args: Any, **kwargs: Any) -> object:
+        raise AssertionError("a client was constructed on the refusal path")
+
+    monkeypatch.setattr(boto3, "client", _explode)
+    assert assess.main([]) == assess.EXIT_STATUS[assess.AssessmentOutcome.REFUSED_NOT_AUTHORIZED]
+    assert "refused: not authorized" in capsys.readouterr().out
+    # And it reaches the composition only as the injected default, in one place: the
+    # module never calls its own factory, so nothing but the authorized path can.
+    assert ASSESS_EXECUTABLE.count("s3_client_factory=_s3_client") == 1
+    assert _calls_to(ASSESS_SOURCE, "_s3_client") == 0
+    assert _calls_to(ACQUIRE_SOURCE, "_s3_client") == 0
+
+
+def _calls_to(source: str, name: str) -> int:
+    """How many times ``name`` is *called* -- a definition or a reference is not one."""
+    return sum(
+        1
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
+    )
+
+
+@pytest.mark.parametrize("name", ["acquire", "assess"])
+def test_neither_command_holds_a_retry_loop(name: str) -> None:
+    """No application-level retry compensates for the SDK taking none.
+
+    A structural check rather than a text one: both commands *name* ``--retry`` and
+    ``--retries``, because they refuse those options, so a word search would prove
+    the opposite of what it looked like. What must be absent is the shape -- there is
+    no ``while`` anywhere in either module, and nothing that reaches AWS sits inside
+    a loop.
+    """
+    tree = ast.parse(_RAW[name])
+    assert not [node for node in ast.walk(tree) if isinstance(node, ast.While)]
+    looped: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For | ast.AsyncFor):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+                looped.append(inner.func.id)
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute):
+                looped.append(inner.func.attr)
+    for forbidden in (
+        "_s3_client",
+        "client",
+        "put_object",
+        "get_object",
+        "head_object",
+        "publish_report",
+        "run_combined_assessment",
+        "execute_qualification_acquisition",
+    ):
+        assert forbidden not in looped
+
+
+def test_the_assessment_command_publishes_through_one_unrepeated_call() -> None:
+    # One composition call, outside every loop. A second call, or one inside a loop,
+    # would be an application-level retry of an operation the accounting counts once.
+    tree = ast.parse(ASSESS_SOURCE)
+    assert _calls_to(ASSESS_SOURCE, "run_combined_assessment") == 1
+    inside_a_loop = [
+        inner
+        for node in ast.walk(tree)
+        if isinstance(node, ast.For | ast.AsyncFor | ast.While)
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Call)
+        and isinstance(inner.func, ast.Name)
+        and inner.func.id == "run_combined_assessment"
+    ]
+    assert inside_a_loop == []
+
+
+def test_the_shared_configuration_adds_no_module_to_the_assessment_graph() -> None:
+    """Sharing the configuration widens nothing the assessment could already reach.
+
+    In a **fresh interpreter**: import the accepted assessment composition, snapshot
+    ``sys.modules``, then import the shared configuration function. The set must not
+    grow -- the plan module is already reachable through the locator, so the factory's
+    function-local import is a lookup rather than a new dependency.
+
+    It also records what the accepted composition already pulls in, so the claim stays
+    honest: ``kalpamani.data.ingest.sharadar.transport`` was already in this graph
+    before this correction, through the accepted composition, and is unchanged by it.
+    What the composition must not *directly* import is asserted separately, in the
+    package-boundary suite.
+    """
+    probe = (
+        "import sys\n"
+        "import kalpamani.data.qualify.sharadar.assessment\n"
+        "before = set(sys.modules)\n"
+        "from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs\n"
+        "print('NEW', sorted(set(sys.modules) - before))\n"
+        "print('PLAN', 'kalpamani.data.qualify.sharadar.plan' in before)\n"
+        "print('SDK', 'boto3' in sys.modules or 'botocore' in sys.modules)\n"
+        "print('SECRETS', [m for m in sys.modules if 'secrets' in m])\n"
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed inline probe
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    assert completed.stdout.splitlines() == [
+        "NEW []",
+        "PLAN True",
+        "SDK False",
+        "SECRETS []",
+    ], completed.stdout

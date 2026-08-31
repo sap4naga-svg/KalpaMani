@@ -500,15 +500,58 @@ def _governed_licensed_bucket() -> str:
 
 
 def _s3_client() -> Any:
-    """An S3 client, pinned to the governed region.
+    """An S3 client, pinned to the governed region, with **retries disabled**.
 
     **The only AWS client this command constructs.** There is no Secrets Manager
     factory here and no provider transport factory, because this process must remain
     unable to reach either.
+
+    **Its retry behaviour is explicit, and that is the point.** Every operation this
+    command performs is counted -- 194 ``GetObject``, one report ``PutObject``, at
+    most one conditional ``HeadObject``, 195 to 196 in total -- and the SDK's default
+    retry mode would turn any one of them into several attempts that the accounting
+    never counted. A hidden retry is not a smaller version of a counted operation; it
+    is an operation nobody counted at all. So the configuration is
+    ``total_max_attempts`` of one in ``standard`` mode: **one invocation is one
+    attempt, and the SDK takes no retry of its own.**
+
+    **``total_max_attempts``, not ``max_attempts``.** Botocore's ``max_attempts``
+    counts the retries that follow the first request, so one there would permit a
+    second attempt; ``total_max_attempts`` counts every attempt, so one there is one
+    request. Only the second spelling disables retries.
+
+    **There is no application-level retry to compensate.** A failed report costs a
+    re-run of this command, which makes zero provider requests, so the remedy is a
+    new assessment identity rather than a retry -- and nothing here retries the
+    report, a locator read, a record read or a payload read.
+
+    The configuration comes from the same pure function the acquisition command uses,
+    :func:`~kalpamani.data.qualify.sharadar.plan.s3_client_config_kwargs`, so the two
+    qualification clients cannot drift apart and no retry literal is written twice.
+    That module is **already in this process's import graph** -- the accepted
+    assessment composition reaches it through the locator -- so importing it here adds
+    **no module at all**, and therefore reaches nothing this command could not already
+    reach. It is function-local, so an ordinary import of this command still imports
+    neither the SDK nor the data platform and constructs nothing.
+
+    It carries that function's two explicit socket timeouts as well, which is a
+    consequence worth stating rather than glossing: they were derived for the
+    acquisition deadline, **this command has no deadline and none is introduced**,
+    and a finite bounded timeout is simply stricter than the SDK's default.
+
+    Adaptive and legacy retry modes are not reachable from here: the mode is a
+    compiled constant and there is no parameter to change it.
     """
     import boto3
+    from botocore.config import Config
 
-    return boto3.client("s3", region_name=EXPECTED_REGION)
+    from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs
+
+    return boto3.client(
+        "s3",
+        region_name=EXPECTED_REGION,
+        config=Config(**s3_client_config_kwargs()),  # type: ignore[arg-type]
+    )
 
 
 #: The public surface, stated so it can be checked rather than inferred.

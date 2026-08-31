@@ -122,10 +122,10 @@ MIN_REQUEST_INTERVAL_SECONDS: Final = 1.0
 #: **Lowering it is a configuration choice; raising it is an ADR change.**
 ACQUISITION_DEADLINE_SECONDS: Final = 1_800.0
 
-#: The two socket timeouts configured on every qualification acquisition S3 client,
-#: and the retry settings that stop the SDK from multiplying them. **Retries are
-#: disabled**, so one invocation is one attempt and the application-level locator
-#: retry is the only retry anywhere on this path.
+#: The two socket timeouts configured on **every** qualification S3 client -- the
+#: acquisition one and the assessment one -- and the retry settings that stop the SDK
+#: from multiplying them. **Retries are disabled**, so one invocation is one attempt
+#: and the application-level locator retry is the only retry anywhere on either path.
 #:
 #: **``total_max_attempts``, and deliberately not ``max_attempts``.** Botocore
 #: distinguishes the two: ``max_attempts`` counts the retries that follow the first
@@ -350,10 +350,11 @@ validate_deadline_constants()
 
 
 def s3_client_config_kwargs() -> dict[str, object]:
-    """The botocore ``Config`` arguments the qualification acquisition client uses.
+    """The botocore ``Config`` arguments **every** qualification S3 client uses.
 
-    A plain dictionary, built by a pure function, so the SDK configuration is
-    assertable in a test that imports no SDK at all. **Retries are disabled** --
+    A plain dictionary, built by a pure function that reads no environment and
+    touches no SDK, so the configuration is assertable in a test that imports no SDK
+    at all. **Retries are disabled** --
     ``total_max_attempts`` of one is one attempt in total, the first included -- and
     both socket timeouts are explicit and finite. Without both, the SDK's own
     defaults would multiply a single invocation into several attempts and
@@ -363,6 +364,13 @@ def s3_client_config_kwargs() -> dict[str, object]:
     counts the retries *after* the first request, so ``max_attempts = 1`` allows two
     attempts and would silently double the worst case this module's ceiling is
     derived from -- the exact defect this configuration was corrected for.
+
+    **Both operator commands take their client configuration from here**, for two
+    different reasons that want the same answer. Acquisition needs it because its
+    per-operation ceiling assumes one invocation is one attempt. Assessment needs it
+    because every operation it performs is *counted*, and a hidden SDK retry is an
+    operation the accounting never counted. One function, so no retry literal is
+    written twice and the two cannot drift apart.
     """
     return {
         "connect_timeout": S3_CONNECT_TIMEOUT_SECONDS,
