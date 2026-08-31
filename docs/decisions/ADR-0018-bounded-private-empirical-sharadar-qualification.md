@@ -17,12 +17,30 @@ clarification only, no behavioural change.
 
 ---
 
-## Clarification amendment — proposed, and not effective until merged
+## Clarification amendment — conditional when written, and effective on merge of PR #42
 
 **Status of this amendment: PROPOSED — effective only upon merge of the pull request introducing
 it.** Until that merge the ADR as accepted on 2026-08-30 is what governs, and this amendment
 carries no authority. That is the same conditional treatment the ADR itself was given, and it is
 written down rather than assumed.
+
+**The clarification's own merge has since occurred** — PR #42 merged as
+`28239514b9e4e13f55ee98fa50877077e70bd593`, approved clarification head
+`579259a62ff7561ae2991f3923ea8aa1d0064be8` — so **the conditional effectiveness event has
+occurred**, the status line above has been satisfied, and **this clarification is now EFFECTIVE**.
+Both decisions it carries are effective with it: the **total elapsed acquisition deadline** and
+the **combined Run A / Run B assessment**.
+
+**While PR #42 was open the clarification was proposed and carried no authority.** That is a
+historical fact about those days, it stays true, and it is **not** rewritten as though the
+clarification had always been effective — the same treatment the ADR's own conditional acceptance
+was given when PR #39 merged.
+
+**The merge approved clarification of architecture only.** It authorized **no implementation, no
+infrastructure mutation, no Run A, no Run B and no assessment**. **The offline implementation
+candidate must be corrected against the now-authoritative clarification**, under a separately
+authorized implementation correction and an independent re-review; it stays **unmerged and
+blocked**, and being newly authoritative is what the clarification is, not permission to act on it.
 
 **It adds no authorization.** No implementation, no infrastructure mutation, no run, no provider
 request, no S3 operation and no credential retrieval becomes permitted by it. **ADR-0018 remains
@@ -1067,11 +1085,14 @@ separate gates.** **This clarification authorizes none of the later gates.**
 
 ```text
 ADR-0018                                     ACCEPTED / IN FORCE -- architecture only
-this clarification amendment                 PROPOSED -- not effective until merged
+this clarification amendment                 EFFECTIVE -- PR #42 merged; PROPOSED
+                                             and without authority while that
+                                             pull request was open
 offline implementation candidate             UNMERGED, NOT ACCEPTED AND BLOCKED --
-                                             pending accepted clarification, a
-                                             separately authorized correction and an
-                                             independent re-review
+                                             pending a separately authorized
+                                             correction against the now-effective
+                                             clarification and an independent
+                                             re-review
 empirical-package executions                 ZERO
 provider requests by this package            ZERO
 S3 operations by this package                ZERO
@@ -1123,3 +1144,9 @@ of the pull request introducing it, and it **authorizes nothing further either.*
 things the accepted architecture left ambiguous — the meaning of the 1,800-second ceiling, and the
 shape of the assessment that lets P1 reach its accepted `TESTED` ceiling — and it **corrects no
 implementation.**
+
+**That merge has since occurred, and the clarification is now effective** — PR #42, merge commit
+`28239514b9e4e13f55ee98fa50877077e70bd593`, approved clarification head
+`579259a62ff7561ae2991f3923ea8aa1d0064be8`. **Effectiveness changed what the architecture means,
+and authorized nothing:** implementation, infrastructure mutation, Run A, Run B and the combined
+assessment each remain separately gated and **NOT AUTHORIZED**.

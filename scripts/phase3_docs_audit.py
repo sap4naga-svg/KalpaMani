@@ -5470,6 +5470,16 @@ ADR_0018: Final = DECISIONS / ("ADR-0018-bounded-private-empirical-sharadar-qual
 #: The pull request whose merge satisfied ADR-0018's conditional acceptance.
 ADR_0018_PR: Final = "#39"
 
+#: The pull request whose merge satisfied the clarification amendment's own
+#: conditional effectiveness, its merge commit and the approved clarification
+#: head. Pinned the way ADR-0017's acceptance commits are pinned: a merge
+#: recorded only as a number is a merge nobody can check against the history
+#: that produced it, and the amendment's status line is conditional on exactly
+#: this one.
+ADR_0018_CLARIFICATION_PR: Final = "#42"
+ADR_0018_CLARIFICATION_MERGE_COMMIT: Final = "28239514b9e4e13f55ee98fa50877077e70bd593"
+ADR_0018_CLARIFICATION_APPROVED_HEAD: Final = "579259a62ff7561ae2991f3923ea8aa1d0064be8"
+
 #: The two future entry points ADR-0018 *designs* and does not create. Their
 #: absence is what makes "architecture only" a checkable fact rather than a
 #: sentence, so the paths are named here and asserted not to exist.
@@ -5681,6 +5691,34 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "status of this amendment: proposed — effective only upon merge of the pull request "
         "introducing it.",
     ),
+    # The post-merge half, added when PR #42 merged. The conditional status line
+    # above is immutable -- it is what the merge satisfied -- so the merge is
+    # recorded beside it rather than by rewriting it, exactly as the ADR's own
+    # acceptance was recorded beside its conditional line when PR #39 merged.
+    (
+        "records that the amendment's own merge has since occurred",
+        "the clarification's own merge has since occurred",
+    ),
+    ("names the clarification merge commit", ADR_0018_CLARIFICATION_MERGE_COMMIT),
+    ("names the approved clarification head", ADR_0018_CLARIFICATION_APPROVED_HEAD),
+    (
+        "records that the conditional effectiveness event has occurred",
+        "the conditional effectiveness event has occurred",
+    ),
+    (
+        "keeps the pre-merge fact that the amendment carried no authority",
+        f"while pr {ADR_0018_CLARIFICATION_PR} was open the clarification was proposed and "
+        "carried no authority",
+    ),
+    (
+        "records that the merge approved clarification of architecture only",
+        "the merge approved clarification of architecture only",
+    ),
+    (
+        "keeps the candidate blocked against the now-authoritative clarification",
+        "the offline implementation candidate must be corrected against the now-authoritative "
+        "clarification",
+    ),
     ("records the blocking review outcome", "`blocked_adr_clarification_required`"),
     (
         "keeps the implementation candidate blocked",
@@ -5866,12 +5904,57 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "run a evidence alone has a p1 ceiling of `partially_tested`",
     ),
     ("records that tested is a ceiling", "`tested` is a ceiling, not an expected outcome"),
-    # The amendment is PROPOSED. A status document that read a proposed
-    # clarification as an effective one would be asserting an authority nobody
-    # granted -- the same drift the pre-merge ADR-0018 guards exist to catch.
+    # The amendment's own conditional effectiveness, now satisfied. This guard
+    # required the opposite while PR #42 was open and is *inverted* rather than
+    # deleted -- the same treatment the ADR-0018 acceptance guards were given on
+    # PR #39, and for the same reason: deleting it would leave the reverted claim
+    # unguarded. Its pre-merge spelling moves to the forbidden list below, so a
+    # revert is caught rather than merely un-asserted.
     (
-        "records that the clarification is not yet effective",
-        "a clarification amendment is proposed and is not effective until merged",
+        "records that the clarification amendment is effective",
+        f"the clarification amendment is effective — pr {ADR_0018_CLARIFICATION_PR} merged",
+    ),
+    ("names the clarification merge commit", ADR_0018_CLARIFICATION_MERGE_COMMIT),
+    ("names the approved clarification head", ADR_0018_CLARIFICATION_APPROVED_HEAD),
+    (
+        "records that the conditional effectiveness event has occurred",
+        "the conditional effectiveness event has occurred",
+    ),
+    # The two decisions the clarification carries, each named as effective. A
+    # document that recorded the event without the decisions would record that
+    # something happened and not what now governs.
+    (
+        "records the effective elapsed acquisition deadline clarification",
+        "adr-0018's total elapsed acquisition deadline clarification is now effective",
+    ),
+    (
+        "records the effective combined assessment clarification",
+        "adr-0018's combined run a / run b assessment clarification is now effective",
+    ),
+    # The historical half, for the amendment exactly as for the ADR. A merge is
+    # not licence to backdate authority onto the days before it.
+    (
+        "keeps the pre-merge fact that the clarification carried no authority",
+        f"while pr {ADR_0018_CLARIFICATION_PR} was open the clarification was proposed and "
+        "carried no authority",
+    ),
+    # And the scope of it. Making a clarification effective changed what the
+    # architecture *means*; a status document that read it as permission to
+    # build, provision or run is the drift every ADR-0018 guard here exists to
+    # catch, one merge later.
+    (
+        "records that the clarification merge approved clarification of architecture only",
+        "the merge approved clarification of architecture only",
+    ),
+    (
+        "records that the clarification merge authorized nothing further",
+        "the clarification merge authorized no implementation, no infrastructure mutation and "
+        "no execution",
+    ),
+    (
+        "records that the candidate must be corrected against the now-authoritative clarification",
+        "the offline implementation candidate must be corrected against the now-authoritative "
+        "clarification",
     ),
     ("records the blocked implementation candidate", "unmerged and blocked"),
     (
@@ -5925,6 +6008,10 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "implementation candidate is ready to merge",
     "implementation candidate may be merged",
     "pr #41 is ready to merge",
+    # The superseded pre-merge spelling of the amendment's status. PR #42 merged,
+    # so a status document carrying this sentence is a document that reverted a
+    # merged fact rather than one being cautious.
+    "a clarification amendment is proposed and is not effective until merged",
 )
 
 #: What the deletion runbook must say after the clarification. Naming a prefix
@@ -5963,6 +6050,18 @@ ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     (
         "keeps the implementation candidate blocked",
         "the offline implementation candidate is unmerged and blocked",
+    ),
+    # PR #42 merged, so the plan's two clarifications are effective. The plan is
+    # where the ceilings are read from, and a plan that still called them
+    # proposed would send a reader to the superseded arithmetic.
+    (
+        "records that the two clarifications are effective",
+        f"two clarifications are effective — pr {ADR_0018_CLARIFICATION_PR} merged",
+    ),
+    ("names the clarification merge commit", ADR_0018_CLARIFICATION_MERGE_COMMIT),
+    (
+        "records that the clarification merge approved clarification of architecture only",
+        "the merge approved clarification of architecture only",
     ),
 )
 

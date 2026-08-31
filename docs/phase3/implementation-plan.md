@@ -294,8 +294,11 @@ authorized, so P1–P9 executions by it are ZERO.**
 and it is an owner decision taken by a person reading evidence rather than a value returned by a
 program.
 
-**Two clarifications are PROPOSED and are not effective until merged.** They change what the
-accepted architecture *means*, not what it authorizes, and they authorize nothing:
+**Two clarifications are EFFECTIVE — PR #42 merged.** Merge commit
+`28239514b9e4e13f55ee98fa50877077e70bd593`, approved clarification head
+`579259a62ff7561ae2991f3923ea8aa1d0064be8`; **while PR #42 was open they were proposed and
+carried no authority**, and that stays true of those days. They change what the accepted
+architecture *means*, not what it authorizes, and they authorize nothing:
 
 - **The 1,800-second acquisition elapsed-time deadline.** It is **one actual elapsed-time
   deadline** measured on an **injected monotonic clock** over the complete acquisition execution
@@ -308,9 +311,12 @@ accepted architecture *means*, not what it authorizes, and they authorize nothin
   cross-run question, so no per-run assessment can reach it. **Run A evidence alone caps P1 at
   `PARTIALLY_TESTED`**, and `TESTED` stays a ceiling rather than an expected outcome.
 
-**The offline implementation candidate is unmerged and blocked**, pending an accepted
-clarification, a separately authorized implementation correction and an independent re-review.
-**No execution of that package is authorized**, and **P1–P9 executions by it are ZERO.**
+**The offline implementation candidate is unmerged and blocked**, pending a separately
+authorized implementation correction against the now-authoritative clarification and an
+independent re-review. **The merge approved clarification of architecture only**, so
+**implementation, infrastructure mutation, Run A, Run B and the combined assessment each remain
+NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
+are ZERO.**
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
