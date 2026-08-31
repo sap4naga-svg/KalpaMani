@@ -270,6 +270,30 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 | P5 | **Adjusted/raw reconciliation.** Recomputing adjusted from raw + actions reproduces the vendor's adjusted series. | check 5.6 blocks the dataset |
 | **P9** | **Bar construction and origin.** Are the daily bars officially disseminated (consolidated tape), aggregated by the provider from its own trade collection, or resampled by us? | decides `price_bar.information_origin`. If `PROVIDER_AGGREGATED`, **price data and everything derived from it — including the universe — are ineligible under `PUBLIC_PIT`**. Larger in consequence than the estimates gap, and revision 3 would never have surfaced it |
 
+**What a bounded private empirical package could actually reach — the ceilings.**
+[ADR-0018](../decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) designs a
+bounded owner-only package for P1–P9 and records the honest ceiling of each test. A ceiling is
+what a run may **at most** report; a run may fall short of one and no run may exceed one. **The
+ADR is proposed and carries no authority until the pull request introducing it merges**, and
+merging it approves architecture only — **no execution of that package is authorized, so P1–P9
+executions by it are ZERO.**
+
+| | Ceiling under that package |
+|---|---|
+| P1 | `PARTIALLY_TESTED` after one run; **at most `TESTED` after a second, separated by calendar time**. The information-time resolution **stays bounded regardless of outcome**, because the vendor's update column is date-granular |
+| P2 | **at most `PARTIALLY_TESTED`** — sampled delisted-history existence **is not proof of the population-wide survivorship claim** |
+| P3 | the **schema question can reach `TESTED`**; announcement timing **remains approximated** where the field is absent |
+| P4 | `DOCUMENTATION_RESOLVED` — classification history **cannot become empirically historized from a snapshot table** |
+| P5 | **realistically at most `PARTIALLY_TESTED`** — split and dividend limbs may be tested; the **spinoff limb stays inconclusive while the provider's semantics are undocumented** |
+| P6 | **`DEFERRED` to Stage 3B** |
+| P7 | **`DEFERRED` to Stage 3B and EDGAR** |
+| P8 | **`DEFERRED` to Stage 3B and EDGAR** |
+| P9 | `DOCUMENTATION_RESOLVED` — price origin stays **`PROVIDER_DERIVED`** and **`PUBLIC_PIT` is not reachable from this evidence** |
+
+**No aggregate verdict is produced by any of it.** Provider selection is **G1**, G1 is **OPEN**,
+and it is an owner decision taken by a person reading evidence rather than a value returned by a
+program.
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
