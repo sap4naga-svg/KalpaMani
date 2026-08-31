@@ -28,10 +28,12 @@ entry points. What they guard is three things:
 4. **The clarification amendment says what it clarifies, and claims nothing more.**
    It makes 1,800 seconds an actual elapsed-time deadline with a stated scope, a
    stated clock and stated enforcement points, and it makes the canonical
-   assessment a combined one over both acquisition executions. Both are
-   **PROPOSED** and take effect only on merge, exactly as the ADR itself did, and
-   neither opens a gate. The combined arithmetic is derived here from `R` and `E`
-   rather than transcribed, for the same reason the acquisition arithmetic is.
+   assessment a combined one over both acquisition executions. Both took effect
+   only on merge, exactly as the ADR itself did -- **PR #42 has since merged**, so
+   the guards below are inverted rather than deleted, its conditional status line
+   is kept as the thing that merge satisfied, and neither decision opens a gate.
+   The combined arithmetic is derived here from `R` and `E` rather than
+   transcribed, for the same reason the acquisition arithmetic is.
 """
 
 from __future__ import annotations
@@ -57,6 +59,14 @@ AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
 
 #: The pull request whose merge satisfied ADR-0018's conditional acceptance.
 ADR_0018_PR = "#39"
+
+#: The pull request whose merge satisfied the clarification amendment's own
+#: conditional effectiveness, with the merge commit and the approved
+#: clarification head. Named here because a merge recorded only as a number is a
+#: merge nobody can check against the history that produced it.
+ADR_0018_CLARIFICATION_PR = "#42"
+ADR_0018_CLARIFICATION_MERGE_COMMIT = "28239514b9e4e13f55ee98fa50877077e70bd593"
+ADR_0018_CLARIFICATION_APPROVED_HEAD = "579259a62ff7561ae2991f3923ea8aa1d0064be8"
 
 #: What approving a design did **not** do. Each is separately checkable, so each
 #: is separately required of both status documents -- an accepted architecture
@@ -632,17 +642,54 @@ class TestTheCombinedRunAAndRunBAssessment:
 
 
 class TestTheClarificationAmendmentClaimsNothing:
-    """PROPOSED, and effective only on merge -- exactly as the ADR itself was.
+    """Effective on merge of PR #42 -- exactly as the ADR itself became on PR #39.
 
     A clarification read as an authorization is the same drift the pre-merge
-    ADR-0018 guards exist to catch, one document later.
+    ADR-0018 guards exist to catch, one document later. Making it effective
+    changed what the architecture *means*; it opened no gate, so every
+    NOT AUTHORIZED boundary is still required here rather than retired.
     """
 
     def test_the_amendment_status_is_conditional(self) -> None:
+        """Immutable: the conditional line is the thing the merge satisfied."""
         assert (
             "status of this amendment: proposed — effective only upon merge of the pull request "
             "introducing it." in flat(ADR)
         )
+
+    def test_the_amendment_records_that_its_own_merge_has_occurred(self) -> None:
+        adr = flat(ADR)
+        assert "the clarification's own merge has since occurred" in adr
+        assert "the conditional effectiveness event has occurred" in adr
+
+    def test_the_amendment_names_its_merge_commit_and_approved_head(self) -> None:
+        """A merge recorded only as a number cannot be checked against history."""
+        adr = flat(ADR)
+        assert ADR_0018_CLARIFICATION_MERGE_COMMIT in adr
+        assert ADR_0018_CLARIFICATION_APPROVED_HEAD in adr
+
+    def test_the_audit_pins_the_same_merge_commit_and_approved_head(self) -> None:
+        """The audit and this file must not drift into two different merges."""
+        audit = AUDIT.read_text(encoding="utf-8")
+        assert f'ADR_0018_CLARIFICATION_PR: Final = "{ADR_0018_CLARIFICATION_PR}"' in audit
+        assert (
+            "ADR_0018_CLARIFICATION_MERGE_COMMIT: Final = "
+            f'"{ADR_0018_CLARIFICATION_MERGE_COMMIT}"' in audit
+        )
+        assert (
+            "ADR_0018_CLARIFICATION_APPROVED_HEAD: Final = "
+            f'"{ADR_0018_CLARIFICATION_APPROVED_HEAD}"' in audit
+        )
+
+    def test_the_amendment_keeps_its_pre_merge_no_authority_fact(self) -> None:
+        """Effectiveness now does not backdate authority onto the days before it."""
+        assert (
+            f"while pr {ADR_0018_CLARIFICATION_PR} was open the clarification was proposed and "
+            "carried no authority" in flat(ADR)
+        )
+
+    def test_the_merge_approved_clarification_of_architecture_only(self) -> None:
+        assert "the merge approved clarification of architecture only" in flat(ADR)
 
     def test_the_amendment_records_the_blocking_review_outcome(self) -> None:
         assert "`blocked_adr_clarification_required`" in flat(ADR)
@@ -659,18 +706,60 @@ class TestTheClarificationAmendmentClaimsNothing:
         assert "clarifying an architecture is not correcting an implementation" in flat(ADR)
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_both_documents_keep_the_amendment_ineffective_until_merged(
+    def test_both_documents_record_the_amendment_as_effective(self, document: Path) -> None:
+        """Inverted on the merge, not deleted, and the superseded spelling is gone."""
+        text = flat(document)
+        assert (
+            f"the clarification amendment is effective — pr {ADR_0018_CLARIFICATION_PR} merged"
+            in text
+        )
+        assert ADR_0018_CLARIFICATION_MERGE_COMMIT in text
+        assert ADR_0018_CLARIFICATION_APPROVED_HEAD in text
+        assert "the conditional effectiveness event has occurred" in text
+        superseded = "a clarification amendment is proposed and is not effective until merged"
+        assert superseded not in text
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_name_the_two_decisions_now_effective(self, document: Path) -> None:
+        """Recording that something happened is not recording what now governs."""
+        text = flat(document)
+        assert (
+            "adr-0018's total elapsed acquisition deadline clarification is now effective" in text
+        )
+        assert "adr-0018's combined run a / run b assessment clarification is now effective" in text
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_keep_the_amendments_pre_merge_no_authority_fact(
         self, document: Path
     ) -> None:
-        assert "a clarification amendment is proposed and is not effective until merged" in flat(
-            document
+        assert (
+            f"while pr {ADR_0018_CLARIFICATION_PR} was open the clarification was proposed and "
+            "carried no authority" in flat(document)
         )
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_keep_the_clarification_merge_authorizing_nothing(
+        self, document: Path
+    ) -> None:
+        """An effective clarification is a meaning, never a permission."""
+        text = flat(document)
+        assert "the merge approved clarification of architecture only" in text
+        assert (
+            "the clarification merge authorized no implementation, no infrastructure mutation "
+            "and no execution" in text
+        )
+        for still_gated in STILL_UNAUTHORIZED:
+            assert still_gated in text
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
     def test_both_documents_keep_the_implementation_candidate_blocked(self, document: Path) -> None:
         text = flat(document)
         assert "unmerged and blocked" in text
         assert "it cannot be merged until it is corrected against the clarified adr" in text
+        assert (
+            "the offline implementation candidate must be corrected against the "
+            "now-authoritative clarification" in text
+        )
         for premature in (
             "implementation candidate is ready to merge",
             "implementation candidate may be merged",
