@@ -67,6 +67,7 @@ from kalpamani.data.qualify.sharadar.locator import (
     locator_key_segments,
 )
 from kalpamani.data.qualify.sharadar.parser import PagePair, ParsedPage, parse_payload
+from kalpamani.data.qualify.sharadar.plan import EMPIRICAL_REQUEST_COUNT
 from kalpamani.data.qualify.sharadar.read import (
     ExactObjectReference,
     LicensedObjectReader,
@@ -159,6 +160,12 @@ class AssessmentOperationCounts:
     ``E * R`` payloads, and **zero claims**. At the accepted two runs of 48 that is
     194 reads, one report write and zero to one metadata resolution -- 195 or 196
     operations.
+
+    **``R`` is the compiled ``EMPIRICAL_REQUEST_COUNT``, and an admitted accounting
+    that claims any other inventory is refused here** -- a second line behind
+    :func:`validate_locator_pair`, so a future caller that bypassed or misordered the
+    pair validation still cannot produce an accounting scaled above the fixed
+    architectural bound.
     """
 
     executions: int
@@ -202,8 +209,21 @@ class AssessmentOperationCounts:
                 raise ValueError("a refused pair reads at most the two locators")
             if self.put_object_count or self.head_object_count:
                 raise ValueError("a refused pair publishes no report")
-        elif self.get_object_count > self.executions * (2 * self.planned_requests + 1):
-            raise ValueError("an assessment reads at most E locators, E*R records and E*R payloads")
+            if self.planned_requests:
+                raise ValueError("a refused pair admits no request inventory")
+        else:
+            # **The read ceiling may not be scaled by its own evidence.** ``R`` is the
+            # compiled inventory, never a number a locator supplied: an admitted
+            # assessment covering some other count would derive a larger
+            # ``E * (2R + 1)`` and call it lawful, which is how the accepted 194 reads
+            # and 195-196 operations stop being fixed. Refused, not clamped -- a
+            # clamped count would report 48 for evidence that was not 48.
+            if self.planned_requests != EMPIRICAL_REQUEST_COUNT:
+                raise ValueError("an admitted assessment covers exactly the compiled inventory")
+            if self.get_object_count > self.executions * (2 * self.planned_requests + 1):
+                raise ValueError(
+                    "an assessment reads at most E locators, E*R records and E*R payloads"
+                )
         if self.put_object_count > 1:
             raise ValueError("an assessment publishes at most one report, and never retries it")
         if self.head_object_count > 1:
@@ -315,8 +335,12 @@ def validate_locator_pair(first: ValidatedLocator, second: ValidatedLocator) -> 
       shape precisely so that a legitimate pair can share it: it binds neither the
       execution identity nor each run's own ``T-1`` window, both of which differ
       across a pair eight days apart by requirement;
-    - **the same planned count, both complete, and matching request inventories** --
-      a comparison needs the same questions asked twice;
+    - **exactly ``EMPIRICAL_REQUEST_COUNT`` planned and completed requests in each,
+      and matching request inventories** -- a comparison needs the same questions
+      asked twice, and it needs them to be *the accepted* questions. Run-to-run
+      agreement alone is not that rule: two locators agreeing on some other count
+      agree about a run nobody authorized, and the read arithmetic scales off the
+      number they supply;
     - **Run A ordered strictly before Run B**, and **at least eight calendar days**
       between the accepted run dates.
 
@@ -337,12 +361,21 @@ def validate_locator_pair(first: ValidatedLocator, second: ValidatedLocator) -> 
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
     if first.source_schema_version != second.source_schema_version:
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
-    if first.planned_request_count != second.planned_request_count:
-        raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
-    if first.completed_request_count != first.planned_request_count:
-        raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
-    if second.completed_request_count != second.planned_request_count:
-        raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
+    for locator in (first, second):
+        # **The fixed inventory, not merely an agreed one.** Two runs that agree with
+        # each other are still not the accepted experiment: a self-consistent pair
+        # claiming any other count would be admitted by a run-to-run comparison and
+        # would then scale the read arithmetic ``E * (2R + 1)`` off its own number,
+        # carrying the accepted 194 reads and 195-196 operations past the fixed
+        # architectural bound. The accepted plan issues exactly
+        # ``EMPIRICAL_REQUEST_COUNT`` requests, so that constant -- and not the
+        # locator -- is what a pair is held to. Being stated against the compiled
+        # constant, this subsumes the run-to-run agreement rule it replaces.
+        if (
+            locator.planned_request_count != EMPIRICAL_REQUEST_COUNT
+            or locator.completed_request_count != EMPIRICAL_REQUEST_COUNT
+        ):
+            raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
     if _request_inventory(first) != _request_inventory(second):
         raise _refuse(AssessmentStatus.REFUSED_LOCATOR) from None
 

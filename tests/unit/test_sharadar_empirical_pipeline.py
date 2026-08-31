@@ -19,6 +19,7 @@ budget is exercised in microseconds against the real arithmetic.
 from __future__ import annotations
 
 import json
+from dataclasses import replace as dataclass_replace
 from datetime import timedelta
 from typing import Any
 
@@ -49,9 +50,11 @@ from kalpamani.data.qualify.sharadar.assessment import (
     EXECUTIONS_PER_ASSESSMENT,
     MIN_RUN_SEPARATION_DAYS,
     AssessmentError,
+    AssessmentOperationCounts,
     AssessmentStatus,
     locator_logical_key,
     run_combined_assessment,
+    validate_locator_pair,
 )
 from kalpamani.data.qualify.sharadar.evaluator import (
     STATUS_RANK,
@@ -62,9 +65,14 @@ from kalpamani.data.qualify.sharadar.evaluator import (
 from kalpamani.data.qualify.sharadar.evaluator import (
     TestStatus as PerTestStatus,  # aliased: pytest tries to collect a Test* class
 )
-from kalpamani.data.qualify.sharadar.locator import locator_key_segments
+from kalpamani.data.qualify.sharadar.locator import (
+    decode_locator,
+    locator_key_segments,
+    serialize_locator,
+)
 from kalpamani.data.qualify.sharadar.plan import (
     ACQUISITION_DEADLINE_SECONDS,
+    EMPIRICAL_REQUEST_COUNT,
     LOCATOR_TERMINAL_RESERVE_SECONDS,
     MIN_REQUEST_INTERVAL_SECONDS,
     PROVIDER_REQUEST_ADMISSION_SECONDS,
@@ -79,7 +87,7 @@ ASSESSMENT_ID = "synthetic-assess-a"
 #: The accepted read arithmetic for one combined assessment: two locators, 96
 #: acquisition records, 96 payloads. Derived from its factors rather than written as
 #: 194, so a change to either factor cannot leave the total stale.
-COMBINED_READS = EXECUTIONS_PER_ASSESSMENT * (2 * 48 + 1)
+COMBINED_READS = EXECUTIONS_PER_ASSESSMENT * (2 * EMPIRICAL_REQUEST_COUNT + 1)
 
 
 def _acquire(
@@ -873,6 +881,321 @@ def test_an_unaddressable_run_b_leaves_the_pair_unassessable() -> None:
     failure, reader = _refused(s3)
     assert failure.status is AssessmentStatus.REFUSED_LOCATOR
     assert reader.put_object_count == 0
+
+
+# -- the fixed request inventory: 48, and never a number a locator supplied ----
+
+
+def _locator_document(s3: FakeS3Client, execution_id: str) -> dict[str, Any]:
+    key = "/".join(locator_key_segments(execution_id))
+    document = json.loads(s3.objects[key].decode("utf-8"))
+    assert type(document) is dict
+    return document
+
+
+def _rescale_entries(entries: list[Any], *, count: int) -> list[Any]:
+    """``count`` entries, all distinct, from a real ``entries`` list of any length.
+
+    Trimmed when ``count`` is smaller, and extended by cloning under a fresh
+    acquisition identity and record key when it is larger -- the locator schema
+    refuses a duplicated identity or record key, so a fabricated extra request has to
+    look like a genuinely separate one. A clone keeps its source's subject, dataset,
+    page limit and page skip, so two runs rescaled the same way still present matching
+    request inventories and the inventory rule cannot be what refuses.
+    """
+    rescaled = [dict(entry) for entry in entries[:count]]
+    while len(rescaled) < count:
+        clone = dict(entries[len(rescaled) % len(entries)])
+        clone["acquisition_id"] = f"{clone['acquisition_id']}-extra-{len(rescaled)}"
+        clone["record_key"] = f"{clone['record_key']}-extra-{len(rescaled)}"
+        rescaled.append(clone)
+    return rescaled
+
+
+def _rescale_locator_in_store(s3: FakeS3Client, execution_id: str, *, count: int) -> None:
+    """Republish one stored locator as a **self-consistent** ``count``-request run.
+
+    Counts, entry list and completeness all agree, so the locator is ``assessable``
+    and every other pair rule still passes: the only thing wrong with it is that
+    ``count`` is not the accepted inventory. That is exactly the pair a run-to-run
+    comparison admits and the fixed-count precondition refuses.
+    """
+    document = _locator_document(s3, execution_id)
+    document["entries"] = _rescale_entries(list(document["entries"]), count=count)
+    document["planned_request_count"] = count
+    document["completed_request_count"] = count
+    s3.objects["/".join(locator_key_segments(execution_id))] = serialize_locator(document)
+
+
+def _rescaled_pair(count: int) -> FakeS3Client:
+    """Both accepted runs, republished at ``count`` requests each."""
+    s3 = _acquire_pair()
+    for execution_id in (EXECUTION_ID_A, EXECUTION_ID_B):
+        _rescale_locator_in_store(s3, execution_id, count=count)
+    return s3
+
+
+def _decoded_pair(s3: FakeS3Client) -> tuple[Any, Any]:
+    first, second = (
+        decode_locator(
+            s3.objects["/".join(locator_key_segments(execution_id))],
+            execution_id=execution_id,
+        )
+        for execution_id in (EXECUTION_ID_A, EXECUTION_ID_B)
+    )
+    return first, second
+
+
+def test_the_accepted_pair_satisfies_the_fixed_request_count_precondition() -> None:
+    """The real thing passes, and it passes *at the compiled constant*.
+
+    Pinned against ``EMPIRICAL_REQUEST_COUNT`` rather than a bare literal, so a plan
+    whose factors changed cannot leave this assertion describing the old inventory --
+    and against the literal 48 as well, because 48 is the accepted architecture and a
+    silent change to the constant is exactly what a literal is here to catch.
+    """
+    s3 = _acquire_pair()
+    run_a, run_b = _decoded_pair(s3)
+    for locator in (run_a, run_b):
+        assert locator.planned_request_count == EMPIRICAL_REQUEST_COUNT == 48
+        assert locator.completed_request_count == EMPIRICAL_REQUEST_COUNT == 48
+    assert validate_locator_pair(run_a, run_b) >= MIN_RUN_SEPARATION_DAYS
+    assert _assess(s3).status is AssessmentStatus.COMPLETED
+
+
+@pytest.mark.parametrize("count", [1, 24, 47, 49, 96])
+def test_a_self_consistent_pair_at_any_other_count_is_refused(count: int) -> None:
+    """Run-to-run agreement is not the rule. **The compiled inventory is.**
+
+    Each pair below agrees with itself perfectly: the same count in both runs,
+    completed equal to planned, an entry list of exactly that length, the same plan
+    digest, the same inventory digest, the same schema, matching request inventories,
+    nine calendar days apart. Every rule that existed before this precondition admits
+    it. It is refused because 48 is the accepted experiment and this is not it.
+    """
+    assert count != EMPIRICAL_REQUEST_COUNT
+    run_a, run_b = _decoded_pair(_rescaled_pair(count))
+    for locator in (run_a, run_b):
+        # Genuinely self-consistent: the pre-existing rules have nothing to object to.
+        assert locator.assessable
+        assert locator.planned_request_count == locator.completed_request_count == count
+        assert len(locator.entries) == count
+    assert run_a.plan_digest == run_b.plan_digest
+    assert run_a.inventory_digest == run_b.inventory_digest
+    assert run_a.source_schema_version == run_b.source_schema_version
+    assert (run_b.run_date - run_a.run_date).days >= MIN_RUN_SEPARATION_DAYS
+
+    with pytest.raises(AssessmentError) as raised:
+        validate_locator_pair(run_a, run_b)
+    assert raised.value.status is AssessmentStatus.REFUSED_LOCATOR
+
+
+@pytest.mark.parametrize("count", [47, 49])
+def test_one_run_at_the_accepted_count_and_one_at_another_is_refused(count: int) -> None:
+    """A mismatched pair is refused in **both** orders, whichever run is the wrong one."""
+    assert count != EMPIRICAL_REQUEST_COUNT
+    s3 = _acquire_pair()
+    _rescale_locator_in_store(s3, EXECUTION_ID_B, count=count)
+    accepted, other = _decoded_pair(s3)
+    assert accepted.planned_request_count == EMPIRICAL_REQUEST_COUNT
+    assert other.planned_request_count == count
+
+    for first, second in ((accepted, other), (other, accepted)):
+        with pytest.raises(AssessmentError) as raised:
+            validate_locator_pair(first, second)
+        assert raised.value.status is AssessmentStatus.REFUSED_LOCATOR
+
+
+def test_completed_short_of_the_accepted_count_never_reaches_evaluation() -> None:
+    """Planned 48 with completed below 48 is refused, and by two rules rather than one.
+
+    A short run cannot be ``assessable`` -- that rule predates this correction and
+    reaches it first -- and the fixed-count precondition refuses the same evidence
+    independently, which is what the self-consistent form below demonstrates. Neither
+    reading admits it.
+    """
+    run_a, run_b = _decoded_pair(_acquire_pair())
+    short = dataclass_replace(
+        run_b,
+        completed_request_count=EMPIRICAL_REQUEST_COUNT - 1,
+        entries=run_b.entries[: EMPIRICAL_REQUEST_COUNT - 1],
+    )
+    assert short.planned_request_count == EMPIRICAL_REQUEST_COUNT
+    assert short.completed_request_count < EMPIRICAL_REQUEST_COUNT
+    assert not short.assessable
+    with pytest.raises(AssessmentError) as raised:
+        validate_locator_pair(run_a, short)
+    assert raised.value.status is AssessmentStatus.REFUSED_LOCATOR
+
+    # The same shortfall made self-consistent -- assessable now, and still refused,
+    # this time by the fixed-count precondition alone.
+    self_consistent = dataclass_replace(short, planned_request_count=EMPIRICAL_REQUEST_COUNT - 1)
+    assert self_consistent.assessable
+    with pytest.raises(AssessmentError) as raised:
+        validate_locator_pair(run_a, self_consistent)
+    assert raised.value.status is AssessmentStatus.REFUSED_LOCATOR
+
+
+@pytest.mark.parametrize("count", [47, 49])
+def test_a_non_accepted_inventory_refuses_before_any_record_or_payload_read(count: int) -> None:
+    """The precondition runs **before** the evidence is touched, end to end.
+
+    Driven through ``run_combined_assessment`` rather than the validator alone, so the
+    ordering exercised is the real one. The 49-request form is the sharper case: its
+    fabricated entry names a record object that was never published, so a build that
+    read first and validated afterwards would refuse on *integrity* after issuing
+    reads. Observing ``REFUSED_LOCATOR`` at two locator reads is therefore evidence
+    about order, and not only about outcome.
+    """
+    s3 = _rescaled_pair(count)
+    failure, reader = _refused(s3)
+    assert failure.status is AssessmentStatus.REFUSED_LOCATOR
+    assert reader.get_object_count == EXECUTIONS_PER_ASSESSMENT == 2
+    assert [key for key in s3.get_calls if "/acquisitions/" in key] == []
+    assert [key for key in s3.get_calls if "/objects/sha256/" in key] == []
+    _assert_refused_pair_envelope(reader, s3)
+
+
+@pytest.mark.parametrize("count", [47, 49])
+def test_a_non_accepted_inventory_publishes_no_report(count: int) -> None:
+    s3 = _rescaled_pair(count)
+    before = len(s3.put_calls)
+    failure, reader = _refused(s3)
+    assert failure.status is AssessmentStatus.REFUSED_LOCATOR
+    assert reader.put_object_count == 0
+    assert reader.head_object_count == 0
+    assert len(s3.put_calls) == before
+    assert [key for key in s3.objects if "/reports/" in key] == []
+
+
+@pytest.mark.parametrize("count", [47, 49])
+def test_the_refused_inventory_envelope_is_at_most_two_locator_reads(count: int) -> None:
+    """0-2 locator reads, 0 records, 0 payloads, 0 report operations."""
+    s3 = _rescaled_pair(count)
+    failure, reader = _refused(s3)
+    assert failure.status is AssessmentStatus.REFUSED_LOCATOR
+    assert 0 <= reader.get_object_count <= EXECUTIONS_PER_ASSESSMENT
+    assert [key for key in s3.get_calls if "/locators/" not in key] == []
+    assert reader.put_object_count == 0
+    assert reader.head_object_count == 0
+    assert reader.get_object_count + reader.put_object_count + reader.head_object_count <= 2
+
+
+def test_a_refusal_on_the_fixed_inventory_discloses_neither_the_count_nor_a_subject() -> None:
+    """The refusal is one closed member. **The number it saw is not in it.**"""
+    s3 = _rescaled_pair(96)
+    failure, _ = _refused(s3)
+    rendered = f"{failure} {failure!r} {failure.args}"
+    assert "96" not in rendered
+    assert "48" not in rendered
+    for subject in SYNTHETIC_SUBJECTS:
+        assert subject not in rendered
+    assert SYNTHETIC_BUCKET not in rendered
+    assert "licensed/" not in rendered
+    assert EXECUTION_ID_A not in rendered
+    assert EXECUTION_ID_B not in rendered
+
+
+# -- the defensive accounting boundary ----------------------------------------
+
+
+def _counts(**overrides: int) -> Any:
+    """One accepted combined accounting, with the named fields overridden."""
+    fields: dict[str, int] = {
+        "executions": EXECUTIONS_PER_ASSESSMENT,
+        "planned_requests": EMPIRICAL_REQUEST_COUNT,
+        "get_object_count": COMBINED_READS,
+        "put_object_count": 1,
+        "head_object_count": 0,
+        "list_operation_count": 0,
+        "control_operation_count": 0,
+        "provider_request_count": 0,
+        "credential_retrieval_count": 0,
+        "claim_read_count": 0,
+    }
+    fields.update(overrides)
+    return AssessmentOperationCounts(**fields)
+
+
+def test_the_accepted_assessment_accounting_is_constructible() -> None:
+    counts = _counts()
+    assert counts.get_object_count == 194
+    assert counts.total_s3_operations == 195
+    assert _counts(head_object_count=1).total_s3_operations == 196
+
+
+@pytest.mark.parametrize("count", [0, 1, 24, 47, 49, 96])
+def test_an_admitted_accounting_refuses_any_inventory_but_the_compiled_one(count: int) -> None:
+    """The read ceiling may not be scaled by the evidence it is meant to bound.
+
+    Each case supplies exactly the reads ``E * (2R + 1)`` would permit for its own
+    ``R``, so every one of them satisfied the previous ceiling precisely. At ``R = 96``
+    that is 386 reads called lawful -- nearly twice the accepted 194 -- which is the
+    failure this boundary stops even if a future caller skipped or misordered the pair
+    validation.
+    """
+    assert count != EMPIRICAL_REQUEST_COUNT
+    with pytest.raises(ValueError):
+        _counts(
+            planned_requests=count,
+            get_object_count=EXECUTIONS_PER_ASSESSMENT * (2 * count + 1),
+        )
+
+
+def test_an_admitted_accounting_is_refused_and_never_clamped_to_the_accepted_count() -> None:
+    """Invalid evidence is refused. It does not become 48 by being reported as 48."""
+    with pytest.raises(ValueError):
+        _counts(planned_requests=96, get_object_count=COMBINED_READS)
+    with pytest.raises(ValueError):
+        _counts(planned_requests=47)
+
+
+def test_the_refused_pair_accounting_admits_no_request_inventory() -> None:
+    """Nothing was admitted, so no inventory may be claimed -- and nothing beyond the
+    two locator reads may be counted."""
+    refused = _counts(
+        executions=0,
+        planned_requests=0,
+        get_object_count=EXECUTIONS_PER_ASSESSMENT,
+        put_object_count=0,
+    )
+    assert refused.total_s3_operations == 2
+    with pytest.raises(ValueError):
+        _counts(
+            executions=0,
+            planned_requests=EMPIRICAL_REQUEST_COUNT,
+            get_object_count=EXECUTIONS_PER_ASSESSMENT,
+            put_object_count=0,
+        )
+    with pytest.raises(ValueError):
+        _counts(executions=0, planned_requests=0, get_object_count=3, put_object_count=0)
+
+
+def test_a_complete_assessment_still_reports_the_accepted_operation_envelope() -> None:
+    """Two locators, 96 records, 96 payloads, one report -- unchanged by the fix.
+
+    The decomposition is read off the fake client's own call log, so it is what the
+    real code asked for rather than what the accounting declared.
+    """
+    s3 = _acquire_pair()
+    before = len(s3.get_calls)
+    result = _assess(s3)
+    reads = s3.get_calls[before:]
+
+    locator_reads = [key for key in reads if "/locators/" in key]
+    record_reads = [key for key in reads if "/acquisitions/" in key]
+    payload_reads = [key for key in reads if "/objects/sha256/" in key]
+    assert len(locator_reads) == EXECUTIONS_PER_ASSESSMENT == 2
+    assert len(record_reads) == EXECUTIONS_PER_ASSESSMENT * EMPIRICAL_REQUEST_COUNT == 96
+    assert len(payload_reads) == EXECUTIONS_PER_ASSESSMENT * EMPIRICAL_REQUEST_COUNT == 96
+    assert len(reads) == COMBINED_READS == 194
+
+    assert result.status is AssessmentStatus.COMPLETED
+    assert result.counts.planned_requests == EMPIRICAL_REQUEST_COUNT == 48
+    assert result.counts.get_object_count == 194
+    assert result.counts.put_object_count == 1
+    assert 0 <= result.counts.head_object_count <= 1
+    assert 195 <= result.counts.total_s3_operations <= 196
 
 
 # -- the ADR-0017 surface is untouched ----------------------------------------
