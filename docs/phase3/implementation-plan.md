@@ -279,9 +279,8 @@ implementation, no infrastructure mutation and no execution: **no execution of t
 authorized, so P1–P9 executions by it are ZERO.**
 
 **A later, separate written authorization opened the implementation gate for one bounded
-offline slice.** That slice exists as an **offline implementation candidate on an open pull
-request** — synthetic fixtures and offline tests only, **not accepted and not in force until
-that pull request merges**, and **never executed against AWS, a provider or a network**.
+offline slice, and that slice has since been merged.** It is **merged and dormant** — synthetic
+fixtures and offline tests only, and **never executed against AWS, a provider or a network**.
 **Infrastructure design and mutation, Run A, Run B and the assessment run each remain NOT
 AUTHORIZED**, and **P1–P9 executions by it are still ZERO**.
 
@@ -318,11 +317,15 @@ architecture *means*, not what it authorizes, and they authorize nothing:
   cross-run question, so no per-run assessment can reach it. **Run A evidence alone caps P1 at
   `PARTIALLY_TESTED`**, and `TESTED` stays a ceiling rather than an expected outcome.
 
-**The offline implementation candidate is unmerged and not accepted.** It has been
-**corrected against the now-authoritative clarification** under a separately authorized
-implementation correction, and it **awaits an independent re-review**; it is **not accepted
-and not in force until its pull request merges**. **The merge approved clarification of
-architecture only**, so
+**The offline implementation is merged and dormant.** **PR #41 merged the ADR-0018 offline
+implementation** — merge commit `3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`, approved implementation
+head `96daac7963d936f231b37847579c5f28bb313760` — and **the fixed 48-request assessment-boundary
+correction is merged**, **PR #44 merged** — merge commit `c945970613b80bfd4f42acc4f3acb4814895eb42`,
+approved correction head `78b4425077e65eeb12dfd24b35825741370e0e0f`. It was **corrected against the
+now-authoritative clarification** under a separately authorized implementation correction, and
+**the independent re-review has since occurred and produced the fixed-count correction merged as
+PR #44**. **Merging an implementation authorized no execution, no infrastructure deployment and no
+run.** **The merge approved clarification of architecture only**, so
 **implementation, infrastructure mutation, Run A, Run B and the combined assessment each remain
 NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
 are ZERO.**

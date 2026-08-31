@@ -1116,6 +1116,39 @@ live trading                                 HARD-DISABLED
 ADR-0017 third attempt                       NOT AUTHORIZED
 ```
 
+### 14.3 Implementation history recorded after this decision
+
+**This subsection is a historical note added after the decision above, and it changes nothing this
+ADR decided.** §14.2 records the state this ADR left behind on the day it was accepted, and that
+record stands unedited. What follows is what happened afterwards, under later and separate written
+authorizations, and it is recorded here so a reader of §14.2 is not left with a superseded present
+tense.
+
+- **The offline implementation was merged.** **PR #41 merged**, merge commit
+  `3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`, approved implementation head
+  `96daac7963d936f231b37847579c5f28bb313760`. **While PR #41 was open it was an unmerged
+  implementation candidate**, and **before PR #41 merged the offline package and its two dormant
+  entry points were absent from main** — historical facts about those days that stay true.
+- **A fixed 48-request assessment-boundary correction was merged separately.** **PR #44 merged**,
+  merge commit `c945970613b80bfd4f42acc4f3acb4814895eb42`, approved correction head
+  `78b4425077e65eeb12dfd24b35825741370e0e0f`. An independent review found that PR #41's initial
+  assessment pair validation enforced only run-to-run count consistency; PR #44 compiled this
+  ADR's requirement of exactly 48 planned and 48 completed requests in each run, and prevents
+  assessment accounting from scaling from a locator-supplied non-48 count. **PR #41 is not
+  described as having passed that later review** — the two merge events stay separate, and the
+  defect remained dormant because execution was not authorized.
+- **The merges are implementation only.** **Infrastructure deployment, implementation execution,
+  Run A, Run B and the combined assessment each remain NOT AUTHORIZED and have not happened.**
+  Empirical-package executions, provider requests, S3 operations, P1-P9 executions, locators,
+  private reports and new IAM roles by this package all stay **ZERO**; **G1 and G2 stay OPEN**, no
+  provider is selected, Phase 3 stays **NOT COMPLETE**, CONTROL stays **DEFERRED** and live
+  trading stays **HARD-DISABLED**.
+- **The read implementation exists without evidence existing.** The bounded assessment-only read
+  implementation is in committed code, dormant and not deployed; it permits no S3 listing, it is
+  not a general read surface, and it has never been executed against licensed objects. No
+  locator, record, payload or report has been read by the empirical package, and the acquisition
+  process remains write-only.
+
 ---
 
 ## 15. Alternatives considered

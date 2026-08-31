@@ -5598,6 +5598,24 @@ ADR_0018_CLARIFICATION_PR: Final = "#42"
 ADR_0018_CLARIFICATION_MERGE_COMMIT: Final = "28239514b9e4e13f55ee98fa50877077e70bd593"
 ADR_0018_CLARIFICATION_APPROVED_HEAD: Final = "579259a62ff7561ae2991f3923ea8aa1d0064be8"
 
+#: The pull request that merged the ADR-0018 offline implementation, its merge
+#: commit and the approved implementation head. Merging an implementation is
+#: crossing the **first** of three gates -- it is not infrastructure deployment
+#: and it is not execution -- so the status guards below require the merge and
+#: the two uncrossed gates in the same breath.
+ADR_0018_IMPL_PR: Final = "#41"
+ADR_0018_IMPL_MERGE_COMMIT: Final = "3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0"
+ADR_0018_IMPL_APPROVED_HEAD: Final = "96daac7963d936f231b37847579c5f28bb313760"
+
+#: The pull request that merged the fixed 48-request assessment-boundary
+#: correction, its merge commit and the approved correction head. A **separate**
+#: merge event, pinned separately: PR #41 merged before this correction existed,
+#: and a document that read one through the other would be claiming the
+#: implementation had passed a review that had not happened yet.
+ADR_0018_FIX_PR: Final = "#44"
+ADR_0018_FIX_MERGE_COMMIT: Final = "c945970613b80bfd4f42acc4f3acb4814895eb42"
+ADR_0018_FIX_APPROVED_HEAD: Final = "78b4425077e65eeb12dfd24b35825741370e0e0f"
+
 #: The two entry points ADR-0018 designs, now built as an **offline
 #: implementation candidate**. Their presence is what crossing the implementation
 #: gate looks like, and it is checked rather than described.
@@ -5920,6 +5938,25 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "one owner-only combined run a / run b assessment",
     ),
     ("leaves the deletion role alone", "the deletion role is unchanged."),
+    # ------------------------------- the adjacent historical implementation note
+    #
+    # §14.2 records the state this ADR left behind on the day it was accepted, and
+    # a decision record is not rewritten when the world moves -- so §14.2 keeps its
+    # present tense and the note beside it is what stops that present tense from
+    # being read as current. Required rather than optional, because an unlabelled
+    # stale §14.2 is exactly the drift the status guards catch one file over.
+    (
+        "carries the adjacent historical implementation note",
+        "this subsection is a historical note added after the decision above",
+    ),
+    ("names the implementation merge commit", ADR_0018_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0018_IMPL_APPROVED_HEAD),
+    ("names the correction merge commit", ADR_0018_FIX_MERGE_COMMIT),
+    ("names the approved correction head", ADR_0018_FIX_APPROVED_HEAD),
+    (
+        "keeps the two merge events separate in the note",
+        f"pr {ADR_0018_IMPL_PR} is not described as having passed that later review",
+    ),
 )
 
 #: Claims ADR-0018 must never make. Each is false today, and each is the shape a
@@ -5997,9 +6034,13 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # The six distinctions an accepted architecture has to keep apart. Approving
     # a design is not permission to write it, to provision for it or to run it,
     # and each of those is separately checkable, so each is separately required.
+    # Inverted on the merge of PR #41, not deleted. What this required while the
+    # implementation sat on an open pull request is false now, and deleting it
+    # would leave the reverted claim unguarded -- the same treatment every ADR-0018
+    # acceptance guard in this file was given when PR #39 merged.
     (
-        "records the implementation candidate",
-        "implementation candidate, not merged, not accepted, never executed",
+        "records the merged, dormant offline implementation",
+        "the offline implementation is merged, dormant and never executed",
     ),
     (
         "keeps implementation execution unauthorized",
@@ -6014,10 +6055,35 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records zero s3 operations", "s3 operations by this package zero"),
     ("records zero p-test executions", "p1–p9 executions by this package zero"),  # noqa: RUF001
     ("records zero new roles", "new iam roles zero"),
+    # The read surface is no longer absent and no longer sitting on an open pull
+    # request, so the single sentence that said so is replaced by the eight claims
+    # that are actually true of it. Eight entries rather than one: a single
+    # sentence covering all of them is a sentence a later edit can soften in place
+    # without any guard noticing, and "a reading implementation exists" is exactly
+    # the claim that gets rounded up into "private evidence exists".
     (
-        "records that the read surface is dormant and never executed",
-        "licensed object-byte read surface exists only as dormant code on an open "
-        "pull request and has never executed against aws",
+        "records that the read implementation exists in committed code",
+        "the bounded assessment-only read implementation now exists in committed code",
+    ),
+    ("records that the read implementation is undeployed", "it is dormant and not deployed"),
+    ("records that the read implementation cannot list", "it permits no s3 listing"),
+    ("records that it is not a general read surface", "it is not a general read surface"),
+    (
+        "records that the read implementation has never executed",
+        "it has never been executed against licensed objects",
+    ),
+    (
+        "records that no retained evidence has been read",
+        "no locator, record, payload or report has been read by the empirical package",
+    ),
+    ("records that acquisition stays write-only", "the acquisition process remains write-only"),
+    (
+        "records that ingestion cannot reach the read surface",
+        "the ordinary ingestion path remains unable to use the qualification read surface",
+    ),
+    (
+        "refuses to read a read implementation as evidence",
+        "a reading implementation existing is not private evidence existing",
     ),
     ("records the per-run request count", "48 requests per run"),
     (
@@ -6157,13 +6223,137 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "records that the candidate was corrected against the now-authoritative clarification",
         "corrected against the now-authoritative clarification",
     ),
+    # Both inverted on the merges, not deleted. The re-review the earlier guard
+    # was waiting for has since happened, and what it produced is the correction
+    # PR #44 merged -- so the guard now requires the outcome rather than the wait.
     (
-        "records the unmerged implementation candidate",
-        "the offline implementation candidate is unmerged and not accepted",
+        "records that the offline implementation merged",
+        f"the adr-0018 offline implementation is merged and dormant — pr {ADR_0018_IMPL_PR} merged",
+    ),
+    ("names the implementation merge commit", ADR_0018_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0018_IMPL_APPROVED_HEAD),
+    (
+        "records what the implementation merge merged",
+        f"pr {ADR_0018_IMPL_PR} merged the adr-0018 offline implementation",
+    ),
+    ("records that the merged implementation is dormant", "the merged implementation is dormant"),
+    (
+        "records that the implementation merge deployed nothing",
+        "the merge did not deploy infrastructure",
     ),
     (
-        "records that the candidate awaits an independent re-review",
-        "awaits an independent re-review",
+        "records that the implementation merge ran nothing",
+        "did not authorize or execute run a, run b or the combined assessment",
+    ),
+    ("records that the implementation merge closed no gate", "did not close g1 or g2"),
+    ("records that the implementation merge selected no provider", "did not select a provider"),
+    (
+        "records that the implementation merge authorized no live trading",
+        "did not authorize live trading",
+    ),
+    (
+        "records that merging an implementation authorized no execution",
+        "merging an implementation authorized no execution, no infrastructure deployment and "
+        "no run",
+    ),
+    (
+        "records that the independent re-review has since occurred",
+        "the independent re-review has since occurred and produced the fixed-count correction "
+        f"merged as pr {ADR_0018_FIX_PR}",
+    ),
+    # ------------------------------------------ the fixed 48-request correction
+    #
+    # A second, separate merge. Every phrase here is required of each document for
+    # the reason the whole ADR-0018 block is: merged main has twice carried a fact
+    # in one status file and a stale contradiction in the other.
+    (
+        "records that the fixed-count correction merged",
+        "the fixed 48-request assessment-boundary correction is merged "
+        f"— pr {ADR_0018_FIX_PR} merged",
+    ),
+    ("names the correction merge commit", ADR_0018_FIX_MERGE_COMMIT),
+    ("names the approved correction head", ADR_0018_FIX_APPROVED_HEAD),
+    (
+        "records what the independent review found",
+        f"independent review found that pr {ADR_0018_IMPL_PR}'s initial assessment pair "
+        "validation enforced only run-to-run count consistency",
+    ),
+    (
+        "records what the correction compiled",
+        f"pr {ADR_0018_FIX_PR} compiled adr-0018's requirement that both runs contain exactly "
+        "48 planned and 48 completed requests",
+    ),
+    (
+        "records that accounting cannot scale from a non-48 count",
+        f"pr {ADR_0018_FIX_PR} also prevents assessment accounting from scaling from a "
+        "locator-supplied non-48 count",
+    ),
+    (
+        "records that an invalid pair refuses before any read",
+        "invalid non-48 pairs refuse before record or payload reads",
+    ),
+    (
+        "records that the correction changed nothing else",
+        "the correction changed no adr, durable locator schema, infrastructure, provider "
+        "behaviour, deadline, p1–p9 ceiling, report format or public "  # noqa: RUF001
+        "authorization",
+    ),
+    # ---------------------------------------------- the four status distinctions
+    #
+    # Architecture, implementation, deployment and execution are four different
+    # states, and this is the row where collapsing any two of them shows up.
+    ("records the architecture status", "adr-0018 architecture: accepted / in force"),
+    ("records the implementation status", "adr-0018 offline implementation: merged / dormant"),
+    ("records the correction status", "fixed 48-request correction: merged"),
+    (
+        "records that infrastructure was never deployed",
+        "infrastructure deployment: not authorized / not performed",
+    ),
+    ("records zero implementation execution", "implementation execution: not authorized / zero"),
+    ("records that run a has not run", "run a: not authorized / not run"),
+    ("records that run b has not run", "run b: not authorized / not run"),
+    (
+        "records that the combined assessment has not run",
+        "combined assessment: not authorized / not run",
+    ),
+    # ------------------------------------------------------- preserved history
+    #
+    # A merge does not backdate itself, and it does not launder the order the two
+    # merges happened in. PR #41 merged with the fixed-count validation missing;
+    # saying so is what keeps the record honest.
+    (
+        "keeps the pre-merge fact that the implementation was a candidate",
+        f"while pr {ADR_0018_IMPL_PR} was open it was an unmerged implementation candidate",
+    ),
+    (
+        "keeps the pre-merge absence of the package",
+        f"before pr {ADR_0018_IMPL_PR} merged, the offline package and its two dormant entry "
+        "points were absent from main",
+    ),
+    (
+        "records that the implementation merged before the correction",
+        f"pr {ADR_0018_IMPL_PR} merged before the missing fixed-count validation was corrected",
+    ),
+    (
+        "records why the defect stayed dormant",
+        "the defect remained dormant because execution was not authorized",
+    ),
+    (
+        "records that the correction landed on main afterwards",
+        f"pr {ADR_0018_FIX_PR} subsequently corrected the implementation on main",
+    ),
+    (
+        "keeps the two merge events separate",
+        f"pr {ADR_0018_IMPL_PR} is not described as having passed the later pr "
+        f"{ADR_0018_FIX_PR} correction review",
+    ),
+    (
+        "records that no run happened around either merge",
+        "no run a, run b or combined assessment occurred before, during or after either merge",
+    ),
+    (
+        "refuses to read the premature merge as evidence",
+        "the premature merge is no evidence of execution or of empirical qualification",
     ),
     # The sanitized incident, recorded in the four clauses that make it a record
     # rather than either a confession or an authorization.
@@ -6223,6 +6413,45 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # so a status document carrying this sentence is a document that reverted a
     # merged fact rather than one being cautious.
     "a clarification amendment is proposed and is not effective until merged",
+    # ------------------------------- the two merges, in both directions of drift
+    #
+    # PR #41 and PR #44 have both merged. The first group is the superseded
+    # pre-merge spelling of each fact, so a revert is caught rather than merely
+    # un-asserted; none of them is a substring of the honest sentences the
+    # required list above pins.
+    "pr #41 is open",
+    "pr #44 is open",
+    "pr #41 remains unmerged",
+    "pr #44 remains unmerged",
+    "the offline implementation candidate is unmerged",
+    "awaits an independent re-review",
+    "implementation candidate, not merged, not accepted, never executed",
+    "read surface does not exist",
+    "exists only as dormant code on an open pull request",
+    "the adr-0018 implementation is absent",
+    # The second group is the opposite drift, and the more dangerous one: a
+    # merged implementation inflated into a deployed, executed or qualified one.
+    # The second and third gates are still uncrossed, and an honest negation
+    # ("it is dormant and not deployed") contains none of these.
+    "the implementation is deployed",
+    "qualification infrastructure is deployed",
+    "run a was executed",
+    "run b was executed",
+    "the combined assessment was executed",
+    "the empirical qualification passed",
+    "provider selection has occurred",
+    "g1 is closed",
+    "g2 is closed",
+    "a general licensed object read surface exists",
+    "licensed objects have been read",
+    "the fixed correction authorized execution",
+    # The bare implementation gate, in the spelling the status documents used
+    # while it was still uncrossed. Implementation was authorized separately and
+    # PR #41 merged, so only *execution* is still unauthorized -- and the honest
+    # sentence, "adr-0018 implementation execution: not authorized", does not
+    # contain either entry below, because the colon falls in a different place.
+    "adr-0018 implementation: not authorized",
+    "adr-0018 implementation remains not authorized",
 )
 
 #: What the deletion runbook must say after the clarification. Naming a prefix
@@ -6258,9 +6487,19 @@ ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "one combined assessment of run a and run b together",
     ),
     ("records the elapsed-time deadline", "1,800-second acquisition elapsed-time deadline"),
+    # Inverted on PR #41's merge, not deleted. The plan is where the ceilings are
+    # read from, so a plan that still called the implementation unmerged would send
+    # a reader looking for a pull request that closed.
     (
-        "records the unmerged implementation candidate",
-        "the offline implementation candidate is unmerged and not accepted",
+        "records the merged, dormant offline implementation",
+        "the offline implementation is merged and dormant",
+    ),
+    ("names the implementation merge commit", ADR_0018_IMPL_MERGE_COMMIT),
+    ("names the correction merge commit", ADR_0018_FIX_MERGE_COMMIT),
+    (
+        "records that merging an implementation authorized no execution",
+        "merging an implementation authorized no execution, no infrastructure deployment and "
+        "no run",
     ),
     # PR #42 merged, so the plan's two clarifications are effective. The plan is
     # where the ceilings are read from, and a plan that still called them

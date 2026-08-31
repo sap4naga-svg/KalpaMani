@@ -74,6 +74,19 @@ ADR_0018_CLARIFICATION_PR = "#42"
 ADR_0018_CLARIFICATION_MERGE_COMMIT = "28239514b9e4e13f55ee98fa50877077e70bd593"
 ADR_0018_CLARIFICATION_APPROVED_HEAD = "579259a62ff7561ae2991f3923ea8aa1d0064be8"
 
+#: The pull request that merged the ADR-0018 offline implementation, and the
+#: pull request that merged the fixed 48-request assessment-boundary correction
+#: afterwards. **Two separate merge events**, pinned separately and never read
+#: through each other: PR #41 merged while the fixed-count validation was still
+#: missing, and describing it as having passed PR #44's review would be
+#: rewriting the order they happened in.
+ADR_0018_IMPL_PR = "#41"
+ADR_0018_IMPL_MERGE_COMMIT = "3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0"
+ADR_0018_IMPL_APPROVED_HEAD = "96daac7963d936f231b37847579c5f28bb313760"
+ADR_0018_FIX_PR = "#44"
+ADR_0018_FIX_MERGE_COMMIT = "c945970613b80bfd4f42acc4f3acb4814895eb42"
+ADR_0018_FIX_APPROVED_HEAD = "78b4425077e65eeb12dfd24b35825741370e0e0f"
+
 #: What approving a design did **not** do. Each is separately checkable, so each
 #: is separately required of both status documents -- an accepted architecture
 #: read as permission to build, provision or run is the drift this guards.
@@ -797,32 +810,143 @@ class TestTheClarificationAmendmentClaimsNothing:
             assert still_gated in text
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_both_documents_keep_the_implementation_candidate_unmerged(
-        self, document: Path
-    ) -> None:
+    def test_both_documents_record_the_merged_offline_implementation(self, document: Path) -> None:
         """Inverted, not deleted.
 
-        This guard required "unmerged and blocked" while the candidate was blocked
-        on the clarification. The correction has since happened under its own
-        authorization, so the guard is turned around rather than removed: what must
-        still be recorded is that the candidate is **unmerged**, that the correction
-        was made, and that a person has yet to review it. A merged claim, a ready
-        claim and an accepted claim all stay forbidden.
+        This guard required "unmerged and not accepted" while the implementation sat
+        on an open pull request, and it forbade "pr #41 is merged" because at that
+        point the claim would have been false. PR #41 has since merged, so the guard
+        is turned around rather than removed: what must now be recorded is that the
+        implementation is **merged and dormant**, that the correction happened, that
+        the independent re-review has since occurred, and that PR #44 merged after
+        it. The superseded spellings move into the refusal set below, so a revert is
+        caught rather than merely un-asserted -- and every claim that reads a merged
+        implementation as a **deployed** or **executed** one stays forbidden, because
+        crossing the first gate is not crossing the second or the third.
         """
         text = flat(document)
-        assert "the offline implementation candidate is unmerged and not accepted" in text
+        assert "the offline implementation is merged, dormant and never executed" in text
         assert "corrected against the now-authoritative clarification" in text
-        assert "awaits an independent re-review" in text
-        assert "not accepted and not in force until its pull request merges" in text
-        for premature in (
+        assert (
+            "the independent re-review has since occurred and produced the fixed-count "
+            f"correction merged as pr {ADR_0018_FIX_PR}" in text
+        )
+        assert (
+            "merging an implementation authorized no execution, no infrastructure "
+            "deployment and no run" in text
+        )
+        for pinned in (
+            ADR_0018_IMPL_MERGE_COMMIT,
+            ADR_0018_IMPL_APPROVED_HEAD,
+            ADR_0018_FIX_MERGE_COMMIT,
+            ADR_0018_FIX_APPROVED_HEAD,
+        ):
+            assert pinned in text
+        for superseded in (
+            "the offline implementation candidate is unmerged and not accepted",
+            "awaits an independent re-review",
+            "implementation candidate, not merged, not accepted, never executed",
+            "read surface does not exist",
+            "exists only as dormant code on an open pull request",
+            "adr-0018 implementation: not authorized",
+        ):
+            assert superseded not in text
+        for overstated in (
             "implementation candidate is ready to merge",
             "implementation candidate may be merged",
-            "implementation candidate is accepted",
-            "pr #41 is ready to merge",
-            "pr #41 is accepted",
-            "pr #41 is merged",
+            "the implementation is deployed",
+            "qualification infrastructure is deployed",
+            "run a was executed",
+            "run b was executed",
+            "the combined assessment was executed",
+            "the empirical qualification passed",
+            "provider selection has occurred",
         ):
-            assert premature not in text
+            assert overstated not in text
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_keep_the_two_merge_events_separate(self, document: Path) -> None:
+        """The order the two merges happened in is itself a governance fact.
+
+        PR #41 merged with the fixed-count validation still missing; the defect was
+        dormant only because execution was not authorized; PR #44 corrected it
+        afterwards. Collapsing the two would credit the implementation with a review
+        that had not happened when it merged.
+        """
+        text = flat(document)
+        assert (
+            f"while pr {ADR_0018_IMPL_PR} was open it was an unmerged implementation candidate"
+            in text
+        )
+        assert (
+            f"before pr {ADR_0018_IMPL_PR} merged, the offline package and its two dormant "
+            "entry points were absent from main" in text
+        )
+        assert (
+            f"pr {ADR_0018_IMPL_PR} merged before the missing fixed-count validation was "
+            "corrected" in text
+        )
+        assert "the defect remained dormant because execution was not authorized" in text
+        assert f"pr {ADR_0018_FIX_PR} subsequently corrected the implementation on main" in text
+        assert (
+            f"pr {ADR_0018_IMPL_PR} is not described as having passed the later pr "
+            f"{ADR_0018_FIX_PR} correction review" in text
+        )
+        assert (
+            "no run a, run b or combined assessment occurred before, during or after "
+            "either merge" in text
+        )
+        assert (
+            "the premature merge is no evidence of execution or of empirical qualification" in text
+        )
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_state_the_read_implementation_precisely(self, document: Path) -> None:
+        """A reading implementation existing is not private evidence existing.
+
+        "The read surface does not exist" was true of the accepted tree and is false
+        now, so it is replaced by what is actually true of the merged code rather
+        than softened. Each clause is separate because a single sentence covering
+        all of them is one a later edit can weaken in place.
+        """
+        text = flat(document)
+        for clause in (
+            "the bounded assessment-only read implementation now exists in committed code",
+            "it is dormant and not deployed",
+            "it permits no s3 listing",
+            "it is not a general read surface",
+            "it has never been executed against licensed objects",
+            "no locator, record, payload or report has been read by the empirical package",
+            "the acquisition process remains write-only",
+            "the ordinary ingestion path remains unable to use the qualification read surface",
+            "a reading implementation existing is not private evidence existing",
+        ):
+            assert clause in text
+        for overstated in (
+            "a general licensed object read surface exists",
+            "licensed objects have been read",
+        ):
+            assert overstated not in text
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_keep_the_four_states_apart(self, document: Path) -> None:
+        """Architecture, implementation, deployment and execution are four states.
+
+        Merging an implementation moved exactly one of them. This is the row where
+        collapsing any two would show up.
+        """
+        text = flat(document)
+        for distinction in (
+            "adr-0018 architecture: accepted / in force",
+            "adr-0018 offline implementation: merged / dormant",
+            "fixed 48-request correction: merged",
+            "infrastructure deployment: not authorized / not performed",
+            "implementation execution: not authorized / zero",
+            "run a: not authorized / not run",
+            "run b: not authorized / not run",
+            "combined assessment: not authorized / not run",
+        ):
+            assert distinction in text
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
     def test_both_documents_record_the_sanitized_incident(self, document: Path) -> None:
