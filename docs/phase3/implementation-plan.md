@@ -287,7 +287,7 @@ AUTHORIZED**, and **P1–P9 executions by it are still ZERO**.
 
 | | Ceiling under that package |
 |---|---|
-| P1 | `PARTIALLY_TESTED` after one run; **at most `TESTED` after a second, separated by calendar time**. The information-time resolution **stays bounded regardless of outcome**, because the vendor's update column is date-granular |
+| P1 | `PARTIALLY_TESTED` after one run; **at most `TESTED` after a second, separated by calendar time**, and reachable **only through one combined assessment of Run A and Run B together**. The information-time resolution **stays bounded regardless of outcome**, because the vendor's update column is date-granular |
 | P2 | **at most `PARTIALLY_TESTED`** — sampled delisted-history existence **is not proof of the population-wide survivorship claim** |
 | P3 | the **schema question can reach `TESTED`**; announcement timing **remains approximated** where the field is absent |
 | P4 | `DOCUMENTATION_RESOLVED` — classification history **cannot become empirically historized from a snapshot table** |
@@ -300,6 +300,30 @@ AUTHORIZED**, and **P1–P9 executions by it are still ZERO**.
 **No aggregate verdict is produced by any of it.** Provider selection is **G1**, G1 is **OPEN**,
 and it is an owner decision taken by a person reading evidence rather than a value returned by a
 program.
+
+**Two clarifications are EFFECTIVE — PR #42 merged.** Merge commit
+`28239514b9e4e13f55ee98fa50877077e70bd593`, approved clarification head
+`579259a62ff7561ae2991f3923ea8aa1d0064be8`; **while PR #42 was open they were proposed and
+carried no authority**, and that stays true of those days. They change what the accepted
+architecture *means*, not what it authorizes, and they authorize nothing:
+
+- **The 1,800-second acquisition elapsed-time deadline.** It is **one actual elapsed-time
+  deadline** measured on an **injected monotonic clock** over the complete acquisition execution
+  phase — provider requests, pacing, local processing, Bronze publication, metadata resolution,
+  locator construction, locator publication and permitted locator retry — rather than compile-time
+  arithmetic over the provider-time component alone. It is a **safety bound on elapsed time and
+  not a guarantee that 48 requests complete**: a slow provider halts the run short, publishes a
+  `PARTIAL` locator, and the assessor refuses to evaluate it.
+- **One combined assessment of Run A and Run B together**, after Run B. P1's `TESTED` ceiling is a
+  cross-run question, so no per-run assessment can reach it. **Run A evidence alone caps P1 at
+  `PARTIALLY_TESTED`**, and `TESTED` stays a ceiling rather than an expected outcome.
+
+**The offline implementation candidate is unmerged and blocked**, pending a separately
+authorized implementation correction against the now-authoritative clarification and an
+independent re-review. **The merge approved clarification of architecture only**, so
+**implementation, infrastructure mutation, Run A, Run B and the combined assessment each remain
+NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
+are ZERO.**
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
