@@ -17,6 +17,43 @@ clarification only, no behavioural change.
 
 ---
 
+## Clarification amendment — proposed, and not effective until merged
+
+**Status of this amendment: PROPOSED — effective only upon merge of the pull request introducing
+it.** Until that merge the ADR as accepted on 2026-08-30 is what governs, and this amendment
+carries no authority. That is the same conditional treatment the ADR itself was given, and it is
+written down rather than assumed.
+
+**It adds no authorization.** No implementation, no infrastructure mutation, no run, no provider
+request, no S3 operation and no credential retrieval becomes permitted by it. **ADR-0018 remains
+ACCEPTED / IN FORCE as architecture only**, and every gate below it stays exactly where it was.
+
+An independent read-only review of the offline implementation candidate returned
+**`BLOCKED_ADR_CLARIFICATION_REQUIRED`** and named two gaps. They are gaps in the **accepted
+architecture**, not defects the reviewer was free to close in code:
+
+| Gap | What the accepted text said | Why that is not implementable |
+|---|---|---|
+| **A — wall-clock meaning** | §4.3 called 1,800 seconds a *wall-clock ceiling* and derived it only from `48 × 30 s` plus pacing | It never said whether local work, Bronze publication, metadata resolution, locator construction or locator retry fall inside the ceiling. A number with no scope is a compile-time assertion rather than a deadline, and the implementation candidate reproduced exactly that: compiled arithmetic and no actual elapsed deadline |
+| **B — cross-run P1 assessment** | §5 permits P1 to reach at most `TESTED` after Run B, while §9.4 defined assessment arithmetic for **one** 48-request locator — `2R + 1` reads, and `2R + 2` to `2R + 3` operations | A one-execution assessment cannot compare Run A with Run B, so it cannot supply the change-detection evidence `TESTED` requires. The implementation candidate correctly capped its single-execution evaluator at `PARTIALLY_TESTED` and recorded cross-run evidence as absent |
+
+**The owner approved two decisions**, recorded as decisions 31 and 32 in §3 and specified in
+§4.5, §5.1, §6.2, §8.1, §8.2, §9.4 and §9.5:
+
+1. The 1,800-second ceiling governs the **complete acquisition execution phase** as **actual
+   monotonic elapsed time** — provider requests, pacing, local processing, Bronze publication,
+   locator construction, locator publication and permitted locator retry included.
+2. After Run B, **one combined private assessment** evaluates **Run A and Run B together**, so P1
+   can legitimately reach the `TESTED` ceiling §5 already grants it.
+
+**The offline implementation candidate remains an unmerged candidate and is blocked.** It may not
+be merged until it is corrected against this clarification under a separate authorization and
+independently re-reviewed. **Clarifying an architecture is not correcting an implementation**, and
+this amendment corrects none: it changes no source file, no entry point and no test of that
+candidate.
+
+---
+
 ## 1. What merging this does, and what it does not
 
 Merging this ADR approves **an architecture**. It approves no code, no role, no bucket policy,
@@ -101,6 +138,8 @@ so that the addressability failure cannot recur*.
 | 28 | **No provider is selected** |
 | 29 | **Phase 3 remains incomplete** |
 | 30 | **CONTROL remains deferred; live trading remains hard-disabled** |
+| 31 | The **1,800-second ceiling is one actual elapsed-time deadline** over the complete acquisition execution phase, measured on an **injected monotonic clock** — §4.5 |
+| 32 | After Run B, **one combined private assessment** evaluates **Run A and Run B together** — §5.1, §6.2, §8.1, §9.4 |
 
 **Decision 9 is a licensing control, not a style preference.** Which securities the owner chose
 to evaluate is *evaluation information*, and the Sharadar Personal Use License bars disclosing
@@ -173,7 +212,7 @@ authorized.
 | Per-request timeout | **30 seconds** | |
 | Inter-request pacing | **at least 1 second** | the vendor publishes no rate limit, and *no documented limit is not an absent limit* |
 | Execution | **sequential only** | concurrency multiplies rate-limit exposure, breaks the canonical request ordering acquisition identity depends on, and makes the run-byte headroom check meaningless |
-| Wall-clock ceiling | **1,800 seconds** | worst case 48 × 30 s = 1,440 s, plus pacing |
+| Acquisition elapsed-time deadline | **1,800 seconds** | **one actual elapsed-time deadline on an injected monotonic clock**, over the complete acquisition execution phase — §4.5. The basis originally quoted here, worst case 48 × 30 s = 1,440 s plus pacing, is the **provider-time component** and never was the whole of what the deadline covers |
 | Runs | **two, at least eight calendar days apart** | P1 needs two observations of the same rows separated by real calendar time |
 | **Max total provider requests across both runs** | **96** | |
 
@@ -191,13 +230,166 @@ authorized. Nothing in this package can reach either: the mode is fixed at
 
 ---
 
+### 4.5 The 1,800-second acquisition deadline
+
+**The 1,800-second ceiling is one actual elapsed-time deadline, and not compile-time arithmetic.**
+§4.3 originally called it a *wall-clock ceiling* and derived it from the provider-time component
+alone. A ceiling nothing measures is an assertion; this section makes it a deadline something
+enforces.
+
+| | |
+|---|---|
+| Kind | **one actual elapsed-time deadline** over the complete acquisition execution phase |
+| Clock | **measured on an injected monotonic clock.** **Wall-clock calendar time must never be used for deadline arithmetic** — a clock adjustment, a leap second or a daylight-saving transition must not be able to shorten or lengthen a licensed acquisition |
+| Starts | **starts immediately before the first provider request, at acquisition stage 11** |
+| Ends | **ends only when acquisition reaches a terminal locator result, at acquisition stage 13** |
+| Value | **1,800 seconds.** Lowering it is a configuration choice; **raising it is an ADR change** |
+
+**What the deadline covers** — the complete acquisition execution phase:
+
+```text
+provider requests                     inter-request pacing
+local validation and digest work      three Bronze publications per completed request
+conditional metadata resolution       partial or complete locator construction
+locator publication                   permitted locator retry
+terminal classification
+```
+
+**What it does not cover** — acquisition stages 1–10. Those are the authorization, private-input,
+identity, binding, credential, dependency-construction and offline-preflight **gates that happen
+before acquisition execution begins**. A slow identity gate or a slow secret retrieval must not
+consume budget belonging to the licensed work, and a refusal in those stages issues no provider
+request and no write at all.
+
+#### 4.5.1 Deadline behaviour
+
+**No provider or S3 operation may start after the deadline**, and **no operation may be started
+merely in the hope that it completes before it**. Remaining budget is checked **before** every one
+of these:
+
+```text
+provider request        pacing delay        Bronze write
+metadata-resolution call                    locator write or locator retry
+```
+
+**A provider request may start only when the remaining budget covers its whole downstream
+obligation** — the request's own configured maximum duration, the **three** Bronze publications it
+will require, the **at most three** conditional metadata resolutions those may trigger, and the
+**reserved locator-terminal budget**. A request admitted on its own duration alone would buy bytes
+the run cannot afford to persist.
+
+**Pacing is never silently shortened.** A pacing delay may be refused — which halts the run — and
+it may **not** be truncated to fit. The minimum inter-request pacing in §4.3 is a courtesy
+obligation to the vendor, and quietly violating it to save a run is exactly the trade this
+architecture refuses.
+
+**If insufficient budget remains, the run halts before starting another provider request.**
+
+| | |
+|---|---|
+| Completed requests | **remain completed.** A deadline is not a rollback, and published objects are immutable |
+| An unpersisted response | **is not a completed request.** Bytes that arrived but were not durably published contribute no acquisition record, and the locator records the actual per-object disposition |
+| The locator | is attempted **only while enough reserved budget remains to perform its permitted terminal sequence**, and it is a **`PARTIAL`** locator when the run halted |
+| No safe locator attempt | if none can begin before the deadline, the public result is the accepted closed non-addressable result **`LOCATOR_NOT_PUBLISHED`** (§7.4). **It must not claim a locator exists** — the evidence is retained and unaddressable, and a new execution identity is required |
+| Status | **deadline exhaustion is a closed, sanitized status** — `RUN_DEADLINE_EXHAUSTED` |
+| Output | **no exception text, private identifier, key, subject, digest, vendor row or timing trace** reaches public output. A timing trace is itself evaluation information about the provider |
+| Authority | **deadline exhaustion never authorizes a retry, a resume or a new execution identity.** A future retry or re-run is a **separate authorization**, and the no-resume rule of §7.4 is unchanged |
+
+#### 4.5.2 The SDK must not be able to defeat the deadline
+
+A deadline the application enforces and the library underneath it ignores is not a deadline.
+Acquisition-side AWS SDK clients must therefore be configured **explicitly**, so that no library
+default can silently multiply an operation or outlast the budget:
+
+| | |
+|---|---|
+| SDK automatic retries | **disabled for qualification S3 calls.** A hidden retry is an operation the accounting in §9 never counted |
+| Adaptive or hidden retry mode | **forbidden** |
+| Connect timeout | **explicit and bounded** |
+| Read timeout | **explicit and bounded** |
+| Locator retry | the application-level retry of §9.2 **is the only locator retry** |
+| Bronze writes | **remain unretried** |
+| Permitted locator retry classifications | **unchanged** — `THROTTLED` and `TRANSIENT`, and nothing else |
+
+#### 4.5.3 The sub-budgets, and what is deliberately not yet a number
+
+**Three values are already accepted and are not re-derived here:** the deadline `D = 1,800 s`, the
+per-request provider ceiling `T_req = 30 s`, and the minimum pacing `P = 1 s` (§4.3).
+
+Everything else the deadline arithmetic needs is a **required implementation constant whose
+proposed numerical value must be reviewed with the correction pull request.** This ADR states the
+obligations those constants must satisfy and **invents no number it cannot derive**:
+
+```text
+S3_CONNECT_TIMEOUT_SECONDS       required implementation constant -- value reviewed at correction
+S3_READ_TIMEOUT_SECONDS          required implementation constant -- value reviewed at correction
+S3_OPERATION_CEILING             T_s3 = connect + read, derived from the two above
+LOCATOR_CONSTRUCTION_ALLOWANCE   C, required implementation constant -- reviewed at correction
+LOCATOR_TERMINAL_RESERVE         L, required implementation constant -- reviewed at correction
+```
+
+**The reserve must be proved, not asserted.** The locator's permitted terminal sequence is **at
+most three locator `PutObject` invocations** and **at most one locator `HeadObject`** (§9.2,
+§9.3), plus deterministic locator construction and terminal classification. The reserved
+locator-terminal budget must therefore **cover `4 * T_s3 + C`**:
+
+```text
+L  >=  3 * T_s3      three locator PutObject attempts
+     + 1 * T_s3      at most one locator HeadObject
+     + C             deterministic construction and terminal classification
+   =   4 * T_s3 + C
+```
+
+**Configuration that cannot fit is refused, not clamped.** The implementation must refuse before
+issuing anything at all when any of these fails:
+
+```text
+T_s3 > 0
+C    >= 0
+L    >= 4 * T_s3 + C
+L    <  D
+T_req + P + 6 * T_s3 + L  <=  D
+```
+
+The `6 * T_s3` term is one request's worst case: **three** Bronze `PutObject` plus the **at most
+three** conditional `HeadObject` they may trigger. The last inequality says that **at least one
+complete request-and-publish cycle, plus the reserve, must fit inside the deadline** — a
+configuration that cannot even do that is refused rather than started.
+
+**Per-request admission, checked before every provider request:**
+
+```text
+remaining >= T_req + 6 * T_s3 + L
+```
+
+**And the consequence is stated plainly, because it is not the comfortable one.** At the compiled
+worst case every provider request takes its full 30 seconds, and
+
+```text
+48 * (30 + 1) = 1488 s
+```
+
+leaves **312 seconds** for 144 Bronze `PutObject`, up to 144 conditional `HeadObject` and the
+locator — about **1.08 seconds per S3 operation**, which is not a defensible bound for a
+connect-plus-read ceiling. **The 1,800-second deadline is therefore a safety bound on elapsed
+time, and not a guarantee that 48 requests complete.** If the provider is slow enough the run
+**halts short**, publishes a **`PARTIAL`** locator, and the assessor **refuses to evaluate it**
+(§7.4). The owner reviews the halt and, under a **separate authorization**, re-runs under a **new
+execution identity**. That outcome is bounded and honest; silently exceeding the deadline, or
+quietly shortening pacing to fit, would be neither.
+
+**The ceiling is not raised by any of this.** 1,800 seconds is the same number it always was; what
+changed is that it now has a scope, a clock and an enforcement point.
+
+---
+
 ## 5. Honest P1–P9 ceilings
 
 These are ceilings, not expectations. A run may fall short of one; **no run may exceed one.**
 
 | | Ceiling and why |
 |---|---|
-| **P1** — availability semantics and origin | `PARTIALLY_TESTED` after Run A; **at most `TESTED` after Run B**. The information-time resolution **remains bounded regardless of outcome**, because the vendor's update column is **date-granular** and a date cannot supply an instant. A favourable empirical result does not upgrade it |
+| **P1** — availability semantics and origin | `PARTIALLY_TESTED` after Run A; **at most `TESTED` after Run B**, and reachable **only through the combined Run A / Run B assessment of §5.1 and §8.1**. The information-time resolution **remains bounded regardless of outcome**, because the vendor's update column is **date-granular** and a date cannot supply an instant. A favourable empirical result does not upgrade it |
 | **P2** — delisted coverage | **at most `PARTIALLY_TESTED`.** Sampled delisted-history existence **is not proof of the provider's population-wide survivorship claim** — one name per cohort establishes that history exists for those names and bounds nothing about the population |
 | **P3** — corporate-action announcement timing | the **schema question can reach `TESTED`**, because a delivered header decides it. Announcement timing **remains approximated** where the required field is absent, whatever the header says |
 | **P4** — classification history | `DOCUMENTATION_RESOLVED`. Classification history **cannot become empirically historized from a snapshot table**: there is no time axis to sample, so no quantity of rows can lift this |
@@ -211,6 +403,32 @@ These are ceilings, not expectations. A run may fall short of one; **no run may 
 qualified, no approved, no proceed, no ready and no provider-selection value — not in the
 evaluator, not in the private report and not in the public result. Provider selection is G1, and
 G1 is the owner's decision, taken by a person reading evidence and not returned by a program.
+
+### 5.1 P1 semantics, stated exactly
+
+**Run A evidence alone has a P1 ceiling of `PARTIALLY_TESTED`.** One observation cannot show that
+anything changed, however carefully it is taken.
+
+**The combined assessment may raise P1 to at most `TESTED`, and only when all four of these
+hold:**
+
+```text
+both complete executions are valid
+the eight-day separation is satisfied
+corresponding observations can be compared
+the comparison supplies the required change-detection evidence
+```
+
+**Date-granular provider information still cannot establish an instant**, so **the
+information-time limitation remains explicitly bounded even when P1 reaches `TESTED`.** Reaching
+the ceiling changes what has been tested; it does not change what the data is able to express.
+
+**Missing, incomparable, truncated, schema-drifted or insufficient cross-run evidence never
+becomes a weaker pass.** It is recorded as an explicit insufficiency. **P1 may remain
+`PARTIALLY_TESTED` or insufficient after Run B**, and that is a legitimate outcome, because
+**`TESTED` is a ceiling, not an expected outcome.**
+
+**No P1 result is an aggregate provider verdict, and no P1 result is a G1 or G2 decision.**
 
 ---
 
@@ -257,21 +475,28 @@ credential. A refusal at stages 1–10 issues **zero** provider requests and **z
 A separate future entry point under a **separate authorization**. It will eventually:
 
 ```text
- 1  require a DIFFERENT singleton authorization
+ 1  require ONE distinct owner-only assessment authorization
  2  refuse under automation, CI, pytest and import-only contexts
  3  pin the governed AWS profile
  4  pass the governed identity gate
  5  resolve only the LICENSED bucket
- 6  accept the owner-known execution identity privately
- 7  derive the exact locator key -- WITHOUT LISTING
- 8  retrieve and validate the locator
- 9  retrieve the exact referenced objects
-10  verify full-object checksum and byte count BEFORE parsing
-11  parse in a new package the ingestion path cannot import
-12  evaluate P1-P9 under compiled ceilings
-13  publish ONE owner-only private report
-14  emit only a closed public result
+ 6  accept THREE private inputs, in fixed order --
+       Run A execution identity, Run B execution identity, one NEW assessment identity
+ 7  resolve BOTH locator keys WITHOUT LISTING
+ 8  retrieve BOTH locators by exact derived name
+ 9  validate BOTH locators completely, and the pair relationship, BEFORE any
+       acquisition record or payload is read
+10  retrieve exactly 96 acquisition records and 96 payloads -- and ZERO claims
+11  verify every object's expected digest and byte count BEFORE parsing
+12  parse in a new package the ingestion path cannot import
+13  evaluate each run's individual evidence under compiled ceilings
+14  compare corresponding Run A and Run B evidence for P1
+15  publish ONE combined owner-private report
+16  emit only ONE closed public result
 ```
+
+**One assessment, after Run B, over both executions.** The requirements the pair itself has to
+satisfy are in §8.1, the report identity is in §8.2, and the arithmetic is in §9.4.
 
 **The assessment process performs zero provider-credential retrievals and zero provider
 requests.** That is enforced twice: it has no credential source in its code, and its role
@@ -392,16 +617,84 @@ the locator, whereas the locator itself is addressed by name. Reading each recor
 cross-checking it against its locator entry is therefore the integrity control that detects a
 locator describing a different run.
 
-**The private report key carries a separate assessment identity:**
+### 8.1 The combined Run A / Run B assessment
+
+**One assessment consumes both complete acquisition executions.** P1's `TESTED` ceiling asks a
+cross-run question — *did the same rows change between two observations separated by real calendar
+time?* — and no per-run assessment can reach it, however many per-run assessments are run.
+**After Run B, one combined private assessment evaluates Run A and Run B together.**
+
+**The assessor receives three private inputs, in fixed order:**
 
 ```text
-licensed/qualification/sharadar/reports/<execution-id>/<assessment-id>.json
+1  Run A execution identity
+2  Run B execution identity
+3  one NEW assessment identity
 ```
 
-Without this, a report write that failed ambiguously would leave the name occupied by unknown
-content and block re-assessment of that execution permanently — while re-assessment is precisely
-the cheap operation this architecture exists to make possible. The assessment identity is
-owner-supplied, single-use, on the same grammar as the execution identity, and never printed.
+**No execution identity, assessment identity, locator key, subject, digest or private path may
+appear in public output.** These are the owner's own identifiers, and under the personal-use
+licence they are evaluation information.
+
+**Both locator keys are resolved without listing**, both locators are retrieved by exact derived
+name, and **both are validated completely — and so is the pair relationship — before any
+acquisition record or payload is read.**
+
+**The pair requirements**, every one of which must hold:
+
+| | |
+|---|---|
+| Identities | **two distinct execution identities.** Identical identities are refused |
+| Completeness | **both locators `COMPLETE`** |
+| Ambiguity | **`publication_state_unknown = false` for both** |
+| Plan | **the same plan digest** |
+| Inventory | **the same inventory digest** |
+| Schema | **the same source-schema version** |
+| Counts | **exactly 48 planned and 48 completed requests in each** |
+| Inventories | **matching subject-class and request inventories** |
+| Order | **Run A ordered before Run B** |
+| Separation | **at least eight calendar days between the accepted run dates** |
+
+**Any failure of either locator, or of the pair relationship, refuses before a payload read.** A
+`PARTIAL` locator preserves accounting and grants no evaluation, and there is **no fallback that
+reconstructs the pair by listing, probing or guessing** — adding one would reintroduce exactly the
+capability this architecture removes.
+
+**Nothing else is permitted:** no provider credential, no secret access, no provider transport, no
+provider request, no S3 listing, no delete, no copy, no Bronze publication, no CONTROL operation
+and no local report.
+
+### 8.2 The combined private report identity
+
+**The canonical combined report binds both executions in fixed Run A / Run B order**, and carries
+a separate assessment identity so that an ambiguous report write can never block re-assessment
+permanently — re-assessment being precisely the cheap operation this architecture exists to make
+possible:
+
+```text
+licensed/qualification/sharadar/reports/<run-a-execution-id>/<run-b-execution-id>/<assessment-id>.json
+```
+
+| | |
+|---|---|
+| Path grammar | **three separately validated path segments**, each on the existing execution-identity grammar |
+| Order | **preserves Run A / Run B order** |
+| Distinctness | **forbids identical execution identities** |
+| Classification | **LICENSED** |
+| Publication | **append-only and conditional** |
+| Listing | **never listed** |
+| Public output | **never printed** |
+| Local copies | **never stored locally** |
+| Scope | **never a cross-execution index** |
+| Binding | binds **both locator identities and both evidence sets** |
+| Contents | **no aggregate verdict, no provider-selection value, no readiness value and no operational recommendation** |
+
+The assessment identity is owner-supplied, single-use, on the same grammar as an execution
+identity, and never printed.
+
+**One report is produced for the combined assessment**, and **no preliminary Run A report is
+required by this architecture.** If a separate Run A-only assessment is ever wanted, it is another
+ADR decision and another authorization; it is **not** introduced here.
 
 ---
 
@@ -497,52 +790,90 @@ admit 147, which no run can reach: the extra invocations a retry buys are exactl
 sent no `HeadObject`. The maximum per-run total is therefore
 `147 + 145 = 292` operations, and across the package's two acquisition runs `2 × 292 = 584`.
 
-### 9.4 Assessment — exact formulas
+### 9.4 Assessment — exact formulas, combined Run A and Run B
 
-For a `COMPLETE` locator over **R** planned requests, with R = 48:
+**The canonical assessment consumes two complete acquisition executions, not one.** A
+one-execution assessment cannot compare Run A with Run B, so it cannot supply the change-detection
+evidence P1 needs to reach the `TESTED` ceiling §5 already grants it. The single-locator
+arithmetic this subsection previously carried is **superseded**, and the historical note at the
+end records what it was.
 
-| Operation | Formula | R = 48 |
+For two **`COMPLETE`** locators, over **R** planned requests each and **E** acquisition
+executions, with `R = 48` and `E = 2`:
+
+| Operation | Formula | R = 48, E = 2 |
 |---|---|---|
 | Provider requests | `0` | **0** |
 | Credential retrievals | `0` | **0** |
-| Locator `GetObject` | `1` | **1** |
-| Acquisition-record `GetObject` | `R` | **48** |
-| Payload `GetObject` | `R` | **48** |
+| Locator `GetObject` | `E` | **2** |
+| Acquisition-record `GetObject` | `E × R` | **96** |
+| Payload `GetObject` | `E × R` | **96** |
 | Acquisition-claim `GetObject` | `0` | **0** |
-| **Total `GetObject`** | `2R + 1` | **97** |
+| **Total `GetObject`** | `E × (2R + 1)` | **194** |
 | Report `PutObject` | `1` | **1** |
 | Conditional `HeadObject` | `0` or `1` | **0 to 1** |
 | S3 listing | `0` | **0** |
 | CONTROL operations | `0` | **0** |
-| **Total S3 operations** | `2R + 2` to `2R + 3` | **98 to 99** |
+| **Total S3 operations** | `E × (2R + 1) + 1` to `E × (2R + 1) + 2` | **195 to 196** |
 
 **The report write is not retried.** Unlike the locator, a failed report costs only a re-run of
 the assessment process, which makes **zero** provider requests — so the cheap remedy is a new
 assessment identity, not a retry.
 
-For a **refused** locator — `PARTIAL`, missing, collided, malformed, oversize or
-digest-unverifiable:
+#### Refused-pair arithmetic
+
+**Both locators, and the pair relationship, are validated before any acquisition record or payload
+is read.** If the assessment refuses during locator or pair validation:
 
 | Operation | Count |
 |---|---|
-| Locator `GetObject` | **0 or 1** |
+| Locator `GetObject` | **0 to 2** |
+| Acquisition-record `GetObject` | **zero** |
+| Payload `GetObject` | **zero** |
+| Acquisition-claim `GetObject` | **zero** |
+| Report `PutObject` | **zero** |
+| Conditional `HeadObject` | **zero** |
 | Every other S3 operation | **zero** |
-| **Total S3 operations** | **0 to 1** |
+| Provider and credential operations | **zero** |
 
-**No payload is read on a refusal**, which is what makes the locator validation a gate rather
-than a formality.
+**No payload is read on a refusal**, which is what makes the pair validation a gate rather than a
+formality.
+
+**If failure occurs after both locators pass, the actual observed counters are preserved and
+reported. Never report nominal counts as observed counts** — the same rule §9.3 applies to a
+locator retry, and it applies here for the same reason.
+
+#### Historical note — the superseded single-execution arithmetic
+
+Before this clarification §9.4 defined the canonical assessment over **one** 48-request locator:
+`2R + 1` reads, and `2R + 2` to `2R + 3` operations; §9.5 then carried a two-assessment row on the
+same basis. **Those numbers are superseded and are no longer canonical.** They are recorded here
+only to explain what changed: a per-run assessment answers a per-run question, and P1's `TESTED`
+ceiling is a cross-run question no per-run assessment can reach.
 
 ### 9.5 Whole-package bound
 
 | | Nominal | Maximum |
 |---|---|---|
 | Provider requests, both runs | 96 | 96 |
+| Provider retries, both runs | 0 | 0 |
 | Acquisition S3 operations, both runs | 290 to 580 | 294 to 584 |
-| Assessment S3 operations, both runs | 196 to 198 | 196 to 198 |
+| **Combined assessment S3 operations** | **195 to 196** | **195 to 196** |
+
+```text
+two acquisition runs       290 to 584 S3 operations
+combined assessment        195 to 196 S3 operations
+whole empirical package    485 to 780 S3 operations
+```
+
+**`485 = 290 + 195` and `780 = 584 + 196`.** There is **one** assessment and it consumes both
+runs, so the superseded row — one assessment per run, 196 to 198 operations across them — is gone
+from the canonical arithmetic.
 
 **Underlying AWS network requests remain UNKNOWN** in every row above. A cloud SDK call can
 resolve locally and fail before anything leaves the machine, so a method invocation is not a
-proven network request. These are invocation counts, and they are labelled as such.
+proven network request. **These are SDK-method invocation counts and must never be equated with
+underlying AWS or network interactions.**
 
 ---
 
@@ -713,8 +1044,9 @@ Each is a separate written authorization. **Gates 3, 6 and 8 may never be collap
  6  IAM / Terraform APPLICATION             separately authorized cloud mutation
  7  Owner-only binding preflight            offline composition validation
  8  ONE owner-only Run A
- 9  ONE owner-only Run B                    its own authorization, its own identity
-10  ONE owner-only assessment run           its own authorization
+ 9  ONE owner-only Run B                    its own authorization, its own identity,
+                                            at least eight calendar days later
+10  ONE owner-only COMBINED Run A / Run B assessment      its own authorization
 11  Public status synchronization
 12  Private owner review
 13  G1 decision                             owner only
@@ -722,9 +1054,24 @@ Each is a separate written authorization. **Gates 3, 6 and 8 may never be collap
 15  Production ingestion / backfill design  a further, separate gate
 ```
 
+**The offline implementation candidate cannot be merged until it is corrected against this
+clarification**, under a separate authorization and with an independent re-review. It is an
+**unmerged candidate**, and it is **blocked**. **Clarifying an architecture is not correcting an
+implementation.**
+
+**ADR clarification, code correction, code review and merge, infrastructure design,
+infrastructure application, binding preflight, Run A, Run B and the combined assessment remain
+separate gates.** **This clarification authorizes none of the later gates.**
+
 ### 14.2 The state this ADR leaves behind
 
 ```text
+ADR-0018                                     ACCEPTED / IN FORCE -- architecture only
+this clarification amendment                 PROPOSED -- not effective until merged
+offline implementation candidate             UNMERGED, NOT ACCEPTED AND BLOCKED --
+                                             pending accepted clarification, a
+                                             separately authorized correction and an
+                                             independent re-review
 empirical-package executions                 ZERO
 provider requests by this package            ZERO
 S3 operations by this package                ZERO
@@ -732,8 +1079,13 @@ P1-P9 executions by this package             ZERO
 locators created by this package             ZERO
 private reports created by this package      ZERO
 new IAM roles created                        ZERO -- none exists
-licensed object-byte read surface            DOES NOT EXIST -- until separately
-                                             authorized implementation is merged
+licensed object-byte read surface            DOES NOT EXIST in the accepted tree --
+                                             until separately authorized
+                                             implementation is merged
+infrastructure mutation                      NOT AUTHORIZED
+Run A                                        NOT AUTHORIZED
+Run B                                        NOT AUTHORIZED
+combined assessment                          NOT AUTHORIZED
 G1                                           OPEN
 G2                                           OPEN
 provider selected                            NONE
@@ -765,3 +1117,9 @@ introducing this ADR.
 **Merging approves architecture. It authorizes no implementation, no infrastructure mutation and
 no execution.** Both future runs, the assessment run, the infrastructure and the implementation
 each remain separately gated, and **no live request of any kind is authorized by this document.**
+
+**The clarification amendment above is adopted on the same terms**, effective **only upon merge**
+of the pull request introducing it, and it **authorizes nothing further either.** It clarifies two
+things the accepted architecture left ambiguous — the meaning of the 1,800-second ceiling, and the
+shape of the assessment that lets P1 reach its accepted `TESTED` ceiling — and it **corrects no
+implementation.**

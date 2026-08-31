@@ -5523,7 +5523,7 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "forbids retry after ambiguity",
         "no retry may follow an ambiguous or unclassified result.",
     ),
-    ("states the assessment read formula", "`2r + 1`"),
+    ("states the combined assessment read formula", "`e × (2r + 1)` | 194"),  # noqa: RUF001
     (
         "states that claims are not retrieved",
         "acquisition claims are validated structurally from the locator and are not retrieved.",
@@ -5533,6 +5533,164 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     (
         "fails closed on a bad locator",
         "a missing, collided, ambiguous or unverified locator fails closed.",
+    ),
+    # ---------------------------------------------- the clarification amendment
+    #
+    # Gap A: the accepted text called 1,800 seconds a wall-clock ceiling and
+    # derived it from the provider-time component alone, so it never said whether
+    # local work, Bronze publication, metadata resolution, locator construction or
+    # locator retry fall inside it. A number with no scope is a compile-time
+    # assertion, and an implementation candidate reproduced exactly that. Each
+    # guard below pins one clause of the scope, the clock, the enforcement points
+    # or the refusal, because a deadline stated only in summary is a deadline the
+    # next edit can quietly narrow.
+    (
+        "states that the deadline is actual elapsed time",
+        "the 1,800-second ceiling is one actual elapsed-time deadline, and not compile-time "
+        "arithmetic.",
+    ),
+    (
+        "measures the deadline on an injected monotonic clock",
+        "measured on an injected monotonic clock.",
+    ),
+    (
+        "refuses calendar time for deadline arithmetic",
+        "wall-clock calendar time must never be used for deadline arithmetic",
+    ),
+    (
+        "starts the deadline at acquisition stage 11",
+        "starts immediately before the first provider request, at acquisition stage 11",
+    ),
+    (
+        "ends the deadline at acquisition stage 13",
+        "ends only when acquisition reaches a terminal locator result, at acquisition stage 13",
+    ),
+    (
+        "puts bronze publication inside the deadline",
+        "three bronze publications per completed request",
+    ),
+    ("puts locator work inside the deadline", "locator publication permitted locator retry"),
+    (
+        "puts the pre-execution gates outside the deadline",
+        "gates that happen before acquisition execution begins",
+    ),
+    (
+        "starts no operation on hope",
+        "no operation may be started merely in the hope that it completes before it",
+    ),
+    ("halts rather than overrunning", "the run halts before starting another provider request."),
+    ("never shortens pacing to fit", "pacing is never silently shortened."),
+    (
+        "does not count an unpersisted response",
+        "an unpersisted response | is not a completed request.",
+    ),
+    ("never claims a locator it did not write", "it must not claim a locator exists"),
+    (
+        "closes and sanitizes deadline exhaustion",
+        "deadline exhaustion is a closed, sanitized status",
+    ),
+    (
+        "keeps a timing trace out of public output",
+        "no exception text, private identifier, key, subject, digest, vendor row or timing trace",
+    ),
+    (
+        "grants nothing on deadline exhaustion",
+        "deadline exhaustion never authorizes a retry, a resume or a new execution identity.",
+    ),
+    ("disables sdk retries for qualification writes", "disabled for qualification s3 calls."),
+    ("forbids an adaptive or hidden retry mode", "adaptive or hidden retry mode | forbidden"),
+    ("bounds the connect timeout explicitly", "connect timeout | explicit and bounded"),
+    ("bounds the read timeout explicitly", "read timeout | explicit and bounded"),
+    ("keeps the application-level locator retry the only one", "is the only locator retry"),
+    ("proves the reserved locator-terminal budget", "cover `4 * t_s3 + c`"),
+    (
+        "refuses configuration that cannot fit",
+        "configuration that cannot fit is refused, not clamped.",
+    ),
+    (
+        "admits a request only with its whole downstream budget",
+        "remaining >= t_req + 6 * t_s3 + l",
+    ),
+    (
+        "leaves the sub-budget values to the correction review",
+        "required implementation constant whose proposed numerical value must be reviewed with "
+        "the correction pull request",
+    ),
+    ("does not raise the ceiling", "raising it is an adr change"),
+    (
+        "states that the deadline guarantees no completion",
+        "the 1,800-second deadline is therefore a safety bound on elapsed time, and not a "
+        "guarantee that 48 requests complete.",
+    ),
+    # Gap B: P1's TESTED ceiling is a cross-run question, and the accepted
+    # arithmetic covered one 48-request locator. A single-execution assessor
+    # cannot compare two observations, so the guards below pin the combined
+    # protocol, its pair preconditions, its arithmetic and its honest ceilings.
+    (
+        "assesses both runs together",
+        "one combined private assessment evaluates run a and run b together",
+    ),
+    ("requires two distinct execution identities", "two distinct execution identities."),
+    (
+        "requires the eight-day separation at assessment",
+        "at least eight calendar days between the accepted run dates",
+    ),
+    (
+        "validates the pair before reading a payload",
+        "before any acquisition record or payload is read.",
+    ),
+    ("resolves both locators without listing", "both locator keys are resolved without listing"),
+    ("reads every acquisition record and payload", "`e × r` | 96"),  # noqa: RUF001
+    ("retrieves no acquisition claim", "acquisition-claim `getobject` | `0` | 0"),
+    ("bounds a refused pair at two locator reads", "locator `getobject` | 0 to 2"),
+    ("reports observed counts, not nominal ones", "never report nominal counts as observed counts"),
+    ("states the whole-package envelope", "`485 = 290 + 195` and `780 = 584 + 196`"),
+    (
+        "binds the report key to three validated segments",
+        "three separately validated path segments",
+    ),
+    ("forbids one execution identity twice", "forbids identical execution identities"),
+    (
+        "keeps every verdict out of the combined report",
+        "no aggregate verdict, no provider-selection value, no readiness value and no operational "
+        "recommendation",
+    ),
+    (
+        "caps run a alone at partially tested",
+        "run a evidence alone has a p1 ceiling of `partially_tested`",
+    ),
+    (
+        "keeps information time bounded even at tested",
+        "the information-time limitation remains explicitly bounded even when p1 reaches `tested`.",
+    ),
+    ("refuses a weaker pass on thin cross-run evidence", "never becomes a weaker pass."),
+    (
+        "allows p1 to stay partial after run b",
+        "p1 may remain `partially_tested` or insufficient after run b",
+    ),
+    ("treats tested as a ceiling", "`tested` is a ceiling, not an expected outcome."),
+    (
+        "keeps p1 out of the gate decisions",
+        "no p1 result is an aggregate provider verdict, and no p1 result is a g1 or g2 decision.",
+    ),
+    # The amendment's own governance. It is conditional in exactly the way the
+    # ADR itself was, it names the review outcome that produced it, and it opens
+    # no gate -- least of all the one in front of the implementation candidate.
+    (
+        "carries the conditional amendment status",
+        "status of this amendment: proposed — effective only upon merge of the pull request "
+        "introducing it.",
+    ),
+    ("records the blocking review outcome", "`blocked_adr_clarification_required`"),
+    (
+        "keeps the implementation candidate blocked",
+        "the offline implementation candidate cannot be merged until it is corrected against "
+        "this clarification",
+    ),
+    ("opens none of the later gates", "this clarification authorizes none of the later gates."),
+    (
+        "sequences one combined assessment after run b",
+        "one owner-only combined run a / run b assessment",
     ),
     ("leaves the deletion role alone", "the deletion role is unchanged."),
 )
@@ -5558,6 +5716,20 @@ ADR_0018_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "zero to 147",
     "147 to 294",
     "294 to 588",
+    # The superseded single-execution assessment arithmetic, in the exact
+    # canonical shapes the ADR used before the clarification. The historical note
+    # still names the old numbers in prose -- deliberately, because explaining
+    # what changed needs them -- so each entry below is a *table-row* spelling
+    # that only a reverted canonical claim can produce.
+    "total `getobject` | `2r + 1` | 97",
+    "`2r + 2` to `2r + 3` | 98 to 99",
+    "assessment s3 operations, both runs | 196 to 198",
+    "for a `complete` locator over",
+    # The superseded ceiling row, and the shape a reintroduced hidden retry would
+    # take. "disabled" does not contain "enabled", and an honest negation reads
+    # "are not enabled", so neither fires on a correct document.
+    "wall-clock ceiling | 1,800 seconds",
+    "sdk automatic retries enabled",
 )
 
 #: Spellings that would mean a concrete subject symbol had been written down.
@@ -5624,12 +5796,104 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # is suppressed per line rather than disabled.
     ("records the maximum headobject count", "conditional `headobject` 0–145"),  # noqa: RUF001
     ("records the maximum per-run s3 total", "total s3 operations 147–292"),  # noqa: RUF001
-    ("records the assessment read formula", "`2r + 1` = 97"),
+    ("records the combined assessment read formula", "`e × (2r + 1)` = 194"),  # noqa: RUF001
     (
         "records that adr-0017's accounting is untouched",
         "adr-0017's exactly-three-`putobject` accounting is untouched",
     ),
     ("keeps the third adr-0017 attempt unauthorized", "a third adr-0017 attempt not authorized"),
+    # ------------------------------------------- the clarification amendment
+    #
+    # Both halves of it, in both documents, for the reason every ADR-0018 status
+    # phrase is required of each file rather than of their concatenation: merged
+    # main has twice carried a fact in one document and a stale contradiction in
+    # the other.
+    ("records the elapsed-time deadline", "1,800-second acquisition elapsed-time deadline"),
+    ("records the injected monotonic clock", "injected monotonic clock"),
+    (
+        "records that the deadline is not compile-time arithmetic",
+        "and not compile-time arithmetic",
+    ),
+    (
+        "records where the deadline starts",
+        "starts immediately before the first provider request, at acquisition stage 11",
+    ),
+    (
+        "records where the deadline ends",
+        "ends only when acquisition reaches a terminal locator result, at acquisition stage 13",
+    ),
+    (
+        "records that bronze publication is inside the deadline",
+        "three bronze publications per completed request",
+    ),
+    (
+        "records that locator work is inside the deadline",
+        "locator publication permitted locator retry",
+    ),
+    (
+        "records that the pre-execution gates are outside it",
+        "gates that happen before acquisition execution begins",
+    ),
+    (
+        "records that sdk retries are disabled",
+        "sdk automatic retries disabled for qualification s3 calls",
+    ),
+    ("records that hidden retry modes are forbidden", "adaptive or hidden retry mode forbidden"),
+    ("records the locator-reserve obligation", "cover `4 * t_s3 + c`"),
+    (
+        "records that unfittable configuration is refused",
+        "configuration that cannot fit is refused, not clamped",
+    ),
+    (
+        "records that the sub-budget values await the correction review",
+        "required implementation constant whose proposed numerical value must be reviewed with "
+        "the correction pull request",
+    ),
+    (
+        "records that deadline exhaustion authorizes nothing",
+        "deadline exhaustion authorizes nothing",
+    ),
+    (
+        "records the combined assessment",
+        "one combined private assessment evaluates run a and run b together",
+    ),
+    ("records the combined read counts", "96 acquisition records and 96 payloads and zero claims"),
+    ("records the combined operation total", "195 to 196"),
+    ("records the whole-package envelope", "whole empirical package 485 to 780"),
+    ("records the combined report path grammar", "three separately validated path segments"),
+    (
+        "records that run a alone caps p1",
+        "run a evidence alone has a p1 ceiling of `partially_tested`",
+    ),
+    ("records that tested is a ceiling", "`tested` is a ceiling, not an expected outcome"),
+    # The amendment is PROPOSED. A status document that read a proposed
+    # clarification as an effective one would be asserting an authority nobody
+    # granted -- the same drift the pre-merge ADR-0018 guards exist to catch.
+    (
+        "records that the clarification is not yet effective",
+        "a clarification amendment is proposed and is not effective until merged",
+    ),
+    ("records the blocked implementation candidate", "unmerged and blocked"),
+    (
+        "records that the candidate needs correction before merge",
+        "it cannot be merged until it is corrected against the clarified adr",
+    ),
+    # The sanitized incident, recorded in the four clauses that make it a record
+    # rather than either a confession or an authorization.
+    (
+        "records the sanitized runtime-area incident",
+        "unauthorized directory listing beneath the private runtime area",
+    ),
+    ("records that no file contents were read", "read no file contents"),
+    (
+        "records that no tracked contamination was found",
+        "no tracked contamination was found by the read-only review",
+    ),
+    ("records that the filenames stay undisclosed", "filenames are intentionally not disclosed"),
+    (
+        "records that the incident authorizes no inspection",
+        "authorizes neither private-directory inspection nor further diagnosis",
+    ),
 )
 
 #: Ways a status document could overstate ADR-0018. All false today.
@@ -5645,6 +5909,22 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "total s3 operations 147–294",  # noqa: RUF001
     "conditional headobject 0 to 147",
     "maximum s3 operations 147 to 294",
+    # The superseded single-execution assessment arithmetic, in the exact
+    # spellings the status documents used. The honest negations were reworded so
+    # they do not carry these tokens: a denylist entry a correct document
+    # contains is an entry that gets deleted rather than fixed.
+    "`2r + 1` = 97",
+    "total getobject 2r + 1 = 97",
+    "total s3 operations 2r + 2 to 2r + 3 = 98 to 99",
+    "conditional `headobject` 0–1, total 98–99",  # noqa: RUF001
+    # The superseded ceilings row, before the deadline had a scope.
+    "wall clock 1,800 s",
+    # The claim the implementation candidate must never carry before it is
+    # corrected. Each is a positive assertion, so an honest "cannot be merged
+    # until it is corrected" does not contain any of them.
+    "implementation candidate is ready to merge",
+    "implementation candidate may be merged",
+    "pr #41 is ready to merge",
 )
 
 #: What the deletion runbook must say after the clarification. Naming a prefix
@@ -5672,6 +5952,18 @@ ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("records zero p-test executions", "p1–p9 executions by it are zero."),  # noqa: RUF001
     ("produces no aggregate verdict", "no aggregate verdict is produced by any of it."),
+    # The clarification's two decisions reach the plan too: the ceiling P1 can
+    # reach is now stated with the assessment that reaches it, and the plan must
+    # not read an unmerged implementation candidate as a delivered one.
+    (
+        "records the combined cross-run assessment",
+        "one combined assessment of run a and run b together",
+    ),
+    ("records the elapsed-time deadline", "1,800-second acquisition elapsed-time deadline"),
+    (
+        "keeps the implementation candidate blocked",
+        "the offline implementation candidate is unmerged and blocked",
+    ),
 )
 
 
