@@ -2327,13 +2327,18 @@ def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
     assert offenders == [], f"module-level mutable state: {offenders}"
 
 
-def test_only_the_two_authorized_entry_points_construct_an_sdk_client() -> None:
-    """ADR-0015 authorized one construction site; ADR-0017 authorized a second.
+def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
+    """Four authorized construction sites, each named, and nothing else.
 
-    Narrowed rather than relaxed. The earlier rule was 'this entry point and
-    nowhere else', which was correct while it was the only operator surface. Both
-    are named here, so a third arriving anywhere under ``src/``, ``scripts/`` or
-    ``tests/`` still fails.
+    Narrowed rather than relaxed, three times now. The earliest rule was 'this
+    entry point and nowhere else', correct while it was the only operator surface;
+    then two; and the empirical qualification package adds its two operator entry
+    points. Every one is named here, so a **fifth** arriving anywhere under
+    ``src/``, ``scripts/`` or ``tests/`` still fails.
+
+    **All four are in ``scripts/``, and that is the property that matters.** No
+    module under ``src/`` constructs a client, which is checked separately and is
+    what keeps the data platform free of ambient credential discovery.
     """
     # The docs audit and this file both *name* the constructor -- one to forbid it,
     # one to assert its absence. A guard that could not tell a prohibition from a
@@ -2341,8 +2346,13 @@ def test_only_the_two_authorized_entry_points_construct_an_sdk_client() -> None:
     scanning = {
         ENTRY_POINT,
         SCRIPTS / "sharadar_authenticated_qualification.py",
+        SCRIPTS / "sharadar_empirical_qualification.py",
+        SCRIPTS / "sharadar_qualification_assessment.py",
         Path(__file__).resolve(),
         SCRIPTS / "phase3_docs_audit.py",
+        # Asserts the absence of a client in those entry points, so it necessarily
+        # names the constructor it is asserting the absence of.
+        PROJECT_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):
@@ -2371,9 +2381,17 @@ def test_no_module_under_src_imports_the_sdk() -> None:
     assert offenders == [], f"the SDK is imported at: {offenders}"
 
 
-def test_the_entry_point_is_the_only_caller_of_the_composition_outside_its_tests() -> None:
+def test_the_composition_has_only_its_named_callers_outside_the_tests() -> None:
+    """Two authorized callers of the offline preflight, and no others.
+
+    Narrowed rather than relaxed. This entry point was the only caller while it
+    was the only authorized surface; the empirical acquisition composition calls
+    it too, as the offline plan preflight that runs before its first request. A
+    **third** caller, a script, a task or an ad-hoc invocation still fails here.
+    """
     allowed = {
         ENTRY_POINT,
+        SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py",
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py",
         Path(__file__).resolve(),
     }

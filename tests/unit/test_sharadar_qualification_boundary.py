@@ -475,20 +475,30 @@ def test_the_project_declares_only_the_authorized_runtime_dependency() -> None:
 #: The one place ADR-0009 authorized vendor knowledge to live, plus the two package
 #: docstrings that describe the layout containing it.
 PROVIDER_PACKAGE = SRC / "kalpamani" / "data" / "ingest" / "sharadar"
+
+#: The private empirical qualification package: a second vendor-scoped package,
+#: outside ``ingest`` so the acquisition path stays parser-free.
+QUALIFY_PACKAGE = SRC / "kalpamani" / "data" / "qualify" / "sharadar"
+
+#: Every package permitted to hold vendor knowledge. Named, so a third still fails.
+VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE)
+
 PROVIDER_DESCRIBED = (
     SRC / "kalpamani" / "data" / "__init__.py",
     SRC / "kalpamani" / "data" / "ingest" / "__init__.py",
+    SRC / "kalpamani" / "data" / "qualify" / "__init__.py",
 )
 
 
 def test_the_provider_is_named_only_inside_the_authorized_package() -> None:
     """ADR-0009 widened this rule; it did not remove it.
 
-    The earlier rule was "no production module names a provider", which was correct
-    while none was authorized. ADR-0009 authorized **one** integration in **one**
-    place, so the rule that replaces it has to be narrower rather than absent:
-    vendor knowledge lives in the provider package, and a second integration cannot
-    appear beside it without failing here.
+    The earliest rule was "no production module names a provider", correct while
+    none was authorized. ADR-0009 authorized **one** integration in **one** place;
+    the private empirical qualification package is the **second** vendor-scoped
+    package, deliberately outside ``ingest`` so the acquisition path stays
+    parser-free. Both are named, so the rule stays narrower rather than absent: a
+    **third** integration cannot appear beside them without failing here.
 
     Naming the implementation target is still not selecting a production provider.
     **G1 remains OPEN**, and the checks below hold the repository to that.
@@ -496,7 +506,7 @@ def test_the_provider_is_named_only_inside_the_authorized_package() -> None:
     offenders = [
         str(path.relative_to(PROJECT_ROOT))
         for path in _python_files(SRC)
-        if not path.is_relative_to(PROVIDER_PACKAGE)
+        if not any(path.is_relative_to(package) for package in VENDOR_SCOPED_PACKAGES)
         and path not in PROVIDER_DESCRIBED
         and "sharadar" in path.read_text(encoding="utf-8").lower()
     ]

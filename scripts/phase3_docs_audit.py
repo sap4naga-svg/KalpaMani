@@ -4156,6 +4156,120 @@ def _src_python_files() -> list[Path]:
     return [p for p in sorted((REPO_ROOT / "src").rglob("*.py")) if "__pycache__" not in p.parts]
 
 
+def _qualification_python_files(root: Path) -> list[Path]:
+    """Every Python module under ``root``, excluding caches and sorted."""
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+
+
+#: What a Sharadar subject may look like on the wire, restated here so the audit can
+#: refuse a literal shaped like one without importing the plan model.
+_SUBJECT_SHAPED: Final = re.compile(r"^[A-Z][A-Z0-9.\-]{0,15}$")
+
+#: Uppercase literals that are vocabulary rather than securities. Every one is a
+#: closed-vocabulary member or a status token, and none could name a listed security.
+_NOT_A_SUBJECT: Final[frozenset[str]] = frozenset(
+    {
+        "AES256",
+        "BIND",
+        "BOUNDED",
+        "COMPLETE",
+        "COMPLETED",
+        "CONTROL",
+        "COUNT",
+        "DATE",
+        "DECIMAL",
+        "DEFERRED",
+        "ENABLED",
+        "FLAG",
+        "FULL",
+        "GET",
+        "HEAD",
+        "INCONCLUSIVE",
+        "INSUFFICIENT",
+        "LICENSED",
+        "MEASURED",
+        "OBSERVED",
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+        "PARTIAL",
+        "PUT",
+        "QUALIFICATION",
+        "SHA256",
+        "SNAPSHOT",
+        "TESTED",
+        "WRITTEN",
+    }
+)
+
+
+def _closed_vocabulary_values(tree: ast.Module) -> set[str]:
+    """Every string a ``StrEnum`` in this module assigns to a member.
+
+    Derived rather than hand-listed. A status token is vocabulary, not a security,
+    and a list of exemptions would have to grow every time a member was added --
+    which is how an exemption list stops being read and starts being appended to.
+    """
+    values: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if not any(
+            (isinstance(base, ast.Name) and base.id == "StrEnum")
+            or (isinstance(base, ast.Attribute) and base.attr == "StrEnum")
+            for base in node.bases
+        ):
+            continue
+        for statement in node.body:
+            if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Constant):
+                if type(statement.value.value) is str:
+                    values.add(statement.value.value)
+    return values
+
+
+def _subject_shaped_literals(path: Path) -> list[str]:
+    """Every string literal in ``path`` shaped like a security symbol.
+
+    Checked against the subject grammar rather than against a list of names nobody
+    can enumerate. A closed-vocabulary member defined in the same module is
+    vocabulary and not a symbol, and so are the few structural tokens above.
+    """
+    tree = ast.parse(read(path), filename=str(path))
+    permitted = _NOT_A_SUBJECT | _closed_vocabulary_values(tree)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and type(node.value) is str:
+            value = node.value
+            if _SUBJECT_SHAPED.match(value) and value not in permitted and "_" not in value:
+                found.append(value)
+    return found
+
+
+def _qualification_role_declarations() -> list[str]:
+    """Every Terraform file declaring one of the two designed qualification roles.
+
+    Expected: none. Designing a role is not creating one, and creating one is a
+    separately authorized infrastructure mutation.
+    """
+    infra = REPO_ROOT / "infra"
+    if not infra.is_dir():
+        return []
+    offenders: list[str] = []
+    for path in sorted(infra.rglob("*.tf")):
+        text = read(path).lower()
+        if "qualification_acquisition" in text or "qualification_assessment" in text:
+            offenders.append(path.name)
+    return offenders
+
+
 def _store_construction_sites() -> list[Path]:
     """Every module under ``src/`` that constructs the licensed object store."""
     sites: list[Path] = []
@@ -4430,7 +4544,11 @@ def _sdk_client_construction_sites() -> list[Path]:
     # This audit and the binding-preflight test both *name* the constructor, in
     # order to forbid it and to assert its absence. A guard that could not tell a
     # prohibition from a construction would forbid writing the prohibition.
-    scanning = {Path(__file__).resolve(), BINDING_TESTS}
+    scanning = {
+        Path(__file__).resolve(),
+        BINDING_TESTS,
+        REPO_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
+    }
     sites: list[Path] = []
     for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):
         if not root.is_dir():
@@ -5470,14 +5588,85 @@ ADR_0018: Final = DECISIONS / ("ADR-0018-bounded-private-empirical-sharadar-qual
 #: The pull request whose merge satisfied ADR-0018's conditional acceptance.
 ADR_0018_PR: Final = "#39"
 
-#: The two future entry points ADR-0018 *designs* and does not create. Their
-#: absence is what makes "architecture only" a checkable fact rather than a
-#: sentence, so the paths are named here and asserted not to exist.
+#: The two entry points ADR-0018 designs, now built as an **offline
+#: implementation candidate**. Their presence is what crossing the implementation
+#: gate looks like, and it is checked rather than described.
 ADR_0018_ACQUIRE_ENTRY: Final = REPO_ROOT / "scripts" / "sharadar_empirical_qualification.py"
 ADR_0018_ASSESS_ENTRY: Final = REPO_ROOT / "scripts" / "sharadar_qualification_assessment.py"
 
-#: The parser/evaluator package ADR-0018 designs and does not create.
+#: The parser/evaluator package, deliberately outside ``data/ingest/`` so the
+#: acquisition path stays parser-free.
 ADR_0018_QUALIFY_PACKAGE: Final = REPO_ROOT / "src" / "kalpamani" / "data" / "qualify"
+ADR_0018_QUALIFY_SHARADAR: Final = ADR_0018_QUALIFY_PACKAGE / "sharadar"
+ADR_0018_ACQUISITION: Final = ADR_0018_QUALIFY_SHARADAR / "acquisition.py"
+ADR_0018_ASSESSMENT: Final = ADR_0018_QUALIFY_SHARADAR / "assessment.py"
+ADR_0018_INGEST_PACKAGE: Final = REPO_ROOT / "src" / "kalpamani" / "data" / "ingest"
+
+#: The dedicated offline suites for the implementation candidate. Executable
+#: invariants belong in unit tests, and this audit must not stand in for them.
+ADR_0018_TEST_SUITES: Final[tuple[Path, ...]] = tuple(
+    REPO_ROOT / "tests" / "unit" / name
+    for name in (
+        "test_sharadar_empirical_inventory.py",
+        "test_sharadar_empirical_plan.py",
+        "test_sharadar_empirical_locator.py",
+        "test_sharadar_empirical_operations.py",
+        "test_sharadar_empirical_read.py",
+        "test_sharadar_empirical_parser.py",
+        "test_sharadar_empirical_evaluator.py",
+        "test_sharadar_empirical_report.py",
+        "test_sharadar_empirical_pipeline.py",
+        "test_sharadar_empirical_entry_points.py",
+        "test_sharadar_qualification_package_boundaries.py",
+    )
+)
+
+#: Every module permitted to construct the licensed object store. Two named
+#: modules, so a **third** still fails: a count could drift, a list cannot.
+STORE_BUILDERS: Final[tuple[str, ...]] = ("acquisition.py", "composition.py")
+
+#: The two operator authorization flags. Different by construction, so neither
+#: authorization can be given by pasting the other one.
+ACQUIRE_FLAG: Final = "--i-am-the-operator-authorizing-empirical-acquisition"
+ASSESS_FLAG: Final = "--i-am-the-operator-authorizing-qualification-assessment"
+
+#: Options the acquisition entry point refuses by name. Each would either widen the
+#: retrieval or put private evaluation information into a process listing.
+ADR_0018_ACQUIRE_REFUSED: Final[tuple[tuple[str, str], ...]] = (
+    ("a subject", "--subject"),
+    ("a subject list", "--subjects"),
+    ("an inventory path", "--inventory"),
+    ("a dataset selector", "--dataset"),
+    ("a window", "--window"),
+    ("a page count", "--page"),
+    ("a retry", "--retry"),
+    ("a bulk retrieval", "--bulk"),
+    ("a credential", "--api-key"),
+    ("a bucket", "--bucket"),
+)
+
+#: Options the assessment entry point refuses by name. Each would either search the
+#: store or emit a finding, and neither exists anywhere in this architecture.
+ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
+    ("a listing", "--list"),
+    ("a prefix scan", "--prefix"),
+    ("a report path", "--output"),
+    ("a printed report", "--print-report"),
+    ("a verdict", "--verdict"),
+    ("a provider selection", "--select-provider"),
+)
+
+
+#: Every file permitted to construct an AWS SDK client. All four are operator
+#: entry points under ``scripts/`` that refuse by default; no module under
+#: ``src/`` appears here, which is what keeps the data platform free of ambient
+#: credential discovery.
+SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
+    "sharadar_authenticated_qualification.py",
+    "sharadar_binding_preflight.py",
+    "sharadar_empirical_qualification.py",
+    "sharadar_qualification_assessment.py",
+)
 
 #: What ADR-0018 must say about itself, matched with emphasis removed and
 #: whitespace collapsed so a rewrap cannot hide a sentence.
@@ -5598,7 +5787,11 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # The six distinctions an accepted architecture has to keep apart. Approving
     # a design is not permission to write it, to provision for it or to run it,
     # and each of those is separately checkable, so each is separately required.
-    ("keeps implementation unauthorized", "adr-0018 implementation: not authorized"),
+    (
+        "records the implementation candidate",
+        "adr-0018 implementation: implementation candidate — not merged, not accepted, "
+        "never executed",
+    ),
     ("keeps infrastructure mutation unauthorized", "infrastructure mutation: not authorized"),
     ("keeps run a unauthorized", "run a: not authorized"),
     ("keeps run b unauthorized", "run b: not authorized"),
@@ -5609,8 +5802,9 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records zero p-test executions", "p1–p9 executions by this package zero"),  # noqa: RUF001
     ("records zero new roles", "new iam roles zero"),
     (
-        "records that the read surface does not exist",
-        "the licensed object-byte read surface does not exist",
+        "records that the read surface is dormant and never executed",
+        "the licensed object-byte read surface exists only as dormant code on an open "
+        "pull request and has never executed against aws",
     ),
     ("records the per-run request count", "48 requests per run"),
     (
@@ -5635,7 +5829,14 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: Ways a status document could overstate ADR-0018. All false today.
 ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "adr-0018 authorizes implementation",
-    "read surface exists",
+    # Not a bare "read surface exists": the honest current sentence says it exists
+    # ONLY as dormant code on an open pull request, and a substring blocklist that
+    # fired on the truthful wording would push the next editor to blur it. The
+    # required phrase above pins that qualifier; these catch the live claims.
+    "read surface is authorized",
+    "read surface has executed",
+    "read surface is live",
+    "read surface is in use",
     "run a completed",
     "run b completed",
     "empirical qualification executed",
@@ -10167,9 +10368,9 @@ def main() -> int:
         "one fact, one statement; two copies cannot be reconciled after the fact",
     )
     f.check(
-        "exactly one module under src/ constructs the licensed store",
-        [path.name for path in _store_construction_sites()] == ["composition.py"],
-        "the permission is one named module, not a count that could drift",
+        "only the two authorized modules under src/ construct the licensed store",
+        sorted(path.name for path in _store_construction_sites()) == list(STORE_BUILDERS),
+        "the permission is two named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
@@ -11128,15 +11329,12 @@ def main() -> int:
         )
 
     f.check(
-        "only the two authorized operator entry points construct an SDK client",
-        # ADR-0015 authorized one; ADR-0017 authorized a second. Both are named,
-        # so a third arriving anywhere fails -- a count could drift, a list cannot.
-        sorted(path.name for path in _sdk_client_construction_sites())
-        == [
-            "sharadar_authenticated_qualification.py",
-            "sharadar_binding_preflight.py",
-        ],
-        "two named modules, not a count that could drift",
+        "only the authorized operator entry points construct an SDK client",
+        # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
+        # candidate adds its two operator entry points. All four are named, so a
+        # fifth arriving anywhere fails -- a count could drift, a list cannot.
+        sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
+        "four named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
@@ -11208,8 +11406,8 @@ def main() -> int:
                 "test_the_output_vocabulary_admits_no_permission_bearing_word",
             ),
             (
-                "the two authorized SDK constructors",
-                "test_only_the_two_authorized_entry_points_construct_an_sdk_client",
+                "the authorized SDK constructors",
+                "test_only_the_authorized_entry_points_construct_an_sdk_client",
             ),
         ):
             f.check(
@@ -13074,8 +13272,10 @@ def main() -> int:
     )
     f.check(
         "the accepted composition root was extended, not duplicated",
-        [path.name for path in _store_construction_sites()] == ["composition.py"],
-        "a second root would widen the single-constructor guard from one file to two",
+        "composition.py" in [path.name for path in _store_construction_sites()]
+        and _executable_python(COMPOSITION_ROOT).count("def execute_qualification_acquisition(")
+        == 1,
+        "ADR-0017's surface stays one function in the module that already composed",
     )
     f.check(
         "the composition root declares the qualification acquisition mode once",
@@ -13229,23 +13429,132 @@ def main() -> int:
             f"missing from the implementation plan: {phrase}",
         )
 
-    # The absence half. ADR-0018 authorizes architecture and nothing else, so
-    # every artifact it designs must still be missing -- and "missing" is checked
-    # against the repository rather than asserted in prose.
+    # The implementation half. The offline implementation candidate exists, and
+    # every boundary it rests on is checked against the repository rather than
+    # asserted in prose. Implementation, infrastructure mutation and execution are
+    # three separate gates, and only the first has been crossed.
     f.check(
-        "the ADR-0018 parser package does not exist yet",
-        not ADR_0018_QUALIFY_PACKAGE.exists(),
-        "implementation is a separate gate, and this directory is what crossing it looks like",
+        "the ADR-0018 qualification package exists",
+        ADR_0018_QUALIFY_PACKAGE.is_dir(),
+        "the offline implementation candidate is present on this branch",
     )
     f.check(
-        "the ADR-0018 acquisition entry point does not exist yet",
-        not ADR_0018_ACQUIRE_ENTRY.exists(),
-        "designing an entry point is not creating one",
+        "the ADR-0018 acquisition entry point exists",
+        ADR_0018_ACQUIRE_ENTRY.is_file(),
+        "the offline implementation candidate is present on this branch",
     )
     f.check(
-        "the ADR-0018 assessment entry point does not exist yet",
-        not ADR_0018_ASSESS_ENTRY.exists(),
-        "designing an entry point is not creating one",
+        "the ADR-0018 assessment entry point exists",
+        ADR_0018_ASSESS_ENTRY.is_file(),
+        "the offline implementation candidate is present on this branch",
+    )
+    f.check(
+        "the qualification package sits outside the ingestion path",
+        not ADR_0018_QUALIFY_PACKAGE.is_relative_to(ADR_0018_INGEST_PACKAGE),
+        "a parser under data/ingest/ would put one on the opaque-payload path",
+    )
+    f.check(
+        "no ingestion module imports the qualification package",
+        not [
+            path
+            for path in _qualification_python_files(ADR_0018_INGEST_PACKAGE)
+            if "data.qualify" in read(path)
+        ],
+        "the separation is a property of the import graph, not a rule to remember",
+    )
+    f.check(
+        "the qualification package never imports the public-test-key harness",
+        not [
+            path
+            for path in _qualification_python_files(ADR_0018_QUALIFY_PACKAGE)
+            if "sharadar_private_qualification" in read(path)
+        ],
+        "that harness stays untouched, unimported and unauthorized to execute",
+    )
+    f.check(
+        "the acquisition composition reaches no parser and no evaluator",
+        ADR_0018_ACQUISITION.is_file()
+        and "parser" not in _executable_python(ADR_0018_ACQUISITION)
+        and "evaluator" not in _executable_python(ADR_0018_ACQUISITION),
+        "the acquisition path publishes opaque bytes and interprets none of them",
+    )
+    f.check(
+        "the assessment composition reaches no credential, secret or transport",
+        ADR_0018_ASSESSMENT.is_file()
+        and not any(
+            token in _executable_python(ADR_0018_ASSESSMENT)
+            for token in ("SharadarCredential", "get_secret_value", "UrllibTransport")
+        ),
+        "a provider failure must not be convertible into an assessment result",
+    )
+    f.check(
+        "no qualification module constructs an SDK client",
+        not [
+            path
+            for path in _qualification_python_files(ADR_0018_QUALIFY_PACKAGE)
+            if "boto3" in _executable_python(path)
+        ],
+        "importing the data platform must still open no socket",
+    )
+    f.check(
+        "PUBLIC_PIT is not expressible in the qualification package",
+        not [
+            path
+            for path in _qualification_python_files(ADR_0018_QUALIFY_PACKAGE)
+            if "PUBLIC_PIT" in _executable_python(path)
+        ],
+        "price origin stays PROVIDER_DERIVED, and Q7 is unchanged by this package",
+    )
+    f.check(
+        "no qualification module carries a real security symbol",
+        not [
+            path
+            for path in _qualification_python_files(ADR_0018_QUALIFY_PACKAGE)
+            if _subject_shaped_literals(path)
+        ],
+        "which securities the owner evaluates is private evaluation information",
+    )
+    f.check(
+        "the owner-only private inventory location is git-ignored",
+        ".runtime/phase3/sharadar/empirical-inventory.json" in read(REPO_ROOT / ".gitignore"),
+        "a subject list in Git history is a disclosure a later deletion does not undo",
+    )
+    f.check(
+        "the owner-only private inventory does not exist in this repository",
+        not (REPO_ROOT / ".runtime" / "phase3" / "sharadar" / "empirical-inventory.json").exists(),
+        "it is the owner's file; a scaffolded placeholder would be mistaken for a decision",
+    )
+    f.check(
+        "the two entry points use different authorization flags",
+        ADR_0018_ACQUIRE_ENTRY.is_file()
+        and ADR_0018_ASSESS_ENTRY.is_file()
+        and ACQUIRE_FLAG in read(ADR_0018_ACQUIRE_ENTRY)
+        and ASSESS_FLAG in read(ADR_0018_ASSESS_ENTRY)
+        and ASSESS_FLAG not in read(ADR_0018_ACQUIRE_ENTRY),
+        "two processes, two authorizations; neither can be given by pasting the other",
+    )
+    for label, option in ADR_0018_ACQUIRE_REFUSED:
+        f.check(
+            f"the acquisition entry point refuses {label} on the command line",
+            ADR_0018_ACQUIRE_ENTRY.is_file() and f'"{option}"' in read(ADR_0018_ACQUIRE_ENTRY),
+            "an operator who could choose it could choose a retrieval nobody reviewed",
+        )
+    for label, option in ADR_0018_ASSESS_REFUSED:
+        f.check(
+            f"the assessment entry point refuses {label} on the command line",
+            ADR_0018_ASSESS_ENTRY.is_file() and f'"{option}"' in read(ADR_0018_ASSESS_ENTRY),
+            "no listing exists anywhere, and no finding is ever emitted publicly",
+        )
+    for suite in ADR_0018_TEST_SUITES:
+        f.check(
+            f"the offline suite {suite.name} exists",
+            suite.is_file(),
+            "executable invariants belong in unit tests, and this audit must not replace them",
+        )
+    f.check(
+        "no Terraform declares either designed qualification role",
+        not _qualification_role_declarations(),
+        "designing a role is not creating one; infrastructure mutation is a separate gate",
     )
     # This audit is excluded by name, and only this audit. It is a governance
     # guard, so it *has* to name the ADR it guards -- but it constructs no client,
@@ -13253,15 +13562,25 @@ def main() -> int:
     # filename rather than by directory keeps every other script in scope,
     # including the two entry points asserted absent above.
     f.check(
-        "no operational module names ADR-0018",
-        not [
-            path
-            for path in tracked_files(REPO_ROOT / "src") + tracked_files(REPO_ROOT / "scripts")
-            if path.suffix == ".py"
-            and path.name != "phase3_docs_audit.py"
-            and "ADR-0018" in read(path)
+        "only the implementation candidate names ADR-0018",
+        # Scanned on disk rather than through git, unlike the identifier scans:
+        # this is about source modules that are part of the slice, and an audit that
+        # only saw committed files would pass on an uncommitted branch by default.
+        # No ``.py`` file under ``src/`` or ``scripts/`` is git-ignored, so none of
+        # the reasons ``tracked_files`` exists applies here.
+        sorted(
+            path.name
+            for path in _qualification_python_files(REPO_ROOT / "src")
+            + _qualification_python_files(REPO_ROOT / "scripts")
+            if path.name != "phase3_docs_audit.py" and "ADR-0018" in read(path)
+        )
+        == [
+            "__init__.py",
+            "__init__.py",
+            "sharadar_empirical_qualification.py",
+            "sharadar_qualification_assessment.py",
         ],
-        "a documentation-only slice leaves the operational surface untouched",
+        "the modules implementing it cite it, as every other module cites its own ADR",
     )
 
     # ---------------------------------------------------------------- verdict
