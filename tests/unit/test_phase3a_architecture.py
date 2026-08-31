@@ -329,6 +329,10 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
         "normalize",
         "pit",
         "quality",
+        # The private empirical qualification package. Deliberately **not** under
+        # `ingest`, so the acquisition path stays parser-free and the separation is
+        # a property of the import graph rather than a rule somebody remembers.
+        "qualify",
         "storage",
     }
     present = {entry.name for entry in DATA_ROOT.iterdir() if entry.name != "__pycache__"}
@@ -458,6 +462,20 @@ COMPOSITION_ROOT = (
     PROJECT_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar" / "composition.py"
 )
 
+#: The empirical qualification package's own composition. A **second** authorized
+#: store-construction site, in a different package under its own governance.
+#:
+#: The rule is narrowed here rather than removed, exactly as it was when the first
+#: composition root was authorized. Both sites are named, so a *third* module
+#: constructing a licensed store still fails -- which is the property this guard
+#: exists for, and which a count would not have preserved.
+EMPIRICAL_COMPOSITION = (
+    PROJECT_ROOT / "src" / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py"
+)
+
+#: Every module permitted to construct the licensed store, and nothing else.
+STORE_BUILDERS = (COMPOSITION_ROOT, EMPIRICAL_COMPOSITION)
+
 #: SDK construction, which ADR-0014 did **not** authorize anywhere.
 #:
 #: Kept separate from the store because the two are different decisions. A store
@@ -468,12 +486,14 @@ SDK_CONSTRUCTIONS = frozenset({"client", "resource", "Session"})
 
 
 def test_no_data_module_constructs_an_s3_client_or_store() -> None:
-    """One composition root exists, and nothing else may build a store.
+    """Two composition roots exist, and nothing else may build a store.
 
     ADR-0014 narrowed this rule; it did not remove it. The earlier rule was "no
-    composition root exists", which was correct while none was authorized. One
-    now is, in exactly one module, so the replacement has to be narrower rather
-    than absent: a second module constructing a licensed store fails here.
+    composition root exists", which was correct while none was authorized, and it
+    then became "exactly one". The empirical qualification package adds a second,
+    in a different package under its own governance -- so the rule is narrowed
+    again rather than dropped: a **third** module constructing a licensed store
+    fails here.
 
     **SDK construction is still forbidden everywhere, including the composition
     root.** The S3 client is injected there too, so the data platform still
@@ -483,7 +503,7 @@ def test_no_data_module_constructs_an_s3_client_or_store() -> None:
     offenders: list[str] = []
     for path in _python_files(PACKAGE_ROOT):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        authorized = path == COMPOSITION_ROOT
+        authorized = path in STORE_BUILDERS
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -503,8 +523,8 @@ def test_no_data_module_constructs_an_s3_client_or_store() -> None:
     )
 
 
-def test_exactly_one_module_constructs_the_licensed_store() -> None:
-    """The permission is a single named module, not a count that could drift."""
+def test_only_the_two_authorized_modules_construct_the_licensed_store() -> None:
+    """The permission is two named modules, not a count that could drift."""
     builders = [
         path.relative_to(PROJECT_ROOT)
         for path in _python_files(PACKAGE_ROOT)
@@ -515,7 +535,7 @@ def test_exactly_one_module_constructs_the_licensed_store() -> None:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
         )
     ]
-    assert builders == [COMPOSITION_ROOT.relative_to(PROJECT_ROOT)], (
+    assert sorted(builders) == sorted(path.relative_to(PROJECT_ROOT) for path in STORE_BUILDERS), (
         f"the licensed store is constructed at: {builders}"
     )
 

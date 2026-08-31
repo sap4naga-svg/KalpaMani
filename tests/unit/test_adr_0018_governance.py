@@ -20,11 +20,13 @@ entry points. What they guard is three things:
    maximum operation count. A count copied from prose into prose is a count
    nobody checks, so the numbers are derived here from the package's own
    parameters and compared against what the ADR says.
-3. **The architecture is still only an architecture.** Every artifact the ADR
-   designs is asserted **absent**, because "approves architecture only" is a claim
-   about the repository and not a sentence about intent, and implementation,
-   infrastructure mutation and execution are each required to still read
-   NOT AUTHORIZED.
+3. **Implementation exists as a candidate; infrastructure and execution do not.**
+   The offline implementation is present on this branch and is asserted **present**,
+   with its structural boundaries. Everything past it is asserted **absent** --
+   no Terraform, no IAM role, no locator, no private report, no run record --
+   because "implementation only" is a claim about the repository and not a
+   sentence about intent, and infrastructure mutation and execution are each
+   required to still read NOT AUTHORIZED.
 4. **The clarification amendment says what it clarifies, and claims nothing more.**
    It makes 1,800 seconds an actual elapsed-time deadline with a stated scope, a
    stated clock and stated enforcement points, and it makes the canonical
@@ -34,6 +36,10 @@ entry points. What they guard is three things:
    is kept as the thing that merge satisfied, and neither decision opens a gate.
    The combined arithmetic is derived here from `R` and `E` rather than
    transcribed, for the same reason the acquisition arithmetic is.
+
+**Implementation, infrastructure mutation and execution are three separate gates.**
+Crossing the first is not crossing the second or the third, and this file is where
+that distinction is checked rather than asserted.
 """
 
 from __future__ import annotations
@@ -72,19 +78,28 @@ ADR_0018_CLARIFICATION_APPROVED_HEAD = "579259a62ff7561ae2991f3923ea8aa1d0064be8
 #: is separately required of both status documents -- an accepted architecture
 #: read as permission to build, provision or run is the drift this guards.
 STILL_UNAUTHORIZED = (
-    "adr-0018 implementation: not authorized",
     "infrastructure mutation: not authorized",
     "run a: not authorized",
     "run b: not authorized",
     "assessment: not authorized",
 )
 
-#: The artifacts ADR-0018 designs and does not create. Implementation is a
-#: separate gate; these paths existing is what crossing it looks like.
-DESIGNED_BUT_ABSENT = (
+#: The artifacts ADR-0018 designs, now built as an **offline implementation
+#: candidate**. Their presence is what crossing the implementation gate looks like,
+#: and it is checked here so "implemented" is a fact about the repository.
+IMPLEMENTED_ON_THIS_BRANCH = (
     PROJECT_ROOT / "src" / "kalpamani" / "data" / "qualify",
     PROJECT_ROOT / "scripts" / "sharadar_empirical_qualification.py",
     PROJECT_ROOT / "scripts" / "sharadar_qualification_assessment.py",
+)
+
+#: Everything past the implementation gate. Infrastructure mutation and execution
+#: are the second and third gates, and neither has been crossed -- so no Terraform
+#: for these roles, no locator, no private report and no run record exists.
+STILL_ABSENT = (
+    PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification_roles.tf",
+    PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification-roles.tf",
+    PROJECT_ROOT / ".runtime" / "phase3" / "sharadar" / "empirical-inventory.json",
 )
 
 #: The package's own parameters, from ADR-0018 §4. Every count below is derived
@@ -323,12 +338,42 @@ class TestRetryIsNeverAmbiguous:
 
 
 class TestTheArchitectureIsStillOnlyAnArchitecture:
-    @pytest.mark.parametrize("path", DESIGNED_BUT_ABSENT, ids=lambda p: p.name)
-    def test_every_designed_artifact_is_absent(self, path: Path) -> None:
-        assert not path.exists(), (
-            f"{path.name} exists. ADR-0018 approves architecture only; implementation, "
-            "infrastructure mutation and execution are three separate gates."
+    @pytest.mark.parametrize("path", IMPLEMENTED_ON_THIS_BRANCH, ids=lambda p: p.name)
+    def test_every_designed_artifact_exists_as_an_implementation_candidate(
+        self, path: Path
+    ) -> None:
+        assert path.exists(), (
+            f"{path.name} is missing. The offline implementation is a candidate on this "
+            "branch, and its presence is what the implementation gate having been "
+            "crossed looks like."
         )
+
+    @pytest.mark.parametrize("path", STILL_ABSENT, ids=lambda p: p.name)
+    def test_nothing_past_the_implementation_gate_exists(self, path: Path) -> None:
+        assert not path.exists(), (
+            f"{path.name} exists. Implementation, infrastructure mutation and execution "
+            "are three separate gates, and only the first has been crossed."
+        )
+
+    def test_no_new_iam_role_is_declared_for_the_two_designed_roles(self) -> None:
+        infra = PROJECT_ROOT / "infra"
+        if not infra.is_dir():  # pragma: no cover - the tree exists in this repository
+            return
+        for path in infra.rglob("*.tf"):
+            text = path.read_text(encoding="utf-8").lower()
+            for role in ("qualification_acquisition", "qualification_assessment"):
+                assert role not in text, (
+                    f"{path.name} declares {role}. Designing a role is not creating one, "
+                    "and infrastructure mutation is a separate gate."
+                )
+
+    def test_neither_entry_point_has_ever_been_executed_against_a_real_service(self) -> None:
+        """A statement about the repository: no run record of either exists."""
+        runtime = PROJECT_ROOT / ".runtime"
+        if not runtime.is_dir():
+            return
+        for pattern in ("**/empirical-qualification*", "**/qualification-assessment*"):
+            assert not list(runtime.glob(pattern))
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
     @pytest.mark.parametrize("phrase", STILL_UNAUTHORIZED)
@@ -752,18 +797,30 @@ class TestTheClarificationAmendmentClaimsNothing:
             assert still_gated in text
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_both_documents_keep_the_implementation_candidate_blocked(self, document: Path) -> None:
+    def test_both_documents_keep_the_implementation_candidate_unmerged(
+        self, document: Path
+    ) -> None:
+        """Inverted, not deleted.
+
+        This guard required "unmerged and blocked" while the candidate was blocked
+        on the clarification. The correction has since happened under its own
+        authorization, so the guard is turned around rather than removed: what must
+        still be recorded is that the candidate is **unmerged**, that the correction
+        was made, and that a person has yet to review it. A merged claim, a ready
+        claim and an accepted claim all stay forbidden.
+        """
         text = flat(document)
-        assert "unmerged and blocked" in text
-        assert "it cannot be merged until it is corrected against the clarified adr" in text
-        assert (
-            "the offline implementation candidate must be corrected against the "
-            "now-authoritative clarification" in text
-        )
+        assert "the offline implementation candidate is unmerged and not accepted" in text
+        assert "corrected against the now-authoritative clarification" in text
+        assert "awaits an independent re-review" in text
+        assert "not accepted and not in force until its pull request merges" in text
         for premature in (
             "implementation candidate is ready to merge",
             "implementation candidate may be merged",
+            "implementation candidate is accepted",
             "pr #41 is ready to merge",
+            "pr #41 is accepted",
+            "pr #41 is merged",
         ):
             assert premature not in text
 

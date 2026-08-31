@@ -1196,12 +1196,18 @@ def test_nothing_calls_the_composition_outside_this_file() -> None:
     """One authorized caller, and no other.
 
     ADR-0014's version of this said *nobody* calls it, which was true while no
-    caller was authorized. ADR-0015 authorized exactly one -- the operator
-    binding preflight, which refuses by default -- so the replacement is narrower
-    rather than absent: a second caller, a script, a task or an ad-hoc invocation
-    still fails here.
+    caller was authorized. ADR-0015 authorized exactly one -- the operator binding
+    preflight, which refuses by default -- and the empirical acquisition
+    composition adds a second, as the offline plan preflight it runs before its
+    first request. The rule is narrowed again rather than dropped: a **third**
+    caller, a script, a task or an ad-hoc invocation still fails here.
     """
-    allowed = {Path(__file__).resolve(), BINDING_PREFLIGHT, BINDING_PREFLIGHT_TEST}
+    allowed = {
+        Path(__file__).resolve(),
+        BINDING_PREFLIGHT,
+        BINDING_PREFLIGHT_TEST,
+        SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py",
+    }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, TESTS):
         for path in _python_files(root):
@@ -1220,8 +1226,10 @@ def test_nothing_calls_the_composition_outside_this_file() -> None:
 def test_no_module_imports_the_composition_outside_this_file() -> None:
     """The composition has a small, named set of importers, and no others.
 
-    ADR-0017 added the authenticated entry point and its tests. Listed by name
-    rather than by relaxing the scan, so a sixth importer still fails here.
+    ADR-0017 added the authenticated entry point and its tests; the empirical
+    qualification package adds its acquisition composition and the boundary test
+    that asserts what that composition may not import. Listed by name rather than
+    by relaxing the scan, so a tenth importer still fails here.
     """
     allowed = {
         Path(__file__).resolve(),
@@ -1231,6 +1239,8 @@ def test_no_module_imports_the_composition_outside_this_file() -> None:
         SCRIPTS / "sharadar_authenticated_qualification.py",
         TESTS / "unit" / "test_sharadar_authenticated_qualification.py",
         TESTS / "unit" / "test_sharadar_acquisition_composition.py",
+        SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py",
+        TESTS / "unit" / "test_sharadar_qualification_package_boundaries.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, TESTS):

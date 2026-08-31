@@ -48,6 +48,16 @@ SRC = PROJECT_ROOT / "src"
 PACKAGE_ROOT = SRC / "kalpamani"
 DATA_ROOT = PACKAGE_ROOT / "data"
 PROVIDER_PACKAGE = DATA_ROOT / "ingest" / "sharadar"
+
+#: The private empirical qualification package. A **second** vendor-scoped
+#: package, and vendor knowledge is confined to it exactly as it is confined to
+#: the ingestion one. It is deliberately outside ``ingest`` so the acquisition
+#: path stays parser-free.
+QUALIFY_PACKAGE = DATA_ROOT / "qualify" / "sharadar"
+
+#: Every package permitted to name the vendor or import the provider package.
+#: Named, so a **third** appearing anywhere else still fails.
+VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE)
 SCRIPTS = PROJECT_ROOT / "scripts"
 TESTS = PROJECT_ROOT / "tests"
 
@@ -141,11 +151,19 @@ def test_the_neutral_bronze_writers_do_not_import_the_provider() -> None:
         )
 
 
-def test_only_the_provider_package_imports_the_provider_package() -> None:
+def test_only_the_vendor_scoped_packages_import_the_provider_package() -> None:
+    """Two vendor-scoped packages may import it; every neutral module may not.
+
+    Narrowed rather than relaxed. The rule was "only the provider package", correct
+    while it was the only vendor-scoped one. The empirical qualification package is
+    the second -- it builds plans from the accepted plan model and parses what that
+    provider returned -- so both are named, and a **third** importer outside them
+    still fails here.
+    """
     offenders = [
         str(path.relative_to(PROJECT_ROOT))
         for path in python_files(PACKAGE_ROOT)
-        if not path.is_relative_to(PROVIDER_PACKAGE)
+        if not any(path.is_relative_to(package) for package in VENDOR_SCOPED_PACKAGES)
         and any(module.startswith(PROVIDER_MODULE) for module in imported_modules(path))
     ]
     assert offenders == [], f"the provider package is imported from outside it: {offenders}"
@@ -158,11 +176,15 @@ def test_no_production_module_outside_the_provider_package_names_the_vendor() ->
     boundary, so the scan is over production modules that are neither inside the
     package nor the two package docstrings that describe the layout.
     """
-    described = {DATA_ROOT / "__init__.py", DATA_ROOT / "ingest" / "__init__.py"}
+    described = {
+        DATA_ROOT / "__init__.py",
+        DATA_ROOT / "ingest" / "__init__.py",
+        DATA_ROOT / "qualify" / "__init__.py",
+    }
     offenders = [
         str(path.relative_to(PROJECT_ROOT))
         for path in python_files(PACKAGE_ROOT)
-        if not path.is_relative_to(PROVIDER_PACKAGE)
+        if not any(path.is_relative_to(package) for package in VENDOR_SCOPED_PACKAGES)
         and path not in described
         and "sharadar" in path.read_text(encoding="utf-8").lower()
     ]
@@ -343,14 +365,23 @@ def test_no_production_module_or_script_constructs_the_concrete_transport() -> N
 
     ADR-0017 added the third, on the same terms: the authenticated acquisition
     entry point builds one inside a factory its authorized branch alone reaches,
-    and it too refuses by default and has never been run. Every other production
-    module, script and unattended runner still fails here.
+    and it too refuses by default and has never been run.
+
+    The empirical acquisition entry point is the fourth, on exactly those terms --
+    a factory reachable only from its authorized branch, refused by default, never
+    run. It passes the package's own 4 MiB response ceiling explicitly, because the
+    transport is what stops reading and a plan alone cannot enforce a bound.
+
+    **The assessment entry point is deliberately not here**: it must be unable to
+    reach a provider at all, so it constructs no transport under any branch. Every
+    other production module, script and unattended runner still fails here.
     """
     allowed = {
         TRANSPORT_TEST,
         BINDING_PREFLIGHT,
         BINDING_PREFLIGHT_TEST,
         SCRIPTS / "sharadar_authenticated_qualification.py",
+        SCRIPTS / "sharadar_empirical_qualification.py",
     }
     offenders: list[str] = []
     for root in (PACKAGE_ROOT, SCRIPTS, TESTS):

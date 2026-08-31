@@ -144,6 +144,19 @@ research_output/
 .runtime/**/*.jsonl
 .runtime/**/*.json.gz
 
+# --- Owner-only private evaluation inventory (NEVER tracked) ---------------
+# The eight-subject empirical qualification inventory. It lives under .runtime/,
+# which is already ignored above; this entry is explicit because WHICH securities
+# the owner chose to evaluate is evaluation information under the Sharadar
+# personal-use licence, and a subject list in Git history is a disclosure that a
+# later deletion does not undo.
+#
+# The path is fixed by the application and is never supplied on a command line.
+# Nothing in this repository creates this file: it is the owner's, and a tool that
+# scaffolded a placeholder would invite the placeholder to be mistaken for a
+# decision.
+.runtime/phase3/sharadar/empirical-inventory.json
+
 # --- Original blueprint source drop ---------------------------------------
 # The authoritative copy is committed at docs/architecture/KalpaMani_Blueprint_V2_1.pdf
 # and is byte-identical (verified by SHA-256). The original drop is preserved on
