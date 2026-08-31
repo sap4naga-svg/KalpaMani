@@ -280,7 +280,7 @@ authorized, so P1–P9 executions by it are ZERO.**
 
 | | Ceiling under that package |
 |---|---|
-| P1 | `PARTIALLY_TESTED` after one run; **at most `TESTED` after a second, separated by calendar time**. The information-time resolution **stays bounded regardless of outcome**, because the vendor's update column is date-granular |
+| P1 | `PARTIALLY_TESTED` after one run; **at most `TESTED` after a second, separated by calendar time**, and reachable **only through one combined assessment of Run A and Run B together**. The information-time resolution **stays bounded regardless of outcome**, because the vendor's update column is date-granular |
 | P2 | **at most `PARTIALLY_TESTED`** — sampled delisted-history existence **is not proof of the population-wide survivorship claim** |
 | P3 | the **schema question can reach `TESTED`**; announcement timing **remains approximated** where the field is absent |
 | P4 | `DOCUMENTATION_RESOLVED` — classification history **cannot become empirically historized from a snapshot table** |
@@ -293,6 +293,24 @@ authorized, so P1–P9 executions by it are ZERO.**
 **No aggregate verdict is produced by any of it.** Provider selection is **G1**, G1 is **OPEN**,
 and it is an owner decision taken by a person reading evidence rather than a value returned by a
 program.
+
+**Two clarifications are PROPOSED and are not effective until merged.** They change what the
+accepted architecture *means*, not what it authorizes, and they authorize nothing:
+
+- **The 1,800-second acquisition elapsed-time deadline.** It is **one actual elapsed-time
+  deadline** measured on an **injected monotonic clock** over the complete acquisition execution
+  phase — provider requests, pacing, local processing, Bronze publication, metadata resolution,
+  locator construction, locator publication and permitted locator retry — rather than compile-time
+  arithmetic over the provider-time component alone. It is a **safety bound on elapsed time and
+  not a guarantee that 48 requests complete**: a slow provider halts the run short, publishes a
+  `PARTIAL` locator, and the assessor refuses to evaluate it.
+- **One combined assessment of Run A and Run B together**, after Run B. P1's `TESTED` ceiling is a
+  cross-run question, so no per-run assessment can reach it. **Run A evidence alone caps P1 at
+  `PARTIALLY_TESTED`**, and `TESTED` stays a ceiling rather than an expected outcome.
+
+**The offline implementation candidate is unmerged and blocked**, pending an accepted
+clarification, a separately authorized implementation correction and an independent re-review.
+**No execution of that package is authorized**, and **P1–P9 executions by it are ZERO.**
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
