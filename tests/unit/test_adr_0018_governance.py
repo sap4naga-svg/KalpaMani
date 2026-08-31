@@ -1,24 +1,30 @@
-"""ADR-0018 is PROPOSED, and the repository has to keep saying so.
+"""ADR-0018 is ACCEPTED ARCHITECTURE ONLY, and the repository has to keep saying so.
 
-A merged ADR drifts by having its facts go stale. A **proposed** one drifts a
-different way: the document exists, it reads like a decision, and a later session
-treats it as authority it does not have. That has a precedent in this repository
--- ADR-0017 spent time in an open pull request while its own text already read
-"Accepted", and the status documents had to carry the distinction explicitly.
+PR #39 merged, so the conditional acceptance took effect. A merged ADR drifts by
+having its facts go stale, and this one has two ways to do it: a status document
+that still calls it proposed, and a status document that reads an approved design
+as permission to write, provision or run it. That second one has a precedent in
+this repository -- ADR-0017 spent time in an open pull request while its own text
+already read "Accepted", and the status documents had to carry the distinction
+explicitly.
 
 These are text and arithmetic checks over committed files. **Nothing here
 contacts AWS, a provider or a network**, and nothing here imports the operational
 entry points. What they guard is three things:
 
-1. **The conditional status stays conditional.** The ADR says it is accepted only
-   on merge, says the merge has not happened, and supersedes nothing.
+1. **The acceptance is recorded, and its history is not rewritten.** The ADR keeps
+   its conditional status line, keeps the sentence saying it carried no authority
+   before the merge, records that the merge has since occurred, and supersedes
+   nothing. Both status documents name the same pull request.
 2. **The arithmetic is recomputed, not quoted.** ADR-0018 states a nominal and a
    maximum operation count. A count copied from prose into prose is a count
    nobody checks, so the numbers are derived here from the package's own
    parameters and compared against what the ADR says.
 3. **The architecture is still only an architecture.** Every artifact the ADR
-   designs is asserted **absent**, because "authorizes architecture only" is a
-   claim about the repository and not a sentence about intent.
+   designs is asserted **absent**, because "approves architecture only" is a claim
+   about the repository and not a sentence about intent, and implementation,
+   infrastructure mutation and execution are each required to still read
+   NOT AUTHORIZED.
 """
 
 from __future__ import annotations
@@ -41,6 +47,20 @@ CLAUDE_MD = PROJECT_ROOT / "CLAUDE.md"
 README = PROJECT_ROOT / "README.md"
 DELETION_RUNBOOK = PROJECT_ROOT / "docs" / "runbooks" / "vendor-data-cloud-deletion.md"
 AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
+
+#: The pull request whose merge satisfied ADR-0018's conditional acceptance.
+ADR_0018_PR = "#39"
+
+#: What approving a design did **not** do. Each is separately checkable, so each
+#: is separately required of both status documents -- an accepted architecture
+#: read as permission to build, provision or run is the drift this guards.
+STILL_UNAUTHORIZED = (
+    "adr-0018 implementation: not authorized",
+    "infrastructure mutation: not authorized",
+    "run a: not authorized",
+    "run b: not authorized",
+    "assessment: not authorized",
+)
 
 #: The artifacts ADR-0018 designs and does not create. Implementation is a
 #: separate gate; these paths existing is what crossing it looks like.
@@ -78,42 +98,73 @@ def flat(path: Path) -> str:
     return " ".join(path.read_text(encoding="utf-8").replace("**", "").split()).lower()
 
 
-class TestTheStatusStaysConditional:
+class TestTheAcceptanceIsRecordedWithoutRewritingItsHistory:
+    """Inverted, not deleted.
+
+    Every guard below required the opposite while PR #39 was open. Deleting them
+    on merge would have left the reverted claim unguarded, so each one was turned
+    around instead -- the same treatment ADR-0017's registry guard was given when
+    PR #33 merged.
+    """
+
     def test_the_status_line_is_the_exact_conditional_acceptance(self) -> None:
+        """The ADR's own status line is immutable; the merge is what satisfied it."""
         assert (
             "status: accepted — effective only upon merge of the pull request "
             "introducing this adr." in flat(ADR)
         )
 
-    def test_the_adr_says_the_merge_condition_has_not_been_met(self) -> None:
+    def test_the_adr_keeps_the_pre_merge_condition_exactly_as_written(self) -> None:
+        """Acceptance now does not give it authority it lacked while the PR was open."""
         assert "before that merge this adr is proposed and carries no authority." in flat(ADR)
+
+    def test_the_adr_records_that_the_merge_condition_has_since_been_met(self) -> None:
+        assert "that merge has since occurred" in flat(ADR)
+
+    def test_the_adr_no_longer_claims_to_be_an_open_pull_request(self) -> None:
+        assert "it is a document in an open pull request" not in flat(ADR)
 
     def test_the_adr_supersedes_nothing(self) -> None:
         assert "supersedes: nothing." in flat(ADR)
 
-    def test_the_adr_is_absent_from_the_merged_registry(self) -> None:
-        """A merged-ADR registry entry asserts an acceptance that has not happened."""
+    def test_the_adr_is_registered_in_the_merged_registry_against_its_pull_request(self) -> None:
+        """An in-force row outside the registry is a row nothing governs."""
         registry = AUDIT.read_text(encoding="utf-8")
         block = registry.split("MERGED_ADR_STATUS: Final", 1)[1].split(")\n", 1)[0]
-        assert "ADR-0018" not in block
+        assert f'("ADR-0018", "PR {ADR_0018_PR} merged")' in block
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_both_status_documents_record_it_as_proposed(self, document: Path) -> None:
-        assert "proposed — not accepted, and it carries no authority." in flat(document)
+    def test_both_status_documents_record_it_as_accepted_and_in_force(self, document: Path) -> None:
+        assert "adr-0018: accepted / in force" in flat(document)
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_neither_document_claims_it_is_in_force(self, document: Path) -> None:
+    def test_neither_document_still_records_it_as_proposed(self, document: Path) -> None:
+        assert "proposed — not accepted, and it carries no authority." not in flat(document)
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_claim_it_in_force_against_the_right_pull_request(
+        self, document: Path
+    ) -> None:
         """The audit's own in-force pattern, applied to the ADR-0018 rows."""
         in_force = re.compile(
-            r"ACCEPTED\s*/\s*IN\s+FORCE.*?\bPR\s*#\d+\s+merged", re.IGNORECASE | re.DOTALL
+            r"ACCEPTED\s*/\s*IN\s+FORCE.*?\bPR\s*#(\d+)\s+merged", re.IGNORECASE | re.DOTALL
         )
         rows = [
             line
             for line in document.read_text(encoding="utf-8").splitlines()
             if line.lstrip().startswith("|") and "ADR-0018-bounded-private" in line.split("|")[1]
         ]
-        assert rows, "the ADR-0018 status row must exist to be checked"
-        assert not any(in_force.search(row.replace("**", "")) for row in rows)
+        assert len(rows) == 1, "exactly one ADR-0018 status row must exist to be checked"
+        matched = in_force.search(rows[0].replace("**", ""))
+        assert matched is not None, "the row must state ACCEPTED / IN FORCE and name its PR"
+        assert f"#{matched.group(1)}" == ADR_0018_PR
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_keep_the_pre_merge_no_authority_fact(self, document: Path) -> None:
+        """A merge is not licence to backdate authority onto the days before it."""
+        assert f"while pr {ADR_0018_PR} was open it was proposed and carried no authority" in flat(
+            document
+        )
 
 
 class TestTheArithmeticIsDerived:
@@ -216,6 +267,22 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
         assert not path.exists(), (
             f"{path.name} exists. ADR-0018 approves architecture only; implementation, "
             "infrastructure mutation and execution are three separate gates."
+        )
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    @pytest.mark.parametrize("phrase", STILL_UNAUTHORIZED)
+    def test_both_documents_keep_each_further_gate_unauthorized(
+        self, document: Path, phrase: str
+    ) -> None:
+        assert phrase in flat(document)
+
+    @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+    def test_both_documents_record_what_the_merge_did_and_did_not_do(self, document: Path) -> None:
+        text = flat(document)
+        assert "the merge approved architecture only" in text
+        assert (
+            "the merge authorized no implementation, no infrastructure mutation and no execution"
+            in text
         )
 
     def test_the_adr_states_that_merging_authorizes_nothing_further(self) -> None:

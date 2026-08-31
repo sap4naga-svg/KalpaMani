@@ -274,9 +274,9 @@ These are new in revision 2, and each one is a claim revision 1 accepted on a ve
 [ADR-0018](../decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) designs a
 bounded owner-only package for P1–P9 and records the honest ceiling of each test. A ceiling is
 what a run may **at most** report; a run may fall short of one and no run may exceed one. **The
-ADR is proposed and carries no authority until the pull request introducing it merges**, and
-merging it approves architecture only — **no execution of that package is authorized, so P1–P9
-executions by it are ZERO.**
+ADR is accepted and approves architecture only** — PR #39 merged, and the merge authorized no
+implementation, no infrastructure mutation and no execution: **no execution of that package is
+authorized, so P1–P9 executions by it are ZERO.**
 
 | | Ceiling under that package |
 |---|---|

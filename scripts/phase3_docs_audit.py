@@ -802,6 +802,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0015", "PR #22 merged"),
     ("ADR-0016", "PR #24 merged"),
     ("ADR-0017", "PR #33 merged"),
+    ("ADR-0018", "PR #39 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -5452,15 +5453,22 @@ ADR_0017_FORBIDDEN_CLI: Final[tuple[str, ...]] = (
 
 
 # ---------------------------------------------------------------------------
-# ADR-0018 -- a PROPOSED architecture, and the facts a status document must keep
+# ADR-0018 -- an ACCEPTED architecture, and the facts a status document must keep
 # ---------------------------------------------------------------------------
 
-#: The ADR this section governs. **Proposed, not merged.** It is deliberately
-#: absent from :data:`MERGED_ADR_STATUS`, and the guards below check that absence
-#: rather than assume it: an ADR that is in an open pull request and a status
-#: document that calls it in force is exactly the drift this audit exists to
+#: The ADR this section governs. **Accepted on the merge of PR #39**, and
+#: therefore registered in :data:`MERGED_ADR_STATUS` like every other in-force
+#: ADR. The guards below were written while it was proposed and are *inverted*
+#: rather than deleted: what they used to require is now false, and deleting
+#: them would leave the reverted claim unguarded. What merging did **not** do
+#: is the half that still needs guarding -- an ADR that approves an
+#: architecture and a status document that reads it as permission to build,
+#: mutate infrastructure or run is exactly the drift this audit exists to
 #: catch, and it has happened before.
 ADR_0018: Final = DECISIONS / ("ADR-0018-bounded-private-empirical-sharadar-qualification.md")
+
+#: The pull request whose merge satisfied ADR-0018's conditional acceptance.
+ADR_0018_PR: Final = "#39"
 
 #: The two future entry points ADR-0018 *designs* and does not create. Their
 #: absence is what makes "architecture only" a checkable fact rather than a
@@ -5484,9 +5492,10 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "status: accepted — effective only upon merge of the pull request introducing this adr.",
     ),
     (
-        "says the condition has not been met",
+        "keeps the pre-merge condition exactly as written",
         "before that merge this adr is proposed and carries no authority.",
     ),
+    ("records that the merge condition has since been met", "that merge has since occurred"),
     ("supersedes nothing", "supersedes: nothing."),
     ("approves an architecture and not code", "merging this adr approves an architecture"),
     # The multiplication sign and the dashes below are the document's own
@@ -5536,7 +5545,6 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: because a denylist that fires on an honest sentence gets deleted rather than
 #: fixed.
 ADR_0018_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
-    "accepted / in force",
     "authorizes implementation",
     "authorizes execution",
     "authorizes a provider request",
@@ -5573,12 +5581,28 @@ ADR_0018_SUBJECT_CARRIERS: Final[tuple[str, ...]] = (
 #: twice carried a fact in one document and a stale contradiction in the other,
 #: so each phrase is required in *each* file rather than in their concatenation.
 ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    ("records it as proposed", "proposed — not accepted, and it carries no authority."),
-    ("records that merging approves architecture", "merging it will approve architecture only"),
+    ("records it as accepted and in force", "adr-0018: accepted / in force"),
+    ("records that the merge approved architecture only", "the merge approved architecture only"),
     (
-        "records that merging authorizes nothing further",
-        "merging it will authorize no implementation, no infrastructure mutation and no execution",
+        "records that the merge authorized nothing further",
+        "the merge authorized no implementation, no infrastructure mutation and no execution",
     ),
+    # The historical half. Acceptance is a fact about now; it does not
+    # retroactively give the document authority it did not have while its pull
+    # request was open, and a status file that quietly rewrote that would be
+    # asserting an authority nobody granted.
+    (
+        "keeps the pre-merge fact that it carried no authority",
+        f"while pr {ADR_0018_PR} was open it was proposed and carried no authority",
+    ),
+    # The six distinctions an accepted architecture has to keep apart. Approving
+    # a design is not permission to write it, to provision for it or to run it,
+    # and each of those is separately checkable, so each is separately required.
+    ("keeps implementation unauthorized", "adr-0018 implementation: not authorized"),
+    ("keeps infrastructure mutation unauthorized", "infrastructure mutation: not authorized"),
+    ("keeps run a unauthorized", "run a: not authorized"),
+    ("keeps run b unauthorized", "run b: not authorized"),
+    ("keeps the assessment run unauthorized", "assessment: not authorized"),
     ("records zero package executions", "empirical-package executions zero"),
     ("records zero provider requests", "provider requests by this package zero"),
     ("records zero s3 operations", "s3 operations by this package zero"),
@@ -5610,7 +5634,6 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 
 #: Ways a status document could overstate ADR-0018. All false today.
 ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "adr-0018 is accepted / in force",
     "adr-0018 authorizes implementation",
     "read surface exists",
     "run a completed",
@@ -5644,8 +5667,8 @@ ADR_0018_RUNBOOK_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("links the adr", "adr-0018-bounded-private-empirical-sharadar-qualification.md"),
     (
-        "records that the adr carries no authority yet",
-        "the adr is proposed and carries no authority until the pull request introducing it merges",
+        "records that the adr is accepted as architecture only",
+        "the adr is accepted and approves architecture only",
     ),
     ("records zero p-test executions", "p1–p9 executions by it are zero."),  # noqa: RUF001
     ("produces no aggregate verdict", "no aggregate verdict is produced by any of it."),
@@ -13118,12 +13141,13 @@ def main() -> int:
                 "the guard this audit names must be a test that exists",
             )
 
-    # ------------------------------------------------- ADR-0018, still proposed
+    # ------------------------------------ ADR-0018, accepted architecture only
     #
-    # A proposed ADR is the one class of governance document whose *absence* of
-    # authority has to be checked as hard as a merged one's presence. Everything
-    # below is either "the document says the true thing" or "the thing it
-    # designs does not exist yet", and the second half is what stops
+    # PR #39 merged, so the conditional acceptance took effect and the absence
+    # guards that governed the proposed state are inverted rather than deleted.
+    # What still has to be checked as hard as the acceptance is the *scope* of
+    # it: everything below is either "the document says the true thing" or "the
+    # thing it designs does not exist yet", and the second half is what stops
     # "architecture only" from being a sentence nobody can falsify.
     f.check(
         "ADR-0018 exists",
@@ -13171,14 +13195,21 @@ def main() -> int:
         )
 
     f.check(
-        "ADR-0018 is not registered as merged",
-        "ADR-0018" not in dict(MERGED_ADR_STATUS),
-        "its pull request is open; registering it would assert an acceptance that has not happened",
+        "ADR-0018 is governed by the merged-ADR registry",
+        # Inverted, not deleted. Until PR #39 merged this check required the
+        # opposite, and deleting it then would have left the reverted claim
+        # unguarded -- the same treatment ADR-0017's guard was given when
+        # PR #33 merged.
+        dict(MERGED_ADR_STATUS).get("ADR-0018") == f"PR {ADR_0018_PR} merged",
+        f"ADR-0018 must be registered as 'PR {ADR_0018_PR} merged'",
     )
     f.check(
-        "no status document claims ADR-0018 is in force",
-        all("ADR-0018" not in _in_force_adr_claims(t) for t in adr_0018_documents.values()),
-        "a proposed ADR named as in force is the exact drift the registry guard exists for",
+        "both status documents make ADR-0018's in-force claim against the right pull request",
+        all(
+            _in_force_adr_claims(t).get("ADR-0018") == f"PR {ADR_0018_PR} merged"
+            for t in adr_0018_documents.values()
+        ),
+        "an accepted ADR must claim its merge, in both documents, naming the same pull request",
     )
 
     for label, phrase in ADR_0018_RUNBOOK_REQUIRED:
