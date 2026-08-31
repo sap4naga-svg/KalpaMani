@@ -797,18 +797,30 @@ class TestTheClarificationAmendmentClaimsNothing:
             assert still_gated in text
 
     @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-    def test_both_documents_keep_the_implementation_candidate_blocked(self, document: Path) -> None:
+    def test_both_documents_keep_the_implementation_candidate_unmerged(
+        self, document: Path
+    ) -> None:
+        """Inverted, not deleted.
+
+        This guard required "unmerged and blocked" while the candidate was blocked
+        on the clarification. The correction has since happened under its own
+        authorization, so the guard is turned around rather than removed: what must
+        still be recorded is that the candidate is **unmerged**, that the correction
+        was made, and that a person has yet to review it. A merged claim, a ready
+        claim and an accepted claim all stay forbidden.
+        """
         text = flat(document)
-        assert "unmerged and blocked" in text
-        assert "it cannot be merged until it is corrected against the clarified adr" in text
-        assert (
-            "the offline implementation candidate must be corrected against the "
-            "now-authoritative clarification" in text
-        )
+        assert "the offline implementation candidate is unmerged and not accepted" in text
+        assert "corrected against the now-authoritative clarification" in text
+        assert "awaits an independent re-review" in text
+        assert "not accepted and not in force until its pull request merges" in text
         for premature in (
             "implementation candidate is ready to merge",
             "implementation candidate may be merged",
+            "implementation candidate is accepted",
             "pr #41 is ready to merge",
+            "pr #41 is accepted",
+            "pr #41 is merged",
         ):
             assert premature not in text
 

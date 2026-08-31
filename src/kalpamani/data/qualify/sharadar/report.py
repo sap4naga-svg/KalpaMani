@@ -1,13 +1,24 @@
 """The canonical private report. **LICENSED, owner-only, and never a recommendation.**
 
 ```text
-licensed/qualification/sharadar/reports/<execution-id>/<assessment-id>.json
+licensed/qualification/sharadar/reports/<run-a-execution-id>/<run-b-execution-id>/<assessment-id>.json
 ```
 
-**The assessment identity is separate from the execution identity, and that is what
-makes re-assessment cheap.** Without it, a report write that failed ambiguously
+**Three separately validated path segments, in fixed Run A / Run B order.** One
+combined assessment covers both acquisition executions, so the report is addressed
+by both -- and the order is part of the address rather than a convention, because a
+report filed under the reversed pair would describe a comparison nobody made.
+:func:`report_key_segments` refuses identical execution identities: a pair that is
+one run twice is not a cross-run comparison, and it must not be able to acquire a
+name that says it is.
+
+**One report per combined assessment.** There is no preliminary Run A report in this
+architecture, and adding one would be another decision and another authorization.
+
+**The assessment identity is separate from the execution identities, and that is
+what makes re-assessment cheap.** Without it, a report write that failed ambiguously
 would leave the name occupied by unknown content and block re-assessment of that
-execution permanently -- while re-assessment is precisely the operation this whole
+pair permanently -- while re-assessment is precisely the operation this whole
 architecture exists to make possible, since it makes zero provider requests. A new
 assessment identity is the remedy, and the report write is therefore **never
 retried**.
@@ -88,24 +99,37 @@ def _refuse(defect: ReportDefect) -> ReportError:
     return ReportError(defect)
 
 
-def report_key_segments(*, execution_id: str, assessment_id: str) -> tuple[str, ...]:
+def report_key_segments(
+    *, run_a_execution_id: str, run_b_execution_id: str, assessment_id: str
+) -> tuple[str, ...]:
     """The report's key segments. **No listing is involved, and none is possible.**
 
-    Both identities pass the existing path-segment grammar, which refuses a leading
-    underscore, a reserved prefix, a trailing dot and a Windows device name at any
-    extension.
+    Three segments, in fixed Run A then Run B then assessment order. Each identity
+    passes the existing path-segment grammar separately -- a joined identity would
+    let a separator inside one of them redraw the boundary between two -- and that
+    grammar refuses a leading underscore, a reserved prefix, a trailing dot and a
+    Windows device name at any extension.
 
     Raises:
-        ReportError: ``IDENTITY_MALFORMED`` if either identity cannot name an object.
+        ReportError: ``IDENTITY_MALFORMED`` if any identity cannot name an object,
+            or if the two execution identities are the same. **One run twice is not
+            a cross-run comparison**, and it may not acquire a name that says it is.
     """
-    if type(execution_id) is not str or type(assessment_id) is not str:
+    if (
+        type(run_a_execution_id) is not str
+        or type(run_b_execution_id) is not str
+        or type(assessment_id) is not str
+    ):
+        raise _refuse(ReportDefect.IDENTITY_MALFORMED) from None
+    if run_a_execution_id == run_b_execution_id:
         raise _refuse(ReportDefect.IDENTITY_MALFORMED) from None
     try:
-        execution = path_segment(execution_id, kind="execution")
+        run_a = path_segment(run_a_execution_id, kind="execution")
+        run_b = path_segment(run_b_execution_id, kind="execution")
         assessment = path_segment(f"{assessment_id}.json", kind="assessment")
     except Exception:
         raise _refuse(ReportDefect.IDENTITY_MALFORMED) from None
-    return (*REPORT_SEGMENTS, execution, assessment)
+    return (*REPORT_SEGMENTS, run_a, run_b, assessment)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -117,13 +141,31 @@ class ReportEvidence:
     is no field one could arrive through.
     """
 
-    execution_id: str
+    run_a_execution_id: str
+    run_b_execution_id: str
     assessment_id: str
-    plan_digest: str
+    #: The comparable half of the plan, shared by both runs, and each run's own
+    #: per-execution digest. Three values rather than one, because the
+    #: per-execution digests bind the window and the identity and therefore
+    #: differ by design -- recording only a shared digest would hide what each
+    #: run actually asked for.
+    plan_shape_digest: str
+    run_a_plan_digest: str
+    run_b_plan_digest: str
     inventory_digest: str
     source_schema_version: str
+    #: Per execution, and equal across the pair by the combined assessor's own
+    #: admission rules -- which is why one field describes both.
     planned_request_count: int
-    completed_request_count: int
+    run_a_completed_request_count: int
+    run_b_completed_request_count: int
+    #: The two accepted run dates and the separation between them, in calendar days.
+    #: Recorded because the eight-day rule is what makes the comparison meaningful,
+    #: and a report that asserted a cross-run result without saying how far apart the
+    #: runs were would be asking a reader to take the interval on trust.
+    run_a_date: str
+    run_b_date: str
+    separation_days: int
     objects_read: int
     excluded_pair_count: int
     observed_schema_digests: tuple[str, ...]
@@ -166,13 +208,20 @@ def build_report_document(
         "retention_basis": RETENTION_BASIS,
         "deletion_obligation": DELETION_OBLIGATION,
         "evidence": {
-            "execution_id": evidence.execution_id,
+            "run_a_execution_id": evidence.run_a_execution_id,
+            "run_b_execution_id": evidence.run_b_execution_id,
             "assessment_id": evidence.assessment_id,
-            "plan_digest": evidence.plan_digest,
+            "plan_shape_digest": evidence.plan_shape_digest,
+            "run_a_plan_digest": evidence.run_a_plan_digest,
+            "run_b_plan_digest": evidence.run_b_plan_digest,
             "inventory_digest": evidence.inventory_digest,
             "source_schema_version": evidence.source_schema_version,
             "planned_request_count": evidence.planned_request_count,
-            "completed_request_count": evidence.completed_request_count,
+            "run_a_completed_request_count": evidence.run_a_completed_request_count,
+            "run_b_completed_request_count": evidence.run_b_completed_request_count,
+            "run_a_date": evidence.run_a_date,
+            "run_b_date": evidence.run_b_date,
+            "separation_days": evidence.separation_days,
             "objects_read": evidence.objects_read,
             "excluded_pair_count": evidence.excluded_pair_count,
             "observed_schema_digests": list(evidence.observed_schema_digests),
@@ -183,6 +232,7 @@ def build_report_document(
                 "status": result.status.value,
                 "ceiling": result.ceiling.value,
                 "single_execution_ceiling": result.single_execution_ceiling.value,
+                "evidence_scope": result.evidence_scope.value,
                 "limbs": [
                     {
                         "limb": limb.limb.value,
@@ -217,10 +267,20 @@ def serialize_report(document: dict[str, Any]) -> bytes:
     return payload
 
 
-def report_object_key(*, execution_id: str, assessment_id: str, payload: bytes) -> ObjectKey:
-    """The LICENSED key one report payload is published under."""
+def report_object_key(
+    *,
+    run_a_execution_id: str,
+    run_b_execution_id: str,
+    assessment_id: str,
+    payload: bytes,
+) -> ObjectKey:
+    """The LICENSED key one combined report payload is published under."""
     return ObjectKey.licensed(
-        *report_key_segments(execution_id=execution_id, assessment_id=assessment_id),
+        *report_key_segments(
+            run_a_execution_id=run_a_execution_id,
+            run_b_execution_id=run_b_execution_id,
+            assessment_id=assessment_id,
+        ),
         payload=payload,
     )
 

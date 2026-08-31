@@ -25,6 +25,7 @@ from kalpamani.data.ingest.sharadar.qualification import (
     MAX_RUN_BYTES as COMPILED_MAX_RUN_BYTES,
 )
 from kalpamani.data.qualify.sharadar.plan import (
+    ACQUISITION_DEADLINE_SECONDS,
     ACTIONS_PAGE_LIMIT,
     EMPIRICAL_DATASETS,
     EMPIRICAL_MAX_PAGES,
@@ -38,13 +39,13 @@ from kalpamani.data.qualify.sharadar.plan import (
     STOCKS_PAGE_LIMIT,
     TICKERS_PAGE_LIMIT,
     TIMEOUT_SECONDS,
-    WALL_CLOCK_CEILING_SECONDS,
     EmpiricalPlan,
     EmpiricalPlanError,
     PlanDefect,
     build_empirical_plan,
+    compiled_request_phase_seconds,
     empirical_window,
-    worst_case_wall_clock_seconds,
+    validate_deadline_constants,
 )
 
 EXECUTION = "synthetic-plan-a"
@@ -174,28 +175,109 @@ def test_the_timeout_and_pacing_are_the_accepted_values() -> None:
     assert MIN_REQUEST_INTERVAL_SECONDS >= 1.0
 
 
-def test_the_worst_case_wall_clock_is_inside_the_ceiling() -> None:
-    worst = worst_case_wall_clock_seconds()
-    assert worst == 48 * 30.0 + 47 * 1.0
-    assert worst == 1_487.0
-    assert worst <= WALL_CLOCK_CEILING_SECONDS == 1_800
+def test_the_request_phase_figure_is_documentation_and_not_the_deadline() -> None:
+    # It covers the requests and their pacing and nothing else -- no Bronze write,
+    # no conditional resolution, no locator -- which is exactly why comparing it
+    # against 1,800 proved nothing and is no longer done anywhere.
+    phase = compiled_request_phase_seconds()
+    assert phase == 48 * 30.0 + 47 * 1.0
+    assert phase == 1_487.0
+    assert phase < ACQUISITION_DEADLINE_SECONDS == 1_800.0
 
 
-def test_the_wall_clock_bound_counts_gaps_and_not_requests() -> None:
-    # One request has no gap before it; the bound must not invent one.
-    assert worst_case_wall_clock_seconds(request_count=1) == 30.0
-    assert worst_case_wall_clock_seconds(request_count=0) == 0.0
+def test_the_request_phase_figure_counts_gaps_and_not_requests() -> None:
+    # One request has no gap before it; the figure must not invent one.
+    assert compiled_request_phase_seconds(request_count=1) == 30.0
+    assert compiled_request_phase_seconds(request_count=0) == 0.0
 
 
-def test_a_plan_whose_worst_case_exceeds_the_ceiling_is_refused() -> None:
-    # Driven through the public helper, so the refusal is the rule and not a mock.
-    assert worst_case_wall_clock_seconds(request_count=100) > WALL_CLOCK_CEILING_SECONDS
+def test_forty_eight_requests_are_not_guaranteed_to_fit_inside_the_deadline() -> None:
+    # The honest consequence, as arithmetic. The requests and their pacing leave 313
+    # seconds for 144 Bronze writes, up to 144 conditional resolutions and the
+    # locator -- so the deadline is a safety bound, not a completion promise.
+    from kalpamani.data.qualify.sharadar.plan import (
+        BRONZE_OPERATIONS_PER_REQUEST,
+        LOCATOR_TERMINAL_RESERVE_SECONDS,
+        S3_OPERATION_CEILING_SECONDS,
+    )
+
+    downstream = (
+        48 * BRONZE_OPERATIONS_PER_REQUEST * S3_OPERATION_CEILING_SECONDS
+        + LOCATOR_TERMINAL_RESERVE_SECONDS
+    )
+    assert compiled_request_phase_seconds() + downstream > ACQUISITION_DEADLINE_SECONDS
 
 
-def test_the_plan_carries_the_inventory_digest_and_the_worst_case() -> None:
+def test_the_deadline_constants_satisfy_every_accepted_constraint() -> None:
+    from kalpamani.data.qualify.sharadar.plan import (
+        BRONZE_OPERATIONS_PER_REQUEST,
+        LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS,
+        LOCATOR_OPERATIONS_ALLOWED,
+        LOCATOR_TERMINAL_RESERVE_SECONDS,
+        S3_CONNECT_TIMEOUT_SECONDS,
+        S3_OPERATION_CEILING_SECONDS,
+        S3_READ_TIMEOUT_SECONDS,
+    )
+
+    t_s3 = S3_OPERATION_CEILING_SECONDS
+    c = LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS
+    ceiling = LOCATOR_TERMINAL_RESERVE_SECONDS
+    assert t_s3 > 0
+    assert c >= 0
+    assert ceiling >= LOCATOR_OPERATIONS_ALLOWED * t_s3 + c
+    assert ceiling < ACQUISITION_DEADLINE_SECONDS
+    assert (
+        TIMEOUT_SECONDS
+        + MIN_REQUEST_INTERVAL_SECONDS
+        + BRONZE_OPERATIONS_PER_REQUEST * t_s3
+        + ceiling
+    ) <= ACQUISITION_DEADLINE_SECONDS
+    # The SDK bound is conservative: one attempt may spend both socket timeouts in
+    # sequence, so the operation ceiling is at least their sum.
+    assert t_s3 >= S3_CONNECT_TIMEOUT_SECONDS + S3_READ_TIMEOUT_SECONDS
+    # And the real configuration passes its own validator.
+    validate_deadline_constants()
+
+
+def test_a_deadline_configuration_that_cannot_hold_is_refused_and_never_clamped() -> None:
+    # Each call violates exactly one rule, and every one of them raises rather than
+    # returning an adjusted value: there is no return value to adjust.
+    for kwargs in (
+        {"s3_operation_seconds": 0.0},
+        {"s3_operation_seconds": 10.0},  # below connect + read
+        {"construction_seconds": -1.0},
+        {"locator_reserve_seconds": 10.0},  # below 4 * T_s3 + C
+        {"locator_reserve_seconds": 1_800.0},  # not below D
+        {"deadline_seconds": 100.0},  # one cycle plus the reserve does not fit
+        {"deadline_seconds": float("nan")},
+        {"request_timeout_seconds": float("inf")},
+    ):
+        with pytest.raises(EmpiricalPlanError) as raised:
+            validate_deadline_constants(**kwargs)
+        assert raised.value.defect is PlanDefect.DEADLINE_UNSATISFIABLE
+
+
+def test_the_sdk_configuration_disables_retries_and_states_finite_timeouts() -> None:
+    from kalpamani.data.qualify.sharadar.plan import (
+        S3_CONNECT_TIMEOUT_SECONDS,
+        S3_READ_TIMEOUT_SECONDS,
+        s3_client_config_kwargs,
+    )
+
+    config = s3_client_config_kwargs()
+    assert config["connect_timeout"] == S3_CONNECT_TIMEOUT_SECONDS
+    assert config["read_timeout"] == S3_READ_TIMEOUT_SECONDS
+    # ``max_attempts`` counts total attempts in standard mode, so one means no retry.
+    assert config["retries"] == {"max_attempts": 1, "mode": "standard"}
+    for value in (config["connect_timeout"], config["read_timeout"]):
+        assert isinstance(value, float)
+        assert 0 < value < float("inf")
+
+
+def test_the_plan_carries_the_inventory_digest_and_the_deadline() -> None:
     plan = _plan()
     assert plan.inventory_digest == synthetic_inventory().digest
-    assert plan.worst_case_seconds == worst_case_wall_clock_seconds()
+    assert plan.deadline_seconds == ACQUISITION_DEADLINE_SECONDS
 
 
 def test_the_schema_version_is_this_package_s_own() -> None:

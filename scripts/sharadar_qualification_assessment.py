@@ -1,4 +1,12 @@
-"""One private assessment of one retained acquisition (ADR-0018). **Refused by default.**
+"""One combined private assessment of BOTH retained acquisitions (ADR-0018).
+**Refused by default.**
+
+**The canonical assessment is combined, and it runs after Run B.** It takes two
+execution identities -- the earlier Run A and the later Run B -- reads both
+locators, validates the pair before any payload is read, and publishes one private
+report addressed by both identities. A single-execution assessment cannot reach
+P1's accepted ``TESTED`` ceiling, so ``--execution-id`` is refused by name rather
+than quietly accepted as half a pair.
 
 **This command has never been run, and running it is a separate written
 authorization that has not been given.** It is also a *different* authorization from
@@ -23,14 +31,14 @@ sits inside a function body.
  3  pin the governed AWS profile
  4  pass the governed identity gate
  5  resolve only the LICENSED bucket
- 6  accept the owner-known execution identity privately
- 7  derive the exact locator key -- WITHOUT LISTING
- 8  retrieve and validate the locator
- 9  retrieve only the exact referenced records and payloads
+ 6  accept the two owner-known execution identities privately, and refuse a repeat
+ 7  derive BOTH exact locator keys -- WITHOUT LISTING
+ 8  retrieve and validate BOTH locators, then validate the PAIR -- before any payload
+ 9  retrieve only the exact referenced records and payloads, 2R per execution
 10  verify checksum and byte count BEFORE parsing
 11  parse in the isolated qualification package
-12  evaluate P1-P9 under compiled ceilings
-13  publish ONE owner-only private report
+12  evaluate P1-P9 across BOTH executions under compiled ceilings
+13  publish ONE owner-only private combined report
 14  emit only a closed public result
 ```
 
@@ -94,6 +102,12 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--control": "CONTROL publication is deferred and forbidden; this writes LICENSED only",
     "--retry": "the report write is never retried; a new assessment identity is the remedy",
     "--fetch": "this process makes no provider request and cannot be made to",
+    "--execution-id": (
+        "one assessment covers two executions; name them with --run-a-execution-id "
+        "and --run-b-execution-id"
+    ),
+    "--single-run": "there is no single-run assessment; the canonical one is combined",
+    "--run-a-only": "same as --single-run: one execution cannot answer a cross-run question",
 }
 
 
@@ -264,7 +278,8 @@ class SystemClock:
 def run_qualification_assessment(
     *,
     authorization: object,
-    execution_id: str | None,
+    run_a_execution_id: str | None,
+    run_b_execution_id: str | None,
     assessment_id: str | None,
     env: Mapping[str, str],
     modules: Mapping[str, object],
@@ -318,24 +333,35 @@ def run_qualification_assessment(
     except Exception:
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_LICENSED_BUCKET) from None
 
-    # 6. The two identities, held privately. Neither is printed, here or anywhere.
-    if type(execution_id) is not str or type(assessment_id) is not str:
+    # 6. The three identities, held privately. None is printed, here or anywhere.
+    #    The two execution identities must differ: one run named twice is not a
+    #    cross-run comparison, and it is refused here as well as in the report key
+    #    grammar, because a mistyped identity should not travel any further than the
+    #    stage that can already see it is wrong.
+    if (
+        type(run_a_execution_id) is not str
+        or type(run_b_execution_id) is not str
+        or type(assessment_id) is not str
+        or run_a_execution_id == run_b_execution_id
+    ):
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_IDENTIFIERS) from None
 
     try:
-        from kalpamani.data.qualify.sharadar.assessment import run_assessment
+        from kalpamani.data.qualify.sharadar.assessment import run_combined_assessment
         from kalpamani.data.qualify.sharadar.read import LicensedObjectReader
 
         reader = LicensedObjectReader(client=s3_client_factory(), licensed_bucket=licensed_bucket)
     except Exception:
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_DEPENDENCY) from None
 
-    # 7-13. The locator key, the locator, the exact reads, the parse, the evaluation
-    #       and the one report, all inside the composition that enforces their order.
+    # 7-13. Both locator keys, both locators, the pair validation, the exact reads,
+    #       the parse, the combined evaluation and the one report, all inside the
+    #       composition that enforces their order.
     try:
-        result = run_assessment(
+        result = run_combined_assessment(
             reader=reader,
-            execution_id=execution_id,
+            run_a_execution_id=run_a_execution_id,
+            run_b_execution_id=run_b_execution_id,
             assessment_id=assessment_id,
             clock=clock,
         )
@@ -368,10 +394,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="authorize ONE private assessment, and nothing else",
     )
     parser.add_argument(
-        "--execution-id",
-        dest="execution_id",
+        "--run-a-execution-id",
+        dest="run_a_execution_id",
         default=None,
-        help="the owner-known execution identity whose locator is assessed",
+        help="the owner-known execution identity of the EARLIER acquisition, Run A",
+    )
+    parser.add_argument(
+        "--run-b-execution-id",
+        dest="run_b_execution_id",
+        default=None,
+        help="the owner-known execution identity of the LATER acquisition, Run B",
     )
     parser.add_argument(
         "--assessment-id",
@@ -426,7 +458,8 @@ def main(argv: list[str] | None = None) -> int:
         outcome, counts = run_qualification_assessment(
             # Handed over here, and only here: the flag has parsed.
             authorization=_ASSESSMENT_AUTHORIZATION,
-            execution_id=parsed.execution_id,
+            run_a_execution_id=parsed.run_a_execution_id,
+            run_b_execution_id=parsed.run_b_execution_id,
             assessment_id=parsed.assessment_id,
             env=os.environ,
             modules=sys.modules,

@@ -117,6 +117,8 @@ def test_neither_command_accepts_the_other_s_authorization() -> None:
             s3_client_factory=lambda: None,
             transport_factory=lambda: None,
             clock=None,
+            monotonic=lambda: 0.0,
+            sleeper=lambda _seconds: None,
         )
     assert raised.value.outcome is acquire.EmpiricalOutcome.REFUSED_NOT_AUTHORIZED
 
@@ -185,6 +187,8 @@ def test_the_execution_context_is_checked_before_the_inventory_is_read() -> None
             s3_client_factory=lambda: None,
             transport_factory=lambda: None,
             clock=None,
+            monotonic=lambda: 0.0,
+            sleeper=lambda _seconds: None,
         )
     assert raised.value.outcome is acquire.EmpiricalOutcome.REFUSED_EXECUTION_CONTEXT
     assert read == []
@@ -289,16 +293,21 @@ def test_the_acquisition_cli_accepts_exactly_two_arguments() -> None:
     assert options == {"-h", "--help", acquire.AUTHORIZATION_FLAG, "--execution-id"}
 
 
-def test_the_assessment_cli_accepts_exactly_three_arguments() -> None:
+def test_the_assessment_cli_accepts_exactly_four_arguments() -> None:
+    # Four, not three: the combined assessment names both executions. The old
+    # single-execution spelling is refused by name rather than quietly accepted as
+    # half a pair.
     actions = assess.build_parser()._actions
     options = {option for action in actions for option in action.option_strings}
     assert options == {
         "-h",
         "--help",
         assess.AUTHORIZATION_FLAG,
-        "--execution-id",
+        "--run-a-execution-id",
+        "--run-b-execution-id",
         "--assessment-id",
     }
+    assert "--execution-id" in assess.REFUSED_OPTIONS
 
 
 # -- allowlisted public output ------------------------------------------------

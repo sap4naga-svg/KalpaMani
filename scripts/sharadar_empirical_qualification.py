@@ -229,6 +229,7 @@ class EmpiricalOutcome(StrEnum):
     REFUSED_UNCLASSIFIED = "empirical acquisition refused: unclassified"
     COMPLETED = "empirical acquisition completed"
     COMPLETED_PARTIAL = "empirical acquisition halted: the locator records a partial run"
+    RUN_DEADLINE_EXHAUSTED = "empirical acquisition halted: the acquisition deadline was reached"
     LOCATOR_NOT_PUBLISHED = "empirical acquisition: the locator was not published"
     LOCATOR_STATE_UNKNOWN = "empirical acquisition: the locator publication was not verified"
     LOCATOR_COLLISION = "empirical acquisition: the locator name is held by other content"
@@ -261,12 +262,14 @@ EXIT_STATUS: Final[dict[EmpiricalOutcome, int]] = {
     EmpiricalOutcome.LOCATOR_NOT_PUBLISHED: 15,
     EmpiricalOutcome.LOCATOR_STATE_UNKNOWN: 16,
     EmpiricalOutcome.LOCATOR_COLLISION: 17,
+    EmpiricalOutcome.RUN_DEADLINE_EXHAUSTED: 18,
 }
 
 #: How an acquisition status becomes a public outcome. **Total, and checked.**
 _STATUS_OUTCOME: Final[dict[str, EmpiricalOutcome]] = {
     "COMPLETED": EmpiricalOutcome.COMPLETED,
     "PARTIAL": EmpiricalOutcome.COMPLETED_PARTIAL,
+    "RUN_DEADLINE_EXHAUSTED": EmpiricalOutcome.RUN_DEADLINE_EXHAUSTED,
     "LOCATOR_NOT_PUBLISHED": EmpiricalOutcome.LOCATOR_NOT_PUBLISHED,
     "LOCATOR_STATE_UNKNOWN": EmpiricalOutcome.LOCATOR_STATE_UNKNOWN,
     "LOCATOR_COLLISION": EmpiricalOutcome.LOCATOR_COLLISION,
@@ -364,6 +367,8 @@ def run_empirical_qualification(
     s3_client_factory: Callable[[], Any],
     transport_factory: Callable[[], Any],
     clock: Any,
+    monotonic: Callable[[], float],
+    sleeper: Callable[[float], None],
 ) -> tuple[EmpiricalOutcome, Any]:
     """Bind the private dependencies and perform **one** bounded acquisition.
 
@@ -379,6 +384,13 @@ def run_empirical_qualification(
     ``secret_id_source`` is a zero-argument callable rather than a value, and it is
     invoked **once**, after every gate above it has passed. A private identifier must
     not be resolved on a path that is going to refuse.
+
+    ``monotonic`` and ``sleeper`` are the acquisition deadline's clock and the
+    pacer's sleep. They are injected as a pair and from one source, so a test drives
+    the whole 1,800-second budget without waiting for any of it. ``monotonic`` must
+    be a **monotonic** source: ``clock`` above is the calendar, it supplies the
+    retrieval instants and the locator's run timestamps, and **no deadline
+    arithmetic reads it**.
 
     Returns:
         One allowlisted outcome and the observed operation accounting. A halted run
@@ -461,23 +473,27 @@ def run_empirical_qualification(
         raise EmpiricalQualificationError(EmpiricalOutcome.REFUSED_CREDENTIAL) from None
 
     # 9. The remaining injected dependencies.
+    if not callable(monotonic) or not callable(sleeper):
+        raise EmpiricalQualificationError(EmpiricalOutcome.REFUSED_DEPENDENCY) from None
     try:
-        from kalpamani.data.ingest.sharadar.client import Pacer
         from kalpamani.data.qualify.sharadar.acquisition import run_empirical_acquisition
-        from kalpamani.data.qualify.sharadar.plan import MIN_REQUEST_INTERVAL_SECONDS
 
         s3_client = s3_client_factory()
         transport = transport_factory()
     except Exception:
         raise EmpiricalQualificationError(EmpiricalOutcome.REFUSED_DEPENDENCY) from None
 
-    # 10-13. The offline preflight, the 48 sequential requests, the Bronze writes and
-    #        the one locator, all inside the composition that enforces their order.
+    # 10-13. The offline preflight, then the armed acquisition phase: the sequential
+    #        requests, the Bronze writes and the one locator, all inside the
+    #        composition that enforces their order and holds them to one deadline.
+    #        The pacer is built in there, from ``monotonic``, so its sleep is
+    #        admitted against the same budget.
     try:
         result = run_empirical_acquisition(
             credential=credential,
             transport=transport,
-            pacer=Pacer(min_interval=MIN_REQUEST_INTERVAL_SECONDS),
+            monotonic=monotonic,
+            sleeper=sleeper,
             s3_client=s3_client,
             licensed_bucket=licensed_bucket,
             clock=clock,
@@ -571,7 +587,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  that flag authorizes exactly one run, never a second")
         return EXIT_STATUS[EmpiricalOutcome.REFUSED_NOT_AUTHORIZED]
 
+    # Imported inside the authorized branch, like every other real dependency, so
+    # the default refusal path still touches nothing. ``time.monotonic`` is the
+    # deadline's clock and ``time.sleep`` is the pacer's: neither is a calendar
+    # source, and the deadline must never be able to move because a calendar did.
     import os
+    import time
 
     try:
         outcome, counts = run_empirical_qualification(
@@ -589,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
             s3_client_factory=_s3_client,
             transport_factory=_transport,
             clock=SystemClock(),
+            monotonic=time.monotonic,
+            sleeper=time.sleep,
         )
     except EmpiricalQualificationError as refusal:
         _emit(refusal.outcome)
@@ -661,10 +684,30 @@ def _secrets_client() -> Any:
 
 
 def _s3_client() -> Any:
-    """An S3 client, pinned to the governed region."""
-    import boto3
+    """An S3 client, pinned to the governed region, with **retries disabled**.
 
-    return boto3.client("s3", region_name=EXPECTED_REGION)
+    The deadline's per-operation ceiling assumes one invocation is one attempt. The
+    SDK's default retry mode does not: it would turn one ``PutObject`` into several
+    attempts, each with its own connect and read timeouts, and the ceiling would then
+    bound a fraction of what the operation could actually take. So the configuration
+    is explicit and finite -- ``max_attempts`` of one in ``standard`` mode, an
+    explicit connect timeout and an explicit read timeout -- and it comes from
+    :func:`~kalpamani.data.qualify.sharadar.plan.s3_client_config_kwargs`, the same
+    module the ceiling is derived in, so the two cannot drift apart.
+
+    Adaptive and legacy retry modes are not reachable from here: the mode is a
+    compiled constant and there is no parameter to change it.
+    """
+    import boto3
+    from botocore.config import Config
+
+    from kalpamani.data.qualify.sharadar.plan import s3_client_config_kwargs
+
+    return boto3.client(
+        "s3",
+        region_name=EXPECTED_REGION,
+        config=Config(**s3_client_config_kwargs()),  # type: ignore[arg-type]
+    )
 
 
 def _transport() -> Any:

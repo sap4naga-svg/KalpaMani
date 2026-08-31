@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any, Final
 
@@ -144,6 +144,7 @@ LOCATOR_FIELDS: Final[frozenset[str]] = frozenset(
         "acquisition_mode",
         "profile",
         "plan_digest",
+        "plan_shape_digest",
         "inventory_digest",
         "source_schema_version",
         "run_started_at",
@@ -222,6 +223,40 @@ def plan_digest(plan: EmpiricalPlan) -> str:
                 "dataset": request.dataset.value,
                 "subject": request.ticker,
                 "requested_range": request.requested_range,
+                "page_limit": request.page.limit,
+                "page_skip": request.page.skip,
+            }
+            for request in plan.plan.requests()
+        ],
+    }
+    return sha256_hex(canonical_bytes(document))
+
+
+def plan_shape_digest(plan: EmpiricalPlan) -> str:
+    """A digest of everything about the plan that **two runs of it must share**.
+
+    :func:`plan_digest` binds what *one* execution asked for, and it necessarily
+    differs between two runs: the execution identity is different by requirement,
+    and the window ends at each run's own ``T-1``, so a pair eight calendar days
+    apart has two different ranges by design. Requiring those digests to match would
+    make a cross-run pair unsatisfiable.
+
+    This digest is what *is* comparable -- the subjects, the datasets, the page
+    limits, the page offsets, the response format, the profile, the schema version
+    and both byte ceilings -- and the combined assessor compares it. The
+    per-execution digest stays exactly as it was and is recorded per run; the two
+    answer different questions and neither replaces the other.
+    """
+    document: dict[str, Any] = {
+        "source_schema_version": plan.plan.source_schema_version,
+        "response_format": plan.plan.response_format.value,
+        "profile": plan.plan.profile.value,
+        "max_response_bytes": plan.plan.limits.max_response_bytes,
+        "max_run_bytes": plan.plan.limits.max_run_bytes,
+        "requests": [
+            {
+                "dataset": request.dataset.value,
+                "subject": request.ticker,
                 "page_limit": request.page.limit,
                 "page_skip": request.page.skip,
             }
@@ -391,6 +426,7 @@ def build_locator_document(
         "acquisition_mode": AcquisitionMode.QUALIFICATION.value,
         "profile": PERMITTED_PROFILE.value,
         "plan_digest": plan_digest(plan),
+        "plan_shape_digest": plan_shape_digest(plan),
         "inventory_digest": plan.inventory_digest,
         "source_schema_version": plan.plan.source_schema_version,
         "run_started_at": run_started_at.astimezone(UTC).isoformat(),
@@ -498,6 +534,9 @@ class ValidatedLocator:
 
     execution_id: str
     plan_digest: str
+    #: The comparable half of the plan -- see :func:`plan_shape_digest`. Two runs of
+    #: one plan share this and cannot share :attr:`plan_digest`.
+    plan_shape_digest: str
     inventory_digest: str
     source_schema_version: str
     completeness: Completeness
@@ -505,10 +544,28 @@ class ValidatedLocator:
     planned_request_count: int
     completed_request_count: int
     entries: tuple[LocatorEntry, ...]
+    #: When the acquisition execution phase started and ended, as the locator
+    #: recorded them. Both were already validated as aware instants; they are
+    #: carried onto the validated object because the **combined** assessment has to
+    #: order Run A before Run B and measure the eight-calendar-day separation
+    #: between them, and it may not learn either fact by listing or by guessing.
+    run_started_at: datetime
+    run_completed_at: datetime
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing: a subclass could override :meth:`assessable`."""
         raise TypeError("ValidatedLocator may not be subclassed")
+
+    @property
+    def run_date(self) -> date:
+        """The UTC calendar date this execution's acquisition phase started.
+
+        The separation between two runs is stated in **calendar days**, so it is
+        measured on calendar dates rather than on elapsed seconds -- eight days
+        apart is a claim about the provider having had eight chances to change
+        something, not about 691,200 seconds having passed.
+        """
+        return self.run_started_at.astimezone(UTC).date()
 
     @property
     def assessable(self) -> bool:
@@ -642,6 +699,7 @@ def validate_locator_document(document: object, *, execution_id: str) -> Validat
     return ValidatedLocator(
         execution_id=execution_id,
         plan_digest=_hex_digest(document["plan_digest"]),
+        plan_shape_digest=_hex_digest(document["plan_shape_digest"]),
         inventory_digest=_hex_digest(document["inventory_digest"]),
         source_schema_version=_text(document["source_schema_version"]),
         completeness=completeness,
@@ -649,6 +707,8 @@ def validate_locator_document(document: object, *, execution_id: str) -> Validat
         planned_request_count=planned,
         completed_request_count=completed_count,
         entries=entries,
+        run_started_at=started,
+        run_completed_at=completed,
     )
 
 
@@ -692,6 +752,7 @@ __all__ = [
     "locator_object_key",
     "payload_key_for",
     "plan_digest",
+    "plan_shape_digest",
     "serialize_locator",
     "validate_locator_document",
 ]

@@ -23,8 +23,9 @@ from fixtures.sharadar_empirical import (
 from kalpamani.data.ingest.sharadar.datasets import SharadarDataset
 from kalpamani.data.qualify.sharadar import report as report_module
 from kalpamani.data.qualify.sharadar.evaluator import (
+    CrossRunSubjectEvidence,
     SubjectEvidence,
-    evaluate,
+    evaluate_combined,
 )
 from kalpamani.data.qualify.sharadar.evaluator import (
     TestResult as PerTestResult,  # aliased: pytest tries to collect a Test* class
@@ -46,7 +47,8 @@ from kalpamani.data.qualify.sharadar.report import (
 )
 
 CREATED_AT = datetime(2026, 8, 30, 18, 0, 0, tzinfo=UTC)
-EXECUTION = "synthetic-empirical-a"
+RUN_A = "synthetic-empirical-a"
+RUN_B = "synthetic-empirical-b"
 ASSESSMENT = "synthetic-assess-a"
 
 _BODIES = {
@@ -68,16 +70,28 @@ def _evidence() -> tuple[SubjectEvidence, ...]:
     return (SubjectEvidence(pairs=pairs),)
 
 
+def _cross_run_evidence() -> tuple[CrossRunSubjectEvidence, ...]:
+    """The same synthetic subject seen twice, which is what a combined report holds."""
+    return tuple(CrossRunSubjectEvidence(first=subject, second=subject) for subject in _evidence())
+
+
 def _report_evidence(**overrides: object) -> ReportEvidence:
     fields: dict[str, object] = {
-        "execution_id": EXECUTION,
+        "run_a_execution_id": RUN_A,
+        "run_b_execution_id": RUN_B,
         "assessment_id": ASSESSMENT,
-        "plan_digest": "a" * 64,
+        "plan_shape_digest": "a" * 64,
+        "run_a_plan_digest": "d" * 64,
+        "run_b_plan_digest": "e" * 64,
         "inventory_digest": "b" * 64,
         "source_schema_version": "sharadar-empirical-v1",
         "planned_request_count": 48,
-        "completed_request_count": 48,
-        "objects_read": 97,
+        "run_a_completed_request_count": 48,
+        "run_b_completed_request_count": 48,
+        "run_a_date": "2026-08-30",
+        "run_b_date": "2026-09-08",
+        "separation_days": 9,
+        "objects_read": 194,
         "excluded_pair_count": 0,
         "observed_schema_digests": ("c" * 64,),
     }
@@ -87,7 +101,9 @@ def _report_evidence(**overrides: object) -> ReportEvidence:
 
 def _document() -> dict[str, Any]:
     return build_report_document(
-        evidence=_report_evidence(), results=evaluate(_evidence()), created_at=CREATED_AT
+        evidence=_report_evidence(),
+        results=evaluate_combined(_cross_run_evidence()),
+        created_at=CREATED_AT,
     )
 
 
@@ -95,34 +111,67 @@ def _document() -> dict[str, Any]:
 
 
 def test_the_report_lives_under_the_licensed_qualification_reports_prefix() -> None:
-    assert report_key_segments(execution_id=EXECUTION, assessment_id=ASSESSMENT) == (
+    assert report_key_segments(
+        run_a_execution_id=RUN_A, run_b_execution_id=RUN_B, assessment_id=ASSESSMENT
+    ) == (
         "qualification",
         "sharadar",
         "reports",
-        EXECUTION,
+        RUN_A,
+        RUN_B,
         f"{ASSESSMENT}.json",
     )
     assert REPORT_SEGMENTS == ("qualification", "sharadar", "reports")
 
 
+def test_the_key_preserves_run_a_then_run_b_order() -> None:
+    forward = report_key_segments(
+        run_a_execution_id=RUN_A, run_b_execution_id=RUN_B, assessment_id=ASSESSMENT
+    )
+    reversed_pair = report_key_segments(
+        run_a_execution_id=RUN_B, run_b_execution_id=RUN_A, assessment_id=ASSESSMENT
+    )
+    # A report filed under the reversed pair would describe a comparison nobody
+    # made, so the two must not share a name.
+    assert forward != reversed_pair
+    assert forward[3:5] == (RUN_A, RUN_B)
+
+
+def test_identical_execution_identities_are_refused_at_key_construction() -> None:
+    with pytest.raises(ReportError) as raised:
+        report_key_segments(
+            run_a_execution_id=RUN_A, run_b_execution_id=RUN_A, assessment_id=ASSESSMENT
+        )
+    assert raised.value.defect is ReportDefect.IDENTITY_MALFORMED
+
+
 def test_the_key_carries_a_separate_assessment_identity() -> None:
-    first = report_key_segments(execution_id=EXECUTION, assessment_id="assess-one")
-    second = report_key_segments(execution_id=EXECUTION, assessment_id="assess-two")
-    # Re-assessment of one execution is the cheap operation this design exists to
-    # make possible, so a second assessment must not collide with the first.
+    first = report_key_segments(
+        run_a_execution_id=RUN_A, run_b_execution_id=RUN_B, assessment_id="assess-one"
+    )
+    second = report_key_segments(
+        run_a_execution_id=RUN_A, run_b_execution_id=RUN_B, assessment_id="assess-two"
+    )
+    # Re-assessment of one pair is the cheap operation this design exists to make
+    # possible, so a second assessment must not collide with the first.
     assert first != second
     assert first[:-1] == second[:-1]
 
 
 def test_a_windows_device_name_identity_is_refused_at_key_construction() -> None:
     with pytest.raises(ReportError) as raised:
-        report_key_segments(execution_id=EXECUTION, assessment_id="aux")
+        report_key_segments(run_a_execution_id=RUN_A, run_b_execution_id=RUN_B, assessment_id="aux")
     assert raised.value.defect is ReportDefect.IDENTITY_MALFORMED
 
 
 def test_the_report_key_is_licensed() -> None:
     payload = serialize_report(_document())
-    key = report_object_key(execution_id=EXECUTION, assessment_id=ASSESSMENT, payload=payload)
+    key = report_object_key(
+        run_a_execution_id=RUN_A,
+        run_b_execution_id=RUN_B,
+        assessment_id=ASSESSMENT,
+        payload=payload,
+    )
     assert key.logical_key.startswith("licensed/qualification/sharadar/reports/")
 
 
@@ -142,7 +191,11 @@ def test_the_report_carries_the_accepted_contents() -> None:
 
 def test_the_report_binds_the_evidence_by_digest() -> None:
     evidence = _document()["evidence"]
-    assert evidence["plan_digest"] == "a" * 64
+    # The shape digest binds what both runs must share; the two per-execution
+    # digests bind what each run actually asked for, and they differ by design.
+    assert evidence["plan_shape_digest"] == "a" * 64
+    assert evidence["run_a_plan_digest"] == "d" * 64
+    assert evidence["run_b_plan_digest"] == "e" * 64
     assert evidence["inventory_digest"] == "b" * 64
     assert evidence["observed_schema_digests"] == ["c" * 64]
 
@@ -211,13 +264,20 @@ def test_the_report_carries_no_vendor_row() -> None:
 def test_the_report_has_no_free_text_field() -> None:
     document = _document()
     assert set(document["evidence"]) == {
-        "execution_id",
+        "run_a_execution_id",
+        "run_b_execution_id",
         "assessment_id",
-        "plan_digest",
+        "plan_shape_digest",
+        "run_a_plan_digest",
+        "run_b_plan_digest",
         "inventory_digest",
         "source_schema_version",
         "planned_request_count",
-        "completed_request_count",
+        "run_a_completed_request_count",
+        "run_b_completed_request_count",
+        "run_a_date",
+        "run_b_date",
+        "separation_days",
         "objects_read",
         "excluded_pair_count",
         "observed_schema_digests",
@@ -248,7 +308,7 @@ def test_a_naive_creation_instant_is_refused() -> None:
     with pytest.raises(ReportError) as raised:
         build_report_document(
             evidence=_report_evidence(),
-            results=evaluate(_evidence()),
+            results=evaluate_combined(_cross_run_evidence()),
             created_at=datetime(2026, 8, 30, 18, 0, 0),
         )
     assert raised.value.defect is ReportDefect.FIELD_MALFORMED

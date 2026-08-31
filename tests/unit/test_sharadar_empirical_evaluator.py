@@ -336,7 +336,12 @@ def test_the_module_exposes_no_aggregating_function() -> None:
             and not name.startswith("_")
             and value.__module__ == evaluator_module.__name__
         ):
-            assert name in ("evaluate", "excluded_subject_count")
+            assert name in (
+                "evaluate",
+                "evaluate_combined",
+                "excluded_cross_run_pair_count",
+                "excluded_subject_count",
+            )
 
 
 # -- measurements are grammar-bound and name no security ----------------------

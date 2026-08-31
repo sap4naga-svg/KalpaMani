@@ -318,9 +318,11 @@ architecture *means*, not what it authorizes, and they authorize nothing:
   cross-run question, so no per-run assessment can reach it. **Run A evidence alone caps P1 at
   `PARTIALLY_TESTED`**, and `TESTED` stays a ceiling rather than an expected outcome.
 
-**The offline implementation candidate is unmerged and blocked**, pending a separately
-authorized implementation correction against the now-authoritative clarification and an
-independent re-review. **The merge approved clarification of architecture only**, so
+**The offline implementation candidate is unmerged and not accepted.** It has been
+**corrected against the now-authoritative clarification** under a separately authorized
+implementation correction, and it **awaits an independent re-review**; it is **not accepted
+and not in force until its pull request merges**. **The merge approved clarification of
+architecture only**, so
 **implementation, infrastructure mutation, Run A, Run B and the combined assessment each remain
 NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
 are ZERO.**

@@ -24,6 +24,7 @@ from fixtures.sharadar_empirical import (
     RUN_INSTANT,
     SYNTHETIC_BUCKET,
     SYNTHETIC_SUBJECTS,
+    FakeMonotonic,
     FakeS3Client,
     FixedClock,
     PagedTransport,
@@ -34,7 +35,6 @@ from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import bronze_payload_key
-from kalpamani.data.ingest.sharadar.client import Pacer
 from kalpamani.data.qualify.sharadar.acquisition import run_empirical_acquisition
 from kalpamani.data.qualify.sharadar.locator import (
     LOCATOR_ENTRY_FIELDS,
@@ -54,16 +54,14 @@ from kalpamani.data.qualify.sharadar.locator import (
 from kalpamani.data.qualify.sharadar.plan import build_empirical_plan
 
 
-def _pacer() -> Pacer:
-    return Pacer(min_interval=0.0, clock=lambda: 0.0, sleeper=lambda _seconds: None)
-
-
 def _acquire() -> tuple[FakeS3Client, Any]:
     s3 = FakeS3Client()
+    monotonic = FakeMonotonic()
     result = run_empirical_acquisition(
         credential=credential(),
         transport=PagedTransport(),
-        pacer=_pacer(),
+        monotonic=monotonic,
+        sleeper=monotonic.sleep,
         s3_client=s3,
         licensed_bucket=SYNTHETIC_BUCKET,
         clock=FixedClock(),

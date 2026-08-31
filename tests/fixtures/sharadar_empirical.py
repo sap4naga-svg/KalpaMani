@@ -24,7 +24,7 @@ semantics the real backend enforces.
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fixtures.sharadar_provider import credential
@@ -41,12 +41,17 @@ __all__ = [
     "ACTIONS_CSV",
     "EMPTY_PAGE_CSV",
     "EXECUTION_ID",
+    "EXECUTION_ID_A",
+    "EXECUTION_ID_B",
     "LEAK_CANARIES",
+    "RUN_B_INSTANT",
     "RUN_INSTANT",
+    "RUN_SEPARATION_DAYS",
     "STOCKS_CSV",
     "SYNTHETIC_BUCKET",
     "SYNTHETIC_SUBJECTS",
     "TICKERS_CSV",
+    "FakeMonotonic",
     "FakeS3Client",
     "FixedClock",
     "PagedTransport",
@@ -68,8 +73,20 @@ SYNTHETIC_BUCKET = "synthetic-fake-not-a-real-bucket"
 #: byte-identical records and therefore identical content addresses.
 RUN_INSTANT = datetime(2026, 8, 30, 12, 0, 0, tzinfo=UTC)
 
-#: One explicit execution identity. There is no default anywhere, which is the point.
-EXECUTION_ID = "synthetic-empirical-a"
+#: Two explicit execution identities, one per acquisition run. There is no default
+#: anywhere, which is the point. ``EXECUTION_ID`` is the Run A spelling, kept because
+#: every single-execution fixture in the suite already names it.
+EXECUTION_ID_A = "synthetic-empirical-a"
+EXECUTION_ID_B = "synthetic-empirical-b"
+EXECUTION_ID = EXECUTION_ID_A
+
+#: How far apart the two synthetic runs are, in calendar days. One more than the
+#: accepted minimum, so a test that tightens the rule by a day still passes and a
+#: test that needs a *refused* separation has to say so explicitly.
+RUN_SEPARATION_DAYS = 9
+
+#: Run B's fixed instant, nine calendar days after Run A's.
+RUN_B_INSTANT = RUN_INSTANT + timedelta(days=RUN_SEPARATION_DAYS)
 
 #: Text that must never escape into a public outcome, a refusal or a report. Each
 #: value is placed somewhere a dependency could leak it, so a test that finds none of
@@ -161,6 +178,39 @@ class FixedClock:
         return self._instant
 
 
+class FakeMonotonic:
+    """A monotonic clock a test drives, and the sleeper that advances it.
+
+    Real monotonic time is exactly what a deadline test must not wait for. This
+    advances only when something advances it -- a sleep, a scripted per-operation
+    cost, or an explicit :meth:`advance` -- so an 1,800-second budget is exercised in
+    microseconds and the arithmetic under test is the real arithmetic.
+
+    **It is not a calendar.** It has no date, no timezone and no relationship to
+    ``datetime``, which is the property the deadline depends on.
+    """
+
+    __slots__ = ("reading", "sleep_calls")
+
+    def __init__(self, start: float = 0.0) -> None:
+        """Start the reading, with no sleeps recorded."""
+        self.reading = start
+        self.sleep_calls: list[float] = []
+
+    def __call__(self) -> float:
+        """The current reading. Never decreases unless a test makes it."""
+        return self.reading
+
+    def sleep(self, seconds: float) -> None:
+        """Advance the reading by ``seconds``, and record the call."""
+        self.sleep_calls.append(float(seconds))
+        self.reading += float(seconds)
+
+    def advance(self, seconds: float) -> None:
+        """Advance the reading without recording a sleep."""
+        self.reading += float(seconds)
+
+
 class PagedTransport:
     """Returns a synthetic CSV page per request, and records what it was asked for.
 
@@ -175,6 +225,8 @@ class PagedTransport:
         max_response_bytes: int = 4 * 1024 * 1024,
         fail_after: int = -1,
         body_override: bytes | None = None,
+        monotonic: FakeMonotonic | None = None,
+        seconds_per_request: float = 0.0,
     ) -> None:
         """Declare a ceiling, optionally fail after ``fail_after``, optionally
         return one fixed body for every request.
@@ -188,6 +240,8 @@ class PagedTransport:
         self._max_response_bytes = max_response_bytes
         self._fail_after = fail_after
         self._body_override = body_override
+        self._monotonic = monotonic
+        self._seconds_per_request = float(seconds_per_request)
         self.urls: list[str] = []
 
     @property
@@ -210,6 +264,10 @@ class PagedTransport:
         )
 
         self.urls.append(url)
+        if self._monotonic is not None and self._seconds_per_request:
+            # A request that really took time, so a deadline test measures the same
+            # thing production would: elapsed monotonic seconds, not a call count.
+            self._monotonic.advance(self._seconds_per_request)
         if 0 <= self._fail_after < len(self.urls):
             from kalpamani.data.ingest.sharadar.redaction import SharadarErrorCode
 
@@ -244,18 +302,32 @@ class FakeS3Client:
     exist.
     """
 
-    def __init__(self, *, fail_puts: dict[str, Exception] | None = None) -> None:
-        """Start empty, optionally scripted to fail specific keys."""
+    def __init__(
+        self,
+        *,
+        fail_puts: dict[str, Exception] | None = None,
+        monotonic: FakeMonotonic | None = None,
+        seconds_per_operation: float = 0.0,
+    ) -> None:
+        """Start empty, optionally scripted to fail keys or to cost elapsed time."""
         self.objects: dict[str, bytes] = {}
         self.put_calls: list[str] = []
         self.head_calls: list[str] = []
         self.get_calls: list[str] = []
         self._fail_puts = dict(fail_puts or {})
+        self._monotonic = monotonic
+        self._seconds_per_operation = float(seconds_per_operation)
+
+    def _spend(self) -> None:
+        """Advance the injected monotonic clock by this operation's scripted cost."""
+        if self._monotonic is not None and self._seconds_per_operation:
+            self._monotonic.advance(self._seconds_per_operation)
 
     def put_object(self, **kwargs: Any) -> dict[str, Any]:
         """Conditionally store one object, or raise the scripted failure."""
         key = kwargs["Key"]
         self.put_calls.append(key)
+        self._spend()
         scripted = self._fail_puts.get(key)
         if scripted is not None:
             raise scripted
@@ -268,6 +340,7 @@ class FakeS3Client:
         """Answer metadata for a stored object, or raise a not-found error."""
         key = kwargs["Key"]
         self.head_calls.append(key)
+        self._spend()
         if key not in self.objects:
             raise _client_error("404")
         payload = self.objects[key]

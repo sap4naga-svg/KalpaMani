@@ -20,19 +20,31 @@ a softer positive would be the single most damaging thing this module could do,
 because it would convert *we did not measure it* into *we measured it and it was
 fine*.
 
-**Cross-run evidence is structurally absent from a single-execution assessment, and
-that is stated rather than worked around.** One assessment reads one locator and the
-objects it references -- that is the whole of its accepted read arithmetic. The
-change-detection limb therefore reports insufficiency here, and nothing in this
-module compares two executions, reads a second locator or infers a comparison from
-one. The P1 ceiling stays at its compiled value because the ceiling describes what
-the *architecture* permits; what a single execution *achieves* is bounded by the
-evidence it actually holds.
+**Cross-run evidence comes from a combined assessment, and from nowhere else.**
+:func:`evaluate` sees one execution's evidence and its change-detection limb reports
+insufficiency, because one observation cannot show that anything changed.
+:func:`evaluate_combined` sees both executions, matched subject by subject by the
+assessor, and is the only way P1 can reach ``TESTED``.
+
+**The two are told apart by a value on the result, not by a convention.** Every
+:class:`TestResult` carries an :class:`EvidenceScope`, and ``__post_init__`` holds a
+``SINGLE_EXECUTION`` result to the single-execution ceiling and a ``COMBINED``
+result to the architecture ceiling. So a single run **cannot** report the cross-run
+P1 ceiling even if some future caller assembled the fields by hand: the guard is on
+the object rather than in the function that happens to build it.
+
+**Reaching a ceiling is never expected, only permitted.** ``TESTED`` for P1 requires
+comparable evidence from both runs -- both deliveries usable, both carrying the
+update column, and the schema stable between them. Missing, incomparable, truncated
+or schema-drifted evidence leaves P1 at ``PARTIALLY_TESTED`` or below, and **never
+becomes a weaker pass**. The information-time limb stays ``BOUNDED`` in both scopes
+regardless of outcome: a date-granular source cannot supply an instant, and no
+quantity of runs changes that.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Final
 
@@ -131,6 +143,21 @@ SINGLE_EXECUTION_CEILINGS: Final[dict[ProviderTest, TestStatus]] = {
 }
 
 
+class EvidenceScope(StrEnum):
+    """How much evidence a result was computed from.
+
+    ``SINGLE_EXECUTION``
+        One acquisition execution. Held to :data:`SINGLE_EXECUTION_CEILINGS`.
+    ``COMBINED``
+        Both acquisition executions, matched subject by subject. Held to
+        :data:`TEST_CEILINGS`, which is the only scope in which P1 may reach
+        ``TESTED``.
+    """
+
+    SINGLE_EXECUTION = "SINGLE_EXECUTION"
+    COMBINED = "COMBINED"
+
+
 class Limb(StrEnum):
     """The individually-answerable parts of the nine tests.
 
@@ -185,6 +212,9 @@ class Reason(StrEnum):
     MEASURED = "MEASURED"
     DATE_GRANULAR_SOURCE = "DATE_GRANULAR_SOURCE"
     CROSS_RUN_EVIDENCE_ABSENT = "CROSS_RUN_EVIDENCE_ABSENT"
+    CROSS_RUN_EVIDENCE_COMPARED = "CROSS_RUN_EVIDENCE_COMPARED"
+    CROSS_RUN_SCHEMA_DRIFTED = "CROSS_RUN_SCHEMA_DRIFTED"
+    CROSS_RUN_MARKER_NOT_DELIVERED = "CROSS_RUN_MARKER_NOT_DELIVERED"
     SAMPLED_NOT_POPULATION = "SAMPLED_NOT_POPULATION"
     COLUMN_NOT_DELIVERED = "COLUMN_NOT_DELIVERED"
     NO_ROWS_DELIVERED = "NO_ROWS_DELIVERED"
@@ -232,6 +262,10 @@ class MeasurementName(StrEnum):
     ADJUSTED_CLOSE_COLUMN_PRESENT = "ADJUSTED_CLOSE_COLUMN_PRESENT"
     ANNOUNCEMENT_DATE_COLUMN_PRESENT = "ANNOUNCEMENT_DATE_COLUMN_PRESENT"
     DUPLICATE_ROWS_OBSERVED = "DUPLICATE_ROWS_OBSERVED"
+    SUBJECTS_COMPARED_ACROSS_RUNS = "SUBJECTS_COMPARED_ACROSS_RUNS"
+    SUBJECTS_WITH_STABLE_SCHEMA_ACROSS_RUNS = "SUBJECTS_WITH_STABLE_SCHEMA_ACROSS_RUNS"
+    SUBJECTS_WITH_ADVANCED_UPDATE_MARKER = "SUBJECTS_WITH_ADVANCED_UPDATE_MARKER"
+    SUBJECTS_WITH_CHANGED_ROW_COUNT = "SUBJECTS_WITH_CHANGED_ROW_COUNT"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -298,20 +332,41 @@ class TestResult:
     ceiling: TestStatus
     single_execution_ceiling: TestStatus
     limbs: tuple[LimbResult, ...]
+    #: How much evidence produced this status. Defaulted to the narrower scope
+    #: deliberately: a result assembled by a caller who did not think about scope is
+    #: held to the single-execution ceiling, which is the direction that fails
+    #: closed.
+    evidence_scope: EvidenceScope = EvidenceScope.SINGLE_EXECUTION
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing, so a status cannot be raised after it was checked."""
         raise TypeError("TestResult may not be subclassed")
 
+    @property
+    def effective_ceiling(self) -> TestStatus:
+        """The ceiling this result's own scope is actually held to."""
+        if self.evidence_scope is EvidenceScope.COMBINED:
+            return self.ceiling
+        return self.single_execution_ceiling
+
     def __post_init__(self) -> None:
-        """Refuse a status above either ceiling, or ceilings that are not this test's."""
+        """Refuse a status above the ceiling its scope permits, or foreign ceilings.
+
+        Both ceilings travel on every result, whatever the scope, so a reader never
+        has to look one up to see whether a status was capped -- and so a combined
+        result still shows what a single execution could have reached. The scope
+        decides only **which** of the two is enforced, and the architecture ceiling
+        is enforced in every scope.
+        """
+        if type(self.evidence_scope) is not EvidenceScope:
+            raise ValueError("a test result must declare an exact EvidenceScope member")
         if self.ceiling is not TEST_CEILINGS[self.test]:
             raise ValueError("a test result must carry its own compiled ceiling")
         if self.single_execution_ceiling is not SINGLE_EXECUTION_CEILINGS[self.test]:
             raise ValueError("a test result must carry its own single-execution ceiling")
         if STATUS_RANK[self.status] > STATUS_RANK[self.ceiling]:
             raise ValueError("a test may not report a status above its ceiling")
-        if STATUS_RANK[self.status] > STATUS_RANK[self.single_execution_ceiling]:
+        if STATUS_RANK[self.status] > STATUS_RANK[self.effective_ceiling]:
             raise ValueError("one execution may not report above its single-execution ceiling")
 
 
@@ -337,6 +392,29 @@ class SubjectEvidence:
     def pair(self, dataset: SharadarDataset) -> PagePair | None:
         """The page pair for one dataset, or ``None`` if it was not retained."""
         return self.pairs.get(dataset)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CrossRunSubjectEvidence:
+    """One subject's evidence from **both** executions. **Private material.**
+
+    The two sides are matched by the assessor, which knows the subjects privately;
+    like :class:`SubjectEvidence` this carries no name, so nothing here can travel
+    into a result or a report. ``first`` is Run A and ``second`` is Run B, and the
+    order is the assessor's responsibility -- it is the one that validated the
+    locator pair's chronology before any payload was read.
+    """
+
+    first: SubjectEvidence
+    second: SubjectEvidence
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing: a subclass could carry a name."""
+        raise TypeError("CrossRunSubjectEvidence may not be subclassed")
+
+    def __repr__(self) -> str:
+        """A constant. **Never a row and never a subject.**"""
+        return "CrossRunSubjectEvidence(runs=2)"
 
 
 #: Column names the evaluator looks for. **Observed, never required**: their absence
@@ -432,6 +510,139 @@ def _evaluate_p1(evidence: tuple[SubjectEvidence, ...]) -> TestResult:
         ceiling=TEST_CEILINGS[ProviderTest.P1],
         single_execution_ceiling=SINGLE_EXECUTION_CEILINGS[ProviderTest.P1],
         limbs=limbs,
+        evidence_scope=EvidenceScope.SINGLE_EXECUTION,
+    )
+
+
+def _latest_update_marker(pair: PagePair) -> str | None:
+    """The largest delivered value of the vendor's update column, or ``None``.
+
+    Compared as delivered strings rather than parsed into instants. The column is
+    date-granular and the vendor does not document its exact rendering, so parsing
+    it into a timestamp would manufacture a precision the source does not have --
+    and the only question asked of it here is whether it *changed*, which string
+    comparison answers without inventing anything.
+    """
+    values = [value for value in pair.first.column(_UPDATE_COLUMN) if value]
+    if not values:
+        return None
+    return max(values)
+
+
+def _evaluate_p1_combined(pairs: tuple[CrossRunSubjectEvidence, ...]) -> TestResult:
+    """P1 across both executions. **The only place P1 may reach ``TESTED``.**
+
+    A subject is *comparable* when both runs delivered a usable price page for it
+    **and** both carried the update column. Anything less is not weaker evidence for
+    change detection -- it is no evidence, and it is recorded as insufficiency.
+
+    Schema stability across the two runs is checked before any count is compared. A
+    delivery whose header changed between runs cannot support a row-count or marker
+    comparison, because the two pages are not the same shape; that is
+    ``INCONCLUSIVE``, and it holds P1 below ``TESTED``.
+    """
+    comparable: list[tuple[PagePair, PagePair]] = []
+    for subject in pairs:
+        before = subject.first.pair(SharadarDataset.STOCKS)
+        after = subject.second.pair(SharadarDataset.STOCKS)
+        if before is None or after is None:
+            continue
+        if not before.first.has_column(_UPDATE_COLUMN) or not after.first.has_column(
+            _UPDATE_COLUMN
+        ):
+            continue
+        comparable.append((before, after))
+
+    stable = [
+        (before, after)
+        for before, after in comparable
+        if before.first.schema_digest == after.first.schema_digest
+    ]
+    advanced = sum(
+        1
+        for before, after in stable
+        if _latest_update_marker(before) != _latest_update_marker(after)
+    )
+    changed_rows = sum(
+        1 for before, after in stable if before.first.row_count != after.first.row_count
+    )
+
+    with_update = sum(
+        1
+        for subject in pairs
+        for pair in (subject.second.pair(SharadarDataset.STOCKS),)
+        if pair is not None and pair.first.has_column(_UPDATE_COLUMN)
+    )
+
+    if not comparable:
+        change = LimbResult(
+            limb=Limb.P1_CROSS_RUN_CHANGE_DETECTION,
+            status=LimbStatus.INSUFFICIENT,
+            reason=Reason.CROSS_RUN_MARKER_NOT_DELIVERED
+            if pairs
+            else Reason.CROSS_RUN_EVIDENCE_ABSENT,
+            measurements=(_count(MeasurementName.SUBJECTS_COMPARED_ACROSS_RUNS, 0),),
+        )
+    elif not stable:
+        change = LimbResult(
+            limb=Limb.P1_CROSS_RUN_CHANGE_DETECTION,
+            status=LimbStatus.INCONCLUSIVE,
+            reason=Reason.CROSS_RUN_SCHEMA_DRIFTED,
+            measurements=(
+                _count(MeasurementName.SUBJECTS_COMPARED_ACROSS_RUNS, len(comparable)),
+                _count(MeasurementName.SUBJECTS_WITH_STABLE_SCHEMA_ACROSS_RUNS, 0),
+            ),
+        )
+    else:
+        change = LimbResult(
+            limb=Limb.P1_CROSS_RUN_CHANGE_DETECTION,
+            status=LimbStatus.OBSERVED,
+            reason=Reason.CROSS_RUN_EVIDENCE_COMPARED,
+            measurements=(
+                _count(MeasurementName.SUBJECTS_COMPARED_ACROSS_RUNS, len(comparable)),
+                _count(MeasurementName.SUBJECTS_WITH_STABLE_SCHEMA_ACROSS_RUNS, len(stable)),
+                _count(MeasurementName.SUBJECTS_WITH_ADVANCED_UPDATE_MARKER, advanced),
+                _count(MeasurementName.SUBJECTS_WITH_CHANGED_ROW_COUNT, changed_rows),
+            ),
+        )
+
+    limbs = (
+        LimbResult(
+            # **Bounded regardless of outcome, and in both scopes.** The vendor's
+            # update column is date-granular, and a date cannot supply an instant.
+            # No number of runs lifts this, so a combined assessment that reported
+            # it as measured would be claiming a precision the source lacks.
+            limb=Limb.P1_INFORMATION_TIME_RESOLUTION,
+            status=LimbStatus.BOUNDED,
+            reason=Reason.DATE_GRANULAR_SOURCE,
+        ),
+        LimbResult(
+            limb=Limb.P1_UPDATE_COLUMN_PRESENT,
+            status=LimbStatus.OBSERVED if pairs else LimbStatus.INSUFFICIENT,
+            reason=Reason.MEASURED if pairs else Reason.EVIDENCE_MISSING,
+            measurements=(_count(MeasurementName.SUBJECTS_WITH_UPDATE_COLUMN, with_update),),
+        ),
+        change,
+    )
+
+    if not pairs:
+        status = TestStatus.INSUFFICIENT_EVIDENCE
+    elif change.status is LimbStatus.OBSERVED:
+        # **The ceiling, and only when the evidence reaches it.** Every limb this
+        # architecture can measure was measured; the information-time limb stays
+        # bounded, and that bound is recorded on the result rather than deducted
+        # from the status.
+        status = TestStatus.TESTED
+    else:
+        status = TestStatus.PARTIALLY_TESTED
+
+    return TestResult(
+        test=ProviderTest.P1,
+        status=status,
+        ceiling=TEST_CEILINGS[ProviderTest.P1],
+        single_execution_ceiling=SINGLE_EXECUTION_CEILINGS[ProviderTest.P1],
+        limbs=limbs,
+        evidence_scope=EvidenceScope.COMBINED,
     )
 
 
@@ -679,6 +890,84 @@ def evaluate(evidence: tuple[SubjectEvidence, ...]) -> tuple[TestResult, ...]:
     )
 
 
+def _usable_only(evidence: tuple[SubjectEvidence, ...]) -> tuple[SubjectEvidence, ...]:
+    """Drop truncated and schema-unstable deliveries before anything is measured."""
+    return tuple(
+        SubjectEvidence(
+            pairs={
+                dataset: pair for dataset, pair in subject.pairs.items() if pair.row_count_usable
+            }
+        )
+        for subject in evidence
+    )
+
+
+def _combined(result: TestResult) -> TestResult:
+    """Restate one result as combined-scope, re-running its own ceiling guard.
+
+    ``dataclasses.replace`` calls ``__post_init__`` again, so widening the scope is
+    itself checked: a status that was legal under the single-execution ceiling is
+    re-checked against the architecture ceiling, and the architecture ceiling is
+    never widened by this.
+    """
+    return replace(result, evidence_scope=EvidenceScope.COMBINED)
+
+
+def evaluate_combined(pairs: tuple[CrossRunSubjectEvidence, ...]) -> tuple[TestResult, ...]:
+    """Every P-test result across **both** executions, in test order.
+
+    **P1 is the only test that uses both runs, because it is the only cross-run
+    question.** It asks whether the provider's view of a period changed between two
+    observations at least eight calendar days apart, and that needs two observations.
+
+    **P2 through P9 are evaluated from Run B**, the later observation. They ask what
+    the provider holds -- delisted history, action schema, classification history,
+    corporate-action reconciliation, price origin -- and for those a stale earlier
+    observation adds nothing that the later one does not already carry. Averaging or
+    unioning the two would double every subject count and describe an experiment
+    nobody ran.
+
+    Returns:
+        Nine :class:`TestResult` values, every one scoped ``COMBINED``. **No
+        aggregate, no verdict, no recommendation and no selection** -- there is no
+        tenth element and no summary field, because the absence is the control.
+    """
+    if type(pairs) is not tuple:
+        raise TypeError("cross-run evidence must be an exact tuple of CrossRunSubjectEvidence")
+    for subject in pairs:
+        if type(subject) is not CrossRunSubjectEvidence:
+            raise TypeError("cross-run evidence must be an exact tuple of CrossRunSubjectEvidence")
+
+    usable = tuple(
+        CrossRunSubjectEvidence(
+            first=_usable_only((subject.first,))[0],
+            second=_usable_only((subject.second,))[0],
+        )
+        for subject in pairs
+    )
+    later = tuple(subject.second for subject in usable)
+
+    return (
+        _evaluate_p1_combined(usable),
+        _combined(_evaluate_p2(later)),
+        _combined(_evaluate_p3(later)),
+        _combined(_evaluate_p4(later)),
+        _combined(_evaluate_p5(later)),
+        _combined(
+            _deferred(
+                ProviderTest.P6, Limb.P6_KNOWN_RESTATEMENT, Reason.REQUIRES_LATER_PHASE_DATASET
+            )
+        ),
+        _combined(
+            _deferred(ProviderTest.P7, Limb.P7_FILING_LINKAGE, Reason.REQUIRES_EXTERNAL_SOURCE)
+        ),
+        _combined(
+            _deferred(ProviderTest.P8, Limb.P8_EARNINGS_TIMING, Reason.REQUIRES_EXTERNAL_SOURCE)
+        ),
+        _combined(_evaluate_p9()),
+    )
+
+
 def excluded_subject_count(evidence: tuple[SubjectEvidence, ...]) -> int:
     """How many retained page pairs were excluded as truncated or schema-unstable."""
     return sum(
@@ -686,10 +975,25 @@ def excluded_subject_count(evidence: tuple[SubjectEvidence, ...]) -> int:
     )
 
 
+def excluded_cross_run_pair_count(pairs: tuple[CrossRunSubjectEvidence, ...]) -> int:
+    """The same exclusion count across both executions of a combined assessment.
+
+    Counted over both sides rather than one, and recorded in the private report:
+    an exclusion is evidence about the delivery, and quietly shrinking the sample
+    instead of recording why is how a row-count conclusion becomes untraceable.
+    """
+    return sum(
+        excluded_subject_count((subject.first,)) + excluded_subject_count((subject.second,))
+        for subject in pairs
+    )
+
+
 __all__ = [
     "SINGLE_EXECUTION_CEILINGS",
     "STATUS_RANK",
     "TEST_CEILINGS",
+    "CrossRunSubjectEvidence",
+    "EvidenceScope",
     "Limb",
     "LimbResult",
     "LimbStatus",
@@ -702,5 +1006,7 @@ __all__ = [
     "TestResult",
     "TestStatus",
     "evaluate",
+    "evaluate_combined",
+    "excluded_cross_run_pair_count",
     "excluded_subject_count",
 ]

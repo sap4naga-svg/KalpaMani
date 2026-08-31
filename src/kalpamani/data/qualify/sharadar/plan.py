@@ -13,14 +13,30 @@ need ``48 <= 32``. Any ``max_attempts`` above one is refused by the accepted pla
 model itself, before this module's own check is even reached -- which is the
 stronger guarantee, because it does not depend on this module staying correct.
 
-**The wall-clock ceiling is a derived worst-case bound, and it is enforced as
-one.** There is no interrupting timer here, and adding one would mean a new halt
-state on an accepted runtime contract. What the architecture actually states is
-arithmetic: 48 requests at a 30-second timeout, plus 47 one-second pacing gaps, is
-1,487 seconds, inside the 1,800-second ceiling. :func:`worst_case_wall_clock_seconds`
-computes that, and :func:`build_empirical_plan` refuses a plan whose worst case
-exceeds the ceiling -- so the bound is checked rather than asserted in prose, and
-it is honestly labelled a bound rather than a stopwatch.
+**The 1,800 seconds are a real elapsed-time deadline, not compile-time
+arithmetic.** An earlier revision of this module computed a worst case -- 48
+requests at a 30-second timeout plus 47 one-second gaps is 1,487 seconds -- and
+called the comparison against 1,800 an enforcement. It was not one. It bounded the
+provider requests and the pacing and nothing else: the 144 Bronze writes, the
+conditional metadata resolutions and the locator were all outside it, and no
+running program was ever held to it. The clarified architecture states one actual
+deadline measured on an **injected monotonic clock** over the complete acquisition
+execution phase, and this module supplies the constants that deadline is made of.
+
+**What is compiled here is the budget arithmetic; the stopwatch lives in**
+:class:`~kalpamani.data.qualify.sharadar.operations.AcquisitionDeadline`. Every
+constant below is checked against the others at import by
+:func:`validate_deadline_constants`, and a configuration that cannot fit is
+**refused rather than clamped** -- a clamped budget is a budget that says one thing
+and does another.
+
+**And the uncomfortable consequence is recorded rather than smoothed over.** At the
+compiled worst case the 48 requests and their pacing occupy 1,487 seconds, leaving
+313 for 144 Bronze writes, up to 144 conditional resolutions and the locator --
+about a second each, which is not a defensible connect-plus-read bound. **The
+deadline is therefore a safety bound on elapsed time and not a guarantee that 48
+requests complete.** A slow provider means the run halts short, publishes a
+``PARTIAL`` locator, and the assessor refuses to evaluate it.
 
 **Page two is a completeness probe, and it is not an invitation to paginate.**
 Sorting is a forbidden request parameter and the vendor's row limit truncates
@@ -100,8 +116,78 @@ PROVIDER_MAX_ATTEMPTS: Final = 1
 TIMEOUT_SECONDS: Final = 30.0
 MIN_REQUEST_INTERVAL_SECONDS: Final = 1.0
 
-#: The worst-case wall clock a complete run may occupy, in seconds.
-WALL_CLOCK_CEILING_SECONDS: Final = 1_800
+#: ``D`` -- the one acquisition elapsed-time deadline, in seconds. Measured on an
+#: injected monotonic clock over the complete acquisition execution phase, from
+#: immediately before the first provider request to the terminal locator result.
+#: **Lowering it is a configuration choice; raising it is an ADR change.**
+ACQUISITION_DEADLINE_SECONDS: Final = 1_800.0
+
+#: The two socket timeouts configured on every qualification S3 client, and the
+#: retry settings that stop the SDK from multiplying them. **Retries are disabled**,
+#: so one invocation is one attempt and the application-level locator retry is the
+#: only retry anywhere on this path.
+S3_CONNECT_TIMEOUT_SECONDS: Final = 5.0
+S3_READ_TIMEOUT_SECONDS: Final = 10.0
+S3_MAX_ATTEMPTS: Final = 1
+S3_RETRY_MODE: Final = "standard"
+
+#: ``T_s3`` -- the worst case one qualification S3 invocation may occupy.
+#:
+#: **Deliberately not either socket timeout on its own.** A single attempt can
+#: consume its connect timeout and then its read timeout in sequence, so a bound
+#: taken from one of them is not a bound on the operation. This is their sum plus a
+#: 5-second margin for name resolution, TLS and local SDK work -- and
+#: :func:`validate_deadline_constants` refuses a value below that sum, so the
+#: relationship is checked rather than remembered. It is sound only because SDK
+#: retries are disabled: with retries on, one invocation is several attempts.
+S3_OPERATION_CEILING_SECONDS: Final = 20.0
+
+#: ``C`` -- deterministic locator construction, serialization and terminal
+#: classification. No network, so this is local work with a generous margin.
+LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS: Final = 5.0
+
+#: ``L`` -- the budget held back so the locator can always be written.
+#:
+#: It must cover ``4 * T_s3 + C``: three permitted locator ``PutObject`` attempts,
+#: at most one locator ``HeadObject`` -- a retry-triggering attempt sends none, so
+#: only the one attempt answered ``412`` reaches the metadata path -- and the
+#: deterministic construction above. 90 is 85 with five seconds to spare.
+LOCATOR_TERMINAL_RESERVE_SECONDS: Final = 90.0
+
+#: Three Bronze ``PutObject`` per completed request, each of which may trigger at
+#: most one conditional ``HeadObject`` after a ``412``.
+BRONZE_OPERATIONS_PER_REQUEST: Final = 6
+
+#: Three locator ``PutObject`` attempts plus at most one locator ``HeadObject``.
+LOCATOR_OPERATIONS_ALLOWED: Final = 4
+
+#: What must still remain before a provider request may **start**: its own ceiling,
+#: the complete downstream Bronze obligation it creates, and the locator reserve.
+#: **Pacing is not in this sum**, and that is the correction rather than an
+#: oversight: pacing for this request has already been checked and already elapsed
+#: by the time admission is asked, so including it here would spend it twice.
+PROVIDER_REQUEST_ADMISSION_SECONDS: Final = (
+    TIMEOUT_SECONDS
+    + BRONZE_OPERATIONS_PER_REQUEST * S3_OPERATION_CEILING_SECONDS
+    + LOCATOR_TERMINAL_RESERVE_SECONDS
+)
+
+#: What must remain before one Bronze operation may start: its own ceiling, plus the
+#: locator reserve, so Bronze can never spend the budget the locator is holding.
+BRONZE_OPERATION_ADMISSION_SECONDS: Final = (
+    S3_OPERATION_CEILING_SECONDS + LOCATOR_TERMINAL_RESERVE_SECONDS
+)
+
+#: What must remain before one locator S3 operation may start. It is inside the
+#: reserve already, so it holds nothing further back.
+LOCATOR_OPERATION_ADMISSION_SECONDS: Final = S3_OPERATION_CEILING_SECONDS
+
+#: What must remain before the locator is even **constructed**: the deterministic
+#: construction plus one write. Below this there is no safe attempt at all, and the
+#: run reports ``LOCATOR_NOT_PUBLISHED`` rather than starting one it cannot finish.
+LOCATOR_ATTEMPT_ADMISSION_SECONDS: Final = (
+    LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS + S3_OPERATION_CEILING_SECONDS
+)
 
 #: Responses are CSV. Stated rather than defaulted, because the parser's contract
 #: is written against this exact encoding.
@@ -124,7 +210,7 @@ class PlanDefect(StrEnum):
     CLOCK_MALFORMED = "CLOCK_MALFORMED"
     WINDOW_UNSATISFIABLE = "WINDOW_UNSATISFIABLE"
     REQUEST_COUNT_UNEXPECTED = "REQUEST_COUNT_UNEXPECTED"
-    WALL_CLOCK_UNSATISFIABLE = "WALL_CLOCK_UNSATISFIABLE"
+    DEADLINE_UNSATISFIABLE = "DEADLINE_UNSATISFIABLE"
 
 
 class EmpiricalPlanError(Exception):
@@ -148,26 +234,129 @@ def _refuse(defect: PlanDefect) -> EmpiricalPlanError:
     return EmpiricalPlanError(defect)
 
 
-def worst_case_wall_clock_seconds(
+def compiled_request_phase_seconds(
     *,
     request_count: int = EMPIRICAL_REQUEST_COUNT,
     timeout_seconds: float = TIMEOUT_SECONDS,
     min_interval_seconds: float = MIN_REQUEST_INTERVAL_SECONDS,
 ) -> float:
-    """The longest a sequential run of ``request_count`` requests can take.
+    """The longest the **provider requests and their pacing alone** can take.
 
-    Every request may occupy its full timeout, and every request after the first
-    may wait a full pacing interval. There are ``request_count - 1`` gaps, not
+    Every request may occupy its full timeout, and every request after the first may
+    wait a full pacing interval. There are ``request_count - 1`` gaps, not
     ``request_count``: the pacer has nothing to wait for before the first request.
 
-    **This is a bound, not a measurement.** It says what the configuration cannot
-    exceed; it does not stop a run that somehow does, and nothing here claims it
-    would. A run is sequential by construction -- there is no concurrency anywhere
-    on this path -- which is what makes the sum, rather than a maximum, correct.
+    **This is documentation, not a control, and it is not compared against the
+    deadline.** It excludes the 144 Bronze writes, the conditional resolutions and
+    the locator, so a run that fitted inside it could still exceed the real deadline
+    -- which is exactly why the earlier revision's comparison proved nothing. The
+    enforcement is
+    :class:`~kalpamani.data.qualify.sharadar.operations.AcquisitionDeadline`, on a
+    monotonic clock, at every operation. This number is retained because the honest
+    consequence -- that 48 requests are **not** guaranteed to complete inside 1,800
+    seconds -- is only visible once it is written down.
     """
     if request_count < 1:
         return 0.0
     return request_count * timeout_seconds + (request_count - 1) * min_interval_seconds
+
+
+def validate_deadline_constants(
+    *,
+    deadline_seconds: float = ACQUISITION_DEADLINE_SECONDS,
+    request_timeout_seconds: float = TIMEOUT_SECONDS,
+    pacing_seconds: float = MIN_REQUEST_INTERVAL_SECONDS,
+    s3_operation_seconds: float = S3_OPERATION_CEILING_SECONDS,
+    s3_connect_seconds: float = S3_CONNECT_TIMEOUT_SECONDS,
+    s3_read_seconds: float = S3_READ_TIMEOUT_SECONDS,
+    construction_seconds: float = LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS,
+    locator_reserve_seconds: float = LOCATOR_TERMINAL_RESERVE_SECONDS,
+) -> None:
+    """Refuse a deadline configuration that cannot hold. **Never clamp one.**
+
+    Every parameter defaults to its compiled constant, so the module-level call
+    below checks the real configuration while a test can drive each branch with its
+    own numbers rather than by editing the module.
+
+    The rules, in the clarified architecture's own terms::
+
+        T_s3 > 0                     an operation ceiling of zero bounds nothing
+        T_s3 >= connect + read       one attempt may consume both, in sequence
+        C >= 0
+        L >= 4 * T_s3 + C            three locator writes, one HEAD, construction
+        L < D                        a reserve as large as the deadline leaves none
+        T_req + P + 6 * T_s3 + L <= D    one paced request-and-publish cycle, plus
+                                         the reserve, must fit
+
+    Raises:
+        EmpiricalPlanError: ``DEADLINE_UNSATISFIABLE`` for any violation, and for a
+            value that is not a finite real number. **Refused, not adjusted.**
+    """
+    values = (
+        deadline_seconds,
+        request_timeout_seconds,
+        pacing_seconds,
+        s3_operation_seconds,
+        s3_connect_seconds,
+        s3_read_seconds,
+        construction_seconds,
+        locator_reserve_seconds,
+    )
+    infinities = (float("inf"), -float("inf"))
+    for value in values:
+        # NaN is the case worth naming: every comparison below is ``False`` for it,
+        # so a bare range check *accepts* it and silently disables the whole budget.
+        if type(value) not in (int, float) or value != value or value in infinities:
+            raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if s3_operation_seconds <= 0 or deadline_seconds <= 0:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if request_timeout_seconds <= 0 or pacing_seconds < 0:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if s3_connect_seconds <= 0 or s3_read_seconds <= 0:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if s3_operation_seconds < s3_connect_seconds + s3_read_seconds:
+        # The clarified architecture names this one explicitly: a bound taken from
+        # one socket timeout is not a bound on an operation that may spend both.
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if construction_seconds < 0:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if locator_reserve_seconds < (
+        LOCATOR_OPERATIONS_ALLOWED * s3_operation_seconds + construction_seconds
+    ):
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    if locator_reserve_seconds >= deadline_seconds:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+    cycle = (
+        request_timeout_seconds
+        + pacing_seconds
+        + BRONZE_OPERATIONS_PER_REQUEST * s3_operation_seconds
+        + locator_reserve_seconds
+    )
+    if cycle > deadline_seconds:
+        raise _refuse(PlanDefect.DEADLINE_UNSATISFIABLE) from None
+
+
+# Checked at import, against the compiled constants themselves. A configuration
+# that cannot hold is refused where it is written rather than at the first run that
+# would have discovered it against a real provider.
+validate_deadline_constants()
+
+
+def s3_client_config_kwargs() -> dict[str, object]:
+    """The botocore ``Config`` keyword arguments every qualification S3 client uses.
+
+    A plain dictionary, built by a pure function, so the SDK configuration is
+    assertable in a test that imports no SDK at all. **Retries are disabled** --
+    ``max_attempts`` counts total attempts in ``standard`` mode, so one means one --
+    and both socket timeouts are explicit and finite. Without both, the SDK's own
+    defaults would multiply a single invocation into several attempts and
+    :data:`S3_OPERATION_CEILING_SECONDS` would bound nothing.
+    """
+    return {
+        "connect_timeout": S3_CONNECT_TIMEOUT_SECONDS,
+        "read_timeout": S3_READ_TIMEOUT_SECONDS,
+        "retries": {"max_attempts": S3_MAX_ATTEMPTS, "mode": S3_RETRY_MODE},
+    }
 
 
 def empirical_window(instant: datetime) -> DateWindow:
@@ -244,7 +433,10 @@ class EmpiricalPlan:
 
     plan: QualificationPlan
     inventory_digest: str
-    worst_case_seconds: float
+    #: The elapsed-time deadline the acquisition phase will be held to, in seconds.
+    #: Carried on the plan so the value enforced is the value validated, rather than
+    #: a constant read again somewhere else and possibly differently.
+    deadline_seconds: float
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing: a stand-in could present a plan never validated."""
@@ -276,9 +468,9 @@ def build_empirical_plan(
             ``CLOCK_MALFORMED`` or ``WINDOW_UNSATISFIABLE`` from the window;
             ``REQUEST_COUNT_UNEXPECTED`` if the assembled plan does not generate
             exactly :data:`EMPIRICAL_REQUEST_COUNT` requests;
-            ``WALL_CLOCK_UNSATISFIABLE`` if the worst case exceeds the ceiling.
-            The accepted plan model's own refusals -- which can quote a subject --
-            are converted to ``INVENTORY_MALFORMED`` ``from None``.
+            ``DEADLINE_UNSATISFIABLE`` if the compiled deadline configuration does
+            not hold. The accepted plan model's own refusals -- which can quote a
+            subject -- are converted to ``INVENTORY_MALFORMED`` ``from None``.
     """
     if type(inventory) is not PrivateInventory:
         raise _refuse(PlanDefect.INVENTORY_MALFORMED) from None
@@ -307,40 +499,56 @@ def build_empirical_plan(
         # different number from the one about to be issued would bound nothing.
         raise _refuse(PlanDefect.REQUEST_COUNT_UNEXPECTED) from None
 
-    worst_case = worst_case_wall_clock_seconds(request_count=plan.request_count)
-    if worst_case > WALL_CLOCK_CEILING_SECONDS:
-        raise _refuse(PlanDefect.WALL_CLOCK_UNSATISFIABLE) from None
+    # Re-checked per plan, not only at import. The import-time call catches a bad
+    # edit; this one catches a plan built in a process where the module was reloaded
+    # or the constants were patched, which is exactly what a test does.
+    validate_deadline_constants()
 
     return EmpiricalPlan(
         plan=plan,
         inventory_digest=inventory.digest,
-        worst_case_seconds=worst_case,
+        deadline_seconds=ACQUISITION_DEADLINE_SECONDS,
     )
 
 
 __all__ = [
+    "ACQUISITION_DEADLINE_SECONDS",
     "ACTIONS_PAGE_LIMIT",
+    "BRONZE_OPERATIONS_PER_REQUEST",
+    "BRONZE_OPERATION_ADMISSION_SECONDS",
     "EMPIRICAL_DATASETS",
     "EMPIRICAL_MAX_PAGES",
     "EMPIRICAL_REQUEST_COUNT",
     "EMPIRICAL_RESPONSE_FORMAT",
     "EMPIRICAL_SCHEMA_VERSION",
     "HISTORY_START",
+    "LOCATOR_ATTEMPT_ADMISSION_SECONDS",
+    "LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS",
+    "LOCATOR_OPERATIONS_ALLOWED",
+    "LOCATOR_OPERATION_ADMISSION_SECONDS",
+    "LOCATOR_TERMINAL_RESERVE_SECONDS",
     "MAX_RESPONSE_BYTES",
     "MAX_RUN_BYTES",
     "MIN_REQUEST_INTERVAL_SECONDS",
     "PAGE_LIMITS",
     "PROVIDER_MAX_ATTEMPTS",
+    "PROVIDER_REQUEST_ADMISSION_SECONDS",
+    "S3_CONNECT_TIMEOUT_SECONDS",
+    "S3_MAX_ATTEMPTS",
+    "S3_OPERATION_CEILING_SECONDS",
+    "S3_READ_TIMEOUT_SECONDS",
+    "S3_RETRY_MODE",
     "STOCKS_PAGE_LIMIT",
     "TICKERS_PAGE_LIMIT",
     "TIMEOUT_SECONDS",
-    "WALL_CLOCK_CEILING_SECONDS",
     "EmpiricalPlan",
     "EmpiricalPlanError",
     "PlanDefect",
     "build_empirical_plan",
+    "compiled_request_phase_seconds",
     "empirical_dataset_plans",
     "empirical_limits",
     "empirical_window",
-    "worst_case_wall_clock_seconds",
+    "s3_client_config_kwargs",
+    "validate_deadline_constants",
 ]

@@ -5999,8 +5999,11 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # and each of those is separately checkable, so each is separately required.
     (
         "records the implementation candidate",
-        "adr-0018 implementation: implementation candidate — not merged, not accepted, "
-        "never executed",
+        "implementation candidate, not merged, not accepted, never executed",
+    ),
+    (
+        "keeps implementation execution unauthorized",
+        "adr-0018 implementation execution: not authorized",
     ),
     ("keeps infrastructure mutation unauthorized", "infrastructure mutation: not authorized"),
     ("keeps run a unauthorized", "run a: not authorized"),
@@ -6013,7 +6016,7 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records zero new roles", "new iam roles zero"),
     (
         "records that the read surface is dormant and never executed",
-        "the licensed object-byte read surface exists only as dormant code on an open "
+        "licensed object-byte read surface exists only as dormant code on an open "
         "pull request and has never executed against aws",
     ),
     ("records the per-run request count", "48 requests per run"),
@@ -6145,15 +6148,22 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "the clarification merge authorized no implementation, no infrastructure mutation and "
         "no execution",
     ),
+    # The candidate has since been corrected under a separate authorization, so
+    # these three are inverted rather than deleted -- the same treatment every
+    # guard in this file gets when the fact it names changes. What must still be
+    # recorded is that the candidate is unmerged, that the correction happened,
+    # and that a person has yet to review it.
     (
-        "records that the candidate must be corrected against the now-authoritative clarification",
-        "the offline implementation candidate must be corrected against the now-authoritative "
-        "clarification",
+        "records that the candidate was corrected against the now-authoritative clarification",
+        "corrected against the now-authoritative clarification",
     ),
-    ("records the blocked implementation candidate", "unmerged and blocked"),
     (
-        "records that the candidate needs correction before merge",
-        "it cannot be merged until it is corrected against the clarified adr",
+        "records the unmerged implementation candidate",
+        "the offline implementation candidate is unmerged and not accepted",
+    ),
+    (
+        "records that the candidate awaits an independent re-review",
+        "awaits an independent re-review",
     ),
     # The sanitized incident, recorded in the four clauses that make it a record
     # rather than either a confession or an authorization.
@@ -6249,8 +6259,8 @@ ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("records the elapsed-time deadline", "1,800-second acquisition elapsed-time deadline"),
     (
-        "keeps the implementation candidate blocked",
-        "the offline implementation candidate is unmerged and blocked",
+        "records the unmerged implementation candidate",
+        "the offline implementation candidate is unmerged and not accepted",
     ),
     # PR #42 merged, so the plan's two clarifications are effective. The plan is
     # where the ceilings are read from, and a plan that still called them
