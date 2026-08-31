@@ -2,10 +2,13 @@
 
 **Status: Accepted — effective only upon merge of the pull request introducing this ADR.**
 
-**Before that merge this ADR is PROPOSED and carries no authority.** It is a document in an
-open pull request. Nothing in it permits an implementation, an infrastructure change, a
-provider request, an S3 operation, a credential retrieval or an execution, and nothing in it
-becomes permission by being read.
+**Before that merge this ADR is PROPOSED and carries no authority.** That was true of it for
+as long as its pull request was open, and it is not rewritten. **That merge has since
+occurred** — PR #39 merged as `97e7ce57bb90303c78c2a1a4bc3ac2301b60f694`, approved ADR head
+`25ee0b0a6ab17c1fea7e2fa4ccd72ce8b2864780` — so the conditional acceptance above has taken
+effect and this ADR is now **ACCEPTED / IN FORCE**, as **architecture only**. Nothing in it
+permits an implementation, an infrastructure change, a provider request, an S3 operation, a
+credential retrieval or an execution, and nothing in it becomes permission by being read.
 
 **Date:** 2026-08-30
 **Supersedes:** nothing.
