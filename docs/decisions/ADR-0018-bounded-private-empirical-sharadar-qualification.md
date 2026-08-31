@@ -424,8 +424,9 @@ though it were exact is how an accounting stops being an accounting.
 
 ### 9.2 Locator retry — the exact closed conditions
 
-A locator publication may be retried **at most twice**, and **only** on these two closed backend
-classifications:
+A locator publication may be retried **at most twice**, and **only** when the conditional
+`PutObject` itself refused with one of these two closed backend classifications — that is, **only
+while the condition remains unresolved**:
 
 | Permitted | Why it is safe |
 |---|---|
@@ -453,6 +454,17 @@ already-occupied-by-different-content   a genuine collision; retrying repeats it
 **No retry may follow an ambiguous or unclassified result.** `INVALID_RESPONSE` and `UNKNOWN` are
 excluded for exactly that reason.
 
+**A retry-triggering attempt sends no `HeadObject`, so retries do not multiply the metadata
+resolution.** `THROTTLED` and `TRANSIENT` are refusals of the conditional `PutObject` itself:
+they leave before the occupancy resolution and issue **no** `HeadObject`. The only attempt that
+reaches that resolution is one answered `412` — and a `412` **resolves** the condition, which is
+the property the retry permission requires to be *absent*. Nothing reached after a `412`
+therefore permits another attempt: identical content is a published outcome, different content
+is a genuine collision, and a `THROTTLED`, `TRANSIENT` or unverifiable refusal *of the metadata
+resolution itself* arrives with the condition already resolved. **At most one locator attempt
+can ever reach the `412` metadata-resolution path**, so locator `HeadObject` is **at most one**,
+however many `PutObject` invocations the locator made.
+
 ### 9.3 Acquisition — maximum (locator retried twice)
 
 | Operation | Count |
@@ -460,8 +472,8 @@ excluded for exactly that reason.
 | Bronze `PutObject` | **exactly 144** — Bronze writes are never retried |
 | Locator `PutObject` | **at most 3** |
 | **Maximum total `PutObject`** | **147** |
-| Conditional `HeadObject` | **zero to 147** — derived from the `PutObject` invocation count |
-| **Maximum total S3 operations** | **147 to 294** |
+| Conditional `HeadObject` | **zero to 145** — 144 Bronze, plus **at most one** locator |
+| **Maximum total S3 operations** | **147 to 292** |
 
 **A complete run's `PutObject` count is therefore `144 <= n <= 147`, and it is not "exactly 145"
 whenever a retry occurred.** The public counters report the **real invocation count**, observed
@@ -470,11 +482,17 @@ rather than assumed, and the consistency rules require:
 ```text
 put_object_count == 3 * completed_requests + locator_put_attempts
 locator_put_attempts in {0, 1, 2, 3}
-head_object_count  <= put_object_count
+head_object_count  <= 3 * completed_requests + 1
 get_object_count   == 0        (acquisition)
 list_operations    == 0
 control_operations == 0
 ```
+
+**For a complete 48-request run that bound is `head_object_count <= 145`**, and it does **not**
+rise with `locator_put_attempts`. Bounding it by the `PutObject` invocation count instead would
+admit 147, which no run can reach: the extra invocations a retry buys are exactly the ones that
+sent no `HeadObject`. The maximum per-run total is therefore
+`147 + 145 = 292` operations, and across the package's two acquisition runs `2 × 292 = 584`.
 
 ### 9.4 Assessment — exact formulas
 
@@ -516,7 +534,7 @@ than a formality.
 | | Nominal | Maximum |
 |---|---|---|
 | Provider requests, both runs | 96 | 96 |
-| Acquisition S3 operations, both runs | 290 to 580 | 294 to 588 |
+| Acquisition S3 operations, both runs | 290 to 580 | 294 to 584 |
 | Assessment S3 operations, both runs | 196 to 198 | 196 to 198 |
 
 **Underlying AWS network requests remain UNKNOWN** in every row above. A cloud SDK call can

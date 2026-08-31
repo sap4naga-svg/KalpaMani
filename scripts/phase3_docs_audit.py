@@ -5497,6 +5497,20 @@ ADR_0018_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("states the maximum putobject count", "maximum total `putobject` | 147"),
     ("bounds the locator retry at two", "may be retried at most twice"),
     (
+        "bounds headobject by the completed requests, not by the writes",
+        "head_object_count <= 3 * completed_requests + 1",
+    ),
+    (
+        "states the maximum headobject count",
+        "for a complete 48-request run that bound is `head_object_count <= 145`",
+    ),
+    (
+        "states that only one attempt can reach the metadata resolution",
+        "at most one locator attempt can ever reach the `412` metadata-resolution path",
+    ),
+    ("states the maximum per-run s3 total", "maximum total s3 operations | 147 to 292"),
+    ("states the maximum two-run s3 total", "294 to 584"),
+    (
         "forbids retry after ambiguity",
         "no retry may follow an ambiguous or unclassified result.",
     ),
@@ -5529,6 +5543,13 @@ ADR_0018_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "g1 closed",
     "g2 closed",
     "putobject is always exactly 145",
+    # The superseded HeadObject arithmetic. 147 HEADs is a count no run can
+    # produce: the extra PutObject invocations a locator retry buys are exactly
+    # the ones that send none, so a bound derived from the write count admits
+    # operations that cannot happen.
+    "zero to 147",
+    "147 to 294",
+    "294 to 588",
 )
 
 #: Spellings that would mean a concrete subject symbol had been written down.
@@ -5574,6 +5595,11 @@ ADR_0018_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("records the nominal putobject count", "total `putobject` 145"),
     ("records the real observed bound", "144 ≤ `putobject` ≤ 147"),
+    # The en-dashes below are the status documents' own characters. A guard
+    # spelled with ASCII look-alikes would match nothing, so the ambiguity rule
+    # is suppressed per line rather than disabled.
+    ("records the maximum headobject count", "conditional `headobject` 0–145"),  # noqa: RUF001
+    ("records the maximum per-run s3 total", "total s3 operations 147–292"),  # noqa: RUF001
     ("records the assessment read formula", "`2r + 1` = 97"),
     (
         "records that adr-0017's accounting is untouched",
@@ -5590,6 +5616,12 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "run a completed",
     "run b completed",
     "empirical qualification executed",
+    # The superseded HeadObject arithmetic, in both spellings the status
+    # documents use -- the en-dashed status row and the ASCII code block.
+    "conditional `headobject` 0–147",  # noqa: RUF001
+    "total s3 operations 147–294",  # noqa: RUF001
+    "conditional headobject 0 to 147",
+    "maximum s3 operations 147 to 294",
 )
 
 #: What the deletion runbook must say after the clarification. Naming a prefix

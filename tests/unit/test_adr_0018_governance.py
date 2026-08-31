@@ -59,6 +59,13 @@ PAGES = 2
 REQUESTS = SUBJECTS * DATASETS * PAGES
 OBJECTS_PER_ACQUISITION = 3
 MAX_LOCATOR_ATTEMPTS = 3
+#: A conditional HEAD is issued only after a 412, at most once per PutObject.
+#: The two classifications that permit a locator retry refuse the conditional
+#: PutObject *before* the occupancy resolution and send no HEAD, and a 412
+#: resolves the condition the retry permission needs unresolved -- so only one
+#: locator attempt can ever reach that path. The locator contributes exactly
+#: one, however many times it wrote, and a retry cannot raise this bound.
+MAX_HEADOBJECTS = OBJECTS_PER_ACQUISITION * REQUESTS + 1
 
 
 def flat(path: Path) -> str:
@@ -142,12 +149,37 @@ class TestTheArithmeticIsDerived:
         assert f"maximum total `putobject` | {bronze + MAX_LOCATOR_ATTEMPTS}" in adr
         assert f"{bronze} <= n <= {bronze + MAX_LOCATOR_ATTEMPTS}" in adr
 
-    def test_head_object_is_bounded_by_the_put_object_invocation_count(self) -> None:
-        """A conditional HEAD is issued at most once per PUT, and only after a 412."""
+    def test_head_object_is_bounded_by_the_completed_requests_not_by_the_writes(self) -> None:
+        """A retry buys PutObject invocations that send no HEAD, so the bound holds."""
+        assert MAX_HEADOBJECTS == OBJECTS_PER_ACQUISITION * REQUESTS + 1 == 145
         adr = flat(ADR)
         assert "zero to 145" in adr
-        assert "zero to 147" in adr
         assert "only after a `412`" in adr
+        assert "head_object_count <= 3 * completed_requests + 1" in adr
+        assert f"head_object_count <= {MAX_HEADOBJECTS}" in adr
+        assert (
+            "at most one locator attempt can ever reach the `412` metadata-resolution path" in adr
+        )
+
+    def test_the_stale_put_object_derived_head_bound_is_gone(self) -> None:
+        """147 HEADs was arithmetic no run can produce, and it must not come back."""
+        adr = flat(ADR)
+        for stale in ("zero to 147", "147 to 294", "294 to 588"):
+            assert stale not in adr, f"{stale} is the superseded HeadObject arithmetic"
+
+    def test_the_maximum_totals_follow_from_the_two_bounds(self) -> None:
+        maximum_puts = REQUESTS * OBJECTS_PER_ACQUISITION + MAX_LOCATOR_ATTEMPTS
+        per_run = maximum_puts + MAX_HEADOBJECTS
+        assert maximum_puts == 147
+        assert per_run == 147 + 145 == 292
+        assert 2 * per_run == 584
+        adr = flat(ADR)
+        assert f"maximum total s3 operations | {maximum_puts} to {per_run}" in adr
+        assert f"`{maximum_puts} + {MAX_HEADOBJECTS} = {per_run}`" in adr
+        # The multiplication sign is the document's own character; an ASCII
+        # look-alike would match nothing, so the rule is suppressed per line.
+        assert f"`2 × {per_run} = {2 * per_run}`" in adr  # noqa: RUF001
+        assert f"294 to {2 * per_run}" in adr
 
     def test_the_assessment_read_formula_excludes_claims(self) -> None:
         reads = 2 * REQUESTS + 1
