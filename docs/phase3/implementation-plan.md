@@ -363,6 +363,45 @@ implementation correction must introduce an ADR-0018-specific write-only publica
 **Infrastructure design: BLOCKED pending implementation correction.** **Acceptance of ADR-0019 is
 not authorization to implement or execute it.**
 
+**Implementing that correction exposed a further, pre-existing incompatibility, and
+[ADR-0020](../decisions/ADR-0020-request-scoped-qualification-payload-identity.md) resolves it.**
+**ADR-0020 architecture: ACCEPTED / IN FORCE**, by **PR #49 merged** — merge commit
+`e4d328af53f2663c570f94e6c090c3296db8cb9d`, approved ADR head
+`d9bbb17b7f174c34223eb4736d763f115daf229f`. **While PR #49 was open, ADR-0020 was proposed and
+carried no authority** — a historical fact that stays true and is not rewritten. **The merge
+approved architecture only**, and authorized no implementation, no infrastructure mutation, no
+deployment and no execution.
+
+**The legitimate duplicate-payload collision** is the conflict between three separately accepted
+clauses: a complete run is exactly 48 requests and 144 Bronze PutObject, the qualification payload
+object was content-addressed by `(provider, dataset, digest)`, and an acquisition-side 412 fails
+closed without reading or comparing the occupied object. Two legitimate byte-equality cases —
+ADR-0018's header-only page-two completeness probes, and an unchanged snapshot re-observed in
+Run B — therefore derived one object name and halted a correct run. **PR #48 is not defective for
+obeying ADR-0019**; its correctness is what made the incompatibility visible.
+
+Authoritative architecture: **the qualification payload key binds the execution identity, the
+request ordinal and the payload digest**, shaped
+`<qualification-payload-prefix>/<execution-identity>/requests/<NN>/sha256/<payload-digest>`, with
+no provider subject value in a qualification payload key. **The request-scoped payload identity is
+now authoritative architecture.** **ADR-0020 preserves ADR-0019's write-only collision policy
+unchanged** — **acquisition remains conditional PutObject only**, with zero HeadObject, zero
+GetObject and no listing, and `BRONZE_NAME_OCCUPIED` and `LOCATOR_NAME_OCCUPIED` unchanged.
+**ADR-0020 supersedes only the qualification payload-key identity rule**, **ADR-0020 does not
+supersede ADR-0017**, **ADR-0020 changes no shared general-purpose Bronze or
+S3ResearchObjectStore contract**, **ADR-0020 introduces no locator field**, **ADR-0020 introduces
+no additional S3 operation**, **ADR-0020 preserves the 485 to 490 package envelope**, and
+**ADR-0020 preserves the deadline arithmetic L >= 3 * T_s3 + C**.
+
+**No implementation has yet been authorized or completed.** **ADR-0020 implementation: NOT
+AUTHORIZED / NOT IMPLEMENTED**, and no qualification payload-key builder exists. **PR #48 state:
+OPEN / UNMERGED**, **PR #48 remains open and unchanged**, and **PR #48 correction against
+ADR-0020: NOT BEGUN**. **The next separately authorized implementation gate is correcting PR #48
+against ADR-0020**, and **infrastructure remains blocked until that correction is implemented,
+independently reviewed and merged**. **Infrastructure design and mutation: BLOCKED · deployment:
+NOT PERFORMED · Run A: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined
+assessment: NOT AUTHORIZED / NOT RUN**, and **no deployment or empirical execution has occurred**.
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
