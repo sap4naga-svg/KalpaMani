@@ -43,7 +43,6 @@ from kalpamani.data.contracts.paths import path_segment
 from kalpamani.data.contracts.vocabulary import AcquisitionMode, DataClassification
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import (
-    BRONZE_NAMESPACE,
     acquisition_claim,
     acquisition_claim_key,
     acquisition_record,
@@ -58,6 +57,7 @@ from kalpamani.data.ingest.sharadar.runtime import (
 )
 from kalpamani.data.objectstore import ObjectKey
 from kalpamani.data.qualify.sharadar.plan import EmpiricalPlan
+from kalpamani.data.qualify.sharadar.publication import qualification_payload_key
 
 #: The locator's own namespace, inside the licensed ``qualification/`` prefix the
 #: deletion runbook already deletes wholesale. A new top-level prefix would have
@@ -269,39 +269,29 @@ def _retrieval_for(outcome: RequestOutcome, request: SharadarRequest, plan: Empi
     )
 
 
-def payload_key_for(*, dataset: str, content_sha256: str) -> ObjectKey:
-    """The Bronze payload key for a digest, built from the name and the digest.
-
-    **The one key that cannot be rebuilt from its bytes**, because the acquisition
-    path no longer holds them: the runtime publishes the payload and reports only
-    its digest and length. The payload namespace is the one genuinely
-    content-addressed namespace in this system, so the digest *is* the last path
-    segment and the key is fully determined by ``(dataset, digest)``.
-
-    Constructing it by name and digest is the same operation the assessment side
-    performs on every referenced object, and it is bound to the accepted builder by
-    a test that publishes synthetic payloads and compares the two.
-    """
-    return ObjectKey(
-        classification=DataClassification.LICENSED,
-        segments=(BRONZE_NAMESPACE, PROVIDER, dataset, "objects", "sha256", content_sha256),
-        content_sha256=content_sha256,
-    )
-
-
 def _disposition(written: bool) -> str:
     return (ObjectDisposition.WRITTEN if written else ObjectDisposition.ALREADY_PRESENT).value
 
 
 def _entry_document(
-    *, outcome: RequestOutcome, request: SharadarRequest, plan: EmpiricalPlan
+    *,
+    outcome: RequestOutcome,
+    request: SharadarRequest,
+    plan: EmpiricalPlan,
+    request_ordinal: int,
 ) -> dict[str, Any]:
     """One locator entry: three exact keys, three digests, three byte counts.
 
     The claim and the record are rebuilt through the **accepted builders**, so their
     keys and canonical bytes are the publisher's own rather than a second rendering
-    of the same idea. The payload key is built by name and digest, which is the only
-    route available and the one the assessor uses for every object anyway.
+    of the same idea.
+
+    The payload key is rebuilt through the **ADR-0020 builder**, from the execution
+    identity, this request's canonical ordinal and the digest -- the same pure
+    function the acquisition router publishes through and the assessment
+    reconstructs with. It cannot be rebuilt from its bytes, because the acquisition
+    path no longer holds them: the runtime publishes the payload and reports only
+    its digest and length.
     """
     retrieval = _retrieval_for(outcome, request, plan)
     digest = outcome.content_sha256
@@ -318,7 +308,12 @@ def _entry_document(
     record_key = bronze_acquisition_key(
         retrieval=retrieval, payload_digest=digest, record=record_bytes
     )
-    payload_key = payload_key_for(dataset=request.dataset.value, content_sha256=digest)
+    payload_key = qualification_payload_key(
+        dataset=request.dataset.value,
+        execution_id=plan.plan.execution_id,
+        request_ordinal=request_ordinal,
+        content_sha256=digest,
+    )
 
     return {
         "acquisition_id": outcome.acquisition_id,
@@ -381,7 +376,9 @@ def build_locator_document(
 
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for request, outcome in zip(requests, result.outcomes, strict=False):
+    for request_ordinal, (request, outcome) in enumerate(
+        zip(requests, result.outcomes, strict=False)
+    ):
         if (
             outcome.dataset is not request.dataset
             or outcome.subject != request.ticker
@@ -392,7 +389,11 @@ def build_locator_document(
         if outcome.acquisition_id in seen:
             raise _refuse(LocatorDefect.IDENTITY_MISMATCH) from None
         seen.add(outcome.acquisition_id)
-        entries.append(_entry_document(outcome=outcome, request=request, plan=plan))
+        entries.append(
+            _entry_document(
+                outcome=outcome, request=request, plan=plan, request_ordinal=request_ordinal
+            )
+        )
 
     completeness = (
         Completeness.COMPLETE
@@ -731,7 +732,6 @@ __all__ = [
     "decode_locator",
     "locator_key_segments",
     "locator_object_key",
-    "payload_key_for",
     "plan_digest",
     "serialize_locator",
     "validate_locator_document",

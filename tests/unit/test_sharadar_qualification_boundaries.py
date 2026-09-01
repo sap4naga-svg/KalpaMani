@@ -36,6 +36,17 @@ PROVIDER_PACKAGE = SRC / "kalpamani" / "data" / "ingest" / "sharadar"
 QUALIFICATION = PROVIDER_PACKAGE / "qualification.py"
 RUNTIME = PROVIDER_PACKAGE / "runtime.py"
 COMPOSITION = PROVIDER_PACKAGE / "composition.py"
+
+#: The ADR-0018 empirical acquisition composition. A **second** authorized site for
+#: the client and the runtime -- and only for those two.
+#:
+#: ADR-0019 made that path write-only, and the shared licensed store resolves a
+#: ``412`` with a ``HeadObject`` that AWS maps onto ``s3:GetObject``. So the
+#: acquisition can no longer reach the runtime through ADR-0017's composition root,
+#: which builds that store: it composes the accepted client and the accepted runtime
+#: itself, around its own write-only publisher. **ADR-0017's root is unchanged and
+#: is not called by it.**
+EMPIRICAL_ACQUISITION = SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py"
 PLAN_CHECK = PROJECT_ROOT / "scripts" / "sharadar_plan_check.py"
 PRIVATE_HARNESS = PROJECT_ROOT / "scripts" / "sharadar_private_qualification.py"
 
@@ -215,13 +226,17 @@ def test_the_runtime_never_uses_retrieval_metadata_notes() -> None:
 def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests() -> None:
     """Dormancy where it still matters: one composition root, and no runner.
 
-    ADR-0014 authorized exactly one production module to build a runtime. That
-    is narrower than "nowhere", and much narrower than "anywhere in the provider
-    package": a script, a task, a second composition module or an ad-hoc caller
+    ADR-0014 authorized exactly one production module to build a runtime, and
+    ADR-0019 added the second: the empirical acquisition path had to stop reaching
+    the runtime through ADR-0017's root, because that root builds the shared store
+    whose ``412`` resolution AWS cannot grant without object-read authority. That is
+    narrower than "nowhere", and much narrower than "anywhere in the provider
+    package": a script, a task, a *third* composition module or an ad-hoc caller
     still fails here, which is the property that keeps the core dormant.
     """
     allowed = {
         COMPOSITION,
+        EMPIRICAL_ACQUISITION,
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_qualification_runtime.py",
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_qualification_boundaries.py",
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_composition_preflight.py",
@@ -243,15 +258,15 @@ def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests(
 
 def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
     """The client needs a credential and a transport, so building one *is* the
-    composition root -- and ADR-0014 put it in exactly one module.
+    composition root -- and ADR-0014 put it in one module, ADR-0019 in a second.
 
-    The credential is still a parameter there. Constructing a client from an
+    The credential is still a parameter in both. Constructing a client from an
     injected credential sends nothing; what would send something is a credential
-    source, and none exists anywhere.
+    source, and none exists anywhere under ``src/``.
     """
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        if "__pycache__" in path.parts or path == COMPOSITION:
+        if "__pycache__" in path.parts or path in (COMPOSITION, EMPIRICAL_ACQUISITION):
             continue
         for node in ast.walk(_tree(path)):
             if (
@@ -261,6 +276,29 @@ def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
             ):
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
     assert offenders == [], f"a client is constructed under src/ at: {offenders}"
+
+
+def test_the_second_runtime_site_composes_only_the_write_only_publisher() -> None:
+    """The replacement assertion for the permission the two guards above widened.
+
+    Naming a second module says *where* a runtime may be built. It does not say what
+    it may be built **around** -- so this asserts the thing that actually matters:
+    the ADR-0018 acquisition constructs its own write-only publisher, and never the
+    shared licensed store whose ``412`` resolution needs the read authority ADR-0019
+    withheld. A future edit that composed the runtime around the shared store would
+    pass both guards above and fail here.
+    """
+    source = _executable(EMPIRICAL_ACQUISITION)
+    assert "LicensedWriteOnlyPublisher(" in source
+    assert "S3ResearchObjectStore" not in source
+    assert "execute_qualification_acquisition" not in source, (
+        "ADR-0017's execution surface must not be reachable from the ADR-0018 path"
+    )
+    # The *call* spellings, not the bare names: ``head_object_count=0`` and
+    # ``get_object_count=0`` are the fields asserting those calls never happened, and
+    # forbidding them would forbid the evidence.
+    for call in (".head_object(", ".get_object(", ".get_object_attributes(", ".list_objects"):
+        assert call not in source
 
 
 def test_importing_the_runtime_module_runs_nothing() -> None:

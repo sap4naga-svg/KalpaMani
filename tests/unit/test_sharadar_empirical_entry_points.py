@@ -370,14 +370,40 @@ def test_only_a_complete_addressable_acquisition_exits_zero() -> None:
     assert zeros == [acquire.EmpiricalOutcome.COMPLETED]
 
 
-def test_a_partial_run_and_every_locator_problem_exit_non_zero() -> None:
+def test_a_partial_run_and_every_occupied_or_locator_problem_exit_non_zero() -> None:
     for outcome in (
         acquire.EmpiricalOutcome.COMPLETED_PARTIAL,
+        acquire.EmpiricalOutcome.BRONZE_NAME_OCCUPIED,
         acquire.EmpiricalOutcome.LOCATOR_NOT_PUBLISHED,
         acquire.EmpiricalOutcome.LOCATOR_STATE_UNKNOWN,
-        acquire.EmpiricalOutcome.LOCATOR_COLLISION,
+        acquire.EmpiricalOutcome.LOCATOR_NAME_OCCUPIED,
     ):
         assert acquire.EXIT_STATUS[outcome] != 0
+
+
+def test_the_two_occupied_name_sentences_claim_nothing_about_the_stored_content() -> None:
+    """A ``412`` says a name was taken. The public sentence may say no more.
+
+    ``LOCATOR_COLLISION``'s sentence said *held by other content*, which was a
+    metadata comparison; ADR-0019 removed the authority to make it, so the word had
+    to go with it rather than survive as an unbacked claim.
+    """
+    for outcome in (
+        acquire.EmpiricalOutcome.BRONZE_NAME_OCCUPIED,
+        acquire.EmpiricalOutcome.LOCATOR_NAME_OCCUPIED,
+    ):
+        sentence = outcome.value
+        assert "occupied" in sentence
+        for forbidden in (
+            "other content",
+            "different",
+            "identical",
+            "already present",
+            "adopted",
+            "resumed",
+            "collision",
+        ):
+            assert forbidden not in sentence.lower()
 
 
 def test_only_a_published_report_exits_zero_for_the_assessment() -> None:

@@ -230,9 +230,14 @@ class EmpiricalOutcome(StrEnum):
     COMPLETED = "empirical acquisition completed"
     COMPLETED_PARTIAL = "empirical acquisition halted: the locator records a partial run"
     RUN_DEADLINE_EXHAUSTED = "empirical acquisition halted: the acquisition deadline was reached"
+    # **The two occupied-name sentences say only that a name was occupied.** This
+    # path performs no object read, so what holds the name is undetermined -- and a
+    # sentence claiming the content was identical, different, adopted or resumable
+    # would be a claim nothing established.
+    BRONZE_NAME_OCCUPIED = "empirical acquisition halted: a publication name was occupied"
     LOCATOR_NOT_PUBLISHED = "empirical acquisition: the locator was not published"
     LOCATOR_STATE_UNKNOWN = "empirical acquisition: the locator publication was not verified"
-    LOCATOR_COLLISION = "empirical acquisition: the locator name is held by other content"
+    LOCATOR_NAME_OCCUPIED = "empirical acquisition: the locator name was occupied"
 
 
 #: The exit status each outcome maps to. **Total, and checked by a test.**
@@ -261,8 +266,9 @@ EXIT_STATUS: Final[dict[EmpiricalOutcome, int]] = {
     EmpiricalOutcome.COMPLETED_PARTIAL: 14,
     EmpiricalOutcome.LOCATOR_NOT_PUBLISHED: 15,
     EmpiricalOutcome.LOCATOR_STATE_UNKNOWN: 16,
-    EmpiricalOutcome.LOCATOR_COLLISION: 17,
+    EmpiricalOutcome.LOCATOR_NAME_OCCUPIED: 17,
     EmpiricalOutcome.RUN_DEADLINE_EXHAUSTED: 18,
+    EmpiricalOutcome.BRONZE_NAME_OCCUPIED: 19,
 }
 
 #: How an acquisition status becomes a public outcome. **Total, and checked.**
@@ -270,9 +276,10 @@ _STATUS_OUTCOME: Final[dict[str, EmpiricalOutcome]] = {
     "COMPLETED": EmpiricalOutcome.COMPLETED,
     "PARTIAL": EmpiricalOutcome.COMPLETED_PARTIAL,
     "RUN_DEADLINE_EXHAUSTED": EmpiricalOutcome.RUN_DEADLINE_EXHAUSTED,
+    "BRONZE_NAME_OCCUPIED": EmpiricalOutcome.BRONZE_NAME_OCCUPIED,
     "LOCATOR_NOT_PUBLISHED": EmpiricalOutcome.LOCATOR_NOT_PUBLISHED,
     "LOCATOR_STATE_UNKNOWN": EmpiricalOutcome.LOCATOR_STATE_UNKNOWN,
-    "LOCATOR_COLLISION": EmpiricalOutcome.LOCATOR_COLLISION,
+    "LOCATOR_NAME_OCCUPIED": EmpiricalOutcome.LOCATOR_NAME_OCCUPIED,
 }
 
 

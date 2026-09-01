@@ -462,19 +462,23 @@ COMPOSITION_ROOT = (
     PROJECT_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar" / "composition.py"
 )
 
-#: The empirical qualification package's own composition. A **second** authorized
-#: store-construction site, in a different package under its own governance.
+#: The empirical qualification package's own composition.
 #:
-#: The rule is narrowed here rather than removed, exactly as it was when the first
-#: composition root was authorized. Both sites are named, so a *third* module
-#: constructing a licensed store still fails -- which is the property this guard
-#: exists for, and which a count would not have preserved.
+#: It **used to** construct the shared licensed store and no longer does: ADR-0019
+#: made the acquisition path write-only, and the shared store resolves a ``412``
+#: with a ``HeadObject`` that AWS maps onto ``s3:GetObject``. It now composes the
+#: package's own write-only publisher instead, so the permission list below goes
+#: back to one module -- a **narrowing**, not a relaxation.
 EMPIRICAL_COMPOSITION = (
     PROJECT_ROOT / "src" / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py"
 )
 
 #: Every module permitted to construct the licensed store, and nothing else.
-STORE_BUILDERS = (COMPOSITION_ROOT, EMPIRICAL_COMPOSITION)
+#:
+#: One again, as it was before the empirical package existed. A *second* module
+#: constructing a licensed store fails here, which is the property this guard exists
+#: for and which a count would not have preserved.
+STORE_BUILDERS = (COMPOSITION_ROOT,)
 
 #: SDK construction, which ADR-0014 did **not** authorize anywhere.
 #:
@@ -486,14 +490,14 @@ SDK_CONSTRUCTIONS = frozenset({"client", "resource", "Session"})
 
 
 def test_no_data_module_constructs_an_s3_client_or_store() -> None:
-    """Two composition roots exist, and nothing else may build a store.
+    """One composition root exists, and nothing else may build the shared store.
 
     ADR-0014 narrowed this rule; it did not remove it. The earlier rule was "no
     composition root exists", which was correct while none was authorized, and it
-    then became "exactly one". The empirical qualification package adds a second,
-    in a different package under its own governance -- so the rule is narrowed
-    again rather than dropped: a **third** module constructing a licensed store
-    fails here.
+    then became "exactly one". The empirical qualification package briefly made it
+    two, and ADR-0019 took it back to one: that package's acquisition path is
+    write-only now and builds its own publisher, so a **second** module constructing
+    the shared licensed store fails here.
 
     **SDK construction is still forbidden everywhere, including the composition
     root.** The S3 client is injected there too, so the data platform still
@@ -523,8 +527,33 @@ def test_no_data_module_constructs_an_s3_client_or_store() -> None:
     )
 
 
-def test_only_the_two_authorized_modules_construct_the_licensed_store() -> None:
-    """The permission is two named modules, not a count that could drift."""
+def test_the_empirical_acquisition_never_constructs_the_shared_licensed_store() -> None:
+    """The replacement assertion for the permission this correction removed.
+
+    Narrowing ``STORE_BUILDERS`` back to one module says the shared store is built
+    in one place. It does not, on its own, say *which* place stopped building it --
+    so this names the module ADR-0019 made write-only and asserts the construction
+    is gone, by parse rather than by substring. A future edit that reinstated it
+    would fail here as well as in the count above.
+    """
+    tree = ast.parse(EMPIRICAL_COMPOSITION.read_text(encoding="utf-8"))
+    assert not [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "S3ResearchObjectStore"
+    ], "the write-only acquisition path must not construct the shared licensed store"
+    assert "S3ResearchObjectStore" not in {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }, "the write-only acquisition path must not import the shared licensed store"
+
+
+def test_only_the_authorized_module_constructs_the_licensed_store() -> None:
+    """The permission is a named module, not a count that could drift."""
     builders = [
         path.relative_to(PROJECT_ROOT)
         for path in _python_files(PACKAGE_ROOT)
