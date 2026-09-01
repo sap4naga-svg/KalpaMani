@@ -337,15 +337,31 @@ STOPPED_ARCHITECTURE_GAP_HEAD_REQUIRES_GET**, because AWS maps HeadObject to the
 permission and exposes no independent s3:HeadObject IAM action — so ADR-0018 §10.1's
 metadata-only collision resolution and its IAM-level prohibition on acquisition object-byte reads
 are jointly undeployable. **Infrastructure design and deployment: BLOCKED.**
-[ADR-0019](../decisions/ADR-0019-write-only-acquisition-collision-policy.md) proposes the
-correction and is **PROPOSED / NOT IN FORCE**: **ADR-0019 carries no authority until the pull
-request introducing it is merged**, so **ADR-0018's accepted arithmetic remains the in-force
-arithmetic** and the figures ADR-0019 derives are proposed rather than current. The selected
-direction is the **IAM-preserving acquisition zero-HEAD fail-closed design** — the acquisition
-role receives no s3:GetObject, acquisition HeadObject invocations are zero, and the acquisition
-collision fails closed without comparison. **ADR-0017 is not amended and not superseded**, and
-**the later implementation correction must introduce an ADR-0018-specific write-only publication
-surface**. **Production implementation correction: NOT AUTHORIZED / NOT IMPLEMENTED.**
+[ADR-0019](../decisions/ADR-0019-write-only-acquisition-collision-policy.md) records the
+correction, and **PR #46 merged** — merge commit `77974f476ead96548beb16543dfd3db8c03232c3`,
+approved ADR head `bf0414c4a915d85a124ba400284ca1fa671fda27` — so **ADR-0019 architecture:
+ACCEPTED / IN FORCE**. **While PR #46 was open ADR-0019 was proposed and carried no authority**,
+and **ADR-0018's original collision-resolution design and arithmetic governed before the PR #46
+merge** — historical facts that stay true. **The merge approved architecture only, and authorized
+no production-code correction.**
+
+**ADR-0019 supersedes no ADR wholesale**; it **narrowly amends the enumerated clauses of
+ADR-0018**. **ADR-0018 remains ACCEPTED / IN FORCE except as amended by ADR-0019**, **ADR-0017 is
+not amended or superseded**, and **the shared S3ResearchObjectStore remains unchanged**. The
+authoritative design is the **IAM-preserving acquisition zero-HEAD fail-closed design** — **the
+acquisition role receives no s3:GetObject**, **acquisition HeadObject: exactly 0**, **acquisition
+GetObject: exactly 0**, and every acquisition-side conditional PutObject collision fails closed.
+Governing arithmetic: **acquisition PutObject: 145 to 147**, **two successful runs: 290 to 294**,
+**assessment: unchanged at 195 to 196**, **whole successful package: 485 to 490**, with
+**L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**.
+
+**The production implementation does not yet conform to that architecture.** **ADR-0019
+production-code correction: NOT AUTHORIZED / NOT IMPLEMENTED**, **the current dormant acquisition
+implementation still uses the pre-ADR-0019 shared collision path**, and **the current dormant
+implementation is therefore not deployable under the authoritative architecture**. **The later
+implementation correction must introduce an ADR-0018-specific write-only publication surface.**
+**Infrastructure design: BLOCKED pending implementation correction.** **Acceptance of ADR-0019 is
+not authorization to implement or execute it.**
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.

@@ -8,6 +8,18 @@ While that pull request is open this ADR governs nothing. It is a proposal to am
 **ADR-0018 as accepted is what governs**. That is the same conditional treatment ADR-0017 and
 ADR-0018 were each given, and it is written down rather than assumed.
 
+**The condition above has since been satisfied.** **PR #46 merged** at
+**2026-09-01T01:01:22Z** — merge commit **`77974f476ead96548beb16543dfd3db8c03232c3`**, approved
+ADR head **`bf0414c4a915d85a124ba400284ca1fa671fda27`** — after an **independent review**. So
+**ADR-0019's conditional acceptance event has occurred** and this ADR is now
+**ACCEPTED / IN FORCE**, as **architecture only**. The status line above is the conditional text
+this ADR was written with; it is **preserved as history, not rewritten**, and **while PR #46 was
+open ADR-0019 was proposed and carried no authority** — which was true then and stays true.
+**The merge approved architecture only, and authorized no production-code correction**, no
+Terraform, no IAM, no infrastructure mutation, no deployment and no execution. **Acceptance of
+ADR-0019 is not authorization to implement or execute it**, and **the production implementation
+does not yet conform to that architecture** — see §12.
+
 **Date:** 2026-08-31
 **Supersedes:** nothing.
 **Amends, upon acceptance:** ADR-0018 §4.5.3, §7.4, §9.1, §9.2, §9.3, §9.5 and §10.1 — and
@@ -492,3 +504,50 @@ P1–P9 empirical qualification stays separate and unexecuted.
 introducing the write-only publication surface, an infrastructure design review, a Terraform and
 IAM implementation, an infrastructure mutation, Run A, Run B and the combined assessment.
 **ADR-0019 opens none of them.**
+
+---
+
+## 12. Post-merge status — recorded after this decision
+
+**This section is a historical note added after the decision above, and it changes nothing this
+ADR decided.** §1–§11 record the amendment as it was proposed and reviewed; that record stands
+unedited. What follows is what happened afterwards.
+
+**ADR-0019 architecture: ACCEPTED / IN FORCE.** **PR #46 merged** at **2026-09-01T01:01:22Z**,
+merge commit **`77974f476ead96548beb16543dfd3db8c03232c3`**, approved ADR head
+**`bf0414c4a915d85a124ba400284ca1fa671fda27`**, after an **independent review**. **While PR #46
+was open ADR-0019 was proposed and carried no authority**, and **ADR-0018's original
+collision-resolution design and arithmetic governed before the PR #46 merge**.
+
+**The relationship, restated because acceptance is when it starts to matter.** **ADR-0019
+supersedes no ADR wholesale**; it **narrowly amends the enumerated clauses of ADR-0018** listed in
+§9. **ADR-0018 remains ACCEPTED / IN FORCE except as amended by ADR-0019.** **ADR-0017 is not
+amended or superseded**, **ADR-0011 is not amended or superseded**, and **the shared
+S3ResearchObjectStore remains unchanged**. **ADR-0019's amendment is now authoritative
+architecture.**
+
+**The implementation gap is open, and it is not concealed by the architecture being accepted.**
+
+| Layer | Current status |
+|---|---|
+| Architecture | **ADR-0019 accepted and effective** |
+| Existing code | **merged, dormant, not yet conforming** |
+| Corrective code | **not authorized, not implemented** |
+| Terraform / IAM | **not authorized, not implemented** |
+| Deployment | **not authorized, not performed** |
+| Execution | **ZERO** |
+
+**The production implementation does not yet conform to that architecture.** **ADR-0018 offline
+implementation: MERGED / DORMANT.** **ADR-0019 production-code correction: NOT AUTHORIZED / NOT
+IMPLEMENTED.** **The current dormant acquisition implementation still uses the pre-ADR-0019 shared
+collision path**, which issues a conditional HeadObject after a 412, so **the current dormant
+implementation is therefore not deployable under the authoritative architecture**. **No claim is
+made that the current implementation already has zero acquisition HEAD operations**, and **no
+claim is made that the ADR-0018-specific write-only publication surface already exists** — it does
+not. **Infrastructure design: BLOCKED pending implementation correction.**
+
+**Acceptance of ADR-0019 is not authorization to implement or execute it.** Run A, Run B, the
+combined assessment, Terraform, IAM, infrastructure mutation and deployment each remain
+**NOT AUTHORIZED**; **G1 and G2 stay OPEN**; no provider is selected; Phase 3 stays **NOT
+COMPLETE**; CONTROL stays **DEFERRED**; live trading stays **HARD-DISABLED**; and a third ADR-0017
+authenticated attempt stays **NOT AUTHORIZED**.

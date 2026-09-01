@@ -1,22 +1,30 @@
-"""ADR-0019 is a PROPOSAL, and the repository has to keep saying so.
+"""ADR-0019 is ACCEPTED ARCHITECTURE with UNCORRECTED CODE, and both halves matter.
 
 ADR-0018 accepted two requirements that AWS cannot both satisfy: the acquisition
 role was granted a metadata-only collision resolution and denied object-byte
 reads, and AWS authorizes ``HeadObject`` with ``s3:GetObject`` and publishes no
-metadata action of its own. ADR-0019 proposes keeping the security boundary and
-removing the operation.
+metadata action of its own. ADR-0019 keeps the security boundary and removes the
+operation. **PR #46 merged**, so its conditional acceptance took effect.
 
-A proposal drifts in two directions, and both are guarded here:
+An accepted amendment with an uncorrected implementation drifts three ways, and
+each is guarded here:
 
-1. **Upward** -- a proposal reading itself as accepted, or a corrected design
-   reading itself as built. ADR-0019 has no authority until its pull request
-   merges, so ADR-0018's accepted arithmetic is still the arithmetic that
-   governs, and every operational gate stays shut.
-2. **Downward** -- the security boundary quietly reverting to the weaker
+1. **Backwards** -- a merged amendment read as still proposed. The proposed-state
+   guards are **inverted rather than deleted**, so a revert to the pre-merge
+   wording fails instead of merely going un-asserted.
+2. **Forwards** -- accepted architecture read as built architecture. The
+   production implementation does **not** conform: the dormant acquisition path
+   still uses the pre-ADR-0019 shared collision path, no write-only publication
+   surface exists, and infrastructure stays blocked.
+3. **Downward** -- the security boundary quietly reverting to the weaker
    application-only reading that ADR-0019 declines. Granting the read action
    would let a compromised credential-holding process read known licensed
    objects, which is exactly the argument ADR-0018 s10.3 rests its two-role
    split on.
+
+**The history is preserved, not rewritten.** While PR #46 was open ADR-0019 was
+proposed and carried no authority, and ADR-0018's original design and arithmetic
+governed until the merge. Both facts stay required.
 
 **The arithmetic is derived here, not transcribed.** A number copied from prose
 into prose is a number nobody checks, so the acquisition totals are recomputed
@@ -29,6 +37,7 @@ point.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -41,6 +50,7 @@ CLAUDE_MD = PROJECT_ROOT / "CLAUDE.md"
 README = PROJECT_ROOT / "README.md"
 PLAN = PROJECT_ROOT / "docs" / "phase3" / "implementation-plan.md"
 SHARED_STORE = PROJECT_ROOT / "src" / "kalpamani" / "data" / "storage" / "s3.py"
+AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
 
 #: The accepted ADR-0018 inventory the corrected arithmetic is derived from.
 SUBJECTS = 8
@@ -49,20 +59,98 @@ PAGES = 2
 WRITES_PER_REQUEST = 3
 EXECUTIONS = 2
 
+#: The PR #46 merge, pinned. Recorded here so a document that quietly renamed the
+#: event would fail rather than pass by describing some other merge.
+MERGE_COMMIT = "77974f476ead96548beb16543dfd3db8c03232c3"
+APPROVED_HEAD = "bf0414c4a915d85a124ba400284ca1fa671fda27"
+
 
 def flat(path: Path) -> str:
     """Whitespace-collapsed, emphasis-stripped, lowercased -- the audit's own reading."""
     return " ".join(path.read_text(encoding="utf-8").replace("**", "").split()).lower()
 
 
-def test_the_adr_exists_and_is_proposed() -> None:
-    """A proposal that read itself as accepted would claim an unmerged authority."""
+def _audit_registry() -> tuple[tuple[str, str], ...]:
+    """``MERGED_ADR_STATUS`` read by static parse.
+
+    Parsed rather than imported: ``scripts`` is not an importable package, and a
+    static read cannot execute the audit as a side effect of checking it.
+    """
+    tree = ast.parse(AUDIT.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        target: str | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target, value = node.target.id, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            first = node.targets[0]
+            if isinstance(first, ast.Name):
+                target, value = first.id, node.value
+        if target == "MERGED_ADR_STATUS" and isinstance(value, ast.Tuple):
+            registry: tuple[tuple[str, str], ...] = ast.literal_eval(value)
+            return registry
+    raise AssertionError("MERGED_ADR_STATUS not found in the audit")
+
+
+def test_the_adr_keeps_its_conditional_line_and_records_the_merge() -> None:
+    """Inverted on the merge of PR #46, not deleted.
+
+    This required only the conditional status line while the pull request was open.
+    That line is still required -- it is what the ADR said then, and a decision
+    record is not rewritten when the world moves -- and what is added beside it is
+    the event that satisfied it.
+    """
     text = flat(ADR)
     assert (
         "no authority until the pull request introducing it is independently reviewed and merged"
         in text
     )
     assert "adr-0018 as accepted is what governs" in text
+    assert "the condition above has since been satisfied" in text
+    assert "adr-0019's conditional acceptance event has occurred" in text
+    assert "preserved as history, not rewritten" in text
+    assert MERGE_COMMIT in text
+    assert APPROVED_HEAD in text
+
+
+def test_the_adr_records_the_relationship_and_the_open_implementation_gap() -> None:
+    """Accepted architecture, uncorrected code. Four states, kept apart."""
+    text = flat(ADR)
+    assert "adr-0019 supersedes no adr wholesale" in text
+    assert "narrowly amends the enumerated clauses of adr-0018" in text
+    assert "adr-0018 remains accepted / in force except as amended by adr-0019" in text
+    assert "adr-0017 is not amended or superseded" in text
+    assert "adr-0011 is not amended or superseded" in text
+    assert "the shared s3researchobjectstore remains unchanged" in text
+    assert "adr-0019's amendment is now authoritative architecture" in text
+    assert "the production implementation does not yet conform to that architecture" in text
+    assert "adr-0019 production-code correction: not authorized / not implemented" in text
+    assert (
+        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "collision path" in text
+    )
+    assert (
+        "no claim is made that the current implementation already has zero acquisition head "
+        "operations" in text
+    )
+    assert (
+        "no claim is made that the adr-0018-specific write-only publication surface already exists"
+        in text
+    )
+    assert "acceptance of adr-0019 is not authorization to implement or execute it" in text
+
+
+def test_the_registry_records_adr_0019_as_merged() -> None:
+    """Inverted on the merge, not deleted.
+
+    While PR #46 was open this asserted ADR-0019 was **absent** from the registry.
+    The merge is the event that flips it, and deleting the guard would leave the
+    reverted claim unguarded.
+    """
+    registry = dict(_audit_registry())
+    assert registry.get("ADR-0019") == "PR #46 merged"
+    assert registry.get("ADR-0018") == "PR #39 merged"
+    assert registry.get("ADR-0017") == "PR #33 merged"
 
 
 def test_the_adr_authorizes_nothing() -> None:
@@ -232,33 +320,53 @@ def test_both_documents_record_the_feasibility_gap(document: Path) -> None:
     """One file carrying the gap and the other carrying a stale design is the drift."""
     text = flat(document)
     assert "stopped_architecture_gap_head_requires_get" in text
-    assert "infrastructure design and deployment: blocked" in text
+    assert "infrastructure design: blocked pending implementation correction" in text
     assert "headobject requires the s3:getobject permission" in text
     assert "aws exposes no independent s3:headobject iam action" in text
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_both_documents_record_the_proposal_as_proposed(document: Path) -> None:
-    """A proposal recorded as in force would grant an authority no merge conferred."""
+def test_both_documents_record_the_merged_amendment(document: Path) -> None:
+    """Inverted on the merge of PR #46, not deleted.
+
+    This required the proposed state while the pull request was open. What must
+    now be recorded is the acceptance **and** the historical fact that the
+    amendment carried no authority before it -- both, because dropping the
+    second would rewrite those days.
+    """
     text = flat(document)
-    assert "adr-0019: proposed / not in force" in text
-    assert "adr-0019 carries no authority until the pull request introducing it is merged" in text
-    assert "adr-0018 as accepted is what governs" in text
-    assert "proposed, not in force -- acquisition" in text
+    assert "adr-0019: accepted / in force" in text
+    assert "adr-0019 architecture: accepted / in force" in text
+    assert MERGE_COMMIT in text
+    assert APPROVED_HEAD in text
+    assert "2026-09-01t01:01:22z" in text
+    assert "adr-0019's conditional acceptance event has occurred" in text
+    assert "pr #46 was independently reviewed before its merge" in text
+    assert "while pr #46 was open adr-0019 was proposed and carried no authority" in text
+    assert (
+        "adr-0018's original collision-resolution design and arithmetic governed "
+        "before the pr #46 merge" in text
+    )
+    assert (
+        "the merge approved architecture only, and authorized no production-code correction" in text
+    )
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
 def test_both_documents_record_the_selected_direction(document: Path) -> None:
     """The direction chosen is the one that keeps the boundary, and it is named."""
     text = flat(document)
-    assert (
-        "the selected direction is the iam-preserving acquisition zero-head fail-closed design"
-        in text
-    )
     assert "the acquisition role receives no s3:getobject" in text
-    assert "acquisition headobject invocations are zero" in text
-    assert "acquisition object-byte reads are zero" in text
-    assert "the acquisition collision fails closed without comparison" in text
+    assert "acquisition headobject: exactly 0" in text
+    assert "acquisition getobject: exactly 0" in text
+    assert "every acquisition-side conditional putobject collision fails closed" in text
+    assert "bronze_name_occupied is the authoritative architectural closed outcome" in text
+    assert (
+        "locator_name_occupied is the authoritative architectural replacement for the "
+        "earlier collision claim" in text
+    )
+    assert "a partial locator cannot claim the collided object was verified or retained" in text
+    assert "the closed result remains locator_not_published" in text
     assert "both the iam boundary and the application boundary are retained" in text
     assert "the application-only alternative is not adopted" in text
 
@@ -269,7 +377,8 @@ def test_both_documents_keep_every_operational_gate_closed(document: Path) -> No
     text = flat(document)
     for gate in (
         "production implementation correction: not authorized / not implemented",
-        "terraform and iam implementation: not authorized / not implemented",
+        "terraform/iam implementation: not authorized / not implemented",
+        "deployment: not authorized / not performed",
         "infrastructure mutation: not authorized / not performed",
         "run a: not authorized / not run",
         "run b: not authorized / not run",
@@ -281,19 +390,22 @@ def test_both_documents_keep_every_operational_gate_closed(document: Path) -> No
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_both_documents_do_not_overstate_the_proposal(document: Path) -> None:
-    """The upward drift, in the spellings it would take."""
+def test_both_documents_do_not_overstate_the_amendment(document: Path) -> None:
+    """Both directions of drift: reverting the merge, and reading it as built."""
     text = flat(document)
     for overstated in (
-        "adr-0019 is now accepted",
-        "adr-0019 has been accepted",
-        "adr-0019 is in force",
-        "adr-0019: accepted",
+        "adr-0019 is still proposed",
+        "adr-0019 has not merged",
+        "adr-0019: proposed / not in force",
+        "pr #46 is open",
         "the acquisition role receives s3:getobject",
         "acquisition may use headobject",
         "s3:headobject is a valid iam action",
         "a 412 establishes identical content",
         "infrastructure is ready to deploy",
+        "the write-only publication surface exists",
+        "the production implementation conforms",
+        "the production-code correction is implemented",
         "the feasibility gap is resolved",
         "the architecture gap is closed",
         "the assessment envelope changed",
@@ -305,10 +417,11 @@ def test_the_implementation_plan_records_the_gap_and_the_proposal() -> None:
     """The plan is where the ceilings are read from."""
     text = flat(PLAN)
     assert "stopped_architecture_gap_head_requires_get" in text
-    assert "infrastructure design and deployment: blocked" in text
-    assert "adr-0019 carries no authority until the pull request introducing it is merged" in text
-    assert "adr-0018's accepted arithmetic remains the in-force arithmetic" in text
-    assert "iam-preserving acquisition zero-head fail-closed design" in text
+    assert "infrastructure design: blocked pending implementation correction" in text
+    assert "adr-0019 architecture: accepted / in force" in text
+    assert "while pr #46 was open adr-0019 was proposed and carried no authority" in text
+    assert "the production implementation does not yet conform to that architecture" in text
+    assert "acquisition putobject: 145 to 147" in text
 
 
 def test_the_implementation_plan_separates_the_clarification_from_the_merge() -> None:

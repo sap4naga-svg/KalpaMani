@@ -803,6 +803,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0016", "PR #24 merged"),
     ("ADR-0017", "PR #33 merged"),
     ("ADR-0018", "PR #39 merged"),
+    ("ADR-0019", "PR #46 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -6523,6 +6524,13 @@ ADR_0018_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: ADR-0017 and ADR-0018 were each registered on theirs.
 ADR_0019: Final = DECISIONS / ("ADR-0019-write-only-acquisition-collision-policy.md")
 
+#: The pull request that merged ADR-0019, its merge commit and the approved ADR
+#: head. Registered in :data:`MERGED_ADR_STATUS` **on the merge**, and not before
+#: -- the same treatment ADR-0017 and ADR-0018 were each given.
+ADR_0019_PR: Final = "#46"
+ADR_0019_MERGE_COMMIT: Final = "77974f476ead96548beb16543dfd3db8c03232c3"
+ADR_0019_APPROVED_HEAD: Final = "bf0414c4a915d85a124ba400284ca1fa671fda27"
+
 #: What ADR-0019 must say about itself.
 #:
 #: The feasibility gap it records is a permission fact, not a preference: AWS
@@ -6627,17 +6635,87 @@ ADR_0019_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "records that nothing ran before the discovery",
         "no infrastructure was built and no run occurred before the discovery",
     ),
+    # ------------------------------------------- the adjacent post-merge note
+    #
+    # ADDED on the merge, not substituted for the conditional status line above.
+    # The ADR keeps the text it was written with -- PROPOSED, no authority until
+    # merged -- because that is what it said while its pull request was open, and
+    # a decision record is not rewritten when the world moves. The note beside it
+    # is what stops that conditional line from being read as current.
+    ("records that the condition was satisfied", "the condition above has since been satisfied"),
+    ("names the merge commit", ADR_0019_MERGE_COMMIT),
+    ("names the approved head", ADR_0019_APPROVED_HEAD),
+    (
+        "records the conditional acceptance event",
+        "adr-0019's conditional acceptance event has occurred",
+    ),
+    (
+        "keeps the proposed period historical",
+        f"while pr {ADR_0019_PR} was open adr-0019 was proposed and carried no authority",
+    ),
+    ("preserves the earlier state", "preserved as history, not rewritten"),
+    (
+        "records that the merge approved architecture only",
+        "the merge approved architecture only, and authorized no production-code correction",
+    ),
+    ("carries the adjacent historical note", "this section is a historical note added after the"),
+    # ------------------------------------------------ the relationship, exactly
+    ("records no wholesale supersession", "adr-0019 supersedes no adr wholesale"),
+    ("records the narrow amendment", "narrowly amends the enumerated clauses of adr-0018"),
+    (
+        "keeps adr-0018 in force as amended",
+        "adr-0018 remains accepted / in force except as amended by adr-0019",
+    ),
+    ("leaves adr-0017 alone after the merge", "adr-0017 is not amended or superseded"),
+    ("leaves adr-0011 alone after the merge", "adr-0011 is not amended or superseded"),
+    ("keeps the shared store unchanged", "the shared s3researchobjectstore remains unchanged"),
+    (
+        "records the amendment as authoritative",
+        "adr-0019's amendment is now authoritative architecture",
+    ),
+    # ---------------------------------------------------- the implementation gap
+    (
+        "records that the implementation does not conform",
+        "the production implementation does not yet conform to that architecture",
+    ),
+    ("records the dormant implementation", "adr-0018 offline implementation: merged / dormant"),
+    (
+        "records the correction status",
+        "adr-0019 production-code correction: not authorized / not implemented",
+    ),
+    (
+        "records the pre-amendment collision path",
+        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "collision path",
+    ),
+    (
+        "records non-deployability",
+        "the current dormant implementation is therefore not deployable under the authoritative "
+        "architecture",
+    ),
+    (
+        "refuses a zero-head implementation claim",
+        "no claim is made that the current implementation already has zero acquisition head "
+        "operations",
+    ),
+    (
+        "refuses a surface-exists claim",
+        "no claim is made that the adr-0018-specific write-only publication surface already exists",
+    ),
+    (
+        "records infrastructure blocked pending correction",
+        "infrastructure design: blocked pending implementation correction",
+    ),
+    (
+        "records that acceptance is not authorization",
+        "acceptance of adr-0019 is not authorization to implement or execute it",
+    ),
 )
 
 #: Claims ADR-0019 must never make. Two directions of drift: a proposal reading
 #: itself as accepted, and a corrected design reading itself as built. Consumed
 #: by one aggregate check, so adding an entry adds no audit check of its own.
 ADR_0019_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
-    "adr-0019 is now accepted",
-    "adr-0019 has been accepted",
-    "adr-0019 is in force",
-    "adr-0019 is accepted / in force",
-    "this adr is now accepted",
     "the acquisition role receives s3:getobject",
     "the acquisition role may receive s3:getobject",
     "acquisition may use headobject",
@@ -6655,6 +6733,15 @@ ADR_0019_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "the assessment envelope changed",
     "g1 is closed",
     "g2 is closed",
+    # Post-merge drift, in both directions. The first four would revert a merged
+    # fact; the last three would read an accepted architecture as a built one.
+    "adr-0019 is still proposed",
+    "adr-0019 has not merged",
+    f"pr {ADR_0019_PR} is open",
+    f"pr {ADR_0019_PR} remains unmerged",
+    "the write-only publication surface exists",
+    "the production implementation conforms",
+    "the production-code correction is implemented",
 )
 
 #: What both status documents must say about the feasibility gap and ADR-0019.
@@ -6662,30 +6749,54 @@ ADR_0019_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
 #: Required of *each* document for the reason the whole ADR-0018 block is:
 #: merged main has twice carried a fact in one status file and a stale
 #: contradiction in the other.
+#: What both status documents must say now that ADR-0019 has merged.
+#:
+#: Inverted on the merge, not deleted: the proposed-state spellings moved into
+#: :data:`ADR_0019_STATUS_FORBIDDEN` below. Required of *each* document,
+#: because merged main has twice carried a fact in one status file and a stale
+#: contradiction in the other.
 ADR_0019_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    # ---------------------------------------------------- the gap, and the status
     ("records the feasibility classification", "stopped_architecture_gap_head_requires_get"),
-    ("records that infrastructure is blocked", "infrastructure design and deployment: blocked"),
-    ("records the proposed adr status", "adr-0019: proposed / not in force"),
+    ("records the accepted status", "adr-0019: accepted / in force"),
+    ("records the architecture status", "adr-0019 architecture: accepted / in force"),
+    ("names the merge commit", "77974f476ead96548beb16543dfd3db8c03232c3"),
+    ("names the approved head", "bf0414c4a915d85a124ba400284ca1fa671fda27"),
+    ("records the merge time", "2026-09-01t01:01:22z"),
     (
-        "records that the proposal has no authority yet",
-        "adr-0019 carries no authority until the pull request introducing it is merged",
+        "records the conditional acceptance event",
+        "adr-0019's conditional acceptance event has occurred",
+    ),
+    ("records the independent review", "pr #46 was independently reviewed before its merge"),
+    (
+        "keeps the proposed period historical",
+        "while pr #46 was open adr-0019 was proposed and carried no authority",
     ),
     (
-        "records that the accepted adr still governs",
-        "adr-0018 as accepted is what governs",
-    ),
-    ("keeps adr-0018 in force", "adr-0018 remains accepted / in force"),
-    (
-        "keeps the merged implementation dormant",
-        "the merged adr-0018 implementation remains merged / dormant",
+        "keeps what governed before the merge",
+        "adr-0018's original collision-resolution design and arithmetic governed before the pr "
+        "#46 merge",
     ),
     (
-        "records that the merged implementation is not yet deployable",
-        "not deployable under the accepted boundary until a later implementation-correction gate "
-        "is completed",
+        "records that the merge approved architecture only",
+        "the merge approved architecture only, and authorized no production-code correction",
     ),
-    # ------------------------------------------------------- the AWS constraint
+    ("records no wholesale supersession", "adr-0019 supersedes no adr wholesale"),
+    ("records the narrow amendment", "narrowly amends the enumerated clauses of adr-0018"),
+    (
+        "keeps adr-0018 in force as amended",
+        "adr-0018 remains accepted / in force except as amended by adr-0019",
+    ),
+    ("leaves adr-0017 alone", "adr-0017 is not amended or superseded"),
+    ("leaves adr-0011 alone", "adr-0011 is not amended or superseded"),
+    ("keeps the shared store unchanged", "the shared s3researchobjectstore remains unchanged"),
+    (
+        "records the amendment as authoritative",
+        "adr-0019's amendment is now authoritative architecture",
+    ),
+    (
+        "records that the implementation does not conform",
+        "the production implementation does not yet conform to that architecture",
+    ),
     ("records that head requires get", "headobject requires the s3:getobject permission"),
     (
         "records that no metadata action exists",
@@ -6703,74 +6814,132 @@ ADR_0019_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "records that an application shape is not iam authority",
         "does not remove iam authority from a compromised process",
     ),
-    # ------------------------------------------------------- the chosen direction
-    (
-        "records the selected direction",
-        "the selected direction is the iam-preserving acquisition zero-head fail-closed design",
-    ),
     ("withholds the read action", "the acquisition role receives no s3:getobject"),
-    ("records zero acquisition head", "acquisition headobject invocations are zero"),
-    ("records zero acquisition object reads", "acquisition object-byte reads are zero"),
+    ("withholds the version read action", "no s3:getobjectversion"),
+    ("withholds the attributes action", "no s3:getobjectattributes"),
     (
-        "records the fail-closed collision",
-        "the acquisition collision fails closed without comparison",
+        "removes head_object from the surface",
+        "the acquisition publication surface has no head_object",
+    ),
+    ("removes get_object from the surface", "no get_object"),
+    ("records zero acquisition head", "acquisition headobject: exactly 0"),
+    ("records zero acquisition object reads", "acquisition getobject: exactly 0"),
+    (
+        "records fail-closed collisions",
+        "every acquisition-side conditional putobject collision fails closed",
     ),
     (
         "refuses to read a 412 as identity",
         "a 412 does not establish that the occupied object is identical",
     ),
     (
-        "keeps both boundaries",
-        "both the iam boundary and the application boundary are retained",
+        "names the authoritative bronze outcome",
+        "bronze_name_occupied is the authoritative architectural closed outcome",
     ),
+    (
+        "names the authoritative locator outcome",
+        "locator_name_occupied is the authoritative architectural replacement for the earlier "
+        "collision claim",
+    ),
+    (
+        "refuses a verified-collided-object claim",
+        "a partial locator cannot claim the collided object was verified or retained",
+    ),
+    ("keeps the unpublished-locator outcome", "the closed result remains locator_not_published"),
+    ("keeps both boundaries", "both the iam boundary and the application boundary are retained"),
     ("rejects the weaker alternative", "the application-only alternative is not adopted"),
-    ("leaves adr-0017 alone", "adr-0017 is not amended and not superseded"),
     (
         "requires the write-only surface at the later gate",
         "the later implementation correction must introduce an adr-0018-specific write-only "
         "publication surface",
     ),
-    # ------------------------------------------------- the arithmetic, as proposed
-    ("labels the proposed arithmetic as not in force", "proposed, not in force -- acquisition"),
+    ("records the dormant implementation", "adr-0018 offline implementation: merged / dormant"),
     (
-        "records the proposed successful-run total",
-        "successful-run acquisition s3 operations 145 to 147",
+        "records the correction status",
+        "adr-0019 production-code correction: not authorized / not implemented",
     ),
-    ("records the proposed two-run total", "two successful acquisition runs 290 to 294"),
-    ("records the proposed package total", "whole successful package 485 to 490"),
     (
-        "keeps the assessment envelope",
-        "the assessment envelope is unchanged at 195 to 196",
+        "records the pre-amendment collision path",
+        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "collision path",
     ),
-    ("records refused-run accounting", "a refused run did not perform 145 operations"),
-    # ------------------------------------------------------ what stays closed
     (
-        "records the production correction status",
-        "production implementation correction: not authorized / not implemented",
+        "records non-deployability",
+        "the current dormant implementation is therefore not deployable under the authoritative "
+        "architecture",
     ),
+    (
+        "refuses a zero-head implementation claim",
+        "no claim is made that the current implementation already has zero acquisition head "
+        "operations",
+    ),
+    (
+        "refuses a surface-exists claim",
+        "no claim is made that the adr-0018-specific write-only publication surface already exists",
+    ),
+    (
+        "records infrastructure blocked pending correction",
+        "infrastructure design: blocked pending implementation correction",
+    ),
+    ("records the governing put range", "acquisition putobject: 145 to 147"),
+    ("records the two-run total", "two successful runs: 290 to 294"),
+    ("keeps the assessment envelope", "assessment: unchanged at 195 to 196"),
+    ("records the package total", "whole successful package: 485 to 490"),
+    ("records the locator reserve", "l >= 3 * t_s3 + c"),
+    ("records the admission rule", "remaining >= t_req + 3 * t_s3 + l"),
+    ("records the feasibility inequality", "t_req + p + 3 * t_s3 + l <= d"),
+    ("records the deadline", "d = 1800 seconds"),
+    (
+        "records refused-run accounting",
+        "partial and refused runs are never reported as having performed 145 operations",
+    ),
+    (
+        "retires the superseded acquisition figures",
+        "the superseded acquisition figures are adr-0018's original accepted arithmetic and no "
+        "longer govern",
+    ),
+    ("records the deployment status", "deployment: not authorized / not performed"),
     (
         "records the terraform and iam status",
-        "terraform and iam implementation: not authorized / not implemented",
+        "terraform/iam implementation: not authorized / not implemented",
     ),
     (
         "records the infrastructure mutation status",
         "infrastructure mutation: not authorized / not performed",
     ),
+    ("records that run a has not run", "run a: not authorized / not run"),
+    ("records that run b has not run", "run b: not authorized / not run"),
+    (
+        "records that the combined assessment has not run",
+        "combined assessment: not authorized / not run",
+    ),
     ("records zero new qualification roles", "new qualification iam roles zero -- none exists"),
+    (
+        "records that acceptance is not authorization",
+        "acceptance of adr-0019 is not authorization to implement or execute it",
+    ),
     (
         "records that nothing ran before the discovery",
         "no infrastructure was built and no run occurred before the discovery",
+    ),
+    (
+        "records when the conflict was discovered",
+        "discovered after adr-0018's dormant implementation had merged",
+    ),
+    ("keeps g1 open", "g1 open"),
+    ("keeps g2 open", "g2 open"),
+    ("keeps phase 3 incomplete", "phase 3 not complete"),
+    ("keeps control deferred", "control publication deferred"),
+    ("keeps live trading disabled", "live trading hard-disabled"),
+    (
+        "keeps the third adr-0017 attempt unauthorized",
+        "a third adr-0017 authenticated attempt not authorized",
     ),
 )
 
 #: Claims neither status document may make about the gap or the proposal.
 #: One aggregate check per document, so entries here add no audit check.
 ADR_0019_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "adr-0019 is now accepted",
-    "adr-0019 has been accepted",
-    "adr-0019 is in force",
-    "adr-0019: accepted",
-    "adr-0019 is accepted / in force",
     "the acquisition role receives s3:getobject",
     "the acquisition role may receive s3:getobject",
     "acquisition may use headobject",
@@ -6784,41 +6953,105 @@ ADR_0019_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the architecture gap is closed",
     "adr-0017's collision behaviour changed",
     "the assessment envelope changed",
+    # ------------------------------------------- the superseded proposed state
+    #
+    # Moved here on the merge rather than deleted, so a revert to the pre-merge
+    # wording is caught rather than merely un-asserted. None of these is a
+    # substring of an honest post-merge sentence: "adr-0019 was proposed" is
+    # historical and allowed, "surface already exists" is a refusal, and
+    # "does not yet conform" is not "conforms".
+    "adr-0019: proposed / not in force",
+    "adr-0019 carries no authority until the pull request introducing it is merged",
+    "proposed, not in force -- acquisition",
+    "adr-0019 is proposed",
+    "adr-0019 is still proposed",
+    "adr-0019 has not merged",
+    "adr-0018 as accepted is what governs",
+    "adr-0018's accepted arithmetic remains the in-force arithmetic",
+    "the figures adr-0019 derives are proposed rather than current",
+    f"pr {ADR_0019_PR} is open",
+    f"pr {ADR_0019_PR} remains unmerged",
+    "the write-only publication surface exists",
+    "the production implementation conforms",
+    "the production-code correction is implemented",
 )
 
 #: What the implementation plan must say once the gap is recorded. The plan is
 #: where the ceilings are read from, so a plan that still sent a reader to an
 #: undeployable design would be sending them to a design nobody can build.
+#: What the implementation plan must say now that ADR-0019 has merged. The
+#: plan is where the ceilings are read from, so it carries the governing
+#: arithmetic and the open implementation gap together.
 ADR_0019_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records the feasibility classification", "stopped_architecture_gap_head_requires_get"),
-    ("records that infrastructure is blocked", "infrastructure design and deployment: blocked"),
-    ("records the proposed adr status", "proposed / not in force"),
+    ("records the architecture status", "adr-0019 architecture: accepted / in force"),
+    ("names the merge commit", "77974f476ead96548beb16543dfd3db8c03232c3"),
+    ("names the approved head", "bf0414c4a915d85a124ba400284ca1fa671fda27"),
     (
-        "records that the proposal has no authority yet",
-        "adr-0019 carries no authority until the pull request introducing it is merged",
+        "keeps the proposed period historical",
+        "while pr #46 was open adr-0019 was proposed and carried no authority",
     ),
     (
-        "records that the accepted arithmetic still governs",
-        "adr-0018's accepted arithmetic remains the in-force arithmetic",
+        "keeps what governed before the merge",
+        "adr-0018's original collision-resolution design and arithmetic governed before the pr "
+        "#46 merge",
     ),
     (
-        "records the selected direction",
-        "iam-preserving acquisition zero-head fail-closed design",
+        "records that the merge approved architecture only",
+        "the merge approved architecture only, and authorized no production-code correction",
+    ),
+    ("records no wholesale supersession", "adr-0019 supersedes no adr wholesale"),
+    ("records the narrow amendment", "narrowly amends the enumerated clauses of adr-0018"),
+    (
+        "keeps adr-0018 in force as amended",
+        "adr-0018 remains accepted / in force except as amended by adr-0019",
+    ),
+    ("leaves adr-0017 alone", "adr-0017 is not amended or superseded"),
+    ("keeps the shared store unchanged", "the shared s3researchobjectstore remains unchanged"),
+    (
+        "records that the implementation does not conform",
+        "the production implementation does not yet conform to that architecture",
     ),
     ("withholds the read action", "the acquisition role receives no s3:getobject"),
-    ("leaves adr-0017 alone", "adr-0017 is not amended and not superseded"),
+    ("records zero acquisition head", "acquisition headobject: exactly 0"),
+    ("records zero acquisition object reads", "acquisition getobject: exactly 0"),
+    (
+        "records fail-closed collisions",
+        "every acquisition-side conditional putobject collision fails closed",
+    ),
     (
         "requires the write-only surface at the later gate",
         "the later implementation correction must introduce an adr-0018-specific write-only "
         "publication surface",
     ),
     (
-        "records the production correction status",
-        "production implementation correction: not authorized / not implemented",
+        "records the correction status",
+        "adr-0019 production-code correction: not authorized / not implemented",
     ),
-    # The PR #45 wording correction. "Implementation ... remains NOT AUTHORIZED"
-    # read as a present-state claim in a paragraph that had just recorded the
-    # implementation merging. The two facts are separated rather than blurred.
+    (
+        "records the pre-amendment collision path",
+        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "collision path",
+    ),
+    (
+        "records non-deployability",
+        "the current dormant implementation is therefore not deployable under the authoritative "
+        "architecture",
+    ),
+    (
+        "records infrastructure blocked pending correction",
+        "infrastructure design: blocked pending implementation correction",
+    ),
+    ("records the governing put range", "acquisition putobject: 145 to 147"),
+    ("records the two-run total", "two successful runs: 290 to 294"),
+    ("keeps the assessment envelope", "assessment: unchanged at 195 to 196"),
+    ("records the package total", "whole successful package: 485 to 490"),
+    ("records the locator reserve", "l >= 3 * t_s3 + c"),
+    ("records the admission rule", "remaining >= t_req + 3 * t_s3 + l"),
+    (
+        "records that acceptance is not authorization",
+        "acceptance of adr-0019 is not authorization to implement or execute it",
+    ),
     (
         "attributes the clarification merge correctly",
         "the pr #42 clarification merge conferred no implementation authority",
@@ -14412,9 +14645,13 @@ def main() -> int:
         )
 
     f.check(
-        "ADR-0019 is not registered as a merged ADR",
-        "ADR-0019" not in dict(MERGED_ADR_STATUS),
-        "a proposed ADR must not be registered as merged until its pull request merges",
+        # Inverted on the merge of PR #46, not deleted. This required ABSENCE from
+        # the registry while ADR-0019 sat on an open pull request; the merge is the
+        # event that flips it, and deleting it would leave the reverted claim
+        # unguarded -- the same treatment ADR-0018's guard was given on PR #39.
+        "ADR-0019 is registered as a merged ADR",
+        dict(MERGED_ADR_STATUS).get("ADR-0019") == f"PR {ADR_0019_PR} merged",
+        f"ADR-0019 must be registered as 'PR {ADR_0019_PR} merged'",
     )
 
     for name, document in sorted(adr_0018_documents.items()):
