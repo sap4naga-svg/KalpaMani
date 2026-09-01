@@ -67,3 +67,25 @@ output "log_group_name" {
   description = "Task log group. Never a destination for payloads or credentials."
   value       = aws_cloudwatch_log_group.research.name
 }
+
+output "qualification_acquisition_policy_arn" {
+  description = <<-EOT
+    ADR-0018/0019 qualification acquisition permission set. Write-only on the
+    licensed qualification prefixes, plus the one governed secret retrieval.
+
+    ATTACHED TO NOTHING as committed: no role holds it, so it grants nothing. The
+    trust principal is a separate architecture decision, and attaching this is a
+    separate authorization. Contains an account id -- do not publish.
+  EOT
+  value       = aws_iam_policy.qualification_acquisition.arn
+}
+
+output "qualification_assessment_policy_arn" {
+  description = <<-EOT
+    ADR-0018 qualification assessment permission set. Exact evidence reads and one
+    conditional private report; no credential, no provider, no listing, no delete.
+
+    ATTACHED TO NOTHING as committed. Contains an account id -- do not publish.
+  EOT
+  value       = aws_iam_policy.qualification_assessment.arn
+}

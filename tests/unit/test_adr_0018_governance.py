@@ -369,16 +369,69 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
         )
 
     def test_no_new_iam_role_is_declared_for_the_two_designed_roles(self) -> None:
+        """No IAM ROLE, and no attachment, for either designed actor.
+
+        This once refused the substring ``qualification_acquisition`` anywhere
+        under ``infra/``, which was the right question while no qualification
+        Terraform was authorized at all. The offline permission-set candidate is
+        now authorized and present, and it has to name the two actors to be about
+        them -- so the guard is inverted into the question it was always asking:
+        does an identity exist? Roles, role policies, users, access keys and every
+        attachment resource are refused; a managed policy attached to nothing is
+        not an identity and grants nothing.
+        """
         infra = PROJECT_ROOT / "infra"
         if not infra.is_dir():  # pragma: no cover - the tree exists in this repository
             return
+        identity = re.compile(
+            r'resource\s+"(aws_iam_role|aws_iam_role_policy|aws_iam_user|aws_iam_access_key|'
+            r"aws_iam_policy_attachment|aws_iam_role_policy_attachment|"
+            r'aws_iam_user_policy_attachment|aws_iam_group_policy_attachment)"\s+"([^"]+)"'
+        )
         for path in infra.rglob("*.tf"):
-            text = path.read_text(encoding="utf-8").lower()
-            for role in ("qualification_acquisition", "qualification_assessment"):
-                assert role not in text, (
-                    f"{path.name} declares {role}. Designing a role is not creating one, "
-                    "and infrastructure mutation is a separate gate."
+            hcl = "\n".join(
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if not line.lstrip().startswith("#")
+            )
+            for resource_type, name in identity.findall(hcl):
+                assert not resource_type.endswith("attachment"), (
+                    f"{path.name} declares {resource_type}.{name}. Attaching a permission "
+                    "set to a principal is infrastructure mutation, which is a separate gate."
                 )
+                for role in ("qualification_acquisition", "qualification_assessment"):
+                    assert role not in name, (
+                        f"{path.name} declares {resource_type}.{name}. Designing a role is "
+                        "not creating one, and infrastructure mutation is a separate gate."
+                    )
+
+    def test_the_offline_permission_set_candidate_exists_and_creates_no_identity(self) -> None:
+        """The reverse-drift half. Deleting the candidate must fail too.
+
+        A guard that only forbids is satisfied by an empty directory. This one
+        requires the accepted ADR-0018 s.10 permission sets to be expressed as two
+        managed policies, and requires them to be the ONLY resources the candidate
+        declares -- so the file cannot quietly grow a role, a bucket or a trust
+        policy while the guard above keeps passing on its own terms.
+        """
+        candidate = (
+            PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification_policies.tf"
+        )
+        assert candidate.is_file(), (
+            "the offline qualification permission-set candidate is missing; the accepted "
+            "ADR-0018 s.10 permission sets would then be expressed nowhere in Terraform"
+        )
+        hcl = "\n".join(
+            line
+            for line in candidate.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        declared = re.findall(r'resource\s+"([a-z0-9_]+)"\s+"([a-z0-9_]+)"', hcl)
+        assert declared == [
+            ("aws_iam_policy", "qualification_acquisition"),
+            ("aws_iam_policy", "qualification_assessment"),
+        ], f"the candidate declares something other than the two permission sets: {declared}"
+        assert "assume_role_policy" not in hcl, "a trust policy would name a principal nobody chose"
 
     def test_neither_entry_point_has_ever_been_executed_against_a_real_service(self) -> None:
         """A statement about the repository: no run record of either exists."""

@@ -387,6 +387,7 @@ INFRA_FILES = (
     "ecr.tf",
     "ecs.tf",
     "logging.tf",
+    "qualification_policies.tf",
     "terraform.tfvars.example",
 )
 
@@ -4269,20 +4270,55 @@ def _subject_shaped_literals(path: Path) -> list[str]:
 
 
 def _qualification_role_declarations() -> list[str]:
-    """Every Terraform file declaring one of the two designed qualification roles.
+    """Every Terraform file declaring an IAM ROLE or attachment for either designed actor.
 
     Expected: none. Designing a role is not creating one, and creating one is a
     separately authorized infrastructure mutation.
+
+    **This asks about roles, not about the words.** It used to refuse the mere
+    substring ``qualification_acquisition`` anywhere under ``infra/``, which was
+    right while no qualification Terraform was authorized at all and is wrong now
+    that the offline permission-set candidate exists: the candidate has to name
+    the two actors to be about them. So the question is asked precisely --
+    ``resource "aws_iam_role"``, ``resource "aws_iam_role_policy"`` and every
+    attachment resource -- on comment-stripped HCL, because these files explain
+    at length which identity they deliberately do not create.
     """
     infra = REPO_ROOT / "infra"
     if not infra.is_dir():
         return []
+    identity = re.compile(
+        r'resource\s+"(aws_iam_role|aws_iam_role_policy|aws_iam_user|aws_iam_access_key|'
+        r"aws_iam_policy_attachment|aws_iam_role_policy_attachment|"
+        r'aws_iam_user_policy_attachment|aws_iam_group_policy_attachment)"\s+"([^"]+)"'
+    )
     offenders: list[str] = []
     for path in sorted(infra.rglob("*.tf")):
-        text = read(path).lower()
-        if "qualification_acquisition" in text or "qualification_assessment" in text:
-            offenders.append(path.name)
+        hcl = strip_hcl_comments(read(path))
+        for resource_type, name in identity.findall(hcl):
+            if "qualification_acquisition" in name or "qualification_assessment" in name:
+                offenders.append(f"{path.name}:{resource_type}.{name}")
+            elif resource_type.endswith("attachment"):
+                offenders.append(f"{path.name}:{resource_type}.{name}")
     return offenders
+
+
+def _qualification_policy_declarations() -> list[str]:
+    """Every ``aws_iam_policy`` declared for one of the two designed actors.
+
+    The reverse-drift half of the check above. Deleting the offline candidate, or
+    quietly renaming one of its policies, would otherwise leave a repository that
+    passes both directions of the role guard while no longer expressing the
+    accepted permission sets at all.
+    """
+    infra = REPO_ROOT / "infra"
+    if not infra.is_dir():
+        return []
+    declared = re.compile(r'resource\s+"aws_iam_policy"\s+"([^"]+)"')
+    found: list[str] = []
+    for path in sorted(infra.rglob("*.tf")):
+        found.extend(declared.findall(strip_hcl_comments(read(path))))
+    return sorted(found)
 
 
 def _unframed_occurrences(text: str, phrase: str, framing: str) -> int:
@@ -16310,9 +16346,15 @@ def main() -> int:
             "executable invariants belong in unit tests, and this audit must not replace them",
         )
     f.check(
-        "no Terraform declares either designed qualification role",
+        "no Terraform declares an IAM role or attachment for either designed actor",
         not _qualification_role_declarations(),
         "designing a role is not creating one; infrastructure mutation is a separate gate",
+    )
+    f.check(
+        "the offline candidate declares both qualification permission sets",
+        _qualification_policy_declarations()
+        == ["qualification_acquisition", "qualification_assessment"],
+        "the accepted ADR-0018 s.10 permission sets are no longer expressed in Terraform",
     )
     # This audit is excluded by name, and only this audit. It is a governance
     # guard, so it *has* to name the ADR it guards -- but it constructs no client,
