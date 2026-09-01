@@ -355,13 +355,23 @@ Governing arithmetic: **acquisition PutObject: 145 to 147**, **two successful ru
 **assessment: unchanged at 195 to 196**, **whole successful package: 485 to 490**, with
 **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**.
 
-**The production implementation does not yet conform to that architecture.** **ADR-0019
-production-code correction: NOT AUTHORIZED / NOT IMPLEMENTED**, **the current dormant acquisition
-implementation still uses the pre-ADR-0019 shared collision path**, and **the current dormant
-implementation is therefore not deployable under the authoritative architecture**. **The later
-implementation correction must introduce an ADR-0018-specific write-only publication surface.**
-**Infrastructure design: BLOCKED pending implementation correction.** **Acceptance of ADR-0019 is
-not authorization to implement or execute it.**
+**The production implementation now conforms to that architecture offline.** **ADR-0019
+production-code correction: MERGED / DORMANT / OFFLINE-CONFORMING** — **PR #48 merged**, merge
+commit `f0b39fccdfb36ea69d08fb4def3979b87814b9ff`, approved implementation head
+`64dc3388f402ee98cf8940d94b42fa16aa7553e2`. **The dormant acquisition implementation no longer
+uses the pre-ADR-0019 shared collision path**, **the ADR-0018-specific write-only publication
+surface now exists**, and **the current dormant implementation is offline-conforming under the
+authoritative architecture**. **The later implementation correction must introduce an
+ADR-0018-specific write-only publication surface** — a standing architecture requirement, and one
+that correction satisfied. **Before PR #48 merged the production implementation did not yet
+conform**, and the three status lines those days carried are kept verbatim, each written with the
+event that ended it: **before PR #48 merged, infrastructure design: BLOCKED pending implementation
+correction**; **before PR #48 merged, production implementation correction: NOT AUTHORIZED / NOT
+IMPLEMENTED**; **before PR #48 merged, the production implementation does not yet conform to that
+architecture**. **None of them is current.** **The ADR-0019 implementation-correction prerequisite is
+SATISFIED**, and **satisfying the implementation prerequisite does not itself authorize or begin
+infrastructure work**: **infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED**.
+**Acceptance of ADR-0019 is not authorization to implement or execute it.**
 
 **Implementing that correction exposed a further, pre-existing incompatibility, and
 [ADR-0020](../decisions/ADR-0020-request-scoped-qualification-payload-identity.md) resolves it.**
@@ -393,14 +403,22 @@ S3ResearchObjectStore contract**, **ADR-0020 introduces no locator field**, **AD
 no additional S3 operation**, **ADR-0020 preserves the 485 to 490 package envelope**, and
 **ADR-0020 preserves the deadline arithmetic L >= 3 * T_s3 + C**.
 
-**No implementation has yet been authorized or completed.** **ADR-0020 implementation: NOT
-AUTHORIZED / NOT IMPLEMENTED**, and no qualification payload-key builder exists. **PR #48 state:
-OPEN / UNMERGED**, **PR #48 remains open and unchanged**, and **PR #48 correction against
-ADR-0020: NOT BEGUN**. **The next separately authorized implementation gate is correcting PR #48
-against ADR-0020**, and **infrastructure remains blocked until that correction is implemented,
-independently reviewed and merged**. **Infrastructure design and mutation: BLOCKED · deployment:
-NOT PERFORMED · Run A: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined
-assessment: NOT AUTHORIZED / NOT RUN**, and **no deployment or empirical execution has occurred**.
+**The implementation has since been separately authorized, made, independently reviewed and
+merged.** **ADR-0020 implementation: MERGED / DORMANT / OFFLINE-CONFORMING**, and **a
+qualification payload-key builder exists**. **PR #48: merged** — merge commit
+`f0b39fccdfb36ea69d08fb4def3979b87814b9ff`, approved implementation head
+`64dc3388f402ee98cf8940d94b42fa16aa7553e2` — and **PR #48 correction against ADR-0020: MERGED**.
+**Before PR #48 merged no qualification payload-key builder existed** and PR #48 was open,
+unmerged and uncorrected — true then, and not rewritten. **The ADR-0020 implementation-correction
+prerequisite is SATISFIED**, and **satisfying the implementation prerequisite does not itself
+authorize or begin infrastructure work**; **the next possible gate is a separate owner
+authorization for offline infrastructure, Terraform and IAM preparation**. **Merging an
+implementation authorizes no infrastructure, no deployment and no run**, and **offline-conforming
+is not deployed, not active, not operational, not authorized to run and not empirically
+validated**. **Infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED · Terraform /
+IAM: NOT AUTHORIZED / NOT IMPLEMENTED · deployment: NOT PERFORMED · execution: ZERO · Run A: NOT
+AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined assessment: NOT AUTHORIZED / NOT
+RUN**, and **no deployment or empirical execution has occurred**.
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.

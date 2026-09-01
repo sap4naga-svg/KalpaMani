@@ -4285,6 +4285,45 @@ def _qualification_role_declarations() -> list[str]:
     return offenders
 
 
+def _unframed_occurrences(text: str, phrase: str, framing: str) -> int:
+    """How many copies of ``phrase`` stand outside its historical ``framing``.
+
+    Pure arithmetic over one flattened reading: every framed copy contains the
+    phrase, so subtracting the framed count from the total leaves the copies that
+    stand alone. Zero is the only acceptable answer for a superseded status line.
+
+    It is deliberately not a denylist. The phrase is *required* elsewhere and is
+    legitimately present, so "is it here" cannot distinguish the preserved record
+    from a revert; "is it here unframed" can.
+    """
+    return text.count(phrase) - text.count(framing)
+
+
+def _runtime_execute_call_sites() -> list[Path]:
+    """Every module under ``src/`` that calls ``.execute(...)`` on something.
+
+    By AST, so a mention in a docstring or a comment is not a call: the composition
+    root's own prose quotes ``composition._runtime.execute(plan)`` to explain a
+    defect it fixed, and a substring scan would count that as a third caller.
+
+    Expected: exactly the two named in :data:`RUNTIME_EXECUTE_CALLERS`. The
+    ADR-0017 composition path is one and the dormant ADR-0018 acquisition path is
+    the other, and they are separate on purpose -- the second may not become
+    reachable from the first.
+    """
+    sites: list[Path] = []
+    for path in _src_python_files():
+        tree = ast.parse(read(path), filename=str(path))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+            for node in ast.walk(tree)
+        ):
+            sites.append(path)
+    return sites
+
+
 def _store_construction_sites() -> list[Path]:
     """Every module under ``src/`` that constructs the licensed object store."""
     sites: list[Path] = []
@@ -4919,7 +4958,7 @@ ADR_0017_CHRONOLOGY: Final[tuple[str, ...]] = (
 #: stays unestablished, no provider is selected, G1 and G2 stay OPEN, and Phase 3
 #: stays NOT COMPLETE.
 #:
-#: 48 claims about an implemented, twice-attempted surface are listed here,
+#: 49 claims about an implemented, twice-attempted surface are listed here,
 #: and the number in that sentence is checked against ``len()`` so an entry cannot
 #: leave quietly.
 ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
@@ -4938,6 +4977,9 @@ ADR_0017_FORBIDDEN: Final[tuple[str, ...]] = (
     "the entry point has not been implemented",
     "authenticated entry points implemented none",
     "has no production caller",
+    # -- stale: true before the dormant ADR-0018 acquisition path merged. The
+    # ADR-0017 caller is still exactly one; the repository now has two.
+    "exactly one production caller",
     "no authenticated implementation may be built",
     # -- unestablished: more than either run put on the record
     "the authenticated qualification passed",
@@ -5109,7 +5151,11 @@ ADR_0017_MATRIX_IN_FORCE: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("counts one implemented entry point", "implemented one;"),
     ("records the composition root as extended", "extended, not duplicated"),
-    ("records exactly one production caller", "production caller."),
+    ("records exactly one ADR-0017 production caller", "adr-0017 production caller"),
+    (
+        "records the two production call sites overall",
+        "exactly two production call sites overall",
+    ),
 )
 
 ADR_0017_MATRIX_NOT_AUTHORIZED: Final[tuple[tuple[str, str], ...]] = (
@@ -5212,7 +5258,18 @@ ADR_0017_ROW_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "authenticated entry points implemented one",
     ),
     ("records the composition root as extended, not duplicated", "extended, not duplicated"),
-    ("records exactly one production caller of execute", "exactly one production caller"),
+    (
+        "records exactly one ADR-0017 production caller of execute",
+        "exactly one adr-0017 production caller",
+    ),
+    (
+        "records the two production call sites overall",
+        "exactly two production call sites overall",
+    ),
+    (
+        "records that the second caller does not reach ADR-0017",
+        "does not alter, broaden or become reachable from adr-0017",
+    ),
     ("states that implementing is not permission to use", "not permission to use it"),
     (
         "keeps a third execution separately gated and unauthorized",
@@ -5283,7 +5340,18 @@ ADR_0017_SECTION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("names the implemented entry point", "scripts/sharadar_authenticated_qualification.py"),
     ("states the entry point refuses by default", "refuses by default"),
     ("records the composition root as extended, not duplicated", "extended, not duplicated"),
-    ("records exactly one production caller of execute", "exactly one production caller"),
+    (
+        "records exactly one ADR-0017 production caller of execute",
+        "exactly one adr-0017 production caller",
+    ),
+    (
+        "records the two production call sites overall",
+        "exactly two production call sites overall",
+    ),
+    (
+        "records that the second caller does not reach ADR-0017",
+        "does not alter, broaden or become reachable from adr-0017",
+    ),
     (
         "states that implementing a surface was not permission to use it",
         "implementing an operator surface was not permission to use it",
@@ -5664,15 +5732,27 @@ ADR_0018_TEST_SUITES: Final[tuple[Path, ...]] = tuple(
     )
 )
 
-#: Every module permitted to construct the licensed object store. Two named
-#: modules, so a **third** still fails: a count could drift, a list cannot.
-#: The modules permitted to construct the shared licensed store. **One**, again.
+#: The modules permitted to construct the shared licensed store. **One** named
+#: module, so a **second** still fails: a count could drift, a list cannot.
 #:
 #: ``acquisition.py`` was the second until ADR-0019 made the empirical acquisition
 #: path write-only: the shared store resolves a ``412`` with a ``HeadObject``, which
 #: AWS maps onto ``s3:GetObject``, so that path publishes through its own write-only
 #: surface now. Narrowing, not relaxing -- a second module here fails again.
 STORE_BUILDERS: Final[tuple[str, ...]] = ("composition.py",)
+
+#: The modules permitted to call ``QualificationRuntime.execute`` in production.
+#:
+#: **Two named modules, so a third fails.** A count could drift; a list cannot.
+#:
+#: ``composition.py`` is ADR-0017's accepted path and is unchanged. ``acquisition.py``
+#: is the dormant ADR-0018 / ADR-0019 / ADR-0020 empirical acquisition path, merged
+#: by PR #48. The second is not reachable from the first, and neither reaches the
+#: assessment read surface -- both properties are checked rather than described.
+#:
+#: The standing "exactly ONE production caller" claim was true of the repository
+#: until that path merged, and is now scoped to ADR-0017 in both status documents.
+RUNTIME_EXECUTE_CALLERS: Final[tuple[str, ...]] = ("acquisition.py", "composition.py")
 
 #: The two operator authorization flags. Different by construction, so neither
 #: authorization can be given by pasting the other one.
@@ -6551,6 +6631,51 @@ ADR_0019_PR: Final = "#46"
 ADR_0019_MERGE_COMMIT: Final = "77974f476ead96548beb16543dfd3db8c03232c3"
 ADR_0019_APPROVED_HEAD: Final = "bf0414c4a915d85a124ba400284ca1fa671fda27"
 
+#: The pull request that merged the production-code correction ADR-0019 required
+#: and ADR-0020 re-scoped, its merge commit and the approved implementation head.
+#:
+#: One correction, one pull request. It is deliberately **not** registered in
+#: :data:`MERGED_ADR_STATUS`: that registry answers *which pull request made an
+#: ADR effective*, and PR #48 made none -- PR #46 and PR #49 did. A second row
+#: for ADR-0019 or ADR-0020 would be two answers to one question.
+ADR_0019_IMPL_PR: Final = "#48"
+ADR_0019_IMPL_MERGE_COMMIT: Final = "f0b39fccdfb36ea69d08fb4def3979b87814b9ff"
+ADR_0019_IMPL_APPROVED_HEAD: Final = "64dc3388f402ee98cf8940d94b42fa16aa7553e2"
+
+#: Superseded status lines that may appear ONLY inside their historical framing.
+#:
+#: Both were true, as current status, until PR #48 merged the production-code
+#: correction. Both are still required **by name** of CLAUDE.md, README.md and the
+#: implementation plan by ``tests/unit/test_adr_0019_governance.py``, so neither can
+#: simply be deleted -- and neither may stand as a current claim, because the
+#: prerequisite is satisfied and the correction is merged.
+#:
+#: A denylist cannot express *only inside this framing*: it answers "is the phrase
+#: present", and the phrase is legitimately present. :func:`_unframed_occurrences`
+#: answers the question that actually matters -- how many copies stand **outside**
+#: the sentence that marks them historical -- so reintroducing either as a current
+#: status line fails while the preserved record stays.
+#:
+#: Each framing must contain its phrase verbatim, or the subtraction below is
+#: meaningless. A check asserts exactly that rather than trusting the pairing.
+HISTORICAL_ONLY_STATUS_LINES: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "infrastructure design: blocked pending implementation correction",
+        f"before pr {ADR_0019_IMPL_PR} merged, infrastructure design: blocked pending "
+        "implementation correction",
+    ),
+    (
+        "production implementation correction: not authorized / not implemented",
+        f"before pr {ADR_0019_IMPL_PR} merged, production implementation correction: not "
+        "authorized / not implemented",
+    ),
+    (
+        "the production implementation does not yet conform to that architecture",
+        f"before pr {ADR_0019_IMPL_PR} merged, the production implementation does not yet "
+        "conform to that architecture",
+    ),
+)
+
 #: What ADR-0019 must say about itself.
 #:
 #: The feasibility gap it records is a permission fact, not a preference: AWS
@@ -6814,8 +6939,12 @@ ADR_0019_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "adr-0019's amendment is now authoritative architecture",
     ),
     (
-        "records that the implementation does not conform",
-        "the production implementation does not yet conform to that architecture",
+        # Inverted on the PR #48 merge, not deleted: the pre-correction spelling
+        # moved into :data:`ADR_0019_STATUS_FORBIDDEN`, so a revert fails rather
+        # than merely going unchecked. "Offline" is load-bearing -- the code
+        # conforms, and nothing is deployed, run or empirically validated.
+        "records that the implementation now conforms offline",
+        "the production implementation now conforms to that architecture offline",
     ),
     ("records that head requires get", "headobject requires the s3:getobject permission"),
     (
@@ -6876,30 +7005,52 @@ ADR_0019_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records the dormant implementation", "adr-0018 offline implementation: merged / dormant"),
     (
         "records the correction status",
-        "adr-0019 production-code correction: not authorized / not implemented",
+        "adr-0019 production-code correction: merged / dormant / offline-conforming",
     ),
+    ("names the correction merge commit", ADR_0019_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0019_IMPL_APPROVED_HEAD),
     (
-        "records the pre-amendment collision path",
-        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "records that the pre-amendment collision path is gone",
+        "the dormant acquisition implementation no longer uses the pre-adr-0019 shared "
         "collision path",
     ),
     (
-        "records non-deployability",
-        "the current dormant implementation is therefore not deployable under the authoritative "
+        "records offline conformance",
+        "the current dormant implementation is offline-conforming under the authoritative "
         "architecture",
     ),
     (
-        "refuses a zero-head implementation claim",
-        "no claim is made that the current implementation already has zero acquisition head "
-        "operations",
+        # What the two refusals it replaces could not say. They were honest while
+        # nothing had been corrected; a document may now state the property, and
+        # a document that states it is held to it by the structural guard.
+        "records the zero-read acquisition implementation",
+        "the merged dormant acquisition implementation has zero acquisition headobject and zero "
+        "acquisition getobject",
     ),
     (
-        "refuses a surface-exists claim",
-        "no claim is made that the adr-0018-specific write-only publication surface already exists",
+        "records that the write-only surface now exists",
+        "the adr-0018-specific write-only publication surface now exists",
     ),
     (
-        "records infrastructure blocked pending correction",
-        "infrastructure design: blocked pending implementation correction",
+        # The pre-correction period stays a fact about those days, exactly as
+        # ADR-0019's own proposed period does.
+        "keeps the pre-correction state historical",
+        f"before pr {ADR_0019_IMPL_PR} merged the production implementation did not yet conform",
+    ),
+    (
+        "records the satisfied prerequisite",
+        "the adr-0019 implementation-correction prerequisite is satisfied",
+    ),
+    (
+        # The transition that matters, and the one a reader could misread: a
+        # prerequisite being met is not a permission being granted.
+        "records that the prerequisite authorizes nothing",
+        "satisfying the implementation prerequisite does not itself authorize or begin "
+        "infrastructure work",
+    ),
+    (
+        "records that infrastructure stays unauthorized",
+        "infrastructure design and mutation: not authorized / not implemented",
     ),
     ("records the governing put range", "acquisition putobject: 145 to 147"),
     ("records the two-run total", "two successful runs: 290 to 294"),
@@ -7016,9 +7167,35 @@ ADR_0019_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the figures adr-0019 derives are proposed rather than current",
     f"pr {ADR_0019_PR} is open",
     f"pr {ADR_0019_PR} remains unmerged",
-    "the write-only publication surface exists",
-    "the production implementation conforms",
-    "the production-code correction is implemented",
+    # ---------------------------- the superseded pre-correction state
+    #
+    # Released on the PR #48 merge, and replaced rather than dropped. Three
+    # entries left this list because they became TRUE -- "the write-only
+    # publication surface exists", "the production implementation conforms" and
+    # "the production-code correction is implemented" -- and a denylist that
+    # forbids the truth is one that forces a document to lie. What took their
+    # place is every spelling of the state the merge ended, so a revert to "not
+    # corrected" fails rather than merely going unasserted. None is a substring
+    # of an honest post-merge sentence: "before pr #48 merged the production
+    # implementation did not yet conform" is history, and is required above.
+    "adr-0019 production-code correction: not authorized / not implemented",
+    "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+    "collision path",
+    "the current dormant implementation is therefore not deployable under the authoritative "
+    "architecture",
+    "no claim is made that the current implementation already has zero acquisition head operations",
+    "no claim is made that the adr-0018-specific write-only publication surface already exists",
+    "infrastructure remains blocked until the production correction is separately authorized",
+    # ------------------------------------------------- the forward drift
+    #
+    # A merged offline correction is not a deployment, and the distance between
+    # those two is the whole of what this synchronization protects.
+    "the write-only publication surface is deployed",
+    "the production implementation is deployed",
+    "the production-code correction is deployed",
+    "terraform/iam implementation: implemented",
+    "infrastructure mutation: performed",
+    "deployment: performed",
 )
 
 #: What the implementation plan must say once the gap is recorded. The plan is
@@ -7054,8 +7231,8 @@ ADR_0019_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("leaves adr-0017 alone", "adr-0017 is not amended or superseded"),
     ("keeps the shared store unchanged", "the shared s3researchobjectstore remains unchanged"),
     (
-        "records that the implementation does not conform",
-        "the production implementation does not yet conform to that architecture",
+        "records that the implementation now conforms offline",
+        "the production implementation now conforms to that architecture offline",
     ),
     ("withholds the read action", "the acquisition role receives no s3:getobject"),
     ("records zero acquisition head", "acquisition headobject: exactly 0"),
@@ -7071,21 +7248,36 @@ ADR_0019_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "records the correction status",
-        "adr-0019 production-code correction: not authorized / not implemented",
+        "adr-0019 production-code correction: merged / dormant / offline-conforming",
     ),
+    ("names the correction merge commit", ADR_0019_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0019_IMPL_APPROVED_HEAD),
     (
-        "records the pre-amendment collision path",
-        "the current dormant acquisition implementation still uses the pre-adr-0019 shared "
+        "records that the pre-amendment collision path is gone",
+        "the dormant acquisition implementation no longer uses the pre-adr-0019 shared "
         "collision path",
     ),
     (
-        "records non-deployability",
-        "the current dormant implementation is therefore not deployable under the authoritative "
+        "records offline conformance",
+        "the current dormant implementation is offline-conforming under the authoritative "
         "architecture",
     ),
     (
-        "records infrastructure blocked pending correction",
-        "infrastructure design: blocked pending implementation correction",
+        "keeps the pre-correction state historical",
+        f"before pr {ADR_0019_IMPL_PR} merged the production implementation did not yet conform",
+    ),
+    (
+        "records the satisfied prerequisite",
+        "the adr-0019 implementation-correction prerequisite is satisfied",
+    ),
+    (
+        "records that the prerequisite authorizes nothing",
+        "satisfying the implementation prerequisite does not itself authorize or begin "
+        "infrastructure work",
+    ),
+    (
+        "records that infrastructure stays unauthorized",
+        "infrastructure design and mutation: not authorized / not implemented",
     ),
     ("records the governing put range", "acquisition putobject: 145 to 147"),
     ("records the two-run total", "two successful runs: 290 to 294"),
@@ -7507,20 +7699,45 @@ ADR_0020_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "keeps the shared store unchanged after the merge",
         "the shared s3researchobjectstore remains unchanged",
     ),
-    # ---------------------------------------------------- the implementation gap
+    # ------------------------------------------- the implementation, merged
+    #
+    # Inverted on the PR #48 merge, not deleted. Every spelling replaced here
+    # moved into :data:`ADR_0020_SELF_FORBIDDEN`, so a revert to "not
+    # implemented" fails rather than merely going unchecked -- the treatment
+    # ADR-0017's, ADR-0018's and ADR-0019's guards were each given.
+    #
+    # Sections 1-8 are NOT touched by any of this. They record the amendment as
+    # it was proposed and reviewed, PR #48's state on that day included, and a
+    # decision record is not rewritten when the world moves. Every clause below
+    # belongs to the post-merge section.
     (
-        "records that implementation is unauthorized after the merge",
-        "adr-0020 implementation: not authorized / not implemented",
+        "records that the implementation merged",
+        "adr-0020 implementation: merged / dormant / offline-conforming",
     ),
-    ("records that no key builder exists", "no qualification payload-key builder exists"),
+    ("records that a key builder exists", "a qualification payload-key builder exists"),
     (
-        "records that the dormant implementation does not conform",
-        "the current dormant implementation is therefore not deployable under the authoritative "
+        "records that the dormant implementation conforms offline",
+        "the current dormant implementation is offline-conforming under the authoritative "
         "architecture",
     ),
     (
-        "keeps infrastructure blocked pending the correction",
-        "infrastructure design: blocked pending implementation correction",
+        "records the satisfied prerequisite",
+        "the adr-0020 implementation-correction prerequisite is satisfied",
+    ),
+    (
+        # A prerequisite met is not a permission granted, and this is the one
+        # sentence that keeps those apart.
+        "records that merging an implementation authorized nothing further",
+        "merging an implementation authorizes no infrastructure, no deployment and no run",
+    ),
+    (
+        "refuses to read offline conformance as deployment",
+        "offline-conforming is not deployed, not active, not operational, not authorized to run "
+        "and not empirically validated",
+    ),
+    (
+        "records that infrastructure stays unauthorized",
+        "infrastructure design and mutation: not authorized / not implemented",
     ),
     (
         "records that acceptance is not authorization",
@@ -7528,21 +7745,34 @@ ADR_0020_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     # ---------------------------------- the blocked pull request, after the merge
     (
-        "records the blocked pull request's post-merge state",
-        f"pr {ADR_0020_BLOCKED_PR} is still open, non-draft, unmerged and untouched",
+        "records the blocked pull request's merge",
+        f"pr {ADR_0020_BLOCKED_PR} is merged, and it was merged under a separate, later "
+        "authorization",
+    ),
+    ("names the correction merge commit", ADR_0019_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0019_IMPL_APPROVED_HEAD),
+    (
+        "records that the correction merged",
+        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: merged",
     ),
     (
-        "records that the blocked pull request is not ready",
-        f"pr {ADR_0020_BLOCKED_PR} ready for review or merge: no",
+        "records that the separate correction has been made",
+        f"the separate correction pr {ADR_0020_BLOCKED_PR} required has since been made, "
+        "independently reviewed and merged",
     ),
     (
-        "records that the blocked pull request needs a separate correction",
-        "requires a separate correction against the accepted adr-0020 design",
+        # The pre-correction period stays a fact about those days.
+        "keeps the pre-correction state historical",
+        f"before pr {ADR_0020_BLOCKED_PR} merged no qualification payload-key builder existed",
     ),
     (
-        "names the next implementation gate",
-        "the next separately authorized implementation gate is correcting pr "
-        f"{ADR_0020_BLOCKED_PR} against adr-0020",
+        "records that the proposal and its merge left the pull request alone",
+        f"pr {ADR_0020_BLOCKED_PR} was untouched by this decision and by its merge",
+    ),
+    (
+        "names the next possible gate",
+        "the next possible gate is a separate owner authorization for offline infrastructure, "
+        "terraform and iam preparation",
     ),
 )
 
@@ -7558,9 +7788,6 @@ ADR_0020_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "adr-0020 has not merged",
     f"pr {ADR_0020_PR} is open",
     f"pr {ADR_0020_PR} remains unmerged",
-    "adr-0020 implementation: authorized",
-    "the qualification payload-key builder exists",
-    "the production implementation conforms",
     "this adr authorizes an implementation",
     "a 412 establishes identical content",
     "the occupied object may be read",
@@ -7570,17 +7797,46 @@ ADR_0020_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "identical occupied content may be adopted",
     f"pr {ADR_0020_BLOCKED_PR} is ready to merge",
     f"pr {ADR_0020_BLOCKED_PR} may be merged",
-    f"pr {ADR_0020_BLOCKED_PR} is merged",
-    f"pr {ADR_0020_BLOCKED_PR} has been corrected",
     "run a is authorized",
     "run b is authorized",
     "the combined assessment is authorized",
     "infrastructure is authorized",
     "infrastructure is ready to deploy",
     "the shared bronze payload key changes",
-    "the request-scoped payload identity is implemented",
     "g1 is closed",
     "g2 is closed",
+    # -------------------------- the superseded pre-implementation state
+    #
+    # Released on the PR #48 merge, and replaced rather than dropped. Six entries
+    # left this list because they became TRUE -- "adr-0020 implementation:
+    # authorized", "the qualification payload-key builder exists", "the
+    # production implementation conforms", "the request-scoped payload identity
+    # is implemented", "pr #48 is merged" and "pr #48 has been corrected" -- and
+    # a denylist that forbids the truth forces a document to lie. Every spelling
+    # of the state that merge ended took their place, so a revert fails rather
+    # than merely going unasserted. None is a substring of an honest post-merge
+    # sentence: "before pr #48 merged no qualification payload-key builder
+    # existed" is history, and is required above.
+    "adr-0020 implementation: not authorized / not implemented",
+    "no qualification payload-key builder exists",
+    "the current dormant implementation is therefore not deployable under the authoritative "
+    "architecture",
+    "infrastructure design: blocked pending implementation correction",
+    f"pr {ADR_0020_BLOCKED_PR} is still open, non-draft, unmerged and untouched",
+    f"pr {ADR_0020_BLOCKED_PR} ready for review or merge: no",
+    f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
+    "requires a separate correction against the accepted adr-0020 design",
+    "the next separately authorized implementation gate is correcting pr "
+    f"{ADR_0020_BLOCKED_PR} against adr-0020",
+    # ------------------------------------------------- the forward drift
+    #
+    # Merged, dormant and offline-conforming is the whole claim. Deployed, run
+    # and validated are three further gates, and none of them has been crossed.
+    "the request-scoped payload identity is deployed",
+    "the qualification payload-key builder is deployed",
+    "the production implementation is deployed",
+    "adr-0020 implementation: deployed",
+    "the implementation has been empirically validated",
 )
 
 #: What **both** status documents must independently say about ADR-0020, **in
@@ -7624,7 +7880,14 @@ ADR_0020_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "records that the architecture blocker is resolved",
         "the architecture blocker that prevented adr-0020 from being authoritative is resolved",
     ),
-    ("records that the implementation blocker remains", "the implementation blocker remains"),
+    (
+        # Inverted on the PR #48 merge. The architecture blocker was resolved by
+        # PR #49 and the implementation blocker by PR #48, and the two are still
+        # reported as two, because collapsing them is how an accepted design
+        # starts reading as a deployed one.
+        "records that the implementation blocker is resolved offline",
+        "the implementation blocker is resolved as well, offline",
+    ),
     ("names the collision", "the legitimate duplicate-payload collision"),
     (
         "records that the blocked pull request obeyed the accepted rule",
@@ -7676,49 +7939,81 @@ ADR_0020_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "assessment recomputes sha-256 over the retrieved payload bytes and refuses on any "
         "mismatch",
     ),
-    # ------------------------------------------------ the implementation gap
+    # -------------------------------------------- the implementation, merged
+    #
+    # Inverted on the PR #48 merge, not deleted: every spelling replaced here
+    # moved into :data:`ADR_0020_STATUS_FORBIDDEN`, so a revert to the
+    # pre-correction wording fails rather than merely going unchecked.
     (
-        "records that implementation is unauthorized",
-        "adr-0020 implementation: not authorized / not implemented",
+        "records that the implementation merged",
+        "adr-0020 implementation: merged / dormant / offline-conforming",
     ),
     (
-        "records that production implementation is unauthorized",
-        "production implementation: not authorized / not implemented",
+        "records that the production implementation merged",
+        "production implementation: merged / dormant / offline-conforming",
     ),
-    ("records that no key builder exists", "no qualification payload-key builder exists"),
+    ("records that a key builder exists", "a qualification payload-key builder exists"),
     (
-        "records the dormant nonconforming implementation",
-        "adr-0018 merged implementation: dormant / nonconforming",
+        "records the dormant offline-conforming implementation",
+        "adr-0018 merged implementation: dormant / offline-conforming",
     ),
     (
-        "names the next implementation gate",
-        "the next separately authorized implementation gate is correcting pr "
-        f"{ADR_0020_BLOCKED_PR} against adr-0020",
+        "records the satisfied prerequisite",
+        "the adr-0020 implementation-correction prerequisite is satisfied",
+    ),
+    (
+        # A prerequisite met is not a permission granted. This sentence is the
+        # whole distance between "the code is corrected" and "build the
+        # infrastructure", and it is required in both documents for that reason.
+        "records that the prerequisite authorizes nothing",
+        "satisfying the implementation prerequisite does not itself authorize or begin "
+        "infrastructure work",
+    ),
+    (
+        "names the next possible gate",
+        "the next possible gate is a separate owner authorization for offline infrastructure, "
+        "terraform and iam preparation",
+    ),
+    (
+        "refuses to read offline conformance as deployment",
+        "offline-conforming is not deployed, not active, not operational, not authorized to run "
+        "and not empirically validated",
+    ),
+    (
+        "records that merging an implementation authorized nothing further",
+        "merging an implementation authorizes no infrastructure, no deployment and no run",
     ),
     # ---------------------------------- the blocked pull request, after the merge
     (
-        "records the blocked pull request's state",
-        f"pr {ADR_0020_BLOCKED_PR} state: open / unmerged",
+        "records the implementation merge",
+        f"pr {ADR_0020_BLOCKED_PR}: merged",
+    ),
+    ("names the correction merge commit", ADR_0019_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0019_IMPL_APPROVED_HEAD),
+    (
+        "records that the correction merged",
+        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: merged",
     ),
     (
-        "records that the blocked pull request is not ready",
-        f"pr {ADR_0020_BLOCKED_PR} ready for review or merge: no",
+        # Present tense would now be false -- a later, separately authorized
+        # correction did touch it. Past tense about the proposal and its merge
+        # stays exactly true, and is what is required.
+        "records that the proposal and its merge left the pull request alone",
+        f"pr {ADR_0020_BLOCKED_PR} was untouched by the adr-0020 proposal and by its merge",
     ),
     (
-        "records that the correction has not begun",
-        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
-    ),
-    (
-        "records that the blocked pull request is untouched",
-        f"pr {ADR_0020_BLOCKED_PR} is untouched by the adr-0020 proposal",
-    ),
-    (
-        "records that the blocked pull request needs a separate correction",
-        "requires a separate correction against the accepted adr-0020 design",
+        "keeps the pre-correction state historical",
+        f"while pr {ADR_0020_BLOCKED_PR} was open it was not ready for review or merge and its "
+        "correction had not begun",
     ),
     # ------------------------------------------ what the merge did not authorize
-    ("keeps infrastructure blocked", "infrastructure design and mutation: blocked"),
+    (
+        "keeps infrastructure unauthorized",
+        "infrastructure design and mutation: not authorized / not implemented",
+    ),
+    ("keeps terraform and iam unauthorized", "terraform / iam: not authorized / not implemented"),
     ("records that nothing was deployed", "deployment: not performed"),
+    ("records that nothing was executed", "execution: zero"),
     ("records that run a has not run", "run a: not authorized / not run"),
     ("records that run b has not run", "run b: not authorized / not run"),
     (
@@ -7755,17 +8050,56 @@ ADR_0020_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     f"pr {ADR_0020_PR} is open",
     f"pr {ADR_0020_PR} remains unmerged",
     "the conditional effectiveness event has not occurred",
+    # -------------------------- the superseded pre-implementation state
+    #
+    # Released on the PR #48 merge, and replaced rather than dropped. Eight
+    # entries left this list because they became TRUE -- "adr-0020
+    # implementation: authorized", "the request-scoped payload identity is
+    # implemented", "the qualification payload-key builder exists", "the
+    # production implementation conforms", "pr #48 has been corrected", "pr #48
+    # was corrected", "pr #48 is merged" and "pr #48 was reviewed" -- and a
+    # denylist that forbids the truth is one that forces a document to lie.
+    # Every spelling of the state that merge ended took their place, so a revert
+    # fails rather than merely going unasserted. None is a substring of an
+    # honest post-merge sentence: "while pr #48 was open it was not ready for
+    # review or merge and its correction had not begun" is history, and is
+    # required above.
+    "adr-0020 implementation: not authorized / not implemented",
+    "production implementation: not authorized / not implemented",
+    "no qualification payload-key builder exists",
+    "adr-0018 merged implementation: dormant / nonconforming",
+    "the implementation blocker remains",
+    f"pr {ADR_0020_BLOCKED_PR} state: open / unmerged",
+    f"pr {ADR_0020_BLOCKED_PR} ready for review or merge: no",
+    f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
+    f"pr {ADR_0020_BLOCKED_PR} is untouched by the adr-0020 proposal",
+    "requires a separate correction against the accepted adr-0020 design",
+    "the next separately authorized implementation gate is correcting pr "
+    f"{ADR_0020_BLOCKED_PR} against adr-0020",
+    "infrastructure design and mutation: blocked",
     # ------------------------------------------------------ the forward drift
-    "adr-0020 implementation: authorized",
-    "the request-scoped payload identity is implemented",
-    "the qualification payload-key builder exists",
-    "the production implementation conforms",
+    #
+    # Merged, dormant and offline-conforming is the whole claim. Deployed, run
+    # and validated are three further gates, and none has been crossed.
     f"pr {ADR_0020_BLOCKED_PR} is ready to merge",
     f"pr {ADR_0020_BLOCKED_PR} is mergeable",
-    f"pr {ADR_0020_BLOCKED_PR} has been corrected",
-    f"pr {ADR_0020_BLOCKED_PR} was corrected",
-    f"pr {ADR_0020_BLOCKED_PR} is merged",
-    f"pr {ADR_0020_BLOCKED_PR} was reviewed",
+    "the request-scoped payload identity is deployed",
+    "the qualification payload-key builder is deployed",
+    "the production implementation is deployed",
+    "adr-0020 implementation: deployed",
+    "adr-0020 implementation: authorized to run",
+    "the implementation has been empirically validated",
+    "infrastructure is authorized",
+    "infrastructure is implemented",
+    "infrastructure is deployed",
+    "deployment: performed",
+    "execution: one",
+    "run a is authorized",
+    "run b is authorized",
+    "the combined assessment is authorized",
+    "phase 3 is complete",
+    "control publication has occurred",
+    "live trading is enabled",
     "acquisition may read an occupied object",
     "an occupied object may be adopted",
     "identical occupied content may be adopted",
@@ -7801,36 +8135,56 @@ ADR_0020_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "adr-0020 preserves adr-0019's write-only collision policy unchanged",
     ),
     (
-        "records that implementation is unauthorized",
-        "adr-0020 implementation: not authorized / not implemented",
+        "records that the implementation merged",
+        "adr-0020 implementation: merged / dormant / offline-conforming",
     ),
     (
-        "records that no implementation has been authorized or completed",
-        "no implementation has yet been authorized or completed",
+        "records that the implementation was separately authorized",
+        "the implementation has since been separately authorized, made, independently reviewed "
+        "and merged",
+    ),
+    ("records that a key builder exists", "a qualification payload-key builder exists"),
+    (
+        "records the implementation merge",
+        f"pr {ADR_0020_BLOCKED_PR}: merged",
+    ),
+    ("names the correction merge commit", ADR_0019_IMPL_MERGE_COMMIT),
+    ("names the approved implementation head", ADR_0019_IMPL_APPROVED_HEAD),
+    (
+        "records that the correction merged",
+        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: merged",
     ),
     (
-        "records the blocked pull request's state",
-        f"pr {ADR_0020_BLOCKED_PR} state: open / unmerged",
+        "keeps the pre-correction state historical",
+        f"before pr {ADR_0020_BLOCKED_PR} merged no qualification payload-key builder existed",
     ),
     (
-        "records that the blocked pull request is unchanged",
-        f"pr {ADR_0020_BLOCKED_PR} remains open and unchanged",
+        "records the satisfied prerequisite",
+        "the adr-0020 implementation-correction prerequisite is satisfied",
     ),
     (
-        "records that the correction has not begun",
-        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
+        "records that the prerequisite authorizes nothing",
+        "satisfying the implementation prerequisite does not itself authorize or begin "
+        "infrastructure work",
     ),
     (
-        "names the next implementation gate",
-        "the next separately authorized implementation gate is correcting pr "
-        f"{ADR_0020_BLOCKED_PR} against adr-0020",
+        "names the next possible gate",
+        "the next possible gate is a separate owner authorization for offline infrastructure, "
+        "terraform and iam preparation",
     ),
     (
-        "keeps infrastructure blocked until the correction merges",
-        "infrastructure remains blocked until that correction is implemented, independently "
-        "reviewed and merged",
+        "records that merging an implementation authorized nothing further",
+        "merging an implementation authorizes no infrastructure, no deployment and no run",
     ),
-    ("keeps infrastructure blocked", "infrastructure design and mutation: blocked"),
+    (
+        "refuses to read offline conformance as deployment",
+        "offline-conforming is not deployed, not active, not operational, not authorized to run "
+        "and not empirically validated",
+    ),
+    (
+        "keeps infrastructure unauthorized",
+        "infrastructure design and mutation: not authorized / not implemented",
+    ),
     (
         "records that nothing was deployed or executed",
         "no deployment or empirical execution has occurred",
@@ -7848,8 +8202,8 @@ ADR_0020_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: and fails, so the rename has to be made deliberately here, in a reviewed
 #: change, rather than quietly detaching every section-scoped guard below.
 ADR_0020_STATUS_HEADING: Final = (
-    "The legitimate duplicate-payload collision, and ADR-0020 — ACCEPTED, and the "
-    "implementation gap"
+    "The legitimate duplicate-payload collision, and ADR-0020 — ACCEPTED, and the merged "
+    "implementation"
 )
 
 #: The level-four subsections ADR-0020's status section is allowed to contain.
@@ -7862,7 +8216,7 @@ ADR_0020_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
     "The conflict, stated exactly",
     "The authoritative identity",
     "What ADR-0020 does not change",
-    "The implementation gap — open, and stated plainly",
+    "The implementation gap — closed offline, and stated plainly",
     "Status",
 )
 
@@ -12528,9 +12882,30 @@ def main() -> int:
         "one fact, one statement; two copies cannot be reconciled after the fact",
     )
     f.check(
-        "only the two authorized modules under src/ construct the licensed store",
+        "only the one authorized module under src/ constructs the licensed store",
         sorted(path.name for path in _store_construction_sites()) == list(STORE_BUILDERS),
-        "the permission is two named modules, not a count that could drift",
+        "the permission is one named module, not a count that could drift",
+    )
+    f.check(
+        # The caller-count correction, structurally. ADR-0017's caller is still
+        # exactly one; the repository now has two, because the dormant ADR-0018
+        # acquisition path merged. A third would be a path nobody reviewed.
+        "exactly the two authorized modules under src/ call the qualification runtime",
+        sorted(path.name for path in _runtime_execute_call_sites())
+        == list(RUNTIME_EXECUTE_CALLERS),
+        "two named modules, not a count that could drift",
+    )
+    f.check(
+        "ADR-0017's composition still carries exactly one execute call",
+        _executable_python(COMPOSITION_ROOT).count(".execute(") == 1,
+        "the accepted path was extended once and has not grown a second call",
+    )
+    f.check(
+        # Separation, not merely count. The acquisition path may not reach the
+        # assessment read surface, and a shared import would be the route.
+        "the acquisition caller cannot reach the assessment read surface",
+        "assessment" not in _executable_python(ADR_0018_ACQUISITION),
+        "a write-only acquisition path that can import the reader is not write-only",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
@@ -15658,6 +16033,37 @@ def main() -> int:
             retired.balanced and not retired.findings,
             ", ".join(f"line {number}: {label}" for number, label in retired.findings),
         )
+
+    for phrase, framing in HISTORICAL_ONLY_STATUS_LINES:
+        f.check(
+            # The pairing itself, before anything is measured with it. A framing
+            # that did not contain its phrase would make every subtraction below
+            # meaningless and every check vacuously green.
+            f"the historical framing contains the line it frames: {phrase[:44]}",
+            phrase in framing,
+            "a framing that does not contain its phrase measures nothing",
+        )
+    for name, path in (
+        ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
+        ("README.md", REPO_ROOT / "README.md"),
+        ("the implementation plan", PHASE3 / "implementation-plan.md"),
+    ):
+        reading = " ".join(read(path).replace("**", "").split()).lower()
+        for phrase, framing in HISTORICAL_ONLY_STATUS_LINES:
+            f.check(
+                f"{name} keeps a superseded status line historical: {phrase[:44]}",
+                _unframed_occurrences(reading, phrase, framing) == 0,
+                f"{phrase} stands outside its historical framing in {name}",
+            )
+            f.check(
+                # The other half. Zero unframed copies is also what a document
+                # that deleted the record entirely would report, and deleting the
+                # record is how a status document stops being able to show that
+                # it moved.
+                f"{name} still carries the superseded line as history: {phrase[:44]}",
+                framing in reading,
+                f"the historical record of {phrase} was deleted from {name}",
+            )
 
     for label, phrase in ADR_0019_PLAN_REQUIRED:
         f.check(

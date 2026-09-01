@@ -20,9 +20,16 @@ implementation is not. Three drifts follow from that, and each is guarded here:
    policy. Acquisition stays conditional ``PutObject`` only, with zero object
    reads and zero listing, and no occupied object may be read, compared or
    adopted.
-3. **Forwards** -- an accepted identity read as an implemented one. No
-   qualification payload-key builder exists, PR #48 is still open, unmerged, not
-   ready for review or merge, and untouched, and its correction has not begun.
+3. **Forwards** -- a merged offline implementation read as a deployed one. The
+   qualification payload-key builder now exists and PR #48 is merged, under a
+   separate later authorization; nothing is deployed, nothing has run, and no
+   infrastructure or IAM role exists.
+
+**Backwards has a second half now.** PR #48 merged the production-code correction,
+so the six spellings of "not implemented" that this file used to require became
+false, and the eight that it used to forbid became true. Each was inverted rather
+than dropped -- the superseded spelling moved into the denylist -- so a revert to
+"still uncorrected" fails, and so does a claim that the merge deployed anything.
 
 **The arithmetic is derived here, not transcribed.** A number copied from prose
 into prose is a number nobody checks, so the request count, the write count and
@@ -108,6 +115,12 @@ def _audit_module() -> ModuleType:
 
 
 GUARD = _audit_module()
+
+#: The merge that carried the production-code correction, and the head approved
+#: for it. Read from the audit rather than restated here, so a test cannot
+#: disagree with the guard about which commit is the one under discussion.
+IMPL_MERGE_COMMIT: Final[str] = GUARD.ADR_0019_IMPL_MERGE_COMMIT
+IMPL_APPROVED_HEAD: Final[str] = GUARD.ADR_0019_IMPL_APPROVED_HEAD
 
 
 def flat(text: str) -> str:
@@ -224,17 +237,50 @@ def test_the_merge_approved_architecture_only() -> None:
     assert "acceptance of adr-0020 is not authorization to implement or execute it" in reading
 
 
-def test_the_adr_records_the_open_implementation_gap() -> None:
-    """Architecture accepted, implementation absent -- two states, never one."""
+def test_the_adr_records_the_merged_implementation_and_the_closed_gates() -> None:
+    """Architecture accepted, implementation merged, nothing deployed -- three states.
+
+    Inverted on the PR #48 merge, not deleted. While the correction was outstanding
+    this required "not authorized / not implemented" and refused the claim that the
+    identity was implemented; both are now the other way round, and the spellings
+    they replaced are refused by :data:`ADR_0020_SELF_FORBIDDEN` below.
+    """
     reading = flat(read(ADR))
-    assert "adr-0020 implementation: not authorized / not implemented" in reading
-    assert "no qualification payload-key builder exists" in reading
+    assert "adr-0020 implementation: merged / dormant / offline-conforming" in reading
+    assert "a qualification payload-key builder exists" in reading
     assert (
-        "the current dormant implementation is therefore not deployable under the authoritative "
+        "the current dormant implementation is offline-conforming under the authoritative "
         "architecture" in reading
     )
-    assert "infrastructure design: blocked pending implementation correction" in reading
-    assert "the request-scoped payload identity is implemented" not in reading
+    assert "the adr-0020 implementation-correction prerequisite is satisfied" in reading
+    # Merged is not deployed, and the ADR has to say so in the same breath.
+    assert (
+        "merging an implementation authorizes no infrastructure, no deployment and no run"
+        in reading
+    )
+    assert (
+        "offline-conforming is not deployed, not active, not operational, not authorized to run "
+        "and not empirically validated" in reading
+    )
+    assert "adr-0020 implementation: not authorized / not implemented" not in reading
+    assert "no qualification payload-key builder exists" not in reading
+    assert "the request-scoped payload identity is deployed" not in reading
+
+
+def test_the_adr_keeps_the_pre_correction_period_historical() -> None:
+    """The days before the correction merged are a fact, and §1-§8 are not rewritten.
+
+    §8 records PR #48 as open and uncorrected because that is what it was when this
+    ADR was proposed and reviewed. §9 carries the current state. Both, because
+    deleting either is how a record stops being able to show that anything moved.
+    """
+    reading = flat(read(ADR))
+    assert f"before pr {BLOCKED_PR} merged no qualification payload-key builder existed" in reading
+    assert (
+        f"pr {BLOCKED_PR} is open, non-draft, unmerged, blocked on architecture, and untouched by "
+        "this proposal" in reading
+    ), "§8's proposal-time record stays unedited"
+    assert f"pr {BLOCKED_PR} was untouched by this decision and by its merge" in reading
 
 
 def test_the_registry_records_adr_0020_as_merged() -> None:
@@ -544,30 +590,58 @@ def test_both_documents_record_the_merge_and_its_bounds(document: Path) -> None:
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
 def test_both_documents_separate_acceptance_from_implementation(document: Path) -> None:
-    """The one distinction this whole synchronization exists to keep."""
+    """The one distinction this whole synchronization exists to keep.
+
+    It used to be *accepted architecture versus absent implementation*. It is now
+    *merged offline implementation versus absent infrastructure, deployment and
+    execution* -- a different pair, and the same discipline: two states, never one.
+    """
     reading = flat(read(document))
     assert "architecture acceptance: complete" in reading
-    assert "production implementation: not authorized / not implemented" in reading
+    assert "production implementation: merged / dormant / offline-conforming" in reading
     assert (
         "the architecture blocker that prevented adr-0020 from being authoritative is resolved"
         in reading
     )
-    assert "the implementation blocker remains" in reading
-    assert "adr-0018 merged implementation: dormant / nonconforming" in reading
+    assert "the implementation blocker is resolved as well, offline" in reading
+    assert "adr-0018 merged implementation: dormant / offline-conforming" in reading
+    # The half that keeps a merged correction from reading as a deployment.
+    assert "the adr-0020 implementation-correction prerequisite is satisfied" in reading
+    assert (
+        "satisfying the implementation prerequisite does not itself authorize or begin "
+        "infrastructure work" in reading
+    )
+    assert "infrastructure design and mutation: not authorized / not implemented" in reading
+    assert "terraform / iam: not authorized / not implemented" in reading
+    assert "deployment: not performed" in reading
+    assert "execution: zero" in reading
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_both_documents_keep_the_blocked_pull_request_open_and_uncorrected(document: Path) -> None:
-    """Open, unmerged, not ready, uncorrected -- and not blamed for obeying ADR-0019."""
+def test_both_documents_record_the_merged_correction(document: Path) -> None:
+    """Merged, with both commits, under a separate authorization -- and still not deployed.
+
+    Inverted on the merge. The four "open / not begun" clauses this required moved
+    into :data:`ADR_0020_STATUS_FORBIDDEN`, so reverting to them fails rather than
+    merely going unchecked; the sentence absolving PR #48 of a defect stays, because
+    obeying ADR-0019 was never the error.
+    """
     reading = flat(read(document))
-    assert f"pr {BLOCKED_PR} state: open / unmerged" in reading
-    assert f"pr {BLOCKED_PR} ready for review or merge: no" in reading
-    assert f"pr {BLOCKED_PR} correction against adr-0020: not begun" in reading
+    assert f"pr {BLOCKED_PR}: merged" in reading
+    assert IMPL_MERGE_COMMIT in reading
+    assert IMPL_APPROVED_HEAD in reading
+    assert f"pr {BLOCKED_PR} correction against adr-0020: merged" in reading
     assert f"pr {BLOCKED_PR} is not defective for obeying adr-0019" in reading
-    assert "requires a separate correction against the accepted adr-0020 design" in reading
+    # Past tense, and exactly true: the proposal and its merge touched nothing. A
+    # later, separately authorized correction did.
+    assert f"pr {BLOCKED_PR} was untouched by the adr-0020 proposal and by its merge" in reading
     assert (
-        "the next separately authorized implementation gate is correcting pr "
-        f"{BLOCKED_PR} against adr-0020" in reading
+        f"while pr {BLOCKED_PR} was open it was not ready for review or merge and its correction "
+        "had not begun" in reading
+    )
+    assert (
+        "the next possible gate is a separate owner authorization for offline infrastructure"
+        in reading
     )
 
 
@@ -596,13 +670,21 @@ def test_no_document_says_the_blocked_pull_request_is_ready(document: Path) -> N
 @pytest.mark.parametrize(
     "document", [CLAUDE_MD, README, PLAN], ids=["CLAUDE.md", "README.md", "plan"]
 )
-def test_no_document_says_the_new_identity_is_already_implemented(document: Path) -> None:
-    """An accepted key is not a built one, and no qualification key builder exists."""
+def test_no_document_says_the_merged_identity_is_deployed(document: Path) -> None:
+    """A built key is not a deployed one, and the forward drift moved one gate along.
+
+    Inverted on the merge: what may not be claimed is no longer *implemented* but
+    *deployed, run or validated*, and the three spellings this used to refuse are
+    now required facts.
+    """
     reading = flat(read(document))
-    assert "the request-scoped payload identity is implemented" not in reading
-    assert "the qualification payload-key builder exists" not in reading
-    assert "the production implementation conforms" not in reading
-    assert "adr-0020 implementation: not authorized / not implemented" in reading
+    assert "the request-scoped payload identity is deployed" not in reading
+    assert "the qualification payload-key builder is deployed" not in reading
+    assert "the production implementation is deployed" not in reading
+    assert "adr-0020 implementation: deployed" not in reading
+    assert "the implementation has been empirically validated" not in reading
+    assert "infrastructure is deployed" not in reading
+    assert "adr-0020 implementation: merged / dormant / offline-conforming" in reading
 
 
 @pytest.mark.parametrize(
@@ -627,13 +709,19 @@ def test_the_implementation_plan_carries_the_same_state() -> None:
     assert not absent, f"the implementation plan is missing: {absent}"
 
 
-def test_neither_the_proposal_nor_its_merge_changed_production_code() -> None:
-    """The shared surfaces still have exactly what a later correction would route around.
+def test_the_merged_correction_left_the_shared_surfaces_alone() -> None:
+    """The correction routed around the shared surfaces rather than widening them.
 
-    ADR-0020 requires a *later* implementation gate to introduce a
-    qualification-specific builder. Neither the decision nor its merge performed
-    that correction, and the proof is that the shared content-addressed builder
-    and the shared store's collision resolution are both still here, unchanged.
+    ADR-0020 required a *later* implementation gate to introduce a
+    qualification-specific builder, and PR #48 is that gate. The proof that it
+    stayed inside its own package: the shared content-addressed builder and the
+    shared store's collision resolution are both still here and unchanged, and
+    neither has learned the qualification key.
+
+    ADR-0011's store keeps its ``head_object``. ADR-0019 removed the *acquisition
+    role's* authority to issue one, not the shared store's collision resolution --
+    two different surfaces, and conflating them is how a narrow amendment turns
+    into a wide one.
     """
     bronze = read(SHARED_BRONZE)
     store = read(SHARED_STORE)
@@ -642,6 +730,72 @@ def test_neither_the_proposal_nor_its_merge_changed_production_code() -> None:
     assert "def head_object" in store
     assert "qualification_payload_key" not in bronze
     assert "qualification_payload_key" not in store
+
+
+def test_the_qualification_key_builder_lives_only_in_the_qualification_package() -> None:
+    """The builder exists, and exactly one module defines it.
+
+    The forward half of the isolation proof. A builder that existed in the shared
+    namespace would be the widening ADR-0020 explicitly refuses, so this asserts
+    both that it is here and that it is only here.
+    """
+    package = PROJECT_ROOT / "src" / "kalpamani" / "data" / "qualify" / "sharadar"
+    definitions = [
+        path.name
+        for path in sorted(package.glob("*.py"))
+        if "def qualification_payload_key(" in read(path)
+    ]
+    assert definitions == ["publication.py"], definitions
+
+    src = PROJECT_ROOT / "src"
+    everywhere = [
+        path.relative_to(src).as_posix()
+        for path in sorted(src.rglob("*.py"))
+        if "def qualification_payload_key(" in read(path)
+    ]
+    assert everywhere == ["kalpamani/data/qualify/sharadar/publication.py"], everywhere
+
+
+def test_the_acquisition_path_is_a_second_caller_and_stays_separate() -> None:
+    """Exactly two production call sites, and the second cannot reach ADR-0017's.
+
+    The caller-count correction, proved against the tree rather than the prose.
+    ADR-0017's caller is still exactly one; the repository has two because the
+    dormant ADR-0018 acquisition path merged. The guard is driven, not restated.
+    """
+    sites = sorted(path.name for path in GUARD._runtime_execute_call_sites())
+    assert sites == list(GUARD.RUNTIME_EXECUTE_CALLERS), sites
+    assert sites == ["acquisition.py", "composition.py"], sites
+
+    composition = PROJECT_ROOT / "src" / "kalpamani" / "data" / "ingest" / "sharadar"
+    executable = GUARD._executable_python(composition / "composition.py")
+    assert executable.count(".execute(") == 1, "ADR-0017's path did not grow a second call"
+
+    acquisition = PROJECT_ROOT / "src" / "kalpamani" / "data" / "qualify" / "sharadar"
+    assert "assessment" not in GUARD._executable_python(acquisition / "acquisition.py"), (
+        "the write-only acquisition path may not reach the assessment read surface"
+    )
+
+
+def test_a_third_production_caller_is_caught() -> None:
+    """MUTATION. The permitted caller set is two names, so a third fails.
+
+    Driven over a mutated *result*, not a mutated copy of the constant: the audit's
+    comparison is what has to notice, and comparing a list against itself would not
+    be a check.
+    """
+    intruder = [*GUARD.RUNTIME_EXECUTE_CALLERS, "runner.py"]
+    assert sorted(intruder) != list(GUARD.RUNTIME_EXECUTE_CALLERS)
+    assert len(GUARD.RUNTIME_EXECUTE_CALLERS) == 2, GUARD.RUNTIME_EXECUTE_CALLERS
+
+
+def test_widening_the_store_builder_set_is_caught() -> None:
+    """MUTATION. One module may construct the licensed store, and a second fails."""
+    assert list(GUARD.STORE_BUILDERS) == ["composition.py"], GUARD.STORE_BUILDERS
+    actual = sorted(path.name for path in GUARD._store_construction_sites())
+    assert actual == list(GUARD.STORE_BUILDERS), actual
+    widened = sorted([*GUARD.STORE_BUILDERS, "acquisition.py"])
+    assert widened != list(GUARD.STORE_BUILDERS), "a second builder must not compare equal"
 
 
 # ---------------------------------------------------------------------------
@@ -756,11 +910,45 @@ def test_a_duplicate_registry_entry_is_caught() -> None:
     )
 
 
-def test_claiming_the_blocked_pull_request_is_mergeable_or_corrected_is_caught() -> None:
+def test_reverting_a_document_to_the_uncorrected_state_is_caught() -> None:
+    """The second backwards drift: a merged correction demoted by a document edit.
+
+    Inverted on the merge. While the correction was outstanding this proved a
+    *mergeable* claim was caught; those spellings became true, so the pre-merge
+    spellings took their place and the same guard now catches the revert.
+    """
     for injected in (
-        f"pr {BLOCKED_PR} is mergeable",
-        f"pr {BLOCKED_PR} has been corrected",
-        f"pr {BLOCKED_PR} is ready to merge",
+        "adr-0020 implementation: not authorized / not implemented",
+        "production implementation: not authorized / not implemented",
+        "no qualification payload-key builder exists",
+        "adr-0018 merged implementation: dormant / nonconforming",
+        f"pr {BLOCKED_PR} state: open / unmerged",
+        f"pr {BLOCKED_PR} ready for review or merge: no",
+        f"pr {BLOCKED_PR} correction against adr-0020: not begun",
+        "the implementation blocker remains",
+        "infrastructure design and mutation: blocked",
+    ):
+        mutated = flat(read(CLAUDE_MD)) + " " + injected
+        assert injected in overstated(GUARD.ADR_0020_STATUS_FORBIDDEN, mutated), injected
+
+
+def test_claiming_the_merged_implementation_was_deployed_is_caught() -> None:
+    """The forward drift, one gate further along than it used to sit."""
+    for injected in (
+        "the request-scoped payload identity is deployed",
+        "the qualification payload-key builder is deployed",
+        "the production implementation is deployed",
+        "adr-0020 implementation: deployed",
+        "the implementation has been empirically validated",
+        "infrastructure is authorized",
+        "infrastructure is implemented",
+        "infrastructure is deployed",
+        "deployment: performed",
+        "run a is authorized",
+        "run b is authorized",
+        "the combined assessment is authorized",
+        "phase 3 is complete",
+        "live trading is enabled",
     ):
         mutated = flat(read(CLAUDE_MD)) + " " + injected
         assert injected in overstated(GUARD.ADR_0020_STATUS_FORBIDDEN, mutated), injected
@@ -833,9 +1021,12 @@ DUPLICATED_ELSEWHERE: Final[tuple[str, ...]] = (
     "records that run a has not run",
     "records that run b has not run",
     "records that the assessment has not run",
-    "keeps infrastructure blocked",
-    "records that the blocked pull request is not ready",
-    "records that implementation is unauthorized",
+    # Three labels moved with the PR #48 merge. The clauses they name were
+    # inverted, not removed, so the disclosed defect is still exercised six ways
+    # across two documents -- against the clauses the audit requires *now*.
+    "keeps infrastructure unauthorized",
+    "records that the correction merged",
+    "records that the implementation merged",
 )
 
 #: Clauses that anchor the merge and the gap. Section scope must catch a local
@@ -846,8 +1037,22 @@ SECTION_ANCHORS: Final[tuple[str, ...]] = (
     "records the conditional effectiveness event",
     "records the merge",
     "records the accepted architecture status",
-    "records that the correction has not begun",
+    # "records that the correction has not begun" became false on the PR #48
+    # merge; the implementation merge is the clause that anchors the same place.
+    "records the implementation merge",
     "records that nothing was deployed",
+)
+
+#: The three clauses with no copy outside ADR-0020's section, by phrase.
+#:
+#: Named rather than counted. A count is satisfied by any three clauses, so it
+#: stays green if the ADR-0020 anchors leak into a neighbouring block and three
+#: unrelated clauses go file-unique in their place; naming them is what makes the
+#: check say *which* three.
+FILE_UNIQUE_CLAUSES: Final[tuple[str, ...]] = (
+    "adr-0020 architecture: accepted / in force",
+    "pr #49: merged",
+    "conditional effectiveness event: occurred",
 )
 
 #: The heading that ends ADR-0020's section in each document. The two differ on
@@ -970,6 +1175,11 @@ def test_three_anchors_are_the_only_file_unique_clauses() -> None:
     Read from the documents rather than asserted: exactly three required clauses
     have no copy outside ADR-0020's section, so removing the whole section tripped
     three guards and removing any single clause tripped none.
+
+    Strengthened from a count to an identity. Three-of-something is satisfied by
+    any three clauses, and the set does move -- the PR #48 merge added clauses to
+    the section, and each had to be carried into the ADR-0020 row for the
+    duplication this file relies on to keep holding. Naming the three says *which*.
     """
     for document in (CLAUDE_MD, README):
         before, _section, after = split_at_section(document)
@@ -977,7 +1187,15 @@ def test_three_anchors_are_the_only_file_unique_clauses() -> None:
         unique = [
             phrase for _label, phrase in GUARD.ADR_0020_STATUS_REQUIRED if phrase not in outside
         ]
-        assert len(unique) == 3, f"{document.name}: {len(unique)} file-unique clauses: {unique}"
+        assert set(unique) == set(FILE_UNIQUE_CLAUSES), f"{document.name}: {unique}"
+        assert len(unique) == len(FILE_UNIQUE_CLAUSES), f"{document.name}: {unique}"
+
+
+def test_every_file_unique_clause_is_one_the_audit_requires() -> None:
+    """NEGATIVE CONTROL. The named three are the audit's clauses, not this file's."""
+    required = [phrase for _label, phrase in GUARD.ADR_0020_STATUS_REQUIRED]
+    for phrase in FILE_UNIQUE_CLAUSES:
+        assert phrase in required, phrase
 
 
 # --- cardinality, boundaries and statelessness -----------------------------
