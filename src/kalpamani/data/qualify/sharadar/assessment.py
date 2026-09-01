@@ -68,6 +68,10 @@ from kalpamani.data.qualify.sharadar.locator import (
 )
 from kalpamani.data.qualify.sharadar.parser import PagePair, ParsedPage, parse_payload
 from kalpamani.data.qualify.sharadar.plan import EMPIRICAL_REQUEST_COUNT
+from kalpamani.data.qualify.sharadar.publication import (
+    qualification_payload_key,
+    request_ordinal_map,
+)
 from kalpamani.data.qualify.sharadar.read import (
     ExactObjectReference,
     LicensedObjectReader,
@@ -389,6 +393,57 @@ def validate_locator_pair(first: ValidatedLocator, second: ValidatedLocator) -> 
     return separation
 
 
+def _verify_payload_identities(locator: ValidatedLocator) -> None:
+    """Reconstruct every qualification payload key, and refuse on the first disagreement.
+
+    **The addressing half of ADR-0020's defence in depth, and it is not the integrity
+    half.** A key states where bytes were put; only the digest recomputed over the
+    retrieved bytes states what they are, and
+    :meth:`~kalpamani.data.qualify.sharadar.read.LicensedObjectReader.read_exact`
+    still does that afterwards. Neither is sufficient alone: a matching name with
+    different bytes is caught by the digest, and matching bytes under a name this run
+    could not have written are caught here.
+
+    The ordinal is reconstructed from the locator's **own request coordinates** --
+    dataset, subject and page offset -- through
+    :func:`~kalpamani.data.qualify.sharadar.publication.request_ordinal_map`, the same
+    pure function the acquisition bound its ordinals with. That function admits only
+    the locked inventory: exactly
+    :data:`~kalpamani.data.qualify.sharadar.plan.EMPIRICAL_REQUEST_COUNT` distinct,
+    well-formed coordinates over known datasets, mapped one-to-one onto ``0``--``47``.
+    A duplicated, short or unknown coordinate has no canonical ordinal and is refused
+    rather than assigned one.
+
+    Called **before any acquisition record or payload is retrieved**, so a locator
+    whose payload names this execution could not have produced costs the two locator
+    reads and nothing more.
+
+    Raises:
+        AssessmentError: ``REFUSED_INTEGRITY`` if the inventory has no canonical
+            ordinal map, or if any recorded payload key differs from the
+            deterministically reconstructed one. **The refusal names no key, digest,
+            ordinal or subject.**
+    """
+    try:
+        ordinals = request_ordinal_map(
+            [(entry.dataset, entry.subject, entry.page_skip) for entry in locator.entries]
+        )
+    except Exception:
+        raise _refuse(AssessmentStatus.REFUSED_INTEGRITY) from None
+    for entry in locator.entries:
+        try:
+            expected = qualification_payload_key(
+                dataset=entry.dataset,
+                execution_id=locator.execution_id,
+                request_ordinal=ordinals[(entry.dataset, entry.subject, entry.page_skip)],
+                content_sha256=entry.payload_sha256,
+            )
+        except Exception:
+            raise _refuse(AssessmentStatus.REFUSED_INTEGRITY) from None
+        if entry.payload_key != expected.logical_key:
+            raise _refuse(AssessmentStatus.REFUSED_INTEGRITY) from None
+
+
 def _record_reference(entry: LocatorEntry) -> ExactObjectReference:
     return ExactObjectReference(
         logical_key=entry.record_key,
@@ -589,7 +644,14 @@ def run_combined_assessment(
     #    refusal here cost two reads rather than 194.
     separation = validate_locator_pair(run_a, run_b)
 
-    # 4. The evidence, one execution at a time.
+    # 4. Every payload name, reconstructed and compared exactly (ADR-0020). **Still
+    #    zero payload reads at this point**: a locator naming payloads its own
+    #    execution and inventory could not have produced is refused here, for the
+    #    same two reads a bad pair costs.
+    _verify_payload_identities(run_a)
+    _verify_payload_identities(run_b)
+
+    # 5. The evidence, one execution at a time.
     parsed_a = _read_execution(reader=reader, locator=run_a)
     parsed_b = _read_execution(reader=reader, locator=run_b)
 

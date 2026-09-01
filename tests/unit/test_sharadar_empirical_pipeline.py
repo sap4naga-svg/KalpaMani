@@ -39,6 +39,7 @@ from fixtures.sharadar_empirical import (
     PagedTransport,
     client_error,
     credential,
+    is_qualification_payload_key,
     synthetic_inventory,
 )
 from kalpamani.data.qualify.sharadar.acquisition import (
@@ -133,14 +134,15 @@ def _variant(execution_id: str) -> str:
 def _acquire_pair() -> FakeS3Client:
     """Both accepted runs into one store, nine calendar days apart.
 
-    The two runs use **different byte variants**, and that is a requirement rather
-    than a fixture flourish: ADR-0019 halts a run at the first occupied Bronze name,
-    the payload object is content-addressed per dataset, and a second run that
-    re-published byte-identical responses would write to names the first run already
-    holds. The variants change no parsed field -- same header names, same rows, same
-    schema digest -- so every assertion downstream is about what it was always about.
-    ``test_a_second_run_republishing_identical_bytes_halts_with_bronze_name_occupied``
-    models the other case.
+    The two runs use **different byte variants**, which under ADR-0020 is a fixture
+    convenience rather than a requirement. It was a requirement: the payload object
+    was content-addressed per dataset, so a second run republishing byte-identical
+    responses landed on names the first run already held, and ADR-0019 correctly
+    halted it. The request-scoped identity separates them, and
+    ``test_a_second_run_republishing_identical_bytes_completes_under_its_own_execution``
+    drives exactly that case. Distinct variants are kept here so the cross-run
+    assertions downstream compare two observations that can actually differ; they
+    change no parsed field -- same header names, same rows, same schema digest.
     """
     s3 = FakeS3Client()
     _acquire(s3=s3, execution_id=EXECUTION_ID_A, instant=RUN_INSTANT)
@@ -879,7 +881,7 @@ def test_an_assessment_for_another_execution_identity_is_refused() -> None:
 
 def test_a_tampered_payload_refuses_on_integrity_before_it_is_parsed() -> None:
     s3 = _acquire_pair()
-    payload_keys = [key for key in s3.objects if "/objects/sha256/" in key]
+    payload_keys = [key for key in s3.objects if is_qualification_payload_key(key)]
     s3.objects[payload_keys[0]] = b"ticker,date,close\nTAMPERED,1998-01-05,1\n"
     failure, reader = _refused(s3)
     assert failure.status is AssessmentStatus.REFUSED_INTEGRITY
@@ -1242,7 +1244,7 @@ def test_a_complete_assessment_still_reports_the_accepted_operation_envelope() -
 
     locator_reads = [key for key in reads if "/locators/" in key]
     record_reads = [key for key in reads if "/acquisitions/" in key]
-    payload_reads = [key for key in reads if "/objects/sha256/" in key]
+    payload_reads = [key for key in reads if is_qualification_payload_key(key)]
     assert len(locator_reads) == EXECUTIONS_PER_ASSESSMENT == 2
     assert len(record_reads) == EXECUTIONS_PER_ASSESSMENT * EMPIRICAL_REQUEST_COUNT == 96
     assert len(payload_reads) == EXECUTIONS_PER_ASSESSMENT * EMPIRICAL_REQUEST_COUNT == 96

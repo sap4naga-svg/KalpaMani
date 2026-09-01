@@ -40,6 +40,19 @@ because of it. A Bronze collision halts the run and reports
 ``BRONZE_NAME_OCCUPIED``; a locator collision reports ``LOCATOR_NAME_OCCUPIED``.
 Neither claims anything about what occupies the name, because nothing here can know.
 
+**Every payload is named by its own request** (ADR-0020). The accepted claim and
+acquisition-record names already bind the execution and the request; the payload name
+did not, so two legitimate byte-identical observations -- a header-only page-two probe
+answered for two subjects, or an unchanged snapshot re-observed in Run B -- derived one
+name, and ADR-0019 correctly halted the run at it. Each request is bound to its
+canonical ordinal in the locked 48-request inventory **before the first provider
+request**, and
+:class:`~kalpamani.data.qualify.sharadar.publication.QualificationPayloadRouter`
+publishes the payload under
+``.../qualification/<execution>/requests/<NN>/sha256/<digest>``. **The collision policy
+is untouched**: the router reads nothing, compares nothing and adopts nothing, and a
+``412`` at the new name still fails closed.
+
 **One real elapsed-time deadline governs the acquisition execution phase.** It is
 armed here, at the stage-11 boundary -- after the offline preflight has returned and
 immediately before the call that performs the first provider request -- and it ends
@@ -68,6 +81,7 @@ from typing import Any, Final, cast
 
 from kalpamani.data.ingest.sharadar.client import Pacer, RetryPolicy, SharadarClient
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
+from kalpamani.data.ingest.sharadar.qualification import acquisition_id
 from kalpamani.data.ingest.sharadar.runtime import (
     QualificationClock,
     QualificationOutcome,
@@ -99,7 +113,11 @@ from kalpamani.data.qualify.sharadar.plan import (
     EmpiricalPlan,
     build_empirical_plan,
 )
-from kalpamani.data.qualify.sharadar.publication import LicensedWriteOnlyPublisher
+from kalpamani.data.qualify.sharadar.publication import (
+    LicensedWriteOnlyPublisher,
+    QualificationPayloadRouter,
+    request_ordinal_map,
+)
 
 #: The one retry policy this package permits: one attempt, no backoff. A second
 #: attempt is refused by the accepted plan model's retry-budget arithmetic before
@@ -420,8 +438,31 @@ def run_empirical_acquisition(
     # calls only ``put_if_absent``, and a test parses both modules and asserts that
     # neither reaches ``.exists`` anywhere. A future edit that added such a call
     # fails that test rather than this cast.
+    # **Each locked request bound to its canonical ordinal, before anything is
+    # fetched or published** (ADR-0020). The ordinal is the request's index in the
+    # plan's own canonical order -- dataset, then subject, then page offset -- and the
+    # map is keyed by the acquisition identity the accepted claim already carries, so
+    # the router recognises which request a publication belongs to rather than
+    # assuming it. Derived from the locked plan alone: nothing a provider returns can
+    # select, shift or influence an ordinal. ``request_ordinal_map`` is the same pure
+    # function the assessment reconstructs with, and its agreement with the plan's own
+    # emission order is asserted rather than assumed.
+    requests = plan.plan.requests()
+    ordinals = request_ordinal_map(
+        [(request.dataset.value, request.ticker, request.page.skip) for request in requests]
+    )
+    router = QualificationPayloadRouter(
+        publisher=publisher,
+        execution_id=plan.plan.execution_id,
+        ordinals={
+            acquisition_id(execution_id=plan.plan.execution_id, request=request): ordinals[
+                (request.dataset.value, request.ticker, request.page.skip)
+            ]
+            for request in requests
+        },
+    )
     runtime = QualificationRuntime(
-        client=client, store=cast(ResearchObjectStore, publisher), clock=clock
+        client=client, store=cast(ResearchObjectStore, router), clock=clock
     )
 
     # **Offline plan preflight, before the first request.** The accepted runtime's

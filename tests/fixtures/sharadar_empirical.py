@@ -481,6 +481,18 @@ class _Body:
         return chunk
 
 
+def is_qualification_payload_key(key: str) -> bool:
+    """Whether a physical key names an ADR-0020 qualification payload.
+
+    Recognised by the segments the amendment introduced rather than by position, so a
+    claim and an acquisition record -- which also carry a digest -- cannot be mistaken
+    for one. Spelled once here because the acquisition tests and the assessment tests
+    must agree about what a payload object is; two spellings is how a filter that
+    matches nothing quietly starts asserting zero.
+    """
+    return "/qualification/" in key and "/requests/" in key and "/sha256/" in key
+
+
 def client_error(code: str) -> Exception:
     """An exception shaped the way the backend classifier reads one.
 

@@ -325,6 +325,11 @@ def test_the_adr_0017_entry_point_cannot_reach_the_write_only_surface() -> None:
     The ADR-0018-specific surface must not be usable by ADR-0017 *accidentally*, and
     the check is structural: its entry point and the composition root it calls name
     neither the qualification package nor the publisher.
+
+    ADR-0020 adds three names to the same list rather than a second guard. Its
+    request-scoped payload identity is ADR-0018's alone: ADR-0017's accounting is
+    stated over the shared content-addressed name, and a path that could reach this
+    builder could write an ADR-0018 name from an ADR-0017 run.
     """
     for path in (
         SCRIPTS / "sharadar_authenticated_qualification.py",
@@ -334,6 +339,28 @@ def test_the_adr_0017_entry_point_cannot_reach_the_write_only_surface() -> None:
         assert "data.qualify" not in source
         assert "LicensedWriteOnlyPublisher" not in source
         assert "NameOccupiedError" not in source
+        assert "QualificationPayloadRouter" not in source
+        assert "qualification_payload_key" not in source
+        assert "request_ordinal_map" not in source
+
+
+def test_exactly_one_module_binds_the_request_scoped_payload_identity() -> None:
+    """One router, constructed in one place -- the same rule the publisher is held to.
+
+    A second construction site would mean a second ordinal map, and two maps over one
+    locked inventory is how two governed requests quietly acquire one name again.
+    """
+    builders = [
+        path.name
+        for path in QUALIFY_MODULES
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "QualificationPayloadRouter"
+            for node in ast.walk(ast.parse(_source(path)))
+        )
+    ]
+    assert builders == ["acquisition.py"]
 
 
 def test_the_earlier_composition_root_remains_the_ingestion_path_s_only_one() -> None:

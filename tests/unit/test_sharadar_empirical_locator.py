@@ -39,6 +39,7 @@ from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import bronze_payload_key
 from kalpamani.data.ingest.sharadar.datasets import ResponseFormat
+from kalpamani.data.objectstore import physical_key
 from kalpamani.data.qualify.sharadar.acquisition import (
     AcquisitionStatus,
     run_empirical_acquisition,
@@ -54,12 +55,15 @@ from kalpamani.data.qualify.sharadar.locator import (
     ObjectDisposition,
     decode_locator,
     locator_key_segments,
-    payload_key_for,
     plan_digest,
     serialize_locator,
     validate_locator_document,
 )
 from kalpamani.data.qualify.sharadar.plan import build_empirical_plan
+from kalpamani.data.qualify.sharadar.publication import (
+    qualification_payload_key,
+    request_ordinal_map,
+)
 
 
 def _acquire(*, transport: PagedTransport | None = None) -> tuple[FakeS3Client, Any]:
@@ -368,23 +372,45 @@ def test_every_recorded_key_and_digest_matches_what_was_actually_stored() -> Non
             assert sha256_hex(stored) == entry[f"{role}_sha256"]
 
 
-def test_the_derived_payload_key_equals_the_accepted_builder_s_key() -> None:
-    # The one key rebuilt from a name and a digest rather than from bytes, bound here
-    # to the accepted builder so a layout change in either fails rather than drifts.
-    payload = b"synthetic-opaque-payload-for-key-derivation"
-    retrieval = RetrievalMetadata(
-        provider="sharadar",
-        dataset="stocks",
-        requested_range="1998-01-01/2026-08-29",
-        retrieved_at=RUN_INSTANT,
-        source_schema_version="sharadar-empirical-v1",
-        ingestion_run_id="synthetic-empirical-a.0123456789abcdef01234567",
-        acquisition_mode=AcquisitionMode.QUALIFICATION,
+def test_every_recorded_payload_key_is_the_adr_0020_key_that_was_actually_written() -> None:
+    # Replaces the superseded builder-agreement check, and asserts more than it did.
+    # That test bound the locator's payload name to ``bronze_payload_key``; ADR-0020 is
+    # precisely the amendment that separates the two, so agreeing with it would now be
+    # the defect. Three things are asserted instead: the recorded name is the
+    # request-scoped reconstruction, an object exists under it in the store the run
+    # actually wrote to, and it is **not** the pre-amendment content-addressed name.
+    s3, _ = _acquire()
+    document = _document(s3)
+    entries = document["entries"]
+    assert len(entries) == 48
+    ordinals = request_ordinal_map(
+        [(entry["dataset"], entry["subject"], entry["page_skip"]) for entry in entries]
     )
-    accepted = bronze_payload_key(retrieval=retrieval, payload=payload)
-    derived = payload_key_for(dataset="stocks", content_sha256=sha256_hex(payload))
-    assert derived.logical_key == accepted.logical_key
-    assert derived.content_sha256 == accepted.content_sha256
+    for entry in entries:
+        coordinate = (entry["dataset"], entry["subject"], entry["page_skip"])
+        expected = qualification_payload_key(
+            dataset=entry["dataset"],
+            execution_id=EXECUTION_ID,
+            request_ordinal=ordinals[coordinate],
+            content_sha256=entry["payload_sha256"],
+        )
+        assert entry["payload_key"] == expected.logical_key
+        assert physical_key(expected) in s3.objects
+
+        superseded = bronze_payload_key(
+            retrieval=RetrievalMetadata(
+                provider="sharadar",
+                dataset=entry["dataset"],
+                requested_range=entry["requested_range"],
+                retrieved_at=RUN_INSTANT,
+                source_schema_version=document["source_schema_version"],
+                ingestion_run_id=entry["acquisition_id"],
+                acquisition_mode=AcquisitionMode.QUALIFICATION,
+            ),
+            payload=s3.objects[physical_key(expected)],
+        )
+        assert entry["payload_key"] != superseded.logical_key
+        assert physical_key(superseded) not in s3.objects
 
 
 def test_every_entry_carries_a_distinct_acquisition_identity() -> None:
@@ -412,25 +438,28 @@ def test_the_acquisition_path_can_no_longer_record_already_present() -> None:
     path can emit is ``WRITTEN``.
 
     ``ObjectDisposition`` keeps both members. It is the accepted durable locator
-    schema, ADR-0019 §9 amends no part of it, and narrowing a stored vocabulary
-    because one producer can no longer reach a value would be an unapproved change to
-    evidence the assessor validates. What changed is what the producer can *say*, and
-    that is asserted here rather than in the schema.
+    schema, neither ADR-0019 §9 nor ADR-0020 amends any part of it, and narrowing a
+    stored vocabulary because one producer can no longer reach a value would be an
+    unapproved change to evidence the assessor validates. What changed is what the
+    producer can *say*, and that is asserted here rather than in the schema.
     """
-    # **Driven on the case that used to produce it.** Every subject's completeness
-    # probe for one dataset returns the same header-only body, so under ADR-0018 the
-    # second and later ones resolved to ``ALREADY_PRESENT`` and the run continued.
-    # Under ADR-0019 the run halts at that write instead, and the entries it did
-    # record can only say ``WRITTEN``. Driving it with byte-distinct responses would
-    # have proven nothing: there would be no repeat to record either way.
+    # **Driven on the case that used to produce it, and now over the whole run.**
+    # Every subject's completeness probe for one dataset returns the same header-only
+    # body, so under ADR-0018 the second and later ones resolved to ``ALREADY_PRESENT``.
+    # Under ADR-0019 that write failed closed and the run halted, so only a truncated
+    # set of entries could be inspected. ADR-0020 gives each request its own payload
+    # name, so the same legitimate repeat now completes -- and the assertion covers all
+    # 48 entries and all 144 dispositions rather than a prefix of them. Driving it with
+    # byte-distinct responses would still prove nothing: there would be no repeat to
+    # record either way.
     s3, result = _acquire(transport=PagedTransport(byte_variant=""))
-    assert result.status is AcquisitionStatus.BRONZE_NAME_OCCUPIED
+    assert result.status is AcquisitionStatus.COMPLETED
+    entries = _document(s3)["entries"]
+    assert len(entries) == 48
     dispositions = [
-        entry[f"{role}_disposition"]
-        for entry in _document(s3)["entries"]
-        for role in ("claim", "payload", "record")
+        entry[f"{role}_disposition"] for entry in entries for role in ("claim", "payload", "record")
     ]
-    assert dispositions
+    assert len(dispositions) == 144
     assert set(dispositions) == {ObjectDisposition.WRITTEN.value}
     assert ObjectDisposition.ALREADY_PRESENT.value not in dispositions
     assert result.counts.head_object_count == 0

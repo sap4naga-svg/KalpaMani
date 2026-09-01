@@ -44,6 +44,7 @@ from fixtures.sharadar_empirical import (
     PagedTransport,
     client_error,
     credential,
+    is_qualification_payload_key,
     synthetic_inventory,
 )
 from kalpamani.data.contracts.errors import (
@@ -139,9 +140,14 @@ def _first_publication_keys() -> tuple[str, str, str]:
     assert result.status is AcquisitionStatus.COMPLETED
     claim, payload, record = s3.put_calls[:OBJECTS_PER_ACQUISITION]
     assert "_acquisition_claims/" in claim
-    assert "/objects/sha256/" in payload
+    assert "/qualification/" in payload and "/requests/00/sha256/" in payload
+    assert "/objects/sha256/" not in payload
     assert "/acquisitions/" in record
     return claim, payload, record
+
+
+def _payload_keys(s3: FakeS3Client) -> list[str]:
+    return [key for key in s3.put_calls if is_qualification_payload_key(key)]
 
 
 def _locator_key(execution_id: str = EXECUTION_ID) -> str:
@@ -279,7 +285,7 @@ def test_a_partial_locator_after_a_bronze_collision_records_no_collided_object()
     keys = _first_publication_keys()
     # Collide on the *second* request, so there is a completed one to record.
     s3, _, complete = _acquire()
-    second_payload = [key for key in s3.put_calls if "/objects/sha256/" in key][1]
+    second_payload = [key for key in s3.put_calls if is_qualification_payload_key(key)][1]
     assert complete.status is AcquisitionStatus.COMPLETED
 
     collided = _occupied_at(second_payload)
@@ -335,49 +341,74 @@ def test_a_definitively_refused_locator_still_reports_locator_not_published() ->
     _assert_no_object_read(s3)
 
 
-# -- the two accepted consequences, modelled rather than avoided ---------------
+# -- the two legitimate duplicates, resolved by ADR-0020 rather than absorbed ---
 
 
-def test_two_identical_payloads_in_one_run_halt_with_bronze_name_occupied() -> None:
-    """ADR-0019 §4.2 and §11, reproduced: a *benign* repeat is a halt.
+def test_two_identical_payloads_in_one_run_complete_under_distinct_names() -> None:
+    """ADR-0020 §2, driven on the case that used to halt.
 
     The completeness probe legitimately answers header-only for every subject, so
-    within one dataset those eight responses are byte-identical -- and the Bronze
-    payload object is content-addressed per dataset, so they are one name. Under
-    ADR-0018 the second write resolved to *already present* and the run continued.
-    It cannot now: the metadata read that proved it identical is gone, so the second
-    write fails closed and the run halts.
+    within one dataset those eight responses are byte-identical. Under ADR-0018 they
+    were one content-addressed name, and under ADR-0019 the second write correctly
+    failed closed -- so a *correct* 48-request run was unreachable. Binding the
+    execution and the canonical request ordinal into the payload name separates them
+    without relaxing anything: the run completes, and 48 distinct names are written.
 
-    This is the accepted cost, recorded rather than absorbed. It is why every other
-    complete-run fixture in the suite publishes byte-distinct responses.
+    **The collision policy is untouched**, and that is asserted here rather than
+    assumed: the store was still never read, and the sibling tests above still halt on
+    a real 412 at each of the three artefacts.
     """
     s3 = HostileS3Client()
     _, wire, result = _acquire(s3=s3, transport=PagedTransport(byte_variant=""))
-    assert result.status is AcquisitionStatus.BRONZE_NAME_OCCUPIED
-    assert result.counts.completed_requests < 48
-    assert wire.call_count < 48
+    assert result.status is AcquisitionStatus.COMPLETED
+    assert result.counts.completed_requests == 48
+    assert wire.call_count == 48
+
+    payloads = _payload_keys(s3)
+    assert len(payloads) == 48
+    assert len(set(payloads)) == 48
+    # The premise: the bytes really were identical within each dataset, so the old
+    # derivation really would have collided. Distinct names over 48 payloads carrying
+    # only 3 distinct digests is the whole of the correction.
+    digests = {key.rsplit("/", 1)[1] for key in payloads}
+    assert len(digests) < 48
     _assert_no_object_read(s3)
 
 
-def test_a_second_run_republishing_identical_bytes_halts_with_bronze_name_occupied() -> None:
-    """The same consequence across a pair of runs, which is where it bites hardest.
+def test_a_second_run_republishing_identical_bytes_completes_under_its_own_execution() -> None:
+    """The same resolution across a pair of runs, which is where it bit hardest.
 
     Run B re-observes the same subjects eight days later. Where the observation is
-    unchanged -- an untouched ``tickers`` snapshot, say -- its bytes are Run A's
-    bytes, and the content-addressed payload name is already occupied. Run B halts.
+    unchanged -- an untouched ``tickers`` snapshot, say -- its bytes are Run A's bytes.
+    Under the superseded derivation that name was already occupied and Run B halted,
+    which made the accepted two-run package unreachable. The execution identity in the
+    name separates them, so Run B completes and writes into names Run A never touched.
     """
     s3 = HostileS3Client()
     _, _, first = _acquire(
         s3=s3, transport=PagedTransport(byte_variant="A"), execution_id=EXECUTION_ID_A
     )
     assert first.status is AcquisitionStatus.COMPLETED
+    run_a_payloads = set(_payload_keys(s3))
+
     _, _, second = _acquire(
         s3=s3,
         transport=PagedTransport(byte_variant="A"),
         execution_id=EXECUTION_ID_B,
         instant=RUN_B_INSTANT,
     )
-    assert second.status is AcquisitionStatus.BRONZE_NAME_OCCUPIED
+    assert second.status is AcquisitionStatus.COMPLETED
+    assert second.counts.completed_requests == 48
+
+    run_b_payloads = set(_payload_keys(s3)) - run_a_payloads
+    assert len(run_a_payloads) == 48
+    assert len(run_b_payloads) == 48
+    assert run_a_payloads.isdisjoint(run_b_payloads)
+    # Byte-identical observations across the pair, under two names. Same digests, two
+    # executions -- which is precisely what the superseded derivation could not express.
+    assert {key.rsplit("/", 1)[1] for key in run_a_payloads} == {
+        key.rsplit("/", 1)[1] for key in run_b_payloads
+    }
     _assert_no_object_read(s3)
 
 
