@@ -2857,6 +2857,135 @@ provider selected, Phase 3 **NOT COMPLETE**, CONTROL publication **DEFERRED**, l
 **HARD-DISABLED**. A **third execution of the ADR-0017 entry point remains NOT AUTHORIZED**, and
 **no live request of any kind is authorized by ADR-0018**.
 
+### The infrastructure-feasibility gap, and ADR-0019 — PROPOSED, and blocking
+
+A read-only infrastructure-feasibility reconciliation of ADR-0018 against AWS's authorization
+model returned the closed classification **STOPPED_ARCHITECTURE_GAP_HEAD_REQUIRES_GET**.
+[ADR-0019](docs/decisions/ADR-0019-write-only-acquisition-collision-policy.md) proposes the
+correction. **ADR-0019: PROPOSED / NOT IN FORCE.**
+
+**ADR-0019 carries no authority until the pull request introducing it is merged.** While that
+pull request is open, **ADR-0018 as accepted is what governs** — including its accepted operation
+and deadline arithmetic, which stays current and is not superseded by a proposal. That is the
+same conditional treatment ADR-0017 and ADR-0018 were each given.
+
+**ADR-0018 remains ACCEPTED / IN FORCE**, and **the merged ADR-0018 implementation remains
+MERGED / DORMANT**. **The merged ADR-0018 implementation is not deployable under the accepted
+boundary until a later implementation-correction gate is completed.**
+
+#### The AWS constraint
+
+ADR-0018 §10.1 grants the acquisition role a metadata-only collision resolution and withholds
+object-byte reads. AWS maps both to one IAM action, so the two accepted requirements are jointly
+undeployable:
+
+```text
+HeadObject requires the s3:GetObject permission
+a GetObject for a known current object uses that same s3:GetObject permission
+AWS exposes no independent s3:HeadObject IAM action
+GetObjectAttributes also requires object-read authority
+no condition key distinguishes the HTTP method -- S3 authorizes by action, never by verb
+absence of s3:ListBucket prevents enumeration but not a known-key read
+the current SSE-S3 design offers no KMS permission that could be withheld
+an application protocol without a get_object method does not remove IAM authority
+    from a compromised process
+```
+
+Sources: <https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html> ·
+<https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html> ·
+<https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html>
+
+#### The selected direction
+
+**The selected direction is the IAM-preserving acquisition zero-HEAD fail-closed design.** The
+security boundary is kept and the operation is removed, rather than the reverse.
+
+Upon acceptance — and **only** upon acceptance:
+
+| | |
+|---|---|
+| **the acquisition role receives no s3:GetObject** | and no s3:GetObjectVersion, no s3:GetObjectAttributes, no listing, copy, deletion or CONTROL authority |
+| **acquisition HeadObject invocations are zero** | the metadata-only collision resolution is removed from the grant |
+| **acquisition object-byte reads are zero** | unchanged in intent, now achievable |
+| **the acquisition collision fails closed without comparison** | a bounded, sanitized terminal outcome that discloses no key, digest, identifier, subject or private value |
+| **a 412 does not establish that the occupied object is identical** | so no already-present-identical disposition exists, and no occupied object is inspected, adopted, reused or resumed from |
+| **both the IAM boundary and the application boundary are retained** | independently — neither is a substitute for the other |
+
+**The application-only alternative is not adopted.** Granting the read action would let a
+compromised credential-holding acquisition process read known licensed objects, which would
+invalidate ADR-0018 §10.3's identity-system compromise argument. A smaller implementation is not
+a reason to weaken an accepted security boundary, and the weaker option was never authorized.
+
+**ADR-0017 is not amended and not superseded.** Its entry point, its shared research object store
+and its accepted three-PutObject and conditional-HeadObject accounting are untouched. **The later
+implementation correction must introduce an ADR-0018-specific write-only publication surface**
+that exposes conditional put behaviour only, has no head_object and no get_object, cannot be
+reached by ADR-0017, and is structurally prevented from importing or invoking the assessment read
+surface. That is an architectural requirement on a later gate, not code, and **ADR-0019
+authorizes no implementation**.
+
+#### The proposed arithmetic — not in force
+
+**Proposed, and current only if ADR-0019 is accepted.** ADR-0018's accepted arithmetic remains
+the in-force arithmetic while ADR-0019 is proposed.
+
+```text
+PROPOSED, NOT IN FORCE -- acquisition
+Bronze PutObject                              exactly 144
+locator PutObject                             1 to 3
+acquisition HeadObject                        exactly 0
+acquisition GetObject                         exactly 0
+successful-run acquisition S3 operations      145 to 147
+two successful acquisition runs               290 to 294
+whole successful package                      485 to 490
+
+UNCHANGED -- the assessment envelope is unchanged at 195 to 196
+GetObject 194   ·   report PutObject 1   ·   conditional report HeadObject 0 to 1
+
+PROPOSED, NOT IN FORCE -- deadline arithmetic
+locator terminal reserve      L >= 3 * T_s3 + C
+per-request obligation        3 * T_s3
+feasibility                   T_req + P + 3 * T_s3 + L <= D
+per-request admission         remaining >= T_req + 3 * T_s3 + L
+```
+
+**Preserved unchanged by the proposal:** the 1,800-second total elapsed acquisition deadline on
+an injected monotonic clock, the 48-request maximum, the provider-retry prohibition, the SDK
+automatic-retry prohibition, the socket-timeout requirements, Run A and Run B separation, the
+P1–P9 ceilings, the absence of any aggregate provider verdict, and the absence of any provider
+selection.
+
+**A refused run did not perform 145 operations**, and partial and refused runs are accounted
+separately rather than reported at nominal counts.
+
+#### What stays closed
+
+```text
+feasibility classification                STOPPED_ARCHITECTURE_GAP_HEAD_REQUIRES_GET
+infrastructure design and deployment:     BLOCKED
+ADR-0019:                                 PROPOSED / NOT IN FORCE
+production implementation correction:     NOT AUTHORIZED / NOT IMPLEMENTED
+Terraform and IAM implementation:         NOT AUTHORIZED / NOT IMPLEMENTED
+infrastructure mutation:                  NOT AUTHORIZED / NOT PERFORMED
+Run A:                                    NOT AUTHORIZED / NOT RUN
+Run B:                                    NOT AUTHORIZED / NOT RUN
+combined assessment:                      NOT AUTHORIZED / NOT RUN
+empirical-package executions              ZERO
+new qualification IAM roles               ZERO -- none exists
+G1                                        OPEN
+G2                                        OPEN
+provider selected                         NONE
+Phase 3                                   NOT COMPLETE
+CONTROL publication                       DEFERRED
+live trading                              HARD-DISABLED
+a third ADR-0017 authenticated attempt    NOT AUTHORIZED
+```
+
+**No infrastructure was built and no run occurred before the discovery.** Infrastructure
+deployment was never authorized, no qualification IAM role was ever created, and Run A, Run B and
+the combined assessment have never run — the conflict was found before it could cost anything.
+
+
 ### Non-blocking follow-ups carried forward
 
 Neither blocks A1 acceptance, and neither is authorization to begin work:

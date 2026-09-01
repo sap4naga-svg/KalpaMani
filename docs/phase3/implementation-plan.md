@@ -325,10 +325,27 @@ approved correction head `78b4425077e65eeb12dfd24b35825741370e0e0f`. It was **co
 now-authoritative clarification** under a separately authorized implementation correction, and
 **the independent re-review has since occurred and produced the fixed-count correction merged as
 PR #44**. **Merging an implementation authorized no execution, no infrastructure deployment and no
-run.** **The merge approved clarification of architecture only**, so
-**implementation, infrastructure mutation, Run A, Run B and the combined assessment each remain
+run.** **The merge approved clarification of architecture only**: **the PR #42 clarification merge
+conferred no implementation authority.** **The offline implementation later merged dormant through
+PR #41, but its execution and deployment remain unauthorized.**
+**Infrastructure mutation, Run A, Run B and the combined assessment each remain
 NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
 are ZERO.**
+
+**A later read-only infrastructure-feasibility reconciliation returned
+STOPPED_ARCHITECTURE_GAP_HEAD_REQUIRES_GET**, because AWS maps HeadObject to the s3:GetObject
+permission and exposes no independent s3:HeadObject IAM action — so ADR-0018 §10.1's
+metadata-only collision resolution and its IAM-level prohibition on acquisition object-byte reads
+are jointly undeployable. **Infrastructure design and deployment: BLOCKED.**
+[ADR-0019](../decisions/ADR-0019-write-only-acquisition-collision-policy.md) proposes the
+correction and is **PROPOSED / NOT IN FORCE**: **ADR-0019 carries no authority until the pull
+request introducing it is merged**, so **ADR-0018's accepted arithmetic remains the in-force
+arithmetic** and the figures ADR-0019 derives are proposed rather than current. The selected
+direction is the **IAM-preserving acquisition zero-HEAD fail-closed design** — the acquisition
+role receives no s3:GetObject, acquisition HeadObject invocations are zero, and the acquisition
+collision fails closed without comparison. **ADR-0017 is not amended and not superseded**, and
+**the later implementation correction must introduce an ADR-0018-specific write-only publication
+surface**. **Production implementation correction: NOT AUTHORIZED / NOT IMPLEMENTED.**
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
