@@ -5652,7 +5652,13 @@ ADR_0018_TEST_SUITES: Final[tuple[Path, ...]] = tuple(
 
 #: Every module permitted to construct the licensed object store. Two named
 #: modules, so a **third** still fails: a count could drift, a list cannot.
-STORE_BUILDERS: Final[tuple[str, ...]] = ("acquisition.py", "composition.py")
+#: The modules permitted to construct the shared licensed store. **One**, again.
+#:
+#: ``acquisition.py`` was the second until ADR-0019 made the empirical acquisition
+#: path write-only: the shared store resolves a ``412`` with a ``HeadObject``, which
+#: AWS maps onto ``s3:GetObject``, so that path publishes through its own write-only
+#: surface now. Narrowing, not relaxing -- a second module here fails again.
+STORE_BUILDERS: Final[tuple[str, ...]] = ("composition.py",)
 
 #: The two operator authorization flags. Different by construction, so neither
 #: authorization can be given by pasting the other one.
@@ -14978,6 +14984,10 @@ def main() -> int:
         == [
             "__init__.py",
             "__init__.py",
+            "acquisition.py",
+            "operations.py",
+            "plan.py",
+            "publication.py",
             "sharadar_empirical_qualification.py",
             "sharadar_qualification_assessment.py",
         ],

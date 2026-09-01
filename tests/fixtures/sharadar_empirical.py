@@ -135,7 +135,62 @@ _EMPTY_BY_DATASET: dict[SharadarDataset, bytes] = {
 }
 
 
-def csv_for(dataset: SharadarDataset, *, subject: str, page_skip: int) -> bytes:
+#: The run tags the byte variants are enumerated over. Enumerated rather than
+#: hashed so the masks below are **injective**: a hash over sixteen keys into
+#: sixty-four masks collides often enough to reintroduce, by accident, exactly the
+#: repeated-bytes collision these variants exist to avoid.
+VARIANT_TAGS: tuple[str, ...] = ("A", "B", "C")
+
+
+def _variant_mask(*, subject: str, byte_variant: str) -> int:
+    """A distinct small integer per ``(subject, run tag)``, for the header quoting.
+
+    ``subject_index + 8 * tag_index`` is injective over the canonical eight subjects
+    and the three tags -- 0 to 23, inside the six bits even the narrowest synthetic
+    header offers. An unrecognised subject or tag falls back to a hash, which is
+    good enough for a one-off and is never used by the canonical fixtures.
+    """
+    try:
+        subject_index = SYNTHETIC_SUBJECTS.index(subject)
+    except ValueError:
+        subject_index = int(sha256_hex(subject.encode()), 16) % len(SYNTHETIC_SUBJECTS)
+    try:
+        tag_index = VARIANT_TAGS.index(byte_variant)
+    except ValueError:
+        tag_index = int(sha256_hex(byte_variant.encode()), 16) % len(VARIANT_TAGS)
+    return subject_index + len(SYNTHETIC_SUBJECTS) * tag_index
+
+
+def _quoted_header(header: bytes, *, mask: int) -> bytes:
+    """The same header row, with a ``mask``-determined subset of its fields quoted.
+
+    RFC4180 lets any field be quoted and ``csv`` unquotes it, so every one of these
+    bodies parses to an **identical** ``ParsedPage`` -- same header names, same rows,
+    same schema digest, same extras, same duplicate count -- while the *bytes*
+    differ. Nothing an evaluator can observe changes; only the content address does.
+
+    That distinction is the whole point. ADR-0019 made a repeated payload digest
+    halt the run, and the Bronze payload object is content-addressed per dataset, so
+    two responses with the same bytes in one dataset are one object name and the
+    second write is answered ``412``. The accepted complete-run envelope -- 48
+    requests, 144 Bronze writes -- is only reachable when every response is
+    byte-distinct, which is exactly what ADR-0019 §6.1 means by *a successful
+    complete run has no collision, by construction*.
+    """
+    fields = header.split(b",")
+    quoted = [
+        b'"' + field + b'"' if mask >> index & 1 else field for index, field in enumerate(fields)
+    ]
+    return b",".join(quoted)
+
+
+def csv_for(
+    dataset: SharadarDataset,
+    *,
+    subject: str,
+    page_skip: int,
+    byte_variant: str = "",
+) -> bytes:
     """One synthetic page body for a subject and dataset.
 
     The subject is substituted into the invented rows so two subjects produce
@@ -144,10 +199,32 @@ def csv_for(dataset: SharadarDataset, *, subject: str, page_skip: int) -> bytes:
 
     The second page is header-only, which is the completeness probe's expected
     answer and the shape a complete first page implies.
+
+    ``byte_variant`` makes the bytes distinct without changing anything a parser or
+    an evaluator sees, by quoting a subset of the header fields. Two things need it,
+    and both are consequences of ADR-0019 rather than conveniences:
+
+    - **within one run**, every subject's completeness probe for one dataset is the
+      same header-only body, so all eight write to one content-addressed name;
+    - **across a pair of runs**, an unchanged ``tickers`` snapshot re-observed eight
+      days later is byte-identical to the first run's, so Run B writes to names
+      Run A already holds.
+
+    Leave it empty to model exactly those collisions -- which
+    ``test_two_identical_payloads_in_one_run_halt_with_bronze_name_occupied`` and
+    ``test_a_second_run_republishing_identical_bytes_halts_with_bronze_name_occupied``
+    do deliberately.
     """
-    if page_skip:
-        return _EMPTY_BY_DATASET[dataset]
-    return _CSV_BY_DATASET[dataset].replace(b"ZZ-SYNTH-01", subject.encode("ascii"))
+    body = (
+        _EMPTY_BY_DATASET[dataset]
+        if page_skip
+        else _CSV_BY_DATASET[dataset].replace(b"ZZ-SYNTH-01", subject.encode("ascii"))
+    )
+    if not byte_variant:
+        return body
+    header, _, rest = body.partition(b"\n")
+    mask = _variant_mask(subject=subject, byte_variant=byte_variant)
+    return _quoted_header(header, mask=mask) + b"\n" + rest
 
 
 def inventory_document(subjects: tuple[str, ...] = SYNTHETIC_SUBJECTS) -> dict[str, Any]:
@@ -227,6 +304,7 @@ class PagedTransport:
         body_override: bytes | None = None,
         monotonic: FakeMonotonic | None = None,
         seconds_per_request: float = 0.0,
+        byte_variant: str = "A",
     ) -> None:
         """Declare a ceiling, optionally fail after ``fail_after``, optionally
         return one fixed body for every request.
@@ -236,12 +314,20 @@ class PagedTransport:
         record and locator entry mutually consistent. Editing a stored object
         afterwards would trip the integrity check instead, and prove nothing
         about the parser.
+
+        ``byte_variant`` defaults to a non-empty tag because the accepted
+        complete-run envelope needs it: ADR-0019 halts a run at the first occupied
+        Bronze name, and the Bronze payload object is content-addressed per dataset,
+        so responses that repeat bytes are one object name. A **pair** of runs needs
+        two different tags for the same reason. Pass ``""`` to model a collision
+        deliberately -- see :func:`csv_for`.
         """
         self._max_response_bytes = max_response_bytes
         self._fail_after = fail_after
         self._body_override = body_override
         self._monotonic = monotonic
         self._seconds_per_request = float(seconds_per_request)
+        self._byte_variant = byte_variant
         self.urls: list[str] = []
 
     @property
@@ -284,8 +370,26 @@ class PagedTransport:
             if fragment.startswith("skip="):
                 skip = int(fragment.removeprefix("skip="))
         if self._body_override is not None:
-            return Response(status=200, body=self._body_override)
-        return Response(status=200, body=csv_for(dataset, subject=subject, page_skip=skip))
+            # **The override is distinguished per request, not per transport.** One
+            # fixed body for all 48 requests would write to one content-addressed
+            # Bronze payload name, and ADR-0019 halts a run at the first occupied
+            # name -- so the run would never reach the stage an overriding test is
+            # about. A trailing single-field line keeps a ragged body ragged and a
+            # malformed body malformed; it changes only the bytes.
+            override = self._body_override
+            if self._byte_variant:
+                marker = f"{self._byte_variant}-{subject}-{skip}".encode("ascii")
+                override = override + marker + b"\n"
+            return Response(status=200, body=override)
+        return Response(
+            status=200,
+            body=csv_for(
+                dataset,
+                subject=subject,
+                page_skip=skip,
+                byte_variant=self._byte_variant,
+            ),
+        )
 
 
 class FakeS3Client:

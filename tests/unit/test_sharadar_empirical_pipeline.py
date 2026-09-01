@@ -70,6 +70,7 @@ from kalpamani.data.qualify.sharadar.locator import (
     locator_key_segments,
     serialize_locator,
 )
+from kalpamani.data.qualify.sharadar.operations import OBJECTS_PER_ACQUISITION
 from kalpamani.data.qualify.sharadar.plan import (
     ACQUISITION_DEADLINE_SECONDS,
     EMPIRICAL_REQUEST_COUNT,
@@ -100,7 +101,16 @@ def _acquire(
 ) -> tuple[FakeS3Client, PagedTransport, Any]:
     clock = monotonic if monotonic is not None else FakeMonotonic()
     client = s3 if s3 is not None else FakeS3Client()
-    wire = transport if transport is not None else PagedTransport()
+    # **The byte variant follows the execution identity**, so any two runs written
+    # into one store are byte-distinct without every call site having to say so.
+    # ADR-0019 halts a run at the first occupied Bronze name, and a Run B that
+    # re-published Run A's bytes would write to names Run A already holds. A caller
+    # that supplies its own transport chooses its own variant, and
+    # ``test_a_second_run_republishing_identical_bytes_halts_with_bronze_name_occupied``
+    # deliberately supplies one that does not.
+    wire = (
+        transport if transport is not None else PagedTransport(byte_variant=_variant(execution_id))
+    )
     result = run_empirical_acquisition(
         credential=credential(),
         transport=wire,
@@ -115,8 +125,23 @@ def _acquire(
     return client, wire, result
 
 
+def _variant(execution_id: str) -> str:
+    """The byte variant a run publishes under, derived from its execution identity."""
+    return "B" if execution_id == EXECUTION_ID_B else "A"
+
+
 def _acquire_pair() -> FakeS3Client:
-    """Both accepted runs into one store, nine calendar days apart."""
+    """Both accepted runs into one store, nine calendar days apart.
+
+    The two runs use **different byte variants**, and that is a requirement rather
+    than a fixture flourish: ADR-0019 halts a run at the first occupied Bronze name,
+    the payload object is content-addressed per dataset, and a second run that
+    re-published byte-identical responses would write to names the first run already
+    holds. The variants change no parsed field -- same header names, same rows, same
+    schema digest -- so every assertion downstream is about what it was always about.
+    ``test_a_second_run_republishing_identical_bytes_halts_with_bronze_name_occupied``
+    models the other case.
+    """
     s3 = FakeS3Client()
     _acquire(s3=s3, execution_id=EXECUTION_ID_A, instant=RUN_INSTANT)
     _acquire(s3=s3, execution_id=EXECUTION_ID_B, instant=RUN_B_INSTANT)
@@ -321,14 +346,20 @@ def test_the_request_admission_requirement_omits_the_pacing_interval() -> None:
     # Stated as arithmetic against the compiled terms: the admission requirement is
     # the request ceiling plus the Bronze obligation plus the locator reserve, and
     # the pacing interval is **not** a term in it, because it has already elapsed.
+    # ADR-0019: the per-request S3 obligation is ``3 * T_s3`` -- three Bronze writes
+    # and **no** conditional resolution, because there is no metadata read to make.
     assert PROVIDER_REQUEST_ADMISSION_SECONDS == pytest.approx(
-        TIMEOUT_SECONDS + 6 * S3_OPERATION_CEILING_SECONDS + LOCATOR_TERMINAL_RESERVE_SECONDS
+        TIMEOUT_SECONDS + 3 * S3_OPERATION_CEILING_SECONDS + LOCATOR_TERMINAL_RESERVE_SECONDS
     )
     assert PROVIDER_REQUEST_ADMISSION_SECONDS < (
         TIMEOUT_SECONDS
         + MIN_REQUEST_INTERVAL_SECONDS
-        + 6 * S3_OPERATION_CEILING_SECONDS
+        + 3 * S3_OPERATION_CEILING_SECONDS
         + LOCATOR_TERMINAL_RESERVE_SECONDS
+    )
+    # And the retired ADR-0018 term is genuinely gone rather than merely unused.
+    assert PROVIDER_REQUEST_ADMISSION_SECONDS != pytest.approx(
+        TIMEOUT_SECONDS + 6 * S3_OPERATION_CEILING_SECONDS + LOCATOR_TERMINAL_RESERVE_SECONDS
     )
 
 
@@ -343,19 +374,38 @@ def test_no_provider_request_begins_without_its_complete_downstream_reserve() ->
 
 
 def test_the_halt_point_is_the_one_the_admission_arithmetic_predicts() -> None:
-    # One completed request costs 30 (request) + 15 (three writes) + 1 (pacing).
-    # Request k is admitted when 1800 - 46*(k-1) - 1 >= 240, so k = 34 is the last
-    # admitted request and k = 35 is refused. Computed here, not transcribed.
+    """The model is rebuilt from the compiled terms, and it models pacing correctly.
+
+    One completed request under ``_pressed`` costs 30 seconds of request and three
+    Bronze writes at 5 -- 45 in all, and **no** conditional resolution, because
+    ADR-0019 left no metadata read to make. Forty-five seconds is far more than the
+    one-second minimum interval, so the pacer owes nothing and sleeps nothing: an
+    earlier model added a pacing second per request that never elapses, and it agreed
+    with the observed count only by accident under the retired arithmetic.
+
+    Everything below is computed from ``PROVIDER_REQUEST_ADMISSION_SECONDS`` and the
+    fixture's own scripted costs. Nothing is transcribed.
+    """
     _, wire, result, _ = _pressed()
+    request_seconds = 30.0
+    operation_seconds = 5.0
     predicted = 0
     elapsed = 0.0
+    previous_request_at: float | None = None
     while True:
-        # The pacer waits before every request but the first.
-        after_pacing = elapsed + (MIN_REQUEST_INTERVAL_SECONDS if predicted else 0.0)
+        # The pacer owes the remainder of the minimum interval since the previous
+        # request began, and owes nothing at all when more than that has passed.
+        owed = (
+            0.0
+            if previous_request_at is None
+            else max(0.0, MIN_REQUEST_INTERVAL_SECONDS - (elapsed - previous_request_at))
+        )
+        after_pacing = elapsed + owed
         if ACQUISITION_DEADLINE_SECONDS - after_pacing < PROVIDER_REQUEST_ADMISSION_SECONDS:
             break
         predicted += 1
-        elapsed = after_pacing + 30.0 + 3 * 5.0
+        previous_request_at = after_pacing
+        elapsed = after_pacing + request_seconds + OBJECTS_PER_ACQUISITION * operation_seconds
     assert wire.call_count == predicted
     assert result.counts.completed_requests == predicted
     assert 0 < predicted < 48
@@ -809,7 +859,11 @@ def test_a_mismatched_pair_from_different_inventories_is_refused() -> None:
 
 def test_a_partial_locator_is_refused_and_no_payload_is_read() -> None:
     s3 = FakeS3Client()
-    _acquire(s3=s3, transport=PagedTransport(fail_after=10), execution_id=EXECUTION_ID_A)
+    _acquire(
+        s3=s3,
+        transport=PagedTransport(fail_after=10, byte_variant=_variant(EXECUTION_ID_A)),
+        execution_id=EXECUTION_ID_A,
+    )
     _acquire(s3=s3, execution_id=EXECUTION_ID_B, instant=RUN_B_INSTANT)
     failure, reader = _refused(s3)
     assert failure.status is AssessmentStatus.REFUSED_LOCATOR
@@ -851,10 +905,14 @@ def test_an_unparseable_payload_refuses_on_evidence_and_publishes_no_report() ->
     # one stage earlier and prove nothing about the parser.
     ragged = b"ticker,date,close" + b"\n" + b"Z,1998-01-05" + b"\n"
     s3 = FakeS3Client()
-    _acquire(s3=s3, transport=PagedTransport(body_override=ragged), execution_id=EXECUTION_ID_A)
     _acquire(
         s3=s3,
-        transport=PagedTransport(body_override=ragged),
+        transport=PagedTransport(body_override=ragged, byte_variant=_variant(EXECUTION_ID_A)),
+        execution_id=EXECUTION_ID_A,
+    )
+    _acquire(
+        s3=s3,
+        transport=PagedTransport(body_override=ragged, byte_variant=_variant(EXECUTION_ID_B)),
         execution_id=EXECUTION_ID_B,
         instant=RUN_B_INSTANT,
     )

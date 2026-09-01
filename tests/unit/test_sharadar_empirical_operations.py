@@ -20,7 +20,7 @@ from fixtures.sharadar_empirical import (
     credential,
     synthetic_inventory,
 )
-from kalpamani.data.contracts.errors import ObjectAlreadyExistsError, ObjectStoreBackendError
+from kalpamani.data.contracts.errors import ObjectStoreBackendError
 from kalpamani.data.contracts.vocabulary import ObjectStoreFailure, ObjectStoreOperation
 from kalpamani.data.objectstore import ObjectKey, PutOutcome
 from kalpamani.data.qualify.sharadar.acquisition import run_empirical_acquisition
@@ -48,6 +48,7 @@ from kalpamani.data.qualify.sharadar.plan import (
     PROVIDER_REQUEST_ADMISSION_SECONDS,
     EmpiricalPlanError,
 )
+from kalpamani.data.qualify.sharadar.publication import NameOccupiedError
 
 
 def _armed(
@@ -92,8 +93,15 @@ def _stored() -> PutOutcome:
     return PutOutcome(key=KEY, stored=True, byte_count=len(PAYLOAD))
 
 
-def _already() -> PutOutcome:
-    return PutOutcome(key=KEY, stored=False, byte_count=len(PAYLOAD))
+def _occupied() -> Exception:
+    """What the write-only publisher raises on a ``412``.
+
+    It is deliberately **not** a ``PutOutcome`` with ``stored=False``: that value
+    meant *identical content was already present*, which required the metadata read
+    ADR-0019 removed. There is no outcome object for an occupied name any more --
+    only this refusal, which claims the name was taken and nothing else.
+    """
+    return NameOccupiedError()
 
 
 def _backend(failure: ObjectStoreFailure, operation: ObjectStoreOperation) -> Exception:
@@ -119,11 +127,17 @@ def test_a_first_attempt_that_writes_needs_no_retry() -> None:
     assert publication.attempts == attempts == 1
 
 
-def test_identical_content_already_present_is_an_ordinary_idempotent_outcome() -> None:
-    publication, attempts = _publish([_already()])
-    assert publication.status is LocatorPublicationStatus.ALREADY_PRESENT
+def test_an_occupied_name_on_the_first_attempt_fails_closed() -> None:
+    """ADR-0019: a ``412`` says the name was taken, and refuses to say more.
+
+    Under ADR-0018 this resolved to ``ALREADY_PRESENT`` and left the locator
+    addressable, on the strength of a ``HeadObject`` that proved the stored bytes
+    identical. There is no such proof available now, so the run must not claim one.
+    """
+    publication, attempts = _publish([_occupied()])
+    assert publication.status is LocatorPublicationStatus.NAME_OCCUPIED
     assert attempts == 1
-    assert publication.addressable is True
+    assert publication.addressable is False
 
 
 @pytest.mark.parametrize("failure", [ObjectStoreFailure.THROTTLED, ObjectStoreFailure.TRANSIENT])
@@ -144,11 +158,20 @@ def test_at_most_two_retries_are_permitted_after_the_first_attempt() -> None:
     assert publication.status is LocatorPublicationStatus.NOT_PUBLISHED
 
 
-def test_a_retry_that_finds_an_earlier_attempt_committed_reports_already_present() -> None:
+def test_a_retry_that_lands_on_an_occupied_name_fails_closed() -> None:
+    """The safe-direction false negative ADR-0019 §4.3 records, driven end to end.
+
+    The first attempt left the condition unresolved, so a retry was permitted; the
+    retry is answered ``412``. A byte-identical locator may in fact be sitting under
+    that name -- written by the very attempt that appeared to fail -- and this run
+    still reports ``NAME_OCCUPIED``. It never claims a locator exists, which is the
+    direction the error is allowed to go in.
+    """
     publication, attempts = _publish(
-        [_backend(ObjectStoreFailure.TRANSIENT, ObjectStoreOperation.PUT), _already()]
+        [_backend(ObjectStoreFailure.TRANSIENT, ObjectStoreOperation.PUT), _occupied()]
     )
-    assert publication.status is LocatorPublicationStatus.ALREADY_PRESENT
+    assert publication.status is LocatorPublicationStatus.NAME_OCCUPIED
+    assert publication.addressable is False
     assert attempts == 2
 
 
@@ -178,16 +201,18 @@ def test_an_ambiguous_result_is_never_retried_and_reports_state_unknown(
     assert publication.addressable is False
 
 
-def test_a_genuine_collision_is_never_retried() -> None:
-    publication, attempts = _publish([ObjectAlreadyExistsError("different content")])
+def test_an_occupied_name_is_never_retried() -> None:
+    publication, attempts = _publish([_occupied()])
     assert attempts == 1
-    assert publication.status is LocatorPublicationStatus.COLLISION
+    assert publication.status is LocatorPublicationStatus.NAME_OCCUPIED
     assert publication.addressable is False
 
 
-def test_a_post_412_metadata_failure_does_not_restore_retry_permission() -> None:
-    # The condition was resolved by the 412, so a THROTTLED refusal of the *metadata*
-    # resolution arrives too late to be retryable -- and the operation says so.
+def test_a_refusal_attributed_to_a_metadata_read_does_not_restore_retry_permission() -> None:
+    # No acquisition-side metadata read exists any more, so nothing here can produce
+    # a HEAD refusal. The mapping is kept and driven anyway: a refusal whose
+    # operation is not a PUT is not an unresolved conditional write, and must not
+    # become retryable if some future store were to report one.
     publication, attempts = _publish(
         [_backend(ObjectStoreFailure.THROTTLED, ObjectStoreOperation.HEAD)]
     )
@@ -208,10 +233,18 @@ def test_only_two_failure_categories_are_retryable() -> None:
     }
 
 
-def test_only_two_statuses_leave_the_locator_addressable() -> None:
-    assert ADDRESSABLE_STATUSES == {
+def test_exactly_one_status_leaves_the_locator_addressable() -> None:
+    """One, now. An occupied name is not an addressable locator.
+
+    ``ALREADY_PRESENT`` was the second, and it rested on a metadata comparison this
+    role can no longer make -- so it is gone rather than reinterpreted.
+    """
+    assert ADDRESSABLE_STATUSES == {LocatorPublicationStatus.PUBLISHED}
+    assert set(LocatorPublicationStatus) == {
         LocatorPublicationStatus.PUBLISHED,
-        LocatorPublicationStatus.ALREADY_PRESENT,
+        LocatorPublicationStatus.NOT_PUBLISHED,
+        LocatorPublicationStatus.STATE_UNKNOWN,
+        LocatorPublicationStatus.NAME_OCCUPIED,
     }
 
 
@@ -238,21 +271,72 @@ def test_the_counting_client_counts_invocations_including_failed_ones() -> None:
         def put_object(self, **kwargs: object) -> object:
             raise RuntimeError("synthetic")
 
-        def head_object(self, **kwargs: object) -> object:
-            raise RuntimeError("synthetic")
-
     counting = CountingS3Client(_Raising(), deadline=_armed())
-    for method in (counting.put_object, counting.head_object):
-        with pytest.raises(RuntimeError):
-            method()
+    with pytest.raises(RuntimeError):
+        counting.put_object()
     assert counting.put_object_count == 1
-    assert counting.head_object_count == 1
+
+
+def test_the_counting_client_binds_a_client_that_can_only_write() -> None:
+    """``put_object`` is the whole requirement, and that is the ADR-0019 correction.
+
+    Requiring ``head_object`` at construction -- as the shared store does -- would
+    refuse exactly the write-only client this path is supposed to be handed.
+    """
+
+    class _WriteOnly:
+        def put_object(self, **kwargs: object) -> object:
+            return {"ETag": "synthetic"}
+
+    counting = CountingS3Client(_WriteOnly(), deadline=_armed())
+    assert counting.put_object_count == 0
 
 
 def test_the_counting_client_exposes_no_read_surface() -> None:
     counting = CountingS3Client(FakeS3Client(), deadline=_armed())
-    for forbidden in ("get_object", "list_objects_v2", "delete_object", "copy_object"):
+    for forbidden in (
+        "head_object",
+        "get_object",
+        "get_object_attributes",
+        "list_objects_v2",
+        "delete_object",
+        "copy_object",
+    ):
         assert not hasattr(counting, forbidden)
+
+
+def test_a_client_carrying_read_methods_is_never_called_through_them() -> None:
+    """The hostile fake: it *can* read, and nothing ever asks it to.
+
+    ``FakeS3Client`` really does implement ``head_object`` and ``get_object``, so a
+    counter that quietly forwarded either would be caught here rather than argued
+    about. The count is the fake's own recorded invocations, not a constant.
+    """
+
+    class _Hostile(FakeS3Client):
+        def get_object_attributes(self, **kwargs: object) -> object:
+            raise AssertionError("get_object_attributes was called")
+
+        def list_objects_v2(self, **kwargs: object) -> object:
+            raise AssertionError("list_objects_v2 was called")
+
+    hostile = _Hostile()
+    monotonic = FakeMonotonic()
+    result = run_empirical_acquisition(
+        credential=credential(),
+        transport=PagedTransport(),
+        monotonic=monotonic,
+        sleeper=monotonic.sleep,
+        s3_client=hostile,
+        licensed_bucket=SYNTHETIC_BUCKET,
+        clock=FixedClock(),
+        inventory=synthetic_inventory(),
+        execution_id=EXECUTION_ID,
+    )
+    assert hostile.head_calls == []
+    assert hostile.get_calls == []
+    assert result.counts.head_object_count == 0
+    assert result.counts.get_object_count == 0
 
 
 def test_the_counting_client_repr_names_no_bucket_or_key() -> None:
@@ -273,7 +357,7 @@ def _counts(**overrides: int) -> AcquisitionOperationCounts:
     base = {
         "completed_requests": 48,
         "put_object_count": 145,
-        "head_object_count": 21,
+        "head_object_count": 0,
         "get_object_count": 0,
         "list_operation_count": 0,
         "control_operation_count": 0,
@@ -287,7 +371,11 @@ def _counts(**overrides: int) -> AcquisitionOperationCounts:
 def test_the_nominal_complete_run_accounting_is_accepted() -> None:
     counts = _counts()
     assert counts.put_object_count == OBJECTS_PER_ACQUISITION * 48 + 1 == 145
-    assert counts.total_s3_operations == 166
+    # ADR-0019: with HeadObject and GetObject at zero, the acquisition S3 total *is*
+    # its PutObject total.
+    assert counts.head_object_count == 0
+    assert counts.get_object_count == 0
+    assert counts.total_s3_operations == 145
 
 
 def test_put_object_below_three_per_completed_acquisition_is_refused() -> None:
@@ -296,14 +384,35 @@ def test_put_object_below_three_per_completed_acquisition_is_refused() -> None:
 
 
 def test_at_most_one_incomplete_publication_may_exceed_the_per_request_writes() -> None:
-    # A halted run can leave one publication part-written -- one or two of its three
-    # conditional writes really happened and are really counted, while its request
-    # never became a completed acquisition. Two extra writes is the ceiling; three
-    # would be a second incomplete publication, which the runtime cannot produce
-    # because it stops at the first terminal failure.
-    assert _counts(completed_requests=47, put_object_count=143).put_object_count == 143
+    """One incomplete publication may contribute **all three** of its writes.
+
+    A halted run leaves one publication part-written: its conditional invocations
+    really happened and are really counted, while its request never became a
+    completed acquisition. The ceiling used to be two extra writes, which was an
+    off-by-one -- ADR-0019 §6.5 states that a collided ``PutObject`` *is* an
+    invocation and *is* counted, so a **third** write answered ``412`` is a real,
+    reachable run the earlier bound refused to describe. Four extra would be a second
+    incomplete publication, which the runtime cannot produce because it stops at the
+    first terminal failure.
+    """
+    for extra in (1, 2, 3):
+        counts = _counts(completed_requests=47, put_object_count=141 + extra + 1)
+        assert counts.put_object_count == 142 + extra
     with pytest.raises(ValueError):
-        _counts(completed_requests=47, put_object_count=145)
+        _counts(completed_requests=47, put_object_count=146)
+
+
+def test_a_third_bronze_write_answered_by_an_occupied_name_is_describable() -> None:
+    """The exact accounting of a record-write collision, which ADR-0019 produces.
+
+    Claim and payload written, record attempted and refused, the request never
+    completed, and one locator attempt. Nothing about it is hypothetical: the
+    end-to-end case is driven in the publication suite.
+    """
+    counts = _counts(completed_requests=0, put_object_count=4, provider_request_count=1)
+    assert counts.put_object_count == 4
+    assert counts.head_object_count == 0
+    assert counts.total_s3_operations == 4
 
 
 def test_a_retried_locator_raises_put_object_to_at_most_one_hundred_and_forty_seven() -> None:
@@ -316,17 +425,23 @@ def test_more_than_three_locator_attempts_is_refused() -> None:
         _counts(locator_put_attempts=4, put_object_count=148)
 
 
-def test_head_object_is_bounded_by_the_bronze_writes_plus_one_locator() -> None:
-    assert _counts(head_object_count=145).head_object_count == 145
+def test_any_metadata_read_on_the_acquisition_path_is_refused() -> None:
+    """Equality with zero, not a bound derived from the write count.
+
+    ADR-0018 accepted ``head_object_count <= 3 * completed + 1``. ADR-0019 replaced
+    it with zero, which is stricter and needs no derivation: the acquisition role
+    holds no object-read authority and the publication surface has no
+    ``head_object``, so **one** is already impossible.
+    """
+    assert _counts(head_object_count=0).head_object_count == 0
     with pytest.raises(ValueError):
-        _counts(head_object_count=146)
+        _counts(head_object_count=1)
 
 
-def test_the_head_bound_does_not_rise_with_locator_retries() -> None:
-    # The extra PutObject invocations a retry buys are exactly the ones that sent no
-    # HeadObject, so 147 PutObject still permits at most 145 HeadObject.
+def test_the_zero_head_rule_does_not_relax_with_locator_retries() -> None:
+    # Not "fewer than the writes would allow" -- zero, whatever the write count is.
     with pytest.raises(ValueError):
-        _counts(locator_put_attempts=3, put_object_count=147, head_object_count=146)
+        _counts(locator_put_attempts=3, put_object_count=147, head_object_count=1)
 
 
 def test_any_object_byte_read_on_the_acquisition_path_is_refused() -> None:
@@ -372,16 +487,19 @@ def test_a_complete_run_produces_the_accepted_nominal_arithmetic() -> None:
     assert counts.provider_request_count == 48
     assert counts.completed_requests == 48
     assert counts.put_object_count == 145
-    assert 144 <= counts.put_object_count <= 147
-    assert counts.head_object_count <= 145
+    assert 145 <= counts.put_object_count <= 147
+    assert counts.head_object_count == 0
     assert counts.get_object_count == 0
     assert counts.list_operation_count == 0
     assert counts.control_operation_count == 0
-    assert 145 <= counts.total_s3_operations <= 290
+    assert counts.total_s3_operations == 145
+    assert 145 <= counts.total_s3_operations <= 147
     assert result.locator_attempts == 1
-    # And the fake was asked for exactly what the counters report.
+    # And the fake was asked for exactly what the counters report. ``head_calls`` and
+    # ``get_calls`` are the fake's **own** records, so these two are measurements of
+    # what happened rather than restatements of the field above.
     assert len(s3.put_calls) == counts.put_object_count
-    assert len(s3.head_calls) == counts.head_object_count
+    assert s3.head_calls == []
     assert s3.get_calls == []
 
 

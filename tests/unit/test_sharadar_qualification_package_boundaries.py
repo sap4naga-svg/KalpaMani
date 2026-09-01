@@ -225,14 +225,115 @@ def test_only_the_inventory_module_reads_a_file_and_only_the_private_one() -> No
     assert [path.name for path in readers] == ["inventory.py"]
 
 
-# -- exactly one construction site for the licensed store ---------------------
+# -- the shared licensed store is not reachable from this package -------------
 
 
-def test_exactly_one_qualification_module_constructs_the_licensed_store() -> None:
+def test_no_qualification_module_constructs_the_shared_licensed_store() -> None:
+    """None, now. The acquisition path used to, and ADR-0019 removed it.
+
+    The shared store resolves a ``412`` with a ``HeadObject``, and AWS maps that onto
+    ``s3:GetObject`` -- the authority the acquisition role no longer holds. This
+    package publishes through its own write-only surface instead, so the count here
+    goes from one to **zero**: a narrowing, not a relaxation.
+    """
     constructors = [
         path.name for path in QUALIFY_MODULES if "S3ResearchObjectStore(" in _source(path)
     ]
-    assert constructors == ["acquisition.py"]
+    assert constructors == []
+
+
+def test_no_qualification_module_imports_the_shared_licensed_store_class() -> None:
+    """Not constructed, and not imported either -- checked in the import graph.
+
+    A module that imported the class without calling it would pass the scan above
+    and still be one edit away from using it.
+    """
+    for path in QUALIFY_MODULES:
+        for node in ast.walk(ast.parse(_source(path))):
+            if isinstance(node, ast.ImportFrom):
+                assert "S3ResearchObjectStore" not in {alias.name for alias in node.names}
+
+
+# -- the write-only publication surface ---------------------------------------
+
+
+PUBLICATION = QUALIFY / "sharadar" / "publication.py"
+
+
+def test_the_write_only_publisher_exists_and_is_the_only_acquisition_publication() -> None:
+    # Over calls in the parsed tree, not a substring: the publisher's own ``__repr__``
+    # names its class, which is not a construction.
+    assert PUBLICATION.is_file()
+    builders = [
+        path.name
+        for path in QUALIFY_MODULES
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "LicensedWriteOnlyPublisher"
+            for node in ast.walk(ast.parse(_source(path)))
+        )
+    ]
+    assert builders == ["acquisition.py"]
+
+
+def test_the_write_only_publisher_names_no_read_operation() -> None:
+    """The surface AWS would have to grant ``s3:GetObject`` for is absent entirely.
+
+    Over the executable source, so the module docstring may still explain *why*
+    there is no metadata read without that explanation satisfying the check.
+    """
+    source = _executable(PUBLICATION)
+    for forbidden in (
+        "head_object",
+        "get_object",
+        "get_object_attributes",
+        "list_objects",
+        "delete_object",
+        "copy_object",
+        "def exists",
+    ):
+        assert forbidden not in source
+
+
+def test_the_write_only_publisher_imports_no_assessment_reader_or_report() -> None:
+    imported = _imports(PUBLICATION)
+    assert not any(name.endswith(".read") for name in imported)
+    assert not any(name.endswith(".report") for name in imported)
+    assert not any(name.endswith(".assessment") for name in imported)
+    source = _executable(PUBLICATION)
+    for forbidden in ("LicensedObjectReader", "read_exact", "publish_report", "run_combined"):
+        assert forbidden not in source
+
+
+def test_the_acquisition_path_cannot_reach_the_adr_0017_execution_surface() -> None:
+    """ADR-0017's composition root is not called from here, and cannot be.
+
+    Its ``execute_qualification_acquisition`` builds the shared licensed store, so
+    reaching it would reintroduce the ``412`` metadata resolution through the back
+    door. The acquisition composes the accepted client and runtime itself instead.
+    """
+    imported = _imports(ACQUISITION)
+    assert not any(name.endswith("sharadar.composition") for name in imported)
+    assert "execute_qualification_acquisition" not in _executable(ACQUISITION)
+    assert "preflight_qualification_composition" not in _executable(ACQUISITION)
+
+
+def test_the_adr_0017_entry_point_cannot_reach_the_write_only_surface() -> None:
+    """Separation in the other direction, which is the one ADR-0019 §5 names.
+
+    The ADR-0018-specific surface must not be usable by ADR-0017 *accidentally*, and
+    the check is structural: its entry point and the composition root it calls name
+    neither the qualification package nor the publisher.
+    """
+    for path in (
+        SCRIPTS / "sharadar_authenticated_qualification.py",
+        INGEST / "sharadar" / "composition.py",
+    ):
+        source = _source(path)
+        assert "data.qualify" not in source
+        assert "LicensedWriteOnlyPublisher" not in source
+        assert "NameOccupiedError" not in source
 
 
 def test_the_earlier_composition_root_remains_the_ingestion_path_s_only_one() -> None:

@@ -17,9 +17,9 @@ stronger guarantee, because it does not depend on this module staying correct.
 arithmetic.** An earlier revision of this module computed a worst case -- 48
 requests at a 30-second timeout plus 47 one-second gaps is 1,487 seconds -- and
 called the comparison against 1,800 an enforcement. It was not one. It bounded the
-provider requests and the pacing and nothing else: the 144 Bronze writes, the
-conditional metadata resolutions and the locator were all outside it, and no
-running program was ever held to it. The clarified architecture states one actual
+provider requests and the pacing and nothing else: the 144 Bronze writes and the
+locator were all outside it, and no running program was ever held to it. The
+clarified architecture states one actual
 deadline measured on an **injected monotonic clock** over the complete acquisition
 execution phase, and this module supplies the constants that deadline is made of.
 
@@ -32,11 +32,12 @@ and does another.
 
 **And the uncomfortable consequence is recorded rather than smoothed over.** At the
 compiled worst case the 48 requests and their pacing occupy 1,487 seconds, leaving
-313 for 144 Bronze writes, up to 144 conditional resolutions and the locator --
-about a second each, which is not a defensible connect-plus-read bound. **The
-deadline is therefore a safety bound on elapsed time and not a guarantee that 48
-requests complete.** A slow provider means the run halts short, publishes a
-``PARTIAL`` locator, and the assessor refuses to evaluate it.
+313 for 144 Bronze writes and at most three locator writes -- 147 operations, about
+two seconds each, which is roughly double the allowance ADR-0018's design left
+because ADR-0019 removed roughly half the operations. **It is still not a guarantee
+that 48 requests complete**, and the deadline is still a safety bound on elapsed
+time. A slow provider means the run halts short, publishes a ``PARTIAL`` locator,
+and the assessor refuses to evaluate it.
 
 **Page two is a completeness probe, and it is not an invitation to paginate.**
 Sorting is a forbidden request parameter and the vendor's row limit truncates
@@ -155,18 +156,23 @@ LOCATOR_CONSTRUCTION_ALLOWANCE_SECONDS: Final = 5.0
 
 #: ``L`` -- the budget held back so the locator can always be written.
 #:
-#: It must cover ``4 * T_s3 + C``: three permitted locator ``PutObject`` attempts,
-#: at most one locator ``HeadObject`` -- a retry-triggering attempt sends none, so
-#: only the one attempt answered ``412`` reaches the metadata path -- and the
-#: deterministic construction above. 90 is 85 with five seconds to spare.
+#: It must cover ``3 * T_s3 + C`` (ADR-0019 §7): three permitted locator
+#: ``PutObject`` attempts, **zero** locator ``HeadObject`` -- the acquisition path
+#: has no metadata read at all, so a ``412`` fails closed instead of resolving --
+#: and the deterministic construction above. 90 is 65 with a conservative margin;
+#: the value is unchanged by the amendment because a larger reserve than the rule
+#: requires is safe in the direction that keeps the locator reachable.
 LOCATOR_TERMINAL_RESERVE_SECONDS: Final = 90.0
 
-#: Three Bronze ``PutObject`` per completed request, each of which may trigger at
-#: most one conditional ``HeadObject`` after a ``412``.
-BRONZE_OPERATIONS_PER_REQUEST: Final = 6
+#: Three Bronze ``PutObject`` per completed request, and **no conditional
+#: ``HeadObject`` after a ``412``**: ADR-0019 removed the acquisition role's
+#: object-read authority, so a collision fails closed rather than being resolved.
+#: This is the ``3 * T_s3`` per-request S3 obligation, down from the ``6 * T_s3``
+#: ADR-0018 was accepted with.
+BRONZE_OPERATIONS_PER_REQUEST: Final = 3
 
-#: Three locator ``PutObject`` attempts plus at most one locator ``HeadObject``.
-LOCATOR_OPERATIONS_ALLOWED: Final = 4
+#: Three locator ``PutObject`` attempts and **zero** locator ``HeadObject``.
+LOCATOR_OPERATIONS_ALLOWED: Final = 3
 
 #: What must still remain before a provider request may **start**: its own ceiling,
 #: the complete downstream Bronze obligation it creates, and the locator reserve.
@@ -254,8 +260,8 @@ def compiled_request_phase_seconds(
     ``request_count``: the pacer has nothing to wait for before the first request.
 
     **This is documentation, not a control, and it is not compared against the
-    deadline.** It excludes the 144 Bronze writes, the conditional resolutions and
-    the locator, so a run that fitted inside it could still exceed the real deadline
+    deadline.** It excludes the 144 Bronze writes and the locator, so a run that
+    fitted inside it could still exceed the real deadline
     -- which is exactly why the earlier revision's comparison proved nothing. The
     enforcement is
     :class:`~kalpamani.data.qualify.sharadar.operations.AcquisitionDeadline`, on a
@@ -290,9 +296,9 @@ def validate_deadline_constants(
         T_s3 > 0                     an operation ceiling of zero bounds nothing
         T_s3 >= connect + read       one attempt may consume both, in sequence
         C >= 0
-        L >= 4 * T_s3 + C            three locator writes, one HEAD, construction
+        L >= 3 * T_s3 + C            three locator writes, no HEAD, construction
         L < D                        a reserve as large as the deadline leaves none
-        T_req + P + 6 * T_s3 + L <= D    one paced request-and-publish cycle, plus
+        T_req + P + 3 * T_s3 + L <= D    one paced request-and-publish cycle, plus
                                          the reserve, must fit
 
     Raises:

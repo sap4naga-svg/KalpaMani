@@ -11,10 +11,11 @@ they are checked against one another at import.
 **Refusing before starting is the whole design.** A budget consulted afterwards
 reports an overrun; a budget consulted first prevents one. So a provider request is
 admitted only when the remaining budget covers its complete downstream obligation --
-its own ceiling, the three Bronze writes and up to three conditional resolutions it
-creates, and the locator reserve -- which is what keeps the locator reachable at the
-end of a run that used every second it had.
-
+its own ceiling, the three Bronze writes it creates, and the locator reserve --
+which is what keeps the locator reachable at the end of a run that used every second
+it had. **There is no conditional resolution in that obligation any more**: ADR-0019
+removed the acquisition role's object-read authority, so ``3 * T_s3`` is the whole
+per-request S3 cost.
 
 **The counters count invocations, and they are labelled as invocations.** A cloud
 SDK call can resolve locally and fail before anything leaves the machine, so a
@@ -28,22 +29,27 @@ retry, and never "exactly 145".
 locator publication may be retried at most twice, and only when the conditional
 ``PutObject`` **itself** refused with ``THROTTLED`` or ``TRANSIENT`` -- that is,
 only while the publication condition remains unresolved. Every attempt sends
-byte-identical content, so if an earlier attempt did commit, a later one is
-answered ``412``, resolves the occupancy by metadata, finds the digest matches and
-reports *already present*. A retry can therefore resolve an unresolved condition
-and can never overwrite, duplicate or corrupt.
+byte-identical content, so a retry can never overwrite, duplicate or corrupt.
+
+**And a retry answered ``412`` now fails closed.** Under ADR-0018 as accepted, an
+earlier attempt that did in fact commit was recognised on the retry by a metadata
+read and reported *already present*. ADR-0019 removed that read, so the same case
+now ends in ``NAME_OCCUPIED``: the run reports that the name was occupied even
+though a correct, byte-identical locator exists. **That is a false negative in the
+safe direction** -- the run never claims a locator exists when it does not, nothing
+is overwritten, and the orphaned object stays inside the licensed qualification
+prefix that prefix-based deletion already covers. It is recorded rather than
+absorbed, and it must never be reinterpreted as success.
 
 **No retry may follow an ambiguous or unclassified result.** ``INVALID_RESPONSE``
 and ``UNKNOWN`` are excluded for exactly that reason, and so are ``ACCESS_DENIED``,
-``NOT_FOUND``, ``INVALID_CONFIGURATION`` and a genuine different-content collision.
+``NOT_FOUND``, ``INVALID_CONFIGURATION`` and an occupied name.
 
-**A retry-triggering attempt sends no ``HeadObject``.** ``THROTTLED`` and
-``TRANSIENT`` are refusals of the conditional ``PutObject`` itself: they leave
-before the occupancy resolution. The only attempt that reaches that resolution is
-one answered ``412`` -- and a ``412`` *resolves* the condition, which is the
-property the retry permission requires to be absent. So at most one locator attempt
-can ever reach the metadata-resolution path, and locator ``HeadObject`` is at most
-one however many ``PutObject`` invocations the locator made.
+**No locator attempt sends a ``HeadObject``, and neither does any Bronze write.**
+``THROTTLED`` and ``TRANSIENT`` are refusals of the conditional ``PutObject``
+itself, and a ``412`` is now terminal rather than the start of a resolution. So
+acquisition ``HeadObject`` is **exactly zero** however many ``PutObject``
+invocations the locator made, and acquisition ``GetObject`` is exactly zero too.
 
 **Bronze writes are never retried here.** They are the runtime's, under its own
 accepted contract, and this module neither wraps nor repeats them.
@@ -56,9 +62,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
-from kalpamani.data.contracts.errors import ObjectAlreadyExistsError, ObjectStoreBackendError
+from kalpamani.data.contracts.errors import ObjectStoreBackendError
 from kalpamani.data.contracts.vocabulary import ObjectStoreFailure, ObjectStoreOperation
-from kalpamani.data.objectstore import ObjectKey, PutOutcome, ResearchObjectStore
+from kalpamani.data.objectstore import ObjectKey, PutOutcome
 from kalpamani.data.qualify.sharadar.plan import (
     ACQUISITION_DEADLINE_SECONDS,
     BRONZE_OPERATION_ADMISSION_SECONDS,
@@ -67,6 +73,7 @@ from kalpamani.data.qualify.sharadar.plan import (
     PROVIDER_REQUEST_ADMISSION_SECONDS,
     validate_deadline_constants,
 )
+from kalpamani.data.qualify.sharadar.publication import NameOccupiedError
 
 #: The two failures that leave the publication condition unresolved, and are
 #: therefore the only two a retry may follow. An allowlist: a failure category
@@ -154,9 +161,9 @@ class AcquisitionDeadline:
 
     **No operation may start on the hope that it finishes in time.** A provider
     request is admitted only when the remaining budget covers its whole downstream
-    obligation -- its own ceiling, the three Bronze writes and up to three
-    conditional resolutions it creates, and the locator reserve. That is what makes
-    the locator reachable at the end of a run that ran right up to the edge.
+    obligation -- its own ceiling, the three Bronze writes it creates, and the
+    locator reserve. That is what makes the locator reachable at the end of a run
+    that ran right up to the edge.
     """
 
     __slots__ = ("_deadline", "_monotonic", "_phase", "_started", "exhausted")
@@ -246,7 +253,8 @@ class AcquisitionDeadline:
     def admit_provider_request(self) -> None:
         """Admit one provider request, or refuse the run.
 
-        Requires ``T_req + 6 * T_s3 + L``. **Pacing is not in that sum**: pacing for
+        Requires ``T_req + 3 * T_s3 + L`` (ADR-0019 §7). **Pacing is not in that
+        sum**: pacing for
         this request was checked and consumed before admission is asked, so counting
         it again here would spend one interval twice and halt runs that could have
         finished.
@@ -281,6 +289,10 @@ class AcquisitionDeadline:
         is being spent, so it requires ``T_s3``. An unarmed deadline admits nothing:
         no S3 operation belongs to the acquisition phase before it starts.
 
+        **Every admitted operation is a ``PutObject``.** The acquisition path issues
+        no ``HeadObject`` and no ``GetObject``, so there is no other kind of S3
+        invocation for this method to admit.
+
         Raises:
             DeadlineExhaustedError: ``BRONZE_OPERATION`` or ``LOCATOR_OPERATION``.
         """
@@ -311,30 +323,34 @@ class LocatorPublicationStatus(StrEnum):
     """How the one locator publication ended. Closed, and never a verdict.
 
     ``PUBLISHED``
-        The locator was written by this execution.
-    ``ALREADY_PRESENT``
-        Byte-identical content was already stored under the name. An ordinary
-        idempotent outcome of a retry whose earlier attempt did commit.
+        The locator was written by this execution. **The only addressable outcome.**
     ``NOT_PUBLISHED``
         The write was refused definitively. **The evidence exists and is
         unaddressable**, and a new execution identity is required.
     ``STATE_UNKNOWN``
         The write could not be verified either way. Same consequence.
-    ``COLLISION``
-        The name is held by different content. A genuine collision; retrying
-        repeats it, so nothing does.
+    ``NAME_OCCUPIED``
+        The conditional write found the name occupied, and **what occupies it was
+        not determined**. ADR-0019 removed the metadata read that would have said
+        whether the stored bytes were identical, so this member replaces both of the
+        two ADR-0018 outcomes that depended on it: there is no ``ALREADY_PRESENT``
+        and no ``COLLISION`` here any more. It is never addressable, never counted as
+        retained evidence, and never reinterpreted as success -- including in the one
+        case where a byte-identical locator really does exist, which is a false
+        negative in the safe direction.
     """
 
     PUBLISHED = "PUBLISHED"
-    ALREADY_PRESENT = "ALREADY_PRESENT"
     NOT_PUBLISHED = "NOT_PUBLISHED"
     STATE_UNKNOWN = "STATE_UNKNOWN"
-    COLLISION = "COLLISION"
+    NAME_OCCUPIED = "NAME_OCCUPIED"
 
 
-#: The statuses under which a locator is addressable afterwards.
+#: The statuses under which a locator is addressable afterwards. **Exactly one**:
+#: an occupied name is not an addressable locator, because nothing established what
+#: the name holds.
 ADDRESSABLE_STATUSES: Final[frozenset[LocatorPublicationStatus]] = frozenset(
-    {LocatorPublicationStatus.PUBLISHED, LocatorPublicationStatus.ALREADY_PRESENT}
+    {LocatorPublicationStatus.PUBLISHED}
 )
 
 
@@ -345,25 +361,29 @@ class CountingS3Client:
     behaviour, no retry, no caching and no rewriting -- it is a counter, and a
     counter that changed what happened would be measuring itself.
 
-    **It exposes only ``put_object`` and ``head_object``**, which is the whole of
-    the writer-side protocol. There is no ``get_object`` here: the acquisition path
-    has no object-byte read, and a wrapper that offered one would be a read surface
-    growing quietly inside a counter.
+    **It exposes only ``put_object``**, which is now the whole of the acquisition
+    writer-side protocol. There is no ``head_object`` and no ``get_object`` here:
+    ADR-0019 removed the acquisition role's object-read authority, and a wrapper that
+    offered either would be a read surface growing quietly inside a counter. A client
+    that happens to *carry* those methods is never called through them, because there
+    is no call site that could.
     """
 
-    __slots__ = ("_client", "_deadline", "head_object_count", "put_object_count")
+    __slots__ = ("_client", "_deadline", "put_object_count")
 
     def __init__(self, client: Any, *, deadline: AcquisitionDeadline) -> None:
-        """Bind the injected client and the deadline, and start both counters at zero.
+        """Bind the injected client and the deadline, and start the counter at zero.
+
+        **Only ``put_object`` is required**, and that is the correction: requiring
+        ``head_object`` would have refused exactly the write-only client this path is
+        supposed to be given.
 
         The deadline is **required**, not optional. An optional one would make the
         unguarded call the default, and the guard would then be present only where
-        somebody remembered it -- which is exactly the shape of the defect this
+        somebody remembered it -- which is exactly the shape of the defect an earlier
         correction exists to remove.
         """
-        if not callable(getattr(client, "put_object", None)) or not callable(
-            getattr(client, "head_object", None)
-        ):
+        if not callable(getattr(client, "put_object", None)):
             raise ObjectStoreBackendError(
                 operation=ObjectStoreOperation.BIND,
                 failure=ObjectStoreFailure.INVALID_CONFIGURATION,
@@ -376,14 +396,10 @@ class CountingS3Client:
         self._client = client
         self._deadline = deadline
         self.put_object_count = 0
-        self.head_object_count = 0
 
     def __repr__(self) -> str:
-        """Counts only. **Never the wrapped client, a bucket or a key.**"""
-        return (
-            f"CountingS3Client(put_object={self.put_object_count}, "
-            f"head_object={self.head_object_count})"
-        )
+        """One count. **Never the wrapped client, a bucket or a key.**"""
+        return f"CountingS3Client(put_object={self.put_object_count})"
 
     def put_object(self, **kwargs: Any) -> Any:
         """Admit against the deadline, count the invocation, then forward it.
@@ -403,12 +419,6 @@ class CountingS3Client:
         self._deadline.admit_s3_operation()
         self.put_object_count += 1
         return self._client.put_object(**kwargs)
-
-    def head_object(self, **kwargs: Any) -> Any:
-        """Admit against the deadline, count the invocation, then forward it."""
-        self._deadline.admit_s3_operation()
-        self.head_object_count += 1
-        return self._client.head_object(**kwargs)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -455,24 +465,32 @@ class AcquisitionOperationCounts:
         completed_puts = OBJECTS_PER_ACQUISITION * self.completed_requests
         if bronze_puts < completed_puts:
             raise ValueError("each completed acquisition writes three Bronze objects")
-        if bronze_puts > completed_puts + OBJECTS_PER_ACQUISITION - 1:
+        if bronze_puts > completed_puts + OBJECTS_PER_ACQUISITION:
             # **A bound, not an equality, and the difference is a halted run.** A
             # publication writes its claim, payload and record in three separate
             # conditional invocations with no short-circuit, so a run that halted
             # part-way through one of them -- a storage refusal, or the deadline
-            # refusing the next write -- has one *incomplete* publication whose one
-            # or two writes really happened and are really counted, while its
-            # request never became a completed acquisition. An equality here would
-            # refuse to describe the halted run at all, which is the run whose
-            # accounting matters most. At most one publication can be incomplete,
-            # because the runtime stops at the first terminal failure.
+            # refusing the next write -- has one *incomplete* publication whose
+            # writes really happened and are really counted, while its request never
+            # became a completed acquisition. An equality here would refuse to
+            # describe the halted run at all, which is the run whose accounting
+            # matters most. At most one publication can be incomplete, because the
+            # runtime stops at the first terminal failure.
+            #
+            # **All three of that publication's writes may be counted**, not two.
+            # ADR-0019 §6.5 is explicit that a collided ``PutObject`` *is* an
+            # invocation and *is* counted, so a third write answered ``412`` leaves
+            # three counted Bronze writes against a request that never completed --
+            # a real, reachable run that the earlier ``- 1`` refused to describe.
             raise ValueError("at most one incomplete publication may exceed the per-request writes")
-        if self.head_object_count > bronze_puts + 1:
-            # Bounded by the *PutObject* count of the Bronze writes plus at most
-            # one locator resolution -- and deliberately not by the total PutObject
-            # count, which a retry raises. The extra invocations a retry buys are
-            # exactly the ones that sent no HeadObject.
-            raise ValueError("head_object_count exceeds one metadata resolution per write")
+        if self.head_object_count:
+            # **Equality with zero, not a bound derived from the write count.**
+            # ADR-0019 replaced the accepted ``<= 3 * completed + 1`` ceiling with
+            # this, which is stricter and needs no derivation: the acquisition role
+            # holds no object-read authority and the publication surface has no
+            # ``head_object``, so any non-zero count means something published
+            # through a path this architecture does not have.
+            raise ValueError("the acquisition path performs no metadata read")
         if self.get_object_count:
             raise ValueError("the acquisition path performs no object-byte read")
         if self.list_operation_count:
@@ -504,7 +522,14 @@ class LocatorPublication:
 
 
 class _LocatorStore(Protocol):
-    """The one store method locator publication uses."""
+    """The one store method locator publication uses.
+
+    **Deliberately narrower than the neutral store protocol**, and deliberately not a
+    union with it: the shared
+    :class:`~kalpamani.data.storage.s3.S3ResearchObjectStore` resolves a ``412`` with
+    a ``HeadObject``, and accepting it here would be a route back to the metadata read
+    ADR-0019 removed. What this path is given is the ADR-0018 write-only publisher.
+    """
 
     def put_if_absent(self, *, key: ObjectKey, payload: bytes) -> PutOutcome:
         """Publish one object unless the name is already occupied."""
@@ -513,7 +538,7 @@ class _LocatorStore(Protocol):
 
 def publish_locator(
     *,
-    store: ResearchObjectStore | _LocatorStore,
+    store: _LocatorStore,
     key: ObjectKey,
     payload: bytes,
     deadline: AcquisitionDeadline,
@@ -528,13 +553,12 @@ def publish_locator(
     **The loop cannot exceed three attempts**, and it exits on anything that is not
     an unresolved-condition refusal of the ``PutObject`` itself:
 
-    - a store refusal whose operation is ``HEAD`` is post-``412`` metadata
-      resolution, so the condition is already resolved and no retry follows;
+    - an occupied name resolves the condition -- the write did not happen -- so it
+      is terminal and no retry follows;
     - ``ACCESS_DENIED``, ``NOT_FOUND`` and ``INVALID_CONFIGURATION`` are
       definitive;
     - ``INVALID_RESPONSE`` and ``UNKNOWN`` are ambiguous, and no retry may follow
-      an ambiguous result;
-    - a different-content collision is genuine, and retrying repeats it.
+      an ambiguous result.
 
     **The deadline is checked before every attempt**, including before a retry, and
     the locator's own S3 invocations are admitted again inside the counting client.
@@ -567,8 +591,16 @@ def publish_locator(
         attempts += 1
         try:
             outcome = store.put_if_absent(key=key, payload=payload)
-        except ObjectAlreadyExistsError:
-            return LocatorPublication(status=LocatorPublicationStatus.COLLISION, attempts=attempts)
+        except NameOccupiedError:
+            # **Terminal, and it claims only that the name was occupied.** No
+            # ``HeadObject``, no comparison, no adoption: what holds the name is
+            # undetermined and stays undetermined. When this arrives on a *retry*
+            # whose earlier attempt may in fact have committed a byte-identical
+            # locator, the run still fails closed -- the safe-direction false
+            # negative ADR-0019 §4.3 records, and never a success.
+            return LocatorPublication(
+                status=LocatorPublicationStatus.NAME_OCCUPIED, attempts=attempts
+            )
         except ObjectStoreBackendError as refusal:
             if (
                 refusal.operation is ObjectStoreOperation.PUT
@@ -593,10 +625,14 @@ def publish_locator(
             return LocatorPublication(
                 status=LocatorPublicationStatus.STATE_UNKNOWN, attempts=attempts
             )
+        # **One success, and it is a write.** The write-only publisher reaches no
+        # other: ``stored`` is ``True`` on every outcome it returns, so there is no
+        # branch here that could report an occupied name as an idempotent
+        # re-publication.
         status = (
             LocatorPublicationStatus.PUBLISHED
             if outcome.stored
-            else LocatorPublicationStatus.ALREADY_PRESENT
+            else LocatorPublicationStatus.STATE_UNKNOWN
         )
         return LocatorPublication(status=status, attempts=attempts)
 

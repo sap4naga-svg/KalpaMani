@@ -39,7 +39,10 @@ from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.bronze import RetrievalMetadata
 from kalpamani.data.ingest.publication import bronze_payload_key
 from kalpamani.data.ingest.sharadar.datasets import ResponseFormat
-from kalpamani.data.qualify.sharadar.acquisition import run_empirical_acquisition
+from kalpamani.data.qualify.sharadar.acquisition import (
+    AcquisitionStatus,
+    run_empirical_acquisition,
+)
 from kalpamani.data.qualify.sharadar.locator import (
     LOCATOR_ENTRY_FIELDS,
     LOCATOR_FIELDS,
@@ -59,12 +62,12 @@ from kalpamani.data.qualify.sharadar.locator import (
 from kalpamani.data.qualify.sharadar.plan import build_empirical_plan
 
 
-def _acquire() -> tuple[FakeS3Client, Any]:
+def _acquire(*, transport: PagedTransport | None = None) -> tuple[FakeS3Client, Any]:
     s3 = FakeS3Client()
     monotonic = FakeMonotonic()
     result = run_empirical_acquisition(
         credential=credential(),
-        transport=PagedTransport(),
+        transport=transport if transport is not None else PagedTransport(),
         monotonic=monotonic,
         sleeper=monotonic.sleep,
         s3_client=s3,
@@ -399,13 +402,39 @@ def test_dispositions_are_the_closed_two_member_vocabulary() -> None:
             assert entry[f"{role}_disposition"] in permitted
 
 
-def test_payload_reuse_across_subjects_is_recorded_as_already_present() -> None:
-    # The header-only completeness probe returns identical bytes for every subject,
-    # so the second and later ones legitimately reuse one payload object.
-    s3, _ = _acquire()
-    dispositions = [entry["payload_disposition"] for entry in _document(s3)["entries"]]
-    assert ObjectDisposition.ALREADY_PRESENT.value in dispositions
-    assert ObjectDisposition.WRITTEN.value in dispositions
+def test_the_acquisition_path_can_no_longer_record_already_present() -> None:
+    """The inversion ADR-0019 forces, and the schema it deliberately leaves alone.
+
+    Until ADR-0019 this asserted the opposite: identical bytes reused one payload
+    object, the shared store proved it identical with a ``HeadObject``, and the entry
+    was recorded ``ALREADY_PRESENT``. The write-only publisher has no such proof
+    available, so it reaches **one** success -- a write -- and every disposition this
+    path can emit is ``WRITTEN``.
+
+    ``ObjectDisposition`` keeps both members. It is the accepted durable locator
+    schema, ADR-0019 §9 amends no part of it, and narrowing a stored vocabulary
+    because one producer can no longer reach a value would be an unapproved change to
+    evidence the assessor validates. What changed is what the producer can *say*, and
+    that is asserted here rather than in the schema.
+    """
+    # **Driven on the case that used to produce it.** Every subject's completeness
+    # probe for one dataset returns the same header-only body, so under ADR-0018 the
+    # second and later ones resolved to ``ALREADY_PRESENT`` and the run continued.
+    # Under ADR-0019 the run halts at that write instead, and the entries it did
+    # record can only say ``WRITTEN``. Driving it with byte-distinct responses would
+    # have proven nothing: there would be no repeat to record either way.
+    s3, result = _acquire(transport=PagedTransport(byte_variant=""))
+    assert result.status is AcquisitionStatus.BRONZE_NAME_OCCUPIED
+    dispositions = [
+        entry[f"{role}_disposition"]
+        for entry in _document(s3)["entries"]
+        for role in ("claim", "payload", "record")
+    ]
+    assert dispositions
+    assert set(dispositions) == {ObjectDisposition.WRITTEN.value}
+    assert ObjectDisposition.ALREADY_PRESENT.value not in dispositions
+    assert result.counts.head_object_count == 0
+    assert s3.head_calls == []
 
 
 def test_the_locator_is_inside_its_size_ceiling() -> None:

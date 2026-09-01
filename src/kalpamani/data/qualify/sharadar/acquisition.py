@@ -22,6 +22,24 @@ transport are each wrapped in a counter that forwards every call unchanged, so t
 reported invocation counts are what the dependencies were actually asked for. A run
 that retried its locator reports the retry.
 
+**Acquisition is write-only, and it composes its own runtime to stay that way**
+(ADR-0019). Every durable object -- the claim, the payload, the acquisition record
+and the locator -- is published through
+:class:`~kalpamani.data.qualify.sharadar.publication.LicensedWriteOnlyPublisher`,
+whose only operation is a conditional ``PutObject``. That is why this module builds
+the accepted client and the accepted runtime here rather than calling ADR-0017's
+composition root: that root constructs the shared
+:class:`~kalpamani.data.storage.s3.S3ResearchObjectStore`, which resolves a ``412``
+with a ``HeadObject``, and AWS maps ``HeadObject`` onto ``s3:GetObject``. **ADR-0017
+is untouched** -- its root, its store and its accounting are exactly as accepted, and
+nothing here is reachable from it.
+
+**A ``412`` fails closed, everywhere on this path.** No metadata is read, no digest
+is compared, no occupied object is adopted or resumed from, and nothing is retried
+because of it. A Bronze collision halts the run and reports
+``BRONZE_NAME_OCCUPIED``; a locator collision reports ``LOCATOR_NAME_OCCUPIED``.
+Neither claims anything about what occupies the name, because nothing here can know.
+
 **One real elapsed-time deadline governs the acquisition execution phase.** It is
 armed here, at the stage-11 boundary -- after the offline preflight has returned and
 immediately before the call that performs the first provider request -- and it ends
@@ -46,19 +64,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final
+from typing import Any, Final, cast
 
-from kalpamani.data.ingest.sharadar.client import Pacer, RetryPolicy
-from kalpamani.data.ingest.sharadar.composition import (
-    execute_qualification_acquisition,
-    preflight_qualification_composition,
-)
+from kalpamani.data.ingest.sharadar.client import Pacer, RetryPolicy, SharadarClient
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
 from kalpamani.data.ingest.sharadar.runtime import (
     QualificationClock,
     QualificationOutcome,
     QualificationRunResult,
+    QualificationRuntime,
 )
+from kalpamani.data.objectstore import ResearchObjectStore
 from kalpamani.data.qualify.sharadar.inventory import PrivateInventory
 from kalpamani.data.qualify.sharadar.locator import (
     build_locator_document,
@@ -83,7 +99,7 @@ from kalpamani.data.qualify.sharadar.plan import (
     EmpiricalPlan,
     build_empirical_plan,
 )
-from kalpamani.data.storage.s3 import S3ResearchObjectStore
+from kalpamani.data.qualify.sharadar.publication import LicensedWriteOnlyPublisher
 
 #: The one retry policy this package permits: one attempt, no backoff. A second
 #: attempt is refused by the accepted plan model's retry-budget arithmetic before
@@ -105,22 +121,32 @@ class AcquisitionStatus(StrEnum):
         because a deadline is not a rollback, and the locator was still published.
         **It authorizes nothing** -- not a retry, not a resume, not a new execution
         identity. Re-running is a separate authorization, and there is no resume.
+    ``BRONZE_NAME_OCCUPIED``
+        A claim, payload or acquisition-record publication found its name occupied.
+        The run halted there: nothing after it in that publication step was
+        attempted, and no further provider request was made. **It says the name was
+        occupied and nothing else** -- not that the stored bytes are identical, not
+        that they differ, and not that anything may be resumed from them, because
+        this path performs no object read that could establish any of it.
     ``LOCATOR_NOT_PUBLISHED``
         The evidence exists and is **unaddressable**. A new execution identity is
         required; there is no listing that could recover it, and none will be added.
     ``LOCATOR_STATE_UNKNOWN``
         The locator write could not be verified either way. Same consequence.
-    ``LOCATOR_COLLISION``
-        The locator name is held by different content. A new execution identity is
-        required; retrying repeats the collision.
+    ``LOCATOR_NAME_OCCUPIED``
+        The locator name was occupied, and **what occupies it was not determined**.
+        A new execution identity is required. This replaces ADR-0018's
+        ``LOCATOR_COLLISION``, whose name asserted *different content* -- a
+        comparison ADR-0019 removed the authority to make.
     """
 
     COMPLETED = "COMPLETED"
     PARTIAL = "PARTIAL"
     RUN_DEADLINE_EXHAUSTED = "RUN_DEADLINE_EXHAUSTED"
+    BRONZE_NAME_OCCUPIED = "BRONZE_NAME_OCCUPIED"
     LOCATOR_NOT_PUBLISHED = "LOCATOR_NOT_PUBLISHED"
     LOCATOR_STATE_UNKNOWN = "LOCATOR_STATE_UNKNOWN"
-    LOCATOR_COLLISION = "LOCATOR_COLLISION"
+    LOCATOR_NAME_OCCUPIED = "LOCATOR_NAME_OCCUPIED"
 
 
 #: How a locator publication status becomes an acquisition status when the run
@@ -129,10 +155,9 @@ class AcquisitionStatus(StrEnum):
 #: silently becoming a completion.
 _LOCATOR_STATUS: Final[dict[LocatorPublicationStatus, AcquisitionStatus]] = {
     LocatorPublicationStatus.PUBLISHED: AcquisitionStatus.COMPLETED,
-    LocatorPublicationStatus.ALREADY_PRESENT: AcquisitionStatus.COMPLETED,
     LocatorPublicationStatus.NOT_PUBLISHED: AcquisitionStatus.LOCATOR_NOT_PUBLISHED,
     LocatorPublicationStatus.STATE_UNKNOWN: AcquisitionStatus.LOCATOR_STATE_UNKNOWN,
-    LocatorPublicationStatus.COLLISION: AcquisitionStatus.LOCATOR_COLLISION,
+    LocatorPublicationStatus.NAME_OCCUPIED: AcquisitionStatus.LOCATOR_NAME_OCCUPIED,
 }
 
 
@@ -272,6 +297,7 @@ def _status_for(
     publication: LocatorPublication,
     *,
     deadline_exhausted: bool,
+    bronze_name_occupied: bool,
 ) -> AcquisitionStatus:
     """One closed status from the run result, the locator publication and the deadline.
 
@@ -279,7 +305,14 @@ def _status_for(
 
     **A locator problem outranks everything.** An unaddressable execution cannot be
     assessed at all, so reporting a halt reason for it would overstate what the
-    owner can do next -- the next step is a new execution identity either way.
+    owner can do next -- the next step is a new execution identity either way. That
+    includes ``LOCATOR_NOT_PUBLISHED`` after a Bronze collision: the collision is
+    real, and so is the fact that nothing can find what the run did publish.
+
+    **An occupied Bronze name outranks the deadline and a plain partial**, because
+    it names a cause that is not a timing budget and not a vendor. It says the
+    conditional write found the name taken, and it stops there: nothing about the
+    occupying object is known, and nothing here pretends otherwise.
 
     **Deadline exhaustion outranks a plain partial**, because it names the cause. A
     run that stopped at 1,800 seconds and a run that stopped because the provider
@@ -297,6 +330,8 @@ def _status_for(
     )
     if complete:
         return AcquisitionStatus.COMPLETED
+    if bronze_name_occupied:
+        return AcquisitionStatus.BRONZE_NAME_OCCUPIED
     if deadline_exhausted:
         return AcquisitionStatus.RUN_DEADLINE_EXHAUSTED
     return AcquisitionStatus.PARTIAL
@@ -355,22 +390,47 @@ def run_empirical_acquisition(
         sleeper=DeadlinePacedSleeper(deadline=deadline, sleeper=sleeper),
     )
 
-    # **Offline plan preflight, before the first request.** It validates the plan
-    # against the injected client's own attempt policy and byte ceiling, so a
-    # configuration that could not have completed is refused while it is still free.
-    # It issues no provider request and no store call, and it is the accepted
-    # composition root's own check rather than a second opinion.
-    preflight_qualification_composition(
+    # **The write-only publication surface, and the accepted runtime around it.**
+    # Every durable object this execution creates -- the three Bronze objects per
+    # completed request and the one locator -- is written through this publisher,
+    # whose only operation is a conditional ``PutObject`` (ADR-0019 §5). The
+    # accepted client and the accepted runtime are built here, from injected values,
+    # rather than through ADR-0017's composition root: that root constructs the
+    # shared licensed store, which resolves a ``412`` with a ``HeadObject``, and this
+    # role holds no authority for one. **ADR-0017's root is unchanged and is not
+    # called** -- its accounting is exactly as accepted, and nothing here alters it.
+    publisher = LicensedWriteOnlyPublisher(client=counting_client, licensed_bucket=licensed_bucket)
+    client = SharadarClient(
         credential=credential,
         transport=counting_transport,
         pacer=pacer,
         retry_policy=NO_RETRY_POLICY,
         timeout_seconds=TIMEOUT_SECONDS,
-        s3_client=counting_client,
-        licensed_bucket=licensed_bucket,
-        clock=clock,
-        plan=plan.plan,
     )
+    # **The one cast in this package, and it is narrower than it looks.** The
+    # accepted runtime's parameter is annotated with the neutral two-method
+    # ``ResearchObjectStore`` protocol, whose second method -- ``exists`` -- is a
+    # metadata read. The write-only publisher deliberately does not offer one, so it
+    # does not satisfy that annotation and must not pretend to at runtime either:
+    # adding a refusing ``exists`` would put a read-shaped method on a write-only
+    # surface, and adding a real one would put back the authority ADR-0019 removed.
+    #
+    # What makes this safe is checked rather than assumed. ``QualificationRuntime``
+    # requires only ``put_if_absent`` at construction, the neutral Bronze publisher
+    # calls only ``put_if_absent``, and a test parses both modules and asserts that
+    # neither reaches ``.exists`` anywhere. A future edit that added such a call
+    # fails that test rather than this cast.
+    runtime = QualificationRuntime(
+        client=client, store=cast(ResearchObjectStore, publisher), clock=clock
+    )
+
+    # **Offline plan preflight, before the first request.** The accepted runtime's
+    # own ``validate`` -- the same call the accepted offline preflight makes, and not
+    # a second opinion -- checks the plan against the injected client's attempt
+    # policy and byte ceilings, so a configuration that could not have completed is
+    # refused while it is still free. It issues no provider request and no store
+    # call.
+    runtime.validate(plan.plan)
 
     # **Stage 11 begins here.** Everything above -- authorization, the inventory,
     # identity, binding, the credential, dependency construction and the offline
@@ -382,18 +442,15 @@ def run_empirical_acquisition(
     # a run halt marginally earlier, never later.
     run_started_at = clock.now()
     deadline.arm()
-    result = execute_qualification_acquisition(
-        credential=credential,
-        transport=counting_transport,
-        pacer=pacer,
-        retry_policy=NO_RETRY_POLICY,
-        timeout_seconds=TIMEOUT_SECONDS,
-        s3_client=counting_client,
-        licensed_bucket=licensed_bucket,
-        clock=clock,
-        plan=plan.plan,
-    )
+    result = runtime.execute(plan.plan)
     run_completed_at = clock.now()
+
+    # **Read before the locator phase, deliberately.** The locator is published
+    # through the same publisher, so a locator collision would set this flag too.
+    # Captured here, it means exactly one thing: a Bronze claim, payload or
+    # acquisition-record write found its name occupied. Nothing about what occupies
+    # it is known, and nothing below infers any.
+    bronze_name_occupied = publisher.name_occupied
 
     # **Stage 13 begins here.** From this point the reserve held back all run is
     # what is being spent, so an S3 operation no longer has to leave it behind.
@@ -418,25 +475,33 @@ def run_empirical_acquisition(
                 run_completed_at=run_completed_at,
             )
         )
-        store = S3ResearchObjectStore(client=counting_client, licensed_bucket=licensed_bucket)
+        # **The same write-only publisher the Bronze objects went through.** One
+        # conditional ``PutObject`` per attempt, and no resolution afterwards.
         publication = publish_locator(
-            store=store,
+            store=publisher,
             key=locator_object_key(execution_id=plan.plan.execution_id, payload=payload),
             payload=payload,
             deadline=deadline,
         )
 
     return EmpiricalAcquisitionResult(
-        status=_status_for(result, publication, deadline_exhausted=deadline.exhausted),
+        status=_status_for(
+            result,
+            publication,
+            deadline_exhausted=deadline.exhausted,
+            bronze_name_occupied=bronze_name_occupied,
+        ),
         locator_attempts=publication.attempts,
         deadline_exhausted=deadline.exhausted,
         counts=AcquisitionOperationCounts(
             completed_requests=result.completed_requests,
             put_object_count=counting_client.put_object_count,
-            head_object_count=counting_client.head_object_count,
-            # Structural, not measured: the writer-side client this path uses has no
-            # ``get_object`` in its shape at all, and no listing or CONTROL surface
-            # exists anywhere in this architecture to have counted.
+            # Structural, not measured, and all four for the same reason: the client
+            # this path is given exposes ``put_object`` and nothing else, the
+            # publisher offers no read of any kind, and no listing or CONTROL surface
+            # exists anywhere in this architecture to have counted. ADR-0019 made the
+            # metadata read the fourth member of that list.
+            head_object_count=0,
             get_object_count=0,
             list_operation_count=0,
             control_operation_count=0,
