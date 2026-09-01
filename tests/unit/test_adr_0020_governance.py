@@ -49,6 +49,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
+from typing import Any, Final
 
 import pytest
 
@@ -517,10 +518,16 @@ def test_the_audit_requires_every_clause_this_file_checks() -> None:
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
 def test_both_documents_record_the_merged_amendment(document: Path) -> None:
-    """Independently: merged main has twice carried a fact in one file and its contradiction
-    in the other."""
-    absent = missing(GUARD.ADR_0020_STATUS_REQUIRED, read(document))
-    assert not absent, f"{document.name} is missing: {absent}"
+    """Independently, and in ADR-0020's own status section.
+
+    Independently, because merged main has twice carried a fact in one file and
+    its contradiction in the other. In the section, because 46 of the 49 clauses
+    are spelled elsewhere in the same file as well, so a whole-document reading
+    was answered by a neighbouring status block -- see the section-scope block at
+    the end of this file.
+    """
+    absent = missing(GUARD.ADR_0020_STATUS_REQUIRED, split_at_section(document)[1])
+    assert not absent, f"{document.name} is missing from its ADR-0020 section: {absent}"
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
@@ -802,3 +809,337 @@ def test_the_guards_pass_only_because_the_documents_carry_the_clauses() -> None:
     assert len(missing(GUARD.ADR_0020_SELF_REQUIRED, "")) == len(GUARD.ADR_0020_SELF_REQUIRED)
     assert len(missing(GUARD.ADR_0020_STATUS_REQUIRED, "")) == len(GUARD.ADR_0020_STATUS_REQUIRED)
     assert len(missing(GUARD.ADR_0020_PLAN_REQUIRED, "")) == len(GUARD.ADR_0020_PLAN_REQUIRED)
+
+
+# ---------------------------------------------------------------------------
+# The ADR-0020 status section -- scope, cardinality, and the boundary
+#
+# Independent review of PR #50 found the status guards anchored on the whole
+# flattened document rather than on ADR-0020's own section. 46 of the 49 required
+# phrases are also spelled elsewhere in the same file -- ADR-0018's and
+# ADR-0019's status blocks carry their own "run a: not authorized / not run" --
+# so deleting one from ADR-0020's section was answered by a neighbour's copy and
+# the audit stayed green. Only three phrases were file-unique, which is why
+# removing the whole section was caught while gutting it clause by clause was not.
+#
+# Everything below mutates real committed text in memory. No tracked file is
+# written, and every scope decision is read from the audit rather than restated.
+# ---------------------------------------------------------------------------
+
+#: The six clauses the review disclosed: required of ADR-0020's section, and also
+#: spelled elsewhere in both documents, so a section-local deletion of any of them
+#: was invisible to a whole-document scan.
+DUPLICATED_ELSEWHERE: Final[tuple[str, ...]] = (
+    "records that run a has not run",
+    "records that run b has not run",
+    "records that the assessment has not run",
+    "keeps infrastructure blocked",
+    "records that the blocked pull request is not ready",
+    "records that implementation is unauthorized",
+)
+
+#: Clauses that anchor the merge and the gap. Section scope must catch a local
+#: deletion of these too. Three of them are the whole reason deleting the entire
+#: section was caught before this correction; the other two are duplicated
+#: elsewhere and were not.
+SECTION_ANCHORS: Final[tuple[str, ...]] = (
+    "records the conditional effectiveness event",
+    "records the merge",
+    "records the accepted architecture status",
+    "records that the correction has not begun",
+    "records that nothing was deployed",
+)
+
+#: The heading that ends ADR-0020's section in each document. The two differ on
+#: purpose: CLAUDE.md is terminated by a sibling ``###`` and README.md by a parent
+#: ``##``, so both terminator classes are exercised.
+TERMINATORS: Final[dict[str, tuple[str, str]]] = {
+    "CLAUDE.md": ("### ", "Non-blocking follow-ups carried forward"),
+    "README.md": ("## ", "Governance"),
+}
+
+
+def scan(text: str) -> Any:
+    """The audit's own extractor, driven rather than reimplemented."""
+    return GUARD.scan_adr_0020_status_sections(text)
+
+
+def split_at_section(document: Path) -> tuple[str, str, str]:
+    """``(before, section, after)`` for a document's one ADR-0020 status section.
+
+    The split is made on the extractor's own output, so a test cannot disagree
+    with the audit about where the section begins and ends.
+    """
+    text = read(document)
+    found = scan(text)
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    section = str(found.sections[0])
+    before, separator, after = text.partition(section)
+    assert separator == section, f"{document.name}: the section is not verbatim in the document"
+    return before, section, after
+
+
+def drop_inside_section(document: Path, label: str) -> tuple[str, str, str, str]:
+    """Remove one required clause from ADR-0020's section only.
+
+    Returns ``(phrase, mutated section reading, mutated whole-document reading,
+    unchanged outside reading)``. The phrase is read from the audit's own
+    requirement list, so this deletes what the audit actually looks for.
+    """
+    phrase = clause(label, GUARD.ADR_0020_STATUS_REQUIRED)
+    before, section, after = split_at_section(document)
+    reading = flat(section)
+    assert phrase in reading, f"{document.name}: absent before removal: {phrase}"
+    mutated = reading.replace(phrase, "")
+    assert phrase not in mutated, f"{document.name}: still present after removal: {phrase}"
+    outside = flat(before) + " " + flat(after)
+    whole = flat(before) + " " + mutated + " " + flat(after)
+    return phrase, mutated, whole, outside
+
+
+def rebuild(before: str, section: str, after: str) -> str:
+    """A whole document with one substituted section, as raw text."""
+    return before + section + after
+
+
+# --- the six disclosed boundary mutations ----------------------------------
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+@pytest.mark.parametrize("label", DUPLICATED_ELSEWHERE)
+def test_a_section_local_deletion_of_a_duplicated_clause_is_caught(
+    document: Path, label: str
+) -> None:
+    """The defect, one clause at a time: section scope catches it, file scope did not."""
+    phrase, mutated, whole, outside = drop_inside_section(document, label)
+    assert label in missing(GUARD.ADR_0020_STATUS_REQUIRED, mutated), f"{document.name}: {phrase}"
+    assert outside.count(phrase) >= 1, f"{document.name}: not duplicated elsewhere: {phrase}"
+    assert phrase in whole, f"{document.name}: file scope would have caught this: {phrase}"
+
+
+def test_every_disclosed_boundary_mutation_is_detected() -> None:
+    """All twelve, counted: six clauses across two documents, none unreported."""
+    attempted = 0
+    detected = 0
+    for document in (CLAUDE_MD, README):
+        for label in DUPLICATED_ELSEWHERE:
+            attempted += 1
+            _phrase, mutated, _whole, _outside = drop_inside_section(document, label)
+            if label in missing(GUARD.ADR_0020_STATUS_REQUIRED, mutated):
+                detected += 1
+    assert attempted == 2 * len(DUPLICATED_ELSEWHERE), attempted
+    assert detected == attempted, f"{detected} of {attempted} detected"
+
+
+def test_the_old_whole_document_scope_missed_every_one_of_them() -> None:
+    """NEGATIVE CONTROL for the correction: the scope that was replaced caught none."""
+    missed = 0
+    for document in (CLAUDE_MD, README):
+        for label in DUPLICATED_ELSEWHERE:
+            phrase, _mutated, whole, _outside = drop_inside_section(document, label)
+            if phrase in whole:
+                missed += 1
+    assert missed == 2 * len(DUPLICATED_ELSEWHERE), f"only {missed} were invisible to file scope"
+
+
+def test_a_section_local_deletion_leaves_every_outside_occurrence_alone() -> None:
+    """The mutation is section-local, so the test proves scope rather than deletion."""
+    for document in (CLAUDE_MD, README):
+        before, _section, after = split_at_section(document)
+        untouched = flat(before) + " " + flat(after)
+        for label in DUPLICATED_ELSEWHERE + SECTION_ANCHORS:
+            phrase, _mutated, _whole, outside = drop_inside_section(document, label)
+            assert outside == untouched, f"{document.name}: outside text changed for {phrase}"
+
+
+# --- unique-anchor mutations -----------------------------------------------
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+@pytest.mark.parametrize("label", SECTION_ANCHORS)
+def test_a_section_local_deletion_of_an_anchor_clause_is_caught(document: Path, label: str) -> None:
+    """The clauses that name the merge and the gap, deleted from their own section."""
+    phrase, mutated, _whole, _outside = drop_inside_section(document, label)
+    assert label in missing(GUARD.ADR_0020_STATUS_REQUIRED, mutated), f"{document.name}: {phrase}"
+
+
+def test_three_anchors_are_the_only_file_unique_clauses() -> None:
+    """Why the old scope caught a deleted section and nothing smaller.
+
+    Read from the documents rather than asserted: exactly three required clauses
+    have no copy outside ADR-0020's section, so removing the whole section tripped
+    three guards and removing any single clause tripped none.
+    """
+    for document in (CLAUDE_MD, README):
+        before, _section, after = split_at_section(document)
+        outside = flat(before) + " " + flat(after)
+        unique = [
+            phrase for _label, phrase in GUARD.ADR_0020_STATUS_REQUIRED if phrase not in outside
+        ]
+        assert len(unique) == 3, f"{document.name}: {len(unique)} file-unique clauses: {unique}"
+
+
+# --- cardinality, boundaries and statelessness -----------------------------
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_each_document_carries_exactly_one_intact_status_section(document: Path) -> None:
+    """The emitted cardinality check, on the real file."""
+    found = scan(read(document))
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)}"
+    assert not found.defects, f"{document.name}: {found.defects}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_removing_the_whole_status_section_is_caught(document: Path) -> None:
+    """Zero sections is a cardinality failure, not a document that simply passed."""
+    before, _section, after = split_at_section(document)
+    found = scan(before + after)
+    assert len(found.sections) == 0, f"{document.name}: {len(found.sections)}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_duplicating_the_whole_status_section_is_caught(document: Path) -> None:
+    """A second copy is invisible to a phrase scan -- it only ever adds occurrences."""
+    before, section, after = split_at_section(document)
+    duplicated = rebuild(before, section + section, after)
+    found = scan(duplicated)
+    assert len(found.sections) == 2, f"{document.name}: {len(found.sections)}"
+    assert not missing(GUARD.ADR_0020_STATUS_REQUIRED, duplicated), (
+        f"{document.name}: a phrase scan cannot see the duplicate, which is why it is counted"
+    )
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_duplicating_the_heading_alone_is_caught(document: Path) -> None:
+    """A bare repeated heading opens a second section with the same claim to answer."""
+    before, section, after = split_at_section(document)
+    heading = section.splitlines(keepends=True)[0]
+    found = scan(rebuild(before, section + heading, after))
+    assert len(found.sections) == 2, f"{document.name}: {len(found.sections)}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_an_empty_duplicate_section_is_caught(document: Path) -> None:
+    """A heading with nothing under it still answers the question a second time."""
+    before, section, after = split_at_section(document)
+    heading = section.splitlines(keepends=True)[0]
+    found = scan(rebuild(before, section + heading + "\n", after))
+    assert len(found.sections) == 2, f"{document.name}: {len(found.sections)}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_renaming_the_status_heading_is_caught(document: Path) -> None:
+    """Heading drift is refused, not absorbed: a rename detaches every section guard."""
+    before, section, after = split_at_section(document)
+    lines = section.splitlines(keepends=True)
+    renamed = lines[0].replace("ADR-0020", "ADR-0021")
+    assert renamed != lines[0], "the heading must name the decision it anchors"
+    found = scan(rebuild(before, renamed + "".join(lines[1:]), after))
+    assert len(found.sections) == 0, f"{document.name}: {len(found.sections)}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_status_heading_at_another_level_is_refused(document: Path) -> None:
+    """Ambiguous structure is reported, never resolved by picking one reading."""
+    before, section, after = split_at_section(document)
+    lines = section.splitlines(keepends=True)
+    found = scan(rebuild(before, "#" + lines[0] + "".join(lines[1:]), after))
+    assert len(found.sections) == 0, f"{document.name}: {len(found.sections)}"
+    assert found.defects, f"{document.name}: a demoted heading must be reported"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_section_keeps_its_own_level_four_subsections(document: Path) -> None:
+    """A ``####`` heading is deeper than the anchor, so it stays inside."""
+    _before, section, _after = split_at_section(document)
+    subsections = [line for line in section.splitlines() if line.startswith("#### ")]
+    assert len(subsections) == len(GUARD.ADR_0020_STATUS_SUBSECTIONS), subsections
+    for line in subsections:
+        assert line[len("#### ") :].strip() in GUARD.ADR_0020_STATUS_SUBSECTIONS, line
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_next_heading_of_level_three_or_higher_ends_the_section(document: Path) -> None:
+    """CLAUDE.md is ended by a sibling ``###`` and README.md by a parent ``##``."""
+    prefix, title = TERMINATORS[document.name]
+    _before, section, after = split_at_section(document)
+    assert title.lower() not in flat(section), f"{document.name}: the section swallowed {title}"
+    assert after.startswith(prefix + title), f"{document.name}: {after[:60]!r}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_demoting_the_terminating_heading_is_caught_as_boundary_drift(document: Path) -> None:
+    """The only way this section can drift is forward, so that is what is tested."""
+    prefix, title = TERMINATORS[document.name]
+    before, section, after = split_at_section(document)
+    demoted = after.replace(prefix + title, "#### " + title, 1)
+    assert demoted != after, f"{document.name}: the terminator must be present to demote"
+    found = scan(rebuild(before, section, demoted))
+    assert found.defects, f"{document.name}: a swallowed neighbour must be reported"
+    assert title.lower() in flat(found.sections[0]), f"{document.name}: drift not reproduced"
+
+
+def test_the_extractor_carries_no_state_between_documents() -> None:
+    """Order-independent and repeatable, so one scan cannot colour the next."""
+    claude, readme = read(CLAUDE_MD), read(README)
+    first = (scan(claude).sections, scan(readme).sections)
+    second = (scan(readme).sections, scan(claude).sections)
+    third = (scan(claude).sections, scan(readme).sections)
+    assert first == third, "a repeated scan of the same text must give the same answer"
+    assert (second[1], second[0]) == first, "the answer must not depend on scan order"
+    assert scan("").sections == (), "a document with no section yields none"
+
+
+def test_one_documents_section_cannot_satisfy_the_other() -> None:
+    """Each file is measured against its own section, never against their union."""
+    claude_section = split_at_section(CLAUDE_MD)[1]
+    readme_section = flat(split_at_section(README)[1])
+    assert claude_section != readme_section, "the two sections are not the same text"
+    label = "records the conditional effectiveness event"
+    phrase, mutated, _whole, _outside = drop_inside_section(CLAUDE_MD, label)
+    assert label in missing(GUARD.ADR_0020_STATUS_REQUIRED, mutated), phrase
+    assert label not in missing(GUARD.ADR_0020_STATUS_REQUIRED, readme_section), (
+        "the other document is intact, so its own check must still pass"
+    )
+    assert label not in missing(GUARD.ADR_0020_STATUS_REQUIRED, mutated + " " + readme_section), (
+        "a union would hide it, which is why each document is scanned on its own"
+    )
+
+
+def test_the_extractor_ignores_headings_inside_fenced_code_blocks() -> None:
+    """README.md carries a shell comment inside a fence; a naive scan reads it as ``#``."""
+    before, section, after = split_at_section(CLAUDE_MD)
+    fence = "```text"
+    fenced = fence + "\n" + "## not a heading" + "\n" + fence + "\n"
+    lines = section.splitlines(keepends=True)
+    injected = rebuild(before, lines[0] + fenced + "".join(lines[1:]), after)
+    found = scan(injected)
+    assert len(found.sections) == 1, f"{len(found.sections)} sections"
+    assert not found.defects, found.defects
+    assert "not a heading" in found.sections[0], "the fenced lines belong to the section body"
+
+
+# --- non-tautology ---------------------------------------------------------
+
+
+def test_the_section_scope_is_read_from_the_audit_not_restated_here() -> None:
+    """Every scope decision above is the audit's, so the tests cannot drift from it."""
+    assert callable(GUARD.scan_adr_0020_status_sections)
+    assert GUARD.ADR_0020_STATUS_HEADING_LEVEL == 3
+    assert GUARD.ADR_0020_STATUS_HEADING.startswith("The legitimate duplicate-payload collision")
+    assert len(GUARD.ADR_0020_STATUS_SUBSECTIONS) > 0
+    for document in (CLAUDE_MD, README):
+        _before, section, _after = split_at_section(document)
+        assert section.splitlines()[0] == "### " + GUARD.ADR_0020_STATUS_HEADING, document.name
+
+
+def test_every_mutated_clause_is_one_the_audit_actually_requires() -> None:
+    """NEGATIVE CONTROL. Nothing above deletes a phrase of its own invention."""
+    required = [label for label, _phrase in GUARD.ADR_0020_STATUS_REQUIRED]
+    assert len(DUPLICATED_ELSEWHERE) == 6, DUPLICATED_ELSEWHERE
+    assert len(SECTION_ANCHORS) == 5, SECTION_ANCHORS
+    for label in DUPLICATED_ELSEWHERE + SECTION_ANCHORS:
+        assert label in required, label
+    assert len(missing(GUARD.ADR_0020_STATUS_REQUIRED, "")) == len(GUARD.ADR_0020_STATUS_REQUIRED)

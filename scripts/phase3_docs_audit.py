@@ -7577,12 +7577,29 @@ ADR_0020_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
     "g2 is closed",
 )
 
-#: What **both** status documents must independently say about ADR-0020.
+#: What **both** status documents must independently say about ADR-0020, **in
+#: ADR-0020's own status section**.
 #:
 #: Independently, and for the reason the ADR-0018 and ADR-0019 blocks give:
 #: merged main has twice carried a fact in one status file and a stale
 #: contradiction in the other, so each phrase is required in *each* file rather
 #: than in their concatenation.
+#:
+#: Section-scoped, and every entry belongs to that section -- there is no
+#: document-global remainder, so the collection is not split. Scanned flat
+#: against the whole file, 46 of these 49 phrases were satisfied by a copy
+#: standing somewhere else: ADR-0018's and ADR-0019's status blocks spell "run a:
+#: not authorized / not run", "infrastructure design and mutation: blocked" and
+#: "adr-0020 implementation: not authorized / not implemented" for their own
+#: reasons. Deleting one from ADR-0020's section left the neighbour's copy behind
+#: and the audit stayed green. Only three phrases -- "adr-0020 architecture:
+#: accepted / in force", "pr #49: merged" and "conditional effectiveness event:
+#: occurred" -- were unique to the file, which is why deleting the *whole*
+#: section was caught while gutting it clause by clause was not.
+#:
+#: The section is located by :func:`scan_adr_0020_status_sections`, from the
+#: heading and never from a phrase in this list: a scope anchored on its own
+#: contents would vanish exactly when the content it guards was deleted.
 ADR_0020_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # ------------------------------------------ the merge, and what it approved
     #
@@ -7813,6 +7830,128 @@ ADR_0020_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "no deployment or empirical execution has occurred",
     ),
 )
+
+#: The exact level-three heading that opens ADR-0020's current-status section in
+#: both status documents.
+#:
+#: The anchor is the heading, never a phrase being tested: a section located by
+#: one of its own required phrases would go missing the moment that phrase was
+#: deleted, which is the deletion the guard exists to catch.
+#:
+#: Heading drift is not silently tolerated. A renamed heading finds no section
+#: and fails, so the rename has to be made deliberately here, in a reviewed
+#: change, rather than quietly detaching every section-scoped guard below.
+ADR_0020_STATUS_HEADING: Final = (
+    "The legitimate duplicate-payload collision, and ADR-0020 — ACCEPTED, and the "
+    "implementation gap"
+)
+
+#: The level-four subsections ADR-0020's status section is allowed to contain.
+#:
+#: Anything else carrying a heading inside the extracted region means the section
+#: swallowed a neighbour -- the boundary drifted, because a terminator was deleted
+#: or demoted -- and a section that has drifted is measuring somebody else's text.
+ADR_0020_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "The history, in order",
+    "The conflict, stated exactly",
+    "The authoritative identity",
+    "What ADR-0020 does not change",
+    "The implementation gap — open, and stated plainly",
+    "Status",
+)
+
+#: The level at which the ADR-0020 status heading, and only that heading, may sit.
+ADR_0020_STATUS_HEADING_LEVEL: Final = 3
+
+#: A Markdown ATX heading: one to six hashes, whitespace, a title, and an optional
+#: run of closing hashes. Setext underlining is not used by either document.
+_ATX_HEADING: Final = re.compile(r"^(?P<hashes>#{1,6})[ \t]+(?P<title>.*?)[ \t]*#*[ \t]*$")
+
+#: A fenced code block opener or closer: at least three backticks or tildes.
+_CODE_FENCE: Final = re.compile(r"^(?P<fence>`{3,}|~{3,})")
+
+
+class Adr0020SectionScan(NamedTuple):
+    """Every ADR-0020 status section a document carries, and its structure defects.
+
+    ``sections`` is the verbatim text of each match, heading included, so a caller
+    can require *exactly one* -- a duplicated, nested or heading-only second copy
+    is two answers to one question, and a phrase scan over the flattened document
+    cannot tell them apart because a duplicate only ever adds occurrences.
+
+    ``defects`` is reported separately rather than folded into the count, for the
+    reason :class:`RetiredArithmeticScan` reports ``balanced`` separately: a
+    malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_adr_0020_status_sections(text: str) -> Adr0020SectionScan:
+    """Extract ADR-0020's status section(s) from a document, by heading.
+
+    Pure and deterministic: it takes text, carries no module state between calls,
+    opens no file and reaches no service. Two documents scanned in either order
+    give the same answer, and one document's scan cannot satisfy the other's.
+
+    A section runs from its level-three heading to the next heading of level three
+    or higher, so its own ``####`` subsections stay inside it and the next ``###``
+    or ``##`` ends it. Headings inside fenced code blocks are not headings --
+    README.md carries a shell comment that begins with ``#`` inside a fence, and a
+    scanner that read it as a level-one heading would cut a section short.
+
+    Ambiguous structure is refused rather than resolved: the status title carried
+    at any level other than three is a defect, and so is a foreign heading inside
+    an extracted section.
+    """
+    lines = text.splitlines(keepends=True)
+    headings: list[tuple[int, int, str]] = []
+    defects: list[str] = []
+    fence: str | None = None
+    for index, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        opener = _CODE_FENCE.match(line)
+        if opener is not None:
+            token = opener.group("fence")
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        heading = _ATX_HEADING.match(line)
+        if heading is None:
+            continue
+        level = len(heading.group("hashes"))
+        title = heading.group("title").strip()
+        headings.append((index, level, title))
+        if title == ADR_0020_STATUS_HEADING and level != ADR_0020_STATUS_HEADING_LEVEL:
+            defects.append(f"line {index + 1}: the ADR-0020 status heading sits at level {level}")
+
+    starts = [
+        position
+        for position, (_, level, title) in enumerate(headings)
+        if level == ADR_0020_STATUS_HEADING_LEVEL and title == ADR_0020_STATUS_HEADING
+    ]
+    sections: list[str] = []
+    for position in starts:
+        begin = headings[position][0]
+        end = len(lines)
+        for index, level, _title in headings[position + 1 :]:
+            if level <= ADR_0020_STATUS_HEADING_LEVEL:
+                end = index
+                break
+        sections.append("".join(lines[begin:end]))
+        for index, _level, title in headings[position + 1 :]:
+            if index >= end:
+                break
+            if title not in ADR_0020_STATUS_SUBSECTIONS:
+                defects.append(f"line {index + 1}: foreign heading inside the section: {title}")
+    return Adr0020SectionScan(tuple(sections), tuple(defects))
+
 
 #: Path separators and placeholder brackets a sample key legitimately contains.
 #: Everything else in a sample key segment is checked against the subject grammar
@@ -15583,13 +15722,46 @@ def main() -> int:
 
     for name, document in sorted(adr_0018_documents.items()):
         flat = " ".join(document.replace("**", "").split()).lower()
+        # The section, not the file. Every phrase below is a claim ADR-0020's own
+        # status section must carry, and 46 of the 49 are spelled somewhere else
+        # in the same document as well -- ADR-0018's and ADR-0019's status blocks
+        # carry their own "run a: not authorized / not run". Scanned flat, a
+        # deletion from ADR-0020's section was answered by ADR-0019's copy and
+        # went unreported: 0 of 12 disclosed section-local removals were caught.
+        # The section is extracted by its heading, never by a phrase under test.
+        scan = scan_adr_0020_status_sections(document)
+        f.check(
+            # One section, and structurally sound. Cardinality is checked because a
+            # phrase scan cannot see a duplicate -- a second copy only ever adds
+            # occurrences, so every phrase check stays green while two sections
+            # disagree about one decision. ``defects`` is checked in the same place
+            # because a malformed structure can still yield exactly one
+            # plausible-looking section, and a vacuous pass is the failure mode.
+            f"{name} carries exactly one ADR-0020 status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
         for label, phrase in ADR_0020_STATUS_REQUIRED:
             f.check(
                 f"{name} {label} for ADR-0020",
-                phrase in flat,
-                f"missing from {name}: {phrase}",
+                phrase in section,
+                f"missing from the ADR-0020 status section of {name}: {phrase}",
             )
-        overstated = [claim for claim in ADR_0020_STATUS_FORBIDDEN if claim in flat]
+        # The denylist keeps whole-document scope and gains the section as well.
+        # For a *presence* denylist document scope already contains section scope,
+        # so this widening removes nothing and can add no failure the file-wide
+        # scan would miss; the section is named in the detail so a reader is told
+        # where the claim sits. It is deliberately not split into a section-only
+        # list: a forbidden phrase that never legitimately appears outside the
+        # section would be a guard that cannot fire, and the proposed-state
+        # language that *does* legitimately appear -- "adr-0020 was proposed and
+        # carried no authority" -- is history the section is required to keep.
+        overstated = [
+            f"{claim} (in the ADR-0020 status section)" if claim in section else claim
+            for claim in ADR_0020_STATUS_FORBIDDEN
+            if claim in flat or claim in section
+        ]
         f.check(
             f"{name} does not overstate ADR-0020",
             not overstated,
