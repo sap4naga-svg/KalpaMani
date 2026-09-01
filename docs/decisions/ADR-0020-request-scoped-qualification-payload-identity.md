@@ -17,8 +17,9 @@ and ADR-0019 were each given, and it is written down rather than assumed.
 text this ADR was written with; it is **preserved as history, not rewritten**, and **while
 PR #49 was open, ADR-0020 was proposed and carried no authority** — which was true then and
 stays true. **The merge approved architecture only, and authorized no implementation, no
-infrastructure mutation, no deployment and no execution.** **PR #48 must be corrected against
-ADR-0020 before it may be independently reviewed or merged** — see §9.
+infrastructure mutation, no deployment and no execution.** **PR #48 has since been corrected
+against ADR-0020, independently reviewed and merged**, under a separate, later authorization —
+see §9.
 
 **Date:** 2026-09-01
 **Supersedes:** nothing wholesale. **Amends, upon acceptance:** the qualification **payload
@@ -495,36 +496,54 @@ remains ACCEPTED / IN FORCE except as amended by ADR-0019 and by this ADR**, **A
 amended or superseded**, **ADR-0011 is not amended or superseded**, and **the shared
 S3ResearchObjectStore remains unchanged**.
 
-**The implementation gap is open, and it is not concealed by the architecture being accepted.**
+**The implementation gap is closed offline, and closing it is not deployment.** §8 records
+PR #48's state as it was when this ADR was proposed and reviewed; that record stands unedited,
+and what follows is what happened afterwards.
 
 | Layer | Current status |
 |---|---|
 | Architecture | **ADR-0020 accepted and effective** |
-| Existing code | **merged, dormant, not yet conforming** |
-| Corrective code | **not authorized, not implemented** |
+| Existing code | **merged, dormant, offline-conforming** |
+| Corrective code | **merged — PR #48** |
 | Terraform / IAM | **not authorized, not implemented** |
 | Deployment | **not authorized, not performed** |
 | Execution | **ZERO** |
 
-**No qualification payload-key builder exists.** **ADR-0020 implementation: NOT AUTHORIZED / NOT
-IMPLEMENTED.** **The ADR-0018 offline implementation remains MERGED / DORMANT**, it still derives
-the qualification payload name from the shared content-addressed builder, and **the current dormant
-implementation is therefore not deployable under the authoritative architecture**. **No claim is
-made that the request-scoped payload identity is already implemented**, and **no claim is made
-that the qualification payload-key builder already exists** — it does not. **Infrastructure
-design: BLOCKED pending implementation correction.**
+**PR #48 is merged, and it was merged under a separate, later authorization** — merge commit
+**`f0b39fccdfb36ea69d08fb4def3979b87814b9ff`**, approved implementation head
+**`64dc3388f402ee98cf8940d94b42fa16aa7553e2`**, after an **independent review**. **PR #48
+correction against ADR-0020: MERGED.** **The separate correction PR #48 required has since been
+made, independently reviewed and merged**, and **the ADR-0020 implementation-correction
+prerequisite is satisfied**.
 
-**PR #48 is still OPEN, non-draft, UNMERGED and untouched.** It was not edited, rebased, amended,
-reviewed, commented on, retitled, closed or merged by this decision or by its merge, and
-auto-merge was not enabled on it. **PR #48 correction against ADR-0020: NOT BEGUN**, and
-**PR #48 ready for review or merge: NO**. **PR #48 is not defective for obeying ADR-0019** — its
-implementation work exposed the architectural identity gap this ADR resolves, and it now
-**requires a separate correction against the accepted ADR-0020 design**. **The next separately
-authorized implementation gate is correcting PR #48 against ADR-0020**, and **infrastructure
-remains blocked until that correction is implemented, independently reviewed and merged.**
+**A qualification payload-key builder exists**, in the qualification package and nowhere else, and
+**ADR-0020 implementation: MERGED / DORMANT / OFFLINE-CONFORMING**. The merged implementation
+derives the qualification payload name from the execution identity, the canonical request ordinal
+and the payload digest; assessment reconstructs that key and recomputes the digest before parsing;
+and **the current dormant implementation is offline-conforming under the authoritative
+architecture**.
 
-**Acceptance of ADR-0020 is not authorization to implement or execute it.** Run A, Run B, the
-combined assessment, Terraform, IAM, infrastructure mutation and deployment each remain
-**NOT AUTHORIZED**; **G1 and G2 stay OPEN**; no provider is selected; Phase 3 stays **NOT
-COMPLETE**; CONTROL stays **DEFERRED**; live trading stays **HARD-DISABLED**; and a third ADR-0017
-authenticated attempt stays **NOT AUTHORIZED**.
+**Before PR #48 merged no qualification payload-key builder existed**, the ADR-0018 offline
+implementation still derived the qualification payload name from the shared content-addressed
+builder, and PR #48 was open, unmerged and uncorrected — historical facts about those days that
+stay true and are **not** rewritten as though the request-scoped identity had always been
+implemented. **PR #48 was untouched by this decision and by its merge**: it was not edited,
+rebased, amended, reviewed, commented on, retitled, closed or merged by either, and auto-merge was
+not enabled on it by either.
+
+**Merging an implementation authorizes no infrastructure, no deployment and no run.**
+**Offline-conforming is not deployed, not active, not operational, not authorized to run and not
+empirically validated** — *production implementation* means code located in production source,
+never a deployed or running service. **Infrastructure design and mutation: NOT AUTHORIZED / NOT
+IMPLEMENTED**, **Terraform / IAM: NOT AUTHORIZED / NOT IMPLEMENTED**, **deployment: NOT
+PERFORMED**, **execution: ZERO**, and **the next possible gate is a separate owner authorization
+for offline infrastructure, Terraform and IAM preparation**.
+
+**Acceptance of ADR-0020 is not authorization to implement or execute it**, and the later,
+separate authorization that produced the correction authorized no deployment and no execution
+either.
+Run A, Run B, the combined assessment, Terraform, IAM, infrastructure mutation and deployment each
+remain **NOT AUTHORIZED**; **G1 and G2 stay OPEN**; no provider is selected; Phase 3 stays **NOT
+COMPLETE**; CONTROL stays **DEFERRED**; live trading stays **HARD-DISABLED**; a sixth binding
+preflight stays **NOT AUTHORIZED**; and a third ADR-0017 authenticated attempt stays **NOT
+AUTHORIZED**.
