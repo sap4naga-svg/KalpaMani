@@ -7148,6 +7148,491 @@ RETIRED_ARITHMETIC: Final[tuple[tuple[str, str], ...]] = (
     ("the 780 = 584 + 196 package maximum", r"\b780\s*=\s*584\b"),
 )
 
+#: The proposed request-scoped qualification payload identity. **PROPOSED**, and
+#: deliberately **not** in :data:`MERGED_ADR_STATUS`: an ADR that has not merged
+#: is not in force, and registering it there would make the coverage check assert
+#: an authority it does not have. Registration happens on the merge, the way
+#: ADR-0017, ADR-0018 and ADR-0019 were each registered on theirs.
+ADR_0020: Final = DECISIONS / ("ADR-0020-request-scoped-qualification-payload-identity.md")
+
+#: The pull request whose implementation work exposed the collision. It is **open,
+#: unmerged and blocked on architecture**, and this proposal does not touch it.
+ADR_0020_BLOCKED_PR: Final = "#48"
+
+#: What ADR-0020 must say about itself.
+#:
+#: The conflict it answers is an identity fact, not a preference: a complete run
+#: is a fixed 48 requests and 144 Bronze writes, the payload object is
+#: content-addressed by ``(provider, dataset, digest)``, and ADR-0019 fails a 412
+#: closed without looking -- so two legitimate byte-identical observations derive
+#: one name and halt a correct run. Each clause below is a separate entry because
+#: a single sentence covering all of them is one a later edit can soften in place.
+ADR_0020_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------ status, and what it is not
+    (
+        "records that it is proposed and carries no authority",
+        "no authority until the pull request introducing it is independently reviewed and merged",
+    ),
+    ("authorizes nothing", "this adr authorizes nothing"),
+    (
+        "carries neither implementation nor infrastructure authority",
+        "it carries no implementation authority and no infrastructure authority",
+    ),
+    ("authorizes no deployment", "it authorizes no deployment"),
+    (
+        "authorizes neither run nor the combined assessment",
+        "it authorizes no run a, no run b and no combined assessment",
+    ),
+    ("keeps infrastructure blocked", "infrastructure remains blocked"),
+    # ------------------------------------------------------- what it leaves alone
+    (
+        "does not make the blocked pull request mergeable",
+        f"this adr does not make pr {ADR_0020_BLOCKED_PR} mergeable",
+    ),
+    (
+        "does not rewrite the blocked pull request's status",
+        f"it does not retroactively change the status of pr {ADR_0020_BLOCKED_PR}",
+    ),
+    (
+        "supersedes only the payload-key identity rule",
+        "it supersedes only the qualification payload-key identity rule",
+    ),
+    (
+        "keeps the write-only collision policy",
+        "it does not supersede adr-0019's write-only collision policy",
+    ),
+    ("leaves adr-0017 alone", "it does not supersede adr-0017"),
+    (
+        "leaves the shared contracts alone",
+        "it does not modify the shared general-purpose bronze or `s3researchobjectstore` contract",
+    ),
+    # ------------------------------------------------------------- the conflict
+    (
+        "names the legitimate duplicate-payload collision",
+        "the legitimate duplicate-payload collision",
+    ),
+    ("names the fixed request count", "exactly 48 requests"),
+    ("names the fixed bronze write count", "exactly 144 bronze"),
+    ("records the header-only completeness probe case", "header-only"),
+    ("records the unchanged-snapshot case", "an unchanged snapshot re-observed in run b"),
+    (
+        "records that the conflict is an identity problem",
+        "this is an identity and key-contract problem. it is not a reason to weaken write-only "
+        "acquisition.",
+    ),
+    (
+        "records that the conflict predates deployment",
+        "the conflict exists before any aws deployment",
+    ),
+    (
+        "records that the blocked pull request obeyed the accepted rule",
+        f"pr {ADR_0020_BLOCKED_PR} is not defective for obeying adr-0019",
+    ),
+    (
+        "records that the claim and record keys are already scoped",
+        "the claim and the record are already execution-and-request-scoped, and the payload is not",
+    ),
+    # ------------------------------------------------------------ the three inputs
+    ("binds the execution identity", "execution_identity"),
+    ("binds the request ordinal", "request_ordinal"),
+    ("binds the payload digest", "payload_sha256_digest"),
+    ("requires all three bindings", "all three bindings must be preserved"),
+    (
+        "takes the ordinal from the locked inventory",
+        "the deterministic ordinal from the locked 48-request inventory",
+    ),
+    (
+        "keeps the ordinal out of provider control",
+        "cannot be supplied freely by the provider",
+    ),
+    (
+        "keeps the digest in durable evidence independently of the key",
+        "remains present in durable evidence independently of the key",
+    ),
+    ("makes the same publication deterministic", "deterministically produce the same key"),
+    ("separates executions", "a different execution identity produces a different key"),
+    ("separates ordinals", "a different request ordinal produces a different key"),
+    (
+        "separates payload bytes",
+        "different payload bytes produce a different digest and a different key",
+    ),
+    (
+        "removes the legitimate collision",
+        "identical bytes from different requests, or from different runs, no longer collide",
+    ),
+    (
+        "keeps a retry deterministic",
+        "a retry of the same publication attempt targets the same key",
+    ),
+    ("forbids a changing suffix", "there is no random suffix"),
+    (
+        "adds no listing and no existence check",
+        "no list operation and no preflight existence check is introduced",
+    ),
+    # ------------------------------------------------------------------- privacy
+    (
+        "keeps every private request value out of the key",
+        "no provider subject, ticker, date range, api path, credential, bucket, account, owner "
+        "name or other private request value",
+    ),
+    # ----------------------------------------------------------------- integrity
+    (
+        "requires the recorded key to equal the reconstructed key",
+        "the recorded payload key exactly equals the reconstructed key",
+    ),
+    (
+        "requires the digest to be recomputed",
+        "sha-256 is recomputed over the retrieved payload bytes",
+    ),
+    (
+        "requires the recomputed digest to match",
+        "the recomputed digest exactly equals the durable digest",
+    ),
+    (
+        "fails closed before parsing",
+        "any mismatch fails closed before parsing or evaluation",
+    ),
+    (
+        "refuses to treat the name as integrity proof",
+        "do not treat the key name alone as integrity proof",
+    ),
+    (
+        "confines the read to the assessment role",
+        "read only by the separately authorized assessment role and process",
+    ),
+    # ------------------------------------------------- write-only, unchanged
+    ("keeps acquisition write-only", "acquisition performs conditional `putobject` only"),
+    ("keeps headobject at zero", "acquisition performs no `headobject`"),
+    ("keeps getobject at zero", "acquisition performs no `getobject`"),
+    ("keeps getobjectattributes at zero", "acquisition performs no `getobjectattributes`"),
+    ("keeps listing at zero", "acquisition performs no s3 listing"),
+    (
+        "keeps a 412 uninformative about content",
+        "a 412 establishes neither identical nor different content",
+    ),
+    (
+        "introduces no adoption or deduplication",
+        "no compare, adopt, resume or deduplicate behaviour exists",
+    ),
+    ("keeps the bronze outcome", "bronze_name_occupied"),
+    ("keeps the locator outcome", "locator_name_occupied"),
+    (
+        "keeps the safe-direction false negative",
+        "an ambiguous write followed by a 412 remains a safe-direction false negative",
+    ),
+    (
+        "counts no occupied object as evidence",
+        "no occupied object is counted as retained or verified evidence",
+    ),
+    (
+        "records that collision handling is not relaxed",
+        "it does not relax collision handling",
+    ),
+    # -------------------------------------------------------------- isolation
+    (
+        "confines the later builder to the qualification package",
+        "confined to the adr-0018 / adr-0019 / adr-0020 qualification code",
+    ),
+    (
+        "leaves the shared payload key builder alone",
+        "not change the shared general-purpose `bronze_payload_key`",
+    ),
+    ("leaves the shared store alone", "not change `s3researchobjectstore`"),
+    (
+        "leaves adr-0017 publication behaviour alone",
+        "not change adr-0017 publication behaviour",
+    ),
+    (
+        "keeps the later builder unreachable from adr-0017",
+        "structurally unreachable from adr-0017",
+    ),
+    (
+        "stops rather than widening the shared contract",
+        "it must stop for a new architecture decision",
+    ),
+    # --------------------------------------------------------- durable schema
+    ("introduces no locator field", "no new locator field is introduced"),
+    ("introduces no private subject value", "no private subject value is introduced"),
+    ("introduces no additional read", "no additional s3 read is introduced"),
+    ("introduces no listing", "no s3 list is introduced"),
+    ("introduces no provider request", "no provider request is introduced"),
+    (
+        "keeps the record carrying the key and digest",
+        "continues to carry the exact payload key and digest",
+    ),
+    (
+        "records the changed value pattern",
+        "the permitted value pattern of the qualification payload-key field changes",
+    ),
+    (
+        "defers the validator correction to the implementation gate",
+        "must later be corrected to reconstruct the qualification-specific key",
+    ),
+    ("records that no migration is needed", "no migration is authorized or needed"),
+    (
+        "renames, copies, deletes and reads nothing already published",
+        "no already-published private evidence is being renamed, copied, deleted or read",
+    ),
+    (
+        "records that no new durable field is required",
+        "the merged durable record already carries enough to reconstruct the new key, so no new "
+        "field is required",
+    ),
+    # ----------------------------------------------------------- arithmetic
+    ("keeps the bronze put count", "bronze putobject: exactly 144"),
+    ("keeps the acquisition put envelope", "total putobject: 145 to 147"),
+    ("keeps acquisition headobject at zero", "headobject: exactly 0"),
+    ("keeps acquisition getobject at zero", "getobject: exactly 0"),
+    ("keeps the two-run total", "290 to 294"),
+    ("keeps the assessment envelope", "195 to 196 total"),
+    ("keeps the package envelope", "485 to 490"),
+    ("keeps the deadline", "d = 1800 seconds"),
+    ("keeps the locator reserve inequality", "l >= 3 * t_s3 + c"),
+    ("keeps the per-request obligation", "per-request s3 obligation = 3 * t_s3"),
+    ("keeps the admission inequality", "remaining >= t_req + 3 * t_s3 + l"),
+    (
+        "records that the identity adds no operation",
+        "the new key identity introduces no additional operation",
+    ),
+    # ------------------------------------------------------------- scenarios
+    (
+        "resolves the same-execution different-bytes case",
+        "must not permit two competing payloads for one governed request to be accepted as a "
+        "complete observation",
+    ),
+    (
+        "binds the record and locator to one terminal outcome",
+        "bind only the single governed terminal outcome",
+    ),
+    # --------------------------------------------------------- consequences
+    (
+        "records the loss of global deduplication",
+        "qualification payloads are no longer globally deduplicated by payload digest",
+    ),
+    ("records the duplicate storage cost", "identical bytes may be stored more than once"),
+    (
+        "records the later correction the blocked pull request needs",
+        f"pr {ADR_0020_BLOCKED_PR} requires a later code correction before review or merge",
+    ),
+    ("bounds the storage cost", "maximum 96 qualification payload objects"),
+    (
+        "refuses to generalize the choice",
+        "do not generalize this choice to ingestion or control storage",
+    ),
+    # --------------------------------------------------- the blocked pull request
+    (
+        "records the blocked pull request's state",
+        f"pr {ADR_0020_BLOCKED_PR} is open, non-draft, unmerged, blocked on architecture, and "
+        "untouched by this proposal",
+    ),
+    (
+        "records that the blocked pull request was not reviewed or merged here",
+        f"pr {ADR_0020_BLOCKED_PR} cannot be reviewed or merged until this adr is independently "
+        "reviewed, merged and synchronized",
+    ),
+    ("records that the correction has not begun", "that correction is a separate gate and is"),
+    # ----------------------------------------------------------------- gates
+    ("leaves g1 open", "g1 open"),
+    ("leaves g2 open", "g2 open"),
+    ("keeps live trading disabled", "hard-disabled"),
+)
+
+#: Claims ADR-0020 must never make. Every entry is a positive assertion, so an
+#: honest negation does not contain one of them.
+ADR_0020_SELF_FORBIDDEN: Final[tuple[str, ...]] = (
+    "adr-0020: accepted / in force",
+    "adr-0020 is accepted",
+    "adr-0020 is in force",
+    "adr-0020 has merged",
+    "this adr authorizes an implementation",
+    "a 412 establishes identical content",
+    "the occupied object may be read",
+    "acquisition may use headobject",
+    "acquisition may resolve a collision",
+    "acquisition deduplicates",
+    "identical occupied content may be adopted",
+    f"pr {ADR_0020_BLOCKED_PR} is ready to merge",
+    f"pr {ADR_0020_BLOCKED_PR} may be merged",
+    f"pr {ADR_0020_BLOCKED_PR} is merged",
+    f"pr {ADR_0020_BLOCKED_PR} has been corrected",
+    "run a is authorized",
+    "run b is authorized",
+    "the combined assessment is authorized",
+    "infrastructure is authorized",
+    "infrastructure is ready to deploy",
+    "the shared bronze payload key changes",
+    "the request-scoped payload identity is implemented",
+    "g1 is closed",
+    "g2 is closed",
+)
+
+#: What **both** status documents must independently say about ADR-0020.
+#:
+#: Independently, and for the reason the ADR-0018 and ADR-0019 blocks give:
+#: merged main has twice carried a fact in one status file and a stale
+#: contradiction in the other, so each phrase is required in *each* file rather
+#: than in their concatenation.
+ADR_0020_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0020: proposed / not in force"),
+    (
+        "records that it carries no authority yet",
+        "adr-0020 carries no authority until it is independently reviewed and merged",
+    ),
+    ("records that it is unregistered", "not registered as a merged adr"),
+    ("names the collision", "the legitimate duplicate-payload collision"),
+    (
+        "records that the blocked pull request obeyed the accepted rule",
+        f"pr {ADR_0020_BLOCKED_PR} is not defective for obeying adr-0019",
+    ),
+    (
+        "records the three key inputs",
+        "the qualification payload key binds the execution identity, the request ordinal and the "
+        "payload digest",
+    ),
+    (
+        "keeps private subject values out of the key",
+        "no provider subject value appears in a qualification payload key",
+    ),
+    (
+        "records that the write-only policy is unchanged",
+        "adr-0020 preserves adr-0019's write-only collision policy unchanged",
+    ),
+    ("keeps acquisition write-only", "acquisition remains conditional `putobject` only"),
+    (
+        "keeps both occupied-name outcomes",
+        "bronze_name_occupied` and `locator_name_occupied` are unchanged",
+    ),
+    (
+        "records the narrow supersession",
+        "adr-0020 supersedes only the qualification payload-key identity rule",
+    ),
+    ("leaves adr-0017 alone", "adr-0020 does not supersede adr-0017"),
+    (
+        "leaves the shared contracts alone",
+        "adr-0020 changes no shared general-purpose bronze or s3researchobjectstore contract",
+    ),
+    ("introduces no locator field", "adr-0020 introduces no locator field"),
+    (
+        "introduces no additional operation",
+        "adr-0020 introduces no additional s3 operation",
+    ),
+    ("keeps the package envelope", "adr-0020 preserves the 485 to 490 package envelope"),
+    (
+        "keeps the deadline arithmetic",
+        "adr-0020 preserves the deadline arithmetic l >= 3 * t_s3 + c",
+    ),
+    (
+        "requires the reconstructed key comparison",
+        "assessment reconstructs the qualification payload key and compares it exactly",
+    ),
+    (
+        "requires the digest recomputation",
+        "assessment recomputes sha-256 over the retrieved payload bytes and refuses on any "
+        "mismatch",
+    ),
+    ("records that implementation is unauthorized", "adr-0020 implementation: not authorized"),
+    (
+        "records the blocked pull request's state",
+        f"pr {ADR_0020_BLOCKED_PR}: open / unmerged / blocked on architecture",
+    ),
+    (
+        "records that the correction has not begun",
+        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
+    ),
+    (
+        "records that the blocked pull request is untouched",
+        f"pr {ADR_0020_BLOCKED_PR} is untouched by the adr-0020 proposal",
+    ),
+    ("keeps infrastructure blocked", "infrastructure: blocked"),
+    ("records that nothing was deployed", "deployment: not performed"),
+    ("records that run a has not run", "run a: not run"),
+    ("records that run b has not run", "run b: not run"),
+    ("records that the assessment has not run", "combined assessment: not run"),
+)
+
+#: Claims neither status document may make about ADR-0020. Each is a positive
+#: assertion, so the honest negations above do not contain any of them.
+ADR_0020_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "adr-0020: accepted / in force",
+    "adr-0020 is accepted",
+    "adr-0020 is in force",
+    "adr-0020 has merged",
+    "adr-0020 implementation: authorized",
+    "the request-scoped payload identity is implemented",
+    "the qualification payload-key builder exists",
+    f"pr {ADR_0020_BLOCKED_PR} is ready to merge",
+    f"pr {ADR_0020_BLOCKED_PR} is mergeable",
+    f"pr {ADR_0020_BLOCKED_PR} has been corrected",
+    f"pr {ADR_0020_BLOCKED_PR} was corrected",
+    f"pr {ADR_0020_BLOCKED_PR} is merged",
+    f"pr {ADR_0020_BLOCKED_PR} was reviewed",
+    "acquisition may read an occupied object",
+    "an occupied object may be adopted",
+    "identical occupied content may be adopted",
+    "acquisition deduplicates objects",
+    "acquisition may resolve a collision with headobject",
+)
+
+#: What the implementation plan must say about ADR-0020. The plan is where the
+#: ceilings are read from, so a plan that still sent a reader to an identity that
+#: cannot reach a complete run would be sending them to a run nobody can finish.
+ADR_0020_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0020: proposed / not in force"),
+    (
+        "records that it carries no authority yet",
+        "adr-0020 carries no authority until it is independently reviewed and merged",
+    ),
+    ("names the collision", "the legitimate duplicate-payload collision"),
+    (
+        "records that the blocked pull request obeyed the accepted rule",
+        f"pr {ADR_0020_BLOCKED_PR} is not defective for obeying adr-0019",
+    ),
+    (
+        "records the three key inputs",
+        "the qualification payload key binds the execution identity, the request ordinal and the "
+        "payload digest",
+    ),
+    (
+        "records that the write-only policy is unchanged",
+        "adr-0020 preserves adr-0019's write-only collision policy unchanged",
+    ),
+    ("records that implementation is unauthorized", "adr-0020 implementation: not authorized"),
+    (
+        "records the blocked pull request's state",
+        f"pr {ADR_0020_BLOCKED_PR}: open / unmerged / blocked on architecture",
+    ),
+    (
+        "records that the correction has not begun",
+        f"pr {ADR_0020_BLOCKED_PR} correction against adr-0020: not begun",
+    ),
+    ("keeps infrastructure blocked", "infrastructure: blocked"),
+)
+
+#: Path separators and placeholder brackets a sample key legitimately contains.
+#: Everything else in a sample key segment is checked against the subject grammar
+#: below, because a worked example is exactly where a real ticker gets typed in.
+ADR_0020_KEY_LINE_MARKERS: Final[tuple[str, ...]] = ("sha256/", "licensed/bronze/", "/requests/")
+
+
+def _sample_key_subject_segments(text: str) -> list[str]:
+    """Every subject-shaped path segment in a document's sample keys.
+
+    Expected: none. A sample key is where a real security symbol gets typed in
+    while nobody is looking, and a placeholder in angle brackets does not match
+    the subject grammar -- the bracket is the first character, and the grammar
+    requires a capital letter there.
+    """
+    found: list[str] = []
+    for raw in text.splitlines():
+        line = raw.replace("`", "").strip()
+        if not any(marker in line for marker in ADR_0020_KEY_LINE_MARKERS):
+            continue
+        for segment in line.split("/"):
+            candidate = segment.strip().strip(".,;:)(")
+            if _SUBJECT_SHAPED.match(candidate) and candidate not in _NOT_A_SUBJECT:
+                found.append(candidate)
+    return found
+
 
 class RetiredArithmeticScan(NamedTuple):
     """One document's retired-arithmetic surfaces.
@@ -14826,6 +15311,74 @@ def main() -> int:
     for label, phrase in ADR_0019_PLAN_REQUIRED:
         f.check(
             f"the implementation plan {label} for ADR-0019",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    # ---------------------------------------------------------------- ADR-0020
+    #
+    # The proposed request-scoped qualification payload identity. It is PROPOSED,
+    # so every check here is about a document that must claim no authority: the
+    # ADR must exist, it must carry its conditional line, it must not read itself
+    # as accepted or as built, it must NOT be in MERGED_ADR_STATUS, its sample
+    # keys must carry no security symbol, and both status documents and the
+    # implementation plan must record the same proposed state and the same
+    # untouched, blocked pull request.
+    f.check(
+        "ADR-0020 exists",
+        ADR_0020.is_file(),
+        "the proposed payload-identity amendment must be the file it names",
+    )
+    if ADR_0020.is_file():
+        adr_0020_text = read(ADR_0020)
+        adr_0020_flat = " ".join(adr_0020_text.replace("**", "").split()).lower()
+        for label, phrase in ADR_0020_SELF_REQUIRED:
+            f.check(
+                f"ADR-0020 {label}",
+                phrase in adr_0020_flat,
+                f"missing from ADR-0020: {phrase}",
+            )
+        overstated = [claim for claim in ADR_0020_SELF_FORBIDDEN if claim in adr_0020_flat]
+        f.check(
+            "ADR-0020 claims no authority it does not have",
+            not overstated,
+            ", ".join(overstated),
+        )
+        leaked = _sample_key_subject_segments(adr_0020_text)
+        f.check(
+            "ADR-0020 exposes no subject-shaped literal in a sample key",
+            not leaked,
+            ", ".join(sorted(set(leaked))),
+        )
+
+    f.check(
+        # The inverse of the registration guard every merged ADR carries. It is
+        # required ABSENCE while ADR-0020 sits on an open pull request; the merge
+        # is the event that flips it, and it is inverted rather than deleted then
+        # -- the treatment ADR-0017, ADR-0018 and ADR-0019 were each given.
+        "ADR-0020 is not registered as a merged ADR",
+        dict(MERGED_ADR_STATUS).get("ADR-0020") is None,
+        "a proposed ADR must not be registered as merged",
+    )
+
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        for label, phrase in ADR_0020_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for ADR-0020",
+                phrase in flat,
+                f"missing from {name}: {phrase}",
+            )
+        overstated = [claim for claim in ADR_0020_STATUS_FORBIDDEN if claim in flat]
+        f.check(
+            f"{name} does not overstate ADR-0020",
+            not overstated,
+            ", ".join(overstated),
+        )
+
+    for label, phrase in ADR_0020_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for ADR-0020",
             phrase in adr_0018_plan,
             f"missing from the implementation plan: {phrase}",
         )

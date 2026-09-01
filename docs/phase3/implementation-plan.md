@@ -363,6 +363,35 @@ implementation correction must introduce an ADR-0018-specific write-only publica
 **Infrastructure design: BLOCKED pending implementation correction.** **Acceptance of ADR-0019 is
 not authorization to implement or execute it.**
 
+**Implementing that correction exposed a further, pre-existing incompatibility, and
+[ADR-0020](../decisions/ADR-0020-request-scoped-qualification-payload-identity.md) is proposed to
+resolve it.** **ADR-0020: PROPOSED / NOT IN FORCE**, and **ADR-0020 carries no authority until it
+is independently reviewed and merged**. **The legitimate duplicate-payload collision** is the
+conflict between three separately accepted clauses: a complete run is exactly 48 requests and 144
+Bronze PutObject, the qualification payload object is content-addressed by
+`(provider, dataset, digest)`, and an acquisition-side 412 fails closed without reading or
+comparing the occupied object. Two legitimate byte-equality cases — ADR-0018's header-only
+page-two completeness probes, and an unchanged snapshot re-observed in Run B — therefore derive
+one object name and halt a correct run. **PR #48 is not defective for obeying ADR-0019**; its
+correctness is what made the incompatibility visible.
+
+Proposed decision: **the qualification payload key binds the execution identity, the request
+ordinal and the payload digest**, shaped
+`<qualification-payload-prefix>/<execution-identity>/requests/<NN>/sha256/<payload-digest>`, with
+**no provider subject value appearing in a qualification payload key**. **ADR-0020 preserves
+ADR-0019's write-only collision policy unchanged** — **acquisition remains conditional PutObject
+only**, with zero HeadObject, zero GetObject and no listing, and `BRONZE_NAME_OCCUPIED` and
+`LOCATOR_NAME_OCCUPIED` unchanged. **ADR-0020 supersedes only the qualification payload-key
+identity rule**, **ADR-0020 does not supersede ADR-0017**, **ADR-0020 changes no shared
+general-purpose Bronze or S3ResearchObjectStore contract**, **ADR-0020 introduces no locator
+field**, **ADR-0020 introduces no additional S3 operation**, **ADR-0020 preserves the 485 to 490
+package envelope**, and **ADR-0020 preserves the deadline arithmetic L >= 3 * T_s3 + C**.
+
+**ADR-0020 implementation: NOT AUTHORIZED.** **PR #48: OPEN / UNMERGED / BLOCKED ON
+ARCHITECTURE**, **PR #48 correction against ADR-0020: NOT BEGUN**, and **PR #48 is untouched by
+the ADR-0020 proposal**. **Infrastructure: BLOCKED · deployment: NOT PERFORMED · Run A: NOT RUN ·
+Run B: NOT RUN · combined assessment: NOT RUN.**
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
