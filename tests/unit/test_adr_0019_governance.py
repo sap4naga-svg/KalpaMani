@@ -38,7 +38,10 @@ point.
 from __future__ import annotations
 
 import ast
+import importlib.util
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -68,6 +71,41 @@ APPROVED_HEAD = "bf0414c4a915d85a124ba400284ca1fa671fda27"
 def flat(path: Path) -> str:
     """Whitespace-collapsed, emphasis-stripped, lowercased -- the audit's own reading."""
     return " ".join(path.read_text(encoding="utf-8").replace("**", "").split()).lower()
+
+
+def _audit_module() -> ModuleType:
+    """Load the audit by path, to *run* its scanner rather than read its constants.
+
+    ``scripts`` is not an importable package. The module is registered in
+    ``sys.modules`` before execution because the audit defines a ``@dataclass``,
+    and ``dataclasses`` resolves the defining module through that entry rather
+    than through the object it is handed.
+
+    Importing it defines constants and functions. It runs no check, opens no
+    socket and reaches no service -- ``main()`` is behind the usual guard, and
+    the module is loaded under a name that is not ``__main__``.
+    """
+    spec = importlib.util.spec_from_file_location("kalpamani_phase3_docs_audit", AUDIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD = _audit_module()
+
+#: The delimiters the corrected documents use, quoted here as test data.
+BEGIN = (
+    "<!-- RETIRED-ARITHMETIC BEGIN: ADR-0018 original, superseded by ADR-0019, "
+    "no longer governing -->"
+)
+END = "<!-- RETIRED-ARITHMETIC END -->"
+
+
+def _labels(text: str) -> list[str]:
+    """Every retired figure the scan reads as current, by label."""
+    return [label for _, label in GUARD.scan_retired_arithmetic(text).findings]
 
 
 def _audit_registry() -> tuple[tuple[str, str], ...]:
@@ -449,3 +487,161 @@ def test_this_proposal_changed_no_production_code() -> None:
     store = SHARED_STORE.read_text(encoding="utf-8")
     assert "def head_object" in store
     assert "_resolve_occupied" in store
+
+
+# ---------------------------------------------------------------------------
+# The contextual retirement of ADR-0018's original arithmetic
+#
+# The independent review of PR #47 stopped on STOPPED_STATUS_ARITHMETIC_CONFLICT.
+# Both status documents recorded that ADR-0018's acquisition figures no longer
+# govern, and both still carried those figures unlabelled in the detailed
+# ADR-0018 narrative -- so one file held `remaining >= T_req + 6 * T_s3 + L` and
+# `remaining >= T_req + 3 * T_s3 + L`, and `485 to 780` and `485 to 490`, three
+# hundred lines apart with nothing saying which governed.
+#
+# A retirement sentence somewhere in a file is not contextualisation of an
+# occurrence somewhere else in it. These tests hold the scanner to that, and
+# prove it is not passing vacuously.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_both_documents_contextualise_every_retired_figure(document: Path) -> None:
+    """Nothing retired stands as current prose in either status document."""
+    scan = GUARD.scan_retired_arithmetic(document.read_text(encoding="utf-8"))
+    assert scan.balanced, "an unclosed or nested marker would make this scan vacuous"
+    assert scan.blocks >= GUARD.RETIRED_ARITHMETIC_BLOCKS
+    rendered = ", ".join(f"line {number}: {label}" for number, label in scan.findings)
+    assert not scan.findings, f"retired arithmetic presented as current: {rendered}"
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_stripping_the_markers_reintroduces_the_finding(document: Path) -> None:
+    """The mutation proof: the pass above is the labels' doing, not the scanner's silence.
+
+    The real document is read, its delimiters are removed **in memory**, and the
+    scan is required to report the defect the review found. Nothing on disk is
+    touched.
+    """
+    text = document.read_text(encoding="utf-8")
+    stripped = "\n".join(
+        line
+        for line in text.splitlines()
+        if "retired-arithmetic begin" not in line.lower()
+        and "retired-arithmetic end" not in line.lower()
+    )
+    scan = GUARD.scan_retired_arithmetic(stripped)
+    assert scan.blocks == 0
+    found = {label for _, label in scan.findings}
+    assert "the 6 x T_s3 per-request allowance" in found
+    assert "the 485-to-780 package envelope" in found
+    assert "the 0-to-145 conditional HeadObject range" in found
+
+
+def test_an_unlabelled_retired_deadline_formula_is_caught() -> None:
+    """The two sub-budget terms ADR-0019 replaced with `3 * T_s3`."""
+    found = _labels(
+        "The reserve must cover `4 * T_s3 + C`.\n"
+        "per-request admission:  remaining >= T_req + 6 * T_s3 + L\n"
+    )
+    assert found == [
+        "the 4 x T_s3 locator allowance",
+        "the 6 x T_s3 per-request allowance",
+    ]
+
+
+def test_an_unlabelled_retired_package_envelope_is_caught() -> None:
+    """Both spellings, because the two documents use both."""
+    assert _labels("whole empirical package    485 to 780 S3 operations") == [
+        "the 485-to-780 package envelope"
+    ]
+    assert _labels("its `485\u2013780` package envelope") == ["the 485-to-780 package envelope"]
+    assert _labels("two acquisition runs       290 to 584 S3 operations") == [
+        "the 290-to-584 two-run total"
+    ]
+
+
+def test_an_unlabelled_retired_headobject_count_is_caught() -> None:
+    """The range ADR-0019 replaced with exactly zero."""
+    assert _labels("conditional HeadObject   0 to 145 -- only after a 412") == [
+        "the 0-to-145 conditional HeadObject range"
+    ]
+    assert _labels("ADR-0018's `zero to 145` conditional HeadObject range") == [
+        "the zero-to-145 conditional HeadObject range"
+    ]
+    assert _labels("total S3 operations      145 to 290") == ["the 145-to-290 per-run total"]
+    assert _labels("maximum S3 operations    147 to 292") == ["the 147-to-292 per-run total"]
+
+
+def test_a_labelled_historical_occurrence_is_allowed() -> None:
+    """Both permitted contexts, because the documents need both.
+
+    A delimited block is the general mechanism. The same-line marker exists for
+    the ADR-0018 registry row, which is a table row an HTML comment cannot wrap
+    without breaking the table.
+    """
+    retired = "total S3 operations 145 to 290 and whole empirical package 485 to 780"
+    assert _labels(retired)
+    assert _labels(f"{BEGIN}\n{retired}\n{END}") == []
+    assert _labels(f"{retired} -- ADR-0018's original arithmetic, which no longer govern") == []
+
+
+def test_the_governing_adr_0019_arithmetic_is_not_flagged() -> None:
+    """A guard that refused the corrected figures would force the defect back."""
+    governing = "\n".join(
+        (
+            "locator terminal reserve      L >= 3 * T_s3 + C",
+            "per-request S3 obligation     3 * T_s3",
+            "feasibility                   T_req + P + 3 * T_s3 + L <= D",
+            "admission                     remaining >= T_req + 3 * T_s3 + L",
+            "acquisition PutObject: 145 to 147",
+            "two successful runs: 290 to 294",
+            "assessment: unchanged at 195 to 196",
+            "whole successful package: 485 to 490",
+            "total GetObject          E x (2R + 1) = 194",
+            "merge commit 77974f476ead96548beb16543dfd3db8c03232c3",
+        )
+    )
+    assert _labels(governing) == []
+
+
+def test_a_current_zero_head_claim_is_not_the_retired_range() -> None:
+    """Exactly-zero and zero-to-145 share a word and mean opposite things."""
+    assert _labels("acquisition HeadObject: exactly 0") == []
+    assert _labels("acquisition GetObject: exactly 0") == []
+    assert _labels("report PutObject 1 -- NOT retried    conditional HeadObject  0 to 1") == []
+    assert _labels("conditional HeadObject zero to 145") == [
+        "the zero-to-145 conditional HeadObject range"
+    ]
+
+
+def test_a_supersession_explanation_needs_its_own_context() -> None:
+    """Naming a retired figure to explain it is still naming it.
+
+    The same-line marker set is strict on purpose: the whole-package paragraph
+    already contained "the superseded canonical arithmetic is gone", which is
+    about a different supersession entirely, and a loose "superseded" marker
+    would have admitted the retired envelope beside it.
+    """
+    explanation = "its `145 to 290` and `147 to 292` per-run totals, its `485 to 780` envelope"
+    assert _labels(explanation)
+    assert _labels(f"{explanation}. The superseded canonical arithmetic is gone.")
+    assert _labels(f"{BEGIN}\n{explanation}\n{END}") == []
+
+
+def test_an_unbalanced_marker_is_refused_rather_than_believed() -> None:
+    """An unclosed BEGIN swallows the file, so emptiness must not read as cleanliness."""
+    retired = "total S3 operations 145 to 290"
+    swallowed = GUARD.scan_retired_arithmetic(f"{BEGIN}\n{retired}\n")
+    assert swallowed.findings == ()
+    assert not swallowed.balanced
+    assert not GUARD.scan_retired_arithmetic(f"{retired}\n{END}\n").balanced
+    assert not GUARD.scan_retired_arithmetic(f"{BEGIN}\n{BEGIN}\n{retired}\n{END}\n").balanced
+
+
+def test_the_scan_carries_nothing_between_documents() -> None:
+    """Each document is scanned on its own text, in either order."""
+    clean = f"{BEGIN}\ntotal S3 operations 145 to 290\n{END}"
+    dirty = "total S3 operations 145 to 290"
+    assert _labels(dirty) and _labels(clean) == []
+    assert _labels(clean) == [] and _labels(dirty)

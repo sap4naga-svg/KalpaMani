@@ -2553,6 +2553,20 @@ read timeout**, the application-level locator retry **is the only locator retry*
 remain unretried**, and the permitted locator retry classifications stay **`THROTTLED` and
 `TRANSIENT`** and nothing else.
 
+<!-- RETIRED-ARITHMETIC BEGIN: ADR-0018 original, superseded by ADR-0019, no longer governing -->
+
+> **HISTORICAL — ADR-0018 ORIGINAL ARITHMETIC. SUPERSEDED BY ADR-0019; NO LONGER GOVERNING.**
+> The sub-budget arithmetic that follows, to the end of this subsection, is ADR-0018's original
+> accepted arithmetic, kept as the record of what ADR-0019 amended.
+> **The governing deadline arithmetic is ADR-0019's**: `L >= 3 * T_s3 + C`, a per-request S3
+> obligation of `3 * T_s3`, `T_req + P + 3 * T_s3 + L <= D`, and
+> `remaining >= T_req + 3 * T_s3 + L`, at `D = 1800 seconds`. Those are **authoritative
+> architecture requirements that the dormant production code does not yet implement** — see
+> *The infrastructure-feasibility gap, and ADR-0019* below. What ADR-0019 amended here is the
+> per-request and locator S3 allowances; the 1,800-second deadline itself, the injected
+> monotonic clock, the SDK-retry and socket-timeout requirements and the halt-and-`PARTIAL`
+> behaviour are **preserved unchanged**.
+
 **The sub-budgets are required implementation constants, not numbers invented here.** Three values
 are already accepted — the deadline `D = 1,800 s`, the provider ceiling `T_req = 30 s` and the
 minimum pacing `P = 1 s`. Every other term is a **required implementation constant whose proposed
@@ -2577,6 +2591,8 @@ defensible connect-plus-read bound. **The 1,800-second deadline is therefore a s
 elapsed time, and not a guarantee that 48 requests complete.** A slow provider means the run halts
 short, publishes a **`PARTIAL`** locator, and the assessor **refuses to evaluate it**; the owner
 reviews the halt and re-runs under a **separate authorization** and a **new execution identity**.
+
+<!-- RETIRED-ARITHMETIC END -->
 
 #### The honest ceilings
 
@@ -2648,6 +2664,17 @@ re-run reads a new retrieval instant, so the append-only store refuses it, and a
 
 #### The arithmetic, nominal and maximum
 
+<!-- RETIRED-ARITHMETIC BEGIN: ADR-0018 original, superseded by ADR-0019, no longer governing -->
+
+> **HISTORICAL — ADR-0018 ORIGINAL ARITHMETIC. SUPERSEDED BY ADR-0019; NO LONGER GOVERNING.**
+> The nominal and maximum acquisition counts that follow are ADR-0018's original accepted
+> arithmetic. **The governing acquisition arithmetic is ADR-0019's**: acquisition `PutObject`
+> **145 to 147**, acquisition `HeadObject` **exactly 0**, acquisition `GetObject` **exactly 0**,
+> and two successful runs **290 to 294** — **authoritative architecture requirements that the
+> dormant production code does not yet implement**. Only the counts are retired: the locator
+> retry policy stated between the two blocks below, and the assessment arithmetic further down at
+> **195 to 196**, are **preserved unchanged by ADR-0019**.
+
 **Nominal** — 48 requests, all complete, locator published on the first attempt:
 
 ```text
@@ -2674,6 +2701,8 @@ conditional HeadObject   0 to 145 -- 144 Bronze, plus AT MOST ONE locator
 maximum S3 operations    147 to 292
 maximum, both runs       2 x 292 = 584
 ```
+
+<!-- RETIRED-ARITHMETIC END -->
 
 **A complete run reports `144 <= PutObject <= 147`, as the real observed invocation count.** It is
 **not "exactly 145" when a retry occurred**, and the public counters report what happened rather
@@ -2709,6 +2738,14 @@ provider and credential operations       ZERO
 **If failure occurs after both locators pass, the actual observed counters are preserved and
 reported. Never report nominal counts as observed counts.**
 
+<!-- RETIRED-ARITHMETIC BEGIN: ADR-0018 original, superseded by ADR-0019, no longer governing -->
+
+> **HISTORICAL — ADR-0018 ORIGINAL ARITHMETIC. SUPERSEDED BY ADR-0019; NO LONGER GOVERNING.**
+> **The governing whole-package envelope is ADR-0019's**: two successful acquisition runs
+> **290 to 294**, the combined assessment **unchanged at 195 to 196**, and the whole successful
+> package **485 to 490** — an **authoritative architecture requirement that the dormant
+> production code does not yet implement**.
+
 **Whole-package envelope**, with the two acquisition runs and the one combined assessment:
 
 ```text
@@ -2717,11 +2754,14 @@ combined assessment        195 to 196 S3 operations
 whole empirical package    485 to 780 S3 operations
 ```
 
-`485 = 290 + 195` and `780 = 584 + 196`. **The superseded canonical arithmetic is gone.** A
-one-locator assessment is no longer canonical, and neither is its read total of 97, its operation
-total of 98-to-99, or the 196-to-198 total that assumed one assessment per run. **These are
-SDK-method invocation counts, and underlying AWS or network interactions remain UNKNOWN and must
-never be equated with them.**
+`485 = 290 + 195` and `780 = 584 + 196`.
+
+<!-- RETIRED-ARITHMETIC END -->
+
+**The superseded canonical arithmetic is gone.** A one-locator assessment is no longer canonical,
+and neither is its read total of 97, its operation total of 98-to-99, or the 196-to-198 total that
+assumed one assessment per run. **These are SDK-method invocation counts, and underlying AWS or
+network interactions remain UNKNOWN and must never be equated with them.**
 
 The private report carries a **separate assessment identity** in its key, so an ambiguous report
 write cannot block re-assessment permanently. **The combined assessor requires** two distinct
@@ -2990,12 +3030,16 @@ operations; the 48-request maximum; the monotonic clock; zero provider retries; 
 automatic retries; bounded socket timeouts; Run A and Run B separation; the assessment
 arithmetic; and the P1–P9 ceilings.
 
+<!-- RETIRED-ARITHMETIC BEGIN: ADR-0018 original, superseded by ADR-0019, no longer governing -->
+
 **The superseded acquisition figures are ADR-0018's original accepted arithmetic and no longer
 govern.** ADR-0018's `zero to 145` conditional HeadObject range, its `145 to 290` and `147 to 292`
 per-run totals, its `294 to 584` two-run total, its `485 to 780` package envelope, its `6 * T_s3`
 per-request collision allowance and its `4 * T_s3` locator allowance are recorded as **history and
 as an explanation of what ADR-0019 amended**, and are **not** current governing status. ADR-0018's
 own text is unchanged and is not rewritten.
+
+<!-- RETIRED-ARITHMETIC END -->
 
 #### What stays closed
 

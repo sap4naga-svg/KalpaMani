@@ -44,7 +44,7 @@ import tokenize
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -6898,6 +6898,31 @@ ADR_0019_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "the superseded acquisition figures are adr-0018's original accepted arithmetic and no "
         "longer govern",
     ),
+    # The retirement sentence above is necessary and was not sufficient. Both
+    # documents carried it while the detailed ADR-0018 narrative still presented
+    # the retired deadline and operation arithmetic as current, three hundred
+    # lines from the figures that replaced it -- which is how a reader ends up
+    # with two admission rules and two package envelopes and no way to tell which
+    # governs. The label and the three pointers below are what make that
+    # narrative unreadable as current, and `scan_retired_arithmetic` is what
+    # proves no occurrence escaped them.
+    (
+        "labels the retired arithmetic where it stands",
+        "historical \u2014 adr-0018 original arithmetic. superseded by adr-0019; no longer "
+        "governing.",
+    ),
+    (
+        "points the historical deadline block at the current rule",
+        "the governing deadline arithmetic is adr-0019's",
+    ),
+    (
+        "points the historical count block at the current rule",
+        "the governing acquisition arithmetic is adr-0019's",
+    ),
+    (
+        "points the historical envelope block at the current rule",
+        "the governing whole-package envelope is adr-0019's",
+    ),
     ("records the deployment status", "deployment: not authorized / not performed"),
     (
         "records the terraform and iam status",
@@ -7062,6 +7087,117 @@ ADR_0019_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "deployment remain unauthorized",
     ),
 )
+
+
+#: The HTML-comment markers that delimit a block of retired ADR-0018 arithmetic
+#: in a current status document.
+#:
+#: A comment rather than prose because it has to survive rendering: README.md is
+#: rendered on GitHub, CLAUDE.md is read raw as instructions, and only a comment
+#: is inert in the first while still visible in the second. The human-facing half
+#: is the blockquote banner the markers are required to wrap.
+RETIRED_ARITHMETIC_BEGIN: Final = "<!-- retired-arithmetic begin"
+RETIRED_ARITHMETIC_END: Final = "<!-- retired-arithmetic end"
+
+#: How many delimited historical regions each status document must carry: the
+#: deadline sub-budget, the nominal-and-maximum counts, the whole-package envelope,
+#: and the supersession paragraph that explains what replaced them. A floor rather
+#: than an equality, so merging two adjacent regions stays legal while deleting a
+#: label does not.
+RETIRED_ARITHMETIC_BLOCKS: Final = 4
+
+#: Same-line retirement markers for retired *arithmetic*, and deliberately only
+#: these two.
+#:
+#: Distinct from :data:`RETIREMENT_MARKERS`, which serves retired field names and
+#: is far looser. A bare "superseded" is enough there and is not enough here: the
+#: whole-package paragraph happens to contain "the superseded canonical arithmetic
+#: is gone", which is about a *different* supersession, and a loose marker would
+#: have waved a retired figure through on the strength of an unrelated sentence.
+#:
+#: A same-line mechanism is needed at all because the ADR-0018 registry row is one
+#: table row, and an HTML comment before and after it would break the table.
+RETIRED_ARITHMETIC_MARKERS: Final[tuple[str, ...]] = (
+    "no longer govern",
+    "superseded by adr-0019",
+)
+
+#: Acquisition arithmetic ADR-0019 retired, as patterns rather than substrings.
+#:
+#: Patterns because the same figure is spelled several ways across two documents:
+#: ASCII and Unicode multiplication signs, ``to`` and en-dash ranges, ``zero`` and
+#: ``0``, and backtick formatting that the scan strips before matching. A bare
+#: numeric substring would be worse than useless here -- ``584`` occurs inside
+#: commit hashes -- so each entry anchors the whole range or equation.
+#:
+#: None of these can match the governing ADR-0019 figures: those are ``3 * T_s3``,
+#: ``145 to 147``, ``290 to 294``, ``195 to 196``, ``485 to 490`` and an
+#: acquisition ``HeadObject`` of exactly 0, and no pattern below matches any of
+#: them. In particular "acquisition HeadObject: exactly 0" is not "zero to 145".
+RETIRED_ARITHMETIC: Final[tuple[tuple[str, str], ...]] = (
+    ("the 4 x T_s3 locator allowance", r"(?<!\d)4\s*[*x\u00d7]\s*t_s3"),
+    ("the 6 x T_s3 per-request allowance", r"(?<!\d)6\s*[*x\u00d7]\s*t_s3"),
+    ("the zero-to-145 conditional HeadObject range", r"\bzero\s+to\s+145\b"),
+    ("the 0-to-145 conditional HeadObject range", r"\b0\s*(?:to|[-\u2013\u2014])\s*145\b"),
+    ("the 145-to-290 per-run total", r"\b145\s*(?:to|[-\u2013\u2014])\s*290\b"),
+    ("the 147-to-292 per-run total", r"\b147\s*(?:to|[-\u2013\u2014])\s*292\b"),
+    ("the 2 x 292 = 584 two-run maximum", r"\b2\s*[*x\u00d7]\s*292\s*=\s*584\b"),
+    ("the both-runs 584 maximum", r"\bboth runs\s*(?:=|:)?\s*584\b"),
+    ("the 290-to-584 two-run total", r"\b29[04]\s*(?:to|[-\u2013\u2014])\s*584\b"),
+    ("the 485-to-780 package envelope", r"\b485\s*(?:to|[-\u2013\u2014])\s*780\b"),
+    ("the 780 = 584 + 196 package maximum", r"\b780\s*=\s*584\b"),
+)
+
+
+class RetiredArithmeticScan(NamedTuple):
+    """One document's retired-arithmetic surfaces.
+
+    ``findings`` is every retired figure presented as current: ``(line number,
+    label)``. ``blocks`` counts the delimited historical regions. ``balanced``
+    is false for an unclosed, unopened or nested marker.
+
+    ``balanced`` is separate because an unclosed BEGIN swallows the rest of the
+    file and would empty ``findings`` -- a vacuous pass is what the caller must
+    be able to refuse, so it is reported rather than folded in.
+    """
+
+    findings: tuple[tuple[int, str], ...]
+    blocks: int
+    balanced: bool
+
+
+def scan_retired_arithmetic(text: str) -> RetiredArithmeticScan:
+    """Find retired ADR-0018 arithmetic that a document presents as current.
+
+    A retired figure may stand only where a reader cannot mistake it: inside a
+    delimited historical block, or on a line carrying one of the strict
+    :data:`RETIRED_ARITHMETIC_MARKERS`. A retirement sentence elsewhere in the file
+    does not count, which is exactly the defect this exists to catch -- ADR-0019
+    retired the figures, both status documents said so once, and both still
+    carried the old numbers unlabelled in the detailed ADR-0018 narrative.
+    """
+    findings: list[tuple[int, str]] = []
+    depth = 0
+    blocks = 0
+    balanced = True
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = " ".join(raw.replace("`", "").lower().split())
+        if RETIRED_ARITHMETIC_BEGIN in line:
+            balanced = balanced and depth == 0
+            depth += 1
+            blocks += 1
+            continue
+        if RETIRED_ARITHMETIC_END in line:
+            balanced = balanced and depth == 1
+            depth = max(depth - 1, 0)
+            continue
+        if depth or any(marker in line for marker in RETIRED_ARITHMETIC_MARKERS):
+            continue
+        for label, pattern in RETIRED_ARITHMETIC:
+            if re.search(pattern, line):
+                findings.append((number, label))
+                break
+    return RetiredArithmeticScan(tuple(findings), blocks, balanced and depth == 0)
 
 
 def main() -> int:
@@ -14619,11 +14755,13 @@ def main() -> int:
 
     # ---------------------------------------------------------------- ADR-0019
     #
-    # The proposed write-only acquisition amendment. Every check here is about a
-    # *proposal*: it must exist, it must say what it decides, and it must not
-    # read itself as accepted. Registration in MERGED_ADR_STATUS happens on the
-    # merge, not here -- which is itself checked, because a proposal registered
-    # as merged would claim an authority no pull request has granted it.
+    # The merged write-only acquisition amendment. PR #46 merged, so every check
+    # here is about an *accepted architecture with an uncorrected implementation*:
+    # the ADR must exist, it must keep the conditional line it was written with as
+    # history beside the event that satisfied it, it must not read itself as built,
+    # it must be registered in MERGED_ADR_STATUS, and the status documents must
+    # carry the governing arithmetic without leaving the arithmetic it replaced
+    # standing anywhere as current.
     f.check(
         "ADR-0019 exists",
         ADR_0019.is_file(),
@@ -14667,6 +14805,22 @@ def main() -> int:
             f"{name} does not overstate ADR-0019",
             not overstated,
             ", ".join(overstated),
+        )
+
+        # The contextual half of the retirement, and the reason it exists: the
+        # phrase checks above establish that each document says the old figures no
+        # longer govern, and say nothing about whether the old figures are still
+        # standing somewhere else in the same file presented as current. They were.
+        retired = scan_retired_arithmetic(document)
+        f.check(
+            f"{name} delimits its retired ADR-0018 arithmetic",
+            retired.balanced and retired.blocks >= RETIRED_ARITHMETIC_BLOCKS,
+            "an unclosed, unopened or nested marker would make the scan below vacuous",
+        )
+        f.check(
+            f"{name} presents no retired ADR-0018 arithmetic as current",
+            retired.balanced and not retired.findings,
+            ", ".join(f"line {number}: {label}" for number, label in retired.findings),
         )
 
     for label, phrase in ADR_0019_PLAN_REQUIRED:
