@@ -9,6 +9,17 @@ rule inside [ADR-0018](ADR-0018-bounded-private-empirical-sharadar-qualification
 amended by ADR-0019 is what governs**. That is the same conditional treatment ADR-0017, ADR-0018
 and ADR-0019 were each given, and it is written down rather than assumed.
 
+**The condition above has since been satisfied.** **PR #49 merged** — merge commit
+**`e4d328af53f2663c570f94e6c090c3296db8cb9d`**, approved ADR head
+**`d9bbb17b7f174c34223eb4736d763f115daf229f`** — after an **independent review**. So
+**ADR-0020's conditional effectiveness event has occurred** and this ADR is now
+**ACCEPTED / IN FORCE**, as **architecture only**. The status line above is the conditional
+text this ADR was written with; it is **preserved as history, not rewritten**, and **while
+PR #49 was open, ADR-0020 was proposed and carried no authority** — which was true then and
+stays true. **The merge approved architecture only, and authorized no implementation, no
+infrastructure mutation, no deployment and no execution.** **PR #48 must be corrected against
+ADR-0020 before it may be independently reviewed or merged** — see §9.
+
 **Date:** 2026-09-01
 **Supersedes:** nothing wholesale. **Amends, upon acceptance:** the qualification **payload
 object key derivation** of ADR-0018, and nothing else.
@@ -458,3 +469,62 @@ implementation is wrong.
 **PR #48 cannot be reviewed or merged until this ADR is independently reviewed, merged and
 synchronized, and PR #48 is corrected against it.** That correction is a separate gate and is
 **NOT BEGUN**.
+
+---
+
+## 9. Post-merge status — recorded after this decision
+
+**This section is a historical note added after the decision above, and it changes nothing this
+ADR decided.** §1–§8 record the amendment as it was proposed and reviewed; that record stands
+unedited. What follows is what happened afterwards.
+
+**ADR-0020 architecture: ACCEPTED / IN FORCE.** **PR #49 merged**, merge commit
+**`e4d328af53f2663c570f94e6c090c3296db8cb9d`**, approved ADR head
+**`d9bbb17b7f174c34223eb4736d763f115daf229f`**, after an **independent review**. **ADR-0020's
+conditional effectiveness event has occurred.** **While PR #49 was open, ADR-0020 was proposed
+and carried no authority**, and **ADR-0018 as amended by ADR-0019 governed the qualification payload
+identity before the PR #49 merge** — historical facts that stay true and are not rewritten as
+though this ADR had always been effective.
+
+**The merge approved architecture only, and authorized no implementation, no infrastructure
+mutation, no deployment and no execution.** The request-scoped payload identity is now the
+governing architecture for ADR-0018 qualification payload objects, and **ADR-0020's amendment is
+now authoritative architecture**. **ADR-0020 supersedes no ADR wholesale**; it amends only the
+qualification payload-key identity rule. **ADR-0019 remains ACCEPTED / IN FORCE**, **ADR-0018
+remains ACCEPTED / IN FORCE except as amended by ADR-0019 and by this ADR**, **ADR-0017 is not
+amended or superseded**, **ADR-0011 is not amended or superseded**, and **the shared
+S3ResearchObjectStore remains unchanged**.
+
+**The implementation gap is open, and it is not concealed by the architecture being accepted.**
+
+| Layer | Current status |
+|---|---|
+| Architecture | **ADR-0020 accepted and effective** |
+| Existing code | **merged, dormant, not yet conforming** |
+| Corrective code | **not authorized, not implemented** |
+| Terraform / IAM | **not authorized, not implemented** |
+| Deployment | **not authorized, not performed** |
+| Execution | **ZERO** |
+
+**No qualification payload-key builder exists.** **ADR-0020 implementation: NOT AUTHORIZED / NOT
+IMPLEMENTED.** **The ADR-0018 offline implementation remains MERGED / DORMANT**, it still derives
+the qualification payload name from the shared content-addressed builder, and **the current dormant
+implementation is therefore not deployable under the authoritative architecture**. **No claim is
+made that the request-scoped payload identity is already implemented**, and **no claim is made
+that the qualification payload-key builder already exists** — it does not. **Infrastructure
+design: BLOCKED pending implementation correction.**
+
+**PR #48 is still OPEN, non-draft, UNMERGED and untouched.** It was not edited, rebased, amended,
+reviewed, commented on, retitled, closed or merged by this decision or by its merge, and
+auto-merge was not enabled on it. **PR #48 correction against ADR-0020: NOT BEGUN**, and
+**PR #48 ready for review or merge: NO**. **PR #48 is not defective for obeying ADR-0019** — its
+implementation work exposed the architectural identity gap this ADR resolves, and it now
+**requires a separate correction against the accepted ADR-0020 design**. **The next separately
+authorized implementation gate is correcting PR #48 against ADR-0020**, and **infrastructure
+remains blocked until that correction is implemented, independently reviewed and merged.**
+
+**Acceptance of ADR-0020 is not authorization to implement or execute it.** Run A, Run B, the
+combined assessment, Terraform, IAM, infrastructure mutation and deployment each remain
+**NOT AUTHORIZED**; **G1 and G2 stay OPEN**; no provider is selected; Phase 3 stays **NOT
+COMPLETE**; CONTROL stays **DEFERRED**; live trading stays **HARD-DISABLED**; and a third ADR-0017
+authenticated attempt stays **NOT AUTHORIZED**.

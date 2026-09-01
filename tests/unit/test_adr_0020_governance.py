@@ -1,4 +1,4 @@
-"""ADR-0020 is a PROPOSAL, and every guard here holds it to that.
+"""ADR-0020 is ACCEPTED as ARCHITECTURE, and every guard here holds it to exactly that.
 
 PR #48 implemented ADR-0019's fail-closed write-only collision rule correctly and
 offline, and in doing so exposed a pre-existing incompatibility between three
@@ -8,19 +8,21 @@ and 144 Bronze writes, the qualification payload object is content-addressed by
 reading or comparing the occupied object. Two legitimate byte-identical
 observations therefore derive one object name and halt a correct run.
 
-ADR-0020 proposes to fix the **name**, not the write. Three drifts follow from
-that, and each is guarded here:
+ADR-0020 fixes the **name**, not the write. PR #49 merged it, so its conditional
+effectiveness event has occurred and its architecture is in force -- and the
+implementation is not. Three drifts follow from that, and each is guarded here:
 
-1. **Upward** -- a proposal read as an acceptance. ADR-0020 is not in
-   ``MERGED_ADR_STATUS``, it authorizes nothing, and neither status document may
-   say otherwise.
+1. **Backwards** -- a merged decision read as still proposed. ADR-0020 is
+   registered in ``MERGED_ADR_STATUS`` as ``PR #49 merged``, exactly once, and
+   neither status document may revert to the pre-merge wording. The conditional
+   status line inside the ADR is **preserved as history** and is not forbidden.
 2. **Sideways** -- the identity fix used as cover for relaxing the collision
    policy. Acquisition stays conditional ``PutObject`` only, with zero object
    reads and zero listing, and no occupied object may be read, compared or
    adopted.
-3. **Forwards** -- a proposed identity read as an implemented one. No
-   qualification payload-key builder exists, PR #48 is open, unmerged, blocked on
-   architecture and untouched, and its correction has not begun.
+3. **Forwards** -- an accepted identity read as an implemented one. No
+   qualification payload-key builder exists, PR #48 is still open, unmerged, not
+   ready for review or merge, and untouched, and its correction has not begun.
 
 **The arithmetic is derived here, not transcribed.** A number copied from prose
 into prose is a number nobody checks, so the request count, the write count and
@@ -29,7 +31,10 @@ what the ADR says.
 
 **Every guard has a mutation test behind it.** A required phrase that no edit can
 remove is a phrase that proves nothing, so each load-bearing clause is deleted or
-inverted in a copy of the real document and the guard is required to notice.
+inverted in a copy of the real document and the guard is required to notice. The
+registry mutations drive the audit's **own** functions over a mutated registry
+rather than a local dictionary, because a dictionary compared against itself is
+not a check.
 
 These are text and structure checks over committed files. **Nothing here contacts
 AWS, a provider or a network**, and nothing here imports an operational entry
@@ -74,8 +79,11 @@ EXECUTIONS = 2
 REPORT_PUT = 1
 REPORT_HEAD_MAX = 1
 
-#: The pull request the proposal must leave alone.
+#: The pull request the proposal, and its merge, must leave alone.
 BLOCKED_PR = "#48"
+
+#: The pull request that merged ADR-0020.
+MERGED_PR = "#49"
 
 
 def _audit_module() -> ModuleType:
@@ -134,6 +142,11 @@ def clause(label: str, required: Iterable[tuple[str, str]]) -> str:
     raise AssertionError(f"no requirement labelled {label!r}")
 
 
+def _status_documents() -> dict[str, str]:
+    """Both current-status documents, keyed the way the audit keys them."""
+    return {"CLAUDE.md": read(CLAUDE_MD), "README.md": read(README)}
+
+
 def audit_registry() -> tuple[tuple[str, str], ...]:
     """``MERGED_ADR_STATUS`` read by static parse.
 
@@ -162,24 +175,80 @@ def audit_registry() -> tuple[tuple[str, str], ...]:
 # ---------------------------------------------------------------------------
 
 
-def test_the_adr_exists_and_carries_its_conditional_status_line() -> None:
-    """A proposal with no conditional line is a proposal nobody can hold to it."""
-    assert ADR.is_file(), "the proposed payload-identity amendment must be the file it names"
+def test_the_adr_preserves_its_conditional_status_line() -> None:
+    """A decision record is not rewritten when the world moves.
+
+    The conditional line is what the ADR said while PR #49 was open, so it stays
+    exactly as written. The post-merge note beside it is what stops that line
+    from being read as current.
+    """
+    assert ADR.is_file(), "the payload-identity amendment must be the file it names"
     reading = flat(read(ADR))
     assert "status: proposed" in reading
     assert (
         "no authority until the pull request introducing it is independently reviewed and merged"
         in reading
     )
-    assert "adr-0020 is accepted" not in reading
-    assert "adr-0020 is in force" not in reading
+    assert "preserved as history, not rewritten" in reading
 
 
-def test_the_adr_is_not_registered_as_a_merged_decision() -> None:
-    """Registration happens on the merge, not on the proposal."""
-    registry = dict(audit_registry())
-    assert "ADR-0020" not in registry
-    assert registry.get("ADR-0019") == "PR #46 merged", "the merged neighbour stays registered"
+def test_the_adr_carries_the_adjacent_post_merge_note() -> None:
+    """Added on the merge, not substituted for the line above it."""
+    reading = flat(read(ADR))
+    assert "the condition above has since been satisfied" in reading
+    assert GUARD.ADR_0020_MERGE_COMMIT in reading
+    assert GUARD.ADR_0020_APPROVED_HEAD in reading
+    assert "adr-0020's conditional effectiveness event has occurred" in reading
+    assert "adr-0020 architecture: accepted / in force" in reading
+    assert "this section is a historical note added after the" in reading
+
+
+def test_the_adr_keeps_the_proposed_period_historical() -> None:
+    """The pre-merge period is a fact about those days, not a claim about today."""
+    reading = flat(read(ADR))
+    assert GUARD.ADR_0020_HISTORICAL_PROPOSED in reading
+    assert (
+        "adr-0018 as amended by adr-0019 governed the qualification payload identity before the "
+        f"pr {MERGED_PR} merge" in reading
+    )
+
+
+def test_the_merge_approved_architecture_only() -> None:
+    """Acceptance of a design is not permission to build it."""
+    reading = flat(read(ADR))
+    assert (
+        "the merge approved architecture only, and authorized no implementation, no "
+        "infrastructure mutation, no deployment and no execution" in reading
+    )
+    assert "acceptance of adr-0020 is not authorization to implement or execute it" in reading
+
+
+def test_the_adr_records_the_open_implementation_gap() -> None:
+    """Architecture accepted, implementation absent -- two states, never one."""
+    reading = flat(read(ADR))
+    assert "adr-0020 implementation: not authorized / not implemented" in reading
+    assert "no qualification payload-key builder exists" in reading
+    assert (
+        "the current dormant implementation is therefore not deployable under the authoritative "
+        "architecture" in reading
+    )
+    assert "infrastructure design: blocked pending implementation correction" in reading
+    assert "the request-scoped payload identity is implemented" not in reading
+
+
+def test_the_registry_records_adr_0020_as_merged() -> None:
+    """Inverted on the merge, not deleted.
+
+    While PR #49 was open this asserted ADR-0020 was **absent** from the registry.
+    The merge is the event that flips it, and deleting the guard would leave the
+    reverted claim unguarded.
+    """
+    registry = audit_registry()
+    assert dict(registry).get("ADR-0020") == f"PR {MERGED_PR} merged"
+    assert [adr for adr, _ in registry].count("ADR-0020") == 1
+    assert dict(registry).get("ADR-0019") == "PR #46 merged", (
+        "the merged neighbour stays registered"
+    )
 
 
 def test_the_adr_names_the_legitimate_duplicate_byte_collision() -> None:
@@ -447,7 +516,7 @@ def test_the_audit_requires_every_clause_this_file_checks() -> None:
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_both_documents_record_the_proposed_state(document: Path) -> None:
+def test_both_documents_record_the_merged_amendment(document: Path) -> None:
     """Independently: merged main has twice carried a fact in one file and its contradiction
     in the other."""
     absent = missing(GUARD.ADR_0020_STATUS_REQUIRED, read(document))
@@ -455,8 +524,49 @@ def test_both_documents_record_the_proposed_state(document: Path) -> None:
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_both_documents_do_not_overstate_the_proposal(document: Path) -> None:
-    """No document may read a proposal as an acceptance or an implementation."""
+def test_both_documents_record_the_merge_and_its_bounds(document: Path) -> None:
+    """The merge, its two commits, and the sentence that keeps the pre-merge period historical."""
+    reading = flat(read(document))
+    assert f"pr {MERGED_PR}: merged" in reading
+    assert GUARD.ADR_0020_MERGE_COMMIT in reading
+    assert GUARD.ADR_0020_APPROVED_HEAD in reading
+    assert "conditional effectiveness event: occurred" in reading
+    assert GUARD.ADR_0020_HISTORICAL_PROPOSED in reading
+    assert "the merge approved architecture only" in reading
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_both_documents_separate_acceptance_from_implementation(document: Path) -> None:
+    """The one distinction this whole synchronization exists to keep."""
+    reading = flat(read(document))
+    assert "architecture acceptance: complete" in reading
+    assert "production implementation: not authorized / not implemented" in reading
+    assert (
+        "the architecture blocker that prevented adr-0020 from being authoritative is resolved"
+        in reading
+    )
+    assert "the implementation blocker remains" in reading
+    assert "adr-0018 merged implementation: dormant / nonconforming" in reading
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_both_documents_keep_the_blocked_pull_request_open_and_uncorrected(document: Path) -> None:
+    """Open, unmerged, not ready, uncorrected -- and not blamed for obeying ADR-0019."""
+    reading = flat(read(document))
+    assert f"pr {BLOCKED_PR} state: open / unmerged" in reading
+    assert f"pr {BLOCKED_PR} ready for review or merge: no" in reading
+    assert f"pr {BLOCKED_PR} correction against adr-0020: not begun" in reading
+    assert f"pr {BLOCKED_PR} is not defective for obeying adr-0019" in reading
+    assert "requires a separate correction against the accepted adr-0020 design" in reading
+    assert (
+        "the next separately authorized implementation gate is correcting pr "
+        f"{BLOCKED_PR} against adr-0020" in reading
+    )
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_both_documents_do_not_overstate_the_amendment(document: Path) -> None:
+    """No document may read an accepted architecture as an implemented one, or revert it."""
     claims = overstated(GUARD.ADR_0020_STATUS_FORBIDDEN, read(document))
     assert not claims, f"{document.name} overstates: {claims}"
 
@@ -480,11 +590,12 @@ def test_no_document_says_the_blocked_pull_request_is_ready(document: Path) -> N
     "document", [CLAUDE_MD, README, PLAN], ids=["CLAUDE.md", "README.md", "plan"]
 )
 def test_no_document_says_the_new_identity_is_already_implemented(document: Path) -> None:
-    """A proposed key is not a built one, and no qualification key builder exists."""
+    """An accepted key is not a built one, and no qualification key builder exists."""
     reading = flat(read(document))
     assert "the request-scoped payload identity is implemented" not in reading
     assert "the qualification payload-key builder exists" not in reading
-    assert "adr-0020 implementation: not authorized" in reading
+    assert "the production implementation conforms" not in reading
+    assert "adr-0020 implementation: not authorized / not implemented" in reading
 
 
 @pytest.mark.parametrize(
@@ -504,18 +615,18 @@ def test_no_document_permits_reading_or_adopting_an_occupied_object(document: Pa
 
 
 def test_the_implementation_plan_carries_the_same_state() -> None:
-    """The plan is where the ceilings are read from, so it carries the same proposed state."""
+    """The plan is where the ceilings are read from, so it carries the same accepted state."""
     absent = missing(GUARD.ADR_0020_PLAN_REQUIRED, read(PLAN))
     assert not absent, f"the implementation plan is missing: {absent}"
 
 
-def test_this_proposal_changed_no_production_code() -> None:
+def test_neither_the_proposal_nor_its_merge_changed_production_code() -> None:
     """The shared surfaces still have exactly what a later correction would route around.
 
     ADR-0020 requires a *later* implementation gate to introduce a
-    qualification-specific builder. It does not perform that correction, and the
-    proof is that the shared content-addressed builder and the shared store's
-    collision resolution are both still here, unchanged.
+    qualification-specific builder. Neither the decision nor its merge performed
+    that correction, and the proof is that the shared content-addressed builder
+    and the shared store's collision resolution are both still here, unchanged.
     """
     bronze = read(SHARED_BRONZE)
     store = read(SHARED_STORE)
@@ -569,20 +680,73 @@ def test_replacing_write_only_behaviour_with_headobject_resolution_is_caught() -
     assert "acquisition may use headobject" in overstated(GUARD.ADR_0020_SELF_FORBIDDEN, text)
 
 
-def test_marking_the_adr_accepted_before_merge_is_caught() -> None:
-    """The upward drift: a proposal promoted by a document rather than by a merge."""
+def test_reverting_a_document_to_the_proposed_state_is_caught() -> None:
+    """The backwards drift: a merged decision demoted by a document edit.
+
+    Inverted on the merge. While PR #49 was open this proved an *acceptance*
+    claim was caught; the pre-merge spellings moved into the forbidden list on the
+    merge, so the same guard now catches the revert.
+    """
     for document in (CLAUDE_MD, README):
-        mutated = flat(read(document)) + " adr-0020: accepted / in force"
-        claims = overstated(GUARD.ADR_0020_STATUS_FORBIDDEN, mutated)
-        assert "adr-0020: accepted / in force" in claims, document.name
+        for injected in (
+            "adr-0020: proposed / not in force",
+            "adr-0020 is still proposed",
+            "adr-0020 has not merged",
+        ):
+            mutated = flat(read(document)) + " " + injected
+            claims = overstated(GUARD.ADR_0020_STATUS_FORBIDDEN, mutated)
+            assert injected in claims, f"{document.name}: {injected}"
 
 
-def test_registering_the_proposal_as_merged_is_caught() -> None:
-    """The registry is what governs an in-force claim, so a premature entry must fail."""
-    registry = dict(audit_registry())
-    registry["ADR-0020"] = "PR #49 merged"
-    assert "ADR-0020" in registry, "the mutation is the premature registration itself"
-    assert "ADR-0020" not in dict(audit_registry()), "the committed registry stays clean"
+def test_the_registry_entry_is_the_one_the_documents_are_measured_against(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact committed tuple, and the exact claim both documents make.
+
+    Not a local dictionary: the entry is read by static parse of the committed
+    audit, and the documents' claims are read by the audit's **own** row scanner.
+    A registry that agreed only with itself would prove nothing about either.
+    """
+    assert dict(audit_registry())["ADR-0020"] == f"PR {MERGED_PR} merged"
+    for document in (CLAUDE_MD, README):
+        claims = GUARD._in_force_adr_claims(read(document))
+        assert claims.get("ADR-0020") == f"PR {MERGED_PR} merged", document.name
+    monkeypatch.setattr(GUARD, "MERGED_ADR_STATUS", audit_registry())
+    assert not GUARD._registry_coverage_defects(_status_documents())
+
+
+def test_removing_the_registry_entry_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting the entry must fail the audit's real coverage check, not merely go unasserted."""
+    without = tuple(pair for pair in audit_registry() if pair[0] != "ADR-0020")
+    assert len(without) == len(audit_registry()) - 1, "the mutation must actually remove something"
+    monkeypatch.setattr(GUARD, "MERGED_ADR_STATUS", without)
+    defects = GUARD._registry_coverage_defects(_status_documents())
+    assert defects, "an in-force row outside the registry's coverage must be a defect"
+    assert all("ADR-0020" in defect for defect in defects), defects
+
+
+def test_a_wrong_pull_request_number_in_the_registry_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registry naming another pull request must disagree with both documents."""
+    wrong = tuple(
+        (adr, f"PR {BLOCKED_PR} merged" if adr == "ADR-0020" else merged_in)
+        for adr, merged_in in audit_registry()
+    )
+    assert dict(wrong)["ADR-0020"] != f"PR {MERGED_PR} merged"
+    monkeypatch.setattr(GUARD, "MERGED_ADR_STATUS", wrong)
+    assert GUARD._registry_coverage_defects(_status_documents())
+    for name, body in _status_documents().items():
+        assert GUARD._stale_adr_status_defects(name, body), name
+
+
+def test_a_duplicate_registry_entry_is_caught() -> None:
+    """A mapping keeps the last value for a repeated key, so the tuple is what is counted."""
+    doubled = (*audit_registry(), ("ADR-0020", f"PR {MERGED_PR} merged"))
+    assert GUARD._duplicate_registry_entries(doubled) == ["ADR-0020"]
+    assert not GUARD._duplicate_registry_entries(audit_registry()), (
+        "the committed registry is clean"
+    )
 
 
 def test_claiming_the_blocked_pull_request_is_mergeable_or_corrected_is_caught() -> None:
