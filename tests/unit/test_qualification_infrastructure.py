@@ -2388,3 +2388,465 @@ class TestTheGovernedVerifierNamesAreMeasuredToo:
 
     def test_an_absent_mapping_reports_nothing_rather_than_agreeing(self) -> None:
         assert GUARD.verifier_permission_set_names("") == {}
+
+
+# ---------------------------------------------------------------------------
+# PR #56 -- the merged offline qualification principals, as the documents claim it
+# ---------------------------------------------------------------------------
+#
+# The Terraform above is checked by parsing it. This half checks the *claim* the
+# status documents, the implementation plan and the infrastructure README make
+# about the merge, because the three states this slice created can drift apart in
+# a way neither the parser nor a reader notices: a merged declaration, an isolated
+# offline validation of a task-owned external copy, and a live AWS object that
+# still does not exist.
+#
+# Two drifts are now possible, and both are driven here. Forward: a merged,
+# validated implementation read as a planned, applied, deployed or authorized one.
+# Reverse: the merged implementation written back to the open, blocked,
+# unvalidated state it came out of -- which is the drift a synchronization commit
+# is most likely to reintroduce.
+#
+# Every guard is the audit's own, driven rather than restated, and every mutation
+# is applied to in-memory text: no tracked file is written, no Terraform runs, and
+# no AWS or private material is read.
+
+PR_56_REQUIRED: tuple[tuple[str, str], ...] = GUARD.PR_56_STATUS_REQUIRED
+PR_56_FORBIDDEN: tuple[str, ...] = GUARD.PR_56_STATUS_FORBIDDEN
+PR_56_PLAN_REQUIRED: tuple[tuple[str, str], ...] = GUARD.PR_56_PLAN_REQUIRED
+PR_56_TERMINATORS: dict[str, str] = dict(GUARD.PR_56_SECTION_TERMINATORS)
+
+INFRA_README = INFRA / "README.md"
+INFRA_REQUIRED: tuple[tuple[str, str], ...] = GUARD.INFRA_README_VALIDATION_REQUIRED
+INFRA_FORBIDDEN: tuple[str, ...] = GUARD.INFRA_README_VALIDATION_FORBIDDEN
+
+
+def pr_56_missing(text: str) -> list[str]:
+    """Every required PR #56 clause the reading does not carry, by label."""
+    return [label for label, phrase in PR_56_REQUIRED if phrase not in text]
+
+
+def infra_missing(text: str) -> list[str]:
+    """Every required infra-README clause the reading does not carry, by label."""
+    return [label for label, phrase in INFRA_REQUIRED if phrase not in text]
+
+
+def pr_56_overstated(text: str) -> list[str]:
+    """Every forbidden PR #56 claim the reading does carry."""
+    return [claim for claim in PR_56_FORBIDDEN if claim in text]
+
+
+def pr_56_clause(label: str) -> str:
+    """The exact phrase a labelled PR #56 requirement asserts, read from the audit."""
+    for candidate, phrase in PR_56_REQUIRED:
+        if candidate == label:
+            return phrase
+    raise AssertionError(f"no PR #56 requirement labelled {label!r}")
+
+
+def split_at_pr_56_section(document: Path) -> tuple[str, str, str]:
+    """``(before, section, after)`` for a document's one PR #56 section.
+
+    Split on the audit's own extractor, so a test cannot disagree with the guard
+    about where the section begins and ends.
+    """
+    text = read(document)
+    found = GUARD.scan_pr_56_status_sections(text)
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    section = str(found.sections[0])
+    before, separator, after = text.partition(section)
+    assert separator == section, f"{document.name}: the section is not verbatim in the document"
+    return before, section, after
+
+
+class TestThePr56MergeIsRecorded:
+    """The unmutated repository satisfies every PR #56 guard. The control for the rest."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_each_document_carries_exactly_one_section(self, document: Path) -> None:
+        found = GUARD.scan_pr_56_status_sections(read(document))
+        assert found.defects == ()
+        assert len(found.sections) == 1
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_required_clause_is_present_in_the_section(self, document: Path) -> None:
+        _before, section, _after = split_at_pr_56_section(document)
+        assert pr_56_missing(flat(section)) == []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_no_forbidden_claim_is_made_anywhere_in_the_document(self, document: Path) -> None:
+        assert pr_56_overstated(flat(read(document))) == []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_merge_identity_is_recorded_whole(self, document: Path) -> None:
+        _before, section, _after = split_at_pr_56_section(document)
+        reading = flat(section)
+        assert GUARD.PR_56_MERGE_COMMIT in reading
+        assert GUARD.PR_56_MERGE_TIME.lower() in reading
+        assert GUARD.PR_56_FIRST_PARENT in reading
+        assert GUARD.PR_56_SECOND_PARENT in reading
+        assert reading.index(GUARD.PR_56_FIRST_PARENT) < reading.index(GUARD.PR_56_SECOND_PARENT)
+
+    def test_the_plan_carries_every_required_clause(self) -> None:
+        reading = flat(read(PLAN))
+        assert [label for label, phrase in PR_56_PLAN_REQUIRED if phrase not in reading] == []
+
+    def test_both_documents_carry_the_same_subsections_in_order(self) -> None:
+        titles = {
+            document.name: GUARD._section_subsection_titles(
+                GUARD.scan_pr_56_status_sections(read(document)).sections
+            )
+            for document in DOCUMENTS
+        }
+        assert len(set(titles.values())) == 1, titles
+        assert titles["CLAUDE.md"] == GUARD.PR_56_STATUS_SUBSECTIONS
+
+    def test_the_two_sections_are_byte_identical(self) -> None:
+        _b, claude_section, _a = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        _b, readme_section, _a = split_at_pr_56_section(PROJECT_ROOT / "README.md")
+        assert claude_section == readme_section
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_real_section_ends_at_its_declared_boundary(self, document: Path) -> None:
+        text = read(document)
+        _before, section, _after = split_at_pr_56_section(document)
+        assert GUARD.qualification_iam_section_is_terminated(
+            text, section, PR_56_TERMINATORS[document.name]
+        )
+
+
+class TestThePr56MergeFactsAreMutationProof:
+    """A wrong commit, a wrong time or swapped parents describes a different history."""
+
+    @pytest.mark.parametrize(
+        ("label", "value"),
+        [
+            ("merge commit", GUARD.PR_56_MERGE_COMMIT),
+            ("merge time", GUARD.PR_56_MERGE_TIME),
+            ("first parent", GUARD.PR_56_FIRST_PARENT),
+            ("second parent", GUARD.PR_56_SECOND_PARENT),
+        ],
+    )
+    def test_replacing_one_recorded_value_is_reported(self, label: str, value: str) -> None:
+        _before, section, _after = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        reading = flat(section)
+        assert value.lower() in reading, label
+        mutated = reading.replace(value.lower(), "0" * len(value))
+        assert mutated != reading
+        assert pr_56_missing(mutated) != [], label
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_swapping_the_ordered_parents_is_reported(self, document: Path) -> None:
+        """Same two commits, wrong order -- a different merge, and a presence scan cannot see it.
+
+        Drives the audit's own order guard: every phrase requirement stays
+        satisfied after the swap, because both commit ids are still present.
+        """
+        _before, section, _after = split_at_pr_56_section(document)
+        assert GUARD.pr_56_parent_order_defects(section) == []
+        first, second = GUARD.PR_56_FIRST_PARENT, GUARD.PR_56_SECOND_PARENT
+        swapped = section.replace(first, "<TMP>").replace(second, first).replace("<TMP>", second)
+        assert swapped != section
+        assert pr_56_missing(flat(swapped)) == [], "a phrase scan cannot see a swap"
+        assert GUARD.pr_56_parent_order_defects(swapped) == [
+            "the ordered merge parents appear in the wrong order"
+        ]
+
+    @pytest.mark.parametrize(
+        ("dropped", "expected"),
+        [
+            (GUARD.PR_56_FIRST_PARENT, "the first ordered merge parent is absent"),
+            (GUARD.PR_56_SECOND_PARENT, "the second ordered merge parent is absent"),
+        ],
+    )
+    def test_dropping_one_ordered_parent_is_reported(self, dropped: str, expected: str) -> None:
+        _before, section, _after = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        mutated = section.replace(dropped, "")
+        assert mutated != section
+        assert GUARD.pr_56_parent_order_defects(mutated) == [expected]
+
+    def test_removing_the_merge_note_is_reported(self) -> None:
+        phrase = pr_56_clause("records the merged pull request")
+        _before, section, _after = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        mutated = flat(section).replace(phrase, "")
+        assert "records the merged pull request" in pr_56_missing(mutated)
+
+    def test_the_audit_keeps_the_cli_and_the_provider_apart(self) -> None:
+        """A Terraform CLI version is not a provider version, and neither substitutes."""
+        assert GUARD.PR_56_TERRAFORM_CLI not in GUARD.PR_56_LOCKED_PROVIDER
+        assert GUARD.PR_56_LOCKED_PROVIDER not in GUARD.PR_56_TERRAFORM_CLI
+
+    def test_the_recorded_merge_and_parents_are_three_commits(self) -> None:
+        assert GUARD.PR_56_FIRST_PARENT != GUARD.PR_56_SECOND_PARENT
+        assert GUARD.PR_56_MERGE_COMMIT not in (
+            GUARD.PR_56_FIRST_PARENT,
+            GUARD.PR_56_SECOND_PARENT,
+        )
+
+
+class TestPr56SectionLocalDeletionIsCaught:
+    """Deleting a clause from the section is caught even when a copy survives elsewhere."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize("label", [label for label, _ in PR_56_REQUIRED])
+    def test_removing_one_required_clause_is_reported(self, document: Path, label: str) -> None:
+        phrase = pr_56_clause(label)
+        _before, section, _after = split_at_pr_56_section(document)
+        reading = flat(section)
+        assert phrase in reading, f"{document.name}: absent before removal: {phrase}"
+        mutated = reading.replace(phrase, "")
+        assert label in pr_56_missing(mutated), f"{document.name}: undetected removal of {phrase}"
+
+    def test_at_least_one_deletion_would_have_escaped_a_whole_file_scan(self) -> None:
+        """Section scope is doing real work, and this names how much."""
+        escaped: list[tuple[str, str]] = []
+        for document in DOCUMENTS:
+            before, _section, after = split_at_pr_56_section(document)
+            outside = flat(before) + " " + flat(after)
+            for label, phrase in PR_56_REQUIRED:
+                if phrase in outside:
+                    escaped.append((document.name, label))
+        assert escaped, "no required clause is duplicated outside the section"
+
+
+class TestPr56SectionStructureMutations:
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_removing_the_whole_section_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_pr_56_section(document)
+        assert section, f"{document.name}: nothing to remove"
+        found = GUARD.scan_pr_56_status_sections(before + after)
+        assert found.sections == ()
+        assert pr_56_missing(flat(before + after)) != []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_duplicating_the_section_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_pr_56_section(document)
+        found = GUARD.scan_pr_56_status_sections(before + section + section + after)
+        assert len(found.sections) == 2, "a second copy must be visible as a second section"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_demoting_the_heading_is_caught(self, document: Path) -> None:
+        text = read(document)
+        heading = f"### {GUARD.PR_56_STATUS_HEADING}"
+        assert text.count(heading + "\n") == 1, f"{document.name}: heading not found once"
+        demoted = text.replace(heading + "\n", f"#### {GUARD.PR_56_STATUS_HEADING}\n")
+        found = GUARD.scan_pr_56_status_sections(demoted)
+        assert found.sections == ()
+        assert found.defects, "a heading at the wrong level must be reported as a defect"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_a_foreign_subsection_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_pr_56_section(document)
+        marker = "#### Status\n"
+        assert section.count(marker) == 1, f"{document.name}: no Status subsection"
+        intruded = section.replace(marker, "#### Deployment evidence\n" + marker, 1)
+        found = GUARD.scan_pr_56_status_sections(before + intruded + after)
+        assert any("Deployment evidence" in defect for defect in found.defects), found.defects
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_deleting_the_terminator_lets_the_section_swallow_its_neighbour(
+        self, document: Path
+    ) -> None:
+        text = read(document)
+        terminator = PR_56_TERMINATORS[document.name]
+        assert text.count(terminator + "\n") == 1, f"{document.name}: terminator not found once"
+        widened = text.replace(terminator + "\n", "", 1)
+        assert widened != text
+        found = GUARD.scan_pr_56_status_sections(widened)
+        assert len(found.sections) == 1, "the section is still extracted, and now too wide"
+        assert not GUARD.qualification_iam_section_is_terminated(
+            widened, str(found.sections[0]), terminator
+        ), "a section running past its declared boundary must be reported"
+
+    def test_breaking_claude_readme_parity_is_caught(self) -> None:
+        _b, claude_section, _a = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        _b, readme_section, _a = split_at_pr_56_section(PROJECT_ROOT / "README.md")
+        assert claude_section == readme_section
+        mutated = readme_section.replace("provider selected:", "provider chosen:", 1)
+        assert mutated != readme_section
+        assert claude_section != mutated
+
+
+class TestPr56ForwardDriftMutations:
+    """A merged, validated declaration read as a planned, applied or live one."""
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            "terraform has been applied",
+            "terraform apply: performed",
+            "terraform plan: completed",
+            "terraform state: created",
+            "repository .terraform/: created",
+            "the repository directory was initialized",
+            "live permission sets: created",
+            "live assignments: created",
+            "live policy attachments: established",
+            "runtime roles: created",
+            "runtime roles: observed",
+            "governed profiles: materialized",
+            "organization-instance existence: established",
+            "binding values: known",
+            "authority granted: acquisition",
+            "aws discovery: authorized",
+            "deployment: performed",
+            "qualification and binding-preflight execution: authorized",
+            "run a: authorized",
+            "run b: authorized",
+            "combined assessment: authorized",
+            "g1: closed",
+            "g2: closed",
+            "phase 3: complete",
+            "control: published",
+            "live trading: enabled",
+        ],
+    )
+    def test_a_forward_drift_claim_is_refused(self, claim: str) -> None:
+        _before, section, _after = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        assert claim not in flat(section)
+        mutated = flat(section) + f" {claim} "
+        assert claim in pr_56_overstated(mutated)
+
+
+class TestPr56ReverseDriftMutations:
+    """The merged implementation written back to the state it came out of.
+
+    The obsolete wording is *required* to survive as history, so it cannot be a
+    banned substring. It is held to its framing instead, and every spelling that
+    would present the pre-merge state as the current one is refused outright.
+    """
+
+    @pytest.mark.parametrize(
+        "document",
+        [*DOCUMENTS, PLAN, INFRA_README],
+        ids=lambda p: p.name if p.name != "README.md" else str(p.parent.name) + "/README.md",
+    )
+    def test_the_real_document_frames_the_pre_merge_state(self, document: Path) -> None:
+        assert GUARD.pr_56_blocked_status_defects(read(document)) == []
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            "PR #56: OPEN / UNMERGED / BLOCKED ON ARCHITECTURE",
+            "PR #56 remains open",
+            "PR #56 is unmerged",
+            "PR #56 correction: NOT AUTHORIZED / NOT BEGUN",
+            "PR #56 Terraform declarations: UNMERGED / UNAPPLIED",
+            "the implementation is not merged",
+            "no isolated `terraform validate` has been run",
+        ],
+    )
+    def test_a_reverse_drift_claim_is_refused(self, claim: str) -> None:
+        text = read(PROJECT_ROOT / "CLAUDE.md")
+        assert GUARD.pr_56_blocked_status_defects(text) == []
+        mutated = text + f"\n\n{claim}\n"
+        defects = GUARD.pr_56_blocked_status_defects(mutated)
+        assert any(
+            defect.startswith("presents the pre-merge state as current:") for defect in defects
+        ), claim
+
+    def test_stripping_the_historical_framing_is_reported(self) -> None:
+        """The obsolete wording kept, every framing marker deleted."""
+        _before, section, _after = split_at_pr_56_section(PROJECT_ROOT / "CLAUDE.md")
+        assert GUARD.pr_56_blocked_status_defects(section) == []
+        mutated = flat(section)
+        for mark in GUARD.PR_56_BLOCKED_FRAMINGS:
+            mutated = mutated.replace(mark, "")
+        assert GUARD.PR_56_BLOCKED_CLAIM in mutated
+        assert GUARD.pr_56_blocked_status_defects(mutated) == [
+            "names PR #56's blocked state with no historical framing"
+        ]
+
+    def test_a_text_that_never_names_the_blocked_state_is_clean(self) -> None:
+        assert GUARD.pr_56_blocked_status_defects("nothing to see here") == []
+
+
+class TestTheInfrastructureReadmeRecordsTheIsolatedValidation:
+    """The README's obsolete no-init/no-validate sentence, and its replacement."""
+
+    def test_every_required_clause_is_present(self) -> None:
+        reading = flat(read(INFRA_README))
+        assert infra_missing(reading) == []
+
+    def test_no_forbidden_claim_is_present(self) -> None:
+        reading = flat(read(INFRA_README))
+        assert [claim for claim in INFRA_FORBIDDEN if claim in reading] == []
+
+    @pytest.mark.parametrize("label", [label for label, _ in INFRA_REQUIRED])
+    def test_removing_one_required_clause_is_reported(self, label: str) -> None:
+        phrase = dict(INFRA_REQUIRED)[label]
+        reading = flat(read(INFRA_README))
+        assert phrase in reading, f"absent before removal: {phrase}"
+        mutated = reading.replace(phrase, "")
+        assert label in infra_missing(mutated)
+
+    def test_reverting_to_the_obsolete_no_validation_sentence_is_refused(self) -> None:
+        reading = flat(read(INFRA_README))
+        reverted = (
+            reading + " no `terraform plan`, `apply`, `init` or `validate` has been run "
+            "against either file "
+        )
+        assert [claim for claim in INFRA_FORBIDDEN if claim in reverted] == [
+            "no `terraform plan`, `apply`, `init` or `validate` has been run"
+        ]
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            "terraform apply has been run",
+            "terraform plan has been run",
+            "has been applied to aws",
+            "deployed to aws",
+        ],
+    )
+    def test_a_deployment_claim_is_refused(self, claim: str) -> None:
+        reading = flat(read(INFRA_README))
+        assert claim not in reading
+        assert claim in [needle for needle in INFRA_FORBIDDEN if needle in reading + f" {claim} "]
+
+
+class TestPr56GuardsAreNotTautologies:
+    """Each list must be non-empty, and each guard must refuse something."""
+
+    def test_the_requirement_lists_are_not_empty(self) -> None:
+        assert PR_56_REQUIRED
+        assert PR_56_PLAN_REQUIRED
+        assert PR_56_FORBIDDEN
+        assert INFRA_REQUIRED
+        assert INFRA_FORBIDDEN
+
+    def test_an_empty_document_fails_rather_than_passing(self) -> None:
+        assert GUARD.scan_pr_56_status_sections("").sections == ()
+        assert pr_56_missing("") == [label for label, _ in PR_56_REQUIRED]
+        assert infra_missing("") == [label for label, _ in INFRA_REQUIRED]
+
+    def test_no_required_clause_is_also_forbidden(self) -> None:
+        required = {phrase for _label, phrase in PR_56_REQUIRED}
+        assert required.isdisjoint(set(PR_56_FORBIDDEN))
+
+    def test_the_accepted_names_still_satisfy_the_provider(self) -> None:
+        for name in (ACCEPTED_ACQUISITION_NAME, ACCEPTED_ASSESSMENT_NAME):
+            assert GUARD.permission_set_name_defects(name) == []
+        assert GUARD.permission_set_name_defects(RETIRED_ACQUISITION_NAME)
+
+    @pytest.mark.parametrize(
+        ("name", "required"),
+        [
+            ("PR_56_STATUS_REQUIRED", GUARD.PR_56_STATUS_REQUIRED),
+            ("PR_56_PLAN_REQUIRED", GUARD.PR_56_PLAN_REQUIRED),
+            ("INFRA_README_VALIDATION_REQUIRED", GUARD.INFRA_README_VALIDATION_REQUIRED),
+        ],
+    )
+    def test_no_label_or_phrase_is_duplicated(
+        self, name: str, required: tuple[tuple[str, str], ...]
+    ) -> None:
+        """A duplicate label answers for the wrong clause; a duplicate phrase pads the count."""
+        labels = [label for label, _phrase in required]
+        phrases = [phrase for _label, phrase in required]
+        assert len(set(labels)) == len(labels), name
+        assert len(set(phrases)) == len(phrases), name
+
+    def test_the_forbidden_lists_carry_no_duplicate(self) -> None:
+        assert len(set(PR_56_FORBIDDEN)) == len(PR_56_FORBIDDEN)
+        assert len(set(INFRA_FORBIDDEN)) == len(INFRA_FORBIDDEN)

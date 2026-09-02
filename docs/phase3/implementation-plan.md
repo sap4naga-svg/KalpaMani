@@ -518,15 +518,16 @@ identity and trust decision adds no S3 operation and changes no deadline term** 
 **The next gate after ADR acceptance is an offline implementation gate** for permission sets,
 assignments, customer-managed-policy attachments, profiles, and actor-specific identity
 verification, including any proven identity-gate and profile-contract corrections. Current
-status: **permission-set implementation: NOT AUTHORIZED / NOT IMPLEMENTED · Identity Center
-assignments: NOT AUTHORIZED / NOT CREATED · runtime roles: NOT CREATED / LIVE EXISTENCE NOT
-ESTABLISHED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy
-attachments: NOT IMPLEMENTED / NOT ESTABLISHED · governed AWS profiles: NOT IMPLEMENTED ·
-identity-gate/profile-constant correction: NOT AUTHORIZED / NOT IMPLEMENTED · authority granted:
-NONE · PR #52 policy declarations: MERGED / OFFLINE-REVIEWED / UNAPPLIED / UNATTACHED · PR #53
+status: **permission-set implementation: MERGED / OFFLINE-VALIDATED / DORMANT · Identity Center
+assignments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · runtime roles: UNCREATED /
+UNOBSERVED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy
+attachments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · governed AWS profiles:
+UNMATERIALIZED · identity-gate/profile-constant correction: MERGED / OFFLINE-VALIDATED / DORMANT ·
+authority granted: NONE · PR #52 policy declarations: MERGED / OFFLINE-REVIEWED / UNAPPLIED / UNATTACHED · PR #53
 governance synchronization: MERGED · corrected qualification application: MERGED / DORMANT /
-OFFLINE-CONFORMING · infrastructure binding/deployment: BLOCKED · Terraform and
-AWS/provider/credential access: NOT AUTHORIZED / NOT RUN · infrastructure mutation and
+OFFLINE-CONFORMING · infrastructure binding/deployment: BLOCKED · Terraform isolated
+init/validate: PERFORMED IN EXTERNAL COPIES ONLY · Terraform plan/apply: NOT AUTHORIZED / NOT
+RUN · Terraform and AWS/provider/credential access: NOT AUTHORIZED / NOT RUN · infrastructure mutation and
 deployment: NOT AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT
 AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT RUN · third
 ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1 / G2: OPEN /
@@ -534,30 +535,45 @@ OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED ·
 HARD-DISABLED**. **Implementation, infrastructure mutation and execution stay three separate
 gates and are never collapsed into one**, and **ADR-0021 amends no earlier ADR document.**
 
-**The qualification permission-set name correction is accepted, and nothing may be corrected
-yet.** **ADR-0022: ACCEPTED / IN FORCE** — PR #57 merged, **architecture only**. **PR #56 remains
-open, unmerged, uncorrected and blocked**, and **its blocking defect is architectural, not merely
-syntactic**: PR #56 correctly implemented ADR-0021 as written, and the name ADR-0021 accepted —
-`KalpaManiQualificationAcquisition`, 33 characters — exceeds the pinned `hashicorp/aws` v6.62.0
-`aws_ssoadmin_permission_set` name validator's 1–32 character limit, so the accepted architecture
-itself is what had to change. **The accepted acquisition permission-set name is
-`KalpaManiQualificationAcquire`, exactly 29 characters**, **the 33-character name is retired** and
-is historical and defect context only, and ADR-0022 changed nothing else. **ADR-0022 acceptance
-satisfies only the architecture prerequisite for the correction**, and **satisfying that
-prerequisite authorizes nothing by itself** — **no implementation correction may begin before its
-own separate authorization**, and **PR #56 correction: NOT AUTHORIZED / NOT BEGUN**. **The next
-separately authorized gate is the narrow correction of PR #56**, and **that later offline gate
-will correct PR #56's acquisition permission-set name and add the provider-limit guards** that
+**The qualification permission-set name correction is accepted, and the correction it unblocked
+has merged.** **ADR-0022: ACCEPTED / IN FORCE** — PR #57 merged, **architecture only**. **PR #56
+is merged** — merge commit `eb1f8311f2fb65c385ae4b5e916f1b69cdf9e3b1`, ordered parents
+`26e6b474b7a610600b362d4bce6f75a0304a8b41` then `6726643bdfa92b2de910ae8f02652e8ec24a8dfa`,
+merged 2026-09-02T19:15:46Z, with a **merge tree identical to the independently validated
+pull-request head tree**. **While PR #56 was open it remained open, unmerged, uncorrected and
+blocked, and its blocking defect was architectural, not merely syntactic** — historical facts
+that stay true and are not rewritten: PR #56 correctly implemented ADR-0021 as written, and the
+name ADR-0021 accepted — `KalpaManiQualificationAcquisition`, 33 characters — exceeds the pinned
+`hashicorp/aws` v6.62.0 `aws_ssoadmin_permission_set` name validator's 1–32 character limit, so
+the accepted architecture itself is what had to change. **The accepted acquisition permission-set
+name is `KalpaManiQualificationAcquire`, exactly 29 characters**, **the 33-character name is
+retired** and is historical and defect context only, and ADR-0022 changed nothing else.
+
+**The corrected implementation on `main` is MERGED / OFFLINE-VALIDATED / DORMANT.** **Genuine
+provider-backed validation was completed** — an isolated `terraform init -backend=false` and
+`terraform validate` against task-owned external copies, with the committed lock selecting
+`hashicorp/aws 6.62.0`, in which **the corrected configuration validated successfully** and
+**the retired 33-character name was independently refused by the same provider validator**. **The correction replaced the
+retired acquisition permission-set name consistently and added the provider-limit guards** that
 check every qualification permission-set name against 1–32 characters and the allowed-character
-grammar, **preserving the assessment permission-set name and both governed profile names**. **A
-real isolated `terraform validate` against the pinned provider remains required before PR #56 can
-merge**, and remains **NOT AUTHORIZED / NOT RUN**. **Terraform and AWS discovery, planning, apply,
-deployment, qualification, binding preflight, Run A, Run B and the combined assessment each remain
-separately unauthorized**, and **all operational gates remain closed**. **No live binding, plan, apply or execution is authorized**: **AWS discovery: NOT
-AUTHORIZED · AWS account/group/instance binding values: UNKNOWN / UNREAD · authority granted:
-NONE · infrastructure deployment: BLOCKED · Terraform init/validate/plan/apply: NOT AUTHORIZED /
-NOT RUN · qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · Run A / Run B
-/ combined assessment: NOT AUTHORIZED / NOT RUN**. **All existing arithmetic and deadlines remain
+grammar, **preserving the assessment permission-set name and both governed profile names**. **The
+ADR-0022 offline implementation prerequisite is SATISFIED**, and **satisfying it authorizes
+nothing by itself**: **the implementation remains dormant**, **declarations are not live
+resources**, **the governed profiles are not materialized**, and **the Organization-instance
+existence and every AWS account, group and instance binding value remain UNKNOWN / UNREAD**.
+**Terraform plan and Terraform apply remain NOT AUTHORIZED / NOT RUN**, and **no repository
+configuration directory was initialized, no backend was configured, no state was created or
+modified and no provider call reached AWS**. **The next separately authorized gate is not
+automatically an AWS apply** — **AWS discovery, environment binding, Terraform plan, Terraform
+apply, profile materialization, identity preflight and execution each remain separate gates** and
+each remain separately unauthorized, and **all operational gates remain closed**. **No live
+binding, plan, apply or execution is authorized**: **AWS discovery: NOT AUTHORIZED · AWS
+account/group/instance binding values: UNKNOWN / UNREAD · authority granted: NONE ·
+infrastructure deployment: BLOCKED · Terraform isolated init/validate: PERFORMED IN EXTERNAL
+COPIES ONLY · Terraform plan/apply: NOT AUTHORIZED / NOT RUN · qualification and
+binding-preflight execution: NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT
+AUTHORIZED / NOT RUN · G1 / G2: OPEN / OPEN · provider selected: NONE · Phase 3: NOT COMPLETE ·
+CONTROL: DEFERRED · live trading: HARD-DISABLED**. **All existing arithmetic and deadlines remain
 unchanged** — **acquisition PutObject: 145 to 147**, **acquisition HeadObject: 0**, **acquisition
 GetObject: 0**, **two successful runs: 290 to 294**, **assessment: 195 to 196**, **whole
 successful package: 485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**.

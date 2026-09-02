@@ -432,13 +432,21 @@ def test_the_status_sections_record_the_merge_facts() -> None:
         assert "no implementation or operational authority followed from the merge" in reading
 
 
-def test_the_status_documents_record_the_blocked_pull_request() -> None:
+def test_the_status_documents_record_the_merged_pull_request() -> None:
+    """Inverted on PR #56's merge, and the blocked period kept as history."""
     for document in (CLAUDE_MD, README):
         _, section, _ = split_at_section(document)
         reading = flat(section)
-        assert "pr #56: open / unmerged / blocked on architecture" in reading
-        assert "pr #56 correction: not authorized / not begun" in reading
-        assert "pr #56 remains open, unmerged and uncorrected" in reading
+        assert "pr #56: merged" in reading
+        assert "pr #56 correction: merged" in reading
+        assert "pr #56 has since been corrected, independently reviewed and merged" in reading
+        assert "pr #56 terraform declarations: merged / unapplied" in reading
+        # The pre-merge state survives, framed, and never as a current claim.
+        assert (
+            "pr #56 was open / unmerged / blocked on architecture while adr-0022 was "
+            "decided" in reading
+        )
+        assert GUARD.pr_56_blocked_status_defects(section) == []
 
 
 def test_the_status_documents_name_the_accepted_and_retired_names() -> None:
@@ -453,20 +461,22 @@ def test_the_status_documents_name_the_accepted_and_retired_names() -> None:
         assert f"{prefix}`awsreservedsso_{PROPOSED.lower()}_`" in reading
 
 
-def test_the_status_documents_name_the_next_gates_work_without_beginning_it() -> None:
-    """The correction is described and still unauthorized -- two facts, kept apart."""
+def test_the_status_documents_record_the_completed_gates_work() -> None:
+    """The correction is described as done, and the merge still authorizes nothing."""
     for document in (CLAUDE_MD, README):
         _, section, _ = split_at_section(document)
         reading = flat(section)
         assert (
-            "must replace the retired acquisition permission-set name consistently and add a "
-            "provider 1-32 name-length guard" in reading
+            "the correction replaced the retired acquisition permission-set name consistently "
+            "and added the provider 1-32 name-length guard" in reading
         )
         assert (
-            "genuine isolated `terraform validate` against the pinned provider remains required "
-            "in a later authorized gate before pr #56 can merge" in reading
+            "the genuine isolated `terraform validate` against the pinned provider was "
+            "performed in task-owned external copies before that merge" in reading
         )
-        assert "pr #56 correction: not authorized / not begun" in reading
+        # Performed validation is not permission to plan or apply.
+        assert "terraform plan/apply: not authorized / not run" in reading
+        assert "terraform: unapplied" in reading
 
 
 def test_the_status_documents_establish_no_live_object() -> None:
@@ -719,19 +729,20 @@ def test_the_implementation_plan_carries_every_required_clause() -> None:
     assert missing(GUARD.ADR_0022_PLAN_REQUIRED, read(PLAN)) == []
 
 
-def test_the_implementation_plan_records_acceptance_without_authorizing_the_correction() -> None:
+def test_the_implementation_plan_records_the_merge_without_authorizing_anything() -> None:
     """The prerequisite is satisfied; nothing follows from satisfying it."""
     reading = flat(read(PLAN))
     assert "adr-0022: accepted / in force" in reading
     assert f"pr {PR} merged" in reading
+    assert "the adr-0022 offline implementation prerequisite is satisfied" in reading
+    assert "satisfying it authorizes nothing by itself" in reading
+    assert "the next separately authorized gate is not automatically an aws apply" in reading
     assert (
-        "adr-0022 acceptance satisfies only the architecture prerequisite for the correction"
-        in reading
+        "the corrected implementation on `main` is merged / offline-validated / dormant" in reading
     )
-    assert "satisfying that prerequisite authorizes nothing by itself" in reading
-    assert "the next separately authorized gate is the narrow correction of pr #56" in reading
-    assert "pr #56 correction: not authorized / not begun" in reading
-    assert "pr #56 remains open, unmerged, uncorrected and blocked" in reading
+    # The blocked period survives as history, and never as a current claim.
+    assert "while pr #56 was open it remained open, unmerged, uncorrected and blocked" in reading
+    assert GUARD.pr_56_blocked_status_defects(read(PLAN)) == []
     assert "all operational gates remain closed" in reading
 
 
@@ -933,9 +944,18 @@ def test_mutation_in_force_row_names_the_wrong_pull_request() -> None:
 
 @pytest.mark.parametrize(
     "claim",
-    ["pr #56: corrected", "pr #56: merged", "pr #56: ready", "pr #56: mergeable"],
+    [
+        "pr #56 is deployed",
+        "pr #56 is operational",
+        "pr #56 has been applied",
+        "pr #56: applied",
+        "pr #56 declarations are live",
+    ],
 )
-def test_mutation_pr_56_claimed_corrected_merged_or_ready(claim: str) -> None:
+def test_mutation_pr_56_claimed_deployed_applied_or_live(claim: str) -> None:
+    """Inverted on the merge. Merged and corrected are now true and required;
+    deployed, applied and live are the overstatements that remain refused.
+    """
     _, section, _ = split_at_section(CLAUDE_MD)
     assert claim not in flat(section)
     mutated = section + f"\n{claim}\n"
@@ -1058,10 +1078,25 @@ def test_mutation_claude_readme_parity_broken() -> None:
     assert claude_section != mutated
 
 
-def test_mutation_implementation_plan_claims_correction_begun() -> None:
-    phrase = clause("refuses to begin the correction", GUARD.ADR_0022_PLAN_REQUIRED)
+def test_mutation_implementation_plan_drops_the_merged_correction() -> None:
+    """Inverted on the merge: the plan must now record what the gate completed."""
+    phrase = clause("records the merged correction", GUARD.ADR_0022_PLAN_REQUIRED)
     mutated = without(read(PLAN), phrase)
-    assert "refuses to begin the correction" in missing(GUARD.ADR_0022_PLAN_REQUIRED, mutated)
+    assert "records the merged correction" in missing(GUARD.ADR_0022_PLAN_REQUIRED, mutated)
+
+
+def test_mutation_implementation_plan_restores_the_blocked_state() -> None:
+    """The reverse drift: a merged correction written back to an unbegun one."""
+    text = read(PLAN)
+    assert GUARD.pr_56_blocked_status_defects(text) == []
+    mutated = text + "\n\nPR #56 correction: NOT AUTHORIZED / NOT BEGUN\n"
+    assert sorted(GUARD.pr_56_blocked_status_defects(mutated)) == sorted(
+        [
+            "presents the pre-merge state as current: pr #56 correction: not authorized / "
+            "not begun",
+            "presents the pre-merge state as current: pr #56 correction: not authorized",
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------

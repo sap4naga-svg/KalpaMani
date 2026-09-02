@@ -9535,26 +9535,26 @@ ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     # ------------------------------------------------- and nothing is implemented
     (
-        "records the unimplemented permission sets",
-        "permission-set implementation: not authorized / not implemented",
+        "records the merged permission-set implementation",
+        "permission-set implementation: merged / offline-validated / dormant",
     ),
     (
-        "records the uncreated assignments",
-        "identity center assignments: not authorized / not created",
+        "records the merged but uncreated assignments",
+        "identity center assignments: merged / uncreated / existence not established",
     ),
     (
         "refuses to assert live role existence",
-        "runtime roles: not created / live existence not established",
+        "runtime roles: uncreated / unobserved",
     ),
     ("records the unselected principal", "runtime trust principals: not selected in aws"),
     (
-        "records the unimplemented attachments",
-        "customer-managed-policy attachments: not implemented / not established",
+        "records the merged but uncreated attachments",
+        "customer-managed-policy attachments: merged / uncreated / existence not established",
     ),
-    ("records the untouched profiles", "governed aws profiles: not implemented"),
+    ("records the unmaterialized profiles", "governed aws profiles: unmaterialized"),
     (
-        "closes the identity-gate correction",
-        "identity-gate/profile-constant correction: not authorized / not implemented",
+        "records the merged identity-gate correction",
+        "identity-gate/profile-constant correction: merged / offline-validated / dormant",
     ),
     (
         "records the organization-instance prerequisite",
@@ -9584,8 +9584,12 @@ ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "infrastructure mutation and deployment: not authorized / not performed",
     ),
     (
-        "closes terraform",
-        "terraform init/validate/plan/apply: not authorized / not run",
+        "scopes the isolated validation",
+        "terraform isolated init/validate: performed in external copies only",
+    ),
+    (
+        "closes terraform plan and apply",
+        "terraform plan/apply: not authorized / not run",
     ),
     (
         "closes terraform and aws access together",
@@ -9995,25 +9999,25 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "actor-specific identity verification",
     ),
     (
-        "records the unimplemented permission sets",
-        "permission-set implementation: not authorized / not implemented",
+        "records the merged permission-set implementation",
+        "permission-set implementation: merged / offline-validated / dormant",
     ),
     (
-        "records the uncreated assignments",
-        "identity center assignments: not authorized / not created",
+        "records the merged but uncreated assignments",
+        "identity center assignments: merged / uncreated / existence not established",
     ),
     (
         "refuses to assert live role existence",
-        "runtime roles: not created / live existence not established",
+        "runtime roles: uncreated / unobserved",
     ),
     (
-        "records the unimplemented attachments",
-        "customer-managed-policy attachments: not implemented / not established",
+        "records the merged but uncreated attachments",
+        "customer-managed-policy attachments: merged / uncreated / existence not established",
     ),
-    ("records the untouched profiles", "governed aws profiles: not implemented"),
+    ("records the unmaterialized profiles", "governed aws profiles: unmaterialized"),
     (
-        "closes the identity-gate correction",
-        "identity-gate/profile-constant correction: not authorized / not implemented",
+        "records the merged identity-gate correction",
+        "identity-gate/profile-constant correction: merged / offline-validated / dormant",
     ),
     (
         "records the organization-instance prerequisite",
@@ -10485,7 +10489,7 @@ ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         f"pr {ADR_0022_PR} was independently reviewed before its merge",
     ),
     ("records that adr-0021 is in force", "adr-0021: accepted / in force"),
-    ("records the blocked pull request", "pr #56: open / unmerged / blocked on architecture"),
+    ("records the merged pull request", "pr #56: merged"),
     (
         "records the faithful implementation",
         "pr #56 correctly implemented adr-0021 as written",
@@ -10547,18 +10551,40 @@ ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "keeps assessment digest verification unchanged",
         "assessment digest verification is unchanged",
     ),
-    ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
-    ("keeps the blocked pull request uncorrected", "pr #56 remains open, unmerged and uncorrected"),
+    ("records the merged correction", "pr #56 correction: merged"),
     (
-        "records the required correction work",
-        "must replace the retired acquisition permission-set name consistently and add a "
-        "provider 1-32 name-length guard",
+        "records the corrected and merged implementation",
+        "pr #56 has since been corrected, independently reviewed and merged",
     ),
     (
-        "records the unmerged declarations",
-        "pr #56 terraform declarations: unmerged / unapplied",
+        "records the completed correction work",
+        "the correction replaced the retired acquisition permission-set name consistently "
+        "and added the provider 1-32 name-length guard",
+    ),
+    (
+        "records the merged declarations",
+        "pr #56 terraform declarations: merged / unapplied",
     ),
     ("keeps terraform unapplied", "terraform: unapplied"),
+    (
+        "records the merged implementation",
+        "permission-set implementation: merged / offline-validated / dormant",
+    ),
+    (
+        "keeps live assignments uncreated",
+        "identity center assignments: merged / uncreated / existence not established",
+    ),
+    ("keeps runtime roles unobserved", "runtime roles: uncreated / unobserved"),
+    (
+        "keeps live attachments uncreated",
+        "customer-managed-policy attachments: merged / uncreated / existence not established",
+    ),
+    ("keeps the profiles unmaterialized", "governed aws profiles: unmaterialized"),
+    (
+        "scopes the isolated validation",
+        "terraform isolated init/validate: performed in external copies only",
+    ),
+    ("closes plan and apply", "terraform plan/apply: not authorized / not run"),
     (
         "defers the organization instance",
         "organization-instance prerequisite: required / live existence not established",
@@ -10586,9 +10612,9 @@ ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("preserves the package envelope", "whole successful package: 485 to 490"),
     ("preserves the deadline terms", "l >= 3 * t_s3 + c"),
     (
-        "keeps terraform validate required",
-        "genuine isolated `terraform validate` against the pinned provider remains required in "
-        "a later authorized gate before pr #56 can merge",
+        "records the performed isolated validation",
+        "the genuine isolated `terraform validate` against the pinned provider was "
+        "performed in task-owned external copies before that merge",
     ),
 )
 
@@ -10615,19 +10641,21 @@ ADR_0022_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "adr-0022 remains proposed",
     "adr-0022 has not been merged",
     "adr-0022 is unmerged",
-    # ------------------------------------- the blocked implementation read forward
-    "pr #56: corrected",
-    "pr #56 has been corrected",
-    "pr #56 correction: complete",
-    "pr #56 correction: begun",
-    "pr #56 correction: authorized",
-    "pr #56 is ready to merge",
-    "pr #56: ready",
-    "pr #56: mergeable",
-    "pr #56: merged",
-    "pr #56 has been merged",
+    # ------------------------------------ the merged implementation read forward
+    #
+    # Inverted on PR #56's merge, one for one. The twelve entries here once
+    # refused a blocked implementation being read as a corrected or merged one;
+    # ten of those states are now true and required, so what is refused instead
+    # is the next overstatement -- a merged implementation read as a deployed,
+    # applied or authorized one. The reverse drift, a merged implementation
+    # restored to a blocked one, is refused structurally by
+    # :func:`pr_56_blocked_status_defects`, because the obsolete wording is
+    # required to survive as history and so cannot be a banned substring.
     "pr #56 is deployed",
     "pr #56 is operational",
+    "pr #56 has been applied",
+    "pr #56: applied",
+    "pr #56 declarations are live",
     # ------------------------------------------------ infrastructure read as live
     "terraform has been applied",
     "terraform apply: performed",
@@ -10671,12 +10699,12 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("retires the old name", "the 33-character name is retired"),
     (
-        "records the blocked pull request",
-        "pr #56 remains open, unmerged, uncorrected and blocked",
+        "keeps the blocked period historical",
+        "while pr #56 was open it remained open, unmerged, uncorrected and blocked",
     ),
     (
-        "records that the defect is architectural",
-        "its blocking defect is architectural, not merely syntactic",
+        "records that the defect was architectural",
+        "its blocking defect was architectural, not merely syntactic",
     ),
     (
         "records the faithful implementation",
@@ -10684,25 +10712,24 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "records the satisfied prerequisite",
-        "adr-0022 acceptance satisfies only the architecture prerequisite for the correction",
+        "the adr-0022 offline implementation prerequisite is satisfied",
     ),
     (
         "records that the prerequisite authorizes nothing",
-        "satisfying that prerequisite authorizes nothing by itself",
+        "satisfying it authorizes nothing by itself",
     ),
     (
-        "refuses to begin the correction",
-        "no implementation correction may begin before its own separate authorization",
+        "records the merged correction",
+        "the corrected implementation on `main` is merged / offline-validated / dormant",
     ),
-    ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
     (
         "names the next authorized gate",
-        "the next separately authorized gate is the narrow correction of pr #56",
+        "the next separately authorized gate is not automatically an aws apply",
     ),
     (
-        "names the next gate's work",
-        "that later offline gate will correct pr #56's acquisition permission-set name and add "
-        "the provider-limit guards",
+        "names what the completed gate did",
+        "the correction replaced the retired acquisition permission-set name consistently "
+        "and added the provider-limit guards",
     ),
     (
         "preserves the assessment and profile names",
@@ -10714,9 +10741,8 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("keeps every operational gate closed", "all operational gates remain closed"),
     (
-        "keeps terraform validate required",
-        "a real isolated `terraform validate` against the pinned provider remains required "
-        "before pr #56 can merge",
+        "records the performed isolated validation",
+        "genuine provider-backed validation was completed",
     ),
     (
         "authorizes no live activity",
@@ -10733,6 +10759,583 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
     ("preserves the package envelope", "whole successful package: 485 to 490"),
+)
+
+# ---------------------------------------------------------------------------
+# PR #56 -- the merged offline qualification principals
+# ---------------------------------------------------------------------------
+#
+# ADR-0021 chose the principals, ADR-0022 corrected the one name the pinned
+# provider could not build, and PR #56 -- corrected against ADR-0022,
+# independently reviewed and merged -- is the implementation of both. The guards
+# below are the ADR-0022 blocked-implementation guards inverted, one for one,
+# plus the properties only a merge can create.
+#
+# Three states stay apart here, in both directions. A merged declaration is not a
+# planned or applied one; an isolated `terraform validate` against a task-owned
+# external copy is not a plan, an apply or a live existence check; and none of it
+# is an AWS object, a materialized profile or a granted authority. The reverse
+# drift is the one this slice can now produce on its own: a merged, validated
+# implementation restored to an open, blocked, unvalidated one.
+
+#: The implementing pull request, its merge, and the merge's ordered parents.
+#:
+#: The parents are recorded in order because a merge with the same commit id and
+#: the wrong parent order would describe a different history. The **tree** is not
+#: recorded as an identifier: the property that matters is that the merge tree was
+#: identical to the independently validated pull-request head tree, and that is
+#: what the documents state in words.
+PR_56: Final = "#56"
+PR_56_MERGE_COMMIT: Final = "eb1f8311f2fb65c385ae4b5e916f1b69cdf9e3b1"
+PR_56_MERGE_TIME: Final = "2026-09-02T19:15:46Z"
+PR_56_FIRST_PARENT: Final = "26e6b474b7a610600b362d4bce6f75a0304a8b41"
+PR_56_SECOND_PARENT: Final = "6726643bdfa92b2de910ae8f02652e8ec24a8dfa"
+
+#: The Terraform CLI the validated review used, and the provider the committed
+#: lock selected for it. Two different things, recorded separately: a CLI version
+#: is not a provider version, and the 1-32 name bound is the provider's.
+PR_56_TERRAFORM_CLI: Final = "1.15.8"
+PR_56_LOCKED_PROVIDER: Final = "hashicorp/aws 6.62.0"
+
+#: The exact level-three heading that opens PR #56's status section in both status
+#: documents. The anchor is the heading, never a phrase being tested.
+PR_56_STATUS_HEADING: Final = (
+    "The merged offline qualification principals — MERGED, OFFLINE-VALIDATED, and nothing is "
+    "deployed"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+PR_56_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+PR_56_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "The merge",
+    "What merged",
+    "The isolated validation, and its exact scope",
+    "Status",
+)
+
+#: The heading each document's PR #56 section must be followed by.
+#:
+#: The section is placed immediately *before* ADR-0022's, so ADR-0022's own
+#: terminator -- and ADR-0021's, and the qualification-IAM foundation's behind it
+#: -- are untouched. A new slice may not move a boundary a merged guard already
+#: pins in order to make room for itself.
+PR_56_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": f"### {ADR_0022_STATUS_HEADING}",
+    "README.md": f"### {ADR_0022_STATUS_HEADING}",
+}
+
+
+class Pr56SectionScan(NamedTuple):
+    """Every PR #56 status section a document carries, and its structure defects.
+
+    Separate from the other section scans so a caller cannot pass one where
+    another is expected. A malformed structure can yield exactly one
+    plausible-looking section, and a vacuous pass is what the caller must be able
+    to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_pr_56_status_sections(text: str) -> Pr56SectionScan:
+    """Extract PR #56's status section(s) from a document, by heading.
+
+    Drives the shared :func:`_scan_status_sections` rather than reimplementing it,
+    so this guard and the ADR-0020, ADR-0021, ADR-0022 and qualification-IAM ones
+    cannot disagree about where a section ends.
+    """
+    return Pr56SectionScan(
+        *_scan_status_sections(
+            text,
+            heading=PR_56_STATUS_HEADING,
+            level=PR_56_STATUS_HEADING_LEVEL,
+            subsections=PR_56_STATUS_SUBSECTIONS,
+            label="PR #56",
+        )
+    )
+
+
+#: What both status documents must say inside their PR #56 section.
+#:
+#: Section-scoped. Nearly every clause here has a near-neighbour in another status
+#: block -- "g1 / g2: open / open" appears in several -- so a flat scan is
+#: answered by a neighbour's copy and a section-local deletion goes unreported.
+PR_56_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------------------ the merge
+    ("records the merged pull request", f"pr {PR_56} is merged"),
+    ("records the merge commit", PR_56_MERGE_COMMIT),
+    ("records the merge time", PR_56_MERGE_TIME.lower()),
+    ("records the first ordered parent", PR_56_FIRST_PARENT),
+    ("records the second ordered parent", PR_56_SECOND_PARENT),
+    (
+        "records the identical merge tree",
+        "merge tree identical to the independently validated pull-request head tree",
+    ),
+    (
+        "records the independent review",
+        f"pr {PR_56} was independently reviewed before its merge",
+    ),
+    ("records the empty head-to-merge diff", "the merge introduced no change of its own"),
+    (
+        "keeps the open period historical",
+        f"while pr {PR_56} was open it was open / unmerged / blocked on architecture",
+    ),
+    (
+        "keeps the uncorrected period historical",
+        "and its correction had not begun",
+    ),
+    (
+        "refuses to blame the faithful implementation",
+        f"pr {PR_56} was not defective for obeying adr-0021",
+    ),
+    # ------------------------------------------------ what merged, and its names
+    ("records both decisions in force", "adr-0021: accepted / in force · adr-0022: accepted"),
+    ("amends no decision", "this merge amends neither"),
+    ("edits no decision record", "no adr document is edited by it"),
+    (
+        "names the accepted acquisition permission set",
+        f"the accepted acquisition permission-set name is "
+        f"`{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}`",
+    ),
+    (
+        "names the unchanged assessment permission set",
+        f"the assessment permission-set name is `{ADR_0021_ASSESSMENT_PERMISSION_SET.lower()}`",
+    ),
+    ("records the provider name bound", "1-32"),
+    ("names the locked provider", PR_56_LOCKED_PROVIDER.lower()),
+    ("counts the permission-set declarations", "permission-set declarations 2"),
+    (
+        "counts the attachment declarations",
+        "customer-managed-policy attachment declarations 2",
+    ),
+    ("counts the assignment declarations", "account-assignment declarations 2"),
+    ("records the principal type", "principal type group"),
+    ("records the target type", "target type aws_account"),
+    ("records the session duration", "session duration pt1h"),
+    ("names the acquisition profile", ADR_0021_ACQUISITION_PROFILE),
+    ("names the assessment profile", ADR_0021_ASSESSMENT_PROFILE),
+    ("records the merged identity verification", "actor-specific identity verification merged"),
+    ("declares no custom role or trust policy", "custom iam role or trust policy none"),
+    ("declares no iam user or key", "iam user or access key none"),
+    ("declares no assume-role", "sts:assumerole none"),
+    ("adds no provider alias, backend or data source", "data source added none"),
+    ("changes no bucket or kms", "bucket or kms change none"),
+    ("commits no binding value", "start url or generated suffix none"),
+    ("keeps every binding an input", "every environment binding is an input with no default"),
+    ("reads no live environment", "nothing in the merged configuration reads the live"),
+    # ------------------------------------------------------- unchanged contracts
+    ("keeps adr-0017 isolation unchanged", "adr-0017 isolation"),
+    ("keeps write-only acquisition unchanged", "adr-0019 write-only acquisition"),
+    ("keeps request-scoped payload identity unchanged", "adr-0020 request-scoped payload"),
+    ("keeps assessment digest verification unchanged", "assessment digest verification"),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    ("preserves the deadline terms", "l >= 3 * t_s3 + c"),
+    # -------------------------------------------- the validation, and its scope
+    (
+        "records the terraform cli",
+        f"terraform cli used for the validated review {PR_56_TERRAFORM_CLI}",
+    ),
+    (
+        "scopes init to external copies",
+        "terraform init -backend=false run, in task-owned external copies only",
+    ),
+    (
+        "scopes validate to external copies",
+        "terraform validate run, in task-owned external copies only",
+    ),
+    ("records the successful validation", "corrected configuration validated successfully"),
+    (
+        "records the negative provider validation",
+        "retired 33-character name independently refused by the provider",
+    ),
+    (
+        "refuses a repository initialization claim",
+        "repository configuration directory initialized no",
+    ),
+    ("records no repository terraform directory", "repository .terraform/ not created or modified"),
+    ("records no backend", "backend configured no"),
+    ("records no state", "terraform state created or modified no"),
+    ("records no real tfvars", "real tfvars read no"),
+    ("closes plan", "terraform plan not run / not authorized"),
+    ("closes apply", "terraform apply not run / not authorized"),
+    ("records no provider call", "provider calls to aws none"),
+    ("establishes no aws resource", "proved to exist none"),
+    ("defers live validation", "live environment validation still requires separate"),
+    (
+        "reconciles with the pr #52 record",
+        "no terraform command has been run against that directory",
+    ),
+    (
+        "separates validate from plan and apply",
+        "`terraform validate` is not `terraform plan`, and neither is `terraform apply`",
+    ),
+    (
+        "refuses validation as apply evidence",
+        "is not evidence that applying this configuration would succeed",
+    ),
+    # -------------------------------------------------------------- the status
+    ("records the merged status line", f"pr {PR_56}: merged"),
+    ("records the merged implementation", "implementation: merged / offline-validated / dormant"),
+    (
+        "records the merged identity routing",
+        "identity-gate and actor-specific routing: merged, never exercised against aws",
+    ),
+    ("records the validated configuration", "terraform configuration: merged and"),
+    ("scopes the validation", "terraform validation: isolated external copies only"),
+    ("keeps plan closed", "terraform plan: not run / not authorized"),
+    ("keeps apply closed", "terraform apply: not run / not authorized"),
+    ("records the merged permission-set declarations", "permission-set declarations: merged"),
+    ("records the merged assignment declarations", "account-assignment declarations: merged"),
+    ("records the merged attachment declarations", "policy-attachment declarations: merged"),
+    (
+        "keeps live permission sets uncreated",
+        "live permission sets: uncreated / existence not established",
+    ),
+    ("keeps live assignments uncreated", "live assignments: uncreated / existence not established"),
+    (
+        "keeps live attachments uncreated",
+        "live policy attachments: uncreated / existence not established",
+    ),
+    ("keeps runtime roles unobserved", "runtime roles: uncreated / unobserved"),
+    ("keeps the profiles unmaterialized", "governed profiles: unmaterialized"),
+    ("defers the organization instance", "organization-instance existence: unestablished"),
+    ("defers every binding value", "binding values: unknown / unread"),
+    ("records that no authority was granted", "authority granted: none"),
+    ("closes aws discovery", "aws discovery: not authorized"),
+    ("keeps infrastructure mutation blocked", "infrastructure mutation: blocked"),
+    ("records no deployment", "deployment: not performed"),
+    ("closes qualification execution", "qualification and binding-preflight execution: not"),
+    ("closes run a", "run a: not authorized / not run"),
+    ("closes run b", "run b: not authorized / not run"),
+    ("closes the combined assessment", "combined assessment: not authorized / not run"),
+    ("closes a third acquisition", "third adr-0017 acquisition: not authorized"),
+    ("closes a sixth binding preflight", "sixth binding preflight: not authorized"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    # ------------------------------------------------- what a merge does not buy
+    ("refuses a declaration read as a resource", "a merged declaration is not a live resource"),
+    ("establishes no live object", "whether any such object exists in aws is not established"),
+    ("grants no authority", "no principal has been granted any aws authority"),
+    (
+        "authorizes nothing by merging",
+        "merging an implementation authorizes no infrastructure, no deployment and no run",
+    ),
+    (
+        "refuses an automatic next gate",
+        "the next separately authorized gate is not automatically an aws apply",
+    ),
+    (
+        "records that the prerequisite authorizes nothing",
+        "satisfying the offline implementation prerequisite authorizes nothing by itself",
+    ),
+)
+
+#: Claims neither status document may make about PR #56, in either direction.
+#:
+#: Anchored, never loose. The honest load-bearing sentences must all survive: the
+#: section legitimately writes that PR #56 was open and blocked while ADR-0022 was
+#: decided, so a loose refusal of the word "blocked" would refuse the document for
+#: keeping the history it is required to keep. The retained obsolete wording is
+#: held to its framing by :func:`pr_56_blocked_status_defects` instead, which is a
+#: structural guard rather than a banned substring.
+PR_56_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    # ------------------------------------- the merged implementation read forward
+    "pr #56 is deployed",
+    "pr #56 is operational",
+    "pr #56 has been applied",
+    "terraform has been applied",
+    "terraform apply: performed",
+    "terraform apply: completed",
+    "terraform plan: completed",
+    "terraform plan: performed",
+    "terraform init/validate/plan/apply: run",
+    "the repository directory was initialized",
+    "repository .terraform/: created",
+    "terraform state: created",
+    "the permission sets exist in aws",
+    "identity center permission sets: created",
+    "live permission sets: created",
+    "live assignments: created",
+    "live policy attachments: established",
+    "account assignments: created",
+    "runtime roles: created",
+    "runtime roles: observed",
+    "governed profiles: materialized",
+    "governed profiles: created",
+    "qualification profiles have been created",
+    "organization-instance existence: established",
+    "binding values: known",
+    "authority granted: acquisition",
+    "authority granted: assessment",
+    "aws discovery: authorized",
+    "infrastructure mutation: authorized",
+    "deployment: performed",
+    # -------------------------------------------------- downstream gates read open
+    "qualification and binding-preflight execution: authorized",
+    "run a: authorized",
+    "run b: authorized",
+    "combined assessment: authorized",
+    "third adr-0017 acquisition: authorized",
+    "sixth binding preflight: authorized",
+    "g1: closed",
+    "g2: closed",
+    "provider selection is complete",
+    "phase 3: complete",
+    "control: published",
+    "live trading: enabled",
+)
+
+#: The obsolete pre-merge wording, kept only where it is framed as history.
+#:
+#: PR #56 really was open, unmerged and blocked, and both status documents are
+#: required to say so; erasing that would rewrite the history the merge came out
+#: of. What may not survive is an *unframed* occurrence, which reads as a claim
+#: about now.
+PR_56_BLOCKED_CLAIM: Final = "open / unmerged / blocked on architecture"
+
+#: Framings that make an occurrence of that wording historical rather than current.
+PR_56_BLOCKED_FRAMINGS: Final[tuple[str, ...]] = (
+    "historical",
+    "has since merged",
+    "while pr #56 was open",
+    "not rewritten",
+)
+
+#: How far either side of an occurrence the guard looks for that framing.
+#:
+#: Symmetric, because the framing legitimately sits on either side: "while PR #56
+#: was open it was ..." frames from in front, and "... — historical facts about
+#: those days" frames from behind.
+PR_56_FRAMING_WINDOW: Final = 320
+
+#: Ways a document could present the pre-merge state as the current one.
+#:
+#: Built from :data:`PR_56` where the pull request is named, so renumbering cannot
+#: leave these strings pointing at the wrong one.
+PR_56_BLOCKED_MISUSE: Final[tuple[str, ...]] = (
+    f"pr {PR_56}: open / unmerged / blocked on architecture",
+    f"pr {PR_56}: open",
+    f"pr {PR_56}: unmerged",
+    f"pr {PR_56}: blocked",
+    f"pr {PR_56} remains open",
+    f"pr {PR_56} is open",
+    f"pr {PR_56} is unmerged",
+    f"pr {PR_56} is blocked",
+    f"pr {PR_56} has not been merged",
+    f"pr {PR_56} correction: not authorized / not begun",
+    f"pr {PR_56} correction: not begun",
+    f"pr {PR_56} correction: not authorized",
+    f"pr {PR_56} terraform declarations: unmerged",
+    f"pr {PR_56} can merge",
+    "the implementation is not merged",
+    "implementation: not merged",
+    "no isolated terraform validate has been run",
+    "no isolated `terraform validate` has been run",
+    "no terraform init or validate has been run",
+    "no `terraform plan`, `apply`, `init` or `validate` has been run",
+)
+
+
+def pr_56_parent_order_defects(text: str) -> list[str]:
+    """Whether ``text`` records PR #56's two merge parents, in their real order.
+
+    A presence check cannot see a swap: both commit ids are still there, and every
+    phrase guard stays green while the document describes a merge that never
+    happened. Order is therefore read rather than assumed, from the first
+    occurrence of each -- which is where a status block names them.
+
+    Pure: it opens no file, runs no Git command and reaches no service.
+    """
+    reading = " ".join(text.replace("**", "").split()).lower()
+    first = reading.find(PR_56_FIRST_PARENT)
+    second = reading.find(PR_56_SECOND_PARENT)
+    defects: list[str] = []
+    if first < 0:
+        defects.append("the first ordered merge parent is absent")
+    if second < 0:
+        defects.append("the second ordered merge parent is absent")
+    if first >= 0 and second >= 0 and first > second:
+        defects.append("the ordered merge parents appear in the wrong order")
+    return defects
+
+
+def pr_56_blocked_status_defects(text: str) -> list[str]:
+    """Every way ``text`` mishandles PR #56's pre-merge state.
+
+    Two failures, and they are opposite. Presenting the blocked, unmerged or
+    unvalidated state as the current one reinstates a status the merge ended;
+    naming that state with no historical framing anywhere near it leaves a reader
+    unable to tell which state governs. Both are reported, and a text that never
+    names it is clean by definition.
+
+    Pure: it opens no file, runs no Terraform and reaches no service.
+    """
+    reading = " ".join(text.replace("**", "").split()).lower()
+    defects = [
+        f"presents the pre-merge state as current: {claim}"
+        for claim in PR_56_BLOCKED_MISUSE
+        if claim in reading
+    ]
+    start = 0
+    while (found := reading.find(PR_56_BLOCKED_CLAIM, start)) != -1:
+        window = reading[
+            max(0, found - PR_56_FRAMING_WINDOW) : found
+            + len(PR_56_BLOCKED_CLAIM)
+            + PR_56_FRAMING_WINDOW
+        ]
+        if not any(mark in window for mark in PR_56_BLOCKED_FRAMINGS):
+            defects.append("names PR #56's blocked state with no historical framing")
+        start = found + len(PR_56_BLOCKED_CLAIM)
+    return defects
+
+
+#: What the implementation plan must record about PR #56's merge.
+#:
+#: Inverted from the ADR-0022 plan clauses, one clause for one clause. The plan is
+#: where the *next* gate is named, so the two clauses that matter most had to
+#: change together: the correction has merged, and merging it authorized nothing.
+PR_56_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the merged pull request", f"pr {PR_56} is merged"),
+    ("records the merge commit", PR_56_MERGE_COMMIT),
+    ("records the merge time", PR_56_MERGE_TIME.lower()),
+    ("records the first ordered parent", PR_56_FIRST_PARENT),
+    ("records the second ordered parent", PR_56_SECOND_PARENT),
+    (
+        "records the identical merge tree",
+        "merge tree identical to the independently validated pull-request head tree",
+    ),
+    (
+        "keeps the blocked period historical",
+        f"while pr {PR_56} was open it remained open, unmerged, uncorrected and blocked",
+    ),
+    (
+        "records the corrected implementation",
+        "the corrected implementation on `main` is merged / offline-validated / dormant",
+    ),
+    (
+        "names the accepted acquisition permission set",
+        ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower(),
+    ),
+    ("records the completed validation", "genuine provider-backed validation was completed"),
+    ("scopes the validation to external copies", "against task-owned external copies"),
+    ("names the locked provider", "`hashicorp/aws 6.62.0`"),
+    (
+        "records the negative provider validation",
+        "the retired 33-character name was independently refused by the same provider validator",
+    ),
+    (
+        "records the satisfied prerequisite",
+        "the adr-0022 offline implementation prerequisite is satisfied",
+    ),
+    (
+        "records that the prerequisite authorizes nothing",
+        "satisfying it authorizes nothing by itself",
+    ),
+    ("keeps the implementation dormant", "the implementation remains dormant"),
+    ("refuses a declaration read as a resource", "declarations are not live resources"),
+    ("keeps the profiles unmaterialized", "the governed profiles are not materialized"),
+    (
+        "defers the organization instance and every binding value",
+        "existence and every aws account, group and instance binding value remain unknown / unread",
+    ),
+    ("closes plan and apply", "terraform plan and terraform apply remain not authorized / not run"),
+    (
+        "records the untouched repository directory",
+        "no repository configuration directory was initialized, no backend was configured, no "
+        "state was created or modified and no provider call reached aws",
+    ),
+    (
+        "refuses an automatic next gate",
+        "the next separately authorized gate is not automatically an aws apply",
+    ),
+    (
+        "keeps every downstream gate separate",
+        "aws discovery, environment binding, terraform plan, terraform apply, profile "
+        "materialization, identity preflight and execution each remain separate gates",
+    ),
+    ("keeps every operational gate closed", "all operational gates remain closed"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("preserves the arithmetic", "all existing arithmetic and deadlines remain unchanged"),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+)
+
+#: What the infrastructure README must say about the isolated validation.
+#:
+#: The README's previous sentence -- that no `terraform plan`, `apply`, `init` or
+#: `validate` had been run against either file -- was true when it was written and
+#: is not any more. The replacement is required to be *precise* rather than merely
+#: updated: what ran, where it ran, and every scope it did not reach.
+INFRA_README_VALIDATION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records the offline validation",
+        "both files have been validated offline, and neither has been planned or applied",
+    ),
+    (
+        "names the isolated commands",
+        "`terraform init -backend=false` and `terraform validate` were run against",
+    ),
+    ("scopes the validation to external copies", "task-owned external copies"),
+    (
+        "names the locked provider",
+        "the committed `.terraform.lock.hcl` selected `hashicorp/aws` v6.62.0",
+    ),
+    ("records the successful validation", "the corrected configuration validated successfully"),
+    (
+        "records the negative provider validation",
+        "retired 33-character acquisition permission-set name was independently refused by the "
+        "same provider validator",
+    ),
+    (
+        "refuses a repository initialization claim",
+        "no command initialized this repository directory",
+    ),
+    ("records no backend", "no backend was configured"),
+    ("records no state", "no terraform state was created or modified"),
+    ("records no real tfvars", "no real tfvars were read"),
+    ("records no plan or apply", "no plan and no apply ran"),
+    ("records no provider call", "no provider call reached aws"),
+    (
+        "establishes no aws resource",
+        "no aws resource was created, changed, discovered or proved to exist",
+    ),
+    (
+        "separates validation from apply readiness",
+        "validating a configuration is not evidence that applying it would succeed",
+    ),
+    (
+        "defers live environment validation",
+        "live environment validation still requires its own separate authorization",
+    ),
+    (
+        "records the merged, unapplied declarations",
+        "merged, offline-validated -- never planned, never applied",
+    ),
+)
+
+#: Claims the infrastructure README may never make.
+#:
+#: Forward drift into a deployed plane, and the one reverse drift this slice can
+#: produce: the obsolete no-validation sentence restored.
+INFRA_README_VALIDATION_FORBIDDEN: Final[tuple[str, ...]] = (
+    "no `terraform plan`, `apply`, `init` or `validate` has been run",
+    "no terraform plan, apply, init or validate has been run",
+    "terraform apply has been run",
+    "terraform plan has been run",
+    "has been applied to aws",
+    "the permission sets exist",
+    "deployed to aws",
 )
 
 #: The two acquisition operations every ADR-0021 surface holds at exactly zero.
@@ -19113,6 +19716,125 @@ def main() -> int:
         "the implementation plan frames the retired acquisition permission-set name historically",
         not retired_permission_set_name_defects(read(PHASE3 / "implementation-plan.md")),
         ", ".join(retired_permission_set_name_defects(read(PHASE3 / "implementation-plan.md"))),
+    )
+
+    # ------------------------------------------------------------------ PR #56
+    # The merged offline qualification principals. Every clause is read from the
+    # repository rather than asserted, and the three states -- merged declaration,
+    # isolated offline validation, live AWS object -- are kept apart in both
+    # directions.
+    pr_56_sections: dict[str, str] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_pr_56_status_sections(document)
+        f.check(
+            # Cardinality, because a phrase scan cannot see a duplicate -- a second
+            # copy only ever adds occurrences, so every phrase check stays green
+            # while two sections disagree about one merge.
+            f"{name} carries exactly one PR #56 status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        pr_56_sections[name] = scan.sections[0] if len(scan.sections) == 1 else ""
+        f.check(
+            f"{name} ends the PR #56 section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                PR_56_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {PR_56_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in PR_56_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for PR #56",
+                phrase in section,
+                f"missing from the PR #56 status section of {name}: {phrase}",
+            )
+        overstated_56 = [
+            f"{claim} (in the PR #56 status section)" if claim in section else claim
+            for claim in PR_56_STATUS_FORBIDDEN
+            if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate PR #56",
+            not overstated_56,
+            ", ".join(overstated_56),
+        )
+        f.check(
+            f"{name} frames PR #56's pre-merge state historically",
+            not pr_56_blocked_status_defects(document),
+            ", ".join(pr_56_blocked_status_defects(document)),
+        )
+        f.check(
+            f"{name} records PR #56's merge parents in order",
+            not pr_56_parent_order_defects(section),
+            ", ".join(pr_56_parent_order_defects(section)),
+        )
+
+    f.check(
+        # Byte-identical, not merely structurally parallel. The two documents have
+        # twice carried a fact in one file and a stale contradiction in the other,
+        # and this section is short enough that exact equality is the honest test.
+        "both status documents carry byte-identical PR #56 sections",
+        len(set(pr_56_sections.values())) == 1 and all(pr_56_sections.values()),
+        "the two PR #56 status sections differ",
+    )
+
+    for label, phrase in PR_56_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for PR #56",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    f.check(
+        "the implementation plan frames PR #56's pre-merge state historically",
+        not pr_56_blocked_status_defects(read(PHASE3 / "implementation-plan.md")),
+        ", ".join(pr_56_blocked_status_defects(read(PHASE3 / "implementation-plan.md"))),
+    )
+
+    # The infrastructure README's corrected validation statement. The obsolete
+    # sentence claimed no init and no validate had happened; the replacement has to
+    # be exact about what ran, where, and everything it did not reach.
+    infra_readme_text = read(INFRA / "README.md") if (INFRA / "README.md").is_file() else ""
+    infra_readme_flat = " ".join(infra_readme_text.replace("**", "").split()).lower()
+    for label, phrase in INFRA_README_VALIDATION_REQUIRED:
+        f.check(
+            f"the infra README {label}",
+            phrase in infra_readme_flat,
+            f"missing from the infra README: {phrase}",
+        )
+    infra_overstated = [
+        claim for claim in INFRA_README_VALIDATION_FORBIDDEN if claim in infra_readme_flat
+    ]
+    f.check(
+        "the infra README neither reverts to the obsolete no-validation claim nor claims a "
+        "deployment",
+        not infra_overstated,
+        ", ".join(infra_overstated),
+    )
+    f.check(
+        "the infra README frames PR #56's pre-merge state historically",
+        not pr_56_blocked_status_defects(infra_readme_text),
+        ", ".join(pr_56_blocked_status_defects(infra_readme_text)),
+    )
+    f.check(
+        # Measured, never transcribed -- the same rule the permission-set names are
+        # held to. A Terraform CLI version is not a provider version, and a status
+        # document that conflated them would be describing a different review.
+        "the recorded Terraform CLI and locked provider are distinct values",
+        PR_56_TERRAFORM_CLI not in PR_56_LOCKED_PROVIDER
+        and PR_56_LOCKED_PROVIDER not in PR_56_TERRAFORM_CLI,
+        "the Terraform CLI version and the locked provider must not be the same value",
+    )
+    f.check(
+        "the recorded PR #56 merge parents are distinct and ordered",
+        PR_56_FIRST_PARENT != PR_56_SECOND_PARENT
+        and PR_56_MERGE_COMMIT not in (PR_56_FIRST_PARENT, PR_56_SECOND_PARENT),
+        "a merge commit and its two ordered parents must be three different commits",
     )
 
     # The implementation half. The offline implementation candidate exists, and

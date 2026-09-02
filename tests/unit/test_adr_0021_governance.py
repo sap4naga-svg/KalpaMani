@@ -1203,3 +1203,88 @@ def test_a_section_local_deletion_survived_by_a_copy_elsewhere_is_caught(documen
     elsewhere = flat(before + after) + " " + phrase
     assert phrase in elsewhere, "the copy must survive outside the section"
     assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, stripped)
+
+
+# ---------------------------------------------------------------------------
+# The implementation clauses PR #56 inverted
+# ---------------------------------------------------------------------------
+#
+# ADR-0021 was accepted as architecture only, and its status block recorded seven
+# clauses that read "not authorized / not implemented". PR #56 implemented the
+# decision offline, so each of those describes a state the merge ended. They were
+# inverted in the audit, one for one, and these drive the replacements.
+#
+# The three states stay apart in both directions: merged declarations, an isolated
+# offline validation, and live AWS objects that still do not exist. Reverse drift
+# -- a merged implementation written back to an unimplemented one -- is what a
+# later synchronization is most likely to reintroduce, so it is driven too.
+
+#: The labels PR #56's merge inverted, with what each must now say.
+PR_56_INVERTED_CLAUSES: Final[tuple[tuple[str, str], ...]] = (
+    ("records the merged permission-set implementation", "merged / offline-validated / dormant"),
+    ("records the merged but uncreated assignments", "uncreated / existence not established"),
+    ("refuses to assert live role existence", "uncreated / unobserved"),
+    ("records the merged but uncreated attachments", "uncreated / existence not established"),
+    ("records the unmaterialized profiles", "unmaterialized"),
+    ("records the merged identity-gate correction", "merged / offline-validated / dormant"),
+    ("scopes the isolated validation", "performed in external copies only"),
+    ("closes terraform plan and apply", "not authorized / not run"),
+)
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+@pytest.mark.parametrize("label", [label for label, _ in PR_56_INVERTED_CLAUSES])
+def test_removing_an_inverted_implementation_clause_is_caught(document: Path, label: str) -> None:
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    _before, section, _after = split_at_section(document)
+    reading = flat(section)
+    assert phrase in reading, f"{document.name}: absent before removal: {phrase}"
+    assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, reading.replace(phrase, ""))
+
+
+@pytest.mark.parametrize(("label", "expected"), PR_56_INVERTED_CLAUSES)
+def test_each_inverted_clause_says_what_the_merge_made_true(label: str, expected: str) -> None:
+    """The inversion is real, and the replacement is not the old wording renamed."""
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    assert expected in phrase, label
+    assert "not implemented" not in phrase, label
+    assert "not created" not in phrase, label
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_merged_implementation_is_not_read_as_a_live_resource(document: Path) -> None:
+    """Merged declarations, and no live permission set, assignment, role or profile."""
+    _before, section, _after = split_at_section(document)
+    reading = flat(section)
+    assert "runtime roles: uncreated / unobserved" in reading
+    assert "governed aws profiles: unmaterialized" in reading
+    assert "authority granted: none" in reading
+    assert (
+        "organization-instance prerequisite: required / live existence not established" in reading
+    )
+    assert overstated(GUARD.ADR_0021_STATUS_FORBIDDEN, reading) == []
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_isolated_validation_is_not_read_as_plan_or_apply(document: Path) -> None:
+    """Validation happened; plan and apply did not, and the two are separate clauses."""
+    _before, section, _after = split_at_section(document)
+    reading = flat(section)
+    assert "terraform isolated init/validate: performed in external copies only" in reading
+    assert "terraform plan/apply: not authorized / not run" in reading
+    assert "infrastructure mutation and deployment: not authorized / not performed" in reading
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_reverting_the_implementation_to_unimplemented_is_caught(document: Path) -> None:
+    """Reverse drift: the merged implementation written back to an unimplemented one."""
+    _before, section, _after = split_at_section(document)
+    reading = flat(section)
+    reverted = reading.replace(
+        "permission-set implementation: merged / offline-validated / dormant",
+        "permission-set implementation: not authorized / not implemented",
+    )
+    assert reverted != reading, "the mutation must actually replace the clause"
+    assert "records the merged permission-set implementation" in missing(
+        GUARD.ADR_0021_STATUS_REQUIRED, reverted
+    )
