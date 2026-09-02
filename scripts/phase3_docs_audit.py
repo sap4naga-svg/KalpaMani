@@ -9885,6 +9885,486 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("amends no earlier adr", "adr-0021 amends no earlier adr document"),
 )
 
+# ---------------------------------------------------------------------------
+# ADR-0022 -- the qualification permission-set name limit, PROPOSED
+# ---------------------------------------------------------------------------
+#
+# ADR-0021 accepted an acquisition permission-set name of 33 characters, and the
+# pinned provider validates that attribute to 1-32. PR #56 implemented the
+# accepted architecture faithfully and is therefore blocked by the architecture
+# rather than by its own code, so the correction is an ADR and not an edit.
+#
+# Every guard below keeps three states apart, in both directions: a proposal, an
+# accepted decision, and a live AWS object. A proposal read forward into an
+# accepted decision and a blocked implementation read forward into a corrected
+# one are the two drifts this slice can produce, and each is refused.
+
+#: The proposal itself. Named once, so the checks and the tests point at one file.
+ADR_0022: Final = DECISIONS / "ADR-0022-qualification-permission-set-name-limit.md"
+
+#: The pinned provider's own bounds on ``aws_ssoadmin_permission_set.name``.
+#:
+#: ``validation.All(validation.StringLenBetween(1, 32), validation.StringMatch(
+#: regexache.MustCompile(`[\w+=,.@-]+`)))`` at ``hashicorp/aws`` v6.62.0, which
+#: mirrors the ``CreatePermissionSet`` API's documented minimum length of 1 and
+#: maximum length of 32. Recorded as numbers rather than as prose because the
+#: guard has to *measure*, and the defect this slice corrects is exactly what a
+#: prose-only statement of a limit fails to catch.
+PERMISSION_SET_NAME_MIN: Final = 1
+PERMISSION_SET_NAME_MAX: Final = 32
+
+#: The provider's allowed-character grammar for that attribute.
+PERMISSION_SET_NAME_GRAMMAR: Final = re.compile(r"[\w+=,.@-]+")
+
+#: The acquisition permission-set name ADR-0022 proposes.
+ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquire"
+
+#: The acquisition permission-set name ADR-0022 retires.
+#:
+#: Read from ADR-0021's own constant rather than retyped: a second spelling of the
+#: retired value would let the two disagree about which name is being retired.
+ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET: Final = ADR_0021_ACQUISITION_PERMISSION_SET
+
+#: Exactly how long the proposed name is. Asserted against ``len()`` of the value
+#: itself, never trusted as a transcription -- see :func:`permission_set_name_defects`.
+ADR_0022_PROPOSED_NAME_LENGTH: Final = 29
+
+#: The length of the name the provider refuses.
+ADR_0022_RETIRED_NAME_LENGTH: Final = 33
+
+#: Every qualification permission-set name the provider limit governs, by label.
+#:
+#: The proposed acquisition name and the unchanged assessment name. The retired
+#: name is deliberately absent: it is the value this guard must *refuse*, and a
+#: list that contained it would assert its own failure.
+QUALIFICATION_PERMISSION_SET_NAMES: Final[tuple[tuple[str, str], ...]] = (
+    ("the proposed acquisition permission set", ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET),
+    ("the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET),
+)
+
+
+def permission_set_name_defects(name: str) -> list[str]:
+    """Every way ``name`` violates the pinned provider's permission-set name rules.
+
+    The length is computed from the string handed in, so a name edited anywhere
+    is measured rather than described. A constant recording a length beside the
+    value it describes agrees with itself, which is precisely the check PR #56
+    did not have and the reason its 33-character name reached review.
+
+    Pure: it opens no file, reaches no service, runs no Terraform and consults no
+    provider binary. The bounds are the provider's, transcribed once from its
+    public source at the pinned tag and never re-derived at run time.
+    """
+    defects: list[str] = []
+    length = len(name)
+    if not PERMISSION_SET_NAME_MIN <= length <= PERMISSION_SET_NAME_MAX:
+        defects.append(
+            f"{name!r} is {length} characters, outside "
+            f"{PERMISSION_SET_NAME_MIN}-{PERMISSION_SET_NAME_MAX}"
+        )
+    if PERMISSION_SET_NAME_GRAMMAR.fullmatch(name) is None:
+        defects.append(f"{name!r} does not match the provider grammar [\\w+=,.@-]+")
+    return defects
+
+
+#: Framings that make a mention of the retired name historical rather than current.
+#:
+#: At least one must accompany the retired name wherever it still appears. The
+#: name is not banned -- a decision record that could not name the value it
+#: retires could not explain itself -- it is required to be *framed*.
+ADR_0022_RETIRED_NAME_FRAMINGS: Final[tuple[str, ...]] = (
+    "historical",
+    "retir",
+    "invalid",
+    "superseded",
+    "refused",
+    "unbuildable",
+    "defect",
+)
+
+#: Ways a document could present the retired name as the proposed or current one.
+#:
+#: Built from the retired value rather than typed out, so changing which name is
+#: retired cannot leave these strings pointing at the wrong one.
+ADR_0022_RETIRED_NAME_MISUSE: Final[tuple[str, ...]] = (
+    f"proposed acquisition permission-set name: {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"proposed acquisition permission-set name is {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"replace it with {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"replace it with `{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}`",
+    f"adr-0022 proposes {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"the acquisition permission-set name becomes {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"awsreservedsso_{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}_ becomes",
+)
+
+
+def retired_permission_set_name_defects(text: str) -> list[str]:
+    """Every way ``text`` mishandles the retired 33-character acquisition name.
+
+    Two failures, and they are opposite. Presenting the retired name as the
+    proposed or current replacement reinstates the defect; mentioning it with no
+    historical framing at all leaves a reader unable to tell which name governs.
+    Both are reported, and a text that never names it is clean by definition.
+    """
+    reading = " ".join(text.replace("**", "").split()).lower()
+    retired = ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET.lower()
+    defects = [
+        f"presents the retired name as current: {claim}"
+        for claim in (c.lower() for c in ADR_0022_RETIRED_NAME_MISUSE)
+        if claim in reading
+    ]
+    if retired in reading and not any(mark in reading for mark in ADR_0022_RETIRED_NAME_FRAMINGS):
+        defects.append("names the retired acquisition permission set with no historical framing")
+    return defects
+
+
+#: What ADR-0022 must say about itself.
+ADR_0022_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("carries a proposed status", "status: proposed — not in force"),
+    (
+        "withholds authority until review and merge",
+        "no authority until the pull request introducing this adr is independently reviewed and "
+        "merged",
+    ),
+    (
+        "keeps the open period authority-free",
+        "while the pull request introducing this adr is open, adr-0022 is proposed and carries no "
+        "authority",
+    ),
+    ("records that adr-0021 is in force", "accepted / in force"),
+    (
+        "records that pr #56 implemented the architecture faithfully",
+        "pr #56 is not defective for implementing the accepted architecture as written",
+    ),
+    (
+        "records the review finding",
+        "independent review of pr #56 found that the accepted name cannot be created by the "
+        "pinned terraform provider",
+    ),
+    ("records the correct refusal", "the independent review correctly refused the merge"),
+    ("names the pinned provider", "`hashicorp/aws` v6.62.0"),
+    ("names the validator", "validation.stringlenbetween(1, 32)"),
+    (
+        "names the retired length",
+        f"a {ADR_0022_RETIRED_NAME_LENGTH}-character name is refused by the provider itself",
+    ),
+    (
+        "names the proposed length",
+        f"the replacement is exactly {ADR_0022_PROPOSED_NAME_LENGTH} characters",
+    ),
+    (
+        "states the decision",
+        f"retire `{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET.lower()}` as the "
+        f"acquisition permission-set name, and replace it with "
+        f"`{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}`",
+    ),
+    (
+        "records the conditional role prefix",
+        f"awsreservedsso_{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET}_".lower(),
+    ),
+    (
+        "refuses the prefix while proposed",
+        "that prefix is not effective while adr-0022 remains proposed",
+    ),
+    ("names the unchanged assessment set", ADR_0021_ASSESSMENT_PERMISSION_SET.lower()),
+    ("names the unchanged acquisition profile", ADR_0021_ACQUISITION_PROFILE),
+    ("names the unchanged assessment profile", ADR_0021_ASSESSMENT_PROFILE),
+    ("scopes itself to naming", "this is a naming-contract correction only"),
+    (
+        "supersedes exactly one value",
+        "adr-0022 supersedes only adr-0021's acquisition permission-set name",
+    ),
+    ("edits no earlier adr", "edits no earlier adr document"),
+    ("weakens no identity property", "this correction weakens no identity property"),
+    ("refuses account-only or profile-only proof", "no account-only or profile-only proof"),
+    ("refuses full-arn pinning", "no full-arn pinning"),
+    ("keeps the suffix grammar structural", "it still proves structure, not provenance"),
+    ("does not reopen the suffix grammar", "adr-0022 does not reopen the suffix grammar"),
+    ("records that nothing is live", "none, because nothing exists"),
+    ("records that no migration is required", "none required -- nothing has been applied"),
+    ("blocks the downstream correction", "pr #56 stays blocked and untouched"),
+    (
+        "requires the length guard",
+        "must be independently checked as 1-32 characters",
+    ),
+    ("requires the grammar guard", "the allowed-character grammar must also be checked"),
+    (
+        "requires a derived length",
+        "the test must derive the length from the actual string",
+    ),
+    (
+        "keeps terraform validate required",
+        "does not replace a real isolated `terraform validate` against the pinned provider",
+    ),
+    ("preserves adr-0021's text", "adr-0021 is not rewritten"),
+    ("adds no operation and no deadline term", "adds no s3 operation and changes no deadline term"),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    (
+        "distinguishes the published role-name limit from suffix observations",
+        "example-based observations, not a documented guarantee",
+    ),
+    (
+        "refuses to encode a suffix length",
+        "does not encode any fixed suffix length as an architectural guarantee",
+    ),
+)
+
+#: The rejected alternatives ADR-0022 must record, by label.
+ADR_0022_REJECTED_ALTERNATIVES: Final[tuple[tuple[str, str], ...]] = (
+    ("rejects an implementation-only rename", "an implementation-only rename without an adr"),
+    ("rejects silent truncation", "truncating the name silently at runtime"),
+    ("rejects weakening validation", "weakening or bypassing provider validation"),
+    (
+        "rejects hoping aws accepts the long name",
+        "keeping the 33-character name and hoping aws accepts it",
+    ),
+    ("rejects renaming the profile", "renaming the profile as well"),
+    ("rejects renaming the assessment set", "renaming the assessment permission set"),
+    ("rejects abbreviating both actors", "abbreviating both actors for symmetry"),
+    ("rejects a configurable name", "a configurable permission-set name"),
+    ("rejects a random suffix", "a random suffix in the configured name"),
+    ("rejects pinning a generated arn", "pinning a generated full iam or sts arn"),
+)
+
+#: The exact level-three heading that opens ADR-0022's status section in both
+#: status documents. The anchor is the heading, never a phrase being tested.
+ADR_0022_STATUS_HEADING: Final = (
+    "The qualification permission-set name limit, and ADR-0022 — PROPOSED, and not in force"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+ADR_0022_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+ADR_0022_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "The defect, reproduced",
+    "The decision",
+    "What it preserves, unchanged",
+    "Status",
+)
+
+#: The heading each document's ADR-0022 section must be followed by.
+#:
+#: ADR-0022's section is placed immediately *before* ADR-0021's, so ADR-0021's own
+#: terminator is untouched. A new slice may not move the boundary a merged guard
+#: already pins in order to make room for itself.
+ADR_0022_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": f"### {ADR_0021_STATUS_HEADING}",
+    "README.md": f"### {ADR_0021_STATUS_HEADING}",
+}
+
+
+class Adr0022SectionScan(NamedTuple):
+    """Every ADR-0022 status section a document carries, and its structure defects.
+
+    Separate from the other section scans so a caller cannot pass one where
+    another is expected. A malformed structure can yield exactly one
+    plausible-looking section, and a vacuous pass is what the caller must be able
+    to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_adr_0022_status_sections(text: str) -> Adr0022SectionScan:
+    """Extract ADR-0022's status section(s) from a document, by heading.
+
+    Drives the shared :func:`_scan_status_sections` rather than reimplementing it,
+    so this guard and the ADR-0020, ADR-0021 and qualification-IAM ones cannot
+    disagree about where a section ends.
+    """
+    return Adr0022SectionScan(
+        *_scan_status_sections(
+            text,
+            heading=ADR_0022_STATUS_HEADING,
+            level=ADR_0022_STATUS_HEADING_LEVEL,
+            subsections=ADR_0022_STATUS_SUBSECTIONS,
+            label="ADR-0022",
+        )
+    )
+
+
+#: What both status documents must say inside their ADR-0022 section.
+#:
+#: Section-scoped. Most of these clauses have near-neighbours elsewhere in the
+#: same file -- "g1 / g2: open / open" appears in several other status blocks --
+#: so a flat scan is answered by a neighbour's copy and a section-local deletion
+#: goes unreported.
+ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0022: proposed / not in force"),
+    (
+        "records the conditional effectiveness",
+        "conditionally effective only after independent review and merge",
+    ),
+    (
+        "keeps the open period authority-free",
+        "while that pull request is open it carries no authority",
+    ),
+    ("records that adr-0021 is in force", "adr-0021: accepted / in force"),
+    ("records the blocked pull request", "pr #56: open / unmerged / blocked on architecture"),
+    (
+        "records the faithful implementation",
+        "pr #56 correctly implemented adr-0021 as written",
+    ),
+    (
+        "records the review finding",
+        "the pr #56 review found the 33-character provider incompatibility",
+    ),
+    ("records the correct refusal", "the independent review correctly refused the merge"),
+    (
+        "names the proposed acquisition permission set",
+        f"proposed acquisition permission-set name: `"
+        f"{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}`",
+    ),
+    (
+        "keeps the accepted name current until merge",
+        "the currently accepted acquisition permission-set name remains adr-0021's until "
+        "adr-0022 is merged, and becomes historical only on that merge",
+    ),
+    (
+        "refuses the retired name as the replacement",
+        "never as the proposed or current replacement",
+    ),
+    (
+        "refuses the new prefix while proposed",
+        "that prefix is not effective while adr-0022 remains proposed",
+    ),
+    ("keeps the assessment name unchanged", "the assessment permission-set name is unchanged"),
+    ("keeps both profile names unchanged", "both profile names are unchanged"),
+    ("keeps the suffix grammar unchanged", "the suffix grammar is unchanged"),
+    (
+        "keeps the neighbouring decisions unchanged",
+        "adr-0017, adr-0019 and adr-0020 are unchanged",
+    ),
+    ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
+    (
+        "records the unmerged declarations",
+        "pr #56 terraform declarations: unmerged / unapplied",
+    ),
+    ("keeps infrastructure deployment blocked", "infrastructure deployment: blocked"),
+    ("closes aws discovery", "aws discovery: not authorized"),
+    ("defers every binding value", "aws account/group/instance binding values: unknown / unread"),
+    ("records that no authority was granted", "authority granted: none"),
+    ("closes the runs", "run a / run b / combined assessment: not authorized / not run"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    (
+        "keeps terraform validate required",
+        "remains required before pr #56 can merge",
+    ),
+)
+
+#: Claims neither status document may make about ADR-0022, in either direction.
+#:
+#: Anchored, never loose. The honest load-bearing sentences must all survive: the
+#: section legitimately writes "if adr-0022 is accepted", so a bare
+#: "adr-0022 is accepted" would refuse the document for saying the right thing.
+ADR_0022_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    # ------------------------------------------------- the proposal read forward
+    "adr-0022: accepted",
+    "adr-0022: in force",
+    "adr-0022: accepted / in force",
+    "adr-0022 is now accepted",
+    "adr-0022 is now in force",
+    "adr-0022 architecture: accepted",
+    "adr-0022's conditional acceptance event has occurred",
+    "adr-0022 has been merged",
+    "adr-0022 merged",
+    # ------------------------------------- the blocked implementation read forward
+    "pr #56: corrected",
+    "pr #56 has been corrected",
+    "pr #56 correction: complete",
+    "pr #56 correction: begun",
+    "pr #56 correction: authorized",
+    "pr #56 is ready to merge",
+    "pr #56: ready",
+    "pr #56: mergeable",
+    "pr #56: merged",
+    "pr #56 has been merged",
+    "pr #56 is deployed",
+    "pr #56 is operational",
+    # ------------------------------------------------ infrastructure read as live
+    "terraform has been applied",
+    "terraform apply: performed",
+    "terraform init/validate/plan/apply: run",
+    "the permission sets exist in aws",
+    "identity center permission sets: created",
+    "account assignments: created",
+    "governed aws profiles: materialized",
+    "governed aws profiles: created",
+    "qualification profiles have been created",
+    "aws identity has been verified",
+    "aws account/group/instance binding values: known",
+    "authority granted: acquisition",
+    "authority granted: assessment",
+    # -------------------------------------------------- downstream gates read open
+    "run a: authorized",
+    "run b: authorized",
+    "combined assessment: authorized",
+    "g1: closed",
+    "g2: closed",
+    "provider selection is complete",
+    "phase 3: complete",
+    "control: published",
+    "live trading: enabled",
+)
+
+#: What the implementation plan must record about ADR-0022.
+ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0022: proposed / not in force"),
+    ("records the blocked pull request", "pr #56 remains open and blocked"),
+    (
+        "records that the defect is architectural",
+        "its blocking defect is architectural, not merely syntactic",
+    ),
+    (
+        "records the faithful implementation",
+        "pr #56 correctly implemented adr-0021 as written",
+    ),
+    (
+        "refuses to begin the correction",
+        "no implementation correction may begin before adr-0022 acceptance",
+    ),
+    ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
+    (
+        "names the next gate's work",
+        "the next offline gate will correct pr #56's acquisition permission-set name and add "
+        "the provider-limit guards",
+    ),
+    (
+        "keeps terraform validate required",
+        "a real isolated `terraform validate` against the pinned provider remains required "
+        "before pr #56 can merge",
+    ),
+    (
+        "authorizes no live activity",
+        "no live binding, plan, apply or execution is authorized",
+    ),
+    ("closes aws discovery", "aws discovery: not authorized"),
+    ("defers every binding value", "aws account/group/instance binding values: unknown / unread"),
+    ("records that no authority was granted", "authority granted: none"),
+    ("keeps infrastructure deployment blocked", "infrastructure deployment: blocked"),
+    ("closes the runs", "run a / run b / combined assessment: not authorized / not run"),
+    (
+        "preserves the arithmetic",
+        "all existing arithmetic and deadlines remain unchanged",
+    ),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+)
+
 #: The two acquisition operations every ADR-0021 surface holds at exactly zero.
 #:
 #: They were guarded by presence alone -- ``"acquisition headobject: 0" in text``
@@ -18086,6 +18566,173 @@ def main() -> int:
         "the implementation plan states each acquisition zero operation as exactly zero",
         not plan_zero_defects,
         ", ".join(plan_zero_defects),
+    )
+
+    # ADR-0022, the PROPOSED qualification permission-set name limit. ADR-0021
+    # accepted a 33-character acquisition permission-set name and the pinned
+    # provider validates that attribute to 1-32, so the blocked implementation is
+    # blocked by the architecture rather than by its own code. Every check keeps a
+    # proposal, an accepted decision and a live AWS object apart, in both
+    # directions.
+    f.check(
+        "the ADR-0022 proposal exists",
+        ADR_0022.is_file(),
+        "the proposal is present on this branch",
+    )
+    f.check(
+        # One decision, one file. A second copy under another name would give two
+        # documents the right to answer for one decision.
+        "ADR-0022 exists exactly once",
+        len(sorted(DECISIONS.glob("ADR-0022-*.md"))) == 1,
+        f"{len(sorted(DECISIONS.glob('ADR-0022-*.md')))} ADR-0022 documents",
+    )
+    f.check(
+        # The registry is what governs an in-force claim. ADR-0022 is proposed, so
+        # its absence here is the fact every proposed-status row is measured
+        # against -- and the entry a later acceptance would have to add.
+        "ADR-0022 is absent from the merged-ADR registry",
+        "ADR-0022" not in dict(MERGED_ADR_STATUS),
+        "a proposed ADR must not be registered as merged",
+    )
+    f.check(
+        # The inverse of the in-force row a merged ADR carries. While ADR-0022 is
+        # proposed neither document may claim one for it.
+        "neither status document claims ADR-0022 is in force",
+        all("ADR-0022" not in _in_force_adr_claims(text) for text in adr_0018_documents.values()),
+        "a proposed ADR must carry no ACCEPTED / IN FORCE row",
+    )
+
+    adr_0022_text = read(ADR_0022) if ADR_0022.is_file() else ""
+    adr_0022_flat = " ".join(adr_0022_text.replace("**", "").split()).lower()
+
+    for label, phrase in ADR_0022_SELF_REQUIRED:
+        f.check(
+            f"ADR-0022 {label}",
+            phrase in adr_0022_flat,
+            f"missing from ADR-0022: {phrase}",
+        )
+
+    for label, phrase in ADR_0022_REJECTED_ALTERNATIVES:
+        f.check(
+            f"ADR-0022 {label}",
+            phrase in adr_0022_flat,
+            f"missing from the ADR-0022 rejected alternatives: {phrase}",
+        )
+
+    f.check(
+        # Measured, never transcribed. This is the check whose absence let a
+        # 33-character name reach review.
+        "the proposed acquisition permission-set name is exactly 29 characters",
+        len(ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET) == ADR_0022_PROPOSED_NAME_LENGTH,
+        f"{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET!r} is "
+        f"{len(ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET)} characters",
+    )
+    f.check(
+        "the retired acquisition permission-set name is exactly 33 characters",
+        len(ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET) == ADR_0022_RETIRED_NAME_LENGTH,
+        f"{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET!r} is "
+        f"{len(ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET)} characters",
+    )
+    for label, value in QUALIFICATION_PERMISSION_SET_NAMES:
+        f.check(
+            f"{label} name satisfies the pinned provider's name rules",
+            not permission_set_name_defects(value),
+            ", ".join(permission_set_name_defects(value)),
+        )
+    f.check(
+        # The guard has to *refuse* something, or it is agreeing with itself. The
+        # retired name is the value the provider rejects, and this is the assertion
+        # that the guard notices.
+        "the retired acquisition permission-set name is refused by the provider-limit guard",
+        bool(permission_set_name_defects(ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET)),
+        "the 1-32 guard must refuse the 33-character name",
+    )
+    f.check(
+        "ADR-0022 frames the retired acquisition permission-set name historically",
+        not retired_permission_set_name_defects(adr_0022_text),
+        ", ".join(retired_permission_set_name_defects(adr_0022_text)),
+    )
+    f.check(
+        # Unchanged contracts, read from ADR-0021's own constants so the two
+        # cannot disagree about what "unchanged" means.
+        "ADR-0022 leaves the assessment permission set and both profiles unchanged",
+        all(
+            value.lower() in adr_0022_flat
+            for value in (
+                ADR_0021_ASSESSMENT_PERMISSION_SET,
+                ADR_0021_ACQUISITION_PROFILE,
+                ADR_0021_ASSESSMENT_PROFILE,
+            )
+        ),
+        "the unchanged assessment permission set and both profile names must be named",
+    )
+
+    adr_0022_sections: dict[str, str] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_adr_0022_status_sections(document)
+        f.check(
+            # Cardinality, because a phrase scan cannot see a duplicate -- a second
+            # copy only ever adds occurrences, so every phrase check stays green
+            # while two sections disagree about one decision.
+            f"{name} carries exactly one ADR-0022 status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        adr_0022_sections[name] = scan.sections[0] if len(scan.sections) == 1 else ""
+        f.check(
+            f"{name} ends the ADR-0022 section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                ADR_0022_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {ADR_0022_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in ADR_0022_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for ADR-0022",
+                phrase in section,
+                f"missing from the ADR-0022 status section of {name}: {phrase}",
+            )
+        overstated_0022 = [
+            f"{claim} (in the ADR-0022 status section)" if claim in section else claim
+            for claim in ADR_0022_STATUS_FORBIDDEN
+            if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate ADR-0022",
+            not overstated_0022,
+            ", ".join(overstated_0022),
+        )
+        f.check(
+            f"{name} frames the retired acquisition permission-set name historically",
+            not retired_permission_set_name_defects(" ".join(scan.sections)),
+            ", ".join(retired_permission_set_name_defects(" ".join(scan.sections))),
+        )
+
+    f.check(
+        # Byte-identical, not merely structurally parallel. The two documents have
+        # twice carried a fact in one file and a stale contradiction in the other,
+        # and this section is short enough that exact equality is the honest test.
+        "both status documents carry byte-identical ADR-0022 sections",
+        len(set(adr_0022_sections.values())) == 1 and all(adr_0022_sections.values()),
+        "the two ADR-0022 status sections differ",
+    )
+
+    for label, phrase in ADR_0022_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for ADR-0022",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    f.check(
+        "the implementation plan frames the retired acquisition permission-set name historically",
+        not retired_permission_set_name_defects(read(PHASE3 / "implementation-plan.md")),
+        ", ".join(retired_permission_set_name_defects(read(PHASE3 / "implementation-plan.md"))),
     )
 
     # The implementation half. The offline implementation candidate exists, and
