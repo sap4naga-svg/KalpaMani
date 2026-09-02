@@ -1636,7 +1636,7 @@ PRINCIPALS_TF = INFRA / "qualification_principals.tf"
 
 #: The exact permission-set names ADR-0021 accepts, per actor label.
 PERMISSION_SET_NAMES = {
-    ACQUISITION: "KalpaManiQualificationAcquisition",
+    ACQUISITION: "KalpaManiQualificationAcquire",
     ASSESSMENT: "KalpaManiQualificationAssessment",
 }
 
@@ -1954,14 +1954,14 @@ class TestThePrincipalsCandidate:
 PRINCIPAL_MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
         "the acquisition permission-set name is corrupted",
-        'qualification_acquisition_permission_set = "KalpaManiQualificationAcquisition"',
+        'qualification_acquisition_permission_set = "KalpaManiQualificationAcquire"',
         'qualification_acquisition_permission_set = "KalpaManiQualification"',
-        "permission-set name is not KalpaManiQualificationAcquisition",
+        "permission-set name is not KalpaManiQualificationAcquire",
     ),
     (
         "the assessment permission-set name is corrupted",
         'qualification_assessment_permission_set  = "KalpaManiQualificationAssessment"',
-        'qualification_assessment_permission_set  = "KalpaManiQualificationAcquisition"',
+        'qualification_assessment_permission_set  = "KalpaManiQualificationAcquire"',
         "permission-set name is not KalpaManiQualificationAssessment",
     ),
     (
@@ -2087,7 +2087,7 @@ class TestPrincipalMutations:
             ("a start URL", 'locals {\n  leaked = "https://example.awsapps.com/start"\n}\n'),
             (
                 "a generated role name",
-                'locals {\n  leaked = "AWSReservedSSO_KalpaManiQualificationAcquisition_abc"\n}\n',
+                'locals {\n  leaked = "AWSReservedSSO_KalpaManiQualificationAcquire_abc"\n}\n',
             ),
             (
                 "an account-bearing ARN",
@@ -2146,3 +2146,245 @@ class TestThePolicyCandidateIsUntouchedByTheseDeclarations:
         assert QUALIFICATION_TF != PRINCIPALS_TF
         assert QUALIFICATION_TF.is_file()
         assert PRINCIPALS_TF.is_file()
+
+
+# ---------------------------------------------------------------------------
+# The pinned provider's own permission-set name limit -- ADR-0022
+# ---------------------------------------------------------------------------
+#
+# ADR-0021 accepted a 33-character acquisition permission-set name and PR #56
+# declared exactly that name, faithfully. The pinned `hashicorp/aws` v6.62.0
+# validates `aws_ssoadmin_permission_set.name` to 1-32 characters against the
+# grammar `[\w+=,.@-]+`, so the declaration was unbuildable -- and every offline
+# test passed, because each compared the declared name with a constant carrying
+# the same 33 characters. Two strings agreeing about a length neither measures is
+# not a check.
+#
+# So these tests measure. They read the name out of the real declaration, follow
+# the `name = local.x` reference the way Terraform would, and hand the resolved
+# literal to the production rule. The mutations rewrite the declaration itself and
+# assert the rule refuses it, so a rule that stopped measuring would fail here
+# rather than go on agreeing with a constant.
+#
+# This is the length-and-grammar contract only. The generated-role suffix grammar
+# is a different contract, over a different string AWS appends, and it is tested in
+# `test_qualification_identity_gate.py`; neither bounds the other.
+
+#: A synthetic 33-character name of the exact shape the provider refuses. Built by
+#: repetition rather than typed, so it cannot silently become 32 or 34.
+OVER_LIMIT_NAME = "K" * 33
+
+#: The longest name the provider accepts.
+BOUNDARY_NAME = "K" * 32
+
+#: The name ADR-0022 retires. Named here once, as the value the rules must refuse.
+RETIRED_ACQUISITION_NAME = "KalpaManiQualificationAcquisition"
+
+#: The name ADR-0022 accepts, and the unchanged assessment name beside it.
+ACCEPTED_ACQUISITION_NAME = "KalpaManiQualificationAcquire"
+ACCEPTED_ASSESSMENT_NAME = "KalpaManiQualificationAssessment"
+
+#: Each actor's local, by the name the declaration gives it.
+PERMISSION_SET_LOCALS = (
+    (ACQUISITION, "qualification_acquisition_permission_set"),
+    (ASSESSMENT, "qualification_assessment_permission_set"),
+)
+
+
+def _declared_names(text: str) -> dict[str, str | None]:
+    """The resolved permission-set names of ``text``, through the production rule."""
+    names: dict[str, str | None] = GUARD.declared_permission_set_names(
+        GUARD.strip_hcl_comments(text)
+    )
+    return names
+
+
+def _rewrite_declared_name(text: str, local_name: str, replacement: str) -> str:
+    """``text`` with ``local_name``'s literal replaced, refusing a no-op mutation.
+
+    The assignment is located rather than reconstructed, because the declaration
+    aligns its two ``=`` and a rebuilt line would match nothing -- a mutation that
+    rewrites nothing passes every assertion made after it.
+    """
+    assert _declared_names(text), "the unmutated declaration must resolve before it is mutated"
+    match = re.search(rf'({re.escape(local_name)}\s*=\s*)"([^"]*)"', text)
+    assert match is not None, f"{local_name}: no literal assignment to mutate"
+    mutated = text.replace(match.group(0), f'{match.group(1)}"{replacement}"')
+    assert mutated != text, f"{local_name}: the mutation matched nothing"
+    return mutated
+
+
+class TestTheProviderNameLimitIsMeasuredNotDescribed:
+    """The rule refuses and admits real values rather than restating a bound."""
+
+    def test_the_rule_admits_the_accepted_acquisition_name(self) -> None:
+        assert len(ACCEPTED_ACQUISITION_NAME) == 29
+        assert GUARD.permission_set_name_defects(ACCEPTED_ACQUISITION_NAME) == []
+
+    def test_the_rule_refuses_the_retired_acquisition_name(self) -> None:
+        """33 characters. The value ADR-0022 retires, refused on length alone."""
+        assert len(RETIRED_ACQUISITION_NAME) == 33
+        defects = GUARD.permission_set_name_defects(RETIRED_ACQUISITION_NAME)
+        assert defects and "33 characters" in defects[0]
+
+    def test_the_retired_name_is_refused_only_on_length(self) -> None:
+        """It satisfies the character grammar, so one character is the whole defect."""
+        assert len(GUARD.permission_set_name_defects(RETIRED_ACQUISITION_NAME)) == 1
+
+    def test_the_rule_admits_the_thirty_two_character_boundary(self) -> None:
+        assert len(BOUNDARY_NAME) == 32
+        assert GUARD.permission_set_name_defects(BOUNDARY_NAME) == []
+
+    def test_the_rule_refuses_one_character_past_the_boundary(self) -> None:
+        assert len(OVER_LIMIT_NAME) == 33
+        assert GUARD.permission_set_name_defects(OVER_LIMIT_NAME)
+
+    def test_the_rule_refuses_an_empty_name(self) -> None:
+        assert GUARD.permission_set_name_defects("")
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Kalpa Mani", "Kalpa/Mani", "Kalpa:Mani", "Kalpa*Mani", "Kalpa!Mani", "Kalpa#Mani"],
+    )
+    def test_the_rule_refuses_a_name_outside_the_character_grammar(self, name: str) -> None:
+        assert GUARD.permission_set_name_defects(name)
+
+    def test_the_assessment_name_sits_exactly_on_the_boundary(self) -> None:
+        """32 characters -- one more and ADR-0022 would have had to retire it too."""
+        assert len(ACCEPTED_ASSESSMENT_NAME) == 32
+        assert GUARD.permission_set_name_defects(ACCEPTED_ASSESSMENT_NAME) == []
+
+
+class TestTheDeclaredNamesAreWhatIsMeasured:
+    """The value checked is resolved out of the file, never copied beside it."""
+
+    def test_both_declared_names_resolve_to_literals(self) -> None:
+        assert _declared_names(_principals_text()) == {
+            ACQUISITION: ACCEPTED_ACQUISITION_NAME,
+            ASSESSMENT: ACCEPTED_ASSESSMENT_NAME,
+        }
+
+    def test_every_declared_name_satisfies_the_provider_rules(self) -> None:
+        for label, name in _declared_names(_principals_text()).items():
+            assert name is not None, label
+            assert GUARD.permission_set_name_defects(name) == [], label
+
+    def test_the_declaration_carries_no_retired_name(self) -> None:
+        assert RETIRED_ACQUISITION_NAME not in _principals_text()
+
+    def test_a_resource_rewired_to_the_wrong_local_is_seen(self) -> None:
+        """Resolving through the reference is why checking the local alone is not enough."""
+        mutated = _principals_text().replace(
+            "  name             = local.qualification_acquisition_permission_set",
+            "  name             = local.qualification_assessment_permission_set",
+            1,
+        )
+        assert _declared_names(mutated)[ACQUISITION] == ACCEPTED_ASSESSMENT_NAME
+
+    def test_an_unresolvable_name_reference_reads_as_unresolved(self) -> None:
+        """A variable, an interpolation or a missing local must never read as valid."""
+        mutated = _principals_text().replace(
+            "  name             = local.qualification_acquisition_permission_set",
+            "  name             = var.some_unbound_name",
+            1,
+        )
+        assert _declared_names(mutated)[ACQUISITION] is None
+
+    def test_a_missing_name_attribute_reads_as_unresolved(self) -> None:
+        mutated = _principals_text().replace(
+            "  name             = local.qualification_acquisition_permission_set\n",
+            "",
+            1,
+        )
+        assert _declared_names(mutated)[ACQUISITION] is None
+
+
+class TestAnInvalidDeclaredNameIsRefused:
+    """The mutations the defect itself would have needed, on the real declaration."""
+
+    @pytest.mark.parametrize(("label", "local_name"), PERMISSION_SET_LOCALS)
+    def test_a_thirty_three_character_declared_name_is_refused(
+        self, label: str, local_name: str
+    ) -> None:
+        text = _principals_text()
+        assert GUARD.permission_set_name_defects(_declared_names(text)[label] or "") == []
+        declared = _declared_names(_rewrite_declared_name(text, local_name, OVER_LIMIT_NAME))[label]
+        assert declared == OVER_LIMIT_NAME
+        assert GUARD.permission_set_name_defects(declared)
+
+    @pytest.mark.parametrize(("label", "local_name"), PERMISSION_SET_LOCALS)
+    def test_the_retired_name_reintroduced_into_either_declaration_is_refused(
+        self, label: str, local_name: str
+    ) -> None:
+        mutated = _rewrite_declared_name(_principals_text(), local_name, RETIRED_ACQUISITION_NAME)
+        declared = _declared_names(mutated)[label]
+        assert declared == RETIRED_ACQUISITION_NAME
+        assert GUARD.permission_set_name_defects(declared)
+
+    @pytest.mark.parametrize(("label", "local_name"), PERMISSION_SET_LOCALS)
+    def test_an_empty_declared_name_is_refused(self, label: str, local_name: str) -> None:
+        declared = _declared_names(_rewrite_declared_name(_principals_text(), local_name, ""))[
+            label
+        ]
+        assert declared == ""
+        assert GUARD.permission_set_name_defects(declared)
+
+    @pytest.mark.parametrize(("label", "local_name"), PERMISSION_SET_LOCALS)
+    def test_a_declared_name_outside_the_grammar_is_refused(
+        self, label: str, local_name: str
+    ) -> None:
+        declared = _declared_names(
+            _rewrite_declared_name(_principals_text(), local_name, "Kalpa Mani")
+        )[label]
+        assert declared == "Kalpa Mani"
+        assert GUARD.permission_set_name_defects(declared)
+
+
+class TestChangingProseAloneCannotSatisfyTheGuard:
+    """The defect reached review because the prose and the constants agreed with each other."""
+
+    def test_a_comment_naming_the_accepted_value_does_not_repair_a_bad_declaration(self) -> None:
+        text = _principals_text()
+        mutated = _rewrite_declared_name(
+            text, "qualification_acquisition_permission_set", OVER_LIMIT_NAME
+        ).replace(
+            "locals {",
+            f"locals {{\n  # the acquisition permission set is {ACCEPTED_ACQUISITION_NAME}, "
+            "29 characters",
+            1,
+        )
+        assert ACCEPTED_ACQUISITION_NAME in mutated
+        declared = _declared_names(mutated)[ACQUISITION]
+        assert declared == OVER_LIMIT_NAME
+        assert GUARD.permission_set_name_defects(declared)
+
+
+class TestTheGovernedVerifierNamesAreMeasuredToo:
+    """The gate admits a role named after the permission set, so it is bound as well."""
+
+    def test_the_verifier_maps_both_actors_to_the_declared_names(self) -> None:
+        assert GUARD.verifier_permission_set_names(GUARD.read(GUARD.ADR_0021_VERIFIER)) == {
+            "ACQUISITION": ACCEPTED_ACQUISITION_NAME,
+            "ASSESSMENT": ACCEPTED_ASSESSMENT_NAME,
+        }
+
+    def test_every_verifier_name_satisfies_the_provider_rules(self) -> None:
+        mapped = GUARD.verifier_permission_set_names(GUARD.read(GUARD.ADR_0021_VERIFIER))
+        assert mapped
+        for member, name in mapped.items():
+            assert name is not None, member
+            assert GUARD.permission_set_name_defects(name) == [], member
+
+    def test_a_verifier_mapping_restored_to_the_retired_name_is_refused(self) -> None:
+        source = GUARD.read(GUARD.ADR_0021_VERIFIER)
+        mutated = source.replace(
+            f'QualificationActor.ACQUISITION: "{ACCEPTED_ACQUISITION_NAME}"',
+            f'QualificationActor.ACQUISITION: "{RETIRED_ACQUISITION_NAME}"',
+        )
+        assert mutated != source, "the mutation matched nothing"
+        mapped = GUARD.verifier_permission_set_names(mutated)
+        assert mapped["ACQUISITION"] == RETIRED_ACQUISITION_NAME
+        assert GUARD.permission_set_name_defects(mapped["ACQUISITION"] or "")
+
+    def test_an_absent_mapping_reports_nothing_rather_than_agreeing(self) -> None:
+        assert GUARD.verifier_permission_set_names("") == {}

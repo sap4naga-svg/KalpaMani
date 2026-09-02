@@ -125,11 +125,17 @@ variable "qualification_target_account_id" {
 }
 
 locals {
-  # The permission-set names, exactly as ADR-0021 accepts them. They are also the
+  # The permission-set names, exactly as ADR-0022 accepts them. They are also the
   # `sso_role_name` an operator profile carries, and the role-name component the
   # identity gate matches against -- one spelling, in one place, so a rename cannot
   # leave the Terraform naming one role and the gate admitting another.
-  qualification_acquisition_permission_set = "KalpaManiQualificationAcquisition"
+  #
+  # The acquisition name is 29 characters. ADR-0021 accepted a 33-character one,
+  # and the pinned provider validates this attribute to 1-32: that name could not
+  # be built at all, so ADR-0022 retired it. The assessment name is 32 and is
+  # unchanged. Both are measured against the provider's bounds by the repository's
+  # own guards, because a limit stated only in prose is what let 33 through.
+  qualification_acquisition_permission_set = "KalpaManiQualificationAcquire"
   qualification_assessment_permission_set  = "KalpaManiQualificationAssessment"
 
   # One hour. ADR-0021 bounds the session rather than raising it: it covers the

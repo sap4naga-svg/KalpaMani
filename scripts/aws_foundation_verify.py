@@ -310,8 +310,13 @@ class QualificationActor(StrEnum):
 
 #: The permission-set name each actor's generated role is named after. These are also
 #: the `sso_role_name` values the two governed profiles carry.
+#:
+#: The acquisition name is ADR-0022's, at 29 characters. ADR-0021 accepted a
+#: 33-character one; the pinned provider validates the attribute to 1-32, so that
+#: name could not be created and ADR-0022 retired it. Admitting a role named after
+#: an unbuildable permission set would be admitting an identity that cannot exist.
 QUALIFICATION_PERMISSION_SETS: dict[QualificationActor, str] = {
-    QualificationActor.ACQUISITION: "KalpaManiQualificationAcquisition",
+    QualificationActor.ACQUISITION: "KalpaManiQualificationAcquire",
     QualificationActor.ASSESSMENT: "KalpaManiQualificationAssessment",
 }
 

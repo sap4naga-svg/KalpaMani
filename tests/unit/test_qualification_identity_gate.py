@@ -217,7 +217,7 @@ def test_each_actor_has_exactly_one_permission_set_and_one_profile() -> None:
 
 
 def test_the_permission_set_names_are_the_accepted_ones_and_are_distinct() -> None:
-    assert V.QUALIFICATION_PERMISSION_SETS[ACQUISITION] == "KalpaManiQualificationAcquisition"
+    assert V.QUALIFICATION_PERMISSION_SETS[ACQUISITION] == "KalpaManiQualificationAcquire"
     assert V.QUALIFICATION_PERMISSION_SETS[ASSESSMENT] == "KalpaManiQualificationAssessment"
     assert len(set(V.QUALIFICATION_PERMISSION_SETS.values())) == 2
 
@@ -262,7 +262,7 @@ def test_the_accepted_form_parses_into_its_three_parts() -> None:
     parsed = V.parse_assumed_role_arn(identity_for(ACQUISITION))
     assert parsed is not None
     assert parsed.account == ACCOUNT
-    assert parsed.role_name == role_name("KalpaManiQualificationAcquisition")
+    assert parsed.role_name == role_name("KalpaManiQualificationAcquire")
     assert parsed.session_name == SESSION
 
 
@@ -273,7 +273,7 @@ def test_the_accepted_form_parses_into_its_three_parts() -> None:
         (
             "the Identity Center IAM role ARN with its reserved path",
             f"arn:aws:iam::{ACCOUNT}:role/aws-reserved/sso.amazonaws.com/"
-            f"us-east-1/{role_name('KalpaManiQualificationAcquisition')}",
+            f"us-east-1/{role_name('KalpaManiQualificationAcquire')}",
         ),
         ("an IAM user ARN", f"arn:aws:iam::{ACCOUNT}:user/operator"),
         ("a root ARN", f"arn:aws:iam::{ACCOUNT}:root"),
@@ -281,63 +281,62 @@ def test_the_accepted_form_parses_into_its_three_parts() -> None:
         (
             "an assumed-role ARN in another partition",
             f"arn:aws-us-gov:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "an assumed-role ARN in the China partition",
             f"arn:aws-cn:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "an ARN for another service",
             f"arn:aws:s3::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "a region-bearing STS ARN",
             f"arn:aws:sts:us-east-1:{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "an eleven-digit account",
             f"arn:aws:sts::00000000000:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "a non-numeric account",
             f"arn:aws:sts::00000000000a:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "an extra resource path segment",
             f"arn:aws:sts::{ACCOUNT}:assumed-role/"
-            f"extra/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}",
+            f"extra/{role_name('KalpaManiQualificationAcquire')}/{SESSION}",
         ),
         (
             "a missing session name",
-            f"arn:aws:sts::{ACCOUNT}:assumed-role/{role_name('KalpaManiQualificationAcquisition')}",
+            f"arn:aws:sts::{ACCOUNT}:assumed-role/{role_name('KalpaManiQualificationAcquire')}",
         ),
         (
             "an empty session name",
-            f"arn:aws:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/",
+            f"arn:aws:sts::{ACCOUNT}:assumed-role/{role_name('KalpaManiQualificationAcquire')}/",
         ),
         ("an empty role name", f"arn:aws:sts::{ACCOUNT}:assumed-role//{SESSION}"),
         (
             "a session name carrying a space",
             f"arn:aws:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/two words",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/two words",
         ),
         (
             "a session name over sixty-four characters",
             f"arn:aws:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{'s' * 65}",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{'s' * 65}",
         ),
         ("a truncated ARN", f"arn:aws:sts::{ACCOUNT}"),
         (
             "a trailing extra field",
             f"arn:aws:sts::{ACCOUNT}:"
-            f"assumed-role/{role_name('KalpaManiQualificationAcquisition')}/{SESSION}:x",
+            f"assumed-role/{role_name('KalpaManiQualificationAcquire')}/{SESSION}:x",
         ),
         ("empty text", ""),
         ("the word arn alone", "arn"),
@@ -393,31 +392,31 @@ def test_each_actor_refuses_the_other_actors_generated_role_name() -> None:
 @pytest.mark.parametrize(
     ("label", "name"),
     [
-        ("a missing suffix", "AWSReservedSSO_KalpaManiQualificationAcquisition"),
-        ("an empty suffix", "AWSReservedSSO_KalpaManiQualificationAcquisition_"),
-        ("an uppercase-hexadecimal suffix", "AWSReservedSSO_KalpaManiQualificationAcquisition_ABC"),
-        ("a non-hexadecimal suffix", "AWSReservedSSO_KalpaManiQualificationAcquisition_zzzz"),
-        ("a suffix carrying a hyphen", "AWSReservedSSO_KalpaManiQualificationAcquisition_ab-cd"),
+        ("a missing suffix", "AWSReservedSSO_KalpaManiQualificationAcquire"),
+        ("an empty suffix", "AWSReservedSSO_KalpaManiQualificationAcquire_"),
+        ("an uppercase-hexadecimal suffix", "AWSReservedSSO_KalpaManiQualificationAcquire_ABC"),
+        ("a non-hexadecimal suffix", "AWSReservedSSO_KalpaManiQualificationAcquire_zzzz"),
+        ("a suffix carrying a hyphen", "AWSReservedSSO_KalpaManiQualificationAcquire_ab-cd"),
         (
             "a suffix over the bound",
-            f"AWSReservedSSO_KalpaManiQualificationAcquisition_{'a' * 33}",
+            f"AWSReservedSSO_KalpaManiQualificationAcquire_{'a' * 33}",
         ),
         (
             "a suffix carrying a second underscore",
-            "AWSReservedSSO_KalpaManiQualificationAcquisition_abc_def",
+            "AWSReservedSSO_KalpaManiQualificationAcquire_abc_def",
         ),
-        ("an altered reserved prefix", "AWSReservedSSO2_KalpaManiQualificationAcquisition_abc"),
-        ("a lowercased reserved prefix", "awsreservedsso_KalpaManiQualificationAcquisition_abc"),
-        ("leading text before the prefix", "XAWSReservedSSO_KalpaManiQualificationAcquisition_abc"),
+        ("an altered reserved prefix", "AWSReservedSSO2_KalpaManiQualificationAcquire_abc"),
+        ("a lowercased reserved prefix", "awsreservedsso_KalpaManiQualificationAcquire_abc"),
+        ("leading text before the prefix", "XAWSReservedSSO_KalpaManiQualificationAcquire_abc"),
         (
             "text appended to the permission-set name",
-            "AWSReservedSSO_KalpaManiQualificationAcquisitionX_abc",
+            "AWSReservedSSO_KalpaManiQualificationAcquireX_abc",
         ),
         (
             "a truncated permission-set name",
             "AWSReservedSSO_KalpaManiQualificationAcquisitio_abc",
         ),
-        ("no reserved prefix at all", "KalpaManiQualificationAcquisition_abc"),
+        ("no reserved prefix at all", "KalpaManiQualificationAcquire_abc"),
         ("an unrelated role name", "kalpamani-research-task"),
         ("empty text", ""),
     ],
@@ -824,7 +823,7 @@ def test_the_pinned_arn_rule_catches_an_injected_pin() -> None:
     assert not ("AWSReservedSSO_" in source and "arn:aws:iam::" in source)
     mutated = (
         f'{source}\nPINNED = "arn:aws:iam::{ACCOUNT}:role/aws-reserved/'
-        f'sso.amazonaws.com/{role_name("KalpaManiQualificationAcquisition")}"\n'
+        f'sso.amazonaws.com/{role_name("KalpaManiQualificationAcquire")}"\n'
     )
     assert "AWSReservedSSO_" in mutated and "arn:aws:iam::" in mutated
 
