@@ -72,10 +72,17 @@ AUTHORIZATION_FLAG: Final = "--i-am-the-operator-authorizing-empirical-acquisiti
 #: environment variable, not a value.
 SECRET_ID_ENV_VAR: Final = "KALPAMANI_SHARADAR_SECRET_ID"  # noqa: S105
 
-#: The profile and region the governed foundation is pinned to. Restated rather than
-#: imported from another executable script: coupling two operator surfaces would make
-#: their failure modes depend on each other.
-EXPECTED_PROFILE: Final = "kalpamani-foundation"
+#: The governed profile this ACTOR is invoked under, and the region the foundation is
+#: pinned to. Restated rather than imported from another executable script: coupling
+#: two operator surfaces would make their failure modes depend on each other. A test
+#: asserts the verifier declares this same literal for this same actor, so the two
+#: spellings cannot drift.
+#:
+#: ADR-0021 gives the two qualification actors two distinct profiles, and this is the
+#: acquisition one. Selecting it is ROUTING, never proof: it chooses which credential
+#: source the SDK resolves, and establishes nothing about the identity that results.
+#: The identity gate at stage 5 is what proves the actor.
+EXPECTED_PROFILE: Final = "kalpamani-qualification-acquisition"
 EXPECTED_REGION: Final = "us-east-1"
 
 #: The Terraform output holding the licensed research bucket. Named, so the CONTROL
@@ -670,10 +677,22 @@ def _environment_secret_id() -> str:
 
 
 def _governed_identity_gate() -> str | None:
-    """The existing account identity gate. Not a second implementation of one."""
-    from aws_foundation_verify import identity_gate  # type: ignore[import-not-found]
+    """The governed ADR-0021 identity gate, bound to the ACQUISITION actor.
 
-    return identity_gate()  # type: ignore[no-any-return]
+    Not a second implementation of one: the account binding, the profile pin and the
+    single ``sts:GetCallerIdentity`` call all live in the existing verifier, and this
+    supplies only which of the two actors is being proved. A credential that resolves
+    to the assessment permission-set role refuses here, before any provider request,
+    any credential retrieval and any write.
+    """
+    from aws_foundation_verify import (  # type: ignore[import-not-found]
+        QualificationActor,
+        qualification_identity_gate,
+    )
+
+    return qualification_identity_gate(  # type: ignore[no-any-return]
+        QualificationActor.ACQUISITION
+    )
 
 
 def _governed_licensed_bucket() -> str:

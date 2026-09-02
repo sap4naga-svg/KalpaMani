@@ -34,22 +34,37 @@ than [ADR-0007](../../../docs/decisions/ADR-0007-cloud-first-research-data-plane
 ### Not everything in this directory has been applied
 
 The `APPLIED` line above describes the 2026-08-27 apply and the 36 resources it created. It is
-**not** a statement that every file here has been applied, and one file has not been:
+**not** a statement that every file here has been applied, and two files have not been:
 
 ```
-qualification_policies.tf   OFFLINE CANDIDATE -- NEVER PLANNED, NEVER APPLIED
+qualification_policies.tf     OFFLINE CANDIDATE -- NEVER PLANNED, NEVER APPLIED
+qualification_principals.tf   OFFLINE CANDIDATE -- NEVER PLANNED, NEVER APPLIED
 ```
 
-It declares the two ADR-0018 §10 qualification permission sets, as amended by
+`qualification_policies.tf` declares the two ADR-0018 §10 qualification permission sets, as
+amended by
 [ADR-0019](../../../docs/decisions/ADR-0019-write-only-acquisition-collision-policy.md) and
 [ADR-0020](../../../docs/decisions/ADR-0020-request-scoped-qualification-payload-identity.md), and
 **two `aws_iam_policy` resources are the whole of it** — no role, no trust policy, no attachment,
 no bucket and no bucket property. A managed policy attached to no principal grants nothing.
 
-**No `terraform plan`, `apply`, `init` or `validate` has been run against it**, so
-`terraform state` still holds the 36 resources the 2026-08-27 apply created. Applying it is a
-separate, ungranted authorization, and naming a principal to hold either policy is a separate
-architecture decision that accepted authority has not taken — see the file's own header.
+`qualification_principals.tf` names the holder that file deliberately left unnamed, under
+[ADR-0021](../../../docs/decisions/ADR-0021-qualification-runtime-principal-and-trust-model.md):
+**two IAM Identity Center permission sets, one customer-managed-policy reference each, and two
+group-principal account assignments** — and that is the whole of it. There is still **no
+`aws_iam_role`, no trust policy, no IAM user, no access key, no instance profile, no service
+principal and no `sts:AssumeRole`**: Identity Center creates and owns the runtime role each
+assignment produces, and this repository authors no trust boundary of its own. Neither policy's
+action or resource matrix is touched. Every environment binding it needs — the Identity Center
+instance, the governed operator group and the target account — is an input with **no default**,
+and there is no data source of any kind, so nothing here reads the live environment.
+
+**No `terraform plan`, `apply`, `init` or `validate` has been run against either file**, so
+`terraform state` still holds the 36 resources the 2026-08-27 apply created. **A declaration is
+not a resource**: no permission set, assignment, generated role or policy attachment exists
+because these files describe one, whether any such object exists in AWS is **NOT ESTABLISHED**
+here, and **no principal has been granted any AWS authority**. Applying either file is a
+separate, ungranted authorization — see each file's own header.
 
 ---
 

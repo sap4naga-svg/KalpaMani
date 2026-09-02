@@ -388,6 +388,7 @@ INFRA_FILES = (
     "ecs.tf",
     "logging.tf",
     "qualification_policies.tf",
+    "qualification_principals.tf",
     "terraform.tfvars.example",
 )
 
@@ -4321,6 +4322,120 @@ def _qualification_policy_declarations() -> list[str]:
     for path in sorted(infra.rglob("*.tf")):
         found.extend(declared.findall(strip_hcl_comments(read(path))))
     return sorted(found)
+
+
+def _principal_declarations(resource_type: str) -> list[str]:
+    """Every label the ADR-0021 principals candidate declares for ``resource_type``.
+
+    Asked of that one file rather than of ``infra/``: the question is what the
+    candidate declares, and a directory-wide scan would answer a different one the
+    moment a second decision adds a file.
+    """
+    if not ADR_0021_PRINCIPALS_TF.is_file():
+        return []
+    hcl = strip_hcl_comments(read(ADR_0021_PRINCIPALS_TF))
+    return sorted(re.findall(rf'resource\s+"{resource_type}"\s+"([^"]+)"', hcl))
+
+
+def _principals_hcl() -> str:
+    """The principals candidate with its explanatory comments removed.
+
+    It names, at length, the constructs it deliberately does not declare. A raw scan
+    would report each of those explanations as the thing it forbids.
+    """
+    if not ADR_0021_PRINCIPALS_TF.is_file():
+        return ""
+    return strip_hcl_comments(read(ADR_0021_PRINCIPALS_TF))
+
+
+def hcl_block_body(hcl: str, header: str) -> str | None:
+    """The brace-matched body of the first block whose header begins with ``header``.
+
+    Brace-matched rather than line-scanned so a nested block -- a ``tags`` map, a
+    ``customer_managed_policy_reference`` -- ends where it actually ends. Returns
+    ``None`` when no such block exists or its braces never close, because an
+    unbalanced file must fail a check rather than silently yield an empty body that
+    every ``not in`` guard would then pass.
+
+    Comment stripping is the caller's: this is a pure function over the text handed
+    in, so a test can drive it with a mutated declaration.
+    """
+    start = hcl.find(header)
+    if start < 0:
+        return None
+    opening = hcl.find("{", start)
+    if opening < 0:
+        return None
+    depth = 0
+    for index in range(opening, len(hcl)):
+        character = hcl[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return hcl[opening + 1 : index]
+    return None
+
+
+def declared_permission_set_names(hcl: str) -> dict[str, str | None]:
+    """Each declared permission set's resolved ``name``, keyed by resource label.
+
+    The value returned is the string the **provider** would receive, resolved the
+    way Terraform would resolve it: a ``name = local.x`` reference is followed into
+    the file's own ``locals`` block, and only the literal at the end of that chain
+    is reported. Checking the local alone would miss a resource rewired to the wrong
+    one; checking the resource alone could not see the value at all.
+
+    A ``name`` that is absent, or that is neither a quoted literal nor a resolvable
+    ``local.`` reference -- an interpolation, a function call, a variable, a missing
+    local -- maps to ``None``. That is a defect the caller must report, never a
+    check quietly skipped: an unresolvable name is exactly the shape in which an
+    unmeasured value would reach the provider.
+    """
+    locals_body = hcl_block_body(hcl, "locals {")
+    resolved: dict[str, str] = (
+        dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', locals_body)) if locals_body else {}
+    )
+
+    names: dict[str, str | None] = {}
+    for label in re.findall(r'resource\s+"aws_ssoadmin_permission_set"\s+"([^"]+)"', hcl):
+        body = hcl_block_body(hcl, f'resource "aws_ssoadmin_permission_set" "{label}"')
+        if body is None:
+            names[label] = None
+            continue
+        assignment = re.search(r"^\s*name\s*=\s*(.+?)\s*$", body, re.MULTILINE)
+        if assignment is None:
+            names[label] = None
+            continue
+        expression = assignment.group(1)
+        literal = re.fullmatch(r'"([^"]*)"', expression)
+        if literal is not None:
+            names[label] = literal.group(1)
+            continue
+        reference = re.fullmatch(r"local\.(\w+)", expression)
+        names[label] = resolved.get(reference.group(1)) if reference is not None else None
+    return names
+
+
+def verifier_permission_set_names(source: str) -> dict[str, str | None]:
+    """Each qualification actor the governed verifier maps to a permission-set name.
+
+    Read out of the verifier's own source rather than by importing it: the audit
+    stays a text guard over operational code, and the mapping it reports is the one
+    a reviewer reads in the file. Keys are the ``QualificationActor`` member names.
+
+    A mapping block that is absent maps every actor to nothing, which the caller
+    reports -- the gate would then admit no actor, and a guard that returned an
+    empty dictionary would pass every ``all()`` written over it.
+    """
+    body = hcl_block_body(source, "QUALIFICATION_PERMISSION_SETS")
+    if body is None:
+        return {}
+    return {
+        member: value
+        for member, value in re.findall(r'QualificationActor\.(\w+):\s*"([^"]*)"', body)
+    }
 
 
 def _unframed_occurrences(text: str, phrase: str, framing: str) -> int:
@@ -8926,10 +9041,81 @@ ADR_0021_HISTORICAL_PROPOSED: Final = (
 #: The two permission sets the proposal names, and the two profiles that reach
 #: them. Written once here and read by every guard, so a rename cannot leave one
 #: spelling in the audit and another in the documents.
+#:
+#: ``ADR_0021_ACQUISITION_PERMISSION_SET`` is the value ADR-0021 accepted and
+#: ADR-0022 **retired**. It is kept, and it is deliberately not corrected: it is
+#: what ADR-0021's own document must go on saying, and what the ADR-0022 guards
+#: measure at 33 characters. It is a HISTORICAL value, and no implementation
+#: surface may declare it -- see :data:`ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET`.
 ADR_0021_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquisition"
 ADR_0021_ASSESSMENT_PERMISSION_SET: Final = "KalpaManiQualificationAssessment"
 ADR_0021_ACQUISITION_PROFILE: Final = "kalpamani-qualification-acquisition"
 ADR_0021_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"
+
+#: The acquisition permission-set name ADR-0022 accepted.
+#:
+#: The constant name is unchanged on purpose: it is read by the governance tests
+#: and by every guard below, and renaming a value at the moment its status changes
+#: would make the inversion look like a rewrite of what was proposed.
+#:
+#: Defined here rather than beside the other ADR-0022 constants, because the actor
+#: table below reads it and Python needs the value first. One definition, in one
+#: place: a second spelling nearer the guards is how the declared name and the
+#: required name drift apart, which is the class of defect ADR-0022 corrects.
+ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquire"
+
+#: The OFFLINE candidate that declares the two runtime principals. A separate file
+#: from ``qualification_policies.tf`` on purpose: PR #52's candidate declares the two
+#: managed policies and must keep declaring exactly those, and a guard that scans one
+#: file cannot stay precise if two decisions share it.
+ADR_0021_PRINCIPALS_TF: Final = INFRA / "qualification_principals.tf"
+
+#: The governed verifier, which owns the account binding, the profile pin and the one
+#: ``sts:GetCallerIdentity`` call site. ADR-0021 adds an actor-specific gate beside
+#: the account gate there rather than a second implementation elsewhere.
+ADR_0021_VERIFIER: Final = REPO_ROOT / "scripts" / "aws_foundation_verify.py"
+
+#: Each actor: its label, its permission-set name, its governed profile and the entry
+#: point that must prove it. Read from the constants above rather than retyped, so a
+#: rename cannot leave one spelling in a guard and another in the code it guards.
+#:
+#: The acquisition name is the ADR-0022 one. This table describes what the
+#: implementation must declare *now*, which is not what ADR-0021's document
+#: records: the retired 33-character name stays in the decision record and may
+#: appear in no surface this table reaches.
+ADR_0021_ACTORS: Final[tuple[tuple[str, str, str, Path], ...]] = (
+    (
+        "acquisition",
+        ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET,
+        ADR_0021_ACQUISITION_PROFILE,
+        REPO_ROOT / "scripts" / "sharadar_empirical_qualification.py",
+    ),
+    (
+        "assessment",
+        ADR_0021_ASSESSMENT_PERMISSION_SET,
+        ADR_0021_ASSESSMENT_PROFILE,
+        REPO_ROOT / "scripts" / "sharadar_qualification_assessment.py",
+    ),
+)
+
+#: The one bounded session duration, as an ISO-8601 duration.
+ADR_0021_SESSION_DURATION: Final = "PT1H"
+
+#: Terraform constructs the principals candidate must never carry. Each would either
+#: mint an identity ADR-0021 rejected, author a trust boundary Identity Center owns,
+#: or read the live environment to write a declaration.
+ADR_0021_FORBIDDEN_PRINCIPAL_HCL: Final[dict[str, str]] = {
+    'resource "aws_iam_role"': "Identity Center generates and owns the runtime role",
+    'resource "aws_iam_user"': "no IAM user is permitted for qualification",
+    'resource "aws_iam_access_key"': "no long-lived access key is permitted",
+    'resource "aws_iam_instance_profile"': "a workload principal contradicts the operator model",
+    "assume_role_policy": "no custom trust policy is authored under this decision",
+    "sts:AssumeRole": "the one runtime identity operation is sts:GetCallerIdentity",
+    'data "aws_ssoadmin_instances"': "reading the live environment is a separate gate",
+    'data "aws_identitystore_group"': "reading the live environment is a separate gate",
+    'data "aws_caller_identity"': "reading the live environment is a separate gate",
+    "inline_policy": "each permission set references the merged managed policy instead",
+}
 
 #: What the ADR itself must say. Section-scoped guards cover the status documents;
 #: this list is the decision document's own contract.
@@ -9938,12 +10124,8 @@ PERMISSION_SET_NAME_MAX: Final = 32
 #: The provider's allowed-character grammar for that attribute.
 PERMISSION_SET_NAME_GRAMMAR: Final = re.compile(r"[\w+=,.@-]+")
 
-#: The acquisition permission-set name ADR-0022 accepted.
-#:
-#: The constant name is unchanged on purpose: it is read by the governance tests
-#: and by every guard below, and renaming a value at the moment its status changes
-#: would make the inversion look like a rewrite of what was proposed.
-ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquire"
+#: The accepted acquisition permission-set name is defined above
+#: :data:`ADR_0021_ACTORS`, which reads it. It is not restated here.
 
 #: The acquisition permission-set name ADR-0022 retires.
 #:
@@ -19066,6 +19248,166 @@ def main() -> int:
         == ["qualification_acquisition", "qualification_assessment"],
         "the accepted ADR-0018 s.10 permission sets are no longer expressed in Terraform",
     )
+
+    # -- ADR-0021: the two runtime principals, declared and applied to nothing ----
+    #
+    # PR #52 declared the two managed policies and named no holder, because accepted
+    # authority determined no runtime trust principal. ADR-0021 chose one. These
+    # guard the offline candidate that expresses that choice -- in both directions,
+    # so deleting it fails as loudly as corrupting it.
+    f.check(
+        "the ADR-0021 principals candidate exists",
+        ADR_0021_PRINCIPALS_TF.is_file(),
+        "the accepted runtime principals would then be expressed nowhere in Terraform",
+    )
+    f.check(
+        "the principals candidate declares exactly the two permission sets",
+        _principal_declarations("aws_ssoadmin_permission_set")
+        == ["qualification_acquisition", "qualification_assessment"],
+        "one shared permission set destroys the two-actor compromise argument",
+    )
+    f.check(
+        "the principals candidate declares exactly two group account assignments",
+        _principal_declarations("aws_ssoadmin_account_assignment")
+        == ["qualification_acquisition", "qualification_assessment"],
+        "the group assignment is the authorization binding; there is no other path in",
+    )
+    f.check(
+        "each permission set is bounded to a one-hour session",
+        _principals_hcl().count(f'qualification_session_duration = "{ADR_0021_SESSION_DURATION}"')
+        == 1
+        and _principals_hcl().count("session_duration = local.qualification_session_duration") == 2,
+        "one hour is the bound, and raising it is an ADR change rather than a setting",
+    )
+    f.check(
+        "no principals input carries a default",
+        ADR_0021_PRINCIPALS_TF.is_file()
+        and re.search(r"^\s+default\s*=", _principals_hcl(), re.MULTILINE) is None,
+        "a default binding value is either wrong everywhere or is a committed identifier",
+    )
+    for token, why in ADR_0021_FORBIDDEN_PRINCIPAL_HCL.items():
+        f.check(
+            f"the principals candidate declares no {token}",
+            token not in _principals_hcl(),
+            why,
+        )
+    for shape in ("ssoins-", "awsapps.com", "AWSReservedSSO_"):
+        f.check(
+            f"the principals candidate carries no {shape} literal",
+            shape not in read(ADR_0021_PRINCIPALS_TF)
+            if ADR_0021_PRINCIPALS_TF.is_file()
+            else False,
+            "instance ids, start URLs and generated role names are environment bindings",
+        )
+    for label, permission_set, profile, entry in ADR_0021_ACTORS:
+        f.check(
+            f"the {label} permission set references only its own merged managed policy",
+            f"name = aws_iam_policy.qualification_{label}.name" in _principals_hcl(),
+            "the PR #52 action matrices are referenced, never restated or crossed over",
+        )
+        f.check(
+            f"the governed verifier names the {label} permission set",
+            f'"{permission_set}"' in read(ADR_0021_VERIFIER),
+            "the identity gate matches the exact actor-specific generated-role prefix",
+        )
+        f.check(
+            f"the governed verifier names the {label} profile",
+            f'"{profile}"' in read(ADR_0021_VERIFIER),
+            "the profile is routing input, and the gate still has to know which one",
+        )
+        f.check(
+            f"the {label} entry point pins the governed {label} profile",
+            entry.is_file() and f'EXPECTED_PROFILE: Final = "{profile}"' in read(entry),
+            "the single shared foundation profile cannot express two actors",
+        )
+        f.check(
+            f"the {label} entry point proves its actor through the governed identity gate",
+            entry.is_file()
+            and f"QualificationActor.{label.upper()}" in read(entry)
+            and "qualification_identity_gate" in read(entry)
+            and "import identity_gate" not in read(entry),
+            "an account-only gate cannot tell one qualification actor from the other",
+        )
+
+    # -- ADR-0022: the provider's own name limit, measured on what is DECLARED ----
+    #
+    # The guards above ask whether the implementation names the actors this audit
+    # expects. These ask a different question, and it is the one PR #56 could not
+    # answer: is the name the provider would actually receive a name the provider
+    # can actually build? ADR-0021 accepted a 33-character acquisition name and
+    # `aws_ssoadmin_permission_set.name` is validated to 1-32, so the declaration
+    # was unbuildable while every prose statement about it agreed with itself.
+    #
+    # So these read the value out of the Terraform and out of the verifier and
+    # MEASURE it. Nothing here compares one constant this file owns with another:
+    # `declared_permission_set_names` resolves `name = local.x` through the file's
+    # own locals, and `verifier_permission_set_names` parses the gate's mapping, so
+    # editing either surface moves what is checked.
+    declared_names = declared_permission_set_names(_principals_hcl())
+    verifier_names = verifier_permission_set_names(read(ADR_0021_VERIFIER))
+
+    f.check(
+        "every declared permission-set name resolves to a literal",
+        bool(declared_names) and all(value is not None for value in declared_names.values()),
+        "a name that is absent, interpolated or an unresolvable local reaches the "
+        "provider unmeasured",
+    )
+    for label, declared in sorted(declared_names.items()):
+        f.check(
+            f"the declared {label} name satisfies the pinned provider's name rules",
+            declared is not None and not permission_set_name_defects(declared),
+            ", ".join(permission_set_name_defects(declared)) if declared is not None else "",
+        )
+    f.check(
+        # Both directions: the accepted acquisition name must be what is declared,
+        # and the unchanged assessment name must still be what is declared.
+        "the declaration carries exactly the two accepted permission-set names",
+        declared_names
+        == {
+            "qualification_acquisition": ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET,
+            "qualification_assessment": ADR_0021_ASSESSMENT_PERMISSION_SET,
+        },
+        "the Terraform declares a permission-set name the accepted architecture does not",
+    )
+    f.check(
+        # The gate admits a role named after the permission set. A gate naming one
+        # name while the Terraform declares another would refuse the only identity
+        # the declaration can ever produce.
+        "the governed verifier maps both actors to exactly the declared names",
+        verifier_names
+        == {
+            "ACQUISITION": ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET,
+            "ASSESSMENT": ADR_0021_ASSESSMENT_PERMISSION_SET,
+        },
+        "the identity gate and the Terraform disagree about a permission-set name",
+    )
+    for member, mapped in sorted(verifier_names.items()):
+        f.check(
+            f"the verifier's {member.lower()} name satisfies the pinned provider's name rules",
+            mapped is not None and not permission_set_name_defects(mapped),
+            ", ".join(permission_set_name_defects(mapped)) if mapped is not None else "",
+        )
+    f.check(
+        # The guard has to refuse something drawn from the implementation, or it is
+        # agreeing with itself. The retired name is the value the provider rejects.
+        "the retired acquisition name is refused when measured as a declared name",
+        bool(permission_set_name_defects(ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET)),
+        "the provider-limit guard must refuse the retired 33-character name",
+    )
+    for label, permission_set, _profile, entry in ADR_0021_ACTORS:
+        surface = read(entry) if entry.is_file() else ""
+        f.check(
+            f"the {label} implementation surfaces carry no retired permission-set name",
+            ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET
+            not in _principals_hcl() + read(ADR_0021_VERIFIER) + surface,
+            "a retired, unbuildable name in an active surface is the defect ADR-0022 corrects",
+        )
+        f.check(
+            f"the {label} actor's expected name is the one measured against the provider",
+            not permission_set_name_defects(permission_set),
+            ", ".join(permission_set_name_defects(permission_set)),
+        )
+
     # This audit is excluded by name, and only this audit. It is a governance
     # guard, so it *has* to name the ADR it guards -- but it constructs no client,
     # sends no request and is not an operational surface. Excluding it by exact

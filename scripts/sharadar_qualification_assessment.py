@@ -64,8 +64,15 @@ from typing import Any, Final
 #: acquisition command's**, so neither authorization can be pasted into the other.
 AUTHORIZATION_FLAG: Final = "--i-am-the-operator-authorizing-qualification-assessment"
 
-#: The profile and region the governed foundation is pinned to.
-EXPECTED_PROFILE: Final = "kalpamani-foundation"
+#: The governed profile this ACTOR is invoked under, and the region the foundation is
+#: pinned to. A test asserts the verifier declares this same literal for this same
+#: actor, so the two spellings cannot drift.
+#:
+#: ADR-0021 gives the two qualification actors two distinct profiles, and this is the
+#: assessment one. Selecting it is ROUTING, never proof: it chooses which credential
+#: source the SDK resolves, and establishes nothing about the identity that results.
+#: The identity gate at stage 4 is what proves the actor.
+EXPECTED_PROFILE: Final = "kalpamani-qualification-assessment"
 EXPECTED_REGION: Final = "us-east-1"
 
 #: The Terraform output holding the licensed research bucket. The control bucket has
@@ -486,10 +493,22 @@ def _ambient_profile() -> str:
 
 
 def _governed_identity_gate() -> str | None:
-    """The existing account identity gate. Not a second implementation of one."""
-    from aws_foundation_verify import identity_gate  # type: ignore[import-not-found]
+    """The governed ADR-0021 identity gate, bound to the ASSESSMENT actor.
 
-    return identity_gate()  # type: ignore[no-any-return]
+    Not a second implementation of one: the account binding, the profile pin and the
+    single ``sts:GetCallerIdentity`` call all live in the existing verifier, and this
+    supplies only which of the two actors is being proved. A credential that resolves
+    to the acquisition permission-set role refuses here, before any locator key is
+    derived and before any licensed object is read.
+    """
+    from aws_foundation_verify import (  # type: ignore[import-not-found]
+        QualificationActor,
+        qualification_identity_gate,
+    )
+
+    return qualification_identity_gate(  # type: ignore[no-any-return]
+        QualificationActor.ASSESSMENT
+    )
 
 
 def _governed_licensed_bucket() -> str:
