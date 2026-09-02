@@ -8882,6 +8882,740 @@ QUALIFICATION_IAM_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# ADR-0021 -- the qualification runtime principal and trust model, PROPOSED
+# ---------------------------------------------------------------------------
+#
+# PR #52 merged two permission-set declarations and deliberately chose no holder
+# for them, because accepted authority determined no runtime trust principal.
+# ADR-0021 is the gate that chooses one, and it is **proposed**: every guard below
+# exists to keep a proposal from being read as an accepted decision, an accepted
+# decision from being read as deployed infrastructure, and either from being read
+# as a live AWS object nothing has checked.
+
+#: The proposed ADR. Deliberately **absent** from :data:`MERGED_ADR_STATUS`: that
+#: registry governs ADRs whose merge has occurred, and registering an unmerged one
+#: would assert the authority the document itself refuses. A guard below asserts
+#: the absence, so registering it early fails rather than passing quietly.
+ADR_0021: Final = DECISIONS / "ADR-0021-qualification-runtime-principal-and-trust-model.md"
+
+#: The two permission sets the proposal names, and the two profiles that reach
+#: them. Written once here and read by every guard, so a rename cannot leave one
+#: spelling in the audit and another in the documents.
+ADR_0021_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquisition"
+ADR_0021_ASSESSMENT_PERMISSION_SET: Final = "KalpaManiQualificationAssessment"
+ADR_0021_ACQUISITION_PROFILE: Final = "kalpamani-qualification-acquisition"
+ADR_0021_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"
+
+#: What the ADR itself must say. Section-scoped guards cover the status documents;
+#: this list is the decision document's own contract.
+ADR_0021_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------ proposed, and not in force
+    (
+        "records the proposed status",
+        "status: proposed — no authority until the pull request introducing this adr is "
+        "independently reviewed and merged",
+    ),
+    (
+        "refuses pre-merge authority",
+        "while the pull request introducing this adr is open, adr-0021 is proposed and carries "
+        "no authority",
+    ),
+    ("records that it chooses architecture only", "this decision chooses architecture only"),
+    ("supersedes nothing", "it supersedes no prior adr"),
+    ("amends no earlier adr", "amends the text of none of them"),
+    # ------------------------------------------------------- the chosen model
+    (
+        "names identity center as the authentication root",
+        "aws iam identity center is the human authentication root",
+    ),
+    (
+        "refuses iam users and long-lived keys",
+        "no iam user or long-lived access key is permitted for qualification",
+    ),
+    (
+        "names the governed operator group",
+        "a dedicated, governed identity center operator group is the assignment subject",
+    ),
+    (
+        "defers the group identifier",
+        "the exact identity-store and group identifier is an environment-binding value and "
+        "remains unknown and unread",
+    ),
+    ("names the acquisition permission set", ADR_0021_ACQUISITION_PERMISSION_SET.lower()),
+    ("names the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET.lower()),
+    (
+        "assigns each permission set to the group in one account",
+        "each permission set is assigned to the governed operator group in the single target "
+        "account that already owns the licensed data plane",
+    ),
+    (
+        "defers the account id",
+        "the account id is an environment-binding value and must not appear in this proposal",
+    ),
+    (
+        "records that assignment creates the role",
+        "each assignment causes iam identity center to create and manage a distinct runtime iam "
+        "role in that account",
+    ),
+    (
+        "binds the acquisition policy",
+        "the acquisition permission set references only the merged acquisition managed-policy "
+        "declaration from pr #52",
+    ),
+    (
+        "binds the assessment policy",
+        "the assessment permission set references only the merged assessment managed-policy "
+        "declaration from pr #52",
+    ),
+    (
+        "rejects every custom principal",
+        "no custom `aws_iam_role`, custom role trust policy, source-profile role chain, "
+        "application assumerole, iam user, access key, ecs task role, lambda execution role, "
+        "ec2 instance profile, web-identity principal or cross-account principal is part of "
+        "this architecture",
+    ),
+    ("names the acquisition profile", ADR_0021_ACQUISITION_PROFILE),
+    ("names the assessment profile", ADR_0021_ASSESSMENT_PROFILE),
+    (
+        "uses the identity center credential provider",
+        "those profiles use the sdk's iam identity center credential provider and return "
+        "short-lived, refreshable credentials for their corresponding permission-set role",
+    ),
+    (
+        "binds each entry point to its own actor",
+        "the acquisition entry point accepts only the acquisition permission-set role identity, "
+        "and assessment accepts only assessment",
+    ),
+    (
+        "fails cross-use closed",
+        "cross-use fails closed before provider, s3 or private-evidence activity",
+    ),
+    (
+        "bounds the session to one hour",
+        "session duration is bounded to one hour per permission set",
+    ),
+    (
+        "explains the session bound",
+        "that covers the 1,800-second run deadline with operational margin without authorizing "
+        "an unbounded session",
+    ),
+    (
+        "records what role separation is",
+        "role separation is a process and permission separation, not a claim that two different "
+        "humans approve the two stages",
+    ),
+    (
+        "permits one operator holding both",
+        "one governed operator may be assigned both permission sets but must invoke each actor "
+        "under its correct profile",
+    ),
+    # --------------------------------------------------------- the trust model
+    (
+        "names the assignment as the authorization binding",
+        "the governed identity center group assignment is the authorization binding",
+    ),
+    (
+        "records that identity center owns the trust",
+        "iam identity center manages the generated role and its service trust, and kalpamani "
+        "does not author a custom trust policy under this decision",
+    ),
+    (
+        "names the later implementation surface",
+        "the two permission sets, account assignments, customer-managed-policy references, "
+        "session durations and the profile contract are the later implementation surface",
+    ),
+    (
+        "records suffix rotation",
+        "removing all assignments may delete and later recreate the generated role with a new "
+        "suffix",
+    ),
+    (
+        "refuses to infer live existence",
+        "no live assignment, permission set, role or policy attachment exists merely because "
+        "this decision describes it",
+    ),
+    # ----------------------------------------------------- the identity contract
+    (
+        "binds account and role prefix",
+        "the identity gate binds the exact target account plus the exact permission-set "
+        "role-name prefix and a validated aws-generated suffix grammar",
+    ),
+    (
+        "refuses to pin one full arn",
+        "it does not pin one full generated role arn forever, because the suffix may rotate "
+        "when assignments are removed and recreated",
+    ),
+    ("refuses profile name as proof", "the profile name is routing input, not proof"),
+    (
+        "keeps get-caller-identity as the runtime proof",
+        "`sts:getcalleridentity` remains the runtime proof during a later authorized execution",
+    ),
+    (
+        "refuses every other credential source",
+        "credentials from default-profile fallback, environment access keys, shared long-lived "
+        "credential files, a differently named sso role, or any other provider chain are refused",
+    ),
+    (
+        "keeps the suffix grammar structural",
+        "the suffix grammar validates structure, not provenance",
+    ),
+    (
+        "marks the sample as architecture",
+        "the sample is architecture, not a file to create in this task",
+    ),
+    # -------------------------------------------------------- preserved boundaries
+    (
+        "preserves application behaviour",
+        "the decision changes no application behaviour, no stored data and no arithmetic",
+    ),
+    (
+        "adds no operation and no deadline term",
+        "the identity and trust decision adds no s3 operation and changes no deadline term",
+    ),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    ("preserves the locator reserve", "l >= 3 * t_s3 + c"),
+    ("preserves the admission rule", "remaining >= t_req + 3 * t_s3 + l"),
+    # ------------------------------------------------------------- the later gates
+    (
+        "authorizes architecture only",
+        "acceptance of adr-0021 would authorize architecture only",
+    ),
+    (
+        "names the next gate",
+        "the next gate after adr acceptance is an offline implementation gate",
+    ),
+    (
+        "keeps the three gates separate",
+        "implementation, infrastructure mutation and execution stay three separate gates and "
+        "are never collapsed into one",
+    ),
+    (
+        "grants no principal authority",
+        "merging this adr would grant no principal any aws authority",
+    ),
+    # ------------------------------------------------------------------- sources
+    ("cites the permission-set concept page", "userguide/permissionsetsconcept.html"),
+    ("cites the customer-managed-policy page", "userguide/howtocmp.html"),
+    ("cites the referencing page", "userguide/referencingpermissionsets.html"),
+    ("cites the sdk credential-provider page", "guide/feature-sso-credentials.html"),
+    ("cites the cli profile page", "userguide/cli-configure-sso.html"),
+    ("cites the credential-retrieval page", "userguide/howtogetcredentials.html"),
+    ("cites the temporary-credentials page", "userguide/id_credentials_temp.html"),
+    ("cites the principal-element page", "userguide/reference_policies_elements_principal.html"),
+    ("records the retrieval date", "retrieved **2026-09-01**".replace("**", "")),
+    (
+        "treats fetched pages as untrusted",
+        "no command suggested by a fetched page was executed",
+    ),
+)
+
+#: The eighteen identity cases the table must answer. Each is required
+#: individually, so deleting one row fails rather than shortening a list nobody
+#: counts.
+ADR_0021_DECISION_CASES: Final[tuple[tuple[str, str], ...]] = (
+    ("the acquisition pass case", "correct acquisition profile and acquisition role"),
+    ("the assessment pass case", "correct assessment profile and assessment role"),
+    (
+        "the acquisition-to-assessment cross case",
+        "acquisition profile resolving to assessment role",
+    ),
+    (
+        "the assessment-to-acquisition cross case",
+        "assessment profile resolving to acquisition role",
+    ),
+    ("the wrong-account case", "correct profile name but wrong account"),
+    ("the wrong-prefix case", "correct account but wrong role prefix"),
+    (
+        "the malformed-suffix case",
+        "valid role prefix with a malformed or missing generated suffix",
+    ),
+    ("the rotated-arn case", "a prior full arn after suffix rotation"),
+    ("the default-profile case", "| default profile |"),
+    ("the no-profile case", "| no profile |"),
+    ("the environment-key case", "environment access key credentials"),
+    ("the iam-user case", "| iam user principal |"),
+    ("the service-principal case", "ecs, lambda, ec2 or other service principal"),
+    ("the chained-role case", "| custom chained role |"),
+    ("the expired-session case", "expired or absent sso session"),
+    ("the unassigned-group case", "group unassigned from the permission set"),
+    ("the dual-assignment case", "one operator assigned both permission sets"),
+    ("the unparseable-identity case", "unknown or unparseable caller identity"),
+)
+
+#: The alternatives the ADR must evaluate and reject. A design that names only the
+#: option it took has not shown its work.
+ADR_0021_REJECTED_ALTERNATIVES: Final[tuple[tuple[str, str], ...]] = (
+    ("rejects long-lived keys", "long-lived iam user or access keys"),
+    ("rejects a shared actor", "one shared role or permission set for both actors"),
+    ("rejects sso role chaining", "an sso source role chained into custom qualification roles"),
+    ("rejects custom trust policies", "direct custom iam roles with hand-written trust policies"),
+    (
+        "rejects service principals",
+        "ecs, lambda, ec2, oidc or other service and workload principals",
+    ),
+    ("rejects cross-account execution", "cross-account execution"),
+    ("rejects pinning the full arn", "pinning the complete generated"),
+    (
+        "rejects whole-account trust",
+        "trusting the whole aws account without a narrower identity contract",
+    ),
+    ("rejects profile-name authorization", "profile-name-only authorization"),
+    ("rejects environment fallback", "environment-variable credential fallback"),
+)
+
+#: The exact level-three heading that opens ADR-0021's status section in both
+#: status documents. The anchor is the heading, never a phrase being tested: a
+#: section located by one of its own required phrases would go missing the moment
+#: that phrase was deleted, which is the deletion the guard exists to catch.
+ADR_0021_STATUS_HEADING: Final = (
+    "The qualification runtime principal and trust model — PROPOSED, and nothing is implemented"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+ADR_0021_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+ADR_0021_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "What the proposal chooses",
+    "The trust model, precisely",
+    "The identity contract",
+    "What it preserves",
+    "Status",
+)
+
+#: The heading each document's ADR-0021 section must be followed by.
+#:
+#: Both documents are terminated by the qualification-IAM status heading, because
+#: this section sits immediately before it. That placement is deliberate rather
+#: than chronological: inserting after ADR-0020's section instead would have moved
+#: the terminator of a section whose boundary an existing guard already pins, and
+#: a new slice may not break a merged one to make room for itself.
+ADR_0021_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": f"### {QUALIFICATION_IAM_STATUS_HEADING}",
+    "README.md": f"### {QUALIFICATION_IAM_STATUS_HEADING}",
+}
+
+
+class Adr0021SectionScan(NamedTuple):
+    """Every ADR-0021 status section a document carries, and its structure defects.
+
+    Separate from the other section scans so a caller cannot pass one where
+    another is expected, and reported the same way for the same reason: a
+    malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_adr_0021_status_sections(text: str) -> Adr0021SectionScan:
+    """Extract ADR-0021's status section(s) from a document, by heading.
+
+    Drives the shared :func:`_scan_status_sections` rather than reimplementing it,
+    so this guard and the ADR-0020 and qualification-IAM ones cannot disagree
+    about where a section ends.
+    """
+    return Adr0021SectionScan(
+        *_scan_status_sections(
+            text,
+            heading=ADR_0021_STATUS_HEADING,
+            level=ADR_0021_STATUS_HEADING_LEVEL,
+            subsections=ADR_0021_STATUS_SUBSECTIONS,
+            label="ADR-0021",
+        )
+    )
+
+
+#: What both status documents must say inside their ADR-0021 section.
+#:
+#: Section-scoped, for the reason the ADR-0020 block gives: most of these clauses
+#: are also spelled somewhere else in the same file -- "g1 / g2: open / open" has
+#: near-neighbours in four other status blocks -- so a flat scan is answered by a
+#: neighbour's copy and a section-local deletion goes unreported.
+ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0021: proposed / not in force"),
+    (
+        "refuses pre-merge authority",
+        "the proposed architecture carries no authority until its pull request is independently "
+        "reviewed and merged",
+    ),
+    ("records the architecture-only scope", "runtime principal/trust architecture: proposed only"),
+    (
+        "records the unimplemented permission sets",
+        "identity center permission sets: not implemented / not created",
+    ),
+    ("records the unimplemented assignments", "account assignments: not implemented / not created"),
+    (
+        "refuses to assert live role existence",
+        "runtime roles: not implemented / live existence not established",
+    ),
+    ("records the unselected principal", "runtime trust principals: not selected in aws"),
+    ("records the unimplemented attachments", "policy attachments: not implemented / not created"),
+    ("records the untouched profiles", "profiles: not created / not inspected"),
+    ("records that no authority was granted", "authority granted: none"),
+    (
+        "records the merged unapplied declarations",
+        "pr #52 policy declarations: merged / offline-reviewed / unapplied",
+    ),
+    ("records the merged synchronization", "pr #53 governance synchronization: merged"),
+    (
+        "closes terraform",
+        "terraform init/validate/plan/apply: not authorized / not run",
+    ),
+    (
+        "closes aws and provider access",
+        "aws/provider/credential access: not authorized / not performed",
+    ),
+    (
+        "closes qualification execution",
+        "qualification and binding-preflight execution: not authorized / not run",
+    ),
+    ("closes the runs", "run a / run b / combined assessment: not authorized / not run"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("keeps control deferred", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    # ------------------------------------------------------ the chosen model, in brief
+    (
+        "names identity center as the authentication root",
+        "aws iam identity center is the human authentication root",
+    ),
+    (
+        "refuses iam users and long-lived keys",
+        "no iam user or long-lived access key is permitted for qualification",
+    ),
+    (
+        "names the governed operator group",
+        "a dedicated, governed identity center operator group is the assignment subject",
+    ),
+    ("names the acquisition permission set", ADR_0021_ACQUISITION_PERMISSION_SET.lower()),
+    ("names the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET.lower()),
+    ("names the acquisition profile", ADR_0021_ACQUISITION_PROFILE),
+    ("names the assessment profile", ADR_0021_ASSESSMENT_PROFILE),
+    (
+        "defers the group identifier",
+        "the exact identity-store and group identifier is an environment-binding value and "
+        "remains unknown and unread",
+    ),
+    (
+        "defers the account id",
+        "the account id is an environment-binding value and must not appear in the proposal",
+    ),
+    (
+        "rejects every custom principal",
+        "no custom `aws_iam_role`, custom role trust policy, source-profile role chain, "
+        "application assumerole, iam user, access key, ecs task role, lambda execution role, "
+        "ec2 instance profile, web-identity principal or cross-account principal is part of "
+        "this architecture",
+    ),
+    (
+        "uses the identity center credential provider",
+        "those profiles use the sdk's iam identity center credential provider and return "
+        "short-lived, refreshable credentials for their corresponding permission-set role",
+    ),
+    (
+        "bounds the session to one hour",
+        "session duration is bounded to one hour per permission set",
+    ),
+    # --------------------------------------------------------------- the trust model
+    (
+        "names the assignment as the authorization binding",
+        "the governed identity center group assignment is the authorization binding",
+    ),
+    (
+        "records that identity center owns the trust",
+        "iam identity center manages the generated role and its service trust, and kalpamani "
+        "does not author a custom trust policy under this decision",
+    ),
+    (
+        "records suffix rotation",
+        "removing all assignments may delete and later recreate the generated role with a new "
+        "suffix",
+    ),
+    (
+        "refuses to infer live existence",
+        "no live assignment, permission set, role or policy attachment exists merely because "
+        "the decision describes it",
+    ),
+    (
+        "records what role separation is",
+        "role separation is a process and permission separation, not a claim that two different "
+        "humans approve the two stages",
+    ),
+    (
+        "permits one operator holding both",
+        "one governed operator may be assigned both permission sets but must invoke each actor "
+        "under its correct profile",
+    ),
+    # ----------------------------------------------------------- the identity contract
+    (
+        "binds each entry point to its own actor",
+        "the acquisition entry point accepts only the acquisition permission-set role identity, "
+        "and assessment accepts only assessment",
+    ),
+    (
+        "fails cross-use closed",
+        "cross-use fails closed before provider, s3 or private-evidence activity",
+    ),
+    (
+        "binds account and role prefix",
+        "the identity gate binds the exact target account plus the exact permission-set "
+        "role-name prefix and a validated aws-generated suffix grammar",
+    ),
+    (
+        "refuses to pin one full arn",
+        "it does not pin one full generated role arn forever, because the suffix may rotate "
+        "when assignments are removed and recreated",
+    ),
+    ("refuses profile name as proof", "the profile name is routing input, not proof"),
+    (
+        "keeps get-caller-identity as the runtime proof",
+        "`sts:getcalleridentity` remains the runtime proof during a later authorized execution",
+    ),
+    (
+        "refuses every other credential source",
+        "credentials from default-profile fallback, environment access keys, shared long-lived "
+        "credential files, a differently named sso role, or any other provider chain are refused",
+    ),
+    # ------------------------------------------------------------ preserved boundaries
+    (
+        "preserves application behaviour",
+        "the decision changes no application behaviour, no stored data and no arithmetic",
+    ),
+    (
+        "adds no operation and no deadline term",
+        "the identity and trust decision adds no s3 operation and changes no deadline term",
+    ),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    ("preserves the locator reserve", "l >= 3 * t_s3 + c"),
+    ("preserves the admission rule", "remaining >= t_req + 3 * t_s3 + l"),
+    # ---------------------------------------------------------------- the later gates
+    (
+        "authorizes architecture only",
+        "acceptance of adr-0021 would authorize architecture only",
+    ),
+    (
+        "names the next gate",
+        "the next gate after adr acceptance is an offline implementation gate",
+    ),
+    (
+        "keeps the three gates separate",
+        "implementation, infrastructure mutation and execution stay three separate gates and "
+        "are never collapsed into one",
+    ),
+    (
+        "keeps the chronology",
+        "the chronology through pr #53 is preserved and unrewritten",
+    ),
+    ("amends no earlier adr", "adr-0021 amends no earlier adr document"),
+)
+
+#: Claims neither status document may make about ADR-0021, in either direction.
+#:
+#: Anchored, never loose. The load-bearing honest sentences -- "not implemented",
+#: "not created", "not selected in aws" -- must all survive, so every entry below
+#: is a positive claim a correct document cannot carry.
+ADR_0021_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    # ---------------------------------------------------------- the forward drift
+    "adr-0021: accepted",
+    "adr-0021: in force",
+    "adr-0021: merged",
+    "adr-0021: effective",
+    "adr-0021 is accepted",
+    "adr-0021 is in force",
+    "adr-0021 architecture: accepted / in force",
+    "adr-0021's conditional acceptance event has occurred",
+    "identity center permission sets: created",
+    "identity center permission sets: implemented",
+    "identity center permission sets: deployed",
+    "account assignments: created",
+    "account assignments: implemented",
+    "runtime roles: created",
+    "runtime roles: deployed",
+    "runtime roles: live",
+    "runtime trust principals: selected in aws",
+    "policy attachments: created",
+    "policy attachments: deployed",
+    "profiles: created",
+    "profiles: inspected",
+    "qualification profiles have been created",
+    "authority granted: acquisition",
+    "authority granted: assessment",
+    "a principal has received aws authority",
+    "the qualification runtime role exists in aws",
+    "an iam user is authorized for qualification",
+    "a shared qualification role",
+    "the qualification actors share one role",
+    "the runtime principal is an ecs task role",
+    "the runtime principal is a lambda execution role",
+    "the runtime principal is an ec2 instance profile",
+    "the runtime principal is an oidc principal",
+    "a custom role chain is chosen",
+    "application assumerole is chosen",
+    "the profile name proves the identity",
+    "the profile name is the identity proof",
+    "the full generated role arn is pinned permanently",
+    "qualification infrastructure is ready",
+    "deployment is unblocked",
+    "terraform access is authorized",
+    "aws access is authorized",
+    "terraform has been run",
+    "run a: authorized",
+    "run b: authorized",
+    "g1: closed",
+    "g2: closed",
+    "a production provider is selected",
+    "phase 3: complete",
+    "control: published",
+    "live trading: enabled",
+    # ---------------------------------------------------------- the reverse drift
+    #
+    # The state this proposal opens. Kept as refusals so a later synchronization
+    # cannot quietly claim the decision was never made, and so the "no principal
+    # is chosen" wording PR #52 correctly carried is not reinstated beside a
+    # proposal that chooses one.
+    "adr-0021: absent",
+    "adr-0021 does not exist",
+    "no runtime principal has been proposed",
+    "no trust model has been proposed",
+    "the runtime principal question is unanswered by any proposal",
+)
+
+#: What the implementation plan must say. The plan is a separate document with a
+#: separate reader, and merged main has twice carried a fact in one status file
+#: and a stale contradiction in another.
+ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the proposed status", "adr-0021: proposed / not in force"),
+    (
+        "refuses pre-merge authority",
+        "the proposed architecture carries no authority until its pull request is independently "
+        "reviewed and merged",
+    ),
+    ("records the architecture-only scope", "runtime principal/trust architecture: proposed only"),
+    (
+        "names the chosen model",
+        "the proposal chooses direct iam identity center permission-set roles",
+    ),
+    ("names the acquisition permission set", ADR_0021_ACQUISITION_PERMISSION_SET.lower()),
+    ("names the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET.lower()),
+    ("names the acquisition profile", ADR_0021_ACQUISITION_PROFILE),
+    ("names the assessment profile", ADR_0021_ASSESSMENT_PROFILE),
+    (
+        "defers the group identifier",
+        "the exact identity-store and group identifier is an environment-binding value and "
+        "remains unknown and unread",
+    ),
+    (
+        "defers the account id",
+        "the account id is an environment-binding value and must not appear in the proposal",
+    ),
+    (
+        "rejects every custom principal",
+        "no custom `aws_iam_role`, custom role trust policy, source-profile role chain, "
+        "application assumerole, iam user, access key, ecs task role, lambda execution role, "
+        "ec2 instance profile, web-identity principal or cross-account principal is part of "
+        "this architecture",
+    ),
+    (
+        "refuses to pin one full arn",
+        "it does not pin one full generated role arn forever, because the suffix may rotate "
+        "when assignments are removed and recreated",
+    ),
+    ("refuses profile name as proof", "the profile name is routing input, not proof"),
+    (
+        "bounds the session to one hour",
+        "session duration is bounded to one hour per permission set",
+    ),
+    (
+        "adds no operation and no deadline term",
+        "the identity and trust decision adds no s3 operation and changes no deadline term",
+    ),
+    ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
+    ("preserves zero acquisition head", "acquisition headobject: 0"),
+    ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
+    ("preserves the package envelope", "whole successful package: 485 to 490"),
+    (
+        "authorizes architecture only",
+        "acceptance of adr-0021 would authorize architecture only",
+    ),
+    (
+        "names the next gate",
+        "the next gate after adr acceptance is an offline implementation gate",
+    ),
+    (
+        "records the unimplemented permission sets",
+        "identity center permission sets: not implemented / not created",
+    ),
+    (
+        "refuses to assert live role existence",
+        "runtime roles: not implemented / live existence not established",
+    ),
+    ("records that no authority was granted", "authority granted: none"),
+    (
+        "records the merged unapplied declarations",
+        "pr #52 policy declarations: merged / offline-reviewed / unapplied",
+    ),
+    ("records the merged synchronization", "pr #53 governance synchronization: merged"),
+    (
+        "keeps the three gates separate",
+        "implementation, infrastructure mutation and execution stay three separate gates and "
+        "are never collapsed into one",
+    ),
+    ("amends no earlier adr", "adr-0021 amends no earlier adr document"),
+)
+
+#: A twelve-digit run is an AWS account id, and an ``AKIA``/``ASIA`` prefix is an
+#: access-key id. Neither may appear in a proposal that says it carries no
+#: identifier, and a placeholder in angle brackets is not one.
+ADR_0021_ACCOUNT_ID: Final = re.compile(r"(?<!\d)\d{12}(?!\d)")
+ADR_0021_ACCESS_KEY_ID: Final = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}\b")
+ADR_0021_SSO_START_URL: Final = re.compile(
+    r"https://[A-Za-z0-9-]+\.awsapps\.com/start|https://ssoins-[0-9a-f]+\."
+)
+
+#: An ARN in the proposal is legitimate only as a shape. One that carries a real
+#: account field rather than a placeholder is an identifier, whatever it is
+#: labelled.
+ADR_0021_CONCRETE_ARN: Final = re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:\d{12}:")
+
+
+def adr_0021_identifier_leaks(text: str) -> list[str]:
+    """Every concrete identifier shape the ADR-0021 proposal must not contain.
+
+    Shapes, not a denylist of values: the point is that no real account id, access
+    key id, SSO start URL or account-bearing ARN can be typed into a document that
+    says it carries none. Placeholders in angle brackets match none of these, and
+    neither do the proposal's own negative statements, which name principal
+    *types* and never values.
+    """
+    leaks: list[str] = []
+    for label, pattern in (
+        ("account id", ADR_0021_ACCOUNT_ID),
+        ("access key id", ADR_0021_ACCESS_KEY_ID),
+        ("sso start url", ADR_0021_SSO_START_URL),
+        ("account-bearing arn", ADR_0021_CONCRETE_ARN),
+    ):
+        found = pattern.search(text)
+        if found is not None:
+            leaks.append(f"{label}: {found.group(0)[:12]}")
+    return leaks
+
+
 #: Path separators and placeholder brackets a sample key legitimately contains.
 #: Everything else in a sample key segment is checked against the subject grammar
 #: below, because a worked example is exactly where a real ticker gets typed in.
@@ -16820,6 +17554,130 @@ def main() -> int:
     for label, phrase in QUALIFICATION_IAM_PLAN_REQUIRED:
         f.check(
             f"the implementation plan {label} for the qualification IAM foundation",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    # ADR-0021, the proposed qualification runtime principal and trust model. PR
+    # #52 merged two permission-set declarations and deliberately left them
+    # unheld; this proposal chooses the holder. Every check below keeps three
+    # states apart -- a proposal, an accepted decision, and a live AWS object --
+    # in both directions, because the two failure modes are opposite and a
+    # document can carry either.
+    f.check(
+        "the ADR-0021 proposal exists",
+        ADR_0021.is_file(),
+        "the proposed decision is present on this branch",
+    )
+    adr_0021_text = read(ADR_0021) if ADR_0021.is_file() else ""
+    adr_0021_flat = " ".join(adr_0021_text.replace("**", "").split()).lower()
+
+    for label, phrase in ADR_0021_SELF_REQUIRED:
+        f.check(
+            f"ADR-0021 {label}",
+            phrase in adr_0021_flat,
+            f"missing from ADR-0021: {phrase}",
+        )
+
+    for label, phrase in ADR_0021_DECISION_CASES:
+        f.check(
+            f"the ADR-0021 identity decision table covers {label}",
+            phrase in adr_0021_flat,
+            f"missing from the ADR-0021 decision table: {phrase}",
+        )
+
+    for label, phrase in ADR_0021_REJECTED_ALTERNATIVES:
+        f.check(
+            f"ADR-0021 {label}",
+            phrase in adr_0021_flat,
+            f"missing from the ADR-0021 rejected alternatives: {phrase}",
+        )
+
+    f.check(
+        # The registry governs ADRs whose merge has occurred. Registering an
+        # unmerged one would assert exactly the authority the document refuses,
+        # and the inverse check is what ADR-0018's guard was before PR #39.
+        "ADR-0021 is absent from the merged-ADR registry",
+        "ADR-0021" not in dict(MERGED_ADR_STATUS),
+        "a proposed ADR is not in force and must not be registered as merged",
+    )
+    f.check(
+        # An in-force row is the shape a merged ADR claims. A proposal must make
+        # no such claim in either document.
+        "neither status document claims ADR-0021 is in force",
+        not any("ADR-0021" in _in_force_adr_claims(t) for t in adr_0018_documents.values()),
+        "a proposed ADR must not carry an ACCEPTED / IN FORCE row",
+    )
+    f.check(
+        # Shapes, not values. The proposal states that it carries no identifier,
+        # and a worked profile sample is exactly where one gets typed in.
+        "ADR-0021 exposes no concrete AWS identifier",
+        not adr_0021_identifier_leaks(adr_0021_text),
+        ", ".join(adr_0021_identifier_leaks(adr_0021_text)),
+    )
+
+    adr_0021_sections: dict[str, tuple[str, ...]] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_adr_0021_status_sections(document)
+        f.check(
+            # One section, and structurally sound. Cardinality is checked because
+            # a phrase scan cannot see a duplicate -- a second copy only ever adds
+            # occurrences, so every phrase check stays green while two sections
+            # disagree about one decision.
+            f"{name} carries exactly one ADR-0021 status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        adr_0021_sections[name] = _section_subsection_titles(scan.sections)
+        f.check(
+            f"{name} ends the ADR-0021 section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                ADR_0021_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {ADR_0021_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in ADR_0021_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for ADR-0021",
+                phrase in section,
+                f"missing from the ADR-0021 status section of {name}: {phrase}",
+            )
+        # Document scope, plus the section named in the detail. For a presence
+        # denylist document scope already contains section scope, so widening
+        # removes nothing; naming the section tells a reader where the claim sits.
+        overstated = [
+            f"{claim} (in the ADR-0021 status section)" if claim in section else claim
+            for claim in ADR_0021_STATUS_FORBIDDEN
+            if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate ADR-0021",
+            not overstated,
+            ", ".join(overstated),
+        )
+        f.check(
+            f"{name} exposes no concrete AWS identifier in its ADR-0021 section",
+            not adr_0021_identifier_leaks(" ".join(scan.sections)),
+            ", ".join(adr_0021_identifier_leaks(" ".join(scan.sections))),
+        )
+
+    f.check(
+        # Parity, on structure rather than on prose. The two documents have twice
+        # carried a fact in one file and a stale contradiction in the other, and a
+        # section whose subsections have diverged is two answers to one question.
+        "both status documents carry the same ADR-0021 subsections, in order",
+        len(set(adr_0021_sections.values())) == 1,
+        f"subsection sequences differ: {adr_0021_sections}",
+    )
+
+    for label, phrase in ADR_0021_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for ADR-0021",
             phrase in adr_0018_plan,
             f"missing from the implementation plan: {phrase}",
         )
