@@ -3117,6 +3117,114 @@ was built, no IAM role was created, no AWS or provider request was made and no r
 it**.
 
 
+### The qualification permission-set name limit, and ADR-0022 — PROPOSED, and not in force
+
+[ADR-0022](docs/decisions/ADR-0022-qualification-permission-set-name-limit.md) proposes one
+narrow correction to an accepted architecture value. **ADR-0022: PROPOSED / NOT IN FORCE.** It is
+conditionally effective only after independent review and merge of the pull request introducing
+it, and **while that pull request is open it carries no authority.**
+
+**ADR-0021: ACCEPTED / IN FORCE**, and this proposal does not change that. It amends one value
+ADR-0021 accepted, and **ADR-0021's own document is not rewritten**.
+
+#### The defect, reproduced
+
+**PR #56: OPEN / UNMERGED / BLOCKED ON ARCHITECTURE.** **PR #56 correctly implemented ADR-0021 as
+written**, declaring the acquisition permission set under exactly the name ADR-0021 accepted —
+so **PR #56 is not defective for obeying ADR-0021**.
+
+**The PR #56 review found the 33-character provider incompatibility**, and **the independent
+review correctly refused the merge**. The pinned provider is **`hashicorp/aws` v6.62.0**, whose
+`aws_ssoadmin_permission_set` `name` attribute is validated by
+`validation.StringLenBetween(1, 32)` together with the character grammar `[\w+=,.@-]+`, mirroring
+the AWS `CreatePermissionSet` API's documented minimum length of 1 and maximum length of 32.
+
+```text
+KalpaManiQualificationAcquisition   33 characters   REFUSED on length
+KalpaManiQualificationAssessment    32 characters   accepted
+KalpaManiQualificationAcquire       29 characters   accepted
+```
+
+All three satisfy the allowed-character grammar; **the old acquisition name fails on length
+alone**. **The defect is in the accepted architecture, not in the implementation**, which is why
+correcting only PR #56 would leave the implementation contradicting the decision governing it.
+
+#### The decision
+
+**Proposed acquisition permission-set name: `KalpaManiQualificationAcquire`**, exactly **29
+characters**, retiring `KalpaManiQualificationAcquisition`. **The currently accepted acquisition
+permission-set name remains ADR-0021's until ADR-0022 is merged, and becomes historical only on
+that merge** — the 33-character name is recorded here as historical and defect context, and
+**never as the proposed or current replacement**.
+
+**If ADR-0022 is accepted, the acquisition generated-role prefix becomes**
+`AWSReservedSSO_KalpaManiQualificationAcquire_`. **That prefix is not effective while ADR-0022
+remains proposed.**
+
+#### What it preserves, unchanged
+
+**The assessment permission-set name is unchanged** — `KalpaManiQualificationAssessment`. **Both
+profile names are unchanged** — `kalpamani-qualification-acquisition` and
+`kalpamani-qualification-assessment`. **The suffix grammar is unchanged**, and ADR-0022 does not
+reopen it: the PR #56 review independently approved it. The acquisition and assessment actor
+identities and semantics, one-hour sessions, Identity Center group assignments,
+customer-managed-policy references, exact-account verification, STS assumed-role parsing and
+role-prefix verification are each unchanged, and the suffix grammar still proves **structure, not
+provenance**.
+
+**ADR-0017, ADR-0019 and ADR-0020 are unchanged**, and so is every operation count and deadline
+term:
+
+```text
+acquisition PutObject: 145 to 147
+acquisition HeadObject: 0
+acquisition GetObject: 0
+two successful runs: 290 to 294
+assessment: 195 to 196
+whole successful package: 485 to 490
+L >= 3 * T_s3 + C
+remaining >= T_req + 3 * T_s3 + L
+```
+
+#### Status
+
+```text
+ADR-0021:                                         ACCEPTED / IN FORCE
+ADR-0022:                                         PROPOSED / NOT IN FORCE
+PR #56:                                           OPEN / UNMERGED / BLOCKED ON ARCHITECTURE
+PR #56 correction:                                NOT AUTHORIZED / NOT BEGUN
+proposed acquisition permission-set name:         KalpaManiQualificationAcquire
+assessment permission-set name:                   UNCHANGED
+acquisition and assessment profiles:              UNCHANGED
+suffix grammar:                                   UNCHANGED
+PR #56 Terraform declarations:                    UNMERGED / UNAPPLIED
+permission-set implementation:                    NOT AUTHORIZED / NOT IMPLEMENTED
+Identity Center assignments:                      NOT AUTHORIZED / NOT CREATED
+runtime roles:                                    NOT CREATED / LIVE EXISTENCE NOT ESTABLISHED
+customer-managed-policy attachments:              NOT IMPLEMENTED / NOT ESTABLISHED
+governed AWS profiles:                            NOT IMPLEMENTED
+AWS discovery:                                    NOT AUTHORIZED
+AWS account/group/instance binding values:        UNKNOWN / UNREAD
+authority granted:                                NONE
+infrastructure deployment:                        BLOCKED
+infrastructure mutation and deployment:           NOT AUTHORIZED / NOT PERFORMED
+Terraform init/validate/plan/apply:               NOT AUTHORIZED / NOT RUN
+qualification and binding-preflight execution:    NOT AUTHORIZED / NOT RUN
+Run A / Run B / combined assessment:              NOT AUTHORIZED / NOT RUN
+third ADR-0017 acquisition:                       NOT AUTHORIZED
+sixth binding preflight:                          NOT AUTHORIZED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**Proposing a correction implements nothing.** **Implementation, infrastructure mutation and
+execution stay three separate gates and are never collapsed into one**, and a real isolated
+`terraform validate` against the pinned provider remains required before PR #56 can merge — and
+remains **NOT AUTHORIZED / NOT RUN**.
+
 ### The qualification runtime principal and trust model — ACCEPTED, and nothing is implemented
 
 **ADR-0021: ACCEPTED / IN FORCE.** **PR #54 merged** — merged **2026-09-02T09:01:29Z**, merge
