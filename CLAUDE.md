@@ -434,6 +434,7 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **[ADR-0018](docs/decisions/ADR-0018-bounded-private-empirical-sharadar-qualification.md) — bounded private empirical Sharadar qualification** | **ACCEPTED / IN FORCE** — PR #39 merged. Merge commit **`97e7ce57bb90303c78c2a1a4bc3ac2301b60f694`**, approved ADR head **`25ee0b0a6ab17c1fea7e2fa4ccd72ce8b2864780`**. **The conditional acceptance event has occurred**, so **ADR-0018: ACCEPTED / IN FORCE**. **While PR #39 was open it was proposed and carried no authority** — that is a historical fact about those days, it stays true, and it is **not** rewritten as though the document had authority before its merge. **The merge approved ARCHITECTURE ONLY** — the evidence inventory, the P1–P9 ceilings, the two-process split, the deterministic private locator, the operation arithmetic, the two least-privilege roles, the parser/evaluator/report boundaries and the deletion-runbook clarification. **The merge authorized NO implementation, NO infrastructure mutation and NO execution**: implementation under `src/`, a new entry point, an IAM role, a Terraform plan or apply, a binding preflight, Run A, Run B, an assessment run, a provider request, an S3 operation, a credential retrieval, a private report, a P1–P9 execution, a provider selection and a G1 or G2 decision each stayed **separately gated** on that day. **The implementation gate has since been crossed under a later, separate authorization and PR #41 merged**, and the rest are unchanged — **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED**. **It supersedes nothing** and rewrites neither ADR-0011 nor ADR-0017: ADR-0011's *no read surface* stays true of the store it authorized, and **ADR-0017's exactly-three-`PutObject` accounting is untouched** — the designed surface is a **different** surface with its own accounting and may never be reached through the ADR-0017 entry point. Designed inventory: **eight private subject classes, recorded as classes and never as names**; datasets **`tickers`, `stocks`, `actions`** only; `tickers` **snapshot, no window**; `stocks` and `actions` **1998-01-01 → `T−1`**; page limits **100 / 10,000 / 10,000**; **two pages maximum**, the second a **completeness probe and not an invitation to paginate**; **48 requests per run**; **`max_attempts = 1`, zero provider retries — arithmetically forced**, because 48 requests against the compiled retry budget of 32 leave no room for one; **4 MiB per response**, **64 MiB per run**, **30-second timeout**, **≥1-second pacing**, **sequential only**, a **1,800-second acquisition elapsed-time deadline** measured on an **injected monotonic clock** over the complete acquisition execution phase — provider requests, pacing, local processing, Bronze publication, metadata resolution, locator construction, locator publication and permitted locator retry — and **not** compile-time arithmetic; **two runs at least eight calendar days apart, each separately authorized with a distinct execution identity**, **96 provider requests maximum across both**. Ceilings: **P1** `PARTIALLY_TESTED` after Run A and **at most `TESTED`** after Run B, information time **bounded regardless**; **P2 at most `PARTIALLY_TESTED`** — sampled existence is **not** proof of the population-wide survivorship claim; **P3** schema question may reach `TESTED`, timing **approximated**; **P4 `DOCUMENTATION_RESOLVED`** — a snapshot table has no time axis to sample; **P5 realistically at most `PARTIALLY_TESTED`**, spinoff limb inconclusive while provider semantics stay undocumented; **P6, P7, P8 `DEFERRED`**; **P9 `DOCUMENTATION_RESOLVED`**, price origin **`PROVIDER_DERIVED`**, **`PUBLIC_PIT` not reachable**. **No aggregate verdict, no provider-selection value and no readiness value exists anywhere in the design.** Locator: **one per execution**, `licensed/qualification/sharadar/locators/<execution-id>.json`, **LICENSED**, **published last**, **append-only and conditional**, **closed schema with no free text**, **≤256 KiB**, binding the plan and private inventory by digest and every claim, payload and record to an exact key, expected digest, byte count and disposition, **never a cross-execution index**, **never listed**, and **a `PARTIAL`, missing, collided, ambiguous or unverified locator fails closed and is refused for evaluation**. Arithmetic, **nominal**: provider requests **48**, provider retries **ZERO**, Bronze `PutObject` **144**, locator `PutObject` **1**, total `PutObject` **145**, conditional `HeadObject` **0–145**, object-byte `GetObject` **ZERO**, listing **ZERO**, CONTROL **ZERO**, total S3 operations **145–290**. **Maximum**, with the locator's **at most two** retries — permitted **only** on `THROTTLED` or `TRANSIENT` and **never** after an ambiguous or unclassified result: locator `PutObject` **≤3**, total `PutObject` **≤147**, conditional `HeadObject` **0–145** — 144 Bronze plus **at most one** locator, because a retry-triggering attempt sends none — total S3 operations **147–292**, and **294–584** across the two acquisition runs; a complete run reports **144 ≤ `PutObject` ≤ 147** as the **real observed invocation count**, never "exactly 145" when a retry occurred. Assessment, exact — **one COMBINED assessment over BOTH executions**, after Run B: `GetObject` **`E × (2R + 1)` = 194** — **two** locators, **96** acquisition records, **96** payloads, **zero claims** — report `PutObject` **1**, conditional `HeadObject` **0–1**, total **195–196**; on a refused locator or pair **`GetObject` 0–2 and every other operation ZERO**, with **no payload read**. Whole package: **two acquisition runs 290–584**, **combined assessment 195–196**, **whole empirical package 485–780** S3 operations. **The superseded canonical arithmetic is gone** — a one-locator assessment is no longer canonical, and neither is its read total of 97, its operation total of 98-to-99, or the 196-to-198 total that assumed one assessment per run. Roles: **two, with separate sessions** — the **acquisition role cannot read object bytes**, the **assessment role can retrieve no credential and reach no provider**, and the **deletion role is unchanged, stays separate and cannot read**. **The clarification amendment is EFFECTIVE — PR #42 merged**, merge commit **`28239514b9e4e13f55ee98fa50877077e70bd593`**, approved clarification head **`579259a62ff7561ae2991f3923ea8aa1d0064be8`** — **the conditional effectiveness event has occurred**, so **ADR-0018's total elapsed acquisition deadline clarification is now effective** and **ADR-0018's combined Run A / Run B assessment clarification is now effective**. **While PR #42 was open the clarification was proposed and carried no authority** — a historical fact about those days that stays true and is not rewritten as though the clarification had always been effective. **The merge approved clarification of architecture only**, and **the clarification merge authorized no implementation, no infrastructure mutation and no execution** — implementation, infrastructure mutation, Run A, Run B and the combined assessment each stay separately gated. **The offline implementation is merged, dormant and never executed**; it was **corrected against the now-authoritative clarification** under a separately authorized implementation correction, and **the independent re-review has since occurred and produced the fixed-count correction merged as PR #44**. A **sanitized incident** is recorded: an **unauthorized directory listing beneath the private runtime area** observed **owner-side filenames but read no file contents**, the review **did not reproduce it**, **no tracked contamination was found by the read-only review**, the **filenames are intentionally not disclosed**, and it **authorizes neither private-directory inspection nor further diagnosis**. Current state: **empirical-package executions ZERO · provider requests by this package ZERO · S3 operations by this package ZERO · P1–P9 executions by this package ZERO · locators ZERO · private reports ZERO · new IAM roles ZERO · the licensed object-byte read surface is MERGED, DORMANT AND NOT DEPLOYED**. **The bounded assessment-only read implementation now exists in committed code**, **it is dormant and not deployed**, **it permits no S3 listing**, **it is not a general read surface**, **it has never been executed against licensed objects**, **no locator, record, payload or report has been read by the empirical package**, **the acquisition process remains write-only**, and **the ordinary ingestion path remains unable to use the qualification read surface**. **G1 OPEN · G2 OPEN**, no provider selected, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live trading **HARD-DISABLED**, and a **third ADR-0017 attempt NOT AUTHORIZED**. **AMENDED BY ADR-0019 — PR #46 merged.** The acquisition-side figures in this row — the `zero to 145` conditional `HeadObject` range, the `145–290` and `147–292` per-run totals, the `294–584` two-run total, the `485–780` package envelope, the `6 × T_s3` per-request collision allowance and the `4 × T_s3` locator allowance — are **ADR-0018's original accepted arithmetic** and **no longer govern**. They are retained here as history and as an explanation of what ADR-0019 amended. **The governing acquisition arithmetic is now ADR-0019's**: acquisition `PutObject` **145–147**, acquisition `HeadObject` **exactly 0**, acquisition `GetObject` **exactly 0**, two successful runs **290–294**, assessment **unchanged at 195–196**, whole successful package **485–490**. ADR-0018's own document is unchanged and is not rewritten |
 | **[ADR-0019](docs/decisions/ADR-0019-write-only-acquisition-collision-policy.md) — write-only acquisition, fail-closed collision policy** | **ACCEPTED / IN FORCE** — PR #46 merged. Merge commit **`77974f476ead96548beb16543dfd3db8c03232c3`**, approved ADR head **`bf0414c4a915d85a124ba400284ca1fa671fda27`**, merged **2026-09-01T01:01:22Z**. **ADR-0019's conditional acceptance event has occurred**, and **PR #46 was independently reviewed before its merge**. **While PR #46 was open ADR-0019 was proposed and carried no authority**, and **ADR-0018's original collision-resolution design and arithmetic governed before the PR #46 merge** — historical facts that stay true and are not rewritten. **The merge approved architecture only, and authorized no production-code correction**, no Terraform, no IAM, no infrastructure mutation, no deployment and no execution. **ADR-0019 supersedes no ADR wholesale**; it **narrowly amends the enumerated clauses of ADR-0018** — §4.5.3, §7.4, §9.1, §9.2, §9.3, §9.5 and §10.1. **ADR-0018 remains ACCEPTED / IN FORCE except as amended by ADR-0019**, **ADR-0017 is not amended or superseded**, **ADR-0011 is not amended or superseded**, and **the shared S3ResearchObjectStore remains unchanged**. Authoritative architecture: **the acquisition role receives no s3:GetObject**, **no s3:GetObjectVersion**, **no s3:GetObjectAttributes**, and no listing, copy, delete or CONTROL authority; **the acquisition publication surface has no head_object** and **no get_object**; **acquisition HeadObject: exactly 0**; **acquisition GetObject: exactly 0**; **every acquisition-side conditional PutObject collision fails closed**; **a 412 does not establish that the occupied object is identical**; **BRONZE_NAME_OCCUPIED** and **LOCATOR_NAME_OCCUPIED** are the authoritative closed outcomes, and **LOCATOR_NOT_PUBLISHED** remains the result when no truthful locator can be published. Governing arithmetic: **acquisition PutObject: 145 to 147**, **two successful runs: 290 to 294**, **assessment: unchanged at 195 to 196**, **whole successful package: 485 to 490**, with **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**. **ADR-0019's amendment is now authoritative architecture**, and **the production implementation now conforms to that architecture offline**: **ADR-0018 offline implementation: MERGED / DORMANT**, **ADR-0019 production-code correction: MERGED / DORMANT / OFFLINE-CONFORMING** — **PR #48 merged**, merge commit **`f0b39fccdfb36ea69d08fb4def3979b87814b9ff`**, approved implementation head **`64dc3388f402ee98cf8940d94b42fa16aa7553e2`** — **the dormant acquisition implementation no longer uses the pre-ADR-0019 shared collision path**, **the ADR-0018-specific write-only publication surface now exists**, **the merged dormant acquisition implementation has zero acquisition HeadObject and zero acquisition GetObject**, and **the current dormant implementation is offline-conforming under the authoritative architecture**. **Before PR #48 merged the production implementation did not yet conform** — true then, and not rewritten. **The ADR-0019 implementation-correction prerequisite is SATISFIED**, and **satisfying the implementation prerequisite does not itself authorize or begin infrastructure work**: **infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED**, **Terraform / IAM: NOT AUTHORIZED / NOT IMPLEMENTED**, **deployment: NOT PERFORMED**, **execution: ZERO**. **Acceptance of ADR-0019 is not authorization to implement or execute it.** **G1 OPEN · G2 OPEN**, no provider selected, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live trading **HARD-DISABLED** |
 | **[ADR-0020](docs/decisions/ADR-0020-request-scoped-qualification-payload-identity.md) — request-scoped qualification payload identity** | **ACCEPTED / IN FORCE** — PR #49 merged. Merge commit **`e4d328af53f2663c570f94e6c090c3296db8cb9d`**, approved ADR head **`d9bbb17b7f174c34223eb4736d763f115daf229f`**. **ADR-0020's conditional effectiveness event has occurred**, and **PR #49 was independently reviewed before its merge**. **While PR #49 was open, ADR-0020 was proposed and carried no authority**, and **ADR-0018 as amended by ADR-0019 governed the qualification payload identity before the PR #49 merge** — historical facts that stay true and are not rewritten. **The merge approved architecture only**, and authorized no production-code correction, no Terraform, no IAM, no infrastructure mutation, no deployment and no execution. It answers **the legitimate duplicate-payload collision** PR #48 exposed: a complete run is exactly 48 requests and 144 Bronze `PutObject`, the qualification payload object was content-addressed by `(provider, dataset, digest)`, and an acquisition-side 412 fails closed — so two legitimate byte-identical observations, such as ADR-0018's header-only page-two probes or an unchanged snapshot re-observed in Run B, derived one name and halted a correct run. **The scope is exactly one key class**: the claim and record keys already bind the request-scoped acquisition identity. Authoritative architecture: **the qualification payload key binds the execution identity, the request ordinal and the payload digest**, shaped `<qualification-payload-prefix>/<execution-identity>/requests/<NN>/sha256/<payload-digest>`, where **no provider subject value appears in a qualification payload key**, with a deterministic retry targeting the same key, and no random suffix, no listing and no preflight existence check. **Assessment reconstructs the qualification payload key and compares it exactly**, and **assessment recomputes SHA-256 over the retrieved payload bytes and refuses on any mismatch** before parsing. **ADR-0020 preserves ADR-0019's write-only collision policy unchanged** — **acquisition remains conditional `PutObject` only**, a 412 still establishes neither identical nor different content, and **`BRONZE_NAME_OCCUPIED` and `LOCATOR_NAME_OCCUPIED` are unchanged**. **ADR-0020 supersedes only the qualification payload-key identity rule**, **ADR-0020 does not supersede ADR-0017**, **ADR-0020 changes no shared general-purpose Bronze or S3ResearchObjectStore contract**, **ADR-0020 introduces no locator field**, **ADR-0020 introduces no additional S3 operation**, **ADR-0020 preserves the 485 to 490 package envelope** and **ADR-0020 preserves the deadline arithmetic L >= 3 * T_s3 + C**. **The architecture blocker that prevented ADR-0020 from being authoritative is resolved. The implementation blocker is resolved as well, offline.** **Architecture acceptance: COMPLETE**, **PR #48: merged**, merge commit **`f0b39fccdfb36ea69d08fb4def3979b87814b9ff`**, approved implementation head **`64dc3388f402ee98cf8940d94b42fa16aa7553e2`**, **PR #48 correction against ADR-0020: MERGED**, **production implementation: MERGED / DORMANT / OFFLINE-CONFORMING**, **ADR-0020 implementation: MERGED / DORMANT / OFFLINE-CONFORMING**, **a qualification payload-key builder exists**, and **ADR-0018 merged implementation: DORMANT / OFFLINE-CONFORMING**. **PR #48 was untouched by the ADR-0020 proposal and by its merge**, and it was corrected, independently reviewed and merged later, under a separate authorization. **While PR #48 was open it was not ready for review or merge and its correction had not begun** — true then, and not rewritten. **PR #48 is not defective for obeying ADR-0019** — its implementation work exposed the architectural identity gap, and the correction it required has since merged. **The ADR-0020 implementation-correction prerequisite is SATISFIED**, and **satisfying the implementation prerequisite does not itself authorize or begin infrastructure work** — **merging an implementation authorizes no infrastructure, no deployment and no run**, and **offline-conforming is not deployed, not active, not operational, not authorized to run and not empirically validated**. **Infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED · Terraform / IAM: NOT AUTHORIZED / NOT IMPLEMENTED · deployment: NOT PERFORMED · execution: ZERO · Run A: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined assessment: NOT AUTHORIZED / NOT RUN.** **ADR-0019: ACCEPTED / IN FORCE · third ADR-0017 attempt: NOT AUTHORIZED · G1: OPEN · G2: OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED** |
+| **[ADR-0021](docs/decisions/ADR-0021-qualification-runtime-principal-and-trust-model.md) — qualification runtime principal and trust model** | **ACCEPTED / IN FORCE** — PR #54 merged. Merge commit **`c58d6c442c34928ad3c25f07368cf1e3323a6552`**, approved ADR head **`0b8d500699468a10c331219c694a8e2fb4e5adee`**, merged **2026-09-02T09:01:29Z**, with a **merge tree identical to the independently validated pull-request head tree**. **ADR-0021's conditional acceptance event has occurred**, and **PR #54 was independently reviewed before its merge**. **While PR #54 was open, ADR-0021 was proposed and carried no authority** — a historical fact about those days that stays true and is not rewritten. **The merge approved architecture only**, and **no implementation or operational authority followed from the merge**: it authorized no permission-set implementation, no Identity Center assignment, no policy attachment, no profile creation, no identity-gate or profile-constant correction, no Terraform, no IAM, no infrastructure mutation, no deployment and no execution. Authoritative architecture: **AWS IAM Identity Center is the human authentication root**, **no IAM user or long-lived access key is permitted for qualification**, **a dedicated, governed Identity Center operator group is the assignment subject**, and two permission sets — `KalpaManiQualificationAcquisition` and `KalpaManiQualificationAssessment` — are each assigned to that group in the single target account, each referencing only its merged PR #52 managed-policy declaration, and each reached through one of the two exact named profiles `kalpamani-qualification-acquisition` and `kalpamani-qualification-assessment`, with **session duration bounded to one hour per permission set**. **The identity gate binds the exact target account plus the exact permission-set role-name prefix and a validated AWS-generated suffix grammar**, **the profile name is routing input, not proof**, and **`sts:GetCallerIdentity` remains the runtime proof during a later authorized execution**. **ADR-0021 supersedes no prior ADR and amends no earlier ADR document**, and the arithmetic is unchanged — **acquisition PutObject: 145 to 147 · acquisition HeadObject: 0 · acquisition GetObject: 0 · two successful runs: 290 to 294 · assessment: 195 to 196 · whole successful package: 485 to 490 · L >= 3 * T_s3 + C · remaining >= T_req + 3 * T_s3 + L**. **Permission-set implementation: NOT AUTHORIZED / NOT IMPLEMENTED · Identity Center assignments: NOT AUTHORIZED / NOT CREATED · runtime roles: NOT CREATED / LIVE EXISTENCE NOT ESTABLISHED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy attachments: NOT IMPLEMENTED / NOT ESTABLISHED · governed AWS profiles: NOT IMPLEMENTED · identity-gate/profile-constant correction: NOT AUTHORIZED / NOT IMPLEMENTED · Organization-instance prerequisite: REQUIRED / LIVE EXISTENCE NOT ESTABLISHED · AWS account/group/instance binding values: UNKNOWN / UNREAD · authority granted: NONE · infrastructure binding/deployment: BLOCKED · Terraform and AWS/provider/credential access: NOT AUTHORIZED / NOT RUN · infrastructure mutation and deployment: NOT AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · Run A: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined assessment: NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1: OPEN · G2: OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED** |
 | **Ingestion runner · ECS task or image · a third authenticated qualification attempt** | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
 | **ADR-0018 implementation execution · qualification infrastructure deployment · the two new IAM roles · Run A · Run B · the combined assessment run** | **NOT AUTHORIZED** — ADR-0018 is **ACCEPTED / IN FORCE**, and **the merge approved architecture only**. **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED.** **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one.** **The ADR-0018 offline implementation is MERGED and DORMANT — PR #41 merged**, merge commit **`3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`**, approved implementation head **`96daac7963d936f231b37847579c5f28bb313760`**; and **the fixed 48-request assessment-boundary correction is MERGED — PR #44 merged**, merge commit **`c945970613b80bfd4f42acc4f3acb4814895eb42`**, approved correction head **`78b4425077e65eeb12dfd24b35825741370e0e0f`**. It was built, and then corrected, under **later, separate written authorizations for offline construction, offline correction and offline validation only**: **synthetic fixtures and offline tests only**, **zero** AWS, credential, Secrets Manager, provider, S3, Terraform and IAM operations, and **neither entry point has ever been run**. **The offline implementation is merged, dormant and never executed**, and **merging an implementation authorized no execution, no infrastructure deployment and no run**. **The clarification amendment is EFFECTIVE — PR #42 merged**, its **conditional effectiveness event has occurred**, and it **authorizes none of the later gates** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
@@ -3116,19 +3117,29 @@ was built, no IAM role was created, no AWS or provider request was made and no r
 it**.
 
 
-### The qualification runtime principal and trust model — PROPOSED, and nothing is implemented
+### The qualification runtime principal and trust model — ACCEPTED, and nothing is implemented
 
-**ADR-0021 is PROPOSED / NOT IN FORCE.** It is open in a pull request, and
-**the proposed architecture carries no authority until its pull request is independently
-reviewed and merged**. While that pull request is open, ADR-0021 is proposed and carries no
-authority — a statement about these days that will stay true afterwards, and that is not to be
-rewritten as though the decision had authority before it was accepted.
+**ADR-0021: ACCEPTED / IN FORCE.** **PR #54 merged** — merged **2026-09-02T09:01:29Z**, merge
+commit **`c58d6c442c34928ad3c25f07368cf1e3323a6552`**, ordered parents
+**`620d402849fb7a51b4a78027b4c24b2ebaae1f23`** then
+**`0b8d500699468a10c331219c694a8e2fb4e5adee`**, with a **merge tree identical to the
+independently validated pull-request head tree**. **ADR-0021's conditional acceptance event has
+occurred**, and **PR #54 was independently reviewed before its merge**.
 
-**The proposal chooses architecture only.** It implements nothing, creates nothing, inspects
-nothing, binds nothing, deploys nothing, plans nothing and runs nothing. **Runtime
-principal/trust architecture: PROPOSED ONLY.**
+**While PR #54 was open, ADR-0021 was proposed and carried no authority** — a historical fact
+about those days that stays true, and that is **not** rewritten as though the decision had
+authority before it was accepted. **ADR-0021's own conditional status line is preserved as
+history beside its post-merge note rather than rewritten.**
 
-#### What the proposal chooses
+**The merge approved architecture only**, and **no implementation or operational authority
+followed from the merge**. It implemented nothing, created nothing, inspected nothing, bound
+nothing, deployed nothing, planned nothing and ran nothing. **Runtime principal/trust
+architecture: ACCEPTED ARCHITECTURE ONLY.** **Merging an architecture decision authorizes no
+implementation, no infrastructure mutation, no deployment and no execution**, and
+**implementation, infrastructure mutation and execution stay three separate gates and are never
+collapsed into one.**
+
+#### What the decision chooses
 
 **AWS IAM Identity Center is the human authentication root**, and **no IAM user or long-lived
 access key is permitted for qualification**. **A dedicated, governed Identity Center operator
@@ -3188,12 +3199,39 @@ runtime proof during a later authorized execution**. **Credentials from default-
 fallback, environment access keys, shared long-lived credential files, a differently named SSO
 role, or any other provider chain are refused.**
 
-The proposal carries an **exhaustive identity decision table** over eighteen cases, and an
+The decision carries an **exhaustive identity decision table** over eighteen cases, and an
 **evaluated set of rejected alternatives** — long-lived IAM users and access keys, one shared
 role or permission set, an SSO source role chained into custom roles, direct custom IAM roles
 with hand-written trust policies, ECS, Lambda, EC2 and OIDC service principals, cross-account
 execution, pinning the complete generated ARN forever, whole-account trust, profile-name-only
 authorization, and environment-variable credential fallback.
+
+#### Carried-forward implementation findings
+
+Two findings from the independent review are recorded for the later, separately authorized
+implementation gate. **Neither expands the accepted decision**, and **neither is a live fact**:
+nothing below was read from AWS, and **no account id, group id, instance identifier, start URL,
+region, suffix, ARN or profile content is invented, discovered or recorded here**.
+
+**Organization-instance prerequisite: REQUIRED / LIVE EXISTENCE NOT ESTABLISHED.** **The
+eventual Identity Center deployment requires an Organization instance with multi-account
+permissions enabled**, because an account instance provides neither permission sets nor account
+assignments. **Whether such an instance exists is NOT ESTABLISHED**, and it **must be checked
+only in a later authorized environment-discovery and binding gate**.
+
+**`sts:GetCallerIdentity` returns an STS assumed-role ARN of the form
+`arn:aws:sts::<account>:assumed-role/AWSReservedSSO_<permission-set-name>_<suffix>/<session-name>`**,
+and not the IAM role ARN the generated role carries. **The later identity gate must therefore
+parse the caller identity form actually returned at runtime** while enforcing **the exact target
+account**, **the exact actor-specific permission-set role-name prefix**, **a strict
+AWS-generated suffix grammar**, **no loose substring matching**, **no full generated ARN pinned
+permanently**, and **no profile-name-only or account-only proof**. **The suffix grammar proves
+structure, not provenance**, and **runtime AWS identity is established by
+`sts:GetCallerIdentity` plus the binding contract.**
+
+**AWS account/group/instance binding values: UNKNOWN / UNREAD**, and **identity-gate and
+profile-constant corrections stay NOT AUTHORIZED / NOT IMPLEMENTED** until that separate gate is
+opened.
 
 #### What it preserves
 
@@ -3219,34 +3257,45 @@ remaining >= T_req + 3 * T_s3 + L
 
 **The identity and trust decision adds no S3 operation and changes no deadline term.**
 
-**Acceptance of ADR-0021 would authorize architecture only.** It would authorize no discovery of
-actual Identity Center instance, identity store, account, group, assignment, profile or region
-values, no Terraform implementation of permission sets or assignments, no policy attachment
+**The merge of PR #54 approved architecture only.** It authorized no discovery of actual
+Identity Center instance, identity store, account, group, assignment, profile or region values,
+no Terraform implementation of permission sets or assignments, no policy attachment
 implementation, no identity-gate code change, no profile creation, no Terraform init, validate,
 plan or apply, no AWS policy, role or assignment creation, and no deployment, binding preflight,
 qualification, Run A, Run B or assessment. **The next gate after ADR acceptance is an offline
-implementation gate** for permission sets, customer-managed-policy attachments, assignments, and
-any proven identity-gate and profile-contract corrections. **Implementation, infrastructure
-mutation and execution stay three separate gates and are never collapsed into one.**
+implementation gate** for permission sets, customer-managed-policy attachments, assignments,
+profiles, and any proven identity-gate and profile-contract corrections.
 
 #### Status
 
 ```text
-ADR-0021:                                         PROPOSED / NOT IN FORCE
-runtime principal/trust architecture:             PROPOSED ONLY
-Identity Center permission sets:                  NOT IMPLEMENTED / NOT CREATED
-account assignments:                              NOT IMPLEMENTED / NOT CREATED
-runtime roles:                                    NOT IMPLEMENTED / LIVE EXISTENCE NOT ESTABLISHED
+ADR-0021:                                         ACCEPTED / IN FORCE
+ADR-0021 architecture:                            ACCEPTED / IN FORCE
+PR #54:                                           MERGED — normal merge, two ordered parents
+runtime principal/trust architecture:             ACCEPTED ARCHITECTURE ONLY
+permission-set implementation:                    NOT AUTHORIZED / NOT IMPLEMENTED
+Identity Center assignments:                      NOT AUTHORIZED / NOT CREATED
+runtime roles:                                    NOT CREATED / LIVE EXISTENCE NOT ESTABLISHED
 runtime trust principals:                         NOT SELECTED IN AWS
-policy attachments:                               NOT IMPLEMENTED / NOT CREATED
-profiles:                                         NOT CREATED / NOT INSPECTED
+customer-managed-policy attachments:              NOT IMPLEMENTED / NOT ESTABLISHED
+governed AWS profiles:                            NOT IMPLEMENTED
+identity-gate/profile-constant correction:        NOT AUTHORIZED / NOT IMPLEMENTED
+Organization-instance prerequisite:               REQUIRED / LIVE EXISTENCE NOT ESTABLISHED
+AWS account/group/instance binding values:        UNKNOWN / UNREAD
 authority granted:                                NONE
-PR #52 policy declarations:                       MERGED / OFFLINE-REVIEWED / UNAPPLIED
+PR #52 policy declarations:                       MERGED / OFFLINE-REVIEWED / UNAPPLIED / UNATTACHED
 PR #53 governance synchronization:                MERGED
+corrected qualification application:              MERGED / DORMANT / OFFLINE-CONFORMING
+ADR-0019 and ADR-0020:                            ACCEPTED / IN FORCE, UNAMENDED
+infrastructure binding/deployment:                BLOCKED
+infrastructure mutation and deployment:           NOT AUTHORIZED / NOT PERFORMED
 Terraform init/validate/plan/apply:               NOT AUTHORIZED / NOT RUN
+Terraform and AWS/provider/credential access:     NOT AUTHORIZED / NOT RUN
 AWS/provider/credential access:                   NOT AUTHORIZED / NOT PERFORMED
 qualification and binding-preflight execution:    NOT AUTHORIZED / NOT RUN
 Run A / Run B / combined assessment:              NOT AUTHORIZED / NOT RUN
+third ADR-0017 acquisition:                       NOT AUTHORIZED
+sixth binding preflight:                          NOT AUTHORIZED
 G1 / G2:                                          OPEN / OPEN
 provider selected:                                NONE
 Phase 3:                                          NOT COMPLETE
@@ -3254,15 +3303,25 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**The chronology through PR #53 is preserved and unrewritten.** ADR-0018's architecture was
+**The chronology through PR #54 is preserved and unrewritten.** ADR-0018's architecture was
 accepted and its offline implementation merged dormant; ADR-0019 corrected acquisition collision
 handling to write-only publication; ADR-0020 corrected qualification payload identity to
 execution-and-request scope; the corrected application implementation merged and remained
 dormant and offline-conforming; PR #52 merged only the offline qualification IAM policy
 declarations and guards and deliberately chose no runtime trust principal; PR #53 synchronized
-that governance status; and **ADR-0021 is the first decision to propose the execution principal
-and trust model**, which none of them chose. **No earlier ADR is rewritten as though ADR-0021
-had always existed**, and **ADR-0021 amends no earlier ADR document.**
+that governance status; **ADR-0021 was proposed in PR #54 as the first decision to choose the
+execution principal and trust model**, which none of them chose; and **PR #54 was independently
+reviewed and normally merged, accepting architecture only**. **No earlier ADR is rewritten as
+though ADR-0021 had always existed**, **ADR-0021 amends no earlier ADR document**, and
+**ADR-0019 and ADR-0020 remain ACCEPTED / IN FORCE and unamended.**
+
+**One historical process violation is recorded, and it is not this session's.** The ADR-0021
+proposal session disclosed accidental `aws --version` and `terraform version` guard-self-test
+probes, and the independent review evaluated them as **a real historical process violation with
+no artifact or infrastructure effect**. That is a fact about **that** session. **It is not a
+claim that no prohibited activity ever occurred**, and it is **not** an event of the
+synchronization that recorded this status, which ran no AWS and no Terraform command of any
+kind.
 
 ### The offline qualification IAM policy foundation — MERGED, and nothing is deployed
 

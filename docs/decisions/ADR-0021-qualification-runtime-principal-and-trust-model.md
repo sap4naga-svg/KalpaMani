@@ -7,6 +7,19 @@ authority. That is a statement about the present, it will remain true of these d
 later merge, and it is not to be rewritten as though this decision had authority before it was
 accepted.
 
+**The condition above has since been satisfied.** **PR #54 merged** — merged
+**2026-09-02T09:01:29Z**, merge commit **`c58d6c442c34928ad3c25f07368cf1e3323a6552`**, ordered
+parents **`620d402849fb7a51b4a78027b4c24b2ebaae1f23`** then
+**`0b8d500699468a10c331219c694a8e2fb4e5adee`**, with a **merge tree identical to the
+independently validated pull-request head tree** — after an **independent review**. So
+**ADR-0021's conditional acceptance event has occurred** and this ADR is now **ACCEPTED / IN
+FORCE**, as **architecture only**. The status line above is the conditional text this ADR was
+written with; it is **preserved as history, not rewritten**, and **while PR #54 was open,
+ADR-0021 was proposed and carried no authority** — which was true then and stays true. **The
+merge approved architecture only, and authorized no implementation, no infrastructure mutation,
+no deployment and no execution**, and **no implementation or operational authority followed from
+the merge**.
+
 **This decision chooses architecture only.** It implements nothing, creates nothing, inspects
 nothing, binds nothing, deploys nothing, plans nothing and runs nothing. No AWS identity,
 account, profile, credential, cache, permission set, assignment, role, trust policy or policy

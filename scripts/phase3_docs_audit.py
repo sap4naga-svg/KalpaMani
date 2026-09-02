@@ -806,6 +806,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0018", "PR #39 merged"),
     ("ADR-0019", "PR #46 merged"),
     ("ADR-0020", "PR #49 merged"),
+    ("ADR-0021", "PR #54 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -8883,21 +8884,43 @@ QUALIFICATION_IAM_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 
 
 # ---------------------------------------------------------------------------
-# ADR-0021 -- the qualification runtime principal and trust model, PROPOSED
+# ADR-0021 -- the qualification runtime principal and trust model, ACCEPTED
 # ---------------------------------------------------------------------------
 #
 # PR #52 merged two permission-set declarations and deliberately chose no holder
 # for them, because accepted authority determined no runtime trust principal.
-# ADR-0021 is the gate that chooses one, and it is **proposed**: every guard below
-# exists to keep a proposal from being read as an accepted decision, an accepted
-# decision from being read as deployed infrastructure, and either from being read
-# as a live AWS object nothing has checked.
+# ADR-0021 is the gate that chose one, and PR #54 merged it: every guard below
+# exists to keep an accepted decision from being read as deployed infrastructure,
+# an accepted decision from being read back down into a proposal, and either from
+# being read as a live AWS object nothing has checked.
+#
+# The guards were **inverted on the merge, not deleted**. While ADR-0021 sat on an
+# open pull request they asserted the proposal state; PR #54 is the event that
+# flips them, and every proposal-era assertion has a one-for-one replacement
+# asserting the accepted state and refusing a return to the proposal wording --
+# the treatment ADR-0017, ADR-0018, ADR-0019 and ADR-0020 were each given.
 
-#: The proposed ADR. Deliberately **absent** from :data:`MERGED_ADR_STATUS`: that
-#: registry governs ADRs whose merge has occurred, and registering an unmerged one
-#: would assert the authority the document itself refuses. A guard below asserts
-#: the absence, so registering it early fails rather than passing quietly.
+#: The accepted ADR. Registered in :data:`MERGED_ADR_STATUS` **on the merge**, and
+#: not before -- that registry governs ADRs whose merge has occurred, and while
+#: this one was unmerged a guard asserted its absence. A guard below now asserts
+#: the registration, so unregistering it fails rather than passing quietly.
 ADR_0021: Final = DECISIONS / "ADR-0021-qualification-runtime-principal-and-trust-model.md"
+
+#: The pull request that merged ADR-0021, its merge commit, its ordered parents
+#: and the approved ADR head. The second parent **is** the approved head: PR #54
+#: is an ordinary two-parent merge whose tree equals the reviewed head's tree.
+ADR_0021_PR: Final = "#54"
+ADR_0021_MERGE_COMMIT: Final = "c58d6c442c34928ad3c25f07368cf1e3323a6552"
+ADR_0021_FIRST_PARENT: Final = "620d402849fb7a51b4a78027b4c24b2ebaae1f23"
+ADR_0021_APPROVED_HEAD: Final = "0b8d500699468a10c331219c694a8e2fb4e5adee"
+ADR_0021_MERGED_AT: Final = "2026-09-02T09:01:29Z"
+
+#: The one sentence that keeps the pre-merge period historical rather than
+#: current. One constant, used by the ADR, both status documents and the plan --
+#: three spellings of one historical fact is how one surface drifts from another.
+ADR_0021_HISTORICAL_PROPOSED: Final = (
+    f"while pr {ADR_0021_PR} was open, adr-0021 was proposed and carried no authority"
+)
 
 #: The two permission sets the proposal names, and the two profiles that reach
 #: them. Written once here and read by every guard, so a rename cannot leave one
@@ -8910,16 +8933,58 @@ ADR_0021_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"
 #: What the ADR itself must say. Section-scoped guards cover the status documents;
 #: this list is the decision document's own contract.
 ADR_0021_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    # ------------------------------------------------ proposed, and not in force
+    # -------------------------------------- the preserved conditional status line
+    #
+    # Preserved, never rewritten. The ADR was written as a proposal and its status
+    # line is the record of that; the post-merge note below sits *beside* it. An
+    # ADR whose original status line was edited to read "accepted" would have
+    # erased the state it moved out of, which is the one thing a decision record
+    # exists not to do.
     (
-        "records the proposed status",
+        "preserves the conditional status line",
         "status: proposed — no authority until the pull request introducing this adr is "
         "independently reviewed and merged",
     ),
     (
-        "refuses pre-merge authority",
+        "preserves the pre-merge refusal of authority",
         "while the pull request introducing this adr is open, adr-0021 is proposed and carries "
         "no authority",
+    ),
+    # ------------------------------------------ the adjacent post-merge note
+    #
+    # Required individually rather than as one sentence, because a single clause
+    # covering the merge, its identity and its boundary is one a later edit can
+    # soften in place while every other guard stays green.
+    ("records that the condition was satisfied", "the condition above has since been satisfied"),
+    ("names the merging pull request", f"pr {ADR_0021_PR} merged"),
+    ("names the merge commit", f"merge commit `{ADR_0021_MERGE_COMMIT}`"),
+    (
+        "names the ordered parents",
+        f"ordered parents `{ADR_0021_FIRST_PARENT}` then `{ADR_0021_APPROVED_HEAD}`",
+    ),
+    ("names the merge timestamp", ADR_0021_MERGED_AT.lower()),
+    (
+        "records the identical merge tree",
+        "merge tree identical to the independently validated pull-request head tree",
+    ),
+    (
+        "records the acceptance event",
+        "adr-0021's conditional acceptance event has occurred",
+    ),
+    ("records the accepted status", "this adr is now accepted / in force, as architecture only"),
+    (
+        "keeps the conditional line as history",
+        "preserved as history, not rewritten",
+    ),
+    ("keeps the proposed period historical", ADR_0021_HISTORICAL_PROPOSED),
+    (
+        "records that the merge approved architecture only",
+        "the merge approved architecture only, and authorized no implementation, no "
+        "infrastructure mutation, no deployment and no execution",
+    ),
+    (
+        "records that no authority followed the merge",
+        "no implementation or operational authority followed from the merge",
     ),
     ("records that it chooses architecture only", "this decision chooses architecture only"),
     ("supersedes nothing", "it supersedes no prior adr"),
@@ -9174,7 +9239,7 @@ ADR_0021_REJECTED_ALTERNATIVES: Final[tuple[tuple[str, str], ...]] = (
 #: section located by one of its own required phrases would go missing the moment
 #: that phrase was deleted, which is the deletion the guard exists to catch.
 ADR_0021_STATUS_HEADING: Final = (
-    "The qualification runtime principal and trust model — PROPOSED, and nothing is implemented"
+    "The qualification runtime principal and trust model — ACCEPTED, and nothing is implemented"
 )
 
 #: The level at which that heading, and only that heading, may sit.
@@ -9182,9 +9247,10 @@ ADR_0021_STATUS_HEADING_LEVEL: Final = 3
 
 #: The level-four subsections that section is allowed to contain.
 ADR_0021_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
-    "What the proposal chooses",
+    "What the decision chooses",
     "The trust model, precisely",
     "The identity contract",
+    "Carried-forward implementation findings",
     "What it preserves",
     "Status",
 )
@@ -9240,35 +9306,106 @@ def scan_adr_0021_status_sections(text: str) -> Adr0021SectionScan:
 #: near-neighbours in four other status blocks -- so a flat scan is answered by a
 #: neighbour's copy and a section-local deletion goes unreported.
 ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    ("records the proposed status", "adr-0021: proposed / not in force"),
+    # --------------------------------------------- accepted, on the merge of PR #54
+    #
+    # Inverted on the merge, one for one. Each clause here replaces the
+    # proposal-era clause it supersedes, and the wording it replaced is now
+    # refused by :data:`ADR_0021_STATUS_FORBIDDEN` -- so neither direction of
+    # drift is left unguarded by the inversion.
+    ("records the accepted status", "adr-0021: accepted / in force"),
+    ("records the accepted architecture row", "adr-0021 architecture: accepted / in force"),
+    ("names the merging pull request", f"pr {ADR_0021_PR} merged"),
+    ("names the merge commit", f"`{ADR_0021_MERGE_COMMIT}`"),
+    ("names the merge timestamp", ADR_0021_MERGED_AT.lower()),
     (
-        "refuses pre-merge authority",
-        "the proposed architecture carries no authority until its pull request is independently "
-        "reviewed and merged",
+        "records the identical merge tree",
+        "merge tree identical to the independently validated pull-request head tree",
     ),
-    ("records the architecture-only scope", "runtime principal/trust architecture: proposed only"),
+    ("records the acceptance event", "adr-0021's conditional acceptance event has occurred"),
+    (
+        "records the independent review",
+        f"pr {ADR_0021_PR} was independently reviewed before its merge",
+    ),
+    ("keeps the proposed period historical", ADR_0021_HISTORICAL_PROPOSED),
+    (
+        "keeps the conditional line as history",
+        "adr-0021's own conditional status line is preserved as history beside its post-merge "
+        "note rather than rewritten",
+    ),
+    ("records the architecture-only merge", "the merge approved architecture only"),
+    (
+        "records that no authority followed the merge",
+        "no implementation or operational authority followed from the merge",
+    ),
+    (
+        "records the architecture-only scope",
+        "runtime principal/trust architecture: accepted architecture only",
+    ),
+    (
+        "refuses to read a merge as authorization",
+        "merging an architecture decision authorizes no implementation, no infrastructure "
+        "mutation, no deployment and no execution",
+    ),
+    # ------------------------------------------------- and nothing is implemented
     (
         "records the unimplemented permission sets",
-        "identity center permission sets: not implemented / not created",
+        "permission-set implementation: not authorized / not implemented",
     ),
-    ("records the unimplemented assignments", "account assignments: not implemented / not created"),
+    (
+        "records the uncreated assignments",
+        "identity center assignments: not authorized / not created",
+    ),
     (
         "refuses to assert live role existence",
-        "runtime roles: not implemented / live existence not established",
+        "runtime roles: not created / live existence not established",
     ),
     ("records the unselected principal", "runtime trust principals: not selected in aws"),
-    ("records the unimplemented attachments", "policy attachments: not implemented / not created"),
-    ("records the untouched profiles", "profiles: not created / not inspected"),
+    (
+        "records the unimplemented attachments",
+        "customer-managed-policy attachments: not implemented / not established",
+    ),
+    ("records the untouched profiles", "governed aws profiles: not implemented"),
+    (
+        "closes the identity-gate correction",
+        "identity-gate/profile-constant correction: not authorized / not implemented",
+    ),
+    (
+        "records the organization-instance prerequisite",
+        "organization-instance prerequisite: required / live existence not established",
+    ),
+    (
+        "defers every binding value",
+        "aws account/group/instance binding values: unknown / unread",
+    ),
     ("records that no authority was granted", "authority granted: none"),
     (
         "records the merged unapplied declarations",
-        "pr #52 policy declarations: merged / offline-reviewed / unapplied",
+        "pr #52 policy declarations: merged / offline-reviewed / unapplied / unattached",
     ),
     ("records the merged synchronization", "pr #53 governance synchronization: merged"),
+    (
+        "records the dormant application implementation",
+        "corrected qualification application: merged / dormant / offline-conforming",
+    ),
+    (
+        "keeps the two amended adrs in force",
+        "adr-0019 and adr-0020: accepted / in force, unamended",
+    ),
+    ("keeps infrastructure blocked", "infrastructure binding/deployment: blocked"),
+    (
+        "closes infrastructure mutation and deployment",
+        "infrastructure mutation and deployment: not authorized / not performed",
+    ),
     (
         "closes terraform",
         "terraform init/validate/plan/apply: not authorized / not run",
     ),
+    (
+        "closes terraform and aws access together",
+        "terraform and aws/provider/credential access: not authorized / not run",
+    ),
+    ("closes the third acquisition", "third adr-0017 acquisition: not authorized"),
+    ("closes the sixth preflight", "sixth binding preflight: not authorized"),
     (
         "closes aws and provider access",
         "aws/provider/credential access: not authorized / not performed",
@@ -9402,10 +9539,56 @@ ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("preserves the package envelope", "whole successful package: 485 to 490"),
     ("preserves the locator reserve", "l >= 3 * t_s3 + c"),
     ("preserves the admission rule", "remaining >= t_req + 3 * t_s3 + l"),
+    # -------------------------------------------- carried-forward review findings
+    #
+    # Recorded for the later, separately authorized implementation gate. Neither
+    # expands the accepted decision, and neither is a live fact: the Organization
+    # instance is a prerequisite whose existence is deliberately NOT ESTABLISHED,
+    # and the caller-identity form is what AWS documents STS returns, not
+    # something read from an account.
+    (
+        "requires an organization instance",
+        "the eventual identity center deployment requires an organization instance with "
+        "multi-account permissions enabled",
+    ),
+    (
+        "refuses to assert the instance exists",
+        "whether such an instance exists is not established",
+    ),
+    (
+        "defers the instance check to a later gate",
+        "must be checked only in a later authorized environment-discovery and binding gate",
+    ),
+    (
+        "records the sts assumed-role caller form",
+        "`sts:getcalleridentity` returns an sts assumed-role arn of the form "
+        "`arn:aws:sts::<account>:assumed-role/awsreservedsso_<permission-set-name>_<suffix>/"
+        "<session-name>`",
+    ),
+    (
+        "parses the runtime caller form",
+        "the later identity gate must therefore parse the caller identity form actually "
+        "returned at runtime",
+    ),
+    (
+        "binds the actor-specific prefix",
+        "the exact actor-specific permission-set role-name prefix",
+    ),
+    ("refuses loose matching", "no loose substring matching"),
+    ("refuses a permanently pinned arn", "no full generated arn pinned permanently"),
+    ("refuses weaker proofs", "no profile-name-only or account-only proof"),
+    (
+        "keeps the suffix grammar structural",
+        "the suffix grammar proves structure, not provenance",
+    ),
+    (
+        "keeps get-caller-identity plus the contract as the proof",
+        "runtime aws identity is established by `sts:getcalleridentity` plus the binding contract",
+    ),
     # ---------------------------------------------------------------- the later gates
     (
         "authorizes architecture only",
-        "acceptance of adr-0021 would authorize architecture only",
+        f"the merge of pr {ADR_0021_PR} approved architecture only",
     ),
     (
         "names the next gate",
@@ -9418,7 +9601,15 @@ ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "keeps the chronology",
-        "the chronology through pr #53 is preserved and unrewritten",
+        f"the chronology through pr {ADR_0021_PR} is preserved and unrewritten",
+    ),
+    (
+        "keeps the historical process violation historical",
+        "one historical process violation is recorded, and it is not this session's",
+    ),
+    (
+        "refuses a blanket no-violation claim",
+        "it is not a claim that no prohibited activity ever occurred",
     ),
     ("amends no earlier adr", "adr-0021 amends no earlier adr document"),
 )
@@ -9430,14 +9621,33 @@ ADR_0021_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: is a positive claim a correct document cannot carry.
 ADR_0021_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # ---------------------------------------------------------- the forward drift
-    "adr-0021: accepted",
-    "adr-0021: in force",
-    "adr-0021: merged",
-    "adr-0021: effective",
-    "adr-0021 is accepted",
-    "adr-0021 is in force",
-    "adr-0021 architecture: accepted / in force",
-    "adr-0021's conditional acceptance event has occurred",
+    #
+    # The eight acceptance-drift refusals this list carried before PR #54 merged
+    # are gone, because each of them is now the truth. They were not deleted: each
+    # has a one-for-one replacement in the reverse-drift block below, refusing the
+    # proposal wording it used to require. The refusals that remain are the ones
+    # PR #54 did **not** make true -- a live permission set, assignment, role,
+    # attachment or profile, a principal holding authority, a deployment, a
+    # Terraform run, an opened gate.
+    #
+    # Anchored, never loose, for the reason the reverse block gives: the honest
+    # load-bearing sentences must all survive.
+    "the merge implemented the permission sets",
+    "the merge created the runtime roles",
+    "the merge granted aws authority",
+    "implementation followed from the merge",
+    "deployment followed from the merge",
+    "permission-set implementation: implemented",
+    "permission-set implementation: authorized",
+    "identity center assignments: created",
+    "customer-managed-policy attachments: implemented",
+    "customer-managed-policy attachments: established",
+    "governed aws profiles: implemented",
+    "identity-gate/profile-constant correction: implemented",
+    "organization-instance prerequisite: satisfied",
+    "organization-instance prerequisite: established",
+    "aws account/group/instance binding values: known",
+    "aws account/group/instance binding values: read",
     "identity center permission sets: created",
     "identity center permission sets: implemented",
     "identity center permission sets: deployed",
@@ -9492,22 +9702,61 @@ ADR_0021_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "no runtime principal has been proposed",
     "no trust model has been proposed",
     "the runtime principal question is unanswered by any proposal",
+    # ------------------------------------------- the eight one-for-one inversions
+    #
+    # One entry per acceptance-drift refusal retired above, refusing the exact
+    # proposal wording that entry used to protect. Worded so the ADR's own
+    # preserved conditional status line -- "adr-0021 is proposed and carries no
+    # authority", which must survive -- matches none of them.
+    "adr-0021: proposed / not in force",
+    "adr-0021: not in force",
+    "adr-0021: unmerged",
+    "adr-0021: not effective",
+    "adr-0021 is not accepted",
+    "adr-0021 is not in force",
+    "adr-0021 architecture: proposed only",
+    "adr-0021's conditional acceptance event has not occurred",
+    # ------------------------------------ and the rest of the proposal-era wording
+    "runtime principal/trust architecture: proposed only",
+    f"pr {ADR_0021_PR} is open",
+    f"pr {ADR_0021_PR} remains open",
+    f"pr {ADR_0021_PR} is unmerged",
+    f"pr {ADR_0021_PR} has not been merged",
+    f"pr {ADR_0021_PR} was not merged",
+    "the runtime principal and trust model is only proposed",
 )
 
 #: What the implementation plan must say. The plan is a separate document with a
 #: separate reader, and merged main has twice carried a fact in one status file
 #: and a stale contradiction in another.
 ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    ("records the proposed status", "adr-0021: proposed / not in force"),
+    ("records the accepted status", "adr-0021: accepted / in force"),
+    ("names the merging pull request", f"pr {ADR_0021_PR} merged"),
+    ("names the merge commit", f"`{ADR_0021_MERGE_COMMIT}`"),
+    ("keeps the proposed period historical", ADR_0021_HISTORICAL_PROPOSED),
     (
-        "refuses pre-merge authority",
-        "the proposed architecture carries no authority until its pull request is independently "
-        "reviewed and merged",
+        "records the architecture-only merge",
+        f"the merge of pr {ADR_0021_PR} approved architecture only",
     ),
-    ("records the architecture-only scope", "runtime principal/trust architecture: proposed only"),
+    (
+        "records that no authority followed the merge",
+        "no implementation or operational authority followed from the merge",
+    ),
+    (
+        "records the architecture-only scope",
+        "runtime principal/trust architecture: accepted architecture only",
+    ),
+    (
+        "records the satisfied architecture prerequisite",
+        "the principal/trust architecture prerequisite is satisfied",
+    ),
+    (
+        "refuses to read that prerequisite as authorization",
+        "satisfying that architecture prerequisite authorizes nothing by itself",
+    ),
     (
         "names the chosen model",
-        "the proposal chooses direct iam identity center permission-set roles",
+        "the decision chooses direct iam identity center permission-set roles",
     ),
     ("names the acquisition permission set", ADR_0021_ACQUISITION_PERMISSION_SET.lower()),
     ("names the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET.lower()),
@@ -9550,27 +9799,84 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("preserves the assessment envelope", "assessment: 195 to 196"),
     ("preserves the package envelope", "whole successful package: 485 to 490"),
     (
-        "authorizes architecture only",
-        "acceptance of adr-0021 would authorize architecture only",
-    ),
-    (
         "names the next gate",
         "the next gate after adr acceptance is an offline implementation gate",
     ),
     (
+        "names what the next gate covers",
+        "permission sets, assignments, customer-managed-policy attachments, profiles, and "
+        "actor-specific identity verification",
+    ),
+    (
         "records the unimplemented permission sets",
-        "identity center permission sets: not implemented / not created",
+        "permission-set implementation: not authorized / not implemented",
+    ),
+    (
+        "records the uncreated assignments",
+        "identity center assignments: not authorized / not created",
     ),
     (
         "refuses to assert live role existence",
-        "runtime roles: not implemented / live existence not established",
+        "runtime roles: not created / live existence not established",
+    ),
+    (
+        "records the unimplemented attachments",
+        "customer-managed-policy attachments: not implemented / not established",
+    ),
+    ("records the untouched profiles", "governed aws profiles: not implemented"),
+    (
+        "closes the identity-gate correction",
+        "identity-gate/profile-constant correction: not authorized / not implemented",
+    ),
+    (
+        "records the organization-instance prerequisite",
+        "organization-instance prerequisite: required / live existence not established",
+    ),
+    (
+        "refuses to assert the instance exists",
+        "whether such an instance exists is not established",
+    ),
+    (
+        "records the sts assumed-role caller form",
+        "`sts:getcalleridentity` returns an sts assumed-role arn of the form "
+        "`arn:aws:sts::<account>:assumed-role/awsreservedsso_<permission-set-name>_<suffix>/"
+        "<session-name>`",
+    ),
+    (
+        "parses the runtime caller form",
+        "the later identity gate must parse the caller identity form actually returned at runtime",
+    ),
+    (
+        "binds the actor-specific prefix",
+        "the exact actor-specific permission-set role-name prefix",
+    ),
+    ("refuses loose matching", "no loose substring matching"),
+    ("refuses a permanently pinned arn", "no full generated arn pinned permanently"),
+    ("refuses weaker proofs", "no profile-name-only or account-only proof"),
+    (
+        "keeps the suffix grammar structural",
+        "the suffix grammar proves structure, not provenance",
+    ),
+    (
+        "defers every binding value",
+        "aws account/group/instance binding values: unknown / unread",
     ),
     ("records that no authority was granted", "authority granted: none"),
     (
         "records the merged unapplied declarations",
-        "pr #52 policy declarations: merged / offline-reviewed / unapplied",
+        "pr #52 policy declarations: merged / offline-reviewed / unapplied / unattached",
     ),
     ("records the merged synchronization", "pr #53 governance synchronization: merged"),
+    (
+        "records the dormant application implementation",
+        "corrected qualification application: merged / dormant / offline-conforming",
+    ),
+    ("keeps infrastructure blocked", "infrastructure binding/deployment: blocked"),
+    (
+        "closes infrastructure mutation and deployment",
+        "infrastructure mutation and deployment: not authorized / not performed",
+    ),
+    ("closes the runs", "run a / run b / combined assessment: not authorized / not run"),
     (
         "keeps the three gates separate",
         "implementation, infrastructure mutation and execution stay three separate gates and "
@@ -9578,6 +9884,72 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("amends no earlier adr", "adr-0021 amends no earlier adr document"),
 )
+
+#: The two acquisition operations every ADR-0021 surface holds at exactly zero.
+#:
+#: They were guarded by presence alone -- ``"acquisition headobject: 0" in text``
+#: -- and an independent review found the hole that leaves: ``acquisition
+#: HeadObject: 0 to 145`` **contains** that string, so the malformed extension
+#: passes a prefix match while asserting the opposite of zero. The same is true of
+#: ``acquisition GetObject: 0 to 145``. The presence entries stay; this reads the
+#: **complete value** and compares it whole, so the governing meaning is exactly
+#: zero rather than merely starting with a zero.
+ADR_0021_ZERO_OPERATIONS: Final[tuple[str, ...]] = ("headobject", "getobject")
+
+#: One ``acquisition <operation>:`` statement and the complete value expression
+#: that follows it.
+#:
+#: The value alphabet is deliberately wider than a bare integer -- digits,
+#: ``to``, hyphens and dashes -- so a range is **captured whole** rather than
+#: truncated to its first number and then silently accepted. ``exactly`` is
+#: admitted because it qualifies the same value rather than making a different
+#: claim: ADR-0019's own sections write "exactly 0", and a guard that refused an
+#: honest spelling of zero would be deleted rather than obeyed.
+#:
+#: Anchored on ``acquisition`` so the two clauses cannot answer for each other,
+#: and so a neighbouring ``the acquisition role receives no s3:GetObject`` -- no
+#: colon after the operation, and not this claim -- is not swept in.
+ACQUISITION_OPERATION_VALUE: Final = re.compile(
+    r"acquisition\s+(?P<operation>headobject|getobject)\s*:\s*"
+    r"(?P<value>(?:exactly|\d+|to|[-\u2013\u2014]|\s)*)",
+    re.IGNORECASE,
+)
+
+#: The two complete values that mean exactly zero. Anything else -- a range, a
+#: different number, an empty value -- is a defect.
+ZERO_OPERATION_VALUES: Final[frozenset[str]] = frozenset({"0", "exactly 0"})
+
+
+def acquisition_zero_operation_defects(text: str) -> list[str]:
+    """Every acquisition ``HeadObject:``/``GetObject:`` statement that is not zero.
+
+    Two defect classes, because they need different repairs. A **value** defect is
+    a statement that says something other than zero -- ``0 to 145`` is the one the
+    review found, and ``1`` is the one a typo produces. An **absence** defect is
+    the clause having been deleted outright: a requirement no text can fail is a
+    requirement that proves nothing, so a missing statement is reported rather
+    than passing vacuously.
+
+    Emphasis markers are stripped and whitespace collapsed before reading, which
+    is the audit's own reading of a document, so a value wrapped across a line
+    break is read as one value rather than as an empty one.
+    """
+    defects: list[str] = []
+    reading = " ".join(text.replace("**", "").split())
+    seen = dict.fromkeys(ADR_0021_ZERO_OPERATIONS, 0)
+    for found in ACQUISITION_OPERATION_VALUE.finditer(reading):
+        operation = found.group("operation").lower()
+        value = " ".join(found.group("value").split()).lower()
+        seen[operation] += 1
+        if value not in ZERO_OPERATION_VALUES:
+            defects.append(f"acquisition {operation}: {value or '<empty>'}")
+    defects.extend(
+        f"acquisition {operation}: absent"
+        for operation in ADR_0021_ZERO_OPERATIONS
+        if not seen[operation]
+    )
+    return defects
+
 
 #: A twelve-digit run is an AWS account id, and an ``AKIA``/``ASIA`` prefix is an
 #: access-key id. Neither may appear in a proposal that says it carries no
@@ -17558,16 +17930,16 @@ def main() -> int:
             f"missing from the implementation plan: {phrase}",
         )
 
-    # ADR-0021, the proposed qualification runtime principal and trust model. PR
+    # ADR-0021, the ACCEPTED qualification runtime principal and trust model. PR
     # #52 merged two permission-set declarations and deliberately left them
-    # unheld; this proposal chooses the holder. Every check below keeps three
-    # states apart -- a proposal, an accepted decision, and a live AWS object --
-    # in both directions, because the two failure modes are opposite and a
-    # document can carry either.
+    # unheld; this decision chose the holder, and PR #54 merged it. Every check
+    # below keeps three states apart -- a proposal, an accepted decision, and a
+    # live AWS object -- in both directions, because the two failure modes are
+    # opposite and a document can carry either.
     f.check(
-        "the ADR-0021 proposal exists",
+        "the ADR-0021 decision exists",
         ADR_0021.is_file(),
-        "the proposed decision is present on this branch",
+        "the accepted decision is present on this branch",
     )
     adr_0021_text = read(ADR_0021) if ADR_0021.is_file() else ""
     adr_0021_flat = " ".join(adr_0021_text.replace("**", "").split()).lower()
@@ -17594,19 +17966,33 @@ def main() -> int:
         )
 
     f.check(
-        # The registry governs ADRs whose merge has occurred. Registering an
-        # unmerged one would assert exactly the authority the document refuses,
-        # and the inverse check is what ADR-0018's guard was before PR #39.
-        "ADR-0021 is absent from the merged-ADR registry",
-        "ADR-0021" not in dict(MERGED_ADR_STATUS),
-        "a proposed ADR is not in force and must not be registered as merged",
+        # Inverted on the merge, not deleted. While ADR-0021 sat on an open pull
+        # request this asserted its ABSENCE from the registry; PR #54 is the event
+        # that flips it, and deleting the guard would leave the reverted claim
+        # unguarded -- the treatment ADR-0017, ADR-0018, ADR-0019 and ADR-0020
+        # were each given. The registry is what governs an in-force claim, so this
+        # is the entry every ADR-0021 status row is measured against.
+        "ADR-0021 is registered as a merged ADR",
+        dict(MERGED_ADR_STATUS).get("ADR-0021") == f"PR {ADR_0021_PR} merged",
+        f"ADR-0021 must be registered as 'PR {ADR_0021_PR} merged'",
     )
     f.check(
-        # An in-force row is the shape a merged ADR claims. A proposal must make
-        # no such claim in either document.
-        "neither status document claims ADR-0021 is in force",
-        not any("ADR-0021" in _in_force_adr_claims(t) for t in adr_0018_documents.values()),
-        "a proposed ADR must not carry an ACCEPTED / IN FORCE row",
+        # An in-force row is the shape a merged ADR claims, and both documents
+        # must now carry one naming the same pull request. The inverse of what
+        # this asserted while the decision was proposed.
+        "both status documents claim ADR-0021 is in force, naming its pull request",
+        all(
+            _in_force_adr_claims(text).get("ADR-0021") == f"PR {ADR_0021_PR} merged"
+            for text in adr_0018_documents.values()
+        ),
+        f"a merged ADR must carry an ACCEPTED / IN FORCE row naming PR {ADR_0021_PR}",
+    )
+    f.check(
+        # The two zero-valued clauses, read as complete values rather than as
+        # prefixes. See :func:`acquisition_zero_operation_defects`.
+        "ADR-0021 states each acquisition zero operation as exactly zero",
+        not acquisition_zero_operation_defects(adr_0021_text),
+        ", ".join(acquisition_zero_operation_defects(adr_0021_text)),
     )
     f.check(
         # Shapes, not values. The proposal states that it carries no identifier,
@@ -17665,6 +18051,16 @@ def main() -> int:
             not adr_0021_identifier_leaks(" ".join(scan.sections)),
             ", ".join(adr_0021_identifier_leaks(" ".join(scan.sections))),
         )
+        zero_defects = acquisition_zero_operation_defects(" ".join(scan.sections))
+        f.check(
+            # Section-scoped, like every other ADR-0021 status clause: ADR-0019's
+            # own section legitimately writes "exactly 0" a few hundred lines
+            # away, and a document-wide reading would let one section answer for
+            # the other.
+            f"{name} states each acquisition zero operation as exactly zero for ADR-0021",
+            not zero_defects,
+            ", ".join(zero_defects),
+        )
 
     f.check(
         # Parity, on structure rather than on prose. The two documents have twice
@@ -17681,6 +18077,16 @@ def main() -> int:
             phrase in adr_0018_plan,
             f"missing from the implementation plan: {phrase}",
         )
+
+    plan_zero_defects = acquisition_zero_operation_defects(read(PHASE3 / "implementation-plan.md"))
+    f.check(
+        # Document-wide here, matching how every other plan clause is read. The
+        # plan states the acquisition zeros twice -- once for ADR-0019 and once
+        # for ADR-0021 -- and both must mean exactly zero.
+        "the implementation plan states each acquisition zero operation as exactly zero",
+        not plan_zero_defects,
+        ", ".join(plan_zero_defects),
+    )
 
     # The implementation half. The offline implementation candidate exists, and
     # every boundary it rests on is checked against the repository rather than

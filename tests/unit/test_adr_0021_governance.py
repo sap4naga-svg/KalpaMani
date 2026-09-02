@@ -1,20 +1,29 @@
-"""ADR-0021 is a PROPOSAL, and every guard here holds it to exactly that.
+"""ADR-0021 is ACCEPTED ARCHITECTURE, and every guard here holds it to exactly that.
 
 PR #52 merged two qualification permission-set declarations and deliberately left
 them unheld, because accepted authority determined no runtime trust principal.
 ADR-0021 chooses one -- IAM Identity Center permission-set roles, two permission
 sets, two profiles, one governed operator group -- and chooses **nothing else**.
+**PR #54 merged it**, so the architecture is accepted and **nothing is
+implemented**.
+
+**The guards were inverted on that merge, not deleted.** Every assertion that held
+the proposal state has a one-for-one replacement asserting the accepted state and
+refusing a return to the proposal wording, so neither direction is left unguarded
+-- the treatment ADR-0017, ADR-0018, ADR-0019 and ADR-0020 were each given.
 
 Three drifts follow from that shape, and each is guarded here:
 
-1. **Forwards, into acceptance** -- a proposal read as an accepted decision.
-   ADR-0021 must carry its conditional status line, must be absent from
-   ``MERGED_ADR_STATUS``, and must claim no in-force row in either status
-   document.
+1. **Backwards, out of acceptance** -- an accepted decision read back down into a
+   proposal. ADR-0021 must carry its **preserved** conditional status line **and**
+   the adjacent post-merge note, must be registered in ``MERGED_ADR_STATUS`` at
+   the exact pull request, and must claim an in-force row in **both** status
+   documents.
 2. **Forwards, into infrastructure** -- an accepted decision read as a deployed
    one. No permission set, assignment, role, attachment or profile exists, and
    whether any live AWS object exists is deliberately **not established**, because
-   establishing it would take a call nobody authorized.
+   establishing it would take a call nobody authorized. Merging an architecture
+   decision granted no authority and opened no gate.
 3. **Sideways, into a weaker identity** -- the two actors collapsed into one, a
    service or IAM-user principal substituted, a profile name treated as proof, or
    a full generated role ARN pinned through a suffix rotation.
@@ -67,6 +76,11 @@ CLAUDE_MD = PROJECT_ROOT / "CLAUDE.md"
 README = PROJECT_ROOT / "README.md"
 PLAN = PROJECT_ROOT / "docs" / "phase3" / "implementation-plan.md"
 AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
+
+#: The registry line that records ADR-0021's merge, quoted once so a mutation
+#: test can remove or forge it in a copy of the real audit source. Built from
+#: the audit's own pull-request constant rather than retyped.
+REGISTRY_ANCHOR: Final = '    ("ADR-0021", "PR #54 merged"),\n'
 
 #: The two acquisition executions the combined assessment reads.
 EXECUTIONS: Final = 2
@@ -203,8 +217,13 @@ def test_the_adr_exists_at_its_exact_path() -> None:
     assert GUARD.ADR_0021 == ADR
 
 
-def test_the_adr_carries_its_proposed_status_line() -> None:
-    """PROPOSED, with the merge condition spelled out rather than implied."""
+def test_the_adr_preserves_its_conditional_status_line() -> None:
+    """The conditional text the ADR was written with, kept rather than rewritten.
+
+    A decision record that edited its own status line to read "accepted" would
+    have erased the state it moved out of, which is the one thing a decision
+    record exists not to do.
+    """
     reading = flat(read(ADR))
     assert (
         "status: proposed — no authority until the pull request introducing this adr is "
@@ -214,6 +233,72 @@ def test_the_adr_carries_its_proposed_status_line() -> None:
         "while the pull request introducing this adr is open, adr-0021 is proposed and carries "
         "no authority" in reading
     )
+
+
+def test_the_adr_carries_the_adjacent_post_merge_note() -> None:
+    """Accepted, with the merge identity spelled out rather than implied."""
+    reading = flat(read(ADR))
+    assert "the condition above has since been satisfied" in reading
+    assert f"pr {GUARD.ADR_0021_PR} merged" in reading
+    assert f"merge commit `{GUARD.ADR_0021_MERGE_COMMIT}`" in reading
+    assert (
+        f"ordered parents `{GUARD.ADR_0021_FIRST_PARENT}` then "
+        f"`{GUARD.ADR_0021_APPROVED_HEAD}`" in reading
+    )
+    assert GUARD.ADR_0021_MERGED_AT.lower() in reading
+    assert "adr-0021's conditional acceptance event has occurred" in reading
+    assert "this adr is now accepted / in force, as architecture only" in reading
+    assert GUARD.ADR_0021_HISTORICAL_PROPOSED in reading
+    assert "no implementation or operational authority followed from the merge" in reading
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "records that the condition was satisfied",
+        "names the merging pull request",
+        "names the merge commit",
+        "names the ordered parents",
+        "records the identical merge tree",
+        "records the acceptance event",
+        "records the accepted status",
+        "keeps the conditional line as history",
+        "keeps the proposed period historical",
+        "records that the merge approved architecture only",
+        "records that no authority followed the merge",
+    ],
+)
+def test_removing_a_post_merge_note_clause_is_caught(label: str) -> None:
+    """Each half of the note individually, so none can be softened in place."""
+    phrase = clause(label, GUARD.ADR_0021_SELF_REQUIRED)
+    mutated = without(read(ADR), phrase)
+    assert label in missing(GUARD.ADR_0021_SELF_REQUIRED, mutated)
+
+
+@pytest.mark.parametrize(
+    "constant",
+    ["ADR_0021_MERGE_COMMIT", "ADR_0021_FIRST_PARENT", "ADR_0021_APPROVED_HEAD"],
+)
+def test_changing_the_merge_or_parent_identity_is_caught(constant: str) -> None:
+    """A different commit or parent is a different merge, and must not pass."""
+    real: str = getattr(GUARD, constant)
+    forged = ("0" if real[0] != "0" else "1") + real[1:]
+    assert forged != real
+    mutated = flat(read(ADR)).replace(real, forged)
+    assert forged in mutated, "the mutation must actually replace the identity"
+    absent = missing(GUARD.ADR_0021_SELF_REQUIRED, mutated)
+    assert absent, f"a forged {constant} must fail at least one required clause"
+
+
+def test_deleting_the_conditional_status_line_is_caught() -> None:
+    """The preserved history is required, not merely tolerated."""
+    for label in (
+        "preserves the conditional status line",
+        "preserves the pre-merge refusal of authority",
+    ):
+        phrase = clause(label, GUARD.ADR_0021_SELF_REQUIRED)
+        mutated = without(read(ADR), phrase)
+        assert label in missing(GUARD.ADR_0021_SELF_REQUIRED, mutated)
 
 
 def test_the_adr_supersedes_nothing_and_amends_no_earlier_adr() -> None:
@@ -244,41 +329,91 @@ def test_the_adr_carries_every_decision_table_case_and_rejected_alternative() ->
 
 
 # ---------------------------------------------------------------------------
-# Proposed, and not registered as merged
+# Accepted, and registered as merged
 # ---------------------------------------------------------------------------
 
 
-def test_the_registry_does_not_record_adr_0021_as_merged() -> None:
-    """A proposal is not in force, so it is absent from the merged-ADR registry."""
+def test_the_registry_records_adr_0021_as_merged() -> None:
+    """Inverted on the merge: the decision is in force, so the registry governs it.
+
+    The one-for-one replacement for the absence assertion this file carried while
+    PR #54 was open. Driven over a static parse of the real audit source, so it is
+    the audit's own registry that is read rather than a local copy of it.
+    """
     registry = dict(registry_from_source(read(AUDIT)))
-    assert "ADR-0021" not in registry
-    assert "ADR-0020" in registry, "the registry must still govern the merged ADRs"
+    assert registry.get("ADR-0021") == f"PR {GUARD.ADR_0021_PR} merged"
+    assert "ADR-0020" in registry, "the registry must still govern the earlier ADRs"
 
 
-def test_registering_adr_0021_as_merged_is_caught() -> None:
-    """Driven over *mutated audit source*, not a mutated local dictionary."""
+def test_unregistering_or_misregistering_adr_0021_is_caught() -> None:
+    """Driven over *mutated audit source*, not a mutated local dictionary.
+
+    The inversion of the early-registration mutation this file carried while
+    PR #54 was open: what must fail now is the entry going away, or naming a pull
+    request that did not merge the decision.
+    """
     source = read(AUDIT)
-    anchor = '    ("ADR-0020", "PR #49 merged"),'
+    anchor = REGISTRY_ANCHOR
     assert anchor in source, "the mutation target must exist"
-    mutated = source.replace(anchor, anchor + '\n    ("ADR-0021", "PR #99 merged"),', 1)
-    registry = dict(registry_from_source(mutated))
-    assert "ADR-0021" in registry, "the mutation must actually register it"
-    assert registry["ADR-0021"] == "PR #99 merged"
+
+    removed = dict(registry_from_source(source.replace(anchor, "", 1)))
+    assert "ADR-0021" not in removed, "the mutation must actually unregister it"
+    assert "ADR-0020" in removed, "the mutation must remove only ADR-0021"
+
+    forged_anchor = anchor.replace("PR #54 merged", "PR #99 merged")
+    assert forged_anchor != anchor
+    forged = dict(registry_from_source(source.replace(anchor, forged_anchor, 1)))
+    assert forged["ADR-0021"] == "PR #99 merged"
+    assert forged["ADR-0021"] != f"PR {GUARD.ADR_0021_PR} merged"
 
 
 @pytest.mark.parametrize(
     "injected",
     [
-        "adr-0021: accepted",
-        "adr-0021: in force",
-        "adr-0021: merged",
-        "adr-0021: effective",
-        "adr-0021 is accepted",
-        "adr-0021 architecture: accepted / in force",
+        "adr-0021: proposed / not in force",
+        "adr-0021: not in force",
+        "adr-0021: unmerged",
+        "adr-0021: not effective",
+        "adr-0021 is not accepted",
+        "adr-0021 architecture: proposed only",
+        "adr-0021's conditional acceptance event has not occurred",
+        "runtime principal/trust architecture: proposed only",
+        "pr #54 is open",
+        "pr #54 remains open",
+        "pr #54 is unmerged",
+        "pr #54 has not been merged",
     ],
 )
-def test_claiming_the_proposal_is_accepted_is_caught(injected: str) -> None:
-    """Forwards drift into acceptance, in the audit's own denylist."""
+def test_reverting_adr_0021_to_the_proposal_state_is_caught(injected: str) -> None:
+    """Backwards drift out of acceptance, in the audit's own denylist.
+
+    The one-for-one replacement for the acceptance-drift refusals retired when
+    PR #54 merged: each of those refused a claim that is now the truth, and each
+    entry here refuses the proposal wording that entry used to protect.
+    """
+    mutated = flat(read(CLAUDE_MD)) + " " + injected
+    assert injected in overstated(GUARD.ADR_0021_STATUS_FORBIDDEN, mutated)
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        "the merge implemented the permission sets",
+        "the merge created the runtime roles",
+        "the merge granted aws authority",
+        "implementation followed from the merge",
+        "deployment followed from the merge",
+        "permission-set implementation: implemented",
+        "identity center assignments: created",
+        "customer-managed-policy attachments: implemented",
+        "governed aws profiles: implemented",
+        "identity-gate/profile-constant correction: implemented",
+        "organization-instance prerequisite: satisfied",
+        "aws account/group/instance binding values: known",
+    ],
+)
+def test_claiming_something_followed_from_the_merge_is_caught(injected: str) -> None:
+    """The merge approved architecture. It implemented, granted and deployed nothing."""
     mutated = flat(read(CLAUDE_MD)) + " " + injected
     assert injected in overstated(GUARD.ADR_0021_STATUS_FORBIDDEN, mutated)
 
@@ -634,9 +769,10 @@ def test_placeholders_and_negative_statements_pass_the_scanner(sample: str) -> N
 
 
 @pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
-def test_each_document_carries_the_full_proposal_status(document: Path) -> None:
+def test_each_document_carries_the_full_accepted_status(document: Path) -> None:
     """Independently, because merged main has twice carried a fact in one file
-    and its contradiction in the other."""
+    and its contradiction in the other. One-for-one inversion of the proposal
+    assertion this file carried while PR #54 was open."""
     absent = missing(GUARD.ADR_0021_STATUS_REQUIRED, split_at_section(document)[1])
     assert not absent, f"{document.name} is missing from its ADR-0021 section: {absent}"
 
@@ -793,7 +929,8 @@ def test_the_scanner_carries_no_state_between_documents() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_plan_records_the_proposal() -> None:
+def test_the_plan_records_the_accepted_decision() -> None:
+    """One-for-one inversion of the plan's proposal assertion."""
     absent = missing(GUARD.ADR_0021_PLAN_REQUIRED, read(PLAN))
     assert not absent, f"the implementation plan is missing: {absent}"
 
@@ -801,9 +938,16 @@ def test_the_plan_records_the_proposal() -> None:
 @pytest.mark.parametrize(
     "label",
     [
-        "records the proposed status",
+        "records the accepted status",
+        "names the merging pull request",
+        "keeps the proposed period historical",
+        "records the satisfied architecture prerequisite",
+        "refuses to read that prerequisite as authorization",
         "names the chosen model",
+        "names what the next gate covers",
         "refuses to assert live role existence",
+        "records the organization-instance prerequisite",
+        "records the sts assumed-role caller form",
         "records that no authority was granted",
         "keeps the three gates separate",
     ],
@@ -812,3 +956,250 @@ def test_removing_a_plan_clause_is_caught(label: str) -> None:
     phrase = clause(label, GUARD.ADR_0021_PLAN_REQUIRED)
     mutated = without(read(PLAN), phrase)
     assert label in missing(GUARD.ADR_0021_PLAN_REQUIRED, mutated)
+
+
+# ---------------------------------------------------------------------------
+# The two zero-valued acquisition clauses, read as complete values
+# ---------------------------------------------------------------------------
+#
+# The independent review found that a presence check --
+# ``"acquisition headobject: 0" in text`` -- is answered by
+# ``acquisition HeadObject: 0 to 145``, because the malformed extension contains
+# the required phrase as a prefix. The audit now reads the **complete value** and
+# compares it whole. These drive the audit's own scanner over in-memory copies of
+# the real documents; no tracked file is touched.
+
+
+def zero_defects(text: str) -> list[str]:
+    """The audit's own complete-value reading, driven rather than reimplemented."""
+    defects: list[str] = GUARD.acquisition_zero_operation_defects(text)
+    return defects
+
+
+@pytest.mark.parametrize(
+    "document",
+    [ADR, PLAN],
+    ids=["ADR-0021", "implementation-plan.md"],
+)
+def test_the_committed_zero_statements_pass(document: Path) -> None:
+    """A guard a correct document cannot satisfy is a guard that gets deleted."""
+    assert zero_defects(read(document)) == []
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_committed_section_zero_statements_pass(document: Path) -> None:
+    """Section-scoped, and satisfied by the section each document actually carries."""
+    assert zero_defects(split_at_section(document)[1]) == []
+
+
+@pytest.mark.parametrize("operation", ["HeadObject", "GetObject"])
+def test_deleting_a_zero_statement_is_caught(operation: str) -> None:
+    """A clause no text can fail is a clause that proves nothing, so absence fails."""
+    reading = flat(read(ADR))
+    target = f"acquisition {operation.lower()}: 0"
+    assert target in reading, "the mutation target must exist"
+    mutated = reading.replace(target, "")
+    assert f"acquisition {operation.lower()}: absent" in zero_defects(mutated)
+
+
+@pytest.mark.parametrize("operation", ["HeadObject", "GetObject"])
+def test_changing_a_zero_to_one_is_caught(operation: str) -> None:
+    """The value is read, not merely located."""
+    reading = flat(read(ADR))
+    target = f"acquisition {operation.lower()}: 0"
+    assert target in reading
+    mutated = reading.replace(target, f"acquisition {operation.lower()}: 1", 1)
+    assert f"acquisition {operation.lower()}: 1" in zero_defects(mutated)
+
+
+@pytest.mark.parametrize("operation", ["HeadObject", "GetObject"])
+@pytest.mark.parametrize("extension", ["0 to 145", "0-145", "0 to 3"])
+def test_extending_a_zero_into_a_range_is_caught(operation: str, extension: str) -> None:
+    """The exact defect the review found: a prefix match accepts a whole range.
+
+    ``acquisition HeadObject: 0 to 145`` contains ``acquisition headobject: 0``,
+    so the presence entry alone passes while the statement means the opposite of
+    zero. The complete-value reading refuses it.
+    """
+    reading = flat(read(ADR))
+    target = f"acquisition {operation.lower()}: 0"
+    assert target in reading
+    mutated = reading.replace(target, f"acquisition {operation.lower()}: {extension}", 1)
+    assert target in mutated, "the malformed extension must still contain the old prefix"
+    assert f"acquisition {operation.lower()}: {extension}" in zero_defects(mutated)
+
+
+def test_the_presence_entry_alone_would_not_have_caught_the_extension() -> None:
+    """The hardening is load-bearing: the old reading passes what the new one fails."""
+    mutated = flat(read(ADR)).replace(
+        "acquisition headobject: 0", "acquisition headobject: 0 to 145", 1
+    )
+    presence = clause("preserves zero acquisition head", GUARD.ADR_0021_SELF_REQUIRED)
+    assert presence in mutated, "the presence entry is satisfied by the malformed line"
+    assert "preserves zero acquisition head" not in missing(GUARD.ADR_0021_SELF_REQUIRED, mutated)
+    assert zero_defects(mutated), "the complete-value reading must refuse it"
+
+
+@pytest.mark.parametrize("qualifier", ["exactly 0", "0"])
+def test_an_honest_spelling_of_zero_passes(qualifier: str) -> None:
+    """ADR-0019's own sections write "exactly 0"; refusing it would be a false failure."""
+    assert (
+        zero_defects(f"acquisition HeadObject: {qualifier}\nacquisition GetObject: {qualifier}")
+        == []
+    )
+
+
+def test_head_and_get_are_not_confused_for_each_other() -> None:
+    """Two clauses, independently required: neither answers for the other.
+
+    A reading anchored only on ``: 0`` would let one zero-valued clause satisfy
+    the guard for the other, so a deletion of exactly one would pass.
+    """
+    assert zero_defects("acquisition GetObject: exactly 0") == ["acquisition headobject: absent"]
+    assert zero_defects("acquisition HeadObject: exactly 0") == ["acquisition getobject: absent"]
+    both_wrong = zero_defects("acquisition HeadObject: exactly 0 acquisition GetObject: 0 to 145")
+    assert both_wrong == ["acquisition getobject: 0 to 145"]
+
+
+def test_a_neighbouring_sentence_is_not_swept_in() -> None:
+    """``the acquisition role receives no s3:GetObject`` is not this claim."""
+    assert (
+        zero_defects(
+            "the acquisition role receives no s3:GetObject, and no s3:GetObjectAttributes. "
+            "acquisition HeadObject: 0, acquisition GetObject: 0"
+        )
+        == []
+    )
+
+
+def test_an_empty_document_fails_rather_than_passing_vacuously() -> None:
+    """A scanner that finds nothing must report absence, not agreement."""
+    assert sorted(zero_defects("")) == [
+        "acquisition getobject: absent",
+        "acquisition headobject: absent",
+    ]
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_the_zero_reading_is_section_scoped(document: Path) -> None:
+    """A range inside the ADR-0021 section fails even though another section is fine.
+
+    Both documents legitimately carry ``acquisition HeadObject: exactly 0`` in
+    ADR-0019's own status section a few hundred lines away. A document-wide
+    reading would let that neighbour stand in for a section-local defect.
+    """
+    before, section, after = split_at_section(document)
+    neighbour = before + after
+    assert "acquisition headobject:" in flat(neighbour), "the neighbouring clause must exist"
+    assert zero_defects(neighbour) == [], "and must itself be conformant"
+    assert zero_defects(section) == []
+
+    # A section-local deletion, answered by the neighbour under a document-wide
+    # reading and reported under a section-scoped one. That difference is the
+    # whole reason the scan is scoped to the section.
+    stripped = section.replace("acquisition HeadObject: 0", "", 1)
+    assert stripped != section, "the mutation must actually apply"
+    assert "acquisition headobject: absent" in zero_defects(stripped)
+    assert zero_defects(rebuild(before, stripped, after)) == []
+
+    # And a section-local range, which a document-wide reading would also catch,
+    # but which must be caught here rather than left to it.
+    broken = section.replace("acquisition HeadObject: 0", "acquisition HeadObject: 0 to 145", 1)
+    assert broken != section
+    assert zero_defects(broken) == ["acquisition headobject: 0 to 145"]
+
+
+# ---------------------------------------------------------------------------
+# The carried-forward implementation findings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "requires an organization instance",
+        "refuses to assert the instance exists",
+        "defers the instance check to a later gate",
+        "records the sts assumed-role caller form",
+        "parses the runtime caller form",
+        "binds the actor-specific prefix",
+        "refuses loose matching",
+        "refuses a permanently pinned arn",
+        "refuses weaker proofs",
+        "keeps the suffix grammar structural",
+        "keeps get-caller-identity plus the contract as the proof",
+    ],
+)
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_removing_a_carried_forward_finding_is_caught(document: Path, label: str) -> None:
+    """Each finding clause individually, and section-locally in both documents."""
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    mutated = without(split_at_section(document)[1], phrase)
+    assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, mutated)
+
+
+def test_falsely_claiming_the_organization_instance_prerequisite_is_satisfied_is_caught() -> None:
+    """Existence is NOT ESTABLISHED, and claiming otherwise would take an AWS call."""
+    for injected in (
+        "organization-instance prerequisite: satisfied",
+        "organization-instance prerequisite: established",
+    ):
+        mutated = flat(read(CLAUDE_MD)) + " " + injected
+        assert injected in overstated(GUARD.ADR_0021_STATUS_FORBIDDEN, mutated)
+
+
+def test_replacing_the_sts_caller_form_with_the_iam_role_arn_is_caught() -> None:
+    """``GetCallerIdentity`` returns an assumed-role ARN, not the generated role ARN.
+
+    A gate written against the IAM role ARN would never match what STS returns, so
+    substituting one for the other is the defect this clause exists to prevent.
+    """
+    label = "records the sts assumed-role caller form"
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    _before, section, _after = split_at_section(CLAUDE_MD)
+    reading = flat(section)
+    assert phrase in reading
+    substituted = reading.replace(
+        phrase,
+        "`sts:getcalleridentity` returns an iam role arn of the form "
+        "`arn:aws:iam::<account>:role/aws-reserved/sso.amazonaws.com/"
+        "awsreservedsso_<permission-set-name>_<suffix>`",
+        1,
+    )
+    assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, substituted)
+
+
+@pytest.mark.parametrize(
+    "weakened",
+    [
+        "the identity gate binds the exact target account",
+        "the identity gate binds the exact permission-set role-name prefix",
+        "the identity gate binds a validated aws-generated suffix grammar",
+    ],
+)
+def test_weakening_the_account_prefix_suffix_conjunction_is_caught(weakened: str) -> None:
+    """All three together, or the contract is not the one that was accepted."""
+    label = "binds account and role prefix"
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    _before, section, _after = split_at_section(CLAUDE_MD)
+    reading = flat(section)
+    assert phrase in reading
+    assert weakened != phrase, "a weakening must drop at least one conjunct"
+    assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, reading.replace(phrase, weakened, 1))
+
+
+@pytest.mark.parametrize("document", [CLAUDE_MD, README], ids=["CLAUDE.md", "README.md"])
+def test_a_section_local_deletion_survived_by_a_copy_elsewhere_is_caught(document: Path) -> None:
+    """The phrase left standing outside the section must not answer for it.
+
+    This is the property a flat document scan cannot provide, applied to a clause
+    the accepted status turns on rather than to an incidental one.
+    """
+    label = "records the accepted status"
+    phrase = clause(label, GUARD.ADR_0021_STATUS_REQUIRED)
+    before, section, after = split_at_section(document)
+    assert phrase in flat(section)
+    stripped = flat(section).replace(phrase, "")
+    elsewhere = flat(before + after) + " " + phrase
+    assert phrase in elsewhere, "the copy must survive outside the section"
+    assert label in missing(GUARD.ADR_0021_STATUS_REQUIRED, stripped)
