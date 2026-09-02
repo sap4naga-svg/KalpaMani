@@ -8267,6 +8267,81 @@ _ATX_HEADING: Final = re.compile(r"^(?P<hashes>#{1,6})[ \t]+(?P<title>.*?)[ \t]*
 _CODE_FENCE: Final = re.compile(r"^(?P<fence>`{3,}|~{3,})")
 
 
+def _scan_status_sections(
+    text: str,
+    *,
+    heading: str,
+    level: int,
+    subsections: tuple[str, ...],
+    label: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Extract one document's status section(s) for ``heading``, and its defects.
+
+    Pure and deterministic: it takes text, carries no module state between calls,
+    opens no file and reaches no service. Two documents scanned in either order
+    give the same answer, and one document's scan cannot satisfy the other's.
+
+    Shared by every section-scoped status guard rather than copied into each one.
+    A second hand-written copy of fence-aware heading extraction is a second
+    opinion about where a section ends, and the guards that disagree are the ones
+    that stop measuring the same text.
+
+    A section runs from its heading to the next heading of the same level or
+    higher, so its own deeper subsections stay inside it. Headings inside fenced
+    code blocks are not headings -- README.md carries a shell comment beginning
+    with ``#`` inside a fence, and a scanner reading it as a level-one heading
+    would cut a section short.
+
+    Ambiguous structure is refused rather than resolved: the status title carried
+    at any other level is a defect, and so is a foreign heading inside a section.
+    """
+    lines = text.splitlines(keepends=True)
+    headings: list[tuple[int, int, str]] = []
+    defects: list[str] = []
+    fence: str | None = None
+    for index, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        opener = _CODE_FENCE.match(line)
+        if opener is not None:
+            token = opener.group("fence")
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        found = _ATX_HEADING.match(line)
+        if found is None:
+            continue
+        depth = len(found.group("hashes"))
+        title = found.group("title").strip()
+        headings.append((index, depth, title))
+        if title == heading and depth != level:
+            defects.append(f"line {index + 1}: the {label} status heading sits at level {depth}")
+
+    starts = [
+        position
+        for position, (_, depth, title) in enumerate(headings)
+        if depth == level and title == heading
+    ]
+    sections: list[str] = []
+    for position in starts:
+        begin = headings[position][0]
+        end = len(lines)
+        for index, depth, _title in headings[position + 1 :]:
+            if depth <= level:
+                end = index
+                break
+        sections.append("".join(lines[begin:end]))
+        for index, _depth, title in headings[position + 1 :]:
+            if index >= end:
+                break
+            if title not in subsections:
+                defects.append(f"line {index + 1}: foreign heading inside the section: {title}")
+    return tuple(sections), tuple(defects)
+
+
 class Adr0020SectionScan(NamedTuple):
     """Every ADR-0020 status section a document carries, and its structure defects.
 
@@ -8302,11 +8377,108 @@ def scan_adr_0020_status_sections(text: str) -> Adr0020SectionScan:
     at any level other than three is a defect, and so is a foreign heading inside
     an extracted section.
     """
-    lines = text.splitlines(keepends=True)
-    headings: list[tuple[int, int, str]] = []
-    defects: list[str] = []
+    return Adr0020SectionScan(
+        *_scan_status_sections(
+            text,
+            heading=ADR_0020_STATUS_HEADING,
+            level=ADR_0020_STATUS_HEADING_LEVEL,
+            subsections=ADR_0020_STATUS_SUBSECTIONS,
+            label="ADR-0020",
+        )
+    )
+
+
+#: The exact level-three heading that opens the qualification IAM foundation's
+#: current-status section in both status documents.
+#:
+#: The anchor is the heading, never a phrase being tested: a section located by
+#: one of its own required phrases would go missing the moment that phrase was
+#: deleted, which is the deletion the guard exists to catch.
+QUALIFICATION_IAM_STATUS_HEADING: Final = (
+    "The offline qualification IAM policy foundation — MERGED, and nothing is deployed"
+)
+
+#: The level-four subsections that section is allowed to contain. Anything else
+#: carrying a heading inside the extracted region means the section swallowed a
+#: neighbour, and a section that has drifted is measuring somebody else's text.
+QUALIFICATION_IAM_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "The history, in order",
+    "What the merge did and did not do",
+    "Why the foundation stops at declarations",
+    "The preserved technical boundary",
+    "Status",
+)
+
+#: The level at which that heading, and only that heading, may sit.
+QUALIFICATION_IAM_STATUS_HEADING_LEVEL: Final = 3
+
+#: The ADR-0020 status heading, as a level-three heading line. Derived from the
+#: heading constant rather than retyped, so the two cannot drift apart.
+ADR_0020_SECTION_TERMINATOR: Final = f"### {ADR_0020_STATUS_HEADING}"
+
+#: The heading each document's qualification-IAM section must be followed by.
+#:
+#: A section is extracted up to the next heading of its own level or higher, so
+#: deleting that heading silently extends the section to the end of the file. The
+#: subsection guard cannot always see it -- a swallowed region carrying no headings
+#: of its own raises nothing -- so the boundary is named and checked rather than
+#: inferred.
+#:
+#: Both documents are terminated by the ADR-0020 status heading, because this
+#: section sits immediately before it. That placement is deliberate: inserting
+#: after ADR-0020's section instead would have replaced README.md's parent ``##``
+#: terminator with a sibling ``###`` one, and a pre-existing guard exercises both
+#: terminator classes through exactly that pair.
+QUALIFICATION_IAM_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": ADR_0020_SECTION_TERMINATOR,
+    "README.md": ADR_0020_SECTION_TERMINATOR,
+}
+
+
+def qualification_iam_section_is_terminated(text: str, section: str, terminator: str) -> bool:
+    """Whether ``section`` is immediately followed by its declared terminator.
+
+    Pure, and reads only what it is given. ``section`` is the scanner's own
+    verbatim output, so the split cannot disagree with the extraction.
+    """
+    if not section:
+        return False
+    before, separator, after = text.partition(section)
+    if separator != section:
+        return False
+    del before
+    return after.lstrip("\n").startswith(terminator)
+
+
+#: PR #52, and the two commits that fix what was merged and what was approved.
+QUALIFICATION_IAM_PR: Final = "#52"
+QUALIFICATION_IAM_MERGE_COMMIT: Final = "beb5afa5087ee7488c54b77d2dfd6f3f94bbc68f"
+QUALIFICATION_IAM_APPROVED_HEAD: Final = "ce06a61ec7a701228849580395d24ce49cebf824"
+
+
+class QualificationIamSectionScan(NamedTuple):
+    """Every qualification-IAM status section a document carries, and its defects.
+
+    Separate from :class:`Adr0020SectionScan` so a caller cannot pass one where
+    the other is expected, and reported the same way for the same reason: a
+    malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def _section_subsection_titles(sections: tuple[str, ...]) -> tuple[str, ...]:
+    """Every level-four heading inside the given sections, in order.
+
+    Structure rather than prose: two documents whose status sections carry the
+    same subsections in the same order are answering the same questions, and one
+    that has quietly lost a subsection is not.
+    """
+    titles: list[str] = []
     fence: str | None = None
-    for index, raw in enumerate(lines):
+    for raw in "".join(sections).splitlines():
         line = raw.rstrip("\n")
         opener = _CODE_FENCE.match(line)
         if opener is not None:
@@ -8318,35 +8490,396 @@ def scan_adr_0020_status_sections(text: str) -> Adr0020SectionScan:
             continue
         if fence is not None:
             continue
-        heading = _ATX_HEADING.match(line)
-        if heading is None:
-            continue
-        level = len(heading.group("hashes"))
-        title = heading.group("title").strip()
-        headings.append((index, level, title))
-        if title == ADR_0020_STATUS_HEADING and level != ADR_0020_STATUS_HEADING_LEVEL:
-            defects.append(f"line {index + 1}: the ADR-0020 status heading sits at level {level}")
+        found = _ATX_HEADING.match(line)
+        if found is not None and len(found.group("hashes")) == 4:
+            titles.append(found.group("title").strip())
+    return tuple(titles)
 
-    starts = [
-        position
-        for position, (_, level, title) in enumerate(headings)
-        if level == ADR_0020_STATUS_HEADING_LEVEL and title == ADR_0020_STATUS_HEADING
-    ]
-    sections: list[str] = []
-    for position in starts:
-        begin = headings[position][0]
-        end = len(lines)
-        for index, level, _title in headings[position + 1 :]:
-            if level <= ADR_0020_STATUS_HEADING_LEVEL:
-                end = index
-                break
-        sections.append("".join(lines[begin:end]))
-        for index, _level, title in headings[position + 1 :]:
-            if index >= end:
-                break
-            if title not in ADR_0020_STATUS_SUBSECTIONS:
-                defects.append(f"line {index + 1}: foreign heading inside the section: {title}")
-    return Adr0020SectionScan(tuple(sections), tuple(defects))
+
+def scan_qualification_iam_status_sections(text: str) -> QualificationIamSectionScan:
+    """Extract the qualification-IAM status section(s) from a document, by heading.
+
+    Drives the shared :func:`_scan_status_sections` rather than reimplementing it,
+    so this guard and the ADR-0020 one cannot disagree about where a section ends.
+    """
+    return QualificationIamSectionScan(
+        *_scan_status_sections(
+            text,
+            heading=QUALIFICATION_IAM_STATUS_HEADING,
+            level=QUALIFICATION_IAM_STATUS_HEADING_LEVEL,
+            subsections=QUALIFICATION_IAM_STATUS_SUBSECTIONS,
+            label="qualification-IAM",
+        )
+    )
+
+
+#: What both status documents must say about the merged qualification IAM policy
+#: foundation, inside that section.
+#:
+#: Section-scoped for the reason the ADR-0020 block gives: most of these clauses
+#: are also spelled somewhere else in the same file -- "run a: not authorized /
+#: not run" appears in three other status blocks -- so a flat scan is answered by
+#: a neighbour's copy and a section-local deletion goes unreported.
+#:
+#: The distinction every entry serves is the one PR #52 makes it possible to lose:
+#: Terraform declarations merged into source control do not mean Terraform was
+#: initialized, planned or applied; that does not mean AWS managed policies were
+#: created; that does not mean roles, trust principals or attachments were chosen;
+#: that does not mean any principal received authority; and that does not mean the
+#: qualification infrastructure is deployable or executable.
+QUALIFICATION_IAM_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------- the merge, and its identity
+    ("records the merge", f"pr {QUALIFICATION_IAM_PR} is merged"),
+    ("names the merge commit", QUALIFICATION_IAM_MERGE_COMMIT),
+    ("names the approved implementation head", QUALIFICATION_IAM_APPROVED_HEAD),
+    (
+        "records the independent review",
+        f"pr {QUALIFICATION_IAM_PR} was independently reviewed before its merge",
+    ),
+    # ------------------------------------------------------------- the chronology
+    (
+        "keeps the accepted architecture first",
+        "adr-0018 architecture was accepted, and its offline implementation merged dormant",
+    ),
+    (
+        "records the adr-0019 correction",
+        "adr-0019 corrected acquisition collision handling to write-only publication",
+    ),
+    (
+        "records the adr-0020 correction",
+        "adr-0020 corrected qualification payload identity to execution-and-request scope",
+    ),
+    (
+        "records the merged dormant application implementation",
+        "the corrected application implementation merged and remained dormant and "
+        "offline-conforming",
+    ),
+    (
+        "records exactly what the merge carried",
+        f"pr {QUALIFICATION_IAM_PR} independently reviewed and merged only the offline "
+        "qualification iam policy declarations and guards",
+    ),
+    (
+        "records the deliberate omission",
+        f"pr {QUALIFICATION_IAM_PR} deliberately did not choose a runtime trust principal and "
+        "created no role or attachment",
+    ),
+    (
+        "records that nothing followed the merge",
+        "no terraform initialization, plan, apply, aws mutation, deployment or qualification "
+        "execution followed from that merge",
+    ),
+    (
+        "refuses to rewrite the chronology",
+        "this chronology is not rewritten as though the final design existed from the beginning",
+    ),
+    ("records that the merge amends no adr", "this merge amends no adr"),
+    # ------------------------------------------- what a merged declaration is not
+    (
+        "records the declarations in source control",
+        "source control now contains two reviewed `aws_iam_policy` declarations",
+    ),
+    (
+        "records that no apply created them",
+        "no authorized `terraform apply` created those resources, and no aws existence check "
+        "occurred",
+    ),
+    (
+        "records the absent role, trust policy and attachment",
+        "the repository declares no role, trust policy or attachment for them",
+    ),
+    (
+        "records that no principal received authority",
+        "therefore this merge grants no principal any aws authority",
+    ),
+    ("records unattached by design", "the declarations are unattached by design"),
+    (
+        # The half a status document is most likely to lose. Nothing here has
+        # asked AWS whether a policy exists, so nothing here may say one does --
+        # nor that one does not.
+        "refuses to assert live policy existence",
+        "whether any live aws policy exists is not established",
+    ),
+    (
+        "refuses to call a live policy unattached",
+        "no live aws policy is described here as unattached",
+    ),
+    (
+        "records the narrowed register lines",
+        "two standing register lines are narrowed by this merge, and neither is edited",
+    ),
+    (
+        "keeps further infrastructure work unauthorized",
+        "further infrastructure design and mutation stay not authorized",
+    ),
+    # --------------------------------------- why the foundation stops where it does
+    (
+        "records the undetermined principal",
+        "accepted authority does not yet determine the runtime trust principal",
+    ),
+    (
+        "records the pinned profile and identity gate",
+        "the operator entry points pin a governed aws profile and perform the identity gate",
+    ),
+    (
+        "records that nothing assumes a role",
+        "the merged entry points do not call `sts:assumerole`",
+    ),
+    (
+        "refuses to invent a trust principal",
+        "inventing an ecs, lambda, ec2, federated or human trust principal would exceed "
+        "accepted architecture",
+    ),
+    (
+        "names the next architecture gate",
+        "the next architecture gate must choose the execution principal and trust model before "
+        "roles or attachments can be designed",
+    ),
+    (
+        "refuses deployment readiness",
+        "the policies-only merge does not satisfy deployment readiness",
+    ),
+    # ------------------------------------------------ the boundary the file keeps
+    (
+        "records the write-only acquisition declaration",
+        "write-only for claims, request-scoped payloads, records and locators, with read, list "
+        "and delete denied",
+    ),
+    (
+        "records the assessment read scope",
+        "reads only accepted evidence and report prefixes, never claims, and writes only reports",
+    ),
+    (
+        "explains the report-prefix read action",
+        "the report-prefix `s3:getobject` permission exists because aws authorizes `headobject` "
+        "through that action",
+    ),
+    (
+        "records the unchanged bucket and encryption",
+        "the existing licensed bucket and sse-s3 are referenced, and no bucket or kms change is "
+        "made",
+    ),
+    (
+        "records what the declarations do not touch",
+        "adr-0017, shared ingestion, application source, the entry points and the durable "
+        "locator schema are unchanged",
+    ),
+    (
+        "records that the declarations are inert",
+        "the declarations are inert until a separately authorized principal, attachment, plan "
+        "and apply sequence exists",
+    ),
+    # ------------------------------------------------------------ the register itself
+    (
+        # Spelled with the qualification rather than as the bare anchor. The bare
+        # "adr-0020 architecture: accepted / in force" is one of exactly three
+        # clauses with no copy outside ADR-0020's own section, and a guard names
+        # those three; borrowing it here would silently make that guard's claim
+        # false. The longer spelling records the same acceptance and says the one
+        # thing this section is for -- that this merge did not change it.
+        "keeps adr-0019 in force and unchanged",
+        "adr-0019 architecture, unchanged by this merge: accepted / in force",
+    ),
+    (
+        "keeps adr-0020 in force and unchanged",
+        "adr-0020 architecture, unchanged by this merge: accepted / in force",
+    ),
+    (
+        "records the corrected application implementation",
+        "corrected qualification application implementation: merged / dormant / offline-conforming",
+    ),
+    (
+        "records the merged declarations",
+        "qualification iam policy terraform declarations: merged / in main / offline-reviewed",
+    ),
+    (
+        "records that initialization was not performed",
+        "terraform initialization for these declarations: not performed",
+    ),
+    (
+        "records that plan has not run",
+        "terraform plan for these declarations: not authorized / not run",
+    ),
+    (
+        "records that apply has not run",
+        "terraform apply for these declarations: not authorized / not run",
+    ),
+    (
+        "refuses to claim aws resource creation",
+        "aws managed-policy resource creation from these declarations: not performed / not "
+        "established",
+    ),
+    ("records that runtime roles are absent", "runtime roles: not implemented"),
+    ("records that no trust principal is selected", "runtime trust principals: not selected"),
+    ("records that nothing is attached", "policy attachments: not implemented"),
+    (
+        "records that the foundation grants nothing",
+        "authority granted to a principal by this foundation: none",
+    ),
+    (
+        "records that binding and deployment are blocked",
+        "qualification infrastructure binding/deployment: blocked",
+    ),
+    (
+        "keeps aws, provider and credential access closed",
+        "aws/provider/credential access: not authorized / not performed",
+    ),
+    (
+        "keeps qualification and preflight execution closed",
+        "qualification and binding-preflight execution: not authorized / not run",
+    ),
+    ("records that run a has not run", "run a: not authorized / not run"),
+    ("records that run b has not run", "run b: not authorized / not run"),
+    ("records that the assessment has not run", "combined assessment: not authorized / not run"),
+    (
+        "keeps a third adr-0017 acquisition unauthorized",
+        "third adr-0017 authenticated acquisition: not authorized",
+    ),
+    ("keeps a sixth binding preflight unauthorized", "sixth binding preflight: not authorized"),
+    ("leaves g1 open", "g1: open"),
+    ("leaves g2 open", "g2: open"),
+    ("records that no provider is selected", "provider selected: none"),
+    ("records that phase 3 is not complete", "phase 3: not complete"),
+    ("keeps control deferred", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    (
+        "refuses to read a merge as authorization",
+        "merging reviewed infrastructure code is not authorization to plan it, apply it or run "
+        "anything",
+    ),
+)
+
+#: Claims neither status document may make about the qualification IAM foundation.
+#:
+#: Two drift directions, both real. Forward: a merged declaration read as a
+#: deployed resource, an attached policy, a chosen principal or a granted
+#: authority. Backward: the merged declarations described as absent, unmerged,
+#: proposed or awaiting review, which is the state PR #52 ended.
+#:
+#: Every entry is anchored -- a register spelling with its colon, or a full
+#: sentence -- rather than a loose substring, so legitimate historical and
+#: conditional wording survives. "if a later apply is authorized" is honest
+#: forward-looking prose and matches nothing here, and neither does "run a: not
+#: authorized / not run", which is required above.
+QUALIFICATION_IAM_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    # ------------------------------------------------------------ the forward drift
+    "qualification iam policies deployed",
+    "qualification iam policies applied",
+    # Anchored, not loose. The load-bearing "DOES NOT MEAN AWS managed policies
+    # created" line is honest prose that a bare substring refused, and a guard a
+    # correct document cannot satisfy is a guard someone deletes.
+    "aws managed policies were created",
+    "aws managed policies have been created",
+    "aws managed policies: created",
+    "aws managed-policy resource creation from these declarations: performed",
+    "aws policies attached",
+    "qualification runtime role implemented",
+    "qualification trust principal selected",
+    "qualification infrastructure ready",
+    "qualification infrastructure deployed",
+    "qualification infrastructure binding/deployment: complete",
+    "qualification infrastructure binding/deployment: performed",
+    "terraform plan completed",
+    "terraform apply completed",
+    "terraform initialization for these declarations: completed",
+    "terraform plan for these declarations: completed",
+    "terraform apply for these declarations: completed",
+    "aws qualification access authorized",
+    "runtime roles: implemented",
+    "runtime trust principals: selected",
+    "policy attachments: implemented",
+    "this merge grants a principal aws authority",
+    "the foundation grants a principal aws authority",
+    "run a: authorized",
+    "run a: completed",
+    "run b: authorized",
+    "run b: completed",
+    "combined assessment: authorized",
+    "combined assessment: completed",
+    "g1: closed",
+    "g2: closed",
+    "a production provider is selected",
+    "phase 3: complete",
+    "control: published",
+    "control publication has occurred",
+    "live trading: enabled",
+    # ------------------------------------------------------------ the reverse drift
+    #
+    # The state PR #52 ended. Kept as refusals rather than merely unasserted, so a
+    # revert to the pre-merge wording fails instead of going unchecked.
+    "qualification iam policy terraform declarations: absent",
+    "qualification iam policy terraform declarations: not merged",
+    "qualification iam policy terraform declarations: proposed",
+    "qualification iam policy terraform declarations: awaiting review",
+    f"pr {QUALIFICATION_IAM_PR} is open",
+    f"pr {QUALIFICATION_IAM_PR} remains unmerged",
+    f"pr {QUALIFICATION_IAM_PR} is awaiting review",
+    f"pr {QUALIFICATION_IAM_PR}: open / unmerged",
+    "the offline qualification iam policy candidate is not merged",
+    "no qualification terraform exists",
+    "the qualification permission sets are expressed nowhere in terraform",
+)
+
+#: What the implementation plan must say. The plan is a separate document with a
+#: separate reader, and merged main has twice carried a fact in one status file
+#: and a stale contradiction in another.
+QUALIFICATION_IAM_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records the merged declarations",
+        "qualification iam policy terraform declarations: merged / in main / offline-reviewed",
+    ),
+    ("names the merge commit", QUALIFICATION_IAM_MERGE_COMMIT),
+    ("names the approved implementation head", QUALIFICATION_IAM_APPROVED_HEAD),
+    (
+        "records the independent review",
+        f"pr {QUALIFICATION_IAM_PR} was independently reviewed before its merge",
+    ),
+    (
+        "records exactly what the merge carried",
+        f"pr {QUALIFICATION_IAM_PR} independently reviewed and merged only the offline "
+        "qualification iam policy declarations and guards",
+    ),
+    (
+        "records the deliberate omission",
+        f"pr {QUALIFICATION_IAM_PR} deliberately did not choose a runtime trust principal and "
+        "created no role or attachment",
+    ),
+    (
+        "records that nothing followed the merge",
+        "no terraform initialization, plan, apply, aws mutation, deployment or qualification "
+        "execution followed from that merge",
+    ),
+    (
+        "records that no principal received authority",
+        "therefore this merge grants no principal any aws authority",
+    ),
+    (
+        "refuses to assert live policy existence",
+        "whether any live aws policy exists is not established",
+    ),
+    (
+        "records the undetermined principal",
+        "accepted authority does not yet determine the runtime trust principal",
+    ),
+    (
+        "names the next architecture gate",
+        "the next architecture gate must choose the execution principal and trust model before "
+        "roles or attachments can be designed",
+    ),
+    (
+        "refuses deployment readiness",
+        "the policies-only merge does not satisfy deployment readiness",
+    ),
+    (
+        "records that binding and deployment are blocked",
+        "qualification infrastructure binding/deployment: blocked",
+    ),
+    (
+        "refuses to read a merge as authorization",
+        "merging reviewed infrastructure code is not authorization to plan it, apply it or run "
+        "anything",
+    ),
+)
 
 
 #: Path separators and placeholder brackets a sample key legitimately contains.
@@ -16219,6 +16752,74 @@ def main() -> int:
     for label, phrase in ADR_0020_PLAN_REQUIRED:
         f.check(
             f"the implementation plan {label} for ADR-0020",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    # The merged qualification IAM policy foundation. PR #52 put two reviewed
+    # `aws_iam_policy` declarations into source control and nothing else: no
+    # `terraform init`, plan or apply, no AWS resource, no role, no trust
+    # principal, no attachment and no authority. Every check below exists to keep
+    # those apart, in both directions -- a merged declaration read forward as a
+    # deployed policy, and a merged declaration read backward as an open
+    # candidate.
+    qualification_iam_sections: dict[str, tuple[str, ...]] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_qualification_iam_status_sections(document)
+        f.check(
+            # One section, and structurally sound. Cardinality is checked because
+            # a phrase scan cannot see a duplicate -- a second copy only ever adds
+            # occurrences, so every phrase check stays green while two sections
+            # disagree about one decision.
+            f"{name} carries exactly one qualification-IAM status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        qualification_iam_sections[name] = _section_subsection_titles(scan.sections)
+        f.check(
+            f"{name} ends the qualification-IAM section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                QUALIFICATION_IAM_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {QUALIFICATION_IAM_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in QUALIFICATION_IAM_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for the qualification IAM foundation",
+                phrase in section,
+                f"missing from the qualification-IAM status section of {name}: {phrase}",
+            )
+        # Document scope, plus the section named in the detail. For a presence
+        # denylist document scope already contains section scope, so widening
+        # removes nothing; naming the section tells a reader where the claim sits.
+        overstated = [
+            f"{claim} (in the qualification-IAM status section)" if claim in section else claim
+            for claim in QUALIFICATION_IAM_STATUS_FORBIDDEN
+            if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate the qualification IAM foundation",
+            not overstated,
+            ", ".join(overstated),
+        )
+
+    f.check(
+        # Parity, on structure rather than on prose. The two documents have twice
+        # carried a fact in one file and a stale contradiction in the other, and a
+        # section whose subsections have diverged is two answers to one question.
+        "both status documents carry the same qualification-IAM subsections, in order",
+        len(set(qualification_iam_sections.values())) == 1,
+        f"subsection sequences differ: {qualification_iam_sections}",
+    )
+
+    for label, phrase in QUALIFICATION_IAM_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for the qualification IAM foundation",
             phrase in adr_0018_plan,
             f"missing from the implementation plan: {phrase}",
         )

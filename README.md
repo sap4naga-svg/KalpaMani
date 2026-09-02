@@ -2607,6 +2607,127 @@ was built, no IAM role was created, no AWS or provider request was made and no r
 it**.
 
 
+### The offline qualification IAM policy foundation — MERGED, and nothing is deployed
+
+**PR #52 is merged.** Merge commit **`beb5afa5087ee7488c54b77d2dfd6f3f94bbc68f`**, approved
+implementation head **`ce06a61ec7a701228849580395d24ce49cebf824`**, and **PR #52 was independently
+reviewed before its merge**. It added one Terraform file declaring the two accepted qualification
+permission sets, two named outputs, an infrastructure README correction, and the guards that hold
+them in place.
+
+**The merge put Terraform declarations into source control, and that is the whole of it.** Six
+statements are kept apart on purpose, and none of them implies the next:
+
+```text
+Terraform declarations merged into source control
+    DOES NOT MEAN   Terraform initialized, planned or applied
+    DOES NOT MEAN   AWS managed policies created
+    DOES NOT MEAN   roles, trust principals or attachments selected or implemented
+    DOES NOT MEAN   any principal received authority
+    DOES NOT MEAN   qualification infrastructure is deployable or executable
+```
+
+#### The history, in order
+
+1. **ADR-0018 architecture was accepted, and its offline implementation merged dormant.**
+2. **ADR-0019 corrected acquisition collision handling to write-only publication.**
+3. **ADR-0020 corrected qualification payload identity to execution-and-request scope, while
+   retaining digest verification.**
+4. **The corrected application implementation merged and remained dormant and
+   offline-conforming.**
+5. **PR #52 independently reviewed and merged only the offline qualification IAM policy
+   declarations and guards.**
+6. **PR #52 deliberately did not choose a runtime trust principal and created no role or
+   attachment.**
+7. **No Terraform initialization, plan, apply, AWS mutation, deployment or qualification
+   execution followed from that merge.**
+
+**This chronology is not rewritten as though the final design existed from the beginning.**
+ADR-0018's original arithmetic stays inside its historical markers, ADR-0019's amendment stays the
+governing acquisition arithmetic, and ADR-0020's proposed period stays historical. **This merge
+amends no ADR**: ADR-0018, ADR-0019 and ADR-0020 are unchanged by it.
+
+#### What the merge did and did not do
+
+**Source control now contains two reviewed `aws_iam_policy` declarations. No authorized
+`terraform apply` created those resources, and no AWS existence check occurred. The repository
+declares no role, trust policy or attachment for them. Therefore this merge grants no principal
+any AWS authority.**
+
+**The declarations are unattached by design.** That is a statement about this repository, and not
+about AWS. **Whether any live AWS policy exists is NOT ESTABLISHED**, because establishing it would
+take an AWS call that is not authorized — so **no live AWS policy is described here as unattached**,
+which would assert an existence nothing has checked.
+
+**Two standing register lines are narrowed by this merge, and neither is edited.** ADR-0019's and
+ADR-0020's own status blocks were written before any qualification Terraform existed, and read that
+Terraform and IAM are not implemented. **What holds now is narrower, and is stated here rather than
+left to inference**: the two permission-set declarations are merged and offline-reviewed; **no role,
+trust principal, attachment, plan, apply, deployment or AWS resource exists or is authorized**; and
+**further infrastructure design and mutation stay NOT AUTHORIZED**. An accepted decision's own
+status text is not rewritten by a later slice, so **this section governs where the two differ**.
+
+#### Why the foundation stops at declarations
+
+| | |
+|---|---|
+| **the principal is undetermined** | **accepted authority does not yet determine the runtime trust principal** |
+| **the entry points pin a profile** | **the operator entry points pin a governed AWS profile and perform the identity gate** |
+| **nothing assumes a role** | **the merged entry points do not call `sts:AssumeRole`** |
+| **guessing would exceed authority** | **inventing an ECS, Lambda, EC2, federated or human trust principal would exceed accepted architecture** |
+| **the next gate is architectural** | **the next architecture gate must choose the execution principal and trust model before roles or attachments can be designed** |
+
+**The policies-only merge does not satisfy deployment readiness**, and is described nowhere as
+doing so.
+
+#### The preserved technical boundary
+
+| | |
+|---|---|
+| **acquisition declaration** | **write-only for claims, request-scoped payloads, records and locators, with read, list and delete denied** |
+| **assessment declaration** | **reads only accepted evidence and report prefixes, never claims, and writes only reports** |
+| **the report-prefix read action** | **the report-prefix `s3:GetObject` permission exists because AWS authorizes `HeadObject` through that action** |
+| **bucket and encryption** | **the existing licensed bucket and SSE-S3 are referenced, and no bucket or KMS change is made** |
+| **untouched** | **ADR-0017, shared ingestion, application source, the entry points and the durable locator schema are unchanged** |
+| **inert** | **the declarations are inert until a separately authorized principal, attachment, plan and apply sequence exists** |
+
+#### Status
+
+```text
+ADR-0019 architecture, unchanged by this merge:   ACCEPTED / IN FORCE
+ADR-0020 architecture, unchanged by this merge:   ACCEPTED / IN FORCE
+corrected qualification application implementation:   MERGED / DORMANT / OFFLINE-CONFORMING
+qualification IAM policy Terraform declarations:  MERGED / IN MAIN / OFFLINE-REVIEWED
+Terraform initialization for these declarations:  NOT PERFORMED
+Terraform plan for these declarations:            NOT AUTHORIZED / NOT RUN
+Terraform apply for these declarations:           NOT AUTHORIZED / NOT RUN
+AWS managed-policy resource creation from these declarations:   NOT PERFORMED / NOT ESTABLISHED
+runtime roles:                                    NOT IMPLEMENTED
+runtime trust principals:                         NOT SELECTED
+policy attachments:                               NOT IMPLEMENTED
+authority granted to a principal by this foundation:   NONE
+qualification infrastructure binding/deployment:  BLOCKED
+AWS/provider/credential access:                   NOT AUTHORIZED / NOT PERFORMED
+qualification and binding-preflight execution:    NOT AUTHORIZED / NOT RUN
+Run A:                                            NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT AUTHORIZED / NOT RUN
+combined assessment:                              NOT AUTHORIZED / NOT RUN
+third ADR-0017 authenticated acquisition:         NOT AUTHORIZED
+sixth binding preflight:                          NOT AUTHORIZED
+G1:                                               OPEN
+G2:                                               OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**Merging reviewed infrastructure code is not authorization to plan it, apply it or run anything.**
+Terraform initialization, validation, plan, apply and every other Terraform command stay **NOT
+AUTHORIZED / NOT RUN** for these declarations; **AWS, provider and credential access stay NOT
+AUTHORIZED and NOT PERFORMED**; and **qualification infrastructure binding and deployment stay
+BLOCKED** until a separate owner authorization chooses the execution principal and the trust model.
+
 ### The legitimate duplicate-payload collision, and ADR-0020 — ACCEPTED, and the merged implementation
 
 [ADR-0020](docs/decisions/ADR-0020-request-scoped-qualification-payload-identity.md) narrowly

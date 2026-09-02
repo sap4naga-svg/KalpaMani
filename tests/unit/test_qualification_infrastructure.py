@@ -27,9 +27,12 @@ checking anything.
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -43,6 +46,7 @@ from kalpamani.data.qualify.sharadar.report import REPORT_SEGMENTS
 pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+AUDIT = PROJECT_ROOT / "scripts" / "phase3_docs_audit.py"
 INFRA = PROJECT_ROOT / "infra" / "aws" / "research-data-plane"
 QUALIFICATION_TF = INFRA / "qualification_policies.tf"
 OUTPUTS_TF = INFRA / "outputs.tf"
@@ -1130,3 +1134,481 @@ class TestCanonicalFormatting:
 
     def test_the_formatting_checker_accepts_canonical_text(self) -> None:
         assert formatting_violations('locals {\n  ab = "1"\n  c  = "2"\n}\n') == []
+
+
+# ---------------------------------------------------------------------------
+# The merged foundation, as the status documents record it
+# ---------------------------------------------------------------------------
+#
+# The Terraform above is checked by parsing it. This half checks the *claim*
+# the status documents make about it, because the two can drift apart in a way
+# neither the parser nor a reader notices: PR #52 put two reviewed
+# `aws_iam_policy` declarations into source control, and every later gate --
+# `terraform init`, plan, apply, an AWS resource, a role, a trust principal, an
+# attachment, an authority -- stayed closed. A document that loses either half
+# of that is wrong in a way that matters.
+#
+# The audit's own scanners and phrase lists are driven rather than restated. A
+# test carrying its own copy of a required phrase proves nothing about the
+# phrase the guard actually looks for, and every mutation below is applied to
+# in-memory text: no tracked file is written, and no private material is read.
+
+
+def _audit_module() -> ModuleType:
+    """Load the audit by path, to *run* its guards rather than restate them.
+
+    ``scripts`` is not an importable package. The module is registered in
+    ``sys.modules`` before execution because the audit defines a ``@dataclass``,
+    and ``dataclasses`` resolves the defining module through that entry.
+
+    Importing it defines constants and functions. It runs no check, opens no
+    socket and reaches no service -- ``main()`` is behind the usual guard.
+    """
+    spec = importlib.util.spec_from_file_location("kalpamani_phase3_docs_audit", AUDIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD = _audit_module()
+
+REQUIRED: tuple[tuple[str, str], ...] = GUARD.QUALIFICATION_IAM_STATUS_REQUIRED
+FORBIDDEN: tuple[str, ...] = GUARD.QUALIFICATION_IAM_STATUS_FORBIDDEN
+PLAN_REQUIRED: tuple[tuple[str, str], ...] = GUARD.QUALIFICATION_IAM_PLAN_REQUIRED
+
+#: The heading that ends the section in each document, read from the audit so a
+#: test cannot disagree with the guard about where the boundary is.
+TERMINATORS: dict[str, str] = dict(GUARD.QUALIFICATION_IAM_SECTION_TERMINATORS)
+
+
+def flat(text: str) -> str:
+    """Whitespace-collapsed, emphasis-stripped, lowercased -- the audit's own reading."""
+    return " ".join(text.replace("**", "").split()).lower()
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def missing(text: str) -> list[str]:
+    """Every required clause the reading does not carry, by label."""
+    return [label for label, phrase in REQUIRED if phrase not in text]
+
+
+def overstated(text: str) -> list[str]:
+    """Every forbidden claim the reading does carry."""
+    return [claim for claim in FORBIDDEN if claim in text]
+
+
+def clause(label: str) -> str:
+    """The exact phrase a labelled requirement asserts, read from the audit."""
+    for candidate, phrase in REQUIRED:
+        if candidate == label:
+            return phrase
+    raise AssertionError(f"no requirement labelled {label!r}")
+
+
+def split_at_section(document: Path) -> tuple[str, str, str]:
+    """``(before, section, after)`` for a document's one qualification-IAM section.
+
+    The split is made on the audit's own extractor, so a test cannot disagree
+    with the guard about where the section begins and ends.
+    """
+    text = read(document)
+    found = GUARD.scan_qualification_iam_status_sections(text)
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    section = str(found.sections[0])
+    before, separator, after = text.partition(section)
+    assert separator == section, f"{document.name}: the section is not verbatim in the document"
+    return before, section, after
+
+
+def drop_inside_section(document: Path, label: str) -> tuple[str, str, str, str]:
+    """Remove one required clause from the qualification-IAM section only.
+
+    Returns ``(phrase, mutated section reading, mutated whole-document reading,
+    unchanged outside reading)``.
+    """
+    phrase = clause(label)
+    before, section, after = split_at_section(document)
+    reading = flat(section)
+    assert phrase in reading, f"{document.name}: absent before removal: {phrase}"
+    mutated = reading.replace(phrase, "")
+    assert phrase not in mutated, f"{document.name}: still present after removal: {phrase}"
+    outside = flat(before) + " " + flat(after)
+    whole = flat(before) + " " + mutated + " " + flat(after)
+    return phrase, mutated, whole, outside
+
+
+DOCUMENTS = [PROJECT_ROOT / "CLAUDE.md", PROJECT_ROOT / "README.md"]
+PLAN = PROJECT_ROOT / "docs" / "phase3" / "implementation-plan.md"
+
+
+class TestTheFoundationStatusIsRecorded:
+    """The unmutated repository satisfies every guard. The control for the rest."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_each_document_carries_exactly_one_section(self, document: Path) -> None:
+        found = GUARD.scan_qualification_iam_status_sections(read(document))
+        assert found.defects == ()
+        assert len(found.sections) == 1
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_required_clause_is_present_in_the_section(self, document: Path) -> None:
+        _before, section, _after = split_at_section(document)
+        assert missing(flat(section)) == []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_no_forbidden_claim_is_made_anywhere_in_the_document(self, document: Path) -> None:
+        assert overstated(flat(read(document))) == []
+
+    def test_the_plan_carries_every_required_clause(self) -> None:
+        reading = flat(read(PLAN))
+        assert [label for label, phrase in PLAN_REQUIRED if phrase not in reading] == []
+
+    def test_both_documents_carry_the_same_subsections_in_order(self) -> None:
+        titles = {
+            document.name: GUARD._section_subsection_titles(
+                GUARD.scan_qualification_iam_status_sections(read(document)).sections
+            )
+            for document in DOCUMENTS
+        }
+        assert len(set(titles.values())) == 1, titles
+        assert titles["CLAUDE.md"] == GUARD.QUALIFICATION_IAM_STATUS_SUBSECTIONS
+
+
+class TestSectionLocalDeletionIsCaught:
+    """Deleting a clause from the section is caught even when a copy survives elsewhere.
+
+    This is the defect section scoping exists for. Most of these clauses are also
+    spelled in a neighbouring status block -- "run a: not authorized / not run"
+    appears in three -- so a flat whole-file scan is answered by the neighbour's
+    copy and reports nothing.
+    """
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize("label", [label for label, _ in REQUIRED])
+    def test_removing_one_required_clause_is_reported(self, document: Path, label: str) -> None:
+        phrase, mutated, _whole, _outside = drop_inside_section(document, label)
+        assert label in missing(mutated), f"{document.name}: undetected removal of {phrase}"
+
+    def test_at_least_one_deletion_would_have_escaped_a_whole_file_scan(self) -> None:
+        """Section scope is doing real work, and this names how much.
+
+        A duplicated clause deleted from the section is still present in the file,
+        so the flat reading a file-wide guard uses stays green. If this ever found
+        none, section scoping would be decoration.
+        """
+        escaped: list[tuple[str, str]] = []
+        for document in DOCUMENTS:
+            for label, _phrase in REQUIRED:
+                phrase, mutated, whole, outside = drop_inside_section(document, label)
+                assert label in missing(mutated)
+                if phrase in whole:
+                    assert outside.count(phrase) >= 1
+                    escaped.append((document.name, label))
+        assert escaped, "no required clause is duplicated outside the section"
+
+
+class TestSectionStructureMutations:
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_removing_the_whole_section_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_section(document)
+        assert section, f"{document.name}: nothing to remove"
+        found = GUARD.scan_qualification_iam_status_sections(before + after)
+        assert found.sections == ()
+        assert missing(flat(before + after)) != []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_duplicating_the_section_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_section(document)
+        found = GUARD.scan_qualification_iam_status_sections(before + section + section + after)
+        assert len(found.sections) == 2, "a second copy must be visible as a second section"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_demoting_the_heading_is_caught(self, document: Path) -> None:
+        text = read(document)
+        heading = f"### {GUARD.QUALIFICATION_IAM_STATUS_HEADING}"
+        assert text.count(heading + "\n") == 1, f"{document.name}: heading not found once"
+        demoted = text.replace(heading + "\n", f"#### {GUARD.QUALIFICATION_IAM_STATUS_HEADING}\n")
+        found = GUARD.scan_qualification_iam_status_sections(demoted)
+        assert found.sections == ()
+        assert found.defects, "a heading at the wrong level must be reported as a defect"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_a_foreign_subsection_is_caught(self, document: Path) -> None:
+        before, section, after = split_at_section(document)
+        marker = "#### Status\n"
+        assert section.count(marker) == 1, f"{document.name}: no Status subsection"
+        intruded = section.replace(marker, "#### Deployment evidence\n" + marker, 1)
+        found = GUARD.scan_qualification_iam_status_sections(before + intruded + after)
+        assert any("Deployment evidence" in defect for defect in found.defects), found.defects
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_real_section_ends_at_its_declared_boundary(self, document: Path) -> None:
+        text = read(document)
+        _before, section, _after = split_at_section(document)
+        assert GUARD.qualification_iam_section_is_terminated(
+            text, section, TERMINATORS[document.name]
+        )
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_deleting_the_terminator_lets_the_section_swallow_its_neighbour(
+        self, document: Path
+    ) -> None:
+        """A boundary that drifts is measuring somebody else's text, and must fail.
+
+        The subsection guard alone does not see this. A swallowed neighbour that
+        carries no headings of its own -- CLAUDE.md's, exactly -- raises no foreign
+        heading, so the section silently extends to the end of the file. That is
+        why the boundary is named and checked rather than inferred, and this drives
+        the named check.
+        """
+        text = read(document)
+        terminator = TERMINATORS[document.name]
+        assert text.count(terminator + "\n") == 1, f"{document.name}: terminator not found once"
+        widened = text.replace(terminator + "\n", "", 1)
+        assert widened != text
+        found = GUARD.scan_qualification_iam_status_sections(widened)
+        assert len(found.sections) == 1, "the section is still extracted, and now too wide"
+        assert not GUARD.qualification_iam_section_is_terminated(
+            widened, str(found.sections[0]), terminator
+        ), "a section running past its declared boundary must be reported"
+
+
+class TestForwardDriftMutations:
+    """A merged declaration read as a deployed, attached or authorized resource."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize(
+        ("target", "replacement", "expected"),
+        [
+            (
+                "terraform initialization for these declarations: not performed",
+                "terraform initialization for these declarations: completed",
+                "terraform initialization for these declarations: completed",
+            ),
+            (
+                "terraform plan for these declarations: not authorized / not run",
+                "terraform plan for these declarations: completed",
+                "terraform plan for these declarations: completed",
+            ),
+            (
+                "terraform apply for these declarations: not authorized / not run",
+                "terraform apply for these declarations: completed",
+                "terraform apply for these declarations: completed",
+            ),
+            (
+                "aws managed-policy resource creation from these declarations: not performed "
+                "/ not established",
+                "aws managed-policy resource creation from these declarations: performed",
+                "aws managed-policy resource creation from these declarations: performed",
+            ),
+            (
+                "runtime roles: not implemented",
+                "runtime roles: implemented",
+                "runtime roles: implemented",
+            ),
+            (
+                "runtime trust principals: not selected",
+                "runtime trust principals: selected",
+                "runtime trust principals: selected",
+            ),
+            (
+                "policy attachments: not implemented",
+                "policy attachments: implemented",
+                "policy attachments: implemented",
+            ),
+            (
+                "therefore this merge grants no principal any aws authority",
+                "therefore this merge grants a principal aws authority",
+                "this merge grants a principal aws authority",
+            ),
+            ("g1: open", "g1: closed", "g1: closed"),
+            ("g2: open", "g2: closed", "g2: closed"),
+            ("phase 3: not complete", "phase 3: complete", "phase 3: complete"),
+            ("control: deferred", "control: published", "control: published"),
+            ("live trading: hard-disabled", "live trading: enabled", "live trading: enabled"),
+            ("run a: not authorized / not run", "run a: completed", "run a: completed"),
+            ("run b: not authorized / not run", "run b: completed", "run b: completed"),
+            (
+                "combined assessment: not authorized / not run",
+                "combined assessment: completed",
+                "combined assessment: completed",
+            ),
+        ],
+        ids=lambda value: value.split(":")[0] if isinstance(value, str) else "",
+    )
+    def test_an_overstatement_is_reported(
+        self, document: Path, target: str, replacement: str, expected: str
+    ) -> None:
+        reading = flat(read(document))
+        assert target in reading, f"{document.name}: absent before replacement: {target}"
+        assert expected not in reading, f"{document.name}: already overstated: {expected}"
+        mutated = reading.replace(target, replacement)
+        assert mutated != reading, f"{document.name}: mutation changed nothing"
+        assert expected in overstated(mutated), f"{document.name}: undetected: {expected}"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize(
+        "injected",
+        [
+            "aws managed policies were created",
+            "aws managed policies have been created",
+            "aws policies attached",
+            "qualification iam policies deployed",
+            "qualification iam policies applied",
+            "qualification runtime role implemented",
+            "qualification trust principal selected",
+            "qualification infrastructure ready",
+            "qualification infrastructure deployed",
+            "terraform plan completed",
+            "terraform apply completed",
+            "aws qualification access authorized",
+            "a production provider is selected",
+        ],
+        ids=lambda value: value.replace(" ", "-"),
+    )
+    def test_an_injected_claim_is_reported(self, document: Path, injected: str) -> None:
+        reading = flat(read(document))
+        assert injected not in reading, f"{document.name}: already present: {injected}"
+        assert injected in overstated(reading + " " + injected), f"undetected: {injected}"
+
+
+class TestReverseDriftMutations:
+    """The pre-merge state, reasserted. PR #52 ended it, and a revert must fail."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize(
+        "injected",
+        [
+            "qualification iam policy terraform declarations: absent",
+            "qualification iam policy terraform declarations: not merged",
+            "qualification iam policy terraform declarations: proposed",
+            "qualification iam policy terraform declarations: awaiting review",
+            "pr #52 is open",
+            "pr #52 remains unmerged",
+            "pr #52 is awaiting review",
+            "pr #52: open / unmerged",
+            "the offline qualification iam policy candidate is not merged",
+            "no qualification terraform exists",
+            "the qualification permission sets are expressed nowhere in terraform",
+        ],
+        ids=lambda value: value.replace(" ", "-"),
+    )
+    def test_a_reverted_claim_is_reported(self, document: Path, injected: str) -> None:
+        reading = flat(read(document))
+        assert injected not in reading, f"{document.name}: already present: {injected}"
+        assert injected in overstated(reading + " " + injected), f"undetected: {injected}"
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_replacing_the_merged_status_with_the_proposed_one_is_reported(
+        self, document: Path
+    ) -> None:
+        target = "qualification iam policy terraform declarations: merged / in main / "
+        target += "offline-reviewed"
+        replacement = "qualification iam policy terraform declarations: proposed"
+        reading = flat(read(document))
+        assert target in reading, f"{document.name}: absent before replacement: {target}"
+        mutated = reading.replace(target, replacement)
+        assert replacement in overstated(mutated)
+        assert "records the merged declarations" in missing(
+            flat(split_at_section(document)[1]).replace(target, replacement)
+        )
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_removing_the_next_gate_trust_principal_requirement_is_reported(
+        self, document: Path
+    ) -> None:
+        """The clause that keeps the next gate architectural, not operational."""
+        phrase, mutated, _whole, _outside = drop_inside_section(
+            document, "names the next architecture gate"
+        )
+        assert "the next architecture gate must choose the execution principal" in phrase
+        assert "names the next architecture gate" in missing(mutated)
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_removing_the_undetermined_principal_clause_is_reported(self, document: Path) -> None:
+        _phrase, mutated, _whole, _outside = drop_inside_section(
+            document, "records the undetermined principal"
+        )
+        assert "records the undetermined principal" in missing(mutated)
+
+
+class TestTheGuardsAreNotTautological:
+    def test_legitimate_conditional_and_historical_wording_is_accepted(self) -> None:
+        """A guard a correct document cannot satisfy is a guard somebody deletes.
+
+        Every line here is honest prose a future editor would reasonably write,
+        and none of it may be refused. The first is the load-bearing distinction
+        the whole section exists to make.
+        """
+        honest = [
+            "does not mean aws managed policies created",
+            "does not mean terraform initialized, planned or applied",
+            "does not mean roles, trust principals or attachments selected or implemented",
+            "does not mean any principal received authority",
+            "does not mean qualification infrastructure is deployable or executable",
+            "if a later apply is authorized, the declarations would create two managed policies",
+            "before pr #52 merged, no qualification terraform existed in main",
+            "while pr #52 was open it was an unmerged implementation candidate",
+            "run a: not authorized / not run",
+            "terraform apply for these declarations: not authorized / not run",
+            "whether any live aws policy exists is not established",
+            "no live aws policy is described here as unattached",
+            "the declarations are unattached by design",
+        ]
+        for sentence in honest:
+            assert overstated(sentence) == [], f"falsely refused: {sentence}"
+
+    def test_an_empty_document_fails_required_presence(self) -> None:
+        assert GUARD.scan_qualification_iam_status_sections("").sections == ()
+        assert len(missing("")) == len(REQUIRED)
+
+    def test_an_unrelated_document_fails_required_presence(self) -> None:
+        unrelated = "# Something else\n\nNothing about qualification infrastructure at all.\n"
+        assert GUARD.scan_qualification_iam_status_sections(unrelated).sections == ()
+        assert missing(flat(unrelated)) != []
+
+    def test_every_required_phrase_is_distinct(self) -> None:
+        phrases = [phrase for _label, phrase in REQUIRED]
+        assert len(set(phrases)) == len(phrases)
+        labels = [label for label, _phrase in REQUIRED]
+        assert len(set(labels)) == len(labels)
+
+    def test_no_forbidden_claim_is_a_substring_of_a_required_one(self) -> None:
+        """Otherwise satisfying the guard would be impossible, in both directions."""
+        offenders = [
+            (claim, phrase) for claim in FORBIDDEN for _label, phrase in REQUIRED if claim in phrase
+        ]
+        assert offenders == []
+
+    def test_the_scanner_holds_no_state_across_documents(self) -> None:
+        """Two documents scanned in either order give the same answer."""
+        claude, readme = read(DOCUMENTS[0]), read(DOCUMENTS[1])
+        forward = (
+            GUARD.scan_qualification_iam_status_sections(claude),
+            GUARD.scan_qualification_iam_status_sections(readme),
+        )
+        backward = (
+            GUARD.scan_qualification_iam_status_sections(readme),
+            GUARD.scan_qualification_iam_status_sections(claude),
+        )
+        assert forward[0] == backward[1]
+        assert forward[1] == backward[0]
+        assert GUARD.scan_qualification_iam_status_sections("").sections == ()
+        assert GUARD.scan_qualification_iam_status_sections(claude) == forward[0]
+
+    def test_one_documents_reading_cannot_satisfy_the_others(self) -> None:
+        """The guard is per file, because merged main has twice disagreed with itself."""
+        claude_section = flat(split_at_section(DOCUMENTS[0])[1])
+        readme_section = flat(split_at_section(DOCUMENTS[1])[1])
+        assert missing(claude_section) == []
+        assert missing(readme_section) == []
+        label = "records the merged declarations"
+        gutted = claude_section.replace(clause(label), "")
+        assert label in missing(gutted)
+        assert label not in missing(readme_section)
