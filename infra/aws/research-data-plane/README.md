@@ -37,8 +37,8 @@ The `APPLIED` line above describes the 2026-08-27 apply and the 36 resources it 
 **not** a statement that every file here has been applied, and two files have not been:
 
 ```
-qualification_policies.tf     OFFLINE CANDIDATE -- NEVER PLANNED, NEVER APPLIED
-qualification_principals.tf   OFFLINE CANDIDATE -- NEVER PLANNED, NEVER APPLIED
+qualification_policies.tf     MERGED, OFFLINE-VALIDATED -- NEVER PLANNED, NEVER APPLIED
+qualification_principals.tf   MERGED, OFFLINE-VALIDATED -- NEVER PLANNED, NEVER APPLIED
 ```
 
 `qualification_policies.tf` declares the two ADR-0018 §10 qualification permission sets, as
@@ -59,12 +59,27 @@ action or resource matrix is touched. Every environment binding it needs — the
 instance, the governed operator group and the target account — is an input with **no default**,
 and there is no data source of any kind, so nothing here reads the live environment.
 
-**No `terraform plan`, `apply`, `init` or `validate` has been run against either file**, so
-`terraform state` still holds the 36 resources the 2026-08-27 apply created. **A declaration is
+**Both files have been validated offline, and neither has been planned or applied.** Under a
+separate authorization, `terraform init -backend=false` and `terraform validate` were run against
+**task-owned external copies** of this configuration; the committed `.terraform.lock.hcl` selected
+**`hashicorp/aws` v6.62.0**, the **corrected configuration validated successfully**, and the
+**retired 33-character acquisition permission-set name was independently refused by the same
+provider validator**. The scope was exactly that and nothing wider:
+
+```
+no command initialized this repository directory     no backend was configured
+no Terraform state was created or modified           no real tfvars were read
+no plan and no apply ran                             no provider call reached AWS
+no AWS resource was created, changed, discovered or proved to exist
+```
+
+So `terraform state` still holds the 36 resources the 2026-08-27 apply created. **A declaration is
 not a resource**: no permission set, assignment, generated role or policy attachment exists
 because these files describe one, whether any such object exists in AWS is **NOT ESTABLISHED**
-here, and **no principal has been granted any AWS authority**. Applying either file is a
-separate, ungranted authorization — see each file's own header.
+here, and **no principal has been granted any AWS authority**. **Validating a configuration is not
+evidence that applying it would succeed**, and **live environment validation still requires its own
+separate authorization**. Applying either file is a separate, ungranted authorization — see each
+file's own header.
 
 ---
 
