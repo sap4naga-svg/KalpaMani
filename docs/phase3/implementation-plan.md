@@ -420,6 +420,49 @@ IAM: NOT AUTHORIZED / NOT IMPLEMENTED · deployment: NOT PERFORMED · execution:
 AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined assessment: NOT AUTHORIZED / NOT
 RUN**, and **no deployment or empirical execution has occurred**.
 
+**The offline qualification IAM policy foundation is merged, and nothing is deployed.**
+**Qualification IAM policy Terraform declarations: MERGED / IN MAIN / OFFLINE-REVIEWED** — **PR #52
+merged**, merge commit `beb5afa5087ee7488c54b77d2dfd6f3f94bbc68f`, approved implementation head
+`ce06a61ec7a701228849580395d24ce49cebf824`, and **PR #52 was independently reviewed before its
+merge**. **PR #52 independently reviewed and merged only the offline qualification IAM policy
+declarations and guards**, and **PR #52 deliberately did not choose a runtime trust principal and
+created no role or attachment**. **No Terraform initialization, plan, apply, AWS mutation,
+deployment or qualification execution followed from that merge.**
+
+**Source control now contains two reviewed `aws_iam_policy` declarations. No authorized
+`terraform apply` created those resources, and no AWS existence check occurred. The repository
+declares no role, trust policy or attachment for them. Therefore this merge grants no principal
+any AWS authority.** The declarations are **unattached by design**, and **whether any live AWS
+policy exists is NOT ESTABLISHED** — no live AWS policy is described here as unattached, because
+that would assert an existence nothing has checked.
+
+The foundation stops at declarations because **accepted authority does not yet determine the
+runtime trust principal**, **the operator entry points pin a governed AWS profile and perform the
+identity gate**, **the merged entry points do not call `sts:AssumeRole`**, **inventing an ECS,
+Lambda, EC2, federated or human trust principal would exceed accepted architecture**, and **the
+next architecture gate must choose the execution principal and trust model before roles or
+attachments can be designed**. **The policies-only merge does not satisfy deployment readiness.**
+
+The boundary the declarations preserve: the **acquisition declaration is write-only for claims,
+request-scoped payloads, records and locators, with read, list and delete denied**; the
+**assessment declaration reads only accepted evidence and report prefixes, never claims, and
+writes only reports**; **the report-prefix `s3:GetObject` permission exists because AWS authorizes
+`HeadObject` through that action**; **the existing licensed bucket and SSE-S3 are referenced, and
+no bucket or KMS change is made**; **ADR-0017, shared ingestion, application source, the entry
+points and the durable locator schema are unchanged**; and **the declarations are inert until a
+separately authorized principal, attachment, plan and apply sequence exists**.
+
+Current status: **Terraform initialization for these declarations: NOT PERFORMED · Terraform plan
+for these declarations: NOT AUTHORIZED / NOT RUN · Terraform apply for these declarations: NOT
+AUTHORIZED / NOT RUN · AWS managed-policy resource creation from these declarations: NOT PERFORMED
+/ NOT ESTABLISHED · runtime roles: NOT IMPLEMENTED · runtime trust principals: NOT SELECTED ·
+policy attachments: NOT IMPLEMENTED · authority granted to a principal by this foundation: NONE ·
+qualification infrastructure binding/deployment: BLOCKED · AWS/provider/credential access: NOT
+AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT AUTHORIZED / NOT
+RUN · third ADR-0017 authenticated acquisition: NOT AUTHORIZED · sixth binding preflight: NOT
+AUTHORIZED**. **Merging reviewed infrastructure code is not authorization to plan it, apply it or
+run anything.**
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
