@@ -534,6 +534,34 @@ OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED ·
 HARD-DISABLED**. **Implementation, infrastructure mutation and execution stay three separate
 gates and are never collapsed into one**, and **ADR-0021 amends no earlier ADR document.**
 
+**The qualification permission-set name correction is accepted, and nothing may be corrected
+yet.** **ADR-0022: ACCEPTED / IN FORCE** — PR #57 merged, **architecture only**. **PR #56 remains
+open, unmerged, uncorrected and blocked**, and **its blocking defect is architectural, not merely
+syntactic**: PR #56 correctly implemented ADR-0021 as written, and the name ADR-0021 accepted —
+`KalpaManiQualificationAcquisition`, 33 characters — exceeds the pinned `hashicorp/aws` v6.62.0
+`aws_ssoadmin_permission_set` name validator's 1–32 character limit, so the accepted architecture
+itself is what had to change. **The accepted acquisition permission-set name is
+`KalpaManiQualificationAcquire`, exactly 29 characters**, **the 33-character name is retired** and
+is historical and defect context only, and ADR-0022 changed nothing else. **ADR-0022 acceptance
+satisfies only the architecture prerequisite for the correction**, and **satisfying that
+prerequisite authorizes nothing by itself** — **no implementation correction may begin before its
+own separate authorization**, and **PR #56 correction: NOT AUTHORIZED / NOT BEGUN**. **The next
+separately authorized gate is the narrow correction of PR #56**, and **that later offline gate
+will correct PR #56's acquisition permission-set name and add the provider-limit guards** that
+check every qualification permission-set name against 1–32 characters and the allowed-character
+grammar, **preserving the assessment permission-set name and both governed profile names**. **A
+real isolated `terraform validate` against the pinned provider remains required before PR #56 can
+merge**, and remains **NOT AUTHORIZED / NOT RUN**. **Terraform and AWS discovery, planning, apply,
+deployment, qualification, binding preflight, Run A, Run B and the combined assessment each remain
+separately unauthorized**, and **all operational gates remain closed**. **No live binding, plan, apply or execution is authorized**: **AWS discovery: NOT
+AUTHORIZED · AWS account/group/instance binding values: UNKNOWN / UNREAD · authority granted:
+NONE · infrastructure deployment: BLOCKED · Terraform init/validate/plan/apply: NOT AUTHORIZED /
+NOT RUN · qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · Run A / Run B
+/ combined assessment: NOT AUTHORIZED / NOT RUN**. **All existing arithmetic and deadlines remain
+unchanged** — **acquisition PutObject: 145 to 147**, **acquisition HeadObject: 0**, **acquisition
+GetObject: 0**, **two successful runs: 290 to 294**, **assessment: 195 to 196**, **whole
+successful package: 485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**.
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
