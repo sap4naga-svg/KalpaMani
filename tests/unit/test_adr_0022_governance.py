@@ -1,23 +1,30 @@
-"""ADR-0022 is a PROPOSED naming correction, and every guard here holds it to exactly that.
+"""ADR-0022 is an ACCEPTED naming correction, and every guard here holds it to exactly that.
 
 ADR-0021 accepted an acquisition permission-set name of 33 characters. The pinned
 ``hashicorp/aws`` v6.62.0 provider validates ``aws_ssoadmin_permission_set.name``
-to 1-32, so **the accepted architecture, not the implementation, is what cannot be
-built**. PR #56 implemented ADR-0021 faithfully and is blocked by that, which is
-why the correction is an ADR and not an edit to PR #56.
+to 1-32, so **the accepted architecture, not the implementation, is what could not
+be built**. PR #56 implemented ADR-0021 faithfully and is blocked by that, which is
+why the correction was an ADR and not an edit to PR #56.
+
+PR #57 merged, so ADR-0022's conditional acceptance event has occurred. Every
+proposal-state assertion below was **inverted, one for one, rather than deleted** --
+a guard removed at the moment its subject changed state is a guard that never
+reports the change being undone.
 
 Three drifts follow from that shape, and each is guarded here:
 
-1. **Forwards, out of proposal** -- a proposed decision read as an accepted one.
-   ADR-0022 must carry its proposed status, must stay **absent** from
-   ``MERGED_ADR_STATUS``, and must claim no in-force row in either status
-   document.
+1. **Backwards, out of acceptance** -- an accepted decision read as a proposal.
+   ADR-0022 must carry its accepted status, must be **registered** in
+   ``MERGED_ADR_STATUS`` as ``PR #57 merged``, must claim an in-force row in both
+   status documents, and must carry the post-merge note naming the exact merge
+   commit and merge time. The **historical proposal text stays required**: an ADR
+   that erased the proposal it was written as would have rewritten its own past.
 2. **Forwards, into implementation** -- a blocked pull request read as corrected,
    ready, merged, deployed or operational, or infrastructure read as live. Nothing
    has been applied, and whether any live AWS object exists is deliberately **not
    established**.
 3. **Backwards, into the defect** -- the retired 33-character name reinstated as
-   the proposed or current replacement, or its historical framing removed so a
+   the accepted or current replacement, or its historical framing removed so a
    reader cannot tell which name governs.
 
 **The length is measured, never transcribed.** A constant recording a length
@@ -112,12 +119,16 @@ ASSESSMENT: Final[str] = GUARD.ADR_0021_ASSESSMENT_PERMISSION_SET
 ACQUISITION_PROFILE: Final[str] = GUARD.ADR_0021_ACQUISITION_PROFILE
 ASSESSMENT_PROFILE: Final[str] = GUARD.ADR_0021_ASSESSMENT_PROFILE
 
-#: The registry line ADR-0022 must **not** occupy, quoted once so a mutation test
-#: can forge it in a copy of the real audit source.
-REGISTRY_FORGERY: Final = '    ("ADR-0022", "PR #57 merged"),\n'
+#: The registry line ADR-0022 now occupies, quoted once so a mutation test can
+#: delete it from a copy of the real audit source. The inverse of the forgery this
+#: held while the decision was proposed.
+REGISTRY_ENTRY: Final = '    ("ADR-0022", "PR #57 merged"),\n'
 
-#: The line ``MERGED_ADR_STATUS`` really ends with, used as the forgery anchor.
-REGISTRY_ANCHOR: Final = '    ("ADR-0021", "PR #54 merged"),\n'
+#: The pull request whose merge accepted ADR-0022, and the merge facts the
+#: post-merge note must record exactly. Read from the audit rather than retyped.
+PR: Final[str] = GUARD.ADR_0022_PR
+MERGE_COMMIT: Final[str] = GUARD.ADR_0022_MERGE_COMMIT
+MERGE_TIME: Final[str] = GUARD.ADR_0022_MERGE_TIME
 
 #: Digests captured at import, before any mutation test has run.
 _BASELINE_DIGESTS: Final[dict[str, str]] = {
@@ -336,7 +347,13 @@ def test_the_adr_exists_exactly_once() -> None:
     assert len(sorted(ADR.parent.glob("ADR-0022-*.md"))) == 1
 
 
-def test_the_adr_carries_a_proposed_status() -> None:
+def test_the_adr_preserves_its_historical_proposed_status() -> None:
+    """The conditional line this ADR was written with, kept rather than rewritten.
+
+    Required *after* the acceptance, not merely tolerated. A decision record that
+    deleted the proposal it was is a record of a decision that appears to have
+    always been in force.
+    """
     reading = flat(read(ADR))
     assert "status: proposed — not in force" in reading
     assert (
@@ -349,27 +366,70 @@ def test_the_adr_carries_a_proposed_status() -> None:
     )
 
 
-def test_the_adr_does_not_claim_to_be_accepted_or_in_force() -> None:
-    """The conditional wording is allowed; a settled claim is not.
+def test_the_adr_carries_its_post_merge_acceptance_note() -> None:
+    """The adjacent note recording the event that satisfied the condition.
 
-    ``if adr-0022 is accepted`` is honest and must survive, which is why the
-    refusals are anchored rather than loose.
+    The inverse of the guard that refused a settled acceptance claim while the
+    pull request was open. The conditional wording the decision was written with
+    survives beside it -- ``if adr-0022 is accepted`` is still in the body, and
+    deleting it would be a rewrite of the proposal.
     """
     reading = flat(read(ADR))
     assert "if adr-0022 is accepted" in reading
-    for claim in ("adr-0022: accepted", "adr-0022: in force", "adr-0022 is now in force"):
-        assert claim not in reading
+    assert "adr-0022's conditional acceptance event has occurred" in reading
+    assert "this adr is now accepted / in force" in reading
+    assert f"pr {PR} merged" in reading
+    assert MERGE_COMMIT in reading
+    assert MERGE_TIME.lower() in reading
+    assert "merge tree identical to the independently validated pull-request head tree" in reading
+    assert f"while pr {PR} was open, adr-0022 was proposed and carried no authority" in reading
 
 
-def test_the_adr_is_absent_from_the_merged_registry() -> None:
-    """The registry governs an in-force claim, and a proposal has no entry."""
-    assert "ADR-0022" not in dict(GUARD.MERGED_ADR_STATUS)
-    assert "ADR-0022" not in dict(registry_from_source(read(AUDIT)))
+def test_the_post_merge_note_grants_no_authority() -> None:
+    """Architecture only, and the downstream correction still untouched."""
+    reading = flat(read(ADR))
+    assert "as architecture only" in reading
+    assert (
+        "the merge approved architecture only, and no implementation or operational authority "
+        "followed from it" in reading
+    )
+    assert "no correction to pr #56 followed from the merge" in reading
+    assert "closed no decision gate" in reading
 
 
-def test_neither_status_document_claims_an_in_force_row() -> None:
+def test_the_adr_is_registered_as_merged() -> None:
+    """The registry governs an in-force claim, and this decision now has an entry.
+
+    Read twice: from the loaded module, and by static parse of the audit source,
+    so a mutation test can drive the same parse over modified source.
+    """
+    assert dict(GUARD.MERGED_ADR_STATUS).get("ADR-0022") == f"PR {PR} merged"
+    assert dict(registry_from_source(read(AUDIT))).get("ADR-0022") == f"PR {PR} merged"
+
+
+def test_the_merged_registry_stays_sorted_and_carries_no_duplicate() -> None:
+    """A repeated key is invisible to ``dict()``, and silently governs."""
+    entries = [adr for adr, _ in GUARD.MERGED_ADR_STATUS]
+    assert entries == sorted(entries)
+    assert len(entries) == len(set(entries))
+
+
+def test_both_status_documents_claim_an_in_force_row() -> None:
     for document in (CLAUDE_MD, README):
-        assert "ADR-0022" not in GUARD._in_force_adr_claims(read(document))
+        assert GUARD._in_force_adr_claims(read(document)).get("ADR-0022") == f"PR {PR} merged"
+
+
+def test_the_status_sections_record_the_merge_facts() -> None:
+    """Section-locally, so a neighbouring decision's merge cannot answer for this one."""
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert "adr-0022: accepted / in force" in reading
+        assert f"pr {PR} merged" in reading
+        assert MERGE_COMMIT in reading
+        assert MERGE_TIME.lower() in reading
+        assert "the merge approved architecture only" in reading
+        assert "no implementation or operational authority followed from the merge" in reading
 
 
 def test_the_status_documents_record_the_blocked_pull_request() -> None:
@@ -378,6 +438,52 @@ def test_the_status_documents_record_the_blocked_pull_request() -> None:
         reading = flat(section)
         assert "pr #56: open / unmerged / blocked on architecture" in reading
         assert "pr #56 correction: not authorized / not begun" in reading
+        assert "pr #56 remains open, unmerged and uncorrected" in reading
+
+
+def test_the_status_documents_name_the_accepted_and_retired_names() -> None:
+    """The accepted name is current; the retired one is named as retired."""
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert f"accepted acquisition permission-set name: {PROPOSED.lower()}" in reading
+        assert f"retired acquisition permission-set name: {RETIRED.lower()}" in reading
+        assert "the retired 33-character name is historical and defect context" in reading
+        prefix = "the acquisition generated-role prefix is now "
+        assert f"{prefix}`awsreservedsso_{PROPOSED.lower()}_`" in reading
+
+
+def test_the_status_documents_name_the_next_gates_work_without_beginning_it() -> None:
+    """The correction is described and still unauthorized -- two facts, kept apart."""
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert (
+            "must replace the retired acquisition permission-set name consistently and add a "
+            "provider 1-32 name-length guard" in reading
+        )
+        assert (
+            "genuine isolated `terraform validate` against the pinned provider remains required "
+            "in a later authorized gate before pr #56 can merge" in reading
+        )
+        assert "pr #56 correction: not authorized / not begun" in reading
+
+
+def test_the_status_documents_establish_no_live_object() -> None:
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert "terraform: unapplied" in reading
+        assert (
+            "no permission set, assignment, role, attachment, profile, binding or authority is "
+            "established" in reading
+        )
+        assert (
+            "organization-instance prerequisite: required / live existence not established"
+            in reading
+        )
+        assert "aws account/group/instance binding values: unknown / unread" in reading
+        assert "authority granted: none" in reading
 
 
 def test_no_code_correction_is_claimed() -> None:
@@ -506,7 +612,32 @@ def test_the_actor_identities_and_session_bound_are_unchanged() -> None:
         reading = flat(section)
         assert "actor identities and semantics" in reading
         assert "one-hour sessions" in reading
+        assert "the session duration is unchanged" in reading
         assert "identity center group assignments" in reading
+
+
+def test_the_identity_contract_is_unchanged() -> None:
+    """Exact account plus actor-specific prefix, structure not provenance, no ARN pin."""
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert (
+            "exact-account plus actor-specific permission-set role-name prefix verification is "
+            "unchanged" in reading
+        )
+        assert "structure, not provenance" in reading
+        assert "no full generated arn is pinned" in reading
+
+
+def test_the_neighbouring_implementations_are_unchanged() -> None:
+    """ADR-0017 isolation, ADR-0019 write-only, ADR-0020 identity, digest verification."""
+    for document in (CLAUDE_MD, README):
+        _, section, _ = split_at_section(document)
+        reading = flat(section)
+        assert "adr-0017 isolation is unchanged" in reading
+        assert "adr-0019 write-only acquisition is unchanged" in reading
+        assert "adr-0020 request-scoped payload identity is unchanged" in reading
+        assert "assessment digest verification is unchanged" in reading
 
 
 def test_the_neighbouring_decisions_are_unchanged() -> None:
@@ -588,6 +719,22 @@ def test_the_implementation_plan_carries_every_required_clause() -> None:
     assert missing(GUARD.ADR_0022_PLAN_REQUIRED, read(PLAN)) == []
 
 
+def test_the_implementation_plan_records_acceptance_without_authorizing_the_correction() -> None:
+    """The prerequisite is satisfied; nothing follows from satisfying it."""
+    reading = flat(read(PLAN))
+    assert "adr-0022: accepted / in force" in reading
+    assert f"pr {PR} merged" in reading
+    assert (
+        "adr-0022 acceptance satisfies only the architecture prerequisite for the correction"
+        in reading
+    )
+    assert "satisfying that prerequisite authorizes nothing by itself" in reading
+    assert "the next separately authorized gate is the narrow correction of pr #56" in reading
+    assert "pr #56 correction: not authorized / not begun" in reading
+    assert "pr #56 remains open, unmerged, uncorrected and blocked" in reading
+    assert "all operational gates remain closed" in reading
+
+
 # ---------------------------------------------------------------------------
 # Mutation proof -- each drives a production guard over an in-memory change
 # ---------------------------------------------------------------------------
@@ -648,23 +795,140 @@ def test_mutation_suffix_grammar_claimed_changed() -> None:
     assert "keeps the suffix grammar unchanged" in missing(GUARD.ADR_0022_STATUS_REQUIRED, mutated)
 
 
-def test_mutation_adr_0022_registered_as_merged() -> None:
-    """A forged registry entry, parsed out of mutated audit source."""
+def test_mutation_registry_entry_removed() -> None:
+    """The registry entry deleted, parsed out of mutated audit source.
+
+    The inverse of the forgery this drove while the decision was proposed: what
+    can now be faked is the *absence* of a merge that happened.
+    """
     source = read(AUDIT)
-    assert source.count(REGISTRY_ANCHOR) == 1
-    assert "ADR-0022" not in dict(registry_from_source(source))
-    mutated = source.replace(REGISTRY_ANCHOR, REGISTRY_ANCHOR + REGISTRY_FORGERY)
-    assert "ADR-0022" in dict(registry_from_source(mutated))
+    assert source.count(REGISTRY_ENTRY) == 1
+    assert dict(registry_from_source(source)).get("ADR-0022") == f"PR {PR} merged"
+    mutated = source.replace(REGISTRY_ENTRY, "")
+    assert "ADR-0022" not in dict(registry_from_source(mutated))
 
 
-def test_mutation_proposal_claimed_accepted() -> None:
+def test_mutation_registry_entry_names_the_wrong_pull_request() -> None:
+    """A registry entry that survives but points at another merge."""
+    source = read(AUDIT)
+    forged = REGISTRY_ENTRY.replace(f"PR {PR} merged", "PR #56 merged")
+    assert forged != REGISTRY_ENTRY
+    mutated = source.replace(REGISTRY_ENTRY, forged)
+    assert dict(registry_from_source(mutated)).get("ADR-0022") != f"PR {PR} merged"
+
+
+def test_mutation_acceptance_reverted_to_proposed() -> None:
+    """The accepted status restored to the proposal, in the status section."""
     _, section, _ = split_at_section(CLAUDE_MD)
     assert overstated(GUARD.ADR_0022_STATUS_FORBIDDEN, section) == []
+    # Both spellings, because the section states the status twice -- in prose and
+    # in the Status block -- and a mutation that reverted only one would be
+    # answered by the copy it left behind.
     mutated = section.replace(
-        "**ADR-0022: PROPOSED / NOT IN FORCE.**", "**ADR-0022: ACCEPTED / IN FORCE.**", 1
+        "**ADR-0022: ACCEPTED / IN FORCE**", "**ADR-0022: PROPOSED / NOT IN FORCE**", 1
+    ).replace(
+        "ADR-0022:                                         ACCEPTED / IN FORCE",
+        "ADR-0022:                                         PROPOSED / NOT IN FORCE",
+        1,
     )
     assert mutated != section
-    assert "adr-0022: accepted / in force" in overstated(GUARD.ADR_0022_STATUS_FORBIDDEN, mutated)
+    assert "adr-0022: proposed / not in force" in overstated(
+        GUARD.ADR_0022_STATUS_FORBIDDEN, mutated
+    )
+    assert "records the accepted status" in missing(GUARD.ADR_0022_STATUS_REQUIRED, mutated)
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "adr-0022: proposed",
+        "adr-0022: not in force",
+        "adr-0022 is now proposed",
+        "adr-0022 remains proposed",
+        "adr-0022 has not been merged",
+        "adr-0022 is unmerged",
+    ],
+)
+def test_mutation_accepted_decision_restored_to_a_proposal(claim: str) -> None:
+    """Every reverse-drift spelling the refusal list carries, proved to be caught."""
+    _, section, _ = split_at_section(CLAUDE_MD)
+    assert claim not in flat(section)
+    mutated = section + f"\n{claim}\n"
+    assert claim in overstated(GUARD.ADR_0022_STATUS_FORBIDDEN, mutated)
+
+
+def test_mutation_post_merge_note_removed_from_the_adr() -> None:
+    """The whole acceptance note deleted; the audit's own list must notice."""
+    phrase = clause("records the satisfied acceptance condition", GUARD.ADR_0022_SELF_REQUIRED)
+    mutated = without(read(ADR), phrase)
+    assert "records the satisfied acceptance condition" in missing(
+        GUARD.ADR_0022_SELF_REQUIRED, mutated
+    )
+
+
+def test_mutation_historical_proposal_line_deleted_from_the_adr() -> None:
+    """The preserved conditional status erased -- the ADR rewriting its own past."""
+    phrase = clause("carries a proposed status", GUARD.ADR_0022_SELF_REQUIRED)
+    mutated = without(read(ADR), phrase)
+    assert "carries a proposed status" in missing(GUARD.ADR_0022_SELF_REQUIRED, mutated)
+
+
+@pytest.mark.parametrize("label", ["records the merge commit", "records the merge time"])
+def test_mutation_wrong_merge_commit_or_merge_time_in_the_adr(label: str) -> None:
+    """A merge fact replaced with another value the note never carried."""
+    phrase = clause(label, GUARD.ADR_0022_SELF_REQUIRED)
+    mutated = without(read(ADR), phrase)
+    assert label in missing(GUARD.ADR_0022_SELF_REQUIRED, mutated)
+
+
+@pytest.mark.parametrize("label", ["records the merge commit", "records the merge time"])
+def test_mutation_wrong_merge_commit_or_merge_time_in_the_status_section(label: str) -> None:
+    phrase = clause(label, GUARD.ADR_0022_STATUS_REQUIRED)
+    _, section, _ = split_at_section(CLAUDE_MD)
+    mutated = without(section, phrase)
+    assert label in missing(GUARD.ADR_0022_STATUS_REQUIRED, mutated)
+
+
+def test_mutation_merge_commit_replaced_by_another_real_commit() -> None:
+    """Not merely deleted -- swapped for ADR-0021's merge commit, which is a real
+    identifier this section must not claim as its own."""
+    _, section, _ = split_at_section(CLAUDE_MD)
+    other = "c58d6c442c34928ad3c25f07368cf1e3323a6552"
+    assert other not in section
+    mutated = section.replace(MERGE_COMMIT, other)
+    assert mutated != section
+    assert "records the merge commit" in missing(GUARD.ADR_0022_STATUS_REQUIRED, mutated)
+
+
+def test_mutation_full_generated_arn_pinned() -> None:
+    """The refusal to pin a generated ARN deleted from the section."""
+    phrase = clause("pins no full generated arn", GUARD.ADR_0022_STATUS_REQUIRED)
+    _, section, _ = split_at_section(CLAUDE_MD)
+    mutated = without(section, phrase)
+    assert "pins no full generated arn" in missing(GUARD.ADR_0022_STATUS_REQUIRED, mutated)
+
+
+def test_mutation_in_force_row_removed_from_a_status_document() -> None:
+    """The current-status row deleted; the row scanner must stop claiming the merge."""
+    for document in (CLAUDE_MD, README):
+        text = read(document)
+        rows = [
+            line
+            for line in text.splitlines(keepends=True)
+            if line.lstrip().startswith("|") and "[ADR-0022](docs/decisions/" in line.split("|")[1]
+        ]
+        assert len(rows) == 1, document.name
+        assert GUARD._in_force_adr_claims(text).get("ADR-0022") == f"PR {PR} merged"
+        mutated = text.replace(rows[0], "")
+        assert "ADR-0022" not in GUARD._in_force_adr_claims(mutated)
+
+
+def test_mutation_in_force_row_names_the_wrong_pull_request() -> None:
+    """A row that survives but cites another merge is a mismatch, not a match."""
+    text = read(CLAUDE_MD)
+    mutated = text.replace(f"PR {PR} merged", "PR #54 merged")
+    assert mutated != text
+    assert GUARD._in_force_adr_claims(mutated).get("ADR-0022") != f"PR {PR} merged"
 
 
 @pytest.mark.parametrize(

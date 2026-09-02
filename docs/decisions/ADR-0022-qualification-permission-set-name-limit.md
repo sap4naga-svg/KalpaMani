@@ -8,6 +8,30 @@ authority. That is a statement about the present, it will remain true of these d
 later merge, and it is not to be rewritten as though this decision had authority before it was
 accepted.
 
+**The condition above has since been satisfied.** **PR #57 merged** — merged
+**2026-09-02T15:39:27Z**, merge commit **`b214484b0da6edd6192caa01c0e57a9878afc288`**, ordered
+parents **`f4aa4f89b4f41acdad57b96fe07e558e71ba40bd`** then
+**`63992a88a9c4fb64defdb446ccc29c5d43b3e0b3`**, with a **merge tree identical to the
+independently validated pull-request head tree** — after an **independent review**. So
+**ADR-0022's conditional acceptance event has occurred** and this ADR is now **ACCEPTED / IN
+FORCE**, as **architecture only**. The status line above is the conditional text this ADR was
+written with; it is **preserved as history, not rewritten**, and **while PR #57 was open,
+ADR-0022 was proposed and carried no authority** — which was true then and stays true.
+
+**The accepted acquisition permission-set name is `KalpaManiQualificationAcquire`**, retiring
+`KalpaManiQualificationAcquisition`, and **the assessment permission-set name
+`KalpaManiQualificationAssessment` is unchanged**. **The acquisition generated-role prefix is now**
+`AWSReservedSSO_KalpaManiQualificationAcquire_`.
+
+**The merge approved architecture only, and no implementation or operational authority followed
+from it.** **No correction to PR #56 followed from the merge** — PR #56 stays **OPEN / UNMERGED /
+BLOCKED ON ARCHITECTURE**, and **PR #56 correction: NOT AUTHORIZED / NOT BEGUN**. The merge
+authorized no Terraform command, no AWS, IAM or Identity Center access, no permission-set,
+assignment, role, attachment or profile implementation, no infrastructure discovery, mutation or
+deployment, no binding preflight, no qualification execution, no Run A, no Run B, no combined
+assessment, no CONTROL publication, no ingestion and no trading authority, and it **closed no
+decision gate**.
+
 **This decision corrects one accepted architecture value and nothing else.** It implements
 nothing, creates nothing, inspects nothing, binds nothing, deploys nothing, plans nothing and
 runs nothing. No AWS identity, account, profile, credential, cache, permission set, assignment,

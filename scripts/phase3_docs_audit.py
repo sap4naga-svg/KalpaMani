@@ -807,6 +807,7 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0019", "PR #46 merged"),
     ("ADR-0020", "PR #49 merged"),
     ("ADR-0021", "PR #54 merged"),
+    ("ADR-0022", "PR #57 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -9886,21 +9887,42 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 # ---------------------------------------------------------------------------
-# ADR-0022 -- the qualification permission-set name limit, PROPOSED
+# ADR-0022 -- the qualification permission-set name limit, ACCEPTED
 # ---------------------------------------------------------------------------
 #
 # ADR-0021 accepted an acquisition permission-set name of 33 characters, and the
 # pinned provider validates that attribute to 1-32. PR #56 implemented the
 # accepted architecture faithfully and is therefore blocked by the architecture
-# rather than by its own code, so the correction is an ADR and not an edit.
+# rather than by its own code, so the correction was an ADR and not an edit.
 #
-# Every guard below keeps three states apart, in both directions: a proposal, an
-# accepted decision, and a live AWS object. A proposal read forward into an
-# accepted decision and a blocked implementation read forward into a corrected
-# one are the two drifts this slice can produce, and each is refused.
+# PR #57 merged, so ADR-0022's conditional acceptance event has occurred and the
+# guards below are inverted rather than deleted. Every one of them still keeps
+# three states apart, in both directions: an accepted architecture value, a
+# blocked implementation, and a live AWS object. The drifts this slice can now
+# produce are an accepted decision read backwards into a proposal, a blocked
+# implementation read forward into a corrected one, and architecture read forward
+# into live infrastructure -- and each is refused.
 
-#: The proposal itself. Named once, so the checks and the tests point at one file.
+#: The accepted decision itself. Named once, so the checks and the tests point at
+#: one file.
 ADR_0022: Final = DECISIONS / "ADR-0022-qualification-permission-set-name-limit.md"
+
+#: The pull request whose merge accepted ADR-0022.
+#:
+#: Quoted once. ``MERGED_ADR_STATUS`` is built from it, the in-force row guard is
+#: measured against it, and a second spelling would let the registry and the
+#: documents disagree about which merge did it.
+ADR_0022_PR: Final = "#57"
+
+#: The merge commit that accepted ADR-0022, and the instant it merged.
+#:
+#: Recorded because a status document that named a different commit, or a
+#: different time, would claim a merge that did not happen. The **tree**
+#: identifier is deliberately not recorded: the property that matters is that the
+#: merge tree was identical to the independently validated pull-request head tree,
+#: and that is what the documents state.
+ADR_0022_MERGE_COMMIT: Final = "b214484b0da6edd6192caa01c0e57a9878afc288"
+ADR_0022_MERGE_TIME: Final = "2026-09-02T15:39:27Z"
 
 #: The pinned provider's own bounds on ``aws_ssoadmin_permission_set.name``.
 #:
@@ -9916,7 +9938,11 @@ PERMISSION_SET_NAME_MAX: Final = 32
 #: The provider's allowed-character grammar for that attribute.
 PERMISSION_SET_NAME_GRAMMAR: Final = re.compile(r"[\w+=,.@-]+")
 
-#: The acquisition permission-set name ADR-0022 proposes.
+#: The acquisition permission-set name ADR-0022 accepted.
+#:
+#: The constant name is unchanged on purpose: it is read by the governance tests
+#: and by every guard below, and renaming a value at the moment its status changes
+#: would make the inversion look like a rewrite of what was proposed.
 ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquire"
 
 #: The acquisition permission-set name ADR-0022 retires.
@@ -9925,7 +9951,7 @@ ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcq
 #: retired value would let the two disagree about which name is being retired.
 ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET: Final = ADR_0021_ACQUISITION_PERMISSION_SET
 
-#: Exactly how long the proposed name is. Asserted against ``len()`` of the value
+#: Exactly how long the accepted name is. Asserted against ``len()`` of the value
 #: itself, never trusted as a transcription -- see :func:`permission_set_name_defects`.
 ADR_0022_PROPOSED_NAME_LENGTH: Final = 29
 
@@ -9934,11 +9960,11 @@ ADR_0022_RETIRED_NAME_LENGTH: Final = 33
 
 #: Every qualification permission-set name the provider limit governs, by label.
 #:
-#: The proposed acquisition name and the unchanged assessment name. The retired
+#: The accepted acquisition name and the unchanged assessment name. The retired
 #: name is deliberately absent: it is the value this guard must *refuse*, and a
 #: list that contained it would assert its own failure.
 QUALIFICATION_PERMISSION_SET_NAMES: Final[tuple[tuple[str, str], ...]] = (
-    ("the proposed acquisition permission set", ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET),
+    ("the accepted acquisition permission set", ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET),
     ("the assessment permission set", ADR_0021_ASSESSMENT_PERMISSION_SET),
 )
 
@@ -9994,6 +10020,17 @@ ADR_0022_RETIRED_NAME_MISUSE: Final[tuple[str, ...]] = (
     f"adr-0022 proposes {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
     f"the acquisition permission-set name becomes {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
     f"awsreservedsso_{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}_ becomes",
+    # Added on the acceptance. The proposal-era spellings above stay -- a document
+    # may still be written in the old vocabulary -- and these are the ones an
+    # accepted-state document could reach for instead.
+    f"accepted acquisition permission-set name: {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"accepted acquisition permission-set name is {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"the acquisition permission-set name is {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"adr-0022 accepted {ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}",
+    f"the acquisition generated-role prefix is now "
+    f"awsreservedsso_{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}_",
+    f"the acquisition generated-role prefix is now "
+    f"`awsreservedsso_{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET}_`",
 )
 
 
@@ -10018,7 +10055,15 @@ def retired_permission_set_name_defects(text: str) -> list[str]:
 
 
 #: What ADR-0022 must say about itself.
+#:
+#: Two halves, and both are load-bearing. The historical half -- the conditional
+#: status line, the authority-free open period -- is **required to survive the
+#: acceptance**: an ADR that erased the proposal it was written as would have
+#: rewritten its own history, which is the one thing a decision record exists not
+#: to do. The post-merge half is the adjacent note recording the event that
+#: satisfied the condition.
 ADR_0022_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------- the preserved historical proposal
     ("carries a proposed status", "status: proposed — not in force"),
     (
         "withholds authority until review and merge",
@@ -10030,6 +10075,41 @@ ADR_0022_SELF_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "while the pull request introducing this adr is open, adr-0022 is proposed and carries no "
         "authority",
     ),
+    # ------------------------------------------------- the post-merge note
+    (
+        "records the satisfied acceptance condition",
+        "adr-0022's conditional acceptance event has occurred",
+    ),
+    ("records the accepting pull request", f"pr {ADR_0022_PR} merged"),
+    ("records the merge commit", ADR_0022_MERGE_COMMIT),
+    ("records the merge time", ADR_0022_MERGE_TIME.lower()),
+    (
+        "records the tree identity",
+        "merge tree identical to the independently validated pull-request head tree",
+    ),
+    ("records that it is now in force", "this adr is now accepted / in force"),
+    ("records architecture-only acceptance", "as architecture only"),
+    ("preserves the conditional line as history", "preserved as history, not rewritten"),
+    (
+        "keeps the merged pull request's open period authority-free",
+        f"while pr {ADR_0022_PR} was open, adr-0022 was proposed and carried no authority",
+    ),
+    (
+        "names the accepted acquisition permission set",
+        f"the accepted acquisition permission-set name is "
+        f"`{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}`",
+    ),
+    (
+        "records that the merge corrected nothing downstream",
+        "no correction to pr #56 followed from the merge",
+    ),
+    (
+        "grants no authority by the merge",
+        "the merge approved architecture only, and no implementation or operational authority "
+        "followed from it",
+    ),
+    ("closes no gate by the merge", "closed no decision gate"),
+    # --------------------------------------------- the unchanged decision text
     ("records that adr-0021 is in force", "accepted / in force"),
     (
         "records that pr #56 implemented the architecture faithfully",
@@ -10133,7 +10213,7 @@ ADR_0022_REJECTED_ALTERNATIVES: Final[tuple[tuple[str, str], ...]] = (
 #: The exact level-three heading that opens ADR-0022's status section in both
 #: status documents. The anchor is the heading, never a phrase being tested.
 ADR_0022_STATUS_HEADING: Final = (
-    "The qualification permission-set name limit, and ADR-0022 — PROPOSED, and not in force"
+    "The qualification permission-set name limit, and ADR-0022 — ACCEPTED, and architecture only"
 )
 
 #: The level at which that heading, and only that heading, may sit.
@@ -10196,14 +10276,31 @@ def scan_adr_0022_status_sections(text: str) -> Adr0022SectionScan:
 #: so a flat scan is answered by a neighbour's copy and a section-local deletion
 #: goes unreported.
 ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    ("records the proposed status", "adr-0022: proposed / not in force"),
+    # Inverted on the merge, one clause for one clause. The proposal-era trio --
+    # the proposed status, the conditional effectiveness and the authority-free
+    # open period -- became the accepted status, the satisfied acceptance event
+    # and the same open period stated in the past tense, which is the only honest
+    # way to keep a fact that was true of those days.
+    ("records the accepted status", "adr-0022: accepted / in force"),
     (
-        "records the conditional effectiveness",
-        "conditionally effective only after independent review and merge",
+        "records the satisfied acceptance event",
+        "adr-0022's conditional acceptance event has occurred",
     ),
     (
         "keeps the open period authority-free",
-        "while that pull request is open it carries no authority",
+        f"while pr {ADR_0022_PR} was open, adr-0022 was proposed and carried no authority",
+    ),
+    ("records the accepting pull request", f"pr {ADR_0022_PR} merged"),
+    ("records the merge commit", ADR_0022_MERGE_COMMIT),
+    ("records the merge time", ADR_0022_MERGE_TIME.lower()),
+    ("records architecture-only acceptance", "the merge approved architecture only"),
+    (
+        "records that no authority followed the merge",
+        "no implementation or operational authority followed from the merge",
+    ),
+    (
+        "records the independent review",
+        f"pr {ADR_0022_PR} was independently reviewed before its merge",
     ),
     ("records that adr-0021 is in force", "adr-0021: accepted / in force"),
     ("records the blocked pull request", "pr #56: open / unmerged / blocked on architecture"),
@@ -10217,34 +10314,77 @@ ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("records the correct refusal", "the independent review correctly refused the merge"),
     (
-        "names the proposed acquisition permission set",
-        f"proposed acquisition permission-set name: `"
-        f"{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}`",
+        "names the accepted acquisition permission set",
+        f"accepted acquisition permission-set name: "
+        f"{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}",
     ),
     (
-        "keeps the accepted name current until merge",
-        "the currently accepted acquisition permission-set name remains adr-0021's until "
-        "adr-0022 is merged, and becomes historical only on that merge",
+        "names the retired acquisition permission set",
+        f"retired acquisition permission-set name: "
+        f"{ADR_0022_RETIRED_ACQUISITION_PERMISSION_SET.lower()}",
+    ),
+    (
+        "records the retired name as historical",
+        "the retired 33-character name is historical and defect context",
     ),
     (
         "refuses the retired name as the replacement",
-        "never as the proposed or current replacement",
+        "never the current or proposed replacement",
     ),
     (
-        "refuses the new prefix while proposed",
-        "that prefix is not effective while adr-0022 remains proposed",
+        "records the accepted role prefix",
+        f"the acquisition generated-role prefix is now "
+        f"`awsreservedsso_{ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower()}_`",
     ),
     ("keeps the assessment name unchanged", "the assessment permission-set name is unchanged"),
     ("keeps both profile names unchanged", "both profile names are unchanged"),
     ("keeps the suffix grammar unchanged", "the suffix grammar is unchanged"),
+    ("keeps the actor semantics unchanged", "actor identities and semantics"),
+    ("keeps the session duration unchanged", "the session duration is unchanged"),
+    (
+        "keeps prefix verification unchanged",
+        "exact-account plus actor-specific permission-set role-name prefix verification is "
+        "unchanged",
+    ),
+    ("keeps the suffix grammar structural", "structure, not provenance"),
+    ("pins no full generated arn", "no full generated arn is pinned"),
     (
         "keeps the neighbouring decisions unchanged",
         "adr-0017, adr-0019 and adr-0020 are unchanged",
     ),
+    ("keeps adr-0017 isolation unchanged", "adr-0017 isolation is unchanged"),
+    (
+        "keeps write-only acquisition unchanged",
+        "adr-0019 write-only acquisition is unchanged",
+    ),
+    (
+        "keeps request-scoped payload identity unchanged",
+        "adr-0020 request-scoped payload identity is unchanged",
+    ),
+    (
+        "keeps assessment digest verification unchanged",
+        "assessment digest verification is unchanged",
+    ),
     ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
+    ("keeps the blocked pull request uncorrected", "pr #56 remains open, unmerged and uncorrected"),
+    (
+        "records the required correction work",
+        "must replace the retired acquisition permission-set name consistently and add a "
+        "provider 1-32 name-length guard",
+    ),
     (
         "records the unmerged declarations",
         "pr #56 terraform declarations: unmerged / unapplied",
+    ),
+    ("keeps terraform unapplied", "terraform: unapplied"),
+    (
+        "defers the organization instance",
+        "organization-instance prerequisite: required / live existence not established",
+    ),
+    (
+        "establishes no permission set, role, attachment, profile, binding or authority",
+        "no permission set, assignment, role, attachment, profile, binding or authority is "
+        "established",
     ),
     ("keeps infrastructure deployment blocked", "infrastructure deployment: blocked"),
     ("closes aws discovery", "aws discovery: not authorized"),
@@ -10259,29 +10399,40 @@ ADR_0022_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("preserves the acquisition put range", "acquisition putobject: 145 to 147"),
     ("preserves zero acquisition head", "acquisition headobject: 0"),
     ("preserves zero acquisition get", "acquisition getobject: 0"),
+    ("preserves the two-run range", "two successful runs: 290 to 294"),
+    ("preserves the assessment envelope", "assessment: 195 to 196"),
     ("preserves the package envelope", "whole successful package: 485 to 490"),
+    ("preserves the deadline terms", "l >= 3 * t_s3 + c"),
     (
         "keeps terraform validate required",
-        "remains required before pr #56 can merge",
+        "genuine isolated `terraform validate` against the pinned provider remains required in "
+        "a later authorized gate before pr #56 can merge",
     ),
 )
 
 #: Claims neither status document may make about ADR-0022, in either direction.
 #:
 #: Anchored, never loose. The honest load-bearing sentences must all survive: the
-#: section legitimately writes "if adr-0022 is accepted", so a bare
-#: "adr-0022 is accepted" would refuse the document for saying the right thing.
+#: section legitimately writes that ADR-0022 was proposed and carried no authority
+#: while PR #57 was open, so a loose refusal of the word "proposed" would refuse
+#: the document for keeping the history it is required to keep.
+#:
+#: The nine refusals that guarded the proposal against being read forward were
+#: **inverted on the merge, one for one**, not deleted. The drift now available is
+#: the opposite one: an accepted decision restored to a proposal, which would
+#: strip an in-force decision of the authority it has and leave the current
+#: acquisition permission-set name unstated.
 ADR_0022_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    # ------------------------------------------------- the proposal read forward
-    "adr-0022: accepted",
-    "adr-0022: in force",
-    "adr-0022: accepted / in force",
-    "adr-0022 is now accepted",
-    "adr-0022 is now in force",
-    "adr-0022 architecture: accepted",
-    "adr-0022's conditional acceptance event has occurred",
-    "adr-0022 has been merged",
-    "adr-0022 merged",
+    # ---------------------------------------- the accepted decision read backward
+    "adr-0022: proposed",
+    "adr-0022: not in force",
+    "adr-0022: proposed / not in force",
+    "adr-0022 is now proposed",
+    "adr-0022 is not in force",
+    "adr-0022 architecture: proposed",
+    "adr-0022 remains proposed",
+    "adr-0022 has not been merged",
+    "adr-0022 is unmerged",
     # ------------------------------------- the blocked implementation read forward
     "pr #56: corrected",
     "pr #56 has been corrected",
@@ -10322,9 +10473,25 @@ ADR_0022_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
 )
 
 #: What the implementation plan must record about ADR-0022.
+#:
+#: Inverted on the merge, one clause for one clause. The plan is where the *next*
+#: gate is named, so the two clauses that mattered most -- the status, and the
+#: refusal to begin -- had to change together: the decision is in force, and the
+#: correction it unblocks is still unauthorized. Collapsing those two into one is
+#: exactly the drift this list refuses.
 ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
-    ("records the proposed status", "adr-0022: proposed / not in force"),
-    ("records the blocked pull request", "pr #56 remains open and blocked"),
+    ("records the accepted status", "adr-0022: accepted / in force"),
+    ("records the accepting pull request", f"pr {ADR_0022_PR} merged"),
+    ("records architecture-only acceptance", "architecture only"),
+    (
+        "names the accepted acquisition permission set",
+        ADR_0022_PROPOSED_ACQUISITION_PERMISSION_SET.lower(),
+    ),
+    ("retires the old name", "the 33-character name is retired"),
+    (
+        "records the blocked pull request",
+        "pr #56 remains open, unmerged, uncorrected and blocked",
+    ),
     (
         "records that the defect is architectural",
         "its blocking defect is architectural, not merely syntactic",
@@ -10334,15 +10501,36 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "pr #56 correctly implemented adr-0021 as written",
     ),
     (
+        "records the satisfied prerequisite",
+        "adr-0022 acceptance satisfies only the architecture prerequisite for the correction",
+    ),
+    (
+        "records that the prerequisite authorizes nothing",
+        "satisfying that prerequisite authorizes nothing by itself",
+    ),
+    (
         "refuses to begin the correction",
-        "no implementation correction may begin before adr-0022 acceptance",
+        "no implementation correction may begin before its own separate authorization",
     ),
     ("closes the downstream correction", "pr #56 correction: not authorized / not begun"),
     (
+        "names the next authorized gate",
+        "the next separately authorized gate is the narrow correction of pr #56",
+    ),
+    (
         "names the next gate's work",
-        "the next offline gate will correct pr #56's acquisition permission-set name and add "
+        "that later offline gate will correct pr #56's acquisition permission-set name and add "
         "the provider-limit guards",
     ),
+    (
+        "preserves the assessment and profile names",
+        "preserving the assessment permission-set name and both governed profile names",
+    ),
+    (
+        "closes every remaining operational gate",
+        "each remain separately unauthorized",
+    ),
+    ("keeps every operational gate closed", "all operational gates remain closed"),
     (
         "keeps terraform validate required",
         "a real isolated `terraform validate` against the pinned provider remains required "
@@ -18568,16 +18756,19 @@ def main() -> int:
         ", ".join(plan_zero_defects),
     )
 
-    # ADR-0022, the PROPOSED qualification permission-set name limit. ADR-0021
+    # ADR-0022, the ACCEPTED qualification permission-set name limit. ADR-0021
     # accepted a 33-character acquisition permission-set name and the pinned
     # provider validates that attribute to 1-32, so the blocked implementation is
-    # blocked by the architecture rather than by its own code. Every check keeps a
-    # proposal, an accepted decision and a live AWS object apart, in both
-    # directions.
+    # blocked by the architecture rather than by its own code. PR #57 merged, so
+    # every proposal-state check below was inverted rather than removed. They keep
+    # an accepted decision, a blocked implementation and a live AWS object apart,
+    # in every direction: an accepted decision read backwards into a proposal, a
+    # blocked implementation read forward into a corrected one, and architecture
+    # read forward into infrastructure.
     f.check(
-        "the ADR-0022 proposal exists",
+        "the ADR-0022 decision exists",
         ADR_0022.is_file(),
-        "the proposal is present on this branch",
+        "the accepted decision is present on this branch",
     )
     f.check(
         # One decision, one file. A second copy under another name would give two
@@ -18587,19 +18778,26 @@ def main() -> int:
         f"{len(sorted(DECISIONS.glob('ADR-0022-*.md')))} ADR-0022 documents",
     )
     f.check(
-        # The registry is what governs an in-force claim. ADR-0022 is proposed, so
-        # its absence here is the fact every proposed-status row is measured
-        # against -- and the entry a later acceptance would have to add.
-        "ADR-0022 is absent from the merged-ADR registry",
-        "ADR-0022" not in dict(MERGED_ADR_STATUS),
-        "a proposed ADR must not be registered as merged",
+        # Inverted on the merge, not deleted. While ADR-0022 sat on an open pull
+        # request this asserted its ABSENCE from the registry; PR #57 is the event
+        # that flips it, and deleting the guard would leave the reverted claim
+        # unguarded -- the treatment ADR-0017 through ADR-0021 were each given. The
+        # registry is what governs an in-force claim, so this is the entry every
+        # ADR-0022 status row is measured against.
+        "ADR-0022 is registered as a merged ADR",
+        dict(MERGED_ADR_STATUS).get("ADR-0022") == f"PR {ADR_0022_PR} merged",
+        f"ADR-0022 must be registered as 'PR {ADR_0022_PR} merged'",
     )
     f.check(
-        # The inverse of the in-force row a merged ADR carries. While ADR-0022 is
-        # proposed neither document may claim one for it.
-        "neither status document claims ADR-0022 is in force",
-        all("ADR-0022" not in _in_force_adr_claims(text) for text in adr_0018_documents.values()),
-        "a proposed ADR must carry no ACCEPTED / IN FORCE row",
+        # An in-force row is the shape a merged ADR claims, and both documents must
+        # now carry one naming the same pull request. The inverse of what this
+        # asserted while the decision was proposed.
+        "both status documents claim ADR-0022 is in force, naming its pull request",
+        all(
+            _in_force_adr_claims(text).get("ADR-0022") == f"PR {ADR_0022_PR} merged"
+            for text in adr_0018_documents.values()
+        ),
+        f"a merged ADR must carry an ACCEPTED / IN FORCE row naming PR {ADR_0022_PR}",
     )
 
     adr_0022_text = read(ADR_0022) if ADR_0022.is_file() else ""
