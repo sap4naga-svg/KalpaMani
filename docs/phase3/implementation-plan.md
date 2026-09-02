@@ -463,6 +463,50 @@ RUN · third ADR-0017 authenticated acquisition: NOT AUTHORIZED · sixth binding
 AUTHORIZED**. **Merging reviewed infrastructure code is not authorization to plan it, apply it or
 run anything.**
 
+**The qualification runtime principal and trust model is proposed, and nothing is implemented.**
+**ADR-0021: PROPOSED / NOT IN FORCE**, and **the proposed architecture carries no authority until
+its pull request is independently reviewed and merged**. **Runtime principal/trust architecture:
+PROPOSED ONLY.** The proposal chooses **direct IAM Identity Center permission-set roles**: **AWS
+IAM Identity Center is the human authentication root**, **no IAM user or long-lived access key is
+permitted for qualification**, **a dedicated, governed Identity Center operator group is the
+assignment subject**, and **two separate permission sets exist logically —
+`KalpaManiQualificationAcquisition` and `KalpaManiQualificationAssessment`** — each referencing
+only its merged PR #52 managed-policy declaration, and each reached through one of two exact
+named profiles, `kalpamani-qualification-acquisition` and `kalpamani-qualification-assessment`.
+**No custom `aws_iam_role`, custom role trust policy, source-profile role chain, application
+AssumeRole, IAM user, access key, ECS task role, Lambda execution role, EC2 instance profile,
+web-identity principal or cross-account principal is part of this architecture.**
+
+**Every environment-binding value stays deferred and unread**: **the exact identity-store and
+group identifier is an environment-binding value and remains unknown and unread**, and **the
+account id is an environment-binding value and must not appear in the proposal**. **The identity
+gate binds the exact target account plus the exact permission-set role-name prefix and a
+validated AWS-generated suffix grammar**, **it does not pin one full generated role ARN forever,
+because the suffix may rotate when assignments are removed and recreated**, **the profile name is
+routing input, not proof**, and **`sts:GetCallerIdentity` remains the runtime proof during a
+later authorized execution**. **Session duration is bounded to one hour per permission set.**
+
+**The decision changes no application behaviour, no stored data and no arithmetic** — **the
+identity and trust decision adds no S3 operation and changes no deadline term** — so
+**acquisition PutObject: 145 to 147**, **acquisition HeadObject: 0**, **acquisition GetObject:
+0**, **two successful runs: 290 to 294**, **assessment: 195 to 196**, **whole successful package:
+485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L** are each unchanged.
+
+**Acceptance of ADR-0021 would authorize architecture only**, and **the next gate after ADR
+acceptance is an offline implementation gate** for permission sets, customer-managed-policy
+attachments, assignments, and any proven identity-gate and profile-contract corrections. Current
+status: **Identity Center permission sets: NOT IMPLEMENTED / NOT CREATED · account assignments:
+NOT IMPLEMENTED / NOT CREATED · runtime roles: NOT IMPLEMENTED / LIVE EXISTENCE NOT ESTABLISHED ·
+runtime trust principals: NOT SELECTED IN AWS · policy attachments: NOT IMPLEMENTED / NOT CREATED
+· profiles: NOT CREATED / NOT INSPECTED · authority granted: NONE · PR #52 policy declarations:
+MERGED / OFFLINE-REVIEWED / UNAPPLIED · PR #53 governance synchronization: MERGED · Terraform
+init/validate/plan/apply: NOT AUTHORIZED / NOT RUN · AWS/provider/credential access: NOT
+AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT AUTHORIZED / NOT
+RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT RUN · G1 / G2: OPEN / OPEN ·
+provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading:
+HARD-DISABLED**. **Implementation, infrastructure mutation and execution stay three separate
+gates and are never collapsed into one**, and **ADR-0021 amends no earlier ADR document.**
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.
