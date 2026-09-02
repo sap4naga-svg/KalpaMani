@@ -519,9 +519,19 @@ def test_neither_command_imports_the_earlier_authenticated_entry_point(name: str
     assert "sharadar_binding_preflight" not in source
 
 
-def test_both_commands_pin_the_governed_profile_and_never_accept_one() -> None:
+def test_each_command_pins_its_own_governed_actor_profile_and_never_accepts_one() -> None:
+    """One profile each, and the shared foundation profile reaches neither.
+
+    ADR-0021 replaced the single ``kalpamani-foundation`` pin with two actor-specific
+    profiles, so this asserts the pair rather than one constant. The old spelling is
+    refused by name: a revert would otherwise route both actors back through one
+    credential source while every other guard here stayed green.
+    """
+    assert acquire.EXPECTED_PROFILE == "kalpamani-qualification-acquisition"
+    assert assess.EXPECTED_PROFILE == "kalpamani-qualification-assessment"
+    assert acquire.EXPECTED_PROFILE != assess.EXPECTED_PROFILE
     for module in (acquire, assess):
-        assert module.EXPECTED_PROFILE == "kalpamani-foundation"
+        assert module.EXPECTED_PROFILE != "kalpamani-foundation"
         assert "--profile" in module.REFUSED_OPTIONS
 
 
@@ -534,7 +544,27 @@ def test_neither_command_reimplements_the_identity_gate() -> None:
         assert not re.search(r"[\"']sts[\"']", source)
         assert "allowed_account_ids" not in source
         assert "terraform" not in source.lower()
-        assert "from aws_foundation_verify import identity_gate" in source
+        # The ADR-0021 gate, still imported from the one governed verifier rather
+        # than rebuilt here. The account-only gate is no longer enough for either
+        # actor, so importing it would be the drift this replaces.
+        assert (
+            "from aws_foundation_verify import QualificationActor, qualification_identity_gate"
+            in source
+        )
+        assert "import identity_gate" not in source
+
+
+def test_each_command_proves_its_own_actor_and_not_the_other() -> None:
+    """Acquisition names only ACQUISITION, assessment names only ASSESSMENT.
+
+    A copy-paste that left both commands proving one actor would pass every other
+    guard in this file: both would import the gate, both would pin a distinct
+    profile, and both would refuse ``--profile``. Only this asserts the pairing.
+    """
+    assert "QualificationActor.ACQUISITION" in ACQUIRE_EXECUTABLE
+    assert "QualificationActor.ASSESSMENT" not in ACQUIRE_EXECUTABLE
+    assert "QualificationActor.ASSESSMENT" in ASSESS_EXECUTABLE
+    assert "QualificationActor.ACQUISITION" not in ASSESS_EXECUTABLE
 
 
 def test_the_acquisition_s3_client_factory_uses_the_compiled_sdk_configuration() -> None:

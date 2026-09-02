@@ -388,6 +388,7 @@ INFRA_FILES = (
     "ecs.tf",
     "logging.tf",
     "qualification_policies.tf",
+    "qualification_principals.tf",
     "terraform.tfvars.example",
 )
 
@@ -4320,6 +4321,30 @@ def _qualification_policy_declarations() -> list[str]:
     for path in sorted(infra.rglob("*.tf")):
         found.extend(declared.findall(strip_hcl_comments(read(path))))
     return sorted(found)
+
+
+def _principal_declarations(resource_type: str) -> list[str]:
+    """Every label the ADR-0021 principals candidate declares for ``resource_type``.
+
+    Asked of that one file rather than of ``infra/``: the question is what the
+    candidate declares, and a directory-wide scan would answer a different one the
+    moment a second decision adds a file.
+    """
+    if not ADR_0021_PRINCIPALS_TF.is_file():
+        return []
+    hcl = strip_hcl_comments(read(ADR_0021_PRINCIPALS_TF))
+    return sorted(re.findall(rf'resource\s+"{resource_type}"\s+"([^"]+)"', hcl))
+
+
+def _principals_hcl() -> str:
+    """The principals candidate with its explanatory comments removed.
+
+    It names, at length, the constructs it deliberately does not declare. A raw scan
+    would report each of those explanations as the thing it forbids.
+    """
+    if not ADR_0021_PRINCIPALS_TF.is_file():
+        return ""
+    return strip_hcl_comments(read(ADR_0021_PRINCIPALS_TF))
 
 
 def _unframed_occurrences(text: str, phrase: str, framing: str) -> int:
@@ -8929,6 +8954,54 @@ ADR_0021_ACQUISITION_PERMISSION_SET: Final = "KalpaManiQualificationAcquisition"
 ADR_0021_ASSESSMENT_PERMISSION_SET: Final = "KalpaManiQualificationAssessment"
 ADR_0021_ACQUISITION_PROFILE: Final = "kalpamani-qualification-acquisition"
 ADR_0021_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"
+
+#: The OFFLINE candidate that declares the two runtime principals. A separate file
+#: from ``qualification_policies.tf`` on purpose: PR #52's candidate declares the two
+#: managed policies and must keep declaring exactly those, and a guard that scans one
+#: file cannot stay precise if two decisions share it.
+ADR_0021_PRINCIPALS_TF: Final = INFRA / "qualification_principals.tf"
+
+#: The governed verifier, which owns the account binding, the profile pin and the one
+#: ``sts:GetCallerIdentity`` call site. ADR-0021 adds an actor-specific gate beside
+#: the account gate there rather than a second implementation elsewhere.
+ADR_0021_VERIFIER: Final = REPO_ROOT / "scripts" / "aws_foundation_verify.py"
+
+#: Each actor: its label, its permission-set name, its governed profile and the entry
+#: point that must prove it. Read from the constants above rather than retyped, so a
+#: rename cannot leave one spelling in a guard and another in the code it guards.
+ADR_0021_ACTORS: Final[tuple[tuple[str, str, str, Path], ...]] = (
+    (
+        "acquisition",
+        ADR_0021_ACQUISITION_PERMISSION_SET,
+        ADR_0021_ACQUISITION_PROFILE,
+        REPO_ROOT / "scripts" / "sharadar_empirical_qualification.py",
+    ),
+    (
+        "assessment",
+        ADR_0021_ASSESSMENT_PERMISSION_SET,
+        ADR_0021_ASSESSMENT_PROFILE,
+        REPO_ROOT / "scripts" / "sharadar_qualification_assessment.py",
+    ),
+)
+
+#: The one bounded session duration, as an ISO-8601 duration.
+ADR_0021_SESSION_DURATION: Final = "PT1H"
+
+#: Terraform constructs the principals candidate must never carry. Each would either
+#: mint an identity ADR-0021 rejected, author a trust boundary Identity Center owns,
+#: or read the live environment to write a declaration.
+ADR_0021_FORBIDDEN_PRINCIPAL_HCL: Final[dict[str, str]] = {
+    'resource "aws_iam_role"': "Identity Center generates and owns the runtime role",
+    'resource "aws_iam_user"': "no IAM user is permitted for qualification",
+    'resource "aws_iam_access_key"': "no long-lived access key is permitted",
+    'resource "aws_iam_instance_profile"': "a workload principal contradicts the operator model",
+    "assume_role_policy": "no custom trust policy is authored under this decision",
+    "sts:AssumeRole": "the one runtime identity operation is sts:GetCallerIdentity",
+    'data "aws_ssoadmin_instances"': "reading the live environment is a separate gate",
+    'data "aws_identitystore_group"': "reading the live environment is a separate gate",
+    'data "aws_caller_identity"': "reading the live environment is a separate gate",
+    "inline_policy": "each permission set references the merged managed policy instead",
+}
 
 #: What the ADR itself must say. Section-scoped guards cover the status documents;
 #: this list is the decision document's own contract.
@@ -18221,6 +18294,87 @@ def main() -> int:
         == ["qualification_acquisition", "qualification_assessment"],
         "the accepted ADR-0018 s.10 permission sets are no longer expressed in Terraform",
     )
+
+    # -- ADR-0021: the two runtime principals, declared and applied to nothing ----
+    #
+    # PR #52 declared the two managed policies and named no holder, because accepted
+    # authority determined no runtime trust principal. ADR-0021 chose one. These
+    # guard the offline candidate that expresses that choice -- in both directions,
+    # so deleting it fails as loudly as corrupting it.
+    f.check(
+        "the ADR-0021 principals candidate exists",
+        ADR_0021_PRINCIPALS_TF.is_file(),
+        "the accepted runtime principals would then be expressed nowhere in Terraform",
+    )
+    f.check(
+        "the principals candidate declares exactly the two permission sets",
+        _principal_declarations("aws_ssoadmin_permission_set")
+        == ["qualification_acquisition", "qualification_assessment"],
+        "one shared permission set destroys the two-actor compromise argument",
+    )
+    f.check(
+        "the principals candidate declares exactly two group account assignments",
+        _principal_declarations("aws_ssoadmin_account_assignment")
+        == ["qualification_acquisition", "qualification_assessment"],
+        "the group assignment is the authorization binding; there is no other path in",
+    )
+    f.check(
+        "each permission set is bounded to a one-hour session",
+        _principals_hcl().count(f'qualification_session_duration = "{ADR_0021_SESSION_DURATION}"')
+        == 1
+        and _principals_hcl().count("session_duration = local.qualification_session_duration") == 2,
+        "one hour is the bound, and raising it is an ADR change rather than a setting",
+    )
+    f.check(
+        "no principals input carries a default",
+        ADR_0021_PRINCIPALS_TF.is_file()
+        and re.search(r"^\s+default\s*=", _principals_hcl(), re.MULTILINE) is None,
+        "a default binding value is either wrong everywhere or is a committed identifier",
+    )
+    for token, why in ADR_0021_FORBIDDEN_PRINCIPAL_HCL.items():
+        f.check(
+            f"the principals candidate declares no {token}",
+            token not in _principals_hcl(),
+            why,
+        )
+    for shape in ("ssoins-", "awsapps.com", "AWSReservedSSO_"):
+        f.check(
+            f"the principals candidate carries no {shape} literal",
+            shape not in read(ADR_0021_PRINCIPALS_TF)
+            if ADR_0021_PRINCIPALS_TF.is_file()
+            else False,
+            "instance ids, start URLs and generated role names are environment bindings",
+        )
+    for label, permission_set, profile, entry in ADR_0021_ACTORS:
+        f.check(
+            f"the {label} permission set references only its own merged managed policy",
+            f"name = aws_iam_policy.qualification_{label}.name" in _principals_hcl(),
+            "the PR #52 action matrices are referenced, never restated or crossed over",
+        )
+        f.check(
+            f"the governed verifier names the {label} permission set",
+            f'"{permission_set}"' in read(ADR_0021_VERIFIER),
+            "the identity gate matches the exact actor-specific generated-role prefix",
+        )
+        f.check(
+            f"the governed verifier names the {label} profile",
+            f'"{profile}"' in read(ADR_0021_VERIFIER),
+            "the profile is routing input, and the gate still has to know which one",
+        )
+        f.check(
+            f"the {label} entry point pins the governed {label} profile",
+            entry.is_file() and f'EXPECTED_PROFILE: Final = "{profile}"' in read(entry),
+            "the single shared foundation profile cannot express two actors",
+        )
+        f.check(
+            f"the {label} entry point proves its actor through the governed identity gate",
+            entry.is_file()
+            and f"QualificationActor.{label.upper()}" in read(entry)
+            and "qualification_identity_gate" in read(entry)
+            and "import identity_gate" not in read(entry),
+            "an account-only gate cannot tell one qualification actor from the other",
+        )
+
     # This audit is excluded by name, and only this audit. It is a governance
     # guard, so it *has* to name the ADR it guards -- but it constructs no client,
     # sends no request and is not an operational surface. Excluding it by exact

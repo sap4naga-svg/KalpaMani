@@ -1028,17 +1028,21 @@ class TestNegativeControls:
 
 
 # ---------------------------------------------------------------------------
-# Canonical formatting, checked offline because `terraform fmt` cannot run here
+# Canonical formatting, checked offline because `terraform fmt` may not be available
 # ---------------------------------------------------------------------------
 #
-# `terraform` is not installed on this workstation, so `terraform fmt -check` is
-# unavailable and the candidate would otherwise ship with its formatting merely
-# believed. This checks the subset of `terraform fmt`'s output that can be decided
+# A test suite cannot assume a `terraform` binary: it is not a declared dependency of
+# this repository, and where it is absent `terraform fmt -check` is unavailable and a
+# candidate would ship with its formatting merely believed. (It IS present on the
+# workstation this section was last exercised on, and the ADR-0021 principals
+# candidate was checked with it as well as here -- which is a fact about one machine
+# on one day, not a property this suite may rely on.) This checks the subset of
+# `terraform fmt`'s output that can be decided
 # from the text alone: two-space indentation, no tabs, no trailing whitespace, one
 # final newline, and `=` alignment across each run of consecutive single-line
 # attributes inside one block.
 #
-# **The thirteen pre-existing files are the control.** They were written and
+# **The pre-existing files are the control.** They were written and
 # committed under a working `terraform fmt`, so a checker that reported them as
 # unformatted would be wrong about the rule rather than right about the file --
 # which is exactly the failure a hand-rolled formatter check invites.
@@ -1612,3 +1616,533 @@ class TestTheGuardsAreNotTautological:
         gutted = claude_section.replace(clause(label), "")
         assert label in missing(gutted)
         assert label not in missing(readme_section)
+
+
+# ---------------------------------------------------------------------------
+# The ADR-0021 runtime principals, parsed the same way
+# ---------------------------------------------------------------------------
+#
+# `qualification_principals.tf` is the second OFFLINE candidate in this package. It
+# names the holder PR #52 deliberately left unnamed: two Identity Center permission
+# sets, one customer-managed-policy reference each, and two group-principal account
+# assignments. Nothing here contacts AWS, runs Terraform or reads state.
+#
+# The rules below are functions over the parsed configuration, for the reason the
+# policy rules above are: a substring scan cannot tell a permission set from an IAM
+# role, cannot tell which policy a reference names, and reports every deliberate
+# omission explained in a comment as a violation.
+
+PRINCIPALS_TF = INFRA / "qualification_principals.tf"
+
+#: The exact permission-set names ADR-0021 accepts, per actor label.
+PERMISSION_SET_NAMES = {
+    ACQUISITION: "KalpaManiQualificationAcquisition",
+    ASSESSMENT: "KalpaManiQualificationAssessment",
+}
+
+#: One hour, as an ISO-8601 duration. Bounded rather than raised.
+SESSION_DURATION = "PT1H"
+
+#: The three unresolved environment bindings, and nothing else. Every one must be
+#: declared without a default: a default here is either wrong everywhere or is a real
+#: environment value committed to a public repository.
+PRINCIPAL_VARIABLES = (
+    "identity_center_instance_arn",
+    "qualification_operator_group_id",
+    "qualification_target_account_id",
+)
+
+#: Resource types this candidate is allowed to declare. Anything else -- a role, a
+#: user, an access key, an instance profile, a bucket, a KMS key -- is a violation
+#: whether or not its label mentions qualification.
+PERMITTED_PRINCIPAL_RESOURCES = frozenset(
+    {
+        "aws_ssoadmin_permission_set",
+        "aws_ssoadmin_customer_managed_policy_attachment",
+        "aws_ssoadmin_account_assignment",
+    }
+)
+
+#: Literal shapes that would mean a live environment value was committed. The
+#: twelve-digit pattern is the one most likely to arrive by accident, pasted from a
+#: console URL; the rest are the values ADR-0021 keeps unresolved and unread.
+PRINCIPAL_LITERAL_PATTERNS = {
+    "a twelve-digit account id": re.compile(r"(?<![\d.])\d{12}(?![\d.])"),
+    "an Identity Center instance id": re.compile(r"ssoins-[0-9a-zA-Z]"),
+    "an identity-store or group UUID": re.compile(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    ),
+    "an SSO start URL": re.compile(r"awsapps\.com"),
+    "a generated role name": re.compile(r"AWSReservedSSO_"),
+    "an account-bearing ARN": re.compile(r"arn:aws:[a-z0-9-]*:[a-z0-9-]*:\d{12}:"),
+}
+
+
+@dataclass(frozen=True)
+class Principals:
+    """One parsed principals document, with `local.*` references resolved."""
+
+    blocks: tuple[Block, ...]
+    locals_: dict[str, tuple[str, ...]]
+    variables: dict[str, Block]
+    resources: dict[tuple[str, str], Block]
+
+
+def analyse_principals(text: str) -> Principals:
+    """Parse the principals document and index its variables and resources."""
+    blocks = tuple(parse_hcl(text))
+    locals_: dict[str, tuple[str, ...]] = {}
+    for block in blocks:
+        if block.type != "locals":
+            continue
+        for name, expression in block.attributes.items():
+            locals_[name] = _resolve(expression, locals_)
+
+    variables = {block.labels[0]: block for block in blocks if block.type == "variable"}
+    resources = {
+        (block.labels[0], block.labels[1]): block
+        for block in blocks
+        if block.type == "resource" and len(block.labels) == 2
+    }
+    return Principals(blocks, locals_, variables, resources)
+
+
+def _one(config: Principals, expression: str) -> str | None:
+    """The single literal ``expression`` denotes, or ``None`` if it is not exactly one."""
+    values = _resolve(expression, config.locals_)
+    return values[0] if len(values) == 1 else None
+
+
+def _permission_set_rules(config: Principals) -> list[str]:
+    broken: list[str] = []
+    for actor, expected in PERMISSION_SET_NAMES.items():
+        block = config.resources.get(("aws_ssoadmin_permission_set", actor))
+        if block is None:
+            broken.append(f"{actor} declares no permission set")
+            continue
+        if _one(config, block.attributes.get("name", "")) != expected:
+            broken.append(f"{actor} permission-set name is not {expected}")
+        if _one(config, block.attributes.get("session_duration", "")) != SESSION_DURATION:
+            broken.append(f"{actor} session duration is not {SESSION_DURATION}")
+        if block.attributes.get("instance_arn") != "var.identity_center_instance_arn":
+            broken.append(f"{actor} permission set does not take the unresolved instance input")
+    return broken
+
+
+def _policy_reference_rules(config: Principals) -> list[str]:
+    broken: list[str] = []
+    for actor in (ACQUISITION, ASSESSMENT):
+        other = ASSESSMENT if actor == ACQUISITION else ACQUISITION
+        block = config.resources.get(("aws_ssoadmin_customer_managed_policy_attachment", actor))
+        if block is None:
+            broken.append(f"{actor} declares no customer-managed-policy reference")
+            continue
+        references = block.children("customer_managed_policy_reference")
+        if len(references) != 1:
+            broken.append(f"{actor} declares {len(references)} policy references, not one")
+            continue
+        reference = references[0]
+        if reference.attributes.get("name") != f"aws_iam_policy.{actor}.name":
+            broken.append(f"{actor} does not reference its own merged managed policy")
+        if reference.attributes.get("path") != f"aws_iam_policy.{actor}.path":
+            broken.append(f"{actor} does not take the path of its own merged managed policy")
+        if f"aws_iam_policy.{other}" in str(sorted(reference.attributes.values())):
+            broken.append(f"{actor} references the {other} managed policy")
+        if block.attributes.get("permission_set_arn") != f"aws_ssoadmin_permission_set.{actor}.arn":
+            broken.append(f"{actor} attaches its policy to another permission set")
+    return broken
+
+
+def _assignment_rules(config: Principals) -> list[str]:
+    broken: list[str] = []
+    for actor in (ACQUISITION, ASSESSMENT):
+        block = config.resources.get(("aws_ssoadmin_account_assignment", actor))
+        if block is None:
+            broken.append(f"{actor} declares no account assignment")
+            continue
+        if _one(config, block.attributes.get("principal_type", "")) != "GROUP":
+            broken.append(f"{actor} assignment principal is not a GROUP")
+        if block.attributes.get("principal_id") != "var.qualification_operator_group_id":
+            broken.append(f"{actor} assignment does not take the governed operator group input")
+        if _one(config, block.attributes.get("target_type", "")) != "AWS_ACCOUNT":
+            broken.append(f"{actor} assignment target type is not AWS_ACCOUNT")
+        if block.attributes.get("target_id") != "var.qualification_target_account_id":
+            broken.append(f"{actor} assignment does not take the unresolved account input")
+        expected_set = f"aws_ssoadmin_permission_set.{actor}.arn"
+        if block.attributes.get("permission_set_arn") != expected_set:
+            broken.append(f"{actor} assignment names another permission set")
+    return broken
+
+
+def _shape_rules(config: Principals) -> list[str]:
+    broken: list[str] = []
+    for block in config.blocks:
+        if block.type == "data":
+            broken.append(f"declares a data source: {block.labels}")
+        if block.type in ("provider", "terraform", "backend", "module"):
+            broken.append(f"declares a {block.type} block")
+        if block.type != "resource":
+            continue
+        if block.labels[0] not in PERMITTED_PRINCIPAL_RESOURCES:
+            broken.append(f"declares an unpermitted resource type: {block.labels[0]}")
+        elif block.labels[1] not in (ACQUISITION, ASSESSMENT):
+            broken.append(f"declares a resource for an unknown actor: {block.labels[1]}")
+        if "assume_role_policy" in block.attributes:
+            broken.append("declares a trust policy")
+        if "inline_policy" in block.attributes:
+            broken.append("declares an inline permission-set policy")
+    return broken
+
+
+def _input_rules(config: Principals) -> list[str]:
+    broken: list[str] = []
+    for name in PRINCIPAL_VARIABLES:
+        block = config.variables.get(name)
+        if block is None:
+            broken.append(f"the {name} input is not declared")
+    for name, block in config.variables.items():
+        if "default" in block.attributes:
+            broken.append(f"the {name} input has a default")
+        if not block.children("validation"):
+            broken.append(f"the {name} input is unvalidated")
+    return broken
+
+
+def principal_violations(config: Principals) -> list[str]:
+    """Every ADR-0021 rule the parsed principals document breaks."""
+    return (
+        _shape_rules(config)
+        + _permission_set_rules(config)
+        + _policy_reference_rules(config)
+        + _assignment_rules(config)
+        + _input_rules(config)
+    )
+
+
+def literal_violations(text: str) -> list[str]:
+    """Every live-environment literal shape present in ``text``."""
+    return [label for label, pattern in PRINCIPAL_LITERAL_PATTERNS.items() if pattern.search(text)]
+
+
+def _principals_text() -> str:
+    return PRINCIPALS_TF.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def principals() -> Principals:
+    return analyse_principals(_principals_text())
+
+
+class TestThePrincipalsCandidate:
+    def test_the_candidate_exists(self) -> None:
+        assert PRINCIPALS_TF.is_file(), "the ADR-0021 principals candidate is missing"
+
+    def test_the_real_file_breaks_no_rule(self, principals: Principals) -> None:
+        assert principal_violations(principals) == []
+
+    def test_exactly_two_permission_sets_are_declared(self, principals: Principals) -> None:
+        declared = sorted(
+            label for kind, label in principals.resources if kind == "aws_ssoadmin_permission_set"
+        )
+        assert declared == [ACQUISITION, ASSESSMENT]
+
+    def test_exactly_two_policy_references_are_declared(self, principals: Principals) -> None:
+        declared = sorted(
+            label
+            for kind, label in principals.resources
+            if kind == "aws_ssoadmin_customer_managed_policy_attachment"
+        )
+        assert declared == [ACQUISITION, ASSESSMENT]
+
+    def test_exactly_two_group_assignments_are_declared(self, principals: Principals) -> None:
+        declared = sorted(
+            label
+            for kind, label in principals.resources
+            if kind == "aws_ssoadmin_account_assignment"
+        )
+        assert declared == [ACQUISITION, ASSESSMENT]
+
+    def test_the_candidate_declares_exactly_six_resources(self, principals: Principals) -> None:
+        """Two permission sets, two references, two assignments. Nothing else."""
+        assert len(principals.resources) == 6
+
+    def test_both_permission_sets_are_bounded_to_one_hour(self, principals: Principals) -> None:
+        for actor in (ACQUISITION, ASSESSMENT):
+            block = principals.resources[("aws_ssoadmin_permission_set", actor)]
+            assert _one(principals, block.attributes["session_duration"]) == SESSION_DURATION
+
+    def test_each_actor_references_only_its_own_merged_policy(self, principals: Principals) -> None:
+        for actor, other in ((ACQUISITION, ASSESSMENT), (ASSESSMENT, ACQUISITION)):
+            block = principals.resources[("aws_ssoadmin_customer_managed_policy_attachment", actor)]
+            reference = block.children("customer_managed_policy_reference")[0]
+            assert reference.attributes["name"] == f"aws_iam_policy.{actor}.name"
+            assert other not in reference.attributes["name"]
+
+    def test_both_assignments_target_the_same_unresolved_account_input(
+        self, principals: Principals
+    ) -> None:
+        targets = {
+            principals.resources[("aws_ssoadmin_account_assignment", actor)].attributes["target_id"]
+            for actor in (ACQUISITION, ASSESSMENT)
+        }
+        assert targets == {"var.qualification_target_account_id"}
+
+    def test_no_live_discovery_data_source_is_declared(self, principals: Principals) -> None:
+        """A data source would read the environment to write a declaration."""
+        assert [block.labels for block in principals.blocks if block.type == "data"] == []
+
+    def test_no_identity_role_user_or_key_is_declared(self, principals: Principals) -> None:
+        forbidden = {
+            "aws_iam_role",
+            "aws_iam_role_policy",
+            "aws_iam_user",
+            "aws_iam_access_key",
+            "aws_iam_instance_profile",
+            "aws_iam_role_policy_attachment",
+            "aws_ssoadmin_managed_policy_attachment",
+        }
+        assert {kind for kind, _ in principals.resources} & forbidden == set()
+
+    def test_no_trust_policy_service_principal_or_assume_role_appears(self) -> None:
+        hcl = GUARD.strip_hcl_comments(_principals_text())
+        for token in (
+            "assume_role_policy",
+            "sts:AssumeRole",
+            "amazonaws.com",
+            "aws_iam_policy_document",
+            "Principal",
+        ):
+            assert token not in hcl, f"the principals candidate names {token}"
+
+    def test_the_candidate_carries_no_live_environment_literal(self) -> None:
+        assert literal_violations(_principals_text()) == []
+
+    def test_none_of_the_three_inputs_has_a_default(self, principals: Principals) -> None:
+        for name in PRINCIPAL_VARIABLES:
+            assert "default" not in principals.variables[name].attributes
+
+    def test_the_account_input_is_cross_checked_against_the_provider_binding(self) -> None:
+        """`allowed_account_ids` constrains the credentials, never the assignment target.
+
+        Without this the two assignments could be created against an account the
+        wrong-account guard in providers.tf never looks at.
+        """
+        hcl = GUARD.strip_hcl_comments(_principals_text())
+        assert "contains(var.allowed_account_ids, var.qualification_target_account_id)" in hcl
+
+    def test_the_candidate_changes_no_policy_action_matrix(self) -> None:
+        """The two PR #52 documents are referenced, never restated.
+
+        A statement, an action or a resource here would be a second matrix beside the
+        reviewed one, and the two could then disagree.
+        """
+        hcl = GUARD.strip_hcl_comments(_principals_text())
+        for token in ("actions", "resources", '"s3:', "statement", "effect"):
+            assert token not in hcl, f"the principals candidate carries policy content: {token}"
+
+    def test_the_candidate_introduces_no_wildcard(self) -> None:
+        assert '"*"' not in GUARD.strip_hcl_comments(_principals_text())
+
+    def test_the_candidate_touches_no_bucket_encryption_or_kms_resource(self) -> None:
+        hcl = GUARD.strip_hcl_comments(_principals_text())
+        for token in ("aws_s3_bucket", "aws_kms", "sse_algorithm", "server_side_encryption"):
+            assert token not in hcl, f"the principals candidate touches {token}"
+
+
+#: Each entry mutates the real principals file and names the substring the rule it
+#: should trip reports.
+PRINCIPAL_MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "the acquisition permission-set name is corrupted",
+        'qualification_acquisition_permission_set = "KalpaManiQualificationAcquisition"',
+        'qualification_acquisition_permission_set = "KalpaManiQualification"',
+        "permission-set name is not KalpaManiQualificationAcquisition",
+    ),
+    (
+        "the assessment permission-set name is corrupted",
+        'qualification_assessment_permission_set  = "KalpaManiQualificationAssessment"',
+        'qualification_assessment_permission_set  = "KalpaManiQualificationAcquisition"',
+        "permission-set name is not KalpaManiQualificationAssessment",
+    ),
+    (
+        "the acquisition permission set is removed",
+        'resource "aws_ssoadmin_permission_set" "qualification_acquisition" {',
+        'resource "aws_ssoadmin_permission_set" "qualification_removed" {',
+        "qualification_acquisition declares no permission set",
+    ),
+    (
+        "the one-hour session bound is raised",
+        'qualification_session_duration = "PT1H"',
+        'qualification_session_duration = "PT12H"',
+        "session duration is not PT1H",
+    ),
+    (
+        "the acquisition managed-policy reference is removed",
+        'resource "aws_ssoadmin_customer_managed_policy_attachment" "qualification_acquisition" {',
+        'resource "aws_ssoadmin_customer_managed_policy_attachment" "qualification_absent" {',
+        "qualification_acquisition declares no customer-managed-policy reference",
+    ),
+    (
+        "the assessment reference names the acquisition policy",
+        "name = aws_iam_policy.qualification_assessment.name",
+        "name = aws_iam_policy.qualification_acquisition.name",
+        "does not reference its own merged managed policy",
+    ),
+    (
+        "the group principal becomes a user",
+        'principal_type = "GROUP"',
+        'principal_type = "USER"',
+        "assignment principal is not a GROUP",
+    ),
+    (
+        "the assignment target type is widened",
+        'target_type = "AWS_ACCOUNT"',
+        'target_type = "AWS_OU"',
+        "assignment target type is not AWS_ACCOUNT",
+    ),
+    (
+        "the account target becomes a literal instead of an input",
+        "target_id   = var.qualification_target_account_id",
+        'target_id   = "000000000000"',
+        "assignment does not take the unresolved account input",
+    ),
+    (
+        "a live-discovery data source is added",
+        "locals {",
+        'data "aws_ssoadmin_instances" "governed" {\n}\n\nlocals {',
+        "declares a data source",
+    ),
+    (
+        "a custom IAM role is added",
+        'resource "aws_ssoadmin_permission_set" "qualification_acquisition" {',
+        'resource "aws_iam_role" "qualification_acquisition" {',
+        "declares an unpermitted resource type: aws_iam_role",
+    ),
+    (
+        "a trust policy is added to a permission set",
+        "  session_duration = local.qualification_session_duration",
+        '  session_duration   = local.qualification_session_duration\n  assume_role_policy = "{}"',
+        "declares a trust policy",
+    ),
+    (
+        "an input gains a default",
+        'variable "qualification_operator_group_id" {',
+        'variable "qualification_operator_group_id" {\n  default = "governed-group"',
+        "the qualification_operator_group_id input has a default",
+    ),
+    (
+        "an input loses its validation",
+        "  validation {\n    condition     = "
+        'can(regex("^[A-Za-z0-9][A-Za-z0-9-]{0,127}$", var.qualification_operator_group_id))',
+        "  validation_removed {\n    condition     = "
+        'can(regex("^[A-Za-z0-9][A-Za-z0-9-]{0,127}$", var.qualification_operator_group_id))',
+        "the qualification_operator_group_id input is unvalidated",
+    ),
+    (
+        "the instance binding becomes a literal",
+        "instance_arn     = var.identity_center_instance_arn",
+        'instance_arn     = "arn:aws:sso:::instance/ssoins-1111222233334444"',
+        "permission set does not take the unresolved instance input",
+    ),
+    (
+        "an assignment is pointed at the other permission set",
+        'resource "aws_ssoadmin_account_assignment" "qualification_assessment" {\n'
+        "  instance_arn       = var.identity_center_instance_arn\n"
+        "  permission_set_arn = aws_ssoadmin_permission_set.qualification_assessment.arn",
+        'resource "aws_ssoadmin_account_assignment" "qualification_assessment" {\n'
+        "  instance_arn       = var.identity_center_instance_arn\n"
+        "  permission_set_arn = aws_ssoadmin_permission_set.qualification_acquisition.arn",
+        "assignment names another permission set",
+    ),
+)
+
+
+class TestPrincipalMutations:
+    @pytest.mark.parametrize(
+        ("label", "before", "after", "expected"),
+        PRINCIPAL_MUTATIONS,
+        ids=[m[0] for m in PRINCIPAL_MUTATIONS],
+    )
+    def test_each_mutation_is_caught(
+        self, label: str, before: str, after: str, expected: str
+    ) -> None:
+        text = _principals_text()
+        assert before in text, f"the {label!r} mutation no longer applies to the file"
+        mutated = text.replace(before, after, 1)
+        assert mutated != text, f"the {label!r} mutation changed nothing"
+        found = principal_violations(analyse_principals(mutated))
+        assert any(expected in entry for entry in found), (
+            f"{label}: expected a violation containing {expected!r}, got {found}"
+        )
+
+    def test_the_unmutated_file_is_the_control(self) -> None:
+        assert principal_violations(analyse_principals(_principals_text())) == []
+
+    @pytest.mark.parametrize(
+        ("label", "injected"),
+        [
+            ("an account id", 'locals {\n  leaked = "123456789012"\n}\n'),
+            ("an instance id", 'locals {\n  leaked = "ssoins-1234567890abcdef"\n}\n'),
+            ("a group UUID", 'locals {\n  leaked = "12345678-1234-1234-1234-123456789012"\n}\n'),
+            ("a start URL", 'locals {\n  leaked = "https://example.awsapps.com/start"\n}\n'),
+            (
+                "a generated role name",
+                'locals {\n  leaked = "AWSReservedSSO_KalpaManiQualificationAcquisition_abc"\n}\n',
+            ),
+            (
+                "an account-bearing ARN",
+                'locals {\n  leaked = "arn:aws:iam::123456789012:policy/x"\n}\n',
+            ),
+        ],
+        ids=lambda value: value if isinstance(value, str) and " " in value else "",
+    )
+    def test_an_injected_live_literal_is_caught(self, label: str, injected: str) -> None:
+        text = _principals_text()
+        assert literal_violations(text) == []
+        assert literal_violations(text + injected), label
+
+
+class TestPrincipalNegativeControls:
+    """A rule set that passes on nothing is not a rule set."""
+
+    def test_an_empty_document_fails(self) -> None:
+        assert principal_violations(analyse_principals(""))
+
+    def test_an_unrelated_document_fails(self) -> None:
+        assert principal_violations(
+            analyse_principals('resource "aws_s3_bucket" "x" {\n  bucket = "y"\n}\n')
+        )
+
+    def test_the_policy_candidate_is_not_a_principals_document(self) -> None:
+        """The two candidates are separate files with separate rules, and stay so."""
+        assert principal_violations(
+            analyse_principals(QUALIFICATION_TF.read_text(encoding="utf-8"))
+        )
+
+    def test_the_literal_rule_reports_nothing_on_empty_text(self) -> None:
+        assert literal_violations("") == []
+
+
+class TestThePolicyCandidateIsUntouchedByTheseDeclarations:
+    """ADR-0021 chose a holder. It changed neither policy it holds."""
+
+    def test_the_policy_candidate_still_declares_exactly_the_two_managed_policies(self) -> None:
+        blocks = parse_hcl(QUALIFICATION_TF.read_text(encoding="utf-8"))
+        declared = [
+            (block.labels[0], block.labels[1])
+            for block in blocks
+            if block.type == "resource" and len(block.labels) == 2
+        ]
+        assert declared == [
+            ("aws_iam_policy", ACQUISITION),
+            ("aws_iam_policy", ASSESSMENT),
+        ]
+
+    def test_the_policy_candidate_declares_no_permission_set_or_assignment(self) -> None:
+        hcl = GUARD.strip_hcl_comments(QUALIFICATION_TF.read_text(encoding="utf-8"))
+        assert "aws_ssoadmin" not in hcl
+
+    def test_the_two_candidates_are_separate_files(self) -> None:
+        assert QUALIFICATION_TF != PRINCIPALS_TF
+        assert QUALIFICATION_TF.is_file()
+        assert PRINCIPALS_TF.is_file()

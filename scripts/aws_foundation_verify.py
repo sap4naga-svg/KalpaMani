@@ -48,7 +48,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -259,6 +261,194 @@ def identity_gate() -> str | None:
     if actual != bound:
         return "the authenticated account does not match the local account binding"
     return None
+
+
+# ---------------------------------------------------------------------------
+# The two ADR-0021 qualification actors -- identity, not merely a profile
+# ---------------------------------------------------------------------------
+#
+# `identity_gate` above answers one question: does the pinned profile resolve to the
+# bound account? That was the whole contract while one profile reached one account,
+# and it cannot express the contract ADR-0021 accepts. The account already holds the
+# ECS task, task-execution and deletion roles, so an account-only gate cannot tell
+# the acquisition actor from the assessment actor, or either from an unrelated
+# principal in the same account -- and the two qualification actors are asymmetric on
+# purpose: one may write licensed evidence and reach a provider credential, the other
+# may read licensed evidence and reach neither.
+#
+# So the qualification gate below binds the exact account AND the exact
+# actor-specific Identity Center permission-set role. It is a SECOND gate beside the
+# first, not a replacement: `identity_gate` is unchanged, and every existing caller
+# of it keeps the contract it was written against.
+#
+# WHAT IS NOT DONE HERE, AND WHY
+#
+#   NO FULL GENERATED ARN IS PINNED. Removing every assignment deletes the generated
+#   role, and a later assignment creates one with a DIFFERENT unique suffix. A pinned
+#   ARN would go stale on a rotation nobody did anything wrong to cause.
+#
+#   THE PROFILE IS NOT PROOF. A profile name is local configuration text any caller
+#   can write; it selects a credential source and establishes nothing about the
+#   identity that results. It is checked here because a wrong pin should refuse
+#   before an AWS call is attempted at all -- never because matching it is evidence.
+#
+#   THE SUFFIX GRAMMAR PROVES STRUCTURE, NOT PROVENANCE. AWS documents the suffix as
+#   unique and generated and publishes no formal grammar for it; its published
+#   examples are lowercase hexadecimal. A string that merely looks like a generated
+#   suffix is lexically indistinguishable from one, and nothing can separate them.
+#
+#   THERE IS STILL NO `sts:AssumeRole`. The one runtime identity operation is
+#   `sts:GetCallerIdentity`, called through the single `_run_aws` site above.
+
+
+class QualificationActor(StrEnum):
+    """The two ADR-0021 qualification actors. A closed vocabulary of exactly two."""
+
+    ACQUISITION = "acquisition"
+    ASSESSMENT = "assessment"
+
+
+#: The permission-set name each actor's generated role is named after. These are also
+#: the `sso_role_name` values the two governed profiles carry.
+QUALIFICATION_PERMISSION_SETS: dict[QualificationActor, str] = {
+    QualificationActor.ACQUISITION: "KalpaManiQualificationAcquisition",
+    QualificationActor.ASSESSMENT: "KalpaManiQualificationAssessment",
+}
+
+#: The governed profile each actor is invoked under. Routing input, never proof.
+QUALIFICATION_PROFILES: dict[QualificationActor, str] = {
+    QualificationActor.ACQUISITION: "kalpamani-qualification-acquisition",
+    QualificationActor.ASSESSMENT: "kalpamani-qualification-assessment",
+}
+
+#: The fixed name prefix IAM Identity Center gives every role it generates.
+GENERATED_ROLE_PREFIX = "AWSReservedSSO_"
+
+#: The generated unique suffix, of the documented shape: non-empty lowercase
+#: hexadecimal, bounded. Bounded rather than open so a role name cannot carry
+#: arbitrary trailing text and still be admitted.
+GENERATED_SUFFIX_RE = re.compile(r"[0-9a-f]{1,32}")
+
+#: An STS role-session name. Non-empty, and no `/`, so the resource cannot carry an
+#: extra path segment and still parse.
+SESSION_NAME_RE = re.compile(r"[A-Za-z0-9+=,.@_-]{1,64}")
+
+
+@dataclass(frozen=True)
+class AssumedRoleIdentity:
+    """One parsed `sts:GetCallerIdentity` assumed-role ARN.
+
+    The STS form, which is what the call actually returns: it carries the role NAME
+    and no path, so an Identity Center role's `/aws-reserved/sso.amazonaws.com/...`
+    IAM path never appears here and must not be looked for.
+    """
+
+    account: str
+    role_name: str
+    session_name: str
+
+
+def parse_assumed_role_arn(arn: object) -> AssumedRoleIdentity | None:
+    """The parsed STS assumed-role identity, or ``None`` if this is not one.
+
+    Fails closed on everything else -- an IAM role ARN, an IAM user, a root ARN, a
+    federated user, another partition, another service, a malformed account, an extra
+    resource segment, or a value that is not a string at all. Nothing is normalised,
+    trimmed or rebuilt: a verdict about a repaired string is a verdict about a
+    different string.
+    """
+    if type(arn) is not str:
+        return None
+    fields = arn.split(":")
+    if len(fields) != 6:
+        return None
+    scheme, partition, service, region, account, resource = fields
+    if scheme != "arn" or partition != "aws" or service != "sts" or region != "":
+        return None
+    if not re.fullmatch(r"[0-9]{12}", account):
+        return None
+    parts = resource.split("/")
+    if len(parts) != 3:
+        return None
+    kind, role_name, session_name = parts
+    if kind != "assumed-role" or not role_name:
+        return None
+    if not SESSION_NAME_RE.fullmatch(session_name):
+        return None
+    return AssumedRoleIdentity(account=account, role_name=role_name, session_name=session_name)
+
+
+def qualification_role_suffix(actor: QualificationActor, role_name: str) -> str | None:
+    """The generated suffix, if ``role_name`` is exactly ``actor``'s permission-set role.
+
+    Anchored at both ends: the name must begin with the exact prefix for this actor
+    and nothing else, and the whole remainder must satisfy the suffix grammar -- which
+    admits no underscore and no uppercase, so trailing text cannot ride along.
+    """
+    expected = f"{GENERATED_ROLE_PREFIX}{QUALIFICATION_PERMISSION_SETS[actor]}_"
+    if not role_name.startswith(expected):
+        return None
+    suffix = role_name[len(expected) :]
+    return suffix if GENERATED_SUFFIX_RE.fullmatch(suffix) else None
+
+
+def qualification_identity_refusal(
+    actor: QualificationActor,
+    *,
+    profile: str,
+    bound_account: str | None,
+    caller_identity: Callable[[], AwsOutcome],
+) -> str | None:
+    """Why ``actor`` may not proceed, or ``None`` when every binding holds.
+
+    ``caller_identity`` is a callable rather than a value so the order stays the
+    security property: a wrong profile and a missing account binding both refuse
+    before it is invoked, and an identity call is never made under a pin nobody
+    checked. Every reason returned is value-free -- no account, ARN, role name,
+    session name, profile value or AWS error text.
+    """
+    if not isinstance(actor, QualificationActor):
+        return "the qualification actor is not a member of the closed vocabulary"
+
+    if profile != QUALIFICATION_PROFILES[actor]:
+        return f"AWS_PROFILE is not pinned to the governed {actor.value} profile"
+
+    if bound_account is None:
+        return "no 12-digit account binding found in the local terraform.tfvars"
+
+    outcome = caller_identity()
+    if not outcome.ok:
+        return f"could not resolve an authenticated AWS identity ({outcome.code})"
+
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    reported = data.get("Account")
+    if type(reported) is not str or not re.fullmatch(r"[0-9]{12}", reported):
+        return "the authenticated identity returned no usable account"
+    if reported != bound_account:
+        return "the authenticated account does not match the local account binding"
+
+    identity = parse_assumed_role_arn(data.get("Arn"))
+    if identity is None:
+        return "the authenticated identity is not a usable STS assumed-role identity"
+    if identity.account != bound_account or identity.account != reported:
+        return "the assumed-role account does not match the bound and authenticated account"
+    if qualification_role_suffix(actor, identity.role_name) is None:
+        return f"the authenticated identity is not the governed {actor.value} permission-set role"
+    return None
+
+
+def qualification_identity_gate(actor: QualificationActor) -> str | None:
+    """The ADR-0021 gate, bound to the ambient profile and the local account binding.
+
+    Returns an error reason, or ``None`` on success. Never prints or returns the
+    account id, the ARN, the role name, the session name or the SSO URL.
+    """
+    return qualification_identity_refusal(
+        actor,
+        profile=os.environ.get("AWS_PROFILE", ""),
+        bound_account=expected_account(),
+        caller_identity=lambda: _run_aws(("sts", "get-caller-identity")),
+    )
 
 
 # ---------------------------------------------------------------------------
