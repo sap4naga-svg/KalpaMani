@@ -463,28 +463,51 @@ RUN · third ADR-0017 authenticated acquisition: NOT AUTHORIZED · sixth binding
 AUTHORIZED**. **Merging reviewed infrastructure code is not authorization to plan it, apply it or
 run anything.**
 
-**The qualification runtime principal and trust model is proposed, and nothing is implemented.**
-**ADR-0021: PROPOSED / NOT IN FORCE**, and **the proposed architecture carries no authority until
-its pull request is independently reviewed and merged**. **Runtime principal/trust architecture:
-PROPOSED ONLY.** The proposal chooses **direct IAM Identity Center permission-set roles**: **AWS
-IAM Identity Center is the human authentication root**, **no IAM user or long-lived access key is
-permitted for qualification**, **a dedicated, governed Identity Center operator group is the
-assignment subject**, and **two separate permission sets exist logically —
-`KalpaManiQualificationAcquisition` and `KalpaManiQualificationAssessment`** — each referencing
-only its merged PR #52 managed-policy declaration, and each reached through one of two exact
-named profiles, `kalpamani-qualification-acquisition` and `kalpamani-qualification-assessment`.
-**No custom `aws_iam_role`, custom role trust policy, source-profile role chain, application
-AssumeRole, IAM user, access key, ECS task role, Lambda execution role, EC2 instance profile,
-web-identity principal or cross-account principal is part of this architecture.**
+**The qualification runtime principal and trust model is accepted, and nothing is implemented.**
+**ADR-0021: ACCEPTED / IN FORCE** — **PR #54 merged**, merge commit
+**`c58d6c442c34928ad3c25f07368cf1e3323a6552`**, approved ADR head
+**`0b8d500699468a10c331219c694a8e2fb4e5adee`**, merged **2026-09-02T09:01:29Z**, with a **merge
+tree identical to the independently validated pull-request head tree**, and **PR #54 was
+independently reviewed before its merge**. **While PR #54 was open, ADR-0021 was proposed and
+carried no authority** — a historical fact that stays true and is not rewritten. **The merge of
+PR #54 approved architecture only**, and **no implementation or operational authority followed
+from the merge**. **Runtime principal/trust architecture: ACCEPTED ARCHITECTURE ONLY.**
+
+**The principal/trust architecture prerequisite is SATISFIED**, and **satisfying that
+architecture prerequisite authorizes nothing by itself**. The decision chooses **direct IAM
+Identity Center permission-set roles**: **AWS IAM Identity Center is the human authentication
+root**, **no IAM user or long-lived access key is permitted for qualification**, **a dedicated,
+governed Identity Center operator group is the assignment subject**, and **two separate
+permission sets exist logically — `KalpaManiQualificationAcquisition` and
+`KalpaManiQualificationAssessment`** — each referencing only its merged PR #52 managed-policy
+declaration, and each reached through one of two exact named profiles,
+`kalpamani-qualification-acquisition` and `kalpamani-qualification-assessment`. **No custom
+`aws_iam_role`, custom role trust policy, source-profile role chain, application AssumeRole, IAM
+user, access key, ECS task role, Lambda execution role, EC2 instance profile, web-identity
+principal or cross-account principal is part of this architecture.**
 
 **Every environment-binding value stays deferred and unread**: **the exact identity-store and
-group identifier is an environment-binding value and remains unknown and unread**, and **the
-account id is an environment-binding value and must not appear in the proposal**. **The identity
-gate binds the exact target account plus the exact permission-set role-name prefix and a
-validated AWS-generated suffix grammar**, **it does not pin one full generated role ARN forever,
-because the suffix may rotate when assignments are removed and recreated**, **the profile name is
-routing input, not proof**, and **`sts:GetCallerIdentity` remains the runtime proof during a
-later authorized execution**. **Session duration is bounded to one hour per permission set.**
+group identifier is an environment-binding value and remains unknown and unread**, **the account
+id is an environment-binding value and must not appear in the proposal**, and **AWS
+account/group/instance binding values: UNKNOWN / UNREAD**. **The identity gate binds the exact
+target account plus the exact permission-set role-name prefix and a validated AWS-generated
+suffix grammar**, **it does not pin one full generated role ARN forever, because the suffix may
+rotate when assignments are removed and recreated**, **the profile name is routing input, not
+proof**, and **`sts:GetCallerIdentity` remains the runtime proof during a later authorized
+execution**. **Session duration is bounded to one hour per permission set.**
+
+Two review findings are carried forward for that later gate, and **neither expands the accepted
+decision**. **Organization-instance prerequisite: REQUIRED / LIVE EXISTENCE NOT ESTABLISHED** —
+**the eventual Identity Center deployment requires an Organization instance with multi-account
+permissions enabled**, and **whether such an instance exists is NOT ESTABLISHED** and **must be
+checked only in a later authorized environment-discovery and binding gate**. And
+**`sts:GetCallerIdentity` returns an STS assumed-role ARN of the form
+`arn:aws:sts::<account>:assumed-role/AWSReservedSSO_<permission-set-name>_<suffix>/<session-name>`**,
+so **the later identity gate must parse the caller identity form actually returned at runtime**
+while enforcing the exact account, the exact actor-specific permission-set role-name prefix and
+a strict suffix grammar, with **no loose substring matching**, **no full generated ARN pinned
+permanently** and **no profile-name-only or account-only proof**; **the suffix grammar proves
+structure, not provenance**.
 
 **The decision changes no application behaviour, no stored data and no arithmetic** — **the
 identity and trust decision adds no S3 operation and changes no deadline term** — so
@@ -492,18 +515,22 @@ identity and trust decision adds no S3 operation and changes no deadline term** 
 0**, **two successful runs: 290 to 294**, **assessment: 195 to 196**, **whole successful package:
 485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L** are each unchanged.
 
-**Acceptance of ADR-0021 would authorize architecture only**, and **the next gate after ADR
-acceptance is an offline implementation gate** for permission sets, customer-managed-policy
-attachments, assignments, and any proven identity-gate and profile-contract corrections. Current
-status: **Identity Center permission sets: NOT IMPLEMENTED / NOT CREATED · account assignments:
-NOT IMPLEMENTED / NOT CREATED · runtime roles: NOT IMPLEMENTED / LIVE EXISTENCE NOT ESTABLISHED ·
-runtime trust principals: NOT SELECTED IN AWS · policy attachments: NOT IMPLEMENTED / NOT CREATED
-· profiles: NOT CREATED / NOT INSPECTED · authority granted: NONE · PR #52 policy declarations:
-MERGED / OFFLINE-REVIEWED / UNAPPLIED · PR #53 governance synchronization: MERGED · Terraform
-init/validate/plan/apply: NOT AUTHORIZED / NOT RUN · AWS/provider/credential access: NOT
-AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT AUTHORIZED / NOT
-RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT RUN · G1 / G2: OPEN / OPEN ·
-provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading:
+**The next gate after ADR acceptance is an offline implementation gate** for permission sets,
+assignments, customer-managed-policy attachments, profiles, and actor-specific identity
+verification, including any proven identity-gate and profile-contract corrections. Current
+status: **permission-set implementation: NOT AUTHORIZED / NOT IMPLEMENTED · Identity Center
+assignments: NOT AUTHORIZED / NOT CREATED · runtime roles: NOT CREATED / LIVE EXISTENCE NOT
+ESTABLISHED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy
+attachments: NOT IMPLEMENTED / NOT ESTABLISHED · governed AWS profiles: NOT IMPLEMENTED ·
+identity-gate/profile-constant correction: NOT AUTHORIZED / NOT IMPLEMENTED · authority granted:
+NONE · PR #52 policy declarations: MERGED / OFFLINE-REVIEWED / UNAPPLIED / UNATTACHED · PR #53
+governance synchronization: MERGED · corrected qualification application: MERGED / DORMANT /
+OFFLINE-CONFORMING · infrastructure binding/deployment: BLOCKED · Terraform and
+AWS/provider/credential access: NOT AUTHORIZED / NOT RUN · infrastructure mutation and
+deployment: NOT AUTHORIZED / NOT PERFORMED · qualification and binding-preflight execution: NOT
+AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT RUN · third
+ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1 / G2: OPEN /
+OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading:
 HARD-DISABLED**. **Implementation, infrastructure mutation and execution stay three separate
 gates and are never collapsed into one**, and **ADR-0021 amends no earlier ADR document.**
 
