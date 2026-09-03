@@ -7348,7 +7348,10 @@ ADR_0019_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the production-code correction is deployed",
     "terraform/iam implementation: implemented",
     "infrastructure mutation: performed",
-    "deployment: performed",
+    # "deployment: performed" is retired here. The qualification-principal deployment has
+    # since been performed and independently verified, so a blanket refusal of that phrase
+    # would refuse the truth rather than a drift. What replaces it is the applied-status
+    # guard below, which refuses the reverse drift instead.
 )
 
 #: What the implementation plan must say once the gap is recorded. The plan is
@@ -8245,7 +8248,8 @@ ADR_0020_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "infrastructure is authorized",
     "infrastructure is implemented",
     "infrastructure is deployed",
-    "deployment: performed",
+    # "deployment: performed" is retired here, for the reason given in ADR-0019's list:
+    # the qualification-principal deployment has been performed and verified.
     "execution: one",
     "run a is authorized",
     "run b is authorized",
@@ -10745,8 +10749,13 @@ ADR_0022_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "genuine provider-backed validation was completed",
     ),
     (
-        "authorizes no live activity",
-        "no live binding, plan, apply or execution is authorized",
+        # The blanket "no live binding, plan, apply or execution is authorized" this
+        # entry used to require was true of that merge and is not true now: the
+        # qualification-principal apply has since been authorized and performed. The
+        # plan keeps the run it belonged to, framed as the status of that merge.
+        "frames its pre-apply status as of that merge",
+        "status as of that merge — historical, and superseded by the applied qualification "
+        "infrastructure recorded below",
     ),
     ("closes aws discovery", "aws discovery: not authorized"),
     ("defers every binding value", "aws account/group/instance binding values: unknown / unread"),
@@ -11080,7 +11089,8 @@ PR_56_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "authority granted: assessment",
     "aws discovery: authorized",
     "infrastructure mutation: authorized",
-    "deployment: performed",
+    # "deployment: performed" is retired here, for the reason given in ADR-0019's list:
+    # the qualification-principal deployment has been performed and verified.
     # -------------------------------------------------- downstream gates read open
     "qualification and binding-preflight execution: authorized",
     "run a: authorized",
@@ -11279,8 +11289,8 @@ PR_56_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: updated: what ran, where it ran, and every scope it did not reach.
 INFRA_README_VALIDATION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     (
-        "records the offline validation",
-        "both files have been validated offline, and neither has been planned or applied",
+        "records the offline validation as the step that came first",
+        "both files were validated offline first",
     ),
     (
         "names the isolated commands",
@@ -11298,44 +11308,352 @@ INFRA_README_VALIDATION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "same provider validator",
     ),
     (
-        "refuses a repository initialization claim",
-        "no command initialized this repository directory",
-    ),
-    ("records no backend", "no backend was configured"),
-    ("records no state", "no terraform state was created or modified"),
-    ("records no real tfvars", "no real tfvars were read"),
-    ("records no plan or apply", "no plan and no apply ran"),
-    ("records no provider call", "no provider call reached aws"),
-    (
-        "establishes no aws resource",
-        "no aws resource was created, changed, discovered or proved to exist",
-    ),
-    (
         "separates validation from apply readiness",
-        "validating a configuration is not evidence that applying it would succeed",
+        "validating a configuration was never evidence that applying it would succeed",
     ),
     (
-        "defers live environment validation",
-        "live environment validation still requires its own separate authorization",
+        "records the applied, verified declarations",
+        "merged, offline-validated -- applied, independently verified",
     ),
     (
-        "records the merged, unapplied declarations",
-        "merged, offline-validated -- never planned, never applied",
+        "records the saved-plan apply and the independent verification",
+        "both files have since been applied from a saved plan, under their own separate "
+        "authorization, and an independent post-apply verification passed",
     ),
+    (
+        "records that the verification read rather than produced the result",
+        "read the result rather than producing it",
+    ),
+    (
+        "records the single state serial with an unchanged lineage",
+        "exactly one serial with its lineage unchanged",
+    ),
+    ("counts the verified policies", "two customer-managed iam policies verified"),
+    ("counts the verified permission sets", "two identity center permission sets verified"),
+    ("counts the verified policy references", "two customer-managed-policy references verified"),
+    ("counts the verified assignments", "two account assignments verified"),
+    ("counts the verified generated roles", "two generated identity center runtime roles verified"),
+    ("records the verified trust policies", "generated-role trust policies verified"),
+    ("records the passing simulation", "iam identity-policy simulation passed"),
+    (
+        "separates applied from authorized",
+        "applied is not authorized to use",
+    ),
+    (
+        "records the assigned, empty operator group",
+        "governed operator group is assigned and remains empty",
+    ),
+    ("records that no human is a member", "no human members"),
+    (
+        "records that nobody holds qualification access",
+        "no person currently holds qualification access",
+    ),
+    ("records the unmaterialized profiles", "neither governed aws profile exists"),
+    (
+        "records that no governed login is proven",
+        "no governed sso login has been performed or proven",
+    ),
+    (
+        "separates a simulation from an end-to-end proof",
+        "an iam identity-policy simulation is a policy evaluation rather than an end-to-end "
+        "authorization proof",
+    ),
+    (
+        "closes every downstream run",
+        "no qualification run, binding preflight, provider acquisition, run a, run b or combined "
+        "assessment has happened",
+    ),
+    ("selects no provider", "no provider is selected"),
+    ("keeps both gates open", "g1 and g2 stay open"),
+    ("closes further mutation", "further infrastructure mutation is not authorized"),
+    (
+        "records that applying opened no other gate",
+        "closed the infrastructure gate and opened none of the others",
+    ),
+)
+
+#: The heading the applied-infrastructure status section must carry, and its level.
+#:
+#: It sits ahead of the per-merge sections it supersedes, so a reader meets the state
+#: that governs before the states that used to.
+APPLIED_INFRA_STATUS_HEADING: Final = (
+    "The applied qualification infrastructure — APPLIED, INDEPENDENTLY VERIFIED, and not "
+    "authorized to use"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+APPLIED_INFRA_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+APPLIED_INFRA_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "What the apply established",
+    "What the apply did not establish",
+    "Verified status",
+)
+
+#: The heading each document's applied-infrastructure section must be followed by.
+APPLIED_INFRA_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": f"### {PR_56_STATUS_HEADING}",
+    "README.md": f"### {PR_56_STATUS_HEADING}",
+}
+
+
+class AppliedInfraSectionScan(NamedTuple):
+    """Every applied-infrastructure status section a document carries, and its defects.
+
+    Separate from the other section scans for the reason they are separate from each
+    other: a malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_applied_infra_status_sections(text: str) -> AppliedInfraSectionScan:
+    """Extract the applied-infrastructure status section(s) from a document, by heading."""
+    return AppliedInfraSectionScan(
+        *_scan_status_sections(
+            text,
+            heading=APPLIED_INFRA_STATUS_HEADING,
+            level=APPLIED_INFRA_STATUS_HEADING_LEVEL,
+            subsections=APPLIED_INFRA_STATUS_SUBSECTIONS,
+            label="applied qualification infrastructure",
+        )
+    )
+
+
+#: The banner every superseded status block must carry, flattened.
+#:
+#: The obsolete wording is *required* to survive as history -- every per-merge section
+#: is the record of its own merge -- so it cannot be a banned substring. It is held to
+#: its framing instead, which is the same structural mechanism PR #56's blocked state
+#: is held to, and for the same reason: an unframed occurrence reads as a claim about
+#: now.
+SUPERSEDED_STATUS_BANNER: Final = (
+    "historical — the state as of that merge, superseded by *the applied qualification "
+    "infrastructure*."
+)
+
+#: The level-four headings whose blocks record a superseded state.
+#:
+#: Every occurrence of each must be followed immediately by the banner. "Verified
+#: status" is deliberately absent: it is the applied section's own block, and the one
+#: block that is not superseded.
+SUPERSEDED_STATUS_HEADINGS: Final[tuple[str, ...]] = (
+    "#### Status",
+    "#### What exists today",
+    "#### What stays closed",
+    "#### The implementation gap — closed offline, and stated plainly",
+    "#### Carried-forward implementation findings",
+)
+
+
+def superseded_status_framing_defects(text: str) -> list[str]:
+    """Every superseded status block that does not open with the historical banner.
+
+    Reads the document as lines rather than as one flattened string, because the
+    property is positional: the banner has to be the first thing under the heading, not
+    merely present somewhere in the file.
+    """
+    defects: list[str] = []
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        if line.strip() not in SUPERSEDED_STATUS_HEADINGS:
+            continue
+        following = [candidate for candidate in lines[index + 1 : index + 4] if candidate.strip()]
+        opening = " ".join(" ".join(following).replace("**", "").replace(">", " ").split()).lower()
+        if not opening.startswith(SUPERSEDED_STATUS_BANNER):
+            defects.append(f"unframed superseded status block at line {index + 1}")
+    return defects
+
+
+#: What both status documents must say inside their applied-infrastructure section.
+#:
+#: Section-scoped, for the reason every other section-scoped list is: nearly every
+#: clause here has a near-neighbour in another status block, so a flat scan is answered
+#: by a neighbour's copy and a section-local deletion goes unreported.
+APPLIED_INFRA_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------------ what actually happened
+    ("records the merged pull request", "pr #60 is merged"),
+    ("records the merged, applied declarations", "terraform declarations: merged / applied"),
+    ("records the controlled apply", "controlled saved-plan apply: completed"),
+    ("records the independent verification", "independent post-apply verification: passed"),
+    (
+        "records that the verification read rather than produced the result",
+        "read the result rather than producing it",
+    ),
+    (
+        "records the single state serial with an unchanged lineage",
+        "advanced by exactly one serial with its lineage unchanged",
+    ),
+    ("counts the verified policies", "live customer-managed iam policies: 2 verified"),
+    ("counts the verified permission sets", "live identity center permission sets: 2 verified"),
+    (
+        "counts the verified policy references",
+        "live customer-managed-policy references: 2 verified",
+    ),
+    ("counts the verified assignments", "live account assignments: 2 verified"),
+    (
+        "counts the verified generated roles",
+        "generated identity center runtime roles: 2 verified",
+    ),
+    ("records the verified trust policies", "role trust policies: verified"),
+    ("records the passing simulation", "iam identity-policy simulation: passed"),
+    # ----------------------------------------------------- and what it did not buy
+    (
+        "separates existence from qualification success",
+        "infrastructure existence is not qualification success",
+    ),
+    ("records the assigned, empty operator group", "empty / assigned / no human members"),
+    ("records that nobody holds qualification access", "human qualification access: none"),
+    ("keeps the profiles unmaterialized", "governed profiles: unmaterialized"),
+    ("records that no governed login is proven", "governed sso login: not performed / not proven"),
+    (
+        "separates a simulation from a login",
+        "an iam simulation is not a login",
+    ),
+    (
+        "separates applied resources from permission to use them",
+        "applied resources are not permission to operate them",
+    ),
+    ("separates eligibility from execution", "eligibility is not execution"),
+    (
+        "separates acquisition eligibility from provider selection",
+        "acquisition eligibility is not provider selection",
+    ),
+    ("records the untaken membership gate", "membership/profile gate: eligible / not executed"),
+    ("closes further mutation", "further infrastructure mutation: not authorized"),
+    (
+        "closes qualification execution",
+        "qualification and binding-preflight execution: not authorized / not run",
+    ),
+    (
+        "closes a third acquisition",
+        "third adr-0017 acquisition: not authorized / not run",
+    ),
+    ("closes the runs", "run a / run b / combined assessment: not authorized / not run"),
+    ("closes provider acquisition", "provider acquisition: not authorized / not run"),
+    ("records that no backtest began", "backtesting: not started"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    ("records that applying authorizes no run", "an applied deployment authorizes no run"),
+    (
+        "records that applying opened no other gate",
+        "closed the infrastructure gate and opened none of the others",
+    ),
+    ("edits no decision record", "no adr document and no historical review report is rewritten"),
+)
+
+#: Claims neither status document may make anywhere: everything the apply did not buy.
+#:
+#: Flat, over the whole document, because a forward overstatement is wrong wherever it
+#: is written. Anchored, never loose, so the honest load-bearing negations survive --
+#: the applied section is *required* to say that no end-to-end authorization is
+#: established, and a loose refusal of that clause would refuse the document for being
+#: correct.
+APPLIED_INFRA_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "a human holds qualification access",
+    "human qualification access: granted",
+    "an operator has been added to the group",
+    "operator group: populated",
+    "governed profiles: materialized",
+    "the governed profiles exist",
+    "governed sso login: performed",
+    "governed sso login: proven",
+    "end-to-end authorization: established",
+    "end-to-end authorization has been proven",
+    "qualification has run",
+    "qualification execution: performed",
+    "the acquisition succeeded",
+    "sharadar is qualified",
+    "a provider is selected",
+    "backtesting has begun",
+    "g1: closed",
+    "g2: closed",
+    "phase 3 is complete",
+    "phase 3: complete",
+    "control is published",
+    "control: published",
+    "live trading is enabled",
+    "live trading: enabled",
+)
+
+#: The pre-apply wording, refused only where it would read as a claim about now.
+#:
+#: Section-scoped rather than flat, and deliberately so. Every per-merge section is the
+#: record of its own merge and is *required* to keep the wording it was written with --
+#: PR #56's status block really did say the live permission sets were uncreated, and
+#: erasing that would rewrite the history the apply came out of. Those blocks are held
+#: to their framing by :func:`superseded_status_framing_defects` instead. What may not
+#: happen is the same wording appearing inside the section that governs now.
+APPLIED_INFRA_REVERSE_DRIFT_FORBIDDEN: Final[tuple[str, ...]] = (
+    "qualification infrastructure remains unapplied",
+    "no qualification resources exist",
+    "no qualification resource was created",
+    "terraform: unapplied",
+    "controlled saved-plan apply: not run",
+    "independent post-apply verification: not performed",
+    "live permission sets: uncreated",
+    "live account assignments: uncreated",
+    "generated identity center runtime roles: uncreated",
+    "runtime roles: uncreated / unobserved",
+    "never planned, never applied",
+)
+
+#: What the implementation plan must say about the applied infrastructure.
+#:
+#: The plan is a separate document with a separate reader, and merged main has more
+#: than once carried a fact in one status file and a stale contradiction in another.
+APPLIED_INFRA_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the merged pull request", "pr #60 is merged"),
+    ("records the controlled apply", "controlled saved-plan apply: completed"),
+    ("records the independent verification", "independent post-apply verification: passed"),
+    ("counts the verified permission sets", "live identity center permission sets: 2 verified"),
+    ("counts the verified assignments", "live account assignments: 2 verified"),
+    (
+        "counts the verified generated roles",
+        "generated identity center runtime roles: 2 verified",
+    ),
+    ("records the assigned, empty operator group", "operator group: empty / assigned / no human"),
+    ("keeps the profiles unmaterialized", "governed profiles: unmaterialized"),
+    ("records the untaken membership gate", "membership/profile gate: eligible / not executed"),
+    (
+        "separates existence from qualification success",
+        "infrastructure existence is not qualification success",
+    ),
+    ("closes further mutation", "further infrastructure mutation: not authorized"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
 )
 
 #: Claims the infrastructure README may never make.
 #:
-#: Forward drift into a deployed plane, and the one reverse drift this slice can
-#: produce: the obsolete no-validation sentence restored.
+#: The forward-drift entries that refused a deployed plane are retired: the two
+#: qualification files really are applied and independently verified, so refusing
+#: those phrasings would refuse the truth. What replaces them is the reverse drift
+#: this transition can produce -- the pre-apply wording restored -- together with
+#: the forward claims the apply still did not buy.
 INFRA_README_VALIDATION_FORBIDDEN: Final[tuple[str, ...]] = (
     "no `terraform plan`, `apply`, `init` or `validate` has been run",
     "no terraform plan, apply, init or validate has been run",
-    "terraform apply has been run",
-    "terraform plan has been run",
-    "has been applied to aws",
-    "the permission sets exist",
-    "deployed to aws",
+    "never planned, never applied",
+    "neither has been planned or applied",
+    "no plan and no apply ran",
+    "no qualification resource",
+    "qualification infrastructure remains unapplied",
+    "a human holds qualification access",
+    "governed profiles are materialized",
+    "the governed profiles exist",
+    "qualification has run",
+    "a provider is selected",
+    "phase 3 is complete",
+    "control is published",
+    "live trading is enabled",
 )
 
 #: The two acquisition operations every ADR-0021 surface holds at exactly zero.
@@ -19795,6 +20113,75 @@ def main() -> int:
         not pr_56_blocked_status_defects(read(PHASE3 / "implementation-plan.md")),
         ", ".join(pr_56_blocked_status_defects(read(PHASE3 / "implementation-plan.md"))),
     )
+
+    # ------------------------------------------ the applied qualification infrastructure
+    # PR #60 merged, the controlled saved-plan apply completed and an independent
+    # post-apply verification passed. Three states are kept apart in both directions:
+    # a merged declaration, an applied and verified resource, and authority to use it.
+    applied_infra_sections: dict[str, str] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_applied_infra_status_sections(document)
+        f.check(
+            f"{name} carries exactly one applied-infrastructure status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        applied_infra_sections[name] = scan.sections[0] if len(scan.sections) == 1 else ""
+        f.check(
+            f"{name} ends the applied-infrastructure section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                APPLIED_INFRA_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {APPLIED_INFRA_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in APPLIED_INFRA_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for the applied infrastructure",
+                phrase in section,
+                f"missing from the applied-infrastructure section of {name}: {phrase}",
+            )
+        applied_overstated = [
+            claim for claim in APPLIED_INFRA_STATUS_FORBIDDEN if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate the apply",
+            not applied_overstated,
+            ", ".join(applied_overstated),
+        )
+        applied_reverted = [
+            claim for claim in APPLIED_INFRA_REVERSE_DRIFT_FORBIDDEN if claim in section
+        ]
+        f.check(
+            f"{name} does not revert the applied section to the pre-apply state",
+            not applied_reverted,
+            ", ".join(applied_reverted),
+        )
+        f.check(
+            f"{name} frames every superseded status block as history",
+            not superseded_status_framing_defects(document),
+            ", ".join(superseded_status_framing_defects(document)),
+        )
+
+    f.check(
+        # Byte-identical, not merely structurally parallel, for the reason every other
+        # paired section is: the two documents have repeatedly carried a fact in one
+        # file and a stale contradiction in the other.
+        "both status documents carry byte-identical applied-infrastructure sections",
+        len(set(applied_infra_sections.values())) == 1 and all(applied_infra_sections.values()),
+        "the two applied-infrastructure status sections differ",
+    )
+
+    for label, phrase in APPLIED_INFRA_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for the applied infrastructure",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
 
     # The infrastructure README's corrected validation statement. The obsolete
     # sentence claimed no init and no validate had happened; the replacement has to

@@ -2782,7 +2782,10 @@ class TestPr56ForwardDriftMutations:
             "binding values: known",
             "authority granted: acquisition",
             "aws discovery: authorized",
-            "deployment: performed",
+            # "deployment: performed" is gone from this list, and from the guard. The
+            # qualification-principal deployment has since been performed and
+            # independently verified, so refusing that spelling would refuse the truth.
+            # The applied-status guard refuses the reverse drift in its place.
             "qualification and binding-preflight execution: authorized",
             "run a: authorized",
             "run b: authorized",
@@ -2886,13 +2889,19 @@ class TestTheInfrastructureReadmeRecordsTheIsolatedValidation:
     @pytest.mark.parametrize(
         "claim",
         [
-            "terraform apply has been run",
-            "terraform plan has been run",
-            "has been applied to aws",
-            "deployed to aws",
+            # The forward-drift claims this list used to carry -- "terraform apply has
+            # been run", "has been applied to aws" -- became true when the two
+            # qualification files were applied and independently verified, so they are
+            # retired rather than restated. What is refused now is the reverse drift,
+            # which is the regression this transition can actually produce, plus the
+            # forward claims the apply still did not buy.
+            "never planned, never applied",
+            "no plan and no apply ran",
+            "qualification infrastructure remains unapplied",
+            "governed profiles are materialized",
         ],
     )
-    def test_a_deployment_claim_is_refused(self, claim: str) -> None:
+    def test_a_drift_claim_is_refused(self, claim: str) -> None:
         reading = flat(read(INFRA_README))
         assert claim not in reading
         assert claim in [needle for needle in INFRA_FORBIDDEN if needle in reading + f" {claim} "]
@@ -2942,3 +2951,123 @@ class TestPr56GuardsAreNotTautologies:
     def test_the_forbidden_lists_carry_no_duplicate(self) -> None:
         assert len(set(PR_56_FORBIDDEN)) == len(PR_56_FORBIDDEN)
         assert len(set(INFRA_FORBIDDEN)) == len(INFRA_FORBIDDEN)
+
+
+APPLIED_REQUIRED: tuple[tuple[str, str], ...] = GUARD.APPLIED_INFRA_STATUS_REQUIRED
+APPLIED_FORBIDDEN: tuple[str, ...] = GUARD.APPLIED_INFRA_STATUS_FORBIDDEN
+APPLIED_REVERSE: tuple[str, ...] = GUARD.APPLIED_INFRA_REVERSE_DRIFT_FORBIDDEN
+APPLIED_PLAN_REQUIRED: tuple[tuple[str, str], ...] = GUARD.APPLIED_INFRA_PLAN_REQUIRED
+APPLIED_TERMINATORS: dict[str, str] = dict(GUARD.APPLIED_INFRA_SECTION_TERMINATORS)
+
+
+def applied_missing(text: str) -> list[str]:
+    """Every required applied-infrastructure clause the reading does not carry."""
+    return [label for label, phrase in APPLIED_REQUIRED if phrase not in text]
+
+
+def split_at_applied_section(document: Path) -> tuple[str, str, str]:
+    """``(before, section, after)`` for a document's one applied-infrastructure section."""
+    text = read(document)
+    found = GUARD.scan_applied_infra_status_sections(text)
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    section = str(found.sections[0])
+    before, separator, after = text.partition(section)
+    assert separator == section, f"{document.name}: the section is not verbatim in the document"
+    return before, section, after
+
+
+class TestTheAppliedInfrastructureIsRecorded:
+    """The unmutated repository satisfies every applied-infrastructure guard."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_each_document_carries_exactly_one_section(self, document: Path) -> None:
+        found = GUARD.scan_applied_infra_status_sections(read(document))
+        assert found.defects == ()
+        assert len(found.sections) == 1
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_section_ends_at_its_declared_boundary(self, document: Path) -> None:
+        _before, section, _after = split_at_applied_section(document)
+        assert GUARD.qualification_iam_section_is_terminated(
+            read(document), section, APPLIED_TERMINATORS[document.name]
+        )
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_required_clause_is_present(self, document: Path) -> None:
+        _before, section, _after = split_at_applied_section(document)
+        assert applied_missing(flat(section)) == []
+
+    def test_both_documents_carry_the_same_section(self) -> None:
+        sections = {document.name: split_at_applied_section(document)[1] for document in DOCUMENTS}
+        assert len(set(sections.values())) == 1
+
+    def test_the_plan_carries_every_required_clause(self) -> None:
+        reading = flat(read(PLAN))
+        assert [label for label, phrase in APPLIED_PLAN_REQUIRED if phrase not in reading] == []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_superseded_block_is_framed_as_history(self, document: Path) -> None:
+        assert GUARD.superseded_status_framing_defects(read(document)) == []
+
+
+class TestTheAppliedInfrastructureGuardRefusesDrift:
+    """The mutations. A guard that cannot fail is a guard that proves nothing."""
+
+    @pytest.mark.parametrize("label", [label for label, _ in APPLIED_REQUIRED])
+    def test_removing_one_required_clause_is_reported(self, label: str) -> None:
+        phrase = dict(APPLIED_REQUIRED)[label]
+        _before, section, _after = split_at_applied_section(PROJECT_ROOT / "CLAUDE.md")
+        reading = flat(section)
+        assert phrase in reading, f"absent before removal: {phrase}"
+        assert label in applied_missing(reading.replace(phrase, ""))
+
+    @pytest.mark.parametrize("claim", APPLIED_FORBIDDEN)
+    def test_a_forward_drift_claim_is_refused(self, claim: str) -> None:
+        """Everything the apply did not buy, refused anywhere in the document."""
+        reading = flat(read(PROJECT_ROOT / "CLAUDE.md"))
+        assert claim not in reading
+        assert claim in [needle for needle in APPLIED_FORBIDDEN if needle in reading + f" {claim} "]
+
+    @pytest.mark.parametrize("claim", APPLIED_REVERSE)
+    def test_a_reverse_drift_claim_is_refused_inside_the_section(self, claim: str) -> None:
+        """The pre-apply wording, refused where it would read as a claim about now.
+
+        Section-scoped on purpose: several of these spellings are *required* to survive
+        in the per-merge sections, which are the record of their own merges.
+        """
+        _before, section, _after = split_at_applied_section(PROJECT_ROOT / "CLAUDE.md")
+        reading = flat(section)
+        assert claim not in reading
+        assert claim in [needle for needle in APPLIED_REVERSE if needle in reading + f" {claim} "]
+
+    def test_an_unframed_superseded_block_is_reported(self) -> None:
+        """The banner deleted from one block, and the obsolete wording left behind."""
+        text = read(PROJECT_ROOT / "CLAUDE.md")
+        assert GUARD.superseded_status_framing_defects(text) == []
+        mutated = text.replace(
+            "> **HISTORICAL — the state as of that merge, superseded by *The applied "
+            "qualification\n> infrastructure*.**",
+            "",
+            1,
+        )
+        assert GUARD.superseded_status_framing_defects(mutated)
+
+    def test_an_empty_document_fails_rather_than_passing(self) -> None:
+        assert GUARD.scan_applied_infra_status_sections("").sections == ()
+        assert applied_missing("") == [label for label, _ in APPLIED_REQUIRED]
+
+    def test_the_lists_are_not_empty_and_carry_no_duplicate(self) -> None:
+        assert APPLIED_REQUIRED and APPLIED_FORBIDDEN and APPLIED_REVERSE
+        assert APPLIED_PLAN_REQUIRED
+        assert len(set(APPLIED_FORBIDDEN)) == len(APPLIED_FORBIDDEN)
+        assert len(set(APPLIED_REVERSE)) == len(APPLIED_REVERSE)
+        labels = [label for label, _phrase in APPLIED_REQUIRED]
+        phrases = [phrase for _label, phrase in APPLIED_REQUIRED]
+        assert len(set(labels)) == len(labels)
+        assert len(set(phrases)) == len(phrases)
+
+    def test_no_required_clause_is_also_forbidden(self) -> None:
+        required = {phrase for _label, phrase in APPLIED_REQUIRED}
+        assert required.isdisjoint(set(APPLIED_FORBIDDEN))
+        assert required.isdisjoint(set(APPLIED_REVERSE))

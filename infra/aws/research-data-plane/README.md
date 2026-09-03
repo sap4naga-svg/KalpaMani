@@ -31,14 +31,15 @@ than [ADR-0007](../../../docs/decisions/ADR-0007-cloud-first-research-data-plane
 [CLAUDE.md](../../../CLAUDE.md)
 **Deletion procedure:** [vendor-data-cloud-deletion.md](../../../docs/runbooks/vendor-data-cloud-deletion.md)
 
-### Not everything in this directory has been applied
+### The qualification files are applied, and applied is not authorized to use
 
-The `APPLIED` line above describes the 2026-08-27 apply and the 36 resources it created. It is
-**not** a statement that every file here has been applied, and two files have not been:
+The `APPLIED` line above describes the 2026-08-27 foundation apply and the 36 resources it
+created. It is **not** a statement about every file here, and two files were applied later, under
+their own separate authorization:
 
 ```
-qualification_policies.tf     MERGED, OFFLINE-VALIDATED -- NEVER PLANNED, NEVER APPLIED
-qualification_principals.tf   MERGED, OFFLINE-VALIDATED -- NEVER PLANNED, NEVER APPLIED
+qualification_policies.tf     MERGED, OFFLINE-VALIDATED -- APPLIED, INDEPENDENTLY VERIFIED
+qualification_principals.tf   MERGED, OFFLINE-VALIDATED -- APPLIED, INDEPENDENTLY VERIFIED
 ```
 
 `qualification_policies.tf` declares the two ADR-0018 §10 qualification permission sets, as
@@ -59,27 +60,39 @@ action or resource matrix is touched. Every environment binding it needs — the
 instance, the governed operator group and the target account — is an input with **no default**,
 and there is no data source of any kind, so nothing here reads the live environment.
 
-**Both files have been validated offline, and neither has been planned or applied.** Under a
-separate authorization, `terraform init -backend=false` and `terraform validate` were run against
-**task-owned external copies** of this configuration; the committed `.terraform.lock.hcl` selected
+**Both files were validated offline first.** Under a separate authorization,
+`terraform init -backend=false` and `terraform validate` were run against **task-owned external
+copies** of this configuration; the committed `.terraform.lock.hcl` selected
 **`hashicorp/aws` v6.62.0**, the **corrected configuration validated successfully**, and the
 **retired 33-character acquisition permission-set name was independently refused by the same
-provider validator**. The scope was exactly that and nothing wider:
+provider validator**. That offline validation touched nothing here, and **validating a
+configuration was never evidence that applying it would succeed**.
+
+**Both files have since been applied from a saved plan, under their own separate authorization,
+and an independent post-apply verification passed.** The verification **read the result rather
+than producing it**: the Terraform state advanced by **exactly one serial with its lineage
+unchanged**, and each governed object was observed.
 
 ```
-no command initialized this repository directory     no backend was configured
-no Terraform state was created or modified           no real tfvars were read
-no plan and no apply ran                             no provider call reached AWS
-no AWS resource was created, changed, discovered or proved to exist
+two customer-managed IAM policies                    VERIFIED
+two Identity Center permission sets                  VERIFIED
+two customer-managed-policy references               VERIFIED
+two account assignments                              VERIFIED
+two generated Identity Center runtime roles          VERIFIED
+generated-role trust policies                        VERIFIED
+IAM identity-policy simulation                       PASSED
+Terraform state                                      one serial forward, lineage unchanged
 ```
 
-So `terraform state` still holds the 36 resources the 2026-08-27 apply created. **A declaration is
-not a resource**: no permission set, assignment, generated role or policy attachment exists
-because these files describe one, whether any such object exists in AWS is **NOT ESTABLISHED**
-here, and **no principal has been granted any AWS authority**. **Validating a configuration is not
-evidence that applying it would succeed**, and **live environment validation still requires its own
-separate authorization**. Applying either file is a separate, ungranted authorization — see each
-file's own header.
+**Applied is not authorized to use, and that is the boundary this file exists to state.** The
+governed operator group **is assigned and remains empty**, with **no human members**, so **no
+person currently holds qualification access**. **Neither governed AWS profile exists**, **no
+governed SSO login has been performed or proven**, and **an IAM identity-policy simulation is a
+policy evaluation rather than an end-to-end authorization proof**. **No qualification run, binding
+preflight, provider acquisition, Run A, Run B or combined assessment has happened**, **no provider
+is selected**, and **G1 and G2 stay OPEN**. Each of those is a separate, ungranted authorization —
+see each file's own header. **Further infrastructure mutation is not authorized**: applying these
+files **closed the infrastructure gate and opened none of the others**.
 
 ---
 
