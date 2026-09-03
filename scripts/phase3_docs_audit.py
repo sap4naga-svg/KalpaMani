@@ -6043,8 +6043,25 @@ def _inventory_history_commits() -> list[str]:
     stays retrievable from the object database. So the question is not whether
     the newest commit carries the file, it is whether **any** reachable commit
     ever did.
+
+    ``--full-history`` is what makes that question answerable, and it is not a
+    refinement. ``git log -- <path>`` applies *history simplification* by
+    default: at a merge whose tree matches the first parent's for that path, it
+    follows the first parent and prunes the rest. A side branch that committed
+    the inventory and was merged with ``-s ours`` produces exactly that shape --
+    the merge tree omits the path, so the disclosure commit is pruned from the
+    walk while remaining reachable through the merge's second parent, and the
+    default query reports zero commits for a subject list that is still
+    retrievable. ``--full-history`` traverses both parents and finds it.
+
+    ``--simplify-merges``, ``--first-parent`` and their relatives are excluded
+    for the same reason: each can discard the side parent this guard exists to
+    reach. ``--all`` keeps every reachable ref in scope, remote-tracking refs
+    included, so a disclosure fetched from the remote is not missed either.
     """
-    result = _git_boundary("log", "--all", "--format=%H", "--", ADR_0018_INVENTORY_RELPATH)
+    result = _git_boundary(
+        "log", "--all", "--full-history", "--format=%H", "--", ADR_0018_INVENTORY_RELPATH
+    )
     if result.returncode != 0:
         raise PrivateInventoryBoundaryError("git log could not answer")
     return result.stdout.split()
