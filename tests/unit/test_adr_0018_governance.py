@@ -213,6 +213,35 @@ def _write_fixture_inventory(root: Path) -> Path:
     return path
 
 
+def _ours_merged_disclosure(root: Path) -> tuple[Path, str, str]:
+    """A fixture whose disclosure survives only through a pruned merge parent.
+
+    The graph is the one the PR #63 review demonstrated: the inventory is
+    committed on a side branch, the branch is merged with ``-s ours`` so the
+    merge tree omits the path, and the side ref is deleted. What is left is a
+    repository whose ``HEAD``, index and working tree are all clean, and whose
+    object database still holds a committed subject list reachable from the merge
+    commit's second parent.
+
+    Returns the repository root, the disclosure commit and the merge commit, so a
+    test can prove the reachability rather than trusting the construction.
+    """
+    repo = _fixture_repo(root, PROTECTED_IGNORE)
+    _git(repo, "checkout", "--quiet", "-b", "side")
+    _write_fixture_inventory(repo)
+    _git(repo, "add", "--force", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+    _git(repo, "commit", "--quiet", "-m", "fixture disclosure on a side branch")
+    side = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "--quiet", "main")
+    (repo / "unrelated.txt").write_text("fixture line", encoding="utf-8")
+    _git(repo, "add", "--", "unrelated.txt")
+    _git(repo, "commit", "--quiet", "-m", "independent mainline commit")
+    _git(repo, "merge", "--quiet", "--no-ff", "-s", "ours", "-m", "fixture ours merge", "side")
+    merge = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "branch", "--quiet", "-D", "side")
+    return repo, side, merge
+
+
 def _facts(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """The audit's own boundary answers, taken against `root`."""
     monkeypatch.setattr(GUARD, "REPO_ROOT", root)
@@ -714,6 +743,96 @@ class TestThePrivateInventoryStaysOutOfGit:
         assert facts["in_head"] is False
         assert facts["history"], "a deleted commit is still a reachable disclosure"
         assert not _holds(facts)
+
+    def test_a_disclosure_merged_ordinarily_still_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The straightforward merge shape, kept beside the `ours` case below.
+
+        Here the merge carries the path into its own tree, so the disclosure is
+        on the mainline and no traversal question arises. It is asserted anyway:
+        the correction below widens the walk, and a widened walk must not stop
+        finding what the narrow one already found.
+        """
+        root = _fixture_repo(tmp_path / "merged", PROTECTED_IGNORE)
+        _git(root, "checkout", "--quiet", "-b", "side")
+        _write_fixture_inventory(root)
+        _git(root, "add", "--force", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+        _git(root, "commit", "--quiet", "-m", "fixture disclosure on a side branch")
+        side = _git(root, "rev-parse", "HEAD").stdout.strip()
+        _git(root, "checkout", "--quiet", "main")
+        (root / "unrelated.txt").write_text("fixture line", encoding="utf-8")
+        _git(root, "add", "--", "unrelated.txt")
+        _git(root, "commit", "--quiet", "-m", "independent mainline commit")
+        _git(root, "merge", "--quiet", "--no-ff", "-m", "fixture merge", "side")
+        _git(root, "branch", "--quiet", "-D", "side")
+        carried = _git(
+            root, "ls-tree", "-r", "--name-only", "HEAD", "--", GUARD.ADR_0018_INVENTORY_RELPATH
+        ).stdout.strip()
+        assert carried, "an ordinary merge carries the path into its own tree"
+        facts = _facts(root, monkeypatch)
+        assert side in facts["history"]  # type: ignore[operator]
+        assert not _holds(facts)
+
+    def test_a_disclosure_hidden_by_an_ours_merge_still_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shape default path simplification prunes, and the reason for `--full-history`.
+
+        A side branch commits the inventory and is merged with ``-s ours``, so the
+        merge tree omits the path and matches the first parent's for it. Default
+        ``git log -- <path>`` treats that as "nothing happened here", follows the
+        first parent and prunes the second -- while the disclosure commit stays
+        reachable through that pruned parent, and its blob stays retrievable by
+        exact SHA. Deleting the side ref changes nothing: reachability comes from
+        the merge, not from the branch name.
+
+        This is the case the contract's fifth limb claims to cover, so it is
+        asserted directly rather than inferred from the linear cases.
+        """
+        root, side, merge = _ours_merged_disclosure(tmp_path / "ours-merged")
+        assert _git(root, "rev-parse", f"{merge}^2").stdout.strip() == side, (
+            "the disclosure must be the merge's second parent"
+        )
+        _git(root, "merge-base", "--is-ancestor", side, merge)
+        omitted = _git(
+            root, "ls-tree", "-r", "--name-only", merge, "--", GUARD.ADR_0018_INVENTORY_RELPATH
+        ).stdout.strip()
+        assert not omitted, "an `ours` merge omits the path from its own tree"
+        facts = _facts(root, monkeypatch)
+        assert facts["in_index"] is False
+        assert facts["in_head"] is False
+        assert side in facts["history"], (  # type: ignore[operator]
+            "a disclosure reachable through a pruned merge parent is still a disclosure"
+        )
+        assert not _holds(facts)
+
+    def test_the_full_history_traversal_is_what_detects_the_ours_merged_disclosure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mutation, not assertion: the flag is removed and the guard must go blind.
+
+        Without this, the case above would pass without showing which part of the
+        query earned the answer. The production helper is run twice against one
+        fixture -- once as written, once through a boundary that drops
+        ``--full-history`` on the way to git -- and the second run is required to
+        find nothing. The helper is never reimplemented here; only the argument
+        under test is taken away from it.
+        """
+        root, side, _merge = _ours_merged_disclosure(tmp_path / "ours-mutated")
+        monkeypatch.setattr(GUARD, "REPO_ROOT", root)
+        assert side in GUARD._inventory_history_commits()
+
+        real_boundary: Any = GUARD._git_boundary
+
+        def boundary_without_full_history(*args: str) -> Any:
+            return real_boundary(*[arg for arg in args if arg != "--full-history"])
+
+        monkeypatch.setattr(GUARD, "_git_boundary", boundary_without_full_history)
+        assert not GUARD._inventory_history_commits(), (
+            "default path simplification hides this disclosure, so `--full-history` "
+            "is load-bearing and not decoration"
+        )
 
     def test_removing_the_runtime_ignore_protection_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
