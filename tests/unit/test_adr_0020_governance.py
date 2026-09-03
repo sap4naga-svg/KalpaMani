@@ -943,7 +943,10 @@ def test_claiming_the_merged_implementation_was_deployed_is_caught() -> None:
         "infrastructure is authorized",
         "infrastructure is implemented",
         "infrastructure is deployed",
-        "deployment: performed",
+        # "deployment: performed" is gone from this list, and from the guard. The
+        # qualification-principal deployment has since been performed and independently
+        # verified, so it is no longer a forward drift -- it is the truth, and the
+        # applied-status guard refuses the reverse drift instead.
         "run a is authorized",
         "run b is authorized",
         "the combined assessment is authorized",

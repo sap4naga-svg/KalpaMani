@@ -452,7 +452,8 @@ no bucket or KMS change is made**; **ADR-0017, shared ingestion, application sou
 points and the durable locator schema are unchanged**; and **the declarations are inert until a
 separately authorized principal, attachment, plan and apply sequence exists**.
 
-Current status: **Terraform initialization for these declarations: NOT PERFORMED · Terraform plan
+Status as of that merge — **historical, and superseded by the applied qualification infrastructure
+recorded below**: **Terraform initialization for these declarations: NOT PERFORMED · Terraform plan
 for these declarations: NOT AUTHORIZED / NOT RUN · Terraform apply for these declarations: NOT
 AUTHORIZED / NOT RUN · AWS managed-policy resource creation from these declarations: NOT PERFORMED
 / NOT ESTABLISHED · runtime roles: NOT IMPLEMENTED · runtime trust principals: NOT SELECTED ·
@@ -517,8 +518,9 @@ identity and trust decision adds no S3 operation and changes no deadline term** 
 
 **The next gate after ADR acceptance is an offline implementation gate** for permission sets,
 assignments, customer-managed-policy attachments, profiles, and actor-specific identity
-verification, including any proven identity-gate and profile-contract corrections. Current
-status: **permission-set implementation: MERGED / OFFLINE-VALIDATED / DORMANT · Identity Center
+verification, including any proven identity-gate and profile-contract corrections. Status as of
+that merge — **historical, and superseded by the applied qualification infrastructure recorded
+below**: **permission-set implementation: MERGED / OFFLINE-VALIDATED / DORMANT · Identity Center
 assignments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · runtime roles: UNCREATED /
 UNOBSERVED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy
 attachments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · governed AWS profiles:
@@ -566,8 +568,9 @@ configuration directory was initialized, no backend was configured, no state was
 modified and no provider call reached AWS**. **The next separately authorized gate is not
 automatically an AWS apply** — **AWS discovery, environment binding, Terraform plan, Terraform
 apply, profile materialization, identity preflight and execution each remain separate gates** and
-each remain separately unauthorized, and **all operational gates remain closed**. **No live
-binding, plan, apply or execution is authorized**: **AWS discovery: NOT AUTHORIZED · AWS
+each remain separately unauthorized, and **all operational gates remain closed**. Status as of that
+merge — **historical, and superseded by the applied qualification infrastructure recorded below**:
+**AWS discovery: NOT AUTHORIZED · AWS
 account/group/instance binding values: UNKNOWN / UNREAD · authority granted: NONE ·
 infrastructure deployment: BLOCKED · Terraform isolated init/validate: PERFORMED IN EXTERNAL
 COPIES ONLY · Terraform plan/apply: NOT AUTHORIZED / NOT RUN · qualification and
@@ -577,6 +580,27 @@ CONTROL: DEFERRED · live trading: HARD-DISABLED**. **All existing arithmetic an
 unchanged** — **acquisition PutObject: 145 to 147**, **acquisition HeadObject: 0**, **acquisition
 GetObject: 0**, **two successful runs: 290 to 294**, **assessment: 195 to 196**, **whole
 successful package: 485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req + 3 * T_s3 + L**.
+
+**The qualification infrastructure is now applied and independently verified, and applying it
+authorized no run.** **PR #60 is merged**, the **controlled saved-plan apply COMPLETED**, and an
+**independent post-apply verification PASSED** — it read the result rather than producing it, and
+the Terraform state advanced by exactly one serial with its lineage unchanged. Current status:
+**qualification-principal Terraform declarations: MERGED / APPLIED · controlled saved-plan apply:
+COMPLETED · independent post-apply verification: PASSED · live customer-managed IAM policies: 2
+VERIFIED · live Identity Center permission sets: 2 VERIFIED · live customer-managed-policy
+references: 2 VERIFIED · live account assignments: 2 VERIFIED · generated Identity Center runtime
+roles: 2 VERIFIED · operator group: EMPTY / ASSIGNED / NO HUMAN MEMBERS · human qualification
+access: NONE · governed profiles: UNMATERIALIZED · governed SSO login: NOT PERFORMED / NOT PROVEN ·
+membership/profile gate: ELIGIBLE / NOT EXECUTED · further infrastructure mutation: NOT AUTHORIZED ·
+qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · third ADR-0017
+acquisition: NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT
+RUN · provider acquisition: NOT AUTHORIZED / NOT RUN · backtesting: NOT STARTED · G1 / G2: OPEN /
+OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading:
+HARD-DISABLED**. **Infrastructure existence is not qualification success**, **an assigned empty
+group is not human access**, **an IAM identity-policy simulation is not an SSO login or an
+end-to-end authorization proof**, **applied resources are not permission to operate them**, and
+**eligibility for the membership and profile gate is not execution of it**. Applying the
+principals **closed the infrastructure gate and opened none of the others**.
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
