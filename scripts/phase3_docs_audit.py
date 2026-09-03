@@ -4233,6 +4233,9 @@ _NOT_A_SUBJECT: Final[frozenset[str]] = frozenset(
         "INCONCLUSIVE",
         "INSUFFICIENT",
         "LICENSED",
+        # A Windows environment-variable name, not a security. ADR-0023 reads it to
+        # locate the current user's private root.
+        "LOCALAPPDATA",
         "MEASURED",
         "OBSERVED",
         "P1",
@@ -10340,6 +10343,19 @@ ADR_0021_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: The accepted decision itself. Named once, so the checks and the tests point at
 #: one file.
 ADR_0022: Final = DECISIONS / "ADR-0022-qualification-permission-set-name-limit.md"
+
+#: ADR-0023: the private runtime binding that replaced the Run A Terraform state read.
+ADR_0023: Final = DECISIONS / "ADR-0023-private-runtime-binding-for-the-licensed-bucket.md"
+ADR_0023_LOADER: Final = (
+    REPO_ROOT / "src" / "kalpamani" / "data" / "qualify" / "sharadar" / "runtime_binding.py"
+)
+ADR_0023_ISOLATION_TESTS: Final = (
+    REPO_ROOT / "tests" / "unit" / "test_sharadar_acquisition_terraform_isolation.py"
+)
+ADR_0023_BINDING_TESTS: Final = REPO_ROOT / "tests" / "unit" / "test_sharadar_runtime_binding.py"
+
+#: The one fixed, non-secret environment-variable *name* that selects the binding.
+ADR_0023_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE"
 
 #: The pull request whose merge accepted ADR-0022.
 #:
@@ -21261,10 +21277,243 @@ def main() -> int:
             "operations.py",
             "plan.py",
             "publication.py",
+            # ADR-0023's private runtime binding replaced the Terraform state read
+            # this path used to depend on, so it cites the slice it corrects.
+            "runtime_binding.py",
             "sharadar_empirical_qualification.py",
             "sharadar_qualification_assessment.py",
         ],
         "the modules implementing it cite it, as every other module cites its own ADR",
+    )
+
+    # -- ADR-0023: the private runtime binding -----------------------------
+    #
+    # The Run A acquisition path used to resolve the licensed bucket from Terraform
+    # remote state, under a profile ADR-0019 made write-only -- so it could not have
+    # succeeded, and the guard that should have caught it looked for the word
+    # `terraform` in a file that never spelled it. These checks hold the corrected
+    # contract in place: what the ADR must say, what the entry point must no longer
+    # reach, and what the loader must never carry.
+    adr = read(ADR_0023) if ADR_0023.is_file() else ""
+    loader = read(ADR_0023_LOADER) if ADR_0023_LOADER.is_file() else ""
+    loader_code = _executable_python(ADR_0023_LOADER) if ADR_0023_LOADER.is_file() else ""
+    acquire = read(ADR_0018_ACQUIRE_ENTRY) if ADR_0018_ACQUIRE_ENTRY.is_file() else ""
+    acquire_code = (
+        _executable_python(ADR_0018_ACQUIRE_ENTRY) if ADR_0018_ACQUIRE_ENTRY.is_file() else ""
+    )
+    # Collapsed, so a rewrap cannot hide a clause the ADR is required to carry.
+    adr_flat = " ".join(adr.split())
+
+    f.check(
+        "the ADR-0023 decision record exists",
+        ADR_0023.is_file(),
+        "a correction to accepted architecture is an ADR, not a code comment",
+    )
+    f.check(
+        "ADR-0023 carries a conditional acceptance status",
+        "Status: PROPOSED -- NOT IN FORCE" in adr.replace("—", "--"),
+        "an ADR carries no authority until its pull request is reviewed and merged",
+    )
+    f.check(
+        "ADR-0023 names the independently approved root cause",
+        "RUNTIME_ACQUISITION_PROFILE_CANNOT_READ_GOVERNED_REMOTE_STATE" in adr,
+        "the decision must name the diagnosis it answers",
+    )
+    f.check(
+        "ADR-0023 records the whole approved correction boundary",
+        all(
+            clause in adr_flat
+            for clause in (
+                "no acquisition-role state access",
+                "no private identifiers in Git",
+                "fail-closed validation",
+                "no Terraform subprocess reachable from the acquisition path",
+            )
+        ),
+        "a boundary the ADR does not state is a boundary nobody is held to",
+    )
+    f.check(
+        "ADR-0023 names the one environment variable and no default path",
+        ADR_0023_ENV_VAR in adr and "no default path" in adr,
+        "a fallback location would read a file nobody selected",
+    )
+    f.check(
+        "ADR-0023 rejects widening the acquisition actor",
+        "Give the acquisition actor Terraform-state access" in adr_flat
+        and "the acquisition iam policy is unchanged" in adr_flat.lower(),
+        "the repair must not undo the write-only boundary that made this visible",
+    )
+    f.check(
+        "ADR-0023 rejects every alternative the approved boundary forbids",
+        all(
+            phrase in adr_flat
+            for phrase in (
+                "kalpamani-foundation",
+                "Hardcode the bucket in Git",
+                "raw bucket-name environment variable",
+                "newest) file found in the private directory",
+                "inside the repository working tree",
+                "explicit S3 read denials",
+            )
+        ),
+        "a rejected alternative nobody wrote down is an alternative somebody retries",
+    )
+    f.check(
+        "ADR-0023 states that the real binding is not materialized",
+        "real private runtime binding:                 NOT MATERIALIZED" in adr,
+        "an implemented contract is not a created file",
+    )
+
+    f.check(
+        "the private runtime-binding loader exists",
+        ADR_0023_LOADER.is_file(),
+        "the contract has to live in one reviewable module",
+    )
+    f.check(
+        "the loader and the entry point spell the variable identically",
+        f'RUNTIME_BINDING_ENV_VAR: Final = "{ADR_0023_ENV_VAR}"' in loader
+        and f'RUNTIME_BINDING_ENV_VAR: Final = "{ADR_0023_ENV_VAR}"' in acquire,
+        "two spellings of one operator contract is a contract that drifts",
+    )
+    f.check(
+        "the loader enumerates no directory",
+        not any(
+            token in loader_code
+            for token in ("glob(", "rglob(", "iterdir(", "listdir(", "scandir(", "walk(")
+        ),
+        "the private root is a containment boundary, not a search path",
+    )
+    f.check(
+        "the loader writes nothing and creates nothing",
+        not any(
+            token in loader_code
+            for token in ("write_text", "write_bytes", "mkdir", "touch(", "tempfile")
+        ),
+        "the binding is the owner's file; a tool that scaffolds one invites a placeholder",
+    )
+    f.check(
+        "the loader constructs no SDK client and makes no AWS call",
+        not any(token in loader_code for token in ("boto3", "botocore", "subprocess")),
+        "resolving configuration must not become a request",
+    )
+    f.check(
+        "the loader carries no private identifier",
+        # ``s3://`` is scanned on the executable form only: the module's own prose says
+        # the grammar exists to refuse an ``s3://`` URI, and a comment explaining a
+        # rejection is not the rejected thing. An ARN, a host and a twelve-digit account
+        # have no legitimate prose use here, so those are scanned on the whole file.
+        not any(marker in loader for marker in ("arn:aws:", "amazonaws.com"))
+        and "s3://" not in loader_code
+        and re.search(r"\b\d{12}\b", loader) is None,
+        "a bucket, an account or an ARN in Git is a disclosure a deletion does not undo",
+    )
+    f.check(
+        "the loader fails closed when the platform cannot answer",
+        "SECURITY_UNVERIFIABLE" in loader_code and "def windows_file_security" in loader,
+        "an unverified boundary is not a satisfied boundary",
+    )
+    f.check(
+        "the loader compares the binding against the governed expected account",
+        "ACCOUNT_MISMATCH" in loader_code and "EXPECTED_ACCOUNT_UNAVAILABLE" in loader_code,
+        "a binding for another account must not be admitted, and neither must no comparison",
+    )
+    f.check(
+        "the loader refuses a duplicate JSON key rather than collapsing it",
+        "object_pairs_hook" in loader_code and "DUPLICATE_KEY" in loader_code,
+        "the default decoder keeps the last occurrence, which validates one value and uses another",
+    )
+    f.check(
+        "every loader refusal is a closed member naming a rule",
+        all(
+            member in loader_code
+            for member in (
+                "PATH_OUTSIDE_PRIVATE_ROOT",
+                "PATH_IS_A_LINK",
+                "OWNER_NOT_CURRENT_USER",
+                "ACL_INHERITANCE_ENABLED",
+                "ACL_NOT_EXCLUSIVE",
+                "ACL_DENY_PRESENT",
+                "FILE_CHANGED_DURING_READ",
+            )
+        ),
+        "a refusal that quoted the offending value would print the private thing",
+    )
+
+    f.check(
+        "the acquisition entry point no longer names the Terraform state read",
+        "tf_outputs" not in acquire,
+        "the write-only acquisition actor cannot read state, so it must not try",
+    )
+    f.check(
+        "the acquisition entry point resolves the bucket from the private binding",
+        "load_runtime_binding" in acquire_code,
+        "stage 6 has to resolve the bucket from somewhere, and this is the somewhere",
+    )
+    f.check(
+        "the acquisition entry point refuses a binding-path option by name",
+        all(option in acquire for option in ('"--binding"', '"--binding-file"', '"--bucket"')),
+        "a private path or a licensed destination in argv enters every process listing",
+    )
+    f.check(
+        "the acquisition entry point keeps its closed bucket outcome and exit code",
+        "REFUSED_LICENSED_BUCKET" in acquire
+        and "EmpiricalOutcome.REFUSED_LICENSED_BUCKET: 8," in acquire,
+        "the public result must not change because the private reason did",
+    )
+    f.check(
+        "the governed verifier keeps the state read for the foundation actor",
+        "def tf_outputs() -> dict[str, Any]:" in read(ADR_0021_VERIFIER),
+        "one caller was removed; the foundation verifier legitimately still uses it",
+    )
+    f.check(
+        "the acquisition IAM policy still denies every object read",
+        all(
+            action in read(INFRA / "qualification_policies.tf")
+            for action in ('"s3:GetObject"', '"s3:GetObjectVersion"', '"s3:GetObjectAttributes"')
+        )
+        and "AcquisitionNeverReadsOrDeletes" in read(INFRA / "qualification_policies.tf"),
+        "the correction must not have widened the actor it exists to keep narrow",
+    )
+
+    f.check(
+        "the Terraform-isolation guard exists and is semantic",
+        ADR_0023_ISOLATION_TESTS.is_file()
+        and all(
+            token in read(ADR_0023_ISOLATION_TESTS)
+            for token in ("_reachability", "_terraform_findings", "SentinelTripped")
+        ),
+        "a source-string check could not see the import that caused this",
+    )
+    f.check(
+        "the isolation guard is proven to fail on every reintroduction",
+        all(
+            token in read(ADR_0023_ISOLATION_TESTS)
+            for token in (
+                "DIRECT_REINTRODUCTION",
+                "ALIASED_REINTRODUCTION",
+                "FOUNDATION_PROFILE_FALLBACK",
+                "RAW_ENVIRONMENT_BYPASS",
+            )
+        ),
+        "a guard nobody has watched fail is a guard nobody has tested",
+    )
+    f.check(
+        "the private runtime binding has its own synthetic suite",
+        ADR_0023_BINDING_TESTS.is_file(),
+        "the trust boundary is only real if every clause of it is exercised",
+    )
+    f.check(
+        "the status document records the corrected contract",
+        all(
+            line in read(REPO_ROOT / "README.md")
+            for line in (
+                "private runtime-binding contract:             IMPLEMENTED / OFFLINE-VALIDATED",
+                "real private runtime binding:                 NOT MATERIALIZED",
+                "acquisition IAM policy:                       UNCHANGED / WRITE-ONLY",
+                "Run A:                                        BLOCKED PENDING MATERIALIZATION",
+            )
+        ),
+        "a status document that omits the blocker reads as though the blocker is gone",
     )
 
     # ---------------------------------------------------------------- verdict

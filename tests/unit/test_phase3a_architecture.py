@@ -18,6 +18,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -142,6 +143,18 @@ def test_no_data_module_imports_the_broker_or_execution_packages() -> None:
     )
 
 
+#: The one file-and-token pair this scan exempts, and nothing wider.
+#:
+#: ADR-0023's private runtime binding carries the AWS account this deployment is
+#: bound to, under the schema field ``target_account_id``. That is an **AWS** account
+#: number, not a brokerage identifier -- a different thing from what this guard
+#: protects against -- and the field name is fixed by the accepted contract, so it
+#: has to be spelled somewhere under ``src/``. The exemption is by exact file and
+#: exact token; every other token stays forbidden in that file, and every other file
+#: stays forbidden every token. The compensating check follows immediately below.
+_ACCOUNT_FIELD_EXEMPTION: Final = ("runtime_binding.py", "account_id")
+
+
 def test_no_broker_identifier_appears_in_any_data_contract() -> None:
     """No brokerage account id, binding digest or broker order id (CLAUDE.md s.3)."""
     forbidden = ("BrokerId", "broker_id", "account_binding", "account_id", "perm_id", "PermId")
@@ -149,12 +162,29 @@ def test_no_broker_identifier_appears_in_any_data_contract() -> None:
     for path in _python_files(DATA_ROOT):
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
+            if (path.name, token) == _ACCOUNT_FIELD_EXEMPTION:
+                continue
             if token in text:
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)} mentions {token!r}")
     assert offenders == [], (
         "The data platform and the brokerage boundary do not meet, so a broker-native "
         f"identifier has no reason to appear here. Found: {offenders}"
     )
+
+
+def test_the_exempted_module_names_an_aws_field_and_no_broker_or_account_value() -> None:
+    """The compensating check, stricter than the token scan it stands in for.
+
+    Every ``account_id`` in the exempted module must be the AWS schema field name, no
+    other forbidden token may appear there, and -- the part the token scan never
+    checked anywhere -- no twelve-digit account **value** may be present.
+    """
+    exempt = DATA_ROOT / "qualify" / "sharadar" / _ACCOUNT_FIELD_EXEMPTION[0]
+    text = exempt.read_text(encoding="utf-8")
+    for token in ("BrokerId", "broker_id", "account_binding", "perm_id", "PermId"):
+        assert token not in text
+    assert set(re.findall(r"\w*account_id\w*", text)) == {"target_account_id"}
+    assert re.search(r"\b\d{12}\b", text) is None
 
 
 # ---------------------------------------------------------------------------
