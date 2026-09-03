@@ -560,9 +560,11 @@ retired acquisition permission-set name consistently and added the provider-limi
 check every qualification permission-set name against 1–32 characters and the allowed-character
 grammar, **preserving the assessment permission-set name and both governed profile names**. **The
 ADR-0022 offline implementation prerequisite is SATISFIED**, and **satisfying it authorizes
-nothing by itself**: **the implementation remains dormant**, **declarations are not live
-resources**, **the governed profiles are not materialized**, and **the Organization-instance
-existence and every AWS account, group and instance binding value remain UNKNOWN / UNREAD**.
+nothing by itself**. As of that merge — **historical, and superseded by the applied
+qualification infrastructure and the qualified operator access recorded below** — **the
+implementation remains dormant**, **declarations were not live resources**, **the governed
+profiles were not materialized**, and **the Organization-instance existence and every AWS
+account, group and instance binding value remain UNKNOWN / UNREAD**.
 **Terraform plan and Terraform apply remain NOT AUTHORIZED / NOT RUN**, and **no repository
 configuration directory was initialized, no backend was configured, no state was created or
 modified and no provider call reached AWS**. **The next separately authorized gate is not
@@ -589,18 +591,37 @@ the Terraform state advanced by exactly one serial with its lineage unchanged. C
 COMPLETED · independent post-apply verification: PASSED · live customer-managed IAM policies: 2
 VERIFIED · live Identity Center permission sets: 2 VERIFIED · live customer-managed-policy
 references: 2 VERIFIED · live account assignments: 2 VERIFIED · generated Identity Center runtime
-roles: 2 VERIFIED · operator group: EMPTY / ASSIGNED / NO HUMAN MEMBERS · human qualification
-access: NONE · governed profiles: UNMATERIALIZED · governed SSO login: NOT PERFORMED / NOT PROVEN ·
-membership/profile gate: ELIGIBLE / NOT EXECUTED · further infrastructure mutation: NOT AUTHORIZED ·
+roles: 2 VERIFIED · further infrastructure mutation: NOT AUTHORIZED ·
 qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · third ADR-0017
 acquisition: NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT
 RUN · provider acquisition: NOT AUTHORIZED / NOT RUN · backtesting: NOT STARTED · G1 / G2: OPEN /
 OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading:
-HARD-DISABLED**. **Infrastructure existence is not qualification success**, **an assigned empty
-group is not human access**, **an IAM identity-policy simulation is not an SSO login or an
-end-to-end authorization proof**, **applied resources are not permission to operate them**, and
-**eligibility for the membership and profile gate is not execution of it**. Applying the
-principals **closed the infrastructure gate and opened none of the others**.
+HARD-DISABLED**. **Infrastructure existence is not qualification success**, **an IAM
+identity-policy simulation is not an SSO login or an end-to-end authorization proof**, and
+**applied resources are not permission to operate them**. Applying the principals **closed the
+infrastructure gate and opened none of the others**. At the time of the apply the governed
+operator group **was assigned and empty** and **neither governed AWS profile existed** —
+**historical, and superseded by the qualified operator access recorded next**.
+
+**The qualified operator access is materialized and independently verified, and materialized
+access is not authority to use it.** One owner-approved human operator was added to the governed
+Identity Center group, both governed AWS profiles were materialized, and an **independent review
+read the result rather than producing it**. **Who the operator is stays out of this repository**
+— the count is recorded and the person is not. Current status: **qualification infrastructure:
+APPLIED / INDEPENDENTLY VERIFIED · operator selection: OWNER-APPROVED · operator group: EXACTLY 1
+OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership: MATERIALIZED / INDEPENDENTLY
+VERIFIED · governed acquisition profile: MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed
+assessment profile: MATERIALIZED / IDENTITY PREFLIGHT PASSED · profile crossover: NONE · AWS
+config ACL: EFFECTIVE ACCESS PRESERVED · membership/profile gate: COMPLETED · sixth
+private-binding preflight: NOT AUTHORIZED / NOT RUN · provider credential retrieval: NONE ·
+S3/provider activity: NONE · qualification execution: NOT AUTHORIZED / NOT RUN · third ADR-0017
+acquisition: NOT AUTHORIZED / NOT RUN · Run A: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED /
+NOT RUN · combined assessment: NOT AUTHORIZED / NOT RUN · further infrastructure mutation: NOT
+AUTHORIZED · backtesting: NOT STARTED · G1 / G2: OPEN / OPEN · provider selected: NONE · Phase 3:
+NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED**. **A materialized access path
+authorizes no run** — completing the membership and profile gate **opened none of the others**,
+and **acceptance, implementation, deployment, access and execution stay distinct gates that are
+never collapsed into one**.
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.

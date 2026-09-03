@@ -84,15 +84,39 @@ IAM identity-policy simulation                       PASSED
 Terraform state                                      one serial forward, lineage unchanged
 ```
 
-**Applied is not authorized to use, and that is the boundary this file exists to state.** The
-governed operator group **is assigned and remains empty**, with **no human members**, so **no
-person currently holds qualification access**. **Neither governed AWS profile exists**, **no
-governed SSO login has been performed or proven**, and **an IAM identity-policy simulation is a
-policy evaluation rather than an end-to-end authorization proof**. **No qualification run, binding
-preflight, provider acquisition, Run A, Run B or combined assessment has happened**, **no provider
-is selected**, and **G1 and G2 stay OPEN**. Each of those is a separate, ungranted authorization —
-see each file's own header. **Further infrastructure mutation is not authorized**: applying these
-files **closed the infrastructure gate and opened none of the others**.
+**Applied is not authorized to use, and that is the boundary this file exists to state.** At the
+time of the apply the governed operator group **was assigned and empty** and **neither governed
+AWS profile existed** — **historical, and superseded by the qualified operator access recorded
+next**. **An IAM identity-policy simulation is a policy evaluation rather than an end-to-end
+authorization proof**, and that has not changed. **Further infrastructure mutation is not
+authorized**: applying these files **closed the infrastructure gate and opened none of the
+others**.
+
+**The qualified operator access is materialized and independently verified, and materialized
+access is not authority to use it.** Under a later, separate authorization **exactly one
+owner-approved human operator** was added to the governed Identity Center group, **both governed
+AWS profiles were materialized**, **each governed profile's identity preflight passed** as its own
+actor, **profile crossover is NONE** — neither profile resolved to the other's permission-set role
+— and the local AWS configuration's **effective access was preserved**. An independent review
+**read the result rather than producing it**. **Who the operator is stays out of this repository**:
+the count is recorded and **no name, user name, email address, identity-store or group identifier,
+membership identifier, role suffix, generated role name, account id, ARN or SSO start URL** is.
+
+```
+operator selection                                   OWNER-APPROVED
+operator group                                       EXACTLY 1 OWNER-APPROVED HUMAN MEMBER
+operator membership                                  MATERIALIZED / INDEPENDENTLY VERIFIED
+governed acquisition profile                         MATERIALIZED / IDENTITY PREFLIGHT PASSED
+governed assessment profile                          MATERIALIZED / IDENTITY PREFLIGHT PASSED
+profile crossover                                    NONE
+AWS config ACL                                       EFFECTIVE ACCESS PRESERVED
+membership/profile gate                              COMPLETED
+```
+
+**No qualification run, binding preflight, provider acquisition, Run A, Run B or combined
+assessment has happened**, **no provider credential was retrieved by this transition**, **no S3
+object operation and no provider request occurred**, **no provider is selected**, and **G1 and G2
+stay OPEN**. Each of those is a separate, ungranted authorization — see each file's own header.
 
 ---
 

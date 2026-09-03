@@ -1234,6 +1234,31 @@ STALE_FIFTH_ATTEMPT_CLAIMS: Final[tuple[str, ...]] = (
     "CURRENT SESSION VALIDITY IS GUARANTEED",
 )
 
+#: The one stale fifth-attempt claim a longer, differently-scoped phrase contains.
+#:
+#: "CREDENTIAL RETRIEVAL: NONE" is the binding preflight's own count, and the fifth
+#: attempt moved it to one. The qualified operator access records "PROVIDER CREDENTIAL
+#: RETRIEVAL: NONE", which is a different subject read against a different event -- the
+#: membership and profile materialization retrieved no provider credential -- and it
+#: ends in the same four words. A bare substring test reads that true statement as the
+#: stale one, so the longer phrase is subtracted before the scan rather than the shorter
+#: claim being deleted: the binding preflight's count is still guarded, and the
+#: materialization's is no longer mistaken for it.
+STALE_FIFTH_ATTEMPT_EXEMPTIONS: Final[tuple[str, ...]] = ("PROVIDER CREDENTIAL RETRIEVAL: NONE",)
+
+
+def stale_fifth_attempt_claims(text: str) -> list[str]:
+    """Every stale or overstated fifth-attempt claim a reading carries.
+
+    Takes a reading that is already flattened and upper-cased, so the two call sites
+    cannot disagree about what a document says. Pure, and reads only what it is given.
+    """
+    reading = text
+    for exemption in STALE_FIFTH_ATTEMPT_EXEMPTIONS:
+        reading = reading.replace(exemption, " ")
+    return [claim for claim in STALE_FIFTH_ATTEMPT_CLAIMS if claim in reading]
+
+
 #: The fifth attempt in the entry point's own source documentation.
 BINDING_SOURCE_FIFTH: Final[tuple[str, ...]] = (
     "invoked five times under separate authorization",
@@ -9854,9 +9879,11 @@ ADR_0021_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "runtime trust principals: selected in aws",
     "policy attachments: created",
     "policy attachments: deployed",
-    "profiles: created",
+    # "profiles: created" and "qualification profiles have been created" are retired
+    # here: both governed profiles have since been materialized and independently
+    # verified. "profiles: inspected" stays -- nothing has inspected an AWS profile,
+    # and AWS discovery is still unauthorized.
     "profiles: inspected",
-    "qualification profiles have been created",
     "authority granted: acquisition",
     "authority granted: assessment",
     "a principal has received aws authority",
@@ -10667,9 +10694,10 @@ ADR_0022_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the permission sets exist in aws",
     "identity center permission sets: created",
     "account assignments: created",
-    "governed aws profiles: materialized",
-    "governed aws profiles: created",
-    "qualification profiles have been created",
+    # The three governed-profile creation bans are retired here for the reason the
+    # ADR-0021 list retires its pair: both governed profiles have since been
+    # materialized and independently verified. ADR_0022_STATUS_REQUIRED still holds
+    # this section's own block to its merge-day wording.
     "aws identity has been verified",
     "aws account/group/instance binding values: known",
     "authority granted: acquisition",
@@ -11080,9 +11108,12 @@ PR_56_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "account assignments: created",
     "runtime roles: created",
     "runtime roles: observed",
-    "governed profiles: materialized",
-    "governed profiles: created",
-    "qualification profiles have been created",
+    # "governed profiles: materialized", "governed profiles: created" and
+    # "qualification profiles have been created" are retired here for the reason
+    # "deployment: performed" was: both governed profiles have since been materialized
+    # and independently verified, so refusing those spellings would refuse the truth.
+    # PR_56_STATUS_REQUIRED still holds this section's own block to "governed profiles:
+    # unmaterialized", which is what keeps the merge-day record honest.
     "organization-instance existence: established",
     "binding values: known",
     "authority granted: acquisition",
@@ -11253,8 +11284,15 @@ PR_56_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "satisfying it authorizes nothing by itself",
     ),
     ("keeps the implementation dormant", "the implementation remains dormant"),
-    ("refuses a declaration read as a resource", "declarations are not live resources"),
-    ("keeps the profiles unmaterialized", "the governed profiles are not materialized"),
+    # Both clauses are scoped to that merge now, in the past tense the plan reads them
+    # in. The declarations have since been applied and both governed profiles have since
+    # been materialized, so the present tense had become a false claim about now rather
+    # than a true one about then.
+    ("refuses a declaration read as a resource", "declarations were not live resources"),
+    (
+        "keeps the merge-day profiles unmaterialized",
+        "the governed profiles were not materialized",
+    ),
     (
         "defers the organization instance and every binding value",
         "existence and every aws account, group and instance binding value remain unknown / unread",
@@ -11339,19 +11377,18 @@ INFRA_README_VALIDATION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "separates applied from authorized",
         "applied is not authorized to use",
     ),
+    # Five clauses are retired here and replaced by OPERATOR_ACCESS_INFRA_REQUIRED
+    # below. The group is no longer empty, both governed profiles exist, and an
+    # identity preflight has since passed for each -- so requiring the empty-group,
+    # unmaterialized-profile, no-access and no-login wording would require this file
+    # to state what is no longer true. The merge-day facts survive in the past tense.
     (
-        "records the assigned, empty operator group",
-        "governed operator group is assigned and remains empty",
+        "frames the merge-day operator state historically",
+        "at the time of the apply the governed operator group was assigned and empty",
     ),
-    ("records that no human is a member", "no human members"),
     (
-        "records that nobody holds qualification access",
-        "no person currently holds qualification access",
-    ),
-    ("records the unmaterialized profiles", "neither governed aws profile exists"),
-    (
-        "records that no governed login is proven",
-        "no governed sso login has been performed or proven",
+        "frames the merge-day profiles historically",
+        "neither governed aws profile existed",
     ),
     (
         "separates a simulation from an end-to-end proof",
@@ -11435,35 +11472,58 @@ SUPERSEDED_STATUS_BANNER: Final = (
     "infrastructure*."
 )
 
-#: The level-four headings whose blocks record a superseded state.
+#: The banner the applied section's own superseded blocks must carry.
 #:
-#: Every occurrence of each must be followed immediately by the banner. "Verified
-#: status" is deliberately absent: it is the applied section's own block, and the one
-#: block that is not superseded.
-SUPERSEDED_STATUS_HEADINGS: Final[tuple[str, ...]] = (
-    "#### Status",
-    "#### What exists today",
-    "#### What stays closed",
-    "#### The implementation gap — closed offline, and stated plainly",
-    "#### Carried-forward implementation findings",
+#: The apply happened, and its operator-group, profile and membership-gate lines were
+#: true on the day it ran. The membership and profile materialization ended them, so
+#: they are framed by *their own* successor rather than by the section they live in --
+#: a block cannot be superseded by the section that contains it.
+APPLIED_INFRA_SUPERSEDED_BANNER: Final = (
+    "historical — the state as of that apply, superseded by *the qualified operator access*."
 )
+
+#: Every level-four heading whose block records a superseded state, and the banner
+#: that block's own successor requires.
+#:
+#: A mapping rather than one shared constant, because two different events superseded
+#: these blocks: the per-merge blocks were superseded by the apply, and the apply's own
+#: operator, profile and membership-gate lines were superseded by the materialization.
+#: One banner serving both would let either block name the other's successor and still
+#: pass. "What the apply established" is deliberately absent -- the apply really did
+#: establish those resources, and nothing has superseded them.
+SUPERSEDED_STATUS_BANNERS: Final[dict[str, str]] = {
+    "#### Status": SUPERSEDED_STATUS_BANNER,
+    "#### What exists today": SUPERSEDED_STATUS_BANNER,
+    "#### What stays closed": SUPERSEDED_STATUS_BANNER,
+    "#### The implementation gap — closed offline, and stated plainly": (SUPERSEDED_STATUS_BANNER),
+    "#### Carried-forward implementation findings": SUPERSEDED_STATUS_BANNER,
+    "#### What the apply did not establish": APPLIED_INFRA_SUPERSEDED_BANNER,
+    "#### Verified status": APPLIED_INFRA_SUPERSEDED_BANNER,
+}
+
+#: The headings those blocks carry, derived from the mapping rather than restated.
+#: Two spellings of one list is how a heading gains a banner requirement in one place
+#: and quietly loses it in the other.
+SUPERSEDED_STATUS_HEADINGS: Final[tuple[str, ...]] = tuple(SUPERSEDED_STATUS_BANNERS)
 
 
 def superseded_status_framing_defects(text: str) -> list[str]:
-    """Every superseded status block that does not open with the historical banner.
+    """Every superseded status block that does not open with its own historical banner.
 
     Reads the document as lines rather than as one flattened string, because the
     property is positional: the banner has to be the first thing under the heading, not
-    merely present somewhere in the file.
+    merely present somewhere in the file. The banner is looked up per heading, so a
+    block framed by the wrong successor is a defect rather than a pass.
     """
     defects: list[str] = []
     lines = text.split("\n")
     for index, line in enumerate(lines):
-        if line.strip() not in SUPERSEDED_STATUS_HEADINGS:
+        banner = SUPERSEDED_STATUS_BANNERS.get(line.strip())
+        if banner is None:
             continue
         following = [candidate for candidate in lines[index + 1 : index + 4] if candidate.strip()]
         opening = " ".join(" ".join(following).replace("**", "").replace(">", " ").split()).lower()
-        if not opening.startswith(SUPERSEDED_STATUS_BANNER):
+        if not opening.startswith(banner):
             defects.append(f"unframed superseded status block at line {index + 1}")
     return defects
 
@@ -11556,12 +11616,12 @@ APPLIED_INFRA_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
 #: established, and a loose refusal of that clause would refuse the document for being
 #: correct.
 APPLIED_INFRA_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "a human holds qualification access",
-    "human qualification access: granted",
-    "an operator has been added to the group",
-    "operator group: populated",
-    "governed profiles: materialized",
-    "the governed profiles exist",
+    # Six entries are retired here, on the rule the "deployment: performed" retirement
+    # above was retired by: a human really does hold the governed qualification access,
+    # an operator really was added to the group, and both governed profiles really are
+    # materialized, so refusing those spellings would refuse the truth. What replaces
+    # them is APPLIED_INFRA_MATERIALIZED_FORBIDDEN below -- the overstatements the
+    # materialization still did not buy.
     "governed sso login: performed",
     "governed sso login: proven",
     "end-to-end authorization: established",
@@ -11618,12 +11678,17 @@ APPLIED_INFRA_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "counts the verified generated roles",
         "generated identity center runtime roles: 2 verified",
     ),
-    ("records the assigned, empty operator group", "operator group: empty / assigned / no human"),
-    ("keeps the profiles unmaterialized", "governed profiles: unmaterialized"),
-    ("records the untaken membership gate", "membership/profile gate: eligible / not executed"),
+    # The empty-group, unmaterialized-profile and untaken-gate clauses are retired
+    # here and replaced by OPERATOR_ACCESS_PLAN_REQUIRED below: the plan now records
+    # the merge-day state in the past tense and the current state in the present, and
+    # requiring the superseded wording would require the plan to contradict itself.
     (
         "separates existence from qualification success",
         "infrastructure existence is not qualification success",
+    ),
+    (
+        "frames the merge-day operator state historically",
+        "at the time of the apply the governed operator group was assigned and empty",
     ),
     ("closes further mutation", "further infrastructure mutation: not authorized"),
     ("keeps both gates open", "g1 / g2: open / open"),
@@ -11646,15 +11711,317 @@ INFRA_README_VALIDATION_FORBIDDEN: Final[tuple[str, ...]] = (
     "no plan and no apply ran",
     "no qualification resource",
     "qualification infrastructure remains unapplied",
-    "a human holds qualification access",
-    "governed profiles are materialized",
-    "the governed profiles exist",
+    # "a human holds qualification access", "governed profiles are materialized" and
+    # "the governed profiles exist" are retired here: one owner-approved human operator
+    # holds the access and both governed profiles are materialized, so refusing those
+    # spellings would refuse the truth this file now has to state.
     "qualification has run",
     "a provider is selected",
     "phase 3 is complete",
     "control is published",
     "live trading is enabled",
 )
+
+#: The overstatements the membership and profile materialization still did not buy.
+#:
+#: Six bans were retired from :data:`APPLIED_INFRA_STATUS_FORBIDDEN` because the
+#: materialization made them true. These replace them, and they are the mirror image:
+#: every one is a claim that reaching a governed role is the same as being authorized
+#: to use it. Anchored, never loose, so the honest negations survive -- the status
+#: documents are *required* to say that qualification execution is not authorized, and
+#: a loose refusal would refuse them for being correct.
+APPLIED_INFRA_MATERIALIZED_FORBIDDEN: Final[tuple[str, ...]] = (
+    "membership materialization authorized qualification",
+    "profile materialization authorized qualification",
+    "the membership/profile gate authorized qualification",
+    "materialized access is authority to use it",
+    "materialized access authorizes a qualification run",
+    "materialized access authorizes data acquisition",
+    "operator access authorizes data acquisition",
+    "qualification execution: authorized",
+    "sixth private-binding preflight: authorized",
+    "sixth private-binding preflight: run",
+    "provider credential retrieval: performed",
+    "provider credential retrieval: one",
+    "s3/provider activity: performed",
+    "run a: performed",
+    "run b: performed",
+    "combined assessment: performed",
+    "third adr-0017 acquisition: performed",
+    "profile crossover: detected",
+)
+
+#: The section that governs the operator and profile state, and its level.
+#:
+#: It sits ahead of the applied-infrastructure section it supersedes, for the reason
+#: that section sits ahead of the per-merge sections it superseded: a reader meets the
+#: state that governs before the states that used to.
+OPERATOR_ACCESS_STATUS_HEADING: Final = (
+    "The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not "
+    "authorized to use"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+OPERATOR_ACCESS_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+OPERATOR_ACCESS_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "What the materialization established",
+    "What the materialization did not establish",
+    "Qualified operator status",
+)
+
+#: The heading each document's operator-access section must be followed by.
+OPERATOR_ACCESS_SECTION_TERMINATORS: Final[dict[str, str]] = {
+    "CLAUDE.md": f"### {APPLIED_INFRA_STATUS_HEADING}",
+    "README.md": f"### {APPLIED_INFRA_STATUS_HEADING}",
+}
+
+
+class OperatorAccessSectionScan(NamedTuple):
+    """Every operator-access status section a document carries, and its defects.
+
+    Separate from the other section scans for the reason they are separate from each
+    other: a malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_operator_access_status_sections(text: str) -> OperatorAccessSectionScan:
+    """Extract the operator-access status section(s) from a document, by heading."""
+    return OperatorAccessSectionScan(
+        *_scan_status_sections(
+            text,
+            heading=OPERATOR_ACCESS_STATUS_HEADING,
+            level=OPERATOR_ACCESS_STATUS_HEADING_LEVEL,
+            subsections=OPERATOR_ACCESS_STATUS_SUBSECTIONS,
+            label="qualified operator access",
+        )
+    )
+
+
+#: What both status documents must say inside their operator-access section.
+#:
+#: Section-scoped, for the reason every other section-scoped list is: nearly every
+#: clause here has a near-neighbour in the applied-infrastructure block below it, so a
+#: flat scan is answered by that neighbour and a section-local deletion goes
+#: unreported.
+OPERATOR_ACCESS_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------------ what actually happened
+    (
+        "records the applied, verified infrastructure",
+        "qualification infrastructure: applied / independently verified",
+    ),
+    ("records the owner-approved selection", "operator selection: owner-approved"),
+    (
+        "counts the one approved human member",
+        "operator group: exactly 1 owner-approved human member / assigned",
+    ),
+    (
+        "records the independently verified membership",
+        "operator membership: materialized / independently verified",
+    ),
+    (
+        "records the materialized acquisition profile",
+        "governed acquisition profile: materialized / identity preflight passed",
+    ),
+    (
+        "records the materialized assessment profile",
+        "governed assessment profile: materialized / identity preflight passed",
+    ),
+    ("records the absence of crossover", "profile crossover: none"),
+    ("records the preserved config access", "aws config acl: effective access preserved"),
+    ("records the completed gate", "membership/profile gate: completed"),
+    (
+        "records that the review read rather than produced the result",
+        "read the result rather than producing it",
+    ),
+    ("names no operator", "no name, user name, email address"),
+    # ------------------------------------------------- and what access did not buy
+    ("separates access from authority", "materialized access is not authority to use it"),
+    (
+        "separates a materialized profile from a run",
+        "a materialized profile is not a qualification run",
+    ),
+    (
+        "separates an identity preflight from a credential",
+        "an identity preflight is not a provider credential",
+    ),
+    ("separates reaching a role from using it", "reaching a role is not using it"),
+    (
+        "separates operator access from provider selection",
+        "operator access is not provider selection",
+    ),
+    ("separates qualified access from phase 3", "qualified access is not phase 3"),
+    (
+        "closes the sixth binding preflight",
+        "sixth private-binding preflight: not authorized / not run",
+    ),
+    ("records no credential retrieval", "provider credential retrieval: none"),
+    ("records no s3 or provider activity", "s3/provider activity: none"),
+    ("closes qualification execution", "qualification execution: not authorized / not run"),
+    ("closes a third acquisition", "third adr-0017 acquisition: not authorized / not run"),
+    ("closes run a", "run a: not authorized / not run"),
+    ("closes run b", "run b: not authorized / not run"),
+    ("closes the combined assessment", "combined assessment: not authorized / not run"),
+    ("closes further mutation", "further infrastructure mutation: not authorized"),
+    ("records that no backtest began", "backtesting: not started"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    ("records that access authorizes no run", "a materialized access path authorizes no run"),
+    ("records that completing this gate opened no other", "opened none of the others"),
+    ("edits no decision record", "no adr document and no historical review report is rewritten"),
+)
+
+#: The pre-materialization wording, refused inside the section that governs now.
+#:
+#: Section-scoped for the reason :data:`APPLIED_INFRA_REVERSE_DRIFT_FORBIDDEN` is: the
+#: applied-infrastructure block and every per-merge block below it are *required* to
+#: keep the wording they were written with, and are held to their framing instead. What
+#: may not happen is that wording appearing in the section that governs now.
+OPERATOR_ACCESS_REVERSE_DRIFT_FORBIDDEN: Final[tuple[str, ...]] = (
+    "operator group: empty",
+    "empty / assigned / no human members",
+    "no human members",
+    "the assigned operator group is empty",
+    "governed operator group is assigned and remains empty",
+    "human qualification access: none",
+    "governed profiles: unmaterialized",
+    "governed aws profiles: unmaterialized",
+    "neither governed aws profile exists",
+    "membership/profile gate: eligible / not executed",
+    "membership/profile gate: not executed",
+)
+
+#: The pre-materialization status lines, wherever they read as a claim about now.
+#:
+#: Document-wide rather than section-scoped, because a superseded status line is wrong
+#: wherever it is written *unframed*. The framing is positional and is the mechanism
+#: the superseded blocks already use: a line inside a block whose heading appears in
+#: :data:`SUPERSEDED_STATUS_BANNERS` is history, and every other occurrence is a claim
+#: about the current state. The banner itself is checked separately, so a block cannot
+#: buy framing merely by carrying one of those headings.
+OPERATOR_ACCESS_STALE_CLAIMS: Final[tuple[str, ...]] = (
+    "operator group: empty / assigned / no human members",
+    "operator group is empty / assigned / no human members",
+    "the assigned operator group is empty",
+    "governed operator group is assigned and remains empty",
+    "human qualification access: none",
+    "human qualification access none",
+    "governed profiles: unmaterialized",
+    "governed aws profiles: unmaterialized",
+    "governed profiles unmaterialized",
+    "neither governed aws profile exists",
+    "membership/profile gate: eligible / not executed",
+    "membership/profile gate eligible / not executed",
+)
+
+
+def operator_access_stale_claim_defects(text: str) -> list[str]:
+    """Every pre-materialization status line that is not inside a framed block.
+
+    Reads the document as lines, because the property is positional in exactly the way
+    :func:`superseded_status_framing_defects` is: an occurrence under a superseded
+    heading is the record of its own date, and the same words anywhere else are a claim
+    that the group is still empty and the profiles still do not exist.
+
+    Pure, and reads only what it is given: no file is opened and no state is carried
+    between calls, so two documents scanned in either order give the same answer.
+    """
+    defects: list[str] = []
+    framed = False
+    for index, line in enumerate(text.split("\n")):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            framed = stripped in SUPERSEDED_STATUS_BANNERS
+            continue
+        if framed:
+            continue
+        reading = " ".join(stripped.replace("**", "").split()).lower()
+        defects.extend(
+            f"unframed pre-materialization claim at line {index + 1}: {claim}"
+            for claim in OPERATOR_ACCESS_STALE_CLAIMS
+            if claim in reading
+        )
+    return defects
+
+
+#: What the implementation plan must say about the qualified operator access.
+#:
+#: The plan is a separate document with a separate reader, and merged main has more
+#: than once carried a fact in one status file and a stale contradiction in another.
+OPERATOR_ACCESS_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "records the applied, verified infrastructure",
+        "qualification infrastructure: applied / independently verified",
+    ),
+    ("records the owner-approved selection", "operator selection: owner-approved"),
+    (
+        "counts the one approved human member",
+        "operator group: exactly 1 owner-approved human member / assigned",
+    ),
+    (
+        "records the independently verified membership",
+        "operator membership: materialized / independently verified",
+    ),
+    (
+        "records the materialized acquisition profile",
+        "governed acquisition profile: materialized / identity preflight passed",
+    ),
+    (
+        "records the materialized assessment profile",
+        "governed assessment profile: materialized / identity preflight passed",
+    ),
+    ("records the absence of crossover", "profile crossover: none"),
+    ("records the preserved config access", "aws config acl: effective access preserved"),
+    ("records the completed gate", "membership/profile gate: completed"),
+    ("names no operator", "who the operator is stays out of this repository"),
+    ("separates access from authority", "materialized access is not authority to use it"),
+    (
+        "closes the sixth binding preflight",
+        "sixth private-binding preflight: not authorized / not run",
+    ),
+    ("records no credential retrieval", "provider credential retrieval: none"),
+    ("records no s3 or provider activity", "s3/provider activity: none"),
+    ("closes qualification execution", "qualification execution: not authorized / not run"),
+    ("closes run a", "run a: not authorized / not run"),
+    ("closes run b", "run b: not authorized / not run"),
+    ("closes the combined assessment", "combined assessment: not authorized / not run"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    ("records that access authorizes no run", "a materialized access path authorizes no run"),
+)
+
+#: What the infrastructure README must say about the qualified operator access.
+OPERATOR_ACCESS_INFRA_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("separates access from authority", "materialized access is not authority to use it"),
+    ("counts the one approved human member", "exactly one owner-approved human operator"),
+    ("records the materialized profiles", "both governed aws profiles were materialized"),
+    (
+        "records each passing identity preflight",
+        "each governed profile's identity preflight passed",
+    ),
+    ("records the absence of crossover", "profile crossover is none"),
+    ("records the preserved config access", "effective access was preserved"),
+    (
+        "records that the review read rather than produced the result",
+        "read the result rather than producing it",
+    ),
+    ("names no operator", "who the operator is stays out of this repository"),
+    ("records no credential retrieval", "no provider credential was retrieved by this transition"),
+    (
+        "records no s3 or provider activity",
+        "no s3 object operation and no provider request occurred",
+    ),
+)
+
 
 #: The two acquisition operations every ADR-0021 surface holds at exactly zero.
 #:
@@ -16952,11 +17319,9 @@ def main() -> int:
         )
         f.check(
             "the entry point carries no stale or overstated fifth-attempt claim",
-            not [
-                claim
-                for claim in STALE_FIFTH_ATTEMPT_CLAIMS
-                if claim in " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
-            ],
+            not stale_fifth_attempt_claims(
+                " ".join(read(BINDING_PREFLIGHT).replace("**", "").split()).upper()
+            ),
             "the file that ran is the last place a superseded count should survive",
         )
         f.check(
@@ -17721,7 +18086,7 @@ def main() -> int:
         )
         f.check(
             f"{name} carries no stale or overstated fifth-attempt claim",
-            not [claim for claim in STALE_FIFTH_ATTEMPT_CLAIMS if claim in flat.upper()],
+            not stale_fifth_attempt_claims(flat.upper()),
             "a zero the attempt moved, and an access it never made, are the same defect",
         )
         f.check(
@@ -20114,6 +20479,86 @@ def main() -> int:
         ", ".join(pr_56_blocked_status_defects(read(PHASE3 / "implementation-plan.md"))),
     )
 
+    # ---------------------------------------------- the qualified operator access
+    # One owner-approved human operator was added to the governed Identity Center
+    # group, both governed profiles were materialized, and an independent review
+    # confirmed each identity preflight. Three states are kept apart in both
+    # directions: an applied resource, a materialized access path, and authority to
+    # use it. Who the operator is stays out of this repository -- the count is
+    # recorded and the person is not.
+    operator_access_sections: dict[str, str] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_operator_access_status_sections(document)
+        f.check(
+            f"{name} carries exactly one operator-access status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        operator_access_sections[name] = scan.sections[0] if len(scan.sections) == 1 else ""
+        f.check(
+            f"{name} ends the operator-access section at its declared boundary",
+            len(scan.sections) == 1
+            and qualification_iam_section_is_terminated(
+                document,
+                str(scan.sections[0]),
+                OPERATOR_ACCESS_SECTION_TERMINATORS[name],
+            ),
+            f"the section does not end at {OPERATOR_ACCESS_SECTION_TERMINATORS[name]!r}",
+        )
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in OPERATOR_ACCESS_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for the qualified operator access",
+                phrase in section,
+                f"missing from the operator-access section of {name}: {phrase}",
+            )
+        access_overstated = [
+            claim
+            for claim in APPLIED_INFRA_MATERIALIZED_FORBIDDEN
+            if claim in flat or claim in section
+        ]
+        f.check(
+            f"{name} does not overstate the materialization",
+            not access_overstated,
+            ", ".join(access_overstated),
+        )
+        access_reverted = [
+            claim for claim in OPERATOR_ACCESS_REVERSE_DRIFT_FORBIDDEN if claim in section
+        ]
+        f.check(
+            f"{name} does not revert the operator-access section to the pre-membership state",
+            not access_reverted,
+            ", ".join(access_reverted),
+        )
+        f.check(
+            f"{name} frames every pre-materialization status line as history",
+            not operator_access_stale_claim_defects(document),
+            ", ".join(operator_access_stale_claim_defects(document)),
+        )
+
+    f.check(
+        # Byte-identical, not merely structurally parallel, for the reason every other
+        # paired section is: the two documents have repeatedly carried a fact in one
+        # file and a stale contradiction in the other.
+        "both status documents carry byte-identical operator-access sections",
+        len(set(operator_access_sections.values())) == 1 and all(operator_access_sections.values()),
+        "the two operator-access status sections differ",
+    )
+
+    for label, phrase in OPERATOR_ACCESS_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for the qualified operator access",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+
+    f.check(
+        "the implementation plan frames every pre-materialization status line as history",
+        not operator_access_stale_claim_defects(read(PHASE3 / "implementation-plan.md")),
+        ", ".join(operator_access_stale_claim_defects(read(PHASE3 / "implementation-plan.md"))),
+    )
+
     # ------------------------------------------ the applied qualification infrastructure
     # PR #60 merged, the controlled saved-plan apply completed and an independent
     # post-apply verification passed. Three states are kept apart in both directions:
@@ -20194,8 +20639,21 @@ def main() -> int:
             phrase in infra_readme_flat,
             f"missing from the infra README: {phrase}",
         )
+    for label, phrase in OPERATOR_ACCESS_INFRA_REQUIRED:
+        f.check(
+            f"the infra README {label} for the qualified operator access",
+            phrase in infra_readme_flat,
+            f"missing from the infra README: {phrase}",
+        )
+    f.check(
+        "the infra README frames every pre-materialization status line as history",
+        not operator_access_stale_claim_defects(infra_readme_text),
+        ", ".join(operator_access_stale_claim_defects(infra_readme_text)),
+    )
     infra_overstated = [
-        claim for claim in INFRA_README_VALIDATION_FORBIDDEN if claim in infra_readme_flat
+        claim
+        for claim in (*INFRA_README_VALIDATION_FORBIDDEN, *APPLIED_INFRA_MATERIALIZED_FORBIDDEN)
+        if claim in infra_readme_flat
     ]
     f.check(
         "the infra README neither reverts to the obsolete no-validation claim nor claims a "
