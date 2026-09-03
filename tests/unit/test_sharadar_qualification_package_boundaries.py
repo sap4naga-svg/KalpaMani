@@ -201,12 +201,72 @@ def test_no_qualification_module_constructs_an_sdk_client(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", QUALIFY_MODULES, ids=lambda path: path.name)
-def test_no_qualification_module_has_an_entry_point_or_reads_the_environment(
-    path: Path,
-) -> None:
+def test_no_qualification_module_has_an_entry_point(path: Path) -> None:
     source = _executable(path)
-    for forbidden in ('__name__ == "__main__"', "argparse", "sys.argv", "os.environ"):
+    for forbidden in ('__name__ == "__main__"', "argparse", "sys.argv"):
         assert forbidden not in source
+
+
+def test_exactly_one_qualification_module_reads_the_environment() -> None:
+    """ADR-0023 moved the licensed bucket out of Terraform state and into a file.
+
+    The file is selected by one fixed environment-variable *name*, so exactly one
+    module in this package now reads an environment -- and the check narrows rather
+    than relaxes: it names which module, and pins the exact variable names it may
+    read. A second reader, or a third name, fails here.
+    """
+    readers = [path.name for path in QUALIFY_MODULES if "os.environ" in _executable(path)]
+    assert readers == ["runtime_binding.py"]
+
+
+def test_the_runtime_binding_module_reads_exactly_two_governed_variable_names() -> None:
+    """The binding selector and the private root, and nothing ambient beyond them.
+
+    Read out of the AST rather than by substring, so a name assembled at runtime --
+    which is how an unreviewed variable would arrive -- is not a literal this can
+    find, and the count below stops matching.
+    """
+    binding = QUALIFY / "sharadar" / "runtime_binding.py"
+    tree = ast.parse(_source(binding))
+
+    #: Module-level string constants, so a name used as the lookup key resolves to
+    #: the literal it was declared with rather than being skipped.
+    literals: dict[str, str] = {}
+    for node in tree.body:
+        target: str | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target, value = node.target.id, node.value
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target, value = node.targets[0].id, node.value
+        if target and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            literals[target] = value.value
+
+    names: set[str] = set()
+    for call in ast.walk(tree):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "get"
+            and isinstance(call.func.value, ast.Attribute)
+            and call.func.value.attr == "environ"
+            and call.args
+        ):
+            continue
+        key = call.args[0]
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            names.add(key.value)
+        elif isinstance(key, ast.Name) and key.id in literals:
+            names.add(literals[key.id])
+        else:  # a key this scan cannot resolve is a key nobody reviewed
+            raise AssertionError("an environment key is not a module-level literal")
+
+    assert names == {"KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE", "LOCALAPPDATA"}
+    assert "os.environ[" not in _executable(binding)
 
 
 @pytest.mark.parametrize("path", QUALIFY_MODULES, ids=lambda path: path.name)
@@ -216,13 +276,32 @@ def test_no_qualification_module_writes_a_local_file(path: Path) -> None:
         assert forbidden not in source
 
 
-def test_only_the_inventory_module_reads_a_file_and_only_the_private_one() -> None:
+def test_only_the_two_private_input_modules_read_a_file() -> None:
+    """The owner-only inventory, and the ADR-0023 private runtime binding.
+
+    Two now rather than one, and both read a single application-selected private
+    input. The list is exact, so a third reader appearing anywhere in this package
+    fails here rather than being noticed in review.
+    """
     readers = [
         path
         for path in QUALIFY_MODULES
         if "read_bytes" in _executable(path) or "read_text" in _executable(path)
     ]
-    assert [path.name for path in readers] == ["inventory.py"]
+    assert [path.name for path in readers] == ["inventory.py", "runtime_binding.py"]
+
+
+@pytest.mark.parametrize("path", QUALIFY_MODULES, ids=lambda path: path.name)
+def test_no_qualification_module_enumerates_a_directory(path: Path) -> None:
+    """No glob, no scan, no listing -- in this package, and in the binding loader.
+
+    The private root is a containment boundary, never a search path: a loader that
+    could pick the newest file out of a private directory would read a file nobody
+    selected, and would turn a wrong environment variable into a silent substitution.
+    """
+    source = _executable(path)
+    for forbidden in ("glob(", "rglob(", "iterdir(", "listdir(", "scandir(", "walk("):
+        assert forbidden not in source
 
 
 # -- the shared licensed store is not reachable from this package -------------

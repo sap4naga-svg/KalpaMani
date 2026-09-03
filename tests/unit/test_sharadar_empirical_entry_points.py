@@ -543,6 +543,13 @@ def test_neither_command_reimplements_the_identity_gate() -> None:
         # absent is an STS call of this module's own.
         assert not re.search(r"[\"']sts[\"']", source)
         assert "allowed_account_ids" not in source
+        # NECESSARY, AND NOT SUFFICIENT. This finds a Terraform reference spelled in
+        # the entry point's own text and nothing else -- and the ADR-0023 defect was
+        # never spelled here: the acquisition path said
+        # ``from aws_foundation_verify import tf_outputs``, and the subprocess lived
+        # one module away, so this assertion was green throughout. The real guard is
+        # the name-level call graph and the runtime sentinel in
+        # ``test_sharadar_acquisition_terraform_isolation.py``.
         assert "terraform" not in source.lower()
         # The ADR-0021 gate, still imported from the one governed verifier rather
         # than rebuilt here. The account-only gate is no longer enough for either

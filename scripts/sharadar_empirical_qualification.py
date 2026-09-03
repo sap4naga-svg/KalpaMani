@@ -23,7 +23,7 @@ writes.
  3  load and validate the owner-only eight-subject inventory
  4  pin the governed AWS profile
  5  pass the governed identity gate
- 6  resolve only the LICENSED bucket -- never CONTROL
+ 6  resolve only the LICENSED bucket, from the private runtime binding
  7  resolve the fixed secret identifier
  8  retrieve one governed credential
  9  construct the injected dependencies
@@ -43,6 +43,38 @@ learning something checkable for free.
 exactly two arguments. The subjects come from an owner-only, git-ignored file whose
 path the application fixes; a ``--subject`` flag would put a private evaluation
 decision into shell history and into every process listing on the workstation.
+
+**The operator contract, in full.** Three things must be true before this command can
+reach stage 7, and each is named here so nothing has to be guessed:
+
+```text
+AWS_PROFILE                                   kalpamani-qualification-acquisition
+KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE  an ABSOLUTE path to the private
+                                              runtime binding, beneath
+                                              %LOCALAPPDATA%\\KalpaMani\\private
+KALPAMANI_SHARADAR_SECRET_ID                  the governed Secrets Manager identifier
+```
+
+**None of the three is an option, and none may be.** A profile, a private path and a
+secret identifier on a command line enter shell history and every process listing on
+the workstation, so each arrives from the environment and every spelling of a
+corresponding flag is refused by name.
+
+**The binding file is configuration, not a credential** (ADR-0023). It carries the
+licensed bucket, the governed account, the partition, the region and the acquisition
+profile, and it carries no secret, key or token. It is **read, never written**: this
+command does not create it, does not create its directory and does not repair its
+permissions. It must be a regular file beneath the current user's own private root,
+reached through no link, owned by that user, with ACL inheritance off, exactly one
+Allow entry naming them, and no Deny entry -- and a binding that fails any of those is
+refused with the same closed ``REFUSED_LICENSED_BUCKET`` as one that is simply
+absent. **The private reason is never printed.**
+
+**Stage 6 starts no Terraform process and makes no AWS call.** It used to resolve the
+bucket from Terraform remote state, which the write-only acquisition actor cannot
+read; ADR-0023 replaced that with the file above. The governed expected account the
+binding is compared against comes from the same local binding stage 5 has already
+read.
 
 **Output is allowlisted.** A fixed set of sentences through one function that takes a
 vocabulary member, not a string -- so no bucket, key, digest, subject, account, URL,
@@ -85,10 +117,15 @@ SECRET_ID_ENV_VAR: Final = "KALPAMANI_SHARADAR_SECRET_ID"  # noqa: S105
 EXPECTED_PROFILE: Final = "kalpamani-qualification-acquisition"
 EXPECTED_REGION: Final = "us-east-1"
 
-#: The Terraform output holding the licensed research bucket. Named, so the CONTROL
-#: bucket cannot be substituted by editing a variable: it has a different output key
-#: and this module never names it.
-LICENSED_BUCKET_OUTPUT: Final = "licensed_bucket_name"
+#: The one fixed, non-secret environment-variable *name* naming the private runtime
+#: binding file, restated from
+#: :mod:`kalpamani.data.qualify.sharadar.runtime_binding` so this surface states its
+#: own operator contract. A test asserts the two spellings are identical.
+#:
+#: ADR-0023 replaced a Terraform state read with this file. The CONTROL bucket still
+#: cannot be substituted: the binding carries one named field, this module never
+#: names a control one, and the loader returns a bucket and nothing else.
+RUNTIME_BINDING_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE"
 
 #: Options refused by name, each with the reason. Present as rejected names rather
 #: than merely absent: an unrecognised flag is already an ``argparse`` error, but one
@@ -111,7 +148,11 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--arn": "an ARN names an account; it is never supplied and never printed",
     "--profile": "the governed profile is pinned in code and compared, never supplied",
     "--aws-profile": "same as --profile: the pin is not an operator choice",
-    "--bucket": "the licensed bucket is resolved from governed state, never supplied",
+    "--bucket": (
+        "the licensed bucket comes from the governed private runtime binding, never "
+        "from an operator: a bucket on the command line is a licensed destination "
+        "chosen outside the repository"
+    ),
     "--endpoint": "no endpoint is accepted; the SDK and the transport resolve the governed one",
     "--subject": (
         "a subject is private evaluation information; it would enter shell history and "
@@ -125,6 +166,14 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
         "put a private location into shell history and every process listing"
     ),
     "--inventory-path": "same as --inventory: the private path is not an operator choice",
+    "--binding": (
+        "the private runtime binding path is named by one fixed environment variable; "
+        "a path option would put a private location into shell history and every "
+        "process listing"
+    ),
+    "--binding-file": "same as --binding: the private path is not an operator choice",
+    "--runtime-binding": "same as --binding: the private path is not an operator choice",
+    "--licensed-bucket": "same as --bucket: a licensed destination is never supplied",
     "--show-inventory": "the inventory is never printed, previewed, enumerated or summarised",
     "--print-inventory": "same as --show-inventory: there is no disclosure option",
     "--dataset": "the three datasets are locked; a selector would widen the retrieval",
@@ -452,7 +501,8 @@ def run_empirical_qualification(
     if reason is not None:
         raise EmpiricalQualificationError(EmpiricalOutcome.REFUSED_IDENTITY) from None
 
-    # 6. The licensed bucket, from governed state. Never the control one.
+    # 6. The licensed bucket, from the ADR-0023 private runtime binding. Never the
+    #    control one, and never a Terraform state read: this actor is write-only.
     try:
         licensed_bucket = resolve_licensed_bucket()
     except Exception:
@@ -696,10 +746,28 @@ def _governed_identity_gate() -> str | None:
 
 
 def _governed_licensed_bucket() -> str:
-    """The licensed bucket from governed Terraform state. Never the control one."""
-    from aws_foundation_verify import tf_outputs  # type: ignore[import-not-found]
+    """The licensed bucket, from the private runtime binding. Never the control one.
 
-    return str(tf_outputs()[LICENSED_BUCKET_OUTPUT])
+    **ADR-0023 removed the Terraform state read that used to live here.** This runs
+    under ``kalpamani-qualification-acquisition``, and a Terraform child process
+    inherits that profile -- so the state read was attempted by an actor ADR-0019
+    deliberately gives ``s3:PutObject`` and an explicit read ``Deny``, and which holds
+    nothing at all on the state bucket. It could not succeed, and widening the actor
+    to make it succeed would have handed a compromised acquisition process the whole
+    infrastructure inventory. The bucket name is configuration, so it arrives as
+    configuration.
+
+    The governed expected account comes from the same local binding the identity gate
+    at stage 5 already read, so **no AWS call and no Terraform process is added
+    here**: the comparison is between two values this workstation already holds. A
+    binding naming a different account is refused before the bucket is returned.
+    """
+    from aws_foundation_verify import expected_account  # type: ignore[import-not-found]
+
+    from kalpamani.data.qualify.sharadar.runtime_binding import load_runtime_binding
+
+    binding = load_runtime_binding(expected_account=expected_account())
+    return binding.licensed_bucket_name
 
 
 def _secrets_client() -> Any:
