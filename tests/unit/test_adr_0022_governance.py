@@ -968,7 +968,9 @@ def test_mutation_pr_56_claimed_deployed_applied_or_live(claim: str) -> None:
         "terraform has been applied",
         "identity center permission sets: created",
         "aws account/group/instance binding values: known",
-        "governed aws profiles: created",
+        # "governed aws profiles: created" is retired here with the guard entry it
+        # drove: both governed profiles have since been materialized and independently
+        # verified. The merge-day record is held by ADR_0022_STATUS_REQUIRED instead.
         "run a: authorized",
         "g1: closed",
         "live trading: enabled",

@@ -427,7 +427,11 @@ def test_claiming_something_followed_from_the_merge_is_caught(injected: str) -> 
         "runtime roles: live",
         "runtime trust principals: selected in aws",
         "policy attachments: created",
-        "profiles: created",
+        # "profiles: created" is retired here with the guard entry it drove: both
+        # governed profiles have since been materialized and independently verified,
+        # so it is no longer a claim the documents may not make. "profiles: inspected"
+        # stays -- nothing has inspected an AWS profile, and AWS discovery is still
+        # unauthorized.
         "profiles: inspected",
         "a principal has received aws authority",
         "the qualification runtime role exists in aws",

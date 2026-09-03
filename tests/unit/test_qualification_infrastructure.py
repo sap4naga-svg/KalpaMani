@@ -2777,7 +2777,10 @@ class TestPr56ForwardDriftMutations:
             "live policy attachments: established",
             "runtime roles: created",
             "runtime roles: observed",
-            "governed profiles: materialized",
+            # "governed profiles: materialized" is retired here with the guard entry it
+            # drove: both governed profiles have since been materialized and
+            # independently verified, so it is no longer a claim the documents may not
+            # make. The merge-day record is held by PR_56_REQUIRED instead.
             "organization-instance existence: established",
             "binding values: known",
             "authority granted: acquisition",
@@ -2898,7 +2901,9 @@ class TestTheInfrastructureReadmeRecordsTheIsolatedValidation:
             "never planned, never applied",
             "no plan and no apply ran",
             "qualification infrastructure remains unapplied",
-            "governed profiles are materialized",
+            # "governed profiles are materialized" is retired here with the guard entry
+            # it drove: both governed profiles exist, and this file is now required to
+            # say so.
         ],
     )
     def test_a_drift_claim_is_refused(self, claim: str) -> None:
@@ -3071,3 +3076,246 @@ class TestTheAppliedInfrastructureGuardRefusesDrift:
         required = {phrase for _label, phrase in APPLIED_REQUIRED}
         assert required.isdisjoint(set(APPLIED_FORBIDDEN))
         assert required.isdisjoint(set(APPLIED_REVERSE))
+
+
+# ---------------------------------------------------------------------------
+# The qualified operator access
+# ---------------------------------------------------------------------------
+#
+# One owner-approved human operator was added to the governed Identity Center
+# group, both governed AWS profiles were materialized, and an independent review
+# confirmed each identity preflight and found no profile crossover. Three states
+# are kept apart in both directions: an applied resource, a materialized access
+# path, and authority to use it.
+#
+# The regression this transition can produce runs both ways. Forward: a
+# materialized profile read as permission to run a qualification. Backward: the
+# pre-membership wording -- an empty group, unmaterialized profiles, an untaken
+# gate -- restored into the section that governs now, or left unframed in a
+# document that has moved past it.
+#
+# Every guard is the audit's own, driven rather than restated, and every mutation
+# is applied to in-memory text: no tracked file is written, no Terraform runs, no
+# AWS is reached, and no private artifact, operator identity or account value is
+# read.
+
+ACCESS_REQUIRED: tuple[tuple[str, str], ...] = GUARD.OPERATOR_ACCESS_STATUS_REQUIRED
+ACCESS_FORBIDDEN: tuple[str, ...] = GUARD.APPLIED_INFRA_MATERIALIZED_FORBIDDEN
+ACCESS_REVERSE: tuple[str, ...] = GUARD.OPERATOR_ACCESS_REVERSE_DRIFT_FORBIDDEN
+ACCESS_STALE: tuple[str, ...] = GUARD.OPERATOR_ACCESS_STALE_CLAIMS
+ACCESS_PLAN_REQUIRED: tuple[tuple[str, str], ...] = GUARD.OPERATOR_ACCESS_PLAN_REQUIRED
+ACCESS_INFRA_REQUIRED: tuple[tuple[str, str], ...] = GUARD.OPERATOR_ACCESS_INFRA_REQUIRED
+ACCESS_TERMINATORS: dict[str, str] = dict(GUARD.OPERATOR_ACCESS_SECTION_TERMINATORS)
+
+
+def access_missing(text: str) -> list[str]:
+    """Every required operator-access clause the reading does not carry, by label."""
+    return [label for label, phrase in ACCESS_REQUIRED if phrase not in text]
+
+
+def split_at_access_section(document: Path) -> tuple[str, str, str]:
+    """``(before, section, after)`` for a document's one operator-access section."""
+    text = read(document)
+    found = GUARD.scan_operator_access_status_sections(text)
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    section = str(found.sections[0])
+    before, separator, after = text.partition(section)
+    assert separator == section, f"{document.name}: the section is not verbatim in the document"
+    return before, section, after
+
+
+class TestTheQualifiedOperatorAccessIsRecorded:
+    """The unmutated repository satisfies every operator-access guard."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_each_document_carries_exactly_one_section(self, document: Path) -> None:
+        found = GUARD.scan_operator_access_status_sections(read(document))
+        assert found.defects == ()
+        assert len(found.sections) == 1
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_section_ends_at_its_declared_boundary(self, document: Path) -> None:
+        """It is followed by the applied-infrastructure section it supersedes."""
+        _before, section, _after = split_at_access_section(document)
+        assert GUARD.qualification_iam_section_is_terminated(
+            read(document), section, ACCESS_TERMINATORS[document.name]
+        )
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_required_clause_is_present(self, document: Path) -> None:
+        _before, section, _after = split_at_access_section(document)
+        assert access_missing(flat(section)) == []
+
+    def test_both_documents_carry_the_same_section(self) -> None:
+        sections = {document.name: split_at_access_section(document)[1] for document in DOCUMENTS}
+        assert len(set(sections.values())) == 1
+
+    def test_the_plan_carries_every_required_clause(self) -> None:
+        reading = flat(read(PLAN))
+        assert [label for label, phrase in ACCESS_PLAN_REQUIRED if phrase not in reading] == []
+
+    def test_the_infra_readme_carries_every_required_clause(self) -> None:
+        reading = flat(read(INFRA_README))
+        assert [label for label, phrase in ACCESS_INFRA_REQUIRED if phrase not in reading] == []
+
+    @pytest.mark.parametrize(
+        "document",
+        [*DOCUMENTS, PLAN, INFRA_README],
+        ids=lambda p: p.name,
+    )
+    def test_no_pre_materialization_claim_is_left_unframed(self, document: Path) -> None:
+        assert GUARD.operator_access_stale_claim_defects(read(document)) == []
+
+
+class TestTheQualifiedOperatorAccessGuardRefusesDrift:
+    """The mutations. A guard that cannot fail is a guard that proves nothing."""
+
+    @pytest.mark.parametrize("label", [label for label, _ in ACCESS_REQUIRED])
+    def test_removing_one_required_clause_is_reported(self, label: str) -> None:
+        phrase = dict(ACCESS_REQUIRED)[label]
+        _before, section, _after = split_at_access_section(PROJECT_ROOT / "CLAUDE.md")
+        reading = flat(section)
+        assert phrase in reading, f"absent before removal: {phrase}"
+        assert label in access_missing(reading.replace(phrase, ""))
+
+    @pytest.mark.parametrize("claim", ACCESS_FORBIDDEN)
+    def test_a_forward_drift_claim_is_refused(self, claim: str) -> None:
+        """Materialized access read as authority to use it, refused anywhere."""
+        reading = flat(read(PROJECT_ROOT / "CLAUDE.md"))
+        assert claim not in reading
+        assert claim in [needle for needle in ACCESS_FORBIDDEN if needle in reading + f" {claim} "]
+
+    @pytest.mark.parametrize("claim", ACCESS_REVERSE)
+    def test_a_reverse_drift_claim_is_refused_inside_the_section(self, claim: str) -> None:
+        """The pre-membership wording, refused where it would read as a claim about now.
+
+        Section-scoped on purpose: every one of these spellings is *required* to
+        survive in the applied-infrastructure block or a per-merge block below it,
+        which are the record of their own dates.
+        """
+        _before, section, _after = split_at_access_section(PROJECT_ROOT / "CLAUDE.md")
+        reading = flat(section)
+        assert claim not in reading
+        assert claim in [needle for needle in ACCESS_REVERSE if needle in reading + f" {claim} "]
+
+    @pytest.mark.parametrize("claim", ACCESS_STALE)
+    def test_an_unframed_pre_materialization_claim_is_reported(self, claim: str) -> None:
+        """The obsolete status line written outside any framed historical block."""
+        text = read(PROJECT_ROOT / "CLAUDE.md")
+        assert GUARD.operator_access_stale_claim_defects(text) == []
+        mutated = f"## Now\n\n{claim}\n\n{text}"
+        assert GUARD.operator_access_stale_claim_defects(mutated)
+
+    def test_a_framed_pre_materialization_claim_is_accepted(self) -> None:
+        """The same wording under a superseded heading is history, not a claim."""
+        framed = f"#### Verified status\n\n{ACCESS_STALE[0]}\n"
+        assert GUARD.operator_access_stale_claim_defects(framed) == []
+
+    def test_the_applied_section_carries_its_own_successor_banner(self) -> None:
+        """The apply's superseded blocks name the materialization, not the apply."""
+        text = read(PROJECT_ROOT / "CLAUDE.md")
+        assert GUARD.superseded_status_framing_defects(text) == []
+        mutated = text.replace(
+            "> **HISTORICAL — the state as of that apply, superseded by *The qualified operator\n"
+            "> access*.**",
+            "",
+            1,
+        )
+        assert GUARD.superseded_status_framing_defects(mutated)
+
+    def test_a_block_framed_by_the_wrong_successor_is_reported(self) -> None:
+        """A per-merge banner over the apply's own block is not framing."""
+        wrong = (
+            f"#### Verified status\n\n> **HISTORICAL — {GUARD.SUPERSEDED_STATUS_BANNER[13:]}**\n"
+        )
+        assert GUARD.superseded_status_framing_defects(wrong)
+
+    def test_an_empty_document_fails_rather_than_passing(self) -> None:
+        assert GUARD.scan_operator_access_status_sections("").sections == ()
+        assert access_missing("") == [label for label, _ in ACCESS_REQUIRED]
+
+    def test_a_second_section_is_refused(self) -> None:
+        """Two answers to one question is not one answer twice."""
+        _before, section, _after = split_at_access_section(PROJECT_ROOT / "CLAUDE.md")
+        found = GUARD.scan_operator_access_status_sections(section + "\n" + section)
+        assert len(found.sections) == 2
+
+    def test_the_lists_are_not_empty_and_carry_no_duplicate(self) -> None:
+        assert ACCESS_REQUIRED and ACCESS_FORBIDDEN and ACCESS_REVERSE and ACCESS_STALE
+        assert ACCESS_PLAN_REQUIRED and ACCESS_INFRA_REQUIRED
+        assert len(set(ACCESS_FORBIDDEN)) == len(ACCESS_FORBIDDEN)
+        assert len(set(ACCESS_REVERSE)) == len(ACCESS_REVERSE)
+        assert len(set(ACCESS_STALE)) == len(ACCESS_STALE)
+        labels = [label for label, _phrase in ACCESS_REQUIRED]
+        phrases = [phrase for _label, phrase in ACCESS_REQUIRED]
+        assert len(set(labels)) == len(labels)
+        assert len(set(phrases)) == len(phrases)
+
+    def test_no_required_clause_is_also_forbidden(self) -> None:
+        """A guard that demands what it refuses can never be satisfied."""
+        for _label, phrase in ACCESS_REQUIRED:
+            assert phrase not in ACCESS_FORBIDDEN
+            assert phrase not in ACCESS_REVERSE
+            assert phrase not in ACCESS_STALE
+
+    def test_the_forbidden_claims_are_not_satisfied_by_an_honest_negation(self) -> None:
+        """The documents say these gates are closed, and must not be refused for it."""
+        reading = flat(read(PROJECT_ROOT / "CLAUDE.md"))
+        assert "qualification execution: not authorized / not run" in reading
+        assert "sixth private-binding preflight: not authorized / not run" in reading
+        assert "provider credential retrieval: none" in reading
+        assert [claim for claim in ACCESS_FORBIDDEN if claim in reading] == []
+
+
+class TestMaterializedAccessIsNotAuthority:
+    """The distinction the whole transition turns on, read from the documents."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_access_is_separated_from_every_downstream_gate(self, document: Path) -> None:
+        _before, section, _after = split_at_access_section(document)
+        reading = flat(section)
+        assert "materialized access is not authority to use it" in reading
+        for gate in (
+            "sixth private-binding preflight",
+            "qualification execution",
+            "third adr-0017 acquisition",
+            "run a",
+            "run b",
+            "combined assessment",
+        ):
+            assert f"{gate}: not authorized / not run" in reading
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_no_provider_or_object_activity_is_claimed(self, document: Path) -> None:
+        _before, section, _after = split_at_access_section(document)
+        reading = flat(section)
+        assert "provider credential retrieval: none" in reading
+        assert "s3/provider activity: none" in reading
+        assert "provider selected: none" in reading
+        assert "g1 / g2: open / open" in reading
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_operator_is_counted_and_never_named(self, document: Path) -> None:
+        """The count is the record. The person is not, and neither is any identifier."""
+        _before, section, _after = split_at_access_section(document)
+        reading = flat(section)
+        assert "operator group: exactly 1 owner-approved human member / assigned" in reading
+        assert "no name, user name, email address" in reading
+        for identifier in (
+            "arn:aws",
+            "ssoins-",
+            "awsapps.com",
+            "awsreservedsso_kalpamaniqualificationacquire_",
+            "awsreservedsso_kalpamaniqualificationassessment_",
+            "d-9",
+            "@gmail.com",
+        ):
+            assert identifier not in reading
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_section_carries_no_twelve_digit_account_or_digest(self, document: Path) -> None:
+        """No account id, and no artifact digest, reaches a tracked status surface."""
+        _before, section, _after = split_at_access_section(document)
+        assert re.search(r"(?<!\d)\d{12}(?!\d)", section) is None
+        assert re.search(r"(?<![0-9a-f])[0-9a-f]{40,}(?![0-9a-f])", section) is None
