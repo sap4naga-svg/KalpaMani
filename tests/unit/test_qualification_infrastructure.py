@@ -1753,9 +1753,20 @@ def _policy_reference_rules(config: Principals) -> list[str]:
     return broken
 
 
+#: A `depends_on` entry is a bare resource address, not a quoted string, so
+#: :func:`string_list` reads nothing out of one. This finds the addresses instead.
+_RESOURCE_ADDRESS = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)+")
+
+
+def depends_on(block: Block) -> tuple[str, ...]:
+    """Every resource address in ``block``'s explicit `depends_on`, in declared order."""
+    return tuple(_RESOURCE_ADDRESS.findall(block.attributes.get("depends_on", "")))
+
+
 def _assignment_rules(config: Principals) -> list[str]:
     broken: list[str] = []
     for actor in (ACQUISITION, ASSESSMENT):
+        other = ASSESSMENT if actor == ACQUISITION else ACQUISITION
         block = config.resources.get(("aws_ssoadmin_account_assignment", actor))
         if block is None:
             broken.append(f"{actor} declares no account assignment")
@@ -1771,6 +1782,20 @@ def _assignment_rules(config: Principals) -> list[str]:
         expected_set = f"aws_ssoadmin_permission_set.{actor}.arn"
         if block.attributes.get("permission_set_arn") != expected_set:
             broken.append(f"{actor} assignment names another permission set")
+        # The ordering edge, and why it cannot be left implicit. An assignment and
+        # its policy attachment both reference the permission set and neither
+        # references the other, so Terraform sees two siblings and may create them
+        # in either order. The assignment is what provisions the permission set
+        # into the target account, so running it first opens a real window in which
+        # the generated role exists carrying none of its intended permissions.
+        # `depends_on` is the only way to say this here: an assignment consumes no
+        # attribute of an attachment, so there is no reference to carry the edge.
+        ordering = depends_on(block)
+        own = f"aws_ssoadmin_customer_managed_policy_attachment.{actor}"
+        if own not in ordering:
+            broken.append(f"{actor} assignment is not ordered after its own policy attachment")
+        if f"aws_ssoadmin_customer_managed_policy_attachment.{other}" in ordering:
+            broken.append(f"{actor} assignment is ordered after the {other} policy attachment")
     return broken
 
 
@@ -1886,6 +1911,44 @@ class TestThePrincipalsCandidate:
             for actor in (ACQUISITION, ASSESSMENT)
         }
         assert targets == {"var.qualification_target_account_id"}
+
+    def test_each_assignment_is_ordered_after_its_own_policy_attachment(
+        self, principals: Principals
+    ) -> None:
+        """The edge the plan gate stopped for: attachment before assignment.
+
+        Both resources reference the permission set and neither references the
+        other, so without this Terraform may create the account assignment -- which
+        provisions the permission set into the target account -- before the managed
+        policy has been attached to it.
+        """
+        for actor in (ACQUISITION, ASSESSMENT):
+            block = principals.resources[("aws_ssoadmin_account_assignment", actor)]
+            assert depends_on(block) == (
+                f"aws_ssoadmin_customer_managed_policy_attachment.{actor}",
+            )
+
+    def test_neither_assignment_is_ordered_after_the_other_actor(
+        self, principals: Principals
+    ) -> None:
+        """An edge across the two actors would couple them at apply time."""
+        for actor, other in ((ACQUISITION, ASSESSMENT), (ASSESSMENT, ACQUISITION)):
+            block = principals.resources[("aws_ssoadmin_account_assignment", actor)]
+            assert all(other not in address for address in depends_on(block))
+
+    def test_the_ordering_edge_reaches_the_matching_managed_policy(
+        self, principals: Principals
+    ) -> None:
+        """Per actor: assignment -> its own attachment -> its own IAM policy."""
+        for actor in (ACQUISITION, ASSESSMENT):
+            assignment = principals.resources[("aws_ssoadmin_account_assignment", actor)]
+            kind, label = depends_on(assignment)[0].split(".")
+            assert (kind, label) == ("aws_ssoadmin_customer_managed_policy_attachment", actor)
+            reference = principals.resources[(kind, label)].children(
+                "customer_managed_policy_reference"
+            )[0]
+            assert reference.attributes["name"] == f"aws_iam_policy.{actor}.name"
+            assert reference.attributes["path"] == f"aws_iam_policy.{actor}.path"
 
     def test_no_live_discovery_data_source_is_declared(self, principals: Principals) -> None:
         """A data source would read the environment to write a declaration."""
@@ -2053,6 +2116,35 @@ PRINCIPAL_MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "  instance_arn       = var.identity_center_instance_arn\n"
         "  permission_set_arn = aws_ssoadmin_permission_set.qualification_acquisition.arn",
         "assignment names another permission set",
+    ),
+    (
+        "the acquisition assignment loses its attachment ordering",
+        "  depends_on = [\n"
+        "    aws_ssoadmin_customer_managed_policy_attachment.qualification_acquisition,\n"
+        "  ]\n",
+        "",
+        "qualification_acquisition assignment is not ordered after its own policy attachment",
+    ),
+    (
+        "the assessment assignment loses its attachment ordering",
+        "  depends_on = [\n"
+        "    aws_ssoadmin_customer_managed_policy_attachment.qualification_assessment,\n"
+        "  ]\n",
+        "",
+        "qualification_assessment assignment is not ordered after its own policy attachment",
+    ),
+    (
+        "the acquisition assignment is ordered after the assessment attachment",
+        "    aws_ssoadmin_customer_managed_policy_attachment.qualification_acquisition,\n",
+        "    aws_ssoadmin_customer_managed_policy_attachment.qualification_assessment,\n",
+        "qualification_acquisition assignment is ordered after the qualification_assessment "
+        "policy attachment",
+    ),
+    (
+        "an assignment is ordered after the permission set instead of the attachment",
+        "    aws_ssoadmin_customer_managed_policy_attachment.qualification_assessment,\n",
+        "    aws_ssoadmin_permission_set.qualification_assessment,\n",
+        "qualification_assessment assignment is not ordered after its own policy attachment",
     ),
 )
 

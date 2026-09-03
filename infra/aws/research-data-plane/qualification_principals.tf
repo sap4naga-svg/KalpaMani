@@ -185,6 +185,10 @@ resource "aws_ssoadmin_account_assignment" "qualification_acquisition" {
 
   target_id   = var.qualification_target_account_id
   target_type = "AWS_ACCOUNT"
+
+  depends_on = [
+    aws_ssoadmin_customer_managed_policy_attachment.qualification_acquisition,
+  ]
 }
 
 # ---------------------------------------------------------------------------
@@ -224,4 +228,8 @@ resource "aws_ssoadmin_account_assignment" "qualification_assessment" {
 
   target_id   = var.qualification_target_account_id
   target_type = "AWS_ACCOUNT"
+
+  depends_on = [
+    aws_ssoadmin_customer_managed_policy_attachment.qualification_assessment,
+  ]
 }
