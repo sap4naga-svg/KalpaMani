@@ -5910,6 +5910,202 @@ ADR_0018_TEST_SUITES: Final[tuple[Path, ...]] = tuple(
     )
 )
 
+#: The owner-only eight-subject empirical inventory, at the sanctioned runtime
+#: path ADR-0018 fixes for it. The **path** is public and appears here
+#: deliberately: a guard has to name what it protects. Everything *inside* the
+#: file is private evaluation information under the personal-use licence, and no
+#: check below opens it.
+#:
+#: The rule this replaced required the file to be **physically absent**, which was
+#: right while nothing had been implemented and wrong the moment the owner
+#: populated it: it turned the owner-only sanctioned runtime input into an audit
+#: failure. Absence was never the property worth having. The property worth
+#: having is that the file stays out of Git -- ignored, untracked, unrecorded in
+#: ``HEAD`` and unrecorded in reachable history -- and that holds whether the file
+#: is on this machine or not.
+ADR_0018_INVENTORY_RELPATH: Final = ".runtime/phase3/sharadar/empirical-inventory.json"
+
+#: The private runtime area the inventory lives under. Named separately because
+#: the inventory's own rule is not the only thing keeping it out of Git, and a
+#: guard that checked only the specific rule would keep passing while the
+#: directory protection was removed underneath it.
+ADR_0018_RUNTIME_RELPATH: Final = ".runtime/"
+
+#: The only functions permitted to name the private inventory path.
+#:
+#: Each asks git **one metadata question** about it. None of them opens, reads,
+#: parses, hashes, sizes, timestamps, copies or lists the file, and none of them
+#: enumerates the directory it sits in. Widening this set is exactly how a guard
+#: over a private file becomes a reader of one, so the set is **pinned by name**
+#: rather than counted -- a count drifts, a list does not.
+ADR_0018_INVENTORY_QUERY_SITES: Final[frozenset[str]] = frozenset(
+    {
+        "_inventory_ignore_rule_is_written_down",
+        "_inventory_is_git_ignored",
+        "_inventory_is_in_index",
+        "_inventory_is_in_head",
+        "_inventory_history_commits",
+    }
+)
+
+#: Directory-enumeration calls. A walk under the private runtime area would put
+#: owner-side filenames in front of this process, which is the disclosure the
+#: recorded runtime-area listing incident already produced once.
+ADR_0018_ENUMERATORS: Final[frozenset[str]] = frozenset(
+    {"glob", "rglob", "iterdir", "walk", "listdir", "scandir"}
+)
+
+
+class PrivateInventoryBoundaryError(RuntimeError):
+    """git could not answer a boundary question about the owner-only inventory.
+
+    **Not a pass.** Every question below is answered from git metadata, and an
+    unanswerable question is a verification failure rather than a satisfied
+    invariant -- the same fail-closed rule ``tracked_files`` applies, and for the
+    same reason: "we could not check" must never read as "nothing is wrong".
+    """
+
+
+def _git_boundary(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run one git metadata query against this repository.
+
+    The inventory itself is never a subject here -- only its **path**, handed to
+    git as a pathspec. git answers from the index, the object database and the
+    exclude rules, and the working-tree file is opened by none of it.
+    """
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(REPO_ROOT), *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _ignores(relpath: str) -> bool:
+    """Do the exclude rules git ACTUALLY APPLIES cover `relpath`?
+
+    ``--no-index`` is deliberate. Without it, ``check-ignore`` reports a *tracked*
+    path as un-ignored, which would fold two separate properties into one answer:
+    "an ignore rule covers this path" and "this path is not tracked" have
+    different failure modes and are asserted separately below.
+    """
+    result = _git_boundary("check-ignore", "--quiet", "--no-index", "--", relpath)
+    if result.returncode not in (0, 1):
+        raise PrivateInventoryBoundaryError("git check-ignore could not answer")
+    return result.returncode == 0
+
+
+def _inventory_ignore_rule_is_written_down() -> bool:
+    """Is the exact path an uncommented rule in the committed `.gitignore`?
+
+    Weaker than :func:`_inventory_is_git_ignored`, and kept beside it on purpose.
+    The effective answer is what protects the file; a written-down rule is what a
+    reviewer reads, and a file protected only by the broad ``.runtime/`` rule
+    would lose its own record of why it is named at all.
+    """
+    rules = [
+        line.strip()
+        for line in read(REPO_ROOT / ".gitignore").splitlines()
+        if not line.strip().startswith("#")
+    ]
+    return ADR_0018_INVENTORY_RELPATH in rules
+
+
+def _inventory_is_git_ignored() -> bool:
+    return _ignores(ADR_0018_INVENTORY_RELPATH)
+
+
+def _inventory_is_in_index() -> bool:
+    """Is the exact path staged in the current index?
+
+    ``--cached`` reads the index and never the working tree, so a present file
+    that is correctly untracked answers ``False``, and an absent file that was
+    somehow staged answers ``True``.
+    """
+    result = _git_boundary("ls-files", "--cached", "--", ADR_0018_INVENTORY_RELPATH)
+    if result.returncode != 0:
+        raise PrivateInventoryBoundaryError("git ls-files could not answer")
+    return bool(result.stdout.strip())
+
+
+def _inventory_is_in_head() -> bool:
+    """Is the exact path recorded in the tree of the `HEAD` commit?"""
+    result = _git_boundary("ls-tree", "-r", "--name-only", "HEAD", "--", ADR_0018_INVENTORY_RELPATH)
+    if result.returncode != 0:
+        raise PrivateInventoryBoundaryError("git ls-tree could not answer")
+    return bool(result.stdout.strip())
+
+
+def _inventory_history_commits() -> list[str]:
+    """Every reachable commit that ever touched the exact path.
+
+    A later deletion does not undo a disclosure: a subject list committed once
+    stays retrievable from the object database. So the question is not whether
+    the newest commit carries the file, it is whether **any** reachable commit
+    ever did.
+    """
+    result = _git_boundary("log", "--all", "--format=%H", "--", ADR_0018_INVENTORY_RELPATH)
+    if result.returncode != 0:
+        raise PrivateInventoryBoundaryError("git log could not answer")
+    return result.stdout.split()
+
+
+def _runtime_ignore_negations() -> list[str]:
+    """Re-include rules that would let something under the runtime area be tracked.
+
+    A negation is the one edit that removes protection without deleting a rule:
+    ``.runtime/`` stays in the file, reads as intact, and a later ``!`` line lets
+    a path back in. The exact inventory path is answered directly by
+    :func:`_inventory_is_git_ignored`; this refuses a **broad** exception that
+    would expose its siblings.
+    """
+    return [
+        line.strip()
+        for line in read(REPO_ROOT / ".gitignore").splitlines()
+        if line.strip().startswith("!") and "runtime" in line.lower()
+    ]
+
+
+def _inventory_path_reference_sites() -> set[str]:
+    """The enclosing function of every load of the private-inventory path constant.
+
+    Structural rather than textual, because a substring scan for the forbidden
+    spellings would match the list of forbidden spellings itself. This walks this
+    module's own tree, so the answer is about what the code *does* with the path
+    and cannot be satisfied by renaming a literal. A module-level load reports as
+    ``<module>``, which is a finding: the path belongs inside a git query.
+    """
+    tree = ast.parse(read(Path(__file__)), filename=__file__)
+    enclosing: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for inner in ast.walk(node):
+                enclosing.setdefault(id(inner), node.name)
+    return {
+        enclosing.get(id(node), "<module>")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id == "ADR_0018_INVENTORY_RELPATH"
+        and isinstance(node.ctx, ast.Load)
+    }
+
+
+def _runtime_enumeration_sites() -> list[str]:
+    """Calls in this audit that would enumerate a directory under the runtime area."""
+    tree = ast.parse(read(Path(__file__)), filename=__file__)
+    sites: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ADR_0018_ENUMERATORS:
+            continue
+        if "runtime" in ast.unparse(node).lower():
+            sites.append(f"line {node.lineno}: {ast.unparse(node.func)}")
+    return sites
+
+
 #: The modules permitted to construct the shared licensed store. **One** named
 #: module, so a **second** still fails: a count could drift, a list cannot.
 #:
@@ -20767,15 +20963,63 @@ def main() -> int:
         ],
         "which securities the owner evaluates is private evaluation information",
     )
+    # -- the owner-only inventory: out of Git, present or absent on disk -------
+    #
+    # The predecessor of this group required the inventory to be **physically
+    # absent**. That was the right question while nothing downstream existed and
+    # a file at that path could only have been a scaffolded placeholder mistaken
+    # for a decision. It became the wrong question the moment the owner populated
+    # the sanctioned runtime input the implementation reads: ordinary validation
+    # then failed on the owner's own private file, and the only ways to make it
+    # pass were to delete the file or to skip the audit.
+    #
+    # Absence was never the property worth having. **Exclusion from Git is.** The
+    # four questions below are asked of git metadata, they hold whether or not the
+    # file exists on this machine, and none of them opens it.
     f.check(
         "the owner-only private inventory location is git-ignored",
-        ".runtime/phase3/sharadar/empirical-inventory.json" in read(REPO_ROOT / ".gitignore"),
+        _inventory_ignore_rule_is_written_down(),
         "a subject list in Git history is a disclosure a later deletion does not undo",
     )
     f.check(
-        "the owner-only private inventory does not exist in this repository",
-        not (REPO_ROOT / ".runtime" / "phase3" / "sharadar" / "empirical-inventory.json").exists(),
-        "it is the owner's file; a scaffolded placeholder would be mistaken for a decision",
+        "the owner-only private inventory path is covered by an effective ignore rule",
+        _inventory_is_git_ignored(),
+        "a rule present in the file but overridden later protects nothing",
+    )
+    f.check(
+        "the private runtime area is covered by an effective ignore rule",
+        _ignores(ADR_0018_RUNTIME_RELPATH),
+        "the inventory's own rule is not the only thing holding the area out of Git",
+    )
+    f.check(
+        "no ignore-negation re-includes anything under the private runtime area",
+        not _runtime_ignore_negations(),
+        "a re-include removes protection while leaving every rule in place",
+    )
+    f.check(
+        "the owner-only private inventory is absent from the git index",
+        not _inventory_is_in_index(),
+        "staging it is the step before committing it, and it must fail closed there",
+    )
+    f.check(
+        "the owner-only private inventory is absent from HEAD",
+        not _inventory_is_in_head(),
+        "a committed subject list is a disclosure, whatever the working tree holds",
+    )
+    f.check(
+        "the owner-only private inventory has never appeared in reachable history",
+        not _inventory_history_commits(),
+        "deleting a committed file leaves it retrievable; only never committing it does not",
+    )
+    f.check(
+        "only git metadata queries name the owner-only private inventory path",
+        _inventory_path_reference_sites() <= ADR_0018_INVENTORY_QUERY_SITES,
+        "a guard that had to open the file to protect it would be the disclosure",
+    )
+    f.check(
+        "this audit enumerates no directory under the private runtime area",
+        not _runtime_enumeration_sites(),
+        "a walk would put owner-side filenames in front of this process",
     )
     f.check(
         "the two entry points use different authorization flags",

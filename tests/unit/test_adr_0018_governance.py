@@ -44,8 +44,15 @@ that distinction is checked rather than asserted.
 
 from __future__ import annotations
 
+import builtins
+import importlib.util
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any, Final
 
 import pytest
 
@@ -108,12 +115,130 @@ IMPLEMENTED_ON_THIS_BRANCH = (
 
 #: Everything past the implementation gate. Infrastructure mutation and execution
 #: are the second and third gates, and neither has been crossed -- so no Terraform
-#: for these roles, no locator, no private report and no run record exists.
+#: for these roles exists.
+#:
+#: **The owner-only inventory used to be the third entry here, and it does not
+#: belong in this category.** Physical absence was a sound question about the two
+#: Terraform files -- nobody's workflow creates one, so a file at either path
+#: could only be unauthorized infrastructure. It was never a sound question about
+#: the inventory: the sanctioned runtime path is where ADR-0018 says the owner's
+#: private input lives, so requiring the file to be absent required the owner not
+#: to have made the decision the implementation reads. It is replaced, one for
+#: one, by :class:`TestThePrivateInventoryStaysOutOfGit` -- a strictly stronger
+#: contract, because absence proves nothing about Git and exclusion from Git holds
+#: in both physical states.
 STILL_ABSENT = (
     PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification_roles.tf",
     PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification-roles.tf",
-    PROJECT_ROOT / ".runtime" / "phase3" / "sharadar" / "empirical-inventory.json",
 )
+
+#: The owner-only inventory, at the sanctioned runtime path. Named so the guards
+#: below can say what they protect; **no value inside the file is read here**, and
+#: no test creates, copies or opens it.
+PRIVATE_INVENTORY: Final = (
+    PROJECT_ROOT / ".runtime" / "phase3" / "sharadar" / "empirical-inventory.json"
+)
+
+
+def _audit_module() -> ModuleType:
+    """Load the audit as a module so its own rule can be exercised, not restated.
+
+    The contract under test is the audit's. Re-implementing it here would give the
+    repository two spellings of one rule, which is exactly how a value one stage
+    admits becomes a value the next refuses -- the defect ADR-0016 was written to
+    correct. So the tests below drive the audit's functions and vary the
+    repository underneath them.
+
+    Registered in ``sys.modules`` before execution because the audit defines a
+    ``@dataclass``, and ``dataclasses`` resolves the defining module through that
+    entry. Importing it defines constants and functions; it runs no check, opens
+    no socket and reaches no service.
+    """
+    spec = importlib.util.spec_from_file_location("kalpamani_phase3_docs_audit_0018", AUDIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD = _audit_module()
+
+#: An ignore file that protects the runtime area exactly the way this repository
+#: does: the broad directory rule, and the inventory named in its own right.
+PROTECTED_IGNORE: Final = f".runtime/\n{GUARD.ADR_0018_INVENTORY_RELPATH}\n"
+
+#: Invented, non-market fixture content. Eight lines of nothing: no ticker, no
+#: real symbol, no owner selection, and nothing derived from the real file, which
+#: no test reads.
+FIXTURE_INVENTORY_BODY: Final = '{"schema_version": "fixture-v0", "subjects": []}\n'
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(  # noqa: S603 - fixed program, fixture-local arguments
+        ["git", "-C", str(root), *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"git {args[0]} failed in the fixture repository"
+    return result
+
+
+def _fixture_repo(root: Path, ignore: str) -> Path:
+    """A real, minimal git repository carrying `ignore` as its whole ignore policy.
+
+    Hermetic on purpose: the fixture pins its own empty global-excludes file, so
+    the answers below come from the rules written here and from nothing this
+    workstation happens to configure.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "--quiet", "-b", "main")
+    empty_excludes = root / ".git" / "fixture-global-excludes"
+    empty_excludes.write_text("", encoding="utf-8")
+    _git(root, "config", "core.excludesFile", str(empty_excludes))
+    _git(root, "config", "user.email", "guard-fixture")
+    _git(root, "config", "user.name", "Guard Fixture")
+    (root / ".gitignore").write_text(ignore, encoding="utf-8")
+    _git(root, "add", "--", ".gitignore")
+    _git(root, "commit", "--quiet", "-m", "fixture baseline")
+    return root
+
+
+def _write_fixture_inventory(root: Path) -> Path:
+    """Create a synthetic file at the sanctioned relative path inside a fixture."""
+    path = root / str(GUARD.ADR_0018_INVENTORY_RELPATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(FIXTURE_INVENTORY_BODY, encoding="utf-8")
+    return path
+
+
+def _facts(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """The audit's own boundary answers, taken against `root`."""
+    monkeypatch.setattr(GUARD, "REPO_ROOT", root)
+    return {
+        "written_down": bool(GUARD._inventory_ignore_rule_is_written_down()),
+        "ignored": bool(GUARD._inventory_is_git_ignored()),
+        "area_ignored": bool(GUARD._ignores(GUARD.ADR_0018_RUNTIME_RELPATH)),
+        "negations": list(GUARD._runtime_ignore_negations()),
+        "in_index": bool(GUARD._inventory_is_in_index()),
+        "in_head": bool(GUARD._inventory_is_in_head()),
+        "history": list(GUARD._inventory_history_commits()),
+    }
+
+
+def _holds(facts: dict[str, object]) -> bool:
+    """Does the whole confidentiality contract hold for those answers?"""
+    return bool(
+        facts["written_down"]
+        and facts["ignored"]
+        and facts["area_ignored"]
+        and not facts["negations"]
+        and not facts["in_index"]
+        and not facts["in_head"]
+        and not facts["history"]
+    )
+
 
 #: The package's own parameters, from ADR-0018 §4. Every count below is derived
 #: from these rather than transcribed, so a later edit that changes one and
@@ -368,6 +493,31 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
             "are three separate gates, and only the first has been crossed."
         )
 
+    def test_the_owner_only_inventory_is_not_in_the_physical_absence_category(self) -> None:
+        """It is neither a forbidden artifact nor one this branch must carry.
+
+        Both memberships would be wrong, in opposite directions. In
+        ``STILL_ABSENT`` the owner's sanctioned runtime input reads as
+        unauthorized infrastructure and ordinary validation fails on it; in
+        ``IMPLEMENTED_ON_THIS_BRANCH`` it reads as something this branch must
+        commit, which is the disclosure the whole contract exists to prevent.
+        """
+        assert PRIVATE_INVENTORY not in STILL_ABSENT
+        assert PRIVATE_INVENTORY not in IMPLEMENTED_ON_THIS_BRANCH
+
+    def test_the_other_physical_absence_guards_are_still_enforced(self) -> None:
+        """Removing one parameter must not have emptied the category.
+
+        A guard reduced to nothing passes trivially, so the two Terraform paths
+        are pinned by name here rather than left to a count.
+        """
+        assert STILL_ABSENT == (
+            PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification_roles.tf",
+            PROJECT_ROOT / "infra" / "aws" / "research-data-plane" / "qualification-roles.tf",
+        )
+        for path in STILL_ABSENT:
+            assert not path.exists()
+
     def test_no_new_iam_role_is_declared_for_the_two_designed_roles(self) -> None:
         """No IAM ROLE, and no attachment, for either designed actor.
 
@@ -472,6 +622,270 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
     def test_the_adr_leaves_adr_0017_accounting_untouched(self) -> None:
         assert "exactly three `putobject`" in flat(ADR)
         assert "it is untouched." in flat(ADR)
+
+
+class TestThePrivateInventoryStaysOutOfGit:
+    """The owner-only inventory: either physical state, and never in Git.
+
+    The guard this replaces asked whether the file existed. That question had one
+    right answer while nothing downstream was implemented and no owner input
+    existed, and it acquired a wrong one the moment the owner populated the
+    sanctioned runtime path ADR-0018 fixes for it: ordinary validation then failed
+    on the owner's own private file, and the two ways to make it pass were to
+    delete the decision or to stop running the audit.
+
+    **Existence was never the property worth having.** These are, and each is
+    asked of git metadata rather than of the file:
+
+    1. an effective ignore rule covers the exact path, and the runtime area too;
+    2. no re-include re-exposes anything under that area;
+    3. the exact path is not in the index;
+    4. the exact path is not in ``HEAD``;
+    5. the exact path appears in no reachable commit -- a later deletion leaves a
+       committed subject list retrievable, so the question is *ever*, not *now*.
+
+    All five hold whether the file is on this machine or not, which is why the
+    correction is a strengthening rather than a relaxation. Every mutation case
+    below runs against a **real, throwaway git repository** with invented
+    contents; none of them copies, opens or derives anything from the owner's
+    file.
+    """
+
+    def test_the_contract_holds_in_this_checkout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The present state, in the primary checkout, with the real file in place."""
+        assert _holds(_facts(PROJECT_ROOT, monkeypatch))
+
+    def test_the_contract_holds_with_the_inventory_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = _fixture_repo(tmp_path / "present", PROTECTED_IGNORE)
+        _write_fixture_inventory(root)
+        assert _holds(_facts(root, monkeypatch))
+
+    def test_the_contract_holds_with_the_inventory_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The absent state. Both physical states pass, and neither is required."""
+        root = _fixture_repo(tmp_path / "absent", PROTECTED_IGNORE)
+        assert not (root / GUARD.ADR_0018_INVENTORY_RELPATH).exists()
+        assert _holds(_facts(root, monkeypatch))
+
+    def test_a_staged_inventory_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Staging is the step before committing, and it must fail closed there."""
+        root = _fixture_repo(tmp_path / "staged", PROTECTED_IGNORE)
+        _write_fixture_inventory(root)
+        _git(root, "add", "--force", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+        facts = _facts(root, monkeypatch)
+        assert facts["in_index"] is True
+        assert not _holds(facts)
+
+    def test_a_committed_inventory_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = _fixture_repo(tmp_path / "committed", PROTECTED_IGNORE)
+        _write_fixture_inventory(root)
+        _git(root, "add", "--force", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+        _git(root, "commit", "--quiet", "-m", "fixture disclosure")
+        facts = _facts(root, monkeypatch)
+        assert facts["in_head"] is True
+        assert facts["history"]
+        assert not _holds(facts)
+
+    def test_an_inventory_deleted_after_being_committed_still_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The case a file-existence guard cannot see at all.
+
+        After the delete commit the working tree is clean, the index is clean and
+        ``HEAD`` no longer carries the file -- and the blob is still reachable from
+        the earlier commit. Deleting a committed subject list does not undo the
+        disclosure, so history is asked separately from ``HEAD``.
+        """
+        root = _fixture_repo(tmp_path / "deleted", PROTECTED_IGNORE)
+        _write_fixture_inventory(root)
+        _git(root, "add", "--force", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+        _git(root, "commit", "--quiet", "-m", "fixture disclosure")
+        _git(root, "rm", "--quiet", "--", GUARD.ADR_0018_INVENTORY_RELPATH)
+        _git(root, "commit", "--quiet", "-m", "fixture deletion")
+        facts = _facts(root, monkeypatch)
+        assert facts["in_index"] is False
+        assert facts["in_head"] is False
+        assert facts["history"], "a deleted commit is still a reachable disclosure"
+        assert not _holds(facts)
+
+    def test_removing_the_runtime_ignore_protection_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = _fixture_repo(tmp_path / "unignored", "# no runtime rule at all\n")
+        _write_fixture_inventory(root)
+        facts = _facts(root, monkeypatch)
+        assert facts["written_down"] is False
+        assert facts["ignored"] is False
+        assert facts["area_ignored"] is False
+        assert not _holds(facts)
+
+    def test_an_ignore_rule_scoped_elsewhere_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rule that looks like protection and does not cover the exact path."""
+        root = _fixture_repo(tmp_path / "misscoped", ".runtime/data/\n.runtime/**/*.parquet\n")
+        _write_fixture_inventory(root)
+        facts = _facts(root, monkeypatch)
+        assert facts["ignored"] is False
+        assert not _holds(facts)
+
+    def test_a_reinclude_under_the_runtime_area_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The edit that removes protection while leaving every rule in place."""
+        root = _fixture_repo(
+            tmp_path / "reincluded",
+            f".runtime/\n{GUARD.ADR_0018_INVENTORY_RELPATH}\n!.runtime/phase3/**\n",
+        )
+        facts = _facts(root, monkeypatch)
+        assert facts["negations"]
+        assert not _holds(facts)
+
+    def test_the_contract_does_not_depend_on_the_inventory_contents(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two different synthetic bodies, byte-different, and one set of answers.
+
+        The contract is about where the file may appear, never about what it says,
+        so a change of contents must be invisible to it.
+        """
+        root = _fixture_repo(tmp_path / "contents", PROTECTED_IGNORE)
+        path = _write_fixture_inventory(root)
+        first = _facts(root, monkeypatch)
+        path.write_text('{"schema_version": "fixture-v0", "note": "different"}\n', encoding="utf-8")
+        second = _facts(root, monkeypatch)
+        assert first == second
+        assert _holds(first)
+
+    def test_the_contract_opens_no_file_under_the_private_runtime_area(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Instrumented, not asserted: reading the file would fail this test.
+
+        Every read, open, stat and existence check the contract performs is
+        recorded, and any of them landing under the runtime area is the finding.
+        The real inventory is present in this checkout, so this runs against the
+        state that would actually expose it.
+        """
+        touched: list[str] = []
+        real_open: Any = builtins.open
+        real_read_text: Any = Path.read_text
+        real_read_bytes: Any = Path.read_bytes
+        real_stat: Any = Path.stat
+        real_exists: Any = Path.exists
+
+        def spy_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+            touched.append(str(file))
+            return real_open(file, *args, **kwargs)
+
+        def spy_read_text(target: Path, *args: Any, **kwargs: Any) -> Any:
+            touched.append(str(target))
+            return real_read_text(target, *args, **kwargs)
+
+        def spy_read_bytes(target: Path) -> Any:
+            touched.append(str(target))
+            return real_read_bytes(target)
+
+        def spy_stat(target: Path, *args: Any, **kwargs: Any) -> Any:
+            touched.append(str(target))
+            return real_stat(target, *args, **kwargs)
+
+        def spy_exists(target: Path, *args: Any, **kwargs: Any) -> Any:
+            touched.append(str(target))
+            return real_exists(target, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", spy_open)
+        monkeypatch.setattr(Path, "read_text", spy_read_text)
+        monkeypatch.setattr(Path, "read_bytes", spy_read_bytes)
+        monkeypatch.setattr(Path, "stat", spy_stat)
+        monkeypatch.setattr(Path, "exists", spy_exists)
+        facts = _facts(PROJECT_ROOT, monkeypatch)
+        assert _holds(facts)
+        under_runtime = [p for p in touched if ".runtime" in p.replace("\\", "/")]
+        assert not under_runtime, f"the contract touched the private runtime area: {under_runtime}"
+
+    def test_the_contract_enumerates_no_directory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No walk, anywhere -- so no owner-side filename can reach this process.
+
+        A recursive listing under the runtime area is the disclosure the recorded
+        listing incident already produced once. The contract needs no enumeration
+        at all, so the bar here is zero rather than zero-under-one-prefix.
+        """
+        enumerated: list[str] = []
+
+        def spy(name: str) -> Any:
+            def enumerator(*args: Any, **kwargs: Any) -> Any:
+                enumerated.append(name)
+                return iter(())
+
+            return enumerator
+
+        monkeypatch.setattr(Path, "glob", spy("Path.glob"))
+        monkeypatch.setattr(Path, "rglob", spy("Path.rglob"))
+        monkeypatch.setattr(Path, "iterdir", spy("Path.iterdir"))
+        monkeypatch.setattr(os, "walk", spy("os.walk"))
+        monkeypatch.setattr(os, "listdir", spy("os.listdir"))
+        monkeypatch.setattr(os, "scandir", spy("os.scandir"))
+        facts = _facts(PROJECT_ROOT, monkeypatch)
+        assert _holds(facts)
+        assert not enumerated, f"the contract enumerated: {enumerated}"
+
+    def test_only_git_metadata_queries_name_the_inventory_path(self) -> None:
+        """And the check is not vacuous: the path IS named, in those queries only.
+
+        A subset assertion over an empty set passes for the wrong reason, so the
+        reference set is required to be non-empty first.
+        """
+        sites = GUARD._inventory_path_reference_sites()
+        assert sites, "nothing names the path; the subset check would pass vacuously"
+        assert sites <= GUARD.ADR_0018_INVENTORY_QUERY_SITES
+        assert "<module>" not in sites
+
+    def test_the_audit_enumerates_no_runtime_directory(self) -> None:
+        assert not GUARD._runtime_enumeration_sites()
+
+    def test_no_ignore_rule_makes_the_ignore_limb_a_constant_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The limb answers a question rather than agreeing with itself.
+
+        A repository with no ignore policy at all must answer ``False`` for the
+        exact path, for the runtime area, and for an unrelated path -- otherwise
+        every passing ignore answer above would be a constant.
+        """
+        root = _fixture_repo(tmp_path / "constant", "# empty policy\n")
+        monkeypatch.setattr(GUARD, "REPO_ROOT", root)
+        assert GUARD._ignores(GUARD.ADR_0018_INVENTORY_RELPATH) is False
+        assert GUARD._ignores(GUARD.ADR_0018_RUNTIME_RELPATH) is False
+        assert GUARD._ignores("docs/architecture") is False
+
+    def test_an_unanswerable_git_query_is_a_failure_and_not_a_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unanswerable git query is a verification failure, never a pass.
+
+        Pointed at a directory that is not a repository, every limb raises the
+        boundary error rather than returning a reassuring ``False``.
+        """
+        outside = tmp_path / "not-a-repository"
+        outside.mkdir()
+        (outside / ".gitignore").write_text(PROTECTED_IGNORE, encoding="utf-8")
+        monkeypatch.setattr(GUARD, "REPO_ROOT", outside)
+        for limb in (
+            GUARD._inventory_is_git_ignored,
+            GUARD._inventory_is_in_index,
+            GUARD._inventory_is_in_head,
+            GUARD._inventory_history_commits,
+        ):
+            with pytest.raises(GUARD.PrivateInventoryBoundaryError):
+                limb()
 
 
 class TestTheDeletionRunbookClarification:
