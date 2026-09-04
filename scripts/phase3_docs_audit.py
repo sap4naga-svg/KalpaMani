@@ -12389,6 +12389,14 @@ RUN_A_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     # ------------------------------------------- and what a completed command is not
     ("separates a command outcome from a verdict", "it is not a provider verdict"),
     ("establishes no data quality", "no data correctness and no data quality"),
+    # The prose above and the status line below are two independent requirements, and
+    # neither substitutes for the other. An independent review flipped the status line
+    # to ESTABLISHED in both documents at once and the audit still passed, because the
+    # prose sentence was the only thing checked and the mutation had not touched it.
+    (
+        "records the unestablished data correctness as status",
+        "data correctness and quality: not established",
+    ),
     ("keeps provider-wide entitlement unknown", "provider-wide entitlement: unknown"),
     ("keeps subscription-wide entitlement unknown", "subscription-wide entitlement: unknown"),
     ("keeps the p-tests unevaluated", "p1-p9: unevaluated"),
@@ -12419,6 +12427,26 @@ RUN_A_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "a completed acquisition authorizes no further run",
     ),
     ("edits no decision record", "no adr document and no historical review report is rewritten"),
+    # The framing sentence is byte-identical in both documents, so it has to be true of
+    # both. It was not: only README.md carries binding-correction sections below this
+    # point, and CLAUDE.md carries none at all, so "the two binding-correction sections
+    # below" pointed at nothing there. The replacement names the history rather than a
+    # position, which is accurate in either file.
+    (
+        "locates the binding-correction history without pointing below",
+        "the repository's binding-correction history records the days those pull requests merged",
+    ),
+)
+
+#: The position-dependent framing the shared section may not go back to.
+#:
+#: Section-scoped, because the sentence lives inside the paired section and is required
+#: to be byte-identical there. Kept apart from the pre-Run-A drift list: this is not an
+#: obsolete status that history is entitled to keep, it is a statement that was never
+#: true of CLAUDE.md.
+RUN_A_SHARED_FRAMING_FORBIDDEN: Final[tuple[str, ...]] = (
+    "the two binding-correction sections below record the days their pull requests merged",
+    "the two binding-correction sections below",
 )
 
 #: The overstatements a completed acquisition still did not buy.
@@ -12434,6 +12462,10 @@ RUN_A_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "run a closed g2",
     "run a is a provider verdict",
     "run a established the data is correct",
+    "data correctness and quality: established",
+    "run a established data correctness",
+    "run a established the data correctness",
+    "run a established the data quality",
     "run a: retried",
     "a run a retry: authorized",
     "a run a retry: performed",
@@ -12495,10 +12527,135 @@ def run_a_binding_framing_defects(text: str) -> list[str]:
     return defects
 
 
-#: What the implementation plan must say about the completed Run A acquisition.
+#: The pre-Run-A spellings a paragraph of the implementation plan can carry.
+#:
+#: Every one of these is a *true record of its own day*, so none of them is forbidden.
+#: What the audit requires is that a paragraph carrying one says which day it records
+#: and which event overtook it -- the property an independent review found missing when
+#: three separate blocks still read "Run A: NOT AUTHORIZED / NOT RUN" as though it were
+#: the present state, two of them under a bare "Current status:" label.
+PLAN_RUN_A_DENIALS: Final[tuple[str, ...]] = (
+    "run a: not authorized / not run",
+    "run a / run b / combined assessment: not authorized / not run",
+    "run a, run b and the assessment run each remain not authorized",
+    "run a, run b and the combined assessment each remain not authorized",
+)
+
+#: The claim that identifies the one paragraph describing the present state.
+PLAN_RUN_A_GOVERNING: Final = "run a: completed / 4 september 2026"
+
+#: The label reserved for that paragraph, and refused to every other.
+PLAN_RUN_A_CURRENT_LABEL: Final = "current status:"
+
+#: The temporal framing a historical block must open its status with.
+PLAN_RUN_A_HISTORICAL_MARKER: Final = "status as of that "
+
+#: The successor a historical Run A denial must name.
+#:
+#: Naming the *immediate* successor is not enough and is exactly the defect found: two
+#: blocks already said "superseded by the applied qualification infrastructure recorded
+#: below", and that chain stops short of the event that actually made their Run A line
+#: obsolete. A banner that names the wrong successor is refused by requiring this one.
+PLAN_RUN_A_SUCCESSOR: Final = "the completed run a empirical acquisition recorded below"
+
+#: How many historical Run A blocks the plan must still carry.
+#:
+#: The contradiction could also be "resolved" by deleting the history, which would make
+#: the plan agree with itself by forgetting what was true on the day of each merge. The
+#: floor refuses that resolution; it is the count the framing correction established.
+PLAN_RUN_A_HISTORICAL_MINIMUM: Final = 7
+
+
+class PlanRunAScan(NamedTuple):
+    """The plan's governing Run A paragraph, its historical blocks, and their defects."""
+
+    governing: tuple[str, ...]
+    historical: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_plan_run_a_blocks(text: str) -> PlanRunAScan:
+    """Split the implementation plan into Run A paragraphs and judge each one.
+
+    Pure, and reads only what it is given: no file is opened and no state is carried
+    between calls, so two documents scanned in either order give the same answer.
+
+    Paragraph-scoped rather than flat, because a flat scan is what let the defect
+    through -- the plan *does* contain the completed Run A paragraph, so every
+    document-wide presence check was satisfied while three other blocks contradicted it.
+    """
+    governing: list[str] = []
+    historical: list[str] = []
+    defects: list[str] = []
+    governing_at = -1
+    last_denial_at = -1
+
+    for index, paragraph in enumerate(text.split("\n\n")):
+        flat = " ".join(paragraph.replace("**", "").split()).lower()
+        denials = [claim for claim in PLAN_RUN_A_DENIALS if claim in flat]
+
+        if PLAN_RUN_A_GOVERNING in flat:
+            governing.append(flat)
+            governing_at = index
+            if denials:
+                defects.append(
+                    f"paragraph {index}: the governing Run A status also carries a pre-Run-A "
+                    f"denial: {', '.join(denials)}"
+                )
+            if PLAN_RUN_A_CURRENT_LABEL not in flat:
+                defects.append(
+                    f"paragraph {index}: the governing Run A status is not labelled current"
+                )
+            continue
+
+        if not denials:
+            continue
+
+        historical.append(flat)
+        last_denial_at = index
+        if PLAN_RUN_A_CURRENT_LABEL in flat:
+            defects.append(f"paragraph {index}: a pre-Run-A block is labelled current status")
+        if PLAN_RUN_A_HISTORICAL_MARKER not in flat:
+            defects.append(
+                f"paragraph {index}: a pre-Run-A block records no as-of-that-event framing"
+            )
+        if PLAN_RUN_A_SUCCESSOR not in flat:
+            defects.append(
+                f"paragraph {index}: a pre-Run-A block names no successor ending at the "
+                f"completed Run A acquisition"
+            )
+
+    if governing_at >= 0 and last_denial_at > governing_at:
+        defects.append(
+            "the governing Run A status is placed ahead of a pre-Run-A block it supersedes"
+        )
+    return PlanRunAScan(tuple(governing), tuple(historical), tuple(defects))
+
+
+#: The Run B claims the implementation plan may not make.
+#:
+#: Document-wide. Run B is unauthorized everywhere in the plan, so a paragraph that
+#: says otherwise is wrong wherever it sits, and none of these can be produced by the
+#: negations the plan is required to keep.
+PLAN_RUN_B_FORBIDDEN: Final[tuple[str, ...]] = (
+    "run b: authorized",
+    "run b: completed",
+    "run b: performed",
+    "run b is authorized",
+    "run b has completed",
+    "run b: not authorized / completed",
+)
+
+
+#: What the implementation plan's GOVERNING Run A paragraph must say.
 #:
 #: The plan is a separate document with a separate reader, and merged main has more
 #: than once carried a fact in one status file and a stale contradiction in another.
+#:
+#: Paragraph-scoped, not document-wide. These phrases were checked against the whole
+#: flattened plan, so each one was answered by whichever block happened to contain it
+#: -- and "run b: not authorized / not run" was answered by a *historical* block while
+#: the governing paragraph could have said anything at all.
 RUN_A_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("records the completed run and its date", "run a: completed / 4 september 2026"),
     ("counts the provider requests", "provider requests: 48"),
@@ -12514,6 +12671,38 @@ RUN_A_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("keeps the p-tests unevaluated", "p1-p9: unevaluated"),
     ("separates a command outcome from a verdict", "rather than a provider verdict"),
     ("records that a completed run authorizes none", "a completed acquisition authorizes no"),
+    # The rest of the observed accounting, and the boundaries a completed command left
+    # exactly where they were. Held in the governing paragraph so that deleting one of
+    # them cannot be answered by a historical block that happens to quote the number.
+    ("counts the one invocation", "run a entry-point invocations: 1"),
+    ("records the exit code", "run a exit code: 0"),
+    ("counts the conditional head requests", "conditional headobject: 0"),
+    ("counts the listings", "listing operations: 0"),
+    ("counts the control operations", "control operations: 0"),
+    ("counts the total s3 operations", "total s3 operations: 145"),
+    ("counts the terraform operations", "terraform operations: 0"),
+    ("records the locator ordering", "locator: published last / addressable"),
+    ("counts the newly written objects", "newly written objects: 145"),
+    (
+        "records the minimum separation",
+        "run b minimum separation: at least 8 calendar days after run a",
+    ),
+    (
+        "records the unestablished data correctness as status",
+        "data correctness and quality: not established",
+    ),
+    ("keeps provider-wide entitlement unknown", "provider-wide entitlement: unknown"),
+    ("keeps subscription-wide entitlement unknown", "subscription-wide entitlement: unknown"),
+    (
+        "closes production ingestion",
+        "production ingestion/backfill/update: not authorized / not run",
+    ),
+    ("records that no backtest began", "backtesting: not started"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
 )
 
 #: What the infrastructure README must say about the completed Run A acquisition.
@@ -12524,6 +12713,44 @@ RUN_A_INFRA_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
     ("separates a command outcome from a verdict", "a command outcome, not a provider verdict"),
     ("records that run a cannot be repeated", "a run a retry is not authorized"),
     ("records the minimum separation", "at least eight calendar days later"),
+    # The Run B sentence, held to its meaning rather than to the word "authorized".
+    #
+    # An independent review found that the earlier wording -- "Run B is a separately
+    # authorized second acquisition" -- reads as though the authorization already
+    # exists, and that nothing in this audit could tell the two apart: the file was
+    # checked for the Run A facts and for the calendar separation, and the clause that
+    # says Run B still needs its own authorization was checked by nothing at all. One
+    # phrase, quoted whole, is what makes the regression detectable: deleting "requires
+    # its own written authorization", deleting "has not run", or restoring the earlier
+    # spelling each leave the phrase absent.
+    (
+        "records that run b needs its own authorization and has not run",
+        "run b is a separate second acquisition that requires its own written authorization "
+        "and has not run",
+    ),
+    ("records the earliest approved target", "earliest approved scheduling target of 2026-09-12"),
+    (
+        "keeps the combined assessment separately authorized",
+        "the combined assessment runs only after run b, under another authorization",
+    ),
+)
+
+#: The Run B claims the infrastructure README may not make.
+#:
+#: A calendar target is a scheduling fact, not a grant. Each entry is a positive claim
+#: that Run B is authorized or has happened, so none of them can be produced by the
+#: honest negations the file is *required* to carry -- "run b: not authorized / not run"
+#: does not contain "run b: authorized", because the negation sits between them.
+RUN_A_INFRA_RUN_B_FORBIDDEN: Final[tuple[str, ...]] = (
+    "run b is a separately authorized second acquisition",
+    "run b: authorized",
+    "run b: completed",
+    "run b: performed",
+    "run b is authorized",
+    "run b has completed",
+    "run b is scheduled and authorized",
+    "the scheduling target authorizes run b",
+    "authorized to run on 2026-09-12",
 )
 
 
@@ -21221,6 +21448,12 @@ def main() -> int:
             not run_a_reverted,
             ", ".join(run_a_reverted),
         )
+        run_a_misframed = [claim for claim in RUN_A_SHARED_FRAMING_FORBIDDEN if claim in section]
+        f.check(
+            f"{name} does not locate the binding-correction history by position",
+            not run_a_misframed,
+            ", ".join(run_a_misframed),
+        )
 
     f.check(
         # Byte-identical, not merely structurally parallel, for the reason every other
@@ -21235,12 +21468,47 @@ def main() -> int:
         not run_a_binding_framing_defects(read(REPO_ROOT / "README.md")),
         ", ".join(run_a_binding_framing_defects(read(REPO_ROOT / "README.md"))),
     )
+
+    # The implementation plan, read as blocks rather than as one flat string.
+    #
+    # Presence alone was the defect. The plan carried the completed Run A paragraph, so
+    # every document-wide phrase check passed while three other blocks still announced
+    # that Run A was not authorized -- two of them labelled "Current status:". The scan
+    # below separates the one paragraph that governs from the blocks that record their
+    # own day, and holds each to the property that makes it readable as what it is.
+    plan_run_a = scan_plan_run_a_blocks(read(PHASE3 / "implementation-plan.md"))
+    f.check(
+        "the implementation plan carries exactly one governing completed-Run-A status",
+        len(plan_run_a.governing) == 1,
+        f"{len(plan_run_a.governing)} governing Run A paragraphs",
+    )
+    f.check(
+        "the implementation plan frames every pre-Run-A block as history",
+        not plan_run_a.defects,
+        "; ".join(plan_run_a.defects),
+    )
+    f.check(
+        # Deleting the stale lines would also make the plan self-consistent, by
+        # forgetting what was true on the day of each merge. That is not the correction.
+        "the implementation plan keeps its pre-Run-A history",
+        len(plan_run_a.historical) >= PLAN_RUN_A_HISTORICAL_MINIMUM,
+        f"{len(plan_run_a.historical)} historical Run A blocks, "
+        f"fewer than {PLAN_RUN_A_HISTORICAL_MINIMUM}",
+    )
+    plan_run_a_governing = plan_run_a.governing[0] if len(plan_run_a.governing) == 1 else ""
     for label, phrase in RUN_A_PLAN_REQUIRED:
         f.check(
             f"the implementation plan {label} for the completed Run A acquisition",
-            phrase in adr_0018_plan,
-            f"missing from the implementation plan: {phrase}",
+            phrase in plan_run_a_governing,
+            f"missing from the governing Run A paragraph of the implementation plan: {phrase}",
         )
+    plan_run_b_overstated = [claim for claim in PLAN_RUN_B_FORBIDDEN if claim in adr_0018_plan]
+    f.check(
+        "the implementation plan does not authorize or complete Run B",
+        not plan_run_b_overstated,
+        ", ".join(plan_run_b_overstated),
+    )
+
     run_a_infra_flat = " ".join(read(INFRA / "README.md").replace("**", "").split()).lower()
     for label, phrase in RUN_A_INFRA_REQUIRED:
         f.check(
@@ -21248,6 +21516,14 @@ def main() -> int:
             phrase in run_a_infra_flat,
             f"missing from the infra README: {phrase}",
         )
+    infra_run_b_overstated = [
+        claim for claim in RUN_A_INFRA_RUN_B_FORBIDDEN if claim in run_a_infra_flat
+    ]
+    f.check(
+        "the infra README does not authorize or complete Run B",
+        not infra_run_b_overstated,
+        ", ".join(infra_run_b_overstated),
+    )
 
     # The implementation half. The offline implementation candidate exists, and
     # every boundary it rests on is checked against the repository rather than

@@ -2639,12 +2639,12 @@ empirical acquisition implementation — merged, dormant and unexecuted until th
 run once under its own separate written authorization. **Run A completed with exit code `0`**,
 and its closed public outcome was `empirical acquisition completed`.
 
-**This section governs the current state.** The two binding-correction sections below record the
-days their pull requests merged, the operator-access section records the day of the materialization,
-and every per-merge section beneath them records its own merge. Their Run A, execution,
-materialization and activity lines describe their own dates and **no longer govern**, while their
-forward authorization boundaries are unchanged. **No ADR document and no historical review report is
-rewritten by this synchronization.**
+**This section governs the current state.** The repository's binding-correction history records the
+days those pull requests merged, the operator-access section below records the day of the
+materialization, and every per-merge section beneath it records its own merge. Their Run A,
+execution, materialization and activity lines describe their own dates and **no longer govern**,
+while their forward authorization boundaries are unchanged. **No ADR document and no historical
+review report is rewritten by this synchronization.**
 
 #### What Run A established
 
