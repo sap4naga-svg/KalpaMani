@@ -3912,6 +3912,15 @@ INFRA_RUN_B_REGRESSION = "Run B is a separately authorized second acquisition"
 DATA_CORRECTNESS_LINE = "data correctness and quality:                     NOT ESTABLISHED"
 DATA_CORRECTNESS_FLIPPED = "data correctness and quality:                     ESTABLISHED"
 
+#: The same fact as the flattened reading sees it, and its flip.
+#:
+#: The mutation is applied here rather than to the column-aligned spelling above,
+#: because a later section restating the same fact under a different alignment would
+#: otherwise keep the required-clause check satisfied after the Run A line had been
+#: flipped -- the mutation surviving, in exactly the shape this guard exists to catch.
+DATA_CORRECTNESS_FLAT = "data correctness and quality: not established"
+DATA_CORRECTNESS_FLAT_FLIPPED = "data correctness and quality: established"
+
 #: The shared framing sentence, and the position-dependent wording it replaced.
 SHARED_FRAMING = (
     "The repository's binding-correction history records the\n"
@@ -4179,14 +4188,27 @@ class TestThePairedRunASectionsPinTheirStatusLines:
         assert len({run_a_section(document) for document in DOCUMENTS}) == 1
 
     @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_aligned_line_is_the_one_the_section_carries(self, document: Path) -> None:
+        """The column-aligned spelling is a real property of the governing section."""
+        assert DATA_CORRECTNESS_LINE in run_a_section(document), document.name
+        assert DATA_CORRECTNESS_FLIPPED not in read(document), document.name
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
     def test_flipping_the_data_correctness_line_is_refused(self, document: Path) -> None:
-        """The review's mutation: identical in both files, and previously invisible."""
-        text = read(document)
-        mutated = text.replace(DATA_CORRECTNESS_LINE, DATA_CORRECTNESS_FLIPPED)
-        assert mutated != text, document.name
-        reading = flat(mutated)
-        assert status_missing(reading) != [], document.name
-        assert status_overstated(reading) != [], document.name
+        """The review's mutation: identical in both files, and previously invisible.
+
+        Applied to **every** occurrence in the flattened reading rather than to one
+        aligned spelling. A document may legitimately restate the fact in a later
+        section under a different alignment, and a mutation that flipped only the Run A
+        line would then be answered by that restatement -- which is the mutation
+        surviving rather than the guard holding.
+        """
+        reading = flat(read(document))
+        mutated = reading.replace(DATA_CORRECTNESS_FLAT, DATA_CORRECTNESS_FLAT_FLIPPED)
+        assert mutated != reading, document.name
+        assert DATA_CORRECTNESS_FLAT not in mutated, document.name
+        assert status_missing(mutated) != [], document.name
+        assert status_overstated(mutated) != [], document.name
 
     @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
     def test_the_prose_and_the_status_line_are_independent(self, document: Path) -> None:

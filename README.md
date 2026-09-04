@@ -351,6 +351,7 @@ live brokerage execution, real-money operation.
 | [ADR-0022](docs/decisions/ADR-0022-qualification-permission-set-name-limit.md) — qualification permission-set name limit | **ACCEPTED / IN FORCE** — PR #57 merged. Merge commit **`b214484b0da6edd6192caa01c0e57a9878afc288`**, ordered parents **`f4aa4f89b4f41acdad57b96fe07e558e71ba40bd`** then **`63992a88a9c4fb64defdb446ccc29c5d43b3e0b3`**, merged **2026-09-02T15:39:27Z**, with a **merge tree identical to the independently validated pull-request head tree**. **ADR-0022's conditional acceptance event has occurred**, and **PR #57 was independently reviewed before its merge**. **While PR #57 was open, ADR-0022 was proposed and carried no authority** — a historical fact about those days that stays true and is not rewritten. **The merge approved architecture only**, and **no implementation or operational authority followed from the merge**. Authoritative architecture: the acquisition permission-set name is **`KalpaManiQualificationAcquire`**, exactly 29 characters and buildable by the pinned `hashicorp/aws` v6.62.0 `aws_ssoadmin_permission_set` name validator; `KalpaManiQualificationAcquisition` is **retired**, historical and defect context, and never the current name; the assessment permission-set name **`KalpaManiQualificationAssessment` is unchanged**; both governed profile names `kalpamani-qualification-acquisition` and `kalpamani-qualification-assessment` are **unchanged**; actor semantics, the one-hour session duration, the suffix grammar, exact-account plus actor-specific role-name prefix verification, **structure-not-provenance** and the refusal to pin a full generated ARN are each **unchanged**; and the acquisition generated-role prefix is now `AWSReservedSSO_KalpaManiQualificationAcquire_`. **ADR-0022 amends only that one value** — **ADR-0017 isolation, ADR-0019 write-only acquisition, ADR-0020 request-scoped payload identity and assessment digest verification are unchanged**, and so is the arithmetic — **acquisition PutObject: 145 to 147 · acquisition HeadObject: 0 · acquisition GetObject: 0 · two successful runs: 290 to 294 · assessment: 195 to 196 · whole successful package: 485 to 490 · L >= 3 * T_s3 + C · remaining >= T_req + 3 * T_s3 + L**. **PR #56: MERGED · PR #56 correction: MERGED** — the later, separately authorized correction replaced the retired name consistently and added a provider 1-32 name-length guard, and the **genuine isolated `terraform validate` against the pinned provider was performed in task-owned external copies before that merge**. **Implementation: MERGED / APPLIED / 2 VERIFIED · Terraform: APPLIED (PR #60, controlled saved-plan apply) · permission-set implementation: MERGED / APPLIED / 2 VERIFIED · Identity Center assignments: MERGED / APPLIED / 2 VERIFIED · generated Identity Center runtime roles: 2 VERIFIED · customer-managed-policy references: MERGED / APPLIED / 2 VERIFIED · governed acquisition profile: MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed assessment profile: MATERIALIZED / IDENTITY PREFLIGHT PASSED · Organization-instance prerequisite: MET BY THE APPLIED DEPLOYMENT · further AWS discovery: NOT AUTHORIZED · AWS account/group/instance binding values: OWNER-SUPPLIED FOR THE APPLY / NOT RECORDED HERE · operator group: EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership: MATERIALIZED / INDEPENDENTLY VERIFIED · profile crossover: NONE · membership/profile gate: COMPLETED · qualification-principal deployment: COMPLETED · further infrastructure mutation: NOT AUTHORIZED · Terraform isolated init/validate: PERFORMED IN EXTERNAL COPIES ONLY · Terraform plan/apply: PERFORMED ONCE UNDER SEPARATE AUTHORIZATION · qualification and binding-preflight execution: NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment: NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1: OPEN · G2: OPEN · provider selected: NONE · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED** |
 | **[ADR-0023](docs/decisions/ADR-0023-private-runtime-binding-for-the-licensed-bucket.md) — private runtime binding for the licensed bucket** | **PROPOSED — NOT IN FORCE, and carrying no authority while its pull request is open.** On independent review and merge it becomes **ACCEPTED / IN FORCE** as **architecture plus the offline implementation the same pull request carries**, and nothing more. It answers the independently approved root cause **`RUNTIME_ACQUISITION_PROFILE_CANNOT_READ_GOVERNED_REMOTE_STATE`**: Run A resolved the licensed bucket from Terraform remote state, Terraform inherits the process environment, and the acquisition actor ADR-0019 made write-only cannot read state — so stage 6 refused every time. **Widening the actor was rejected**; the bucket now arrives as an ACL-protected private JSON file named by absolute path through **`KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE`**, with **no default path, no directory scan, no newest-file selection and no fallback**. **private runtime-binding contract: IMPLEMENTED / OFFLINE-VALIDATED · real private runtime binding: NOT MATERIALIZED · acquisition IAM policy: UNCHANGED / WRITE-ONLY · Terraform-state access for the acquisition actor: NONE · Terraform reachable from Run A: NO · AWS activity: NONE · Terraform activity: NONE · provider/Sharadar activity: NONE · new execution identifiers: 0 · Run A: BLOCKED PENDING MATERIALIZATION AND REVIEW · Run B / combined assessment: NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · production ingestion/backfill/update: NOT AUTHORIZED / NOT RUN · G1: OPEN · G2: OPEN · provider selected: NONE · backtesting: NOT STARTED · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED**. **The assessment entry point is deliberately out of scope** and is a separate authorization |
 | **[ADR-0024](docs/decisions/ADR-0024-governed-qualification-environment-binding-source.md) — the governed qualification environment-binding source** | **PROPOSED — NOT IN FORCE, and carrying no authority while its pull request is open.** On independent review and merge it becomes **ACCEPTED / IN FORCE** as **architecture plus the offline implementation the same pull request carries**, and nothing more. It answers the gap ADR-0023 left: the runtime binding requires **`provenance.environment_binding_sha256`** and the loader checks only its grammar, so **no tracked contract defined the artifact those bytes digest, its producer, its path-discovery mechanism, how its account and licensed-bucket values are obtained, or how its digest reaches runtime-binding materialization** — and no materialization existed either. **The applied secret-access receipt is not that artifact**, because it carries no licensed-bucket environment binding; **the private Terraform input is not that artifact either**, because it is Terraform's own input, carries no licensed bucket, and redesignating it would change what the governed identity check reads. Authoritative architecture: **a second private artifact, the environment binding**, actor-neutral, schema version 1, kind **`kalpamani-qualification-environment`**, contract **`qualification-environment-binding/v1`**, carrying the partition, the region, the governed account, the licensed bucket and a capture provenance of **`source_kind`, `captured_at_utc` and `outputs_digest`**; selected **only by an explicit absolute path** through **`KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE`**, with **no default path, no directory scan, no newest-file selection and no fallback**; held to the **same trust boundary as the runtime binding, by the same code**; and **`environment_binding_sha256` is defined as the SHA-256 of the exact environment-binding bytes runtime-binding materialization consumed**. **The ADR-0023 runtime-binding schema is unchanged**, **the acquisition IAM policy is unchanged**, and **Terraform stays unreachable from Run A** — with a second guard proving the run's call graph reaches neither the capture, nor the materialization gate, nor the writer, nor the environment-binding validator. **environment-binding contract: IMPLEMENTED / OFFLINE-VALIDATED · environment-binding producer: IMPLEMENTED / OFFLINE-VALIDATED / NEVER RUN · runtime-binding materialization gate: IMPLEMENTED / OFFLINE-VALIDATED / NEVER RUN · real environment binding: NOT MATERIALIZED · real private runtime binding: NOT MATERIALIZED · Terraform reachable from Run A: NO · operator tools reachable from Run A: NO · AWS activity: NONE · Terraform activity: NONE · provider/Sharadar activity: NONE · new execution identifiers: 0 · environment-binding capture: NOT AUTHORIZED / NOT RUN · runtime-binding materialization: NOT AUTHORIZED / NOT RUN · binding preflight: NOT AUTHORIZED / NOT RUN · execution-identifier allocation: NOT AUTHORIZED / NOT PERFORMED · Run A: BLOCKED PENDING MATERIALIZATION AND REVIEW · Run B / combined assessment: NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1: OPEN · G2: OPEN · provider selected: NONE · backtesting: NOT STARTED · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED** |
+| **[ADR-0025](docs/decisions/ADR-0025-private-runtime-binding-for-the-combined-assessment.md) — the private runtime binding for the combined assessment** | **PROPOSED — NOT IN FORCE, and carrying no authority while its pull request is open.** On independent review and merge it becomes **ACCEPTED / IN FORCE** as **architecture plus the offline implementation the same pull request carries**, and nothing more. It closes the gap ADR-0023 named and deliberately left open: **the combined assessment entry point still resolved its licensed bucket from Terraform remote state and still took its account binding from the local Terraform variables file** — **two prohibited dependencies, not one**, and only the first would have failed loudly, because the state read cannot succeed under an actor with no grant on the state bucket while `expected_account()` is a plain file read that works. **Widening the actor was rejected**, and **the acquisition artifact was not reused**: it pins `acquisition_profile` by construction, and an actor field on a shared file would let a private input choose which principal reads licensed bytes. Authoritative architecture: **a third private artifact, the assessment runtime binding**, schema version 1, kind **`kalpamani-qualification-assessment-runtime`**, contract **`qualification-assessment-runtime-binding/v1`**, carrying the partition, the region, the governed account, the governed **assessment** profile, the licensed bucket and the ADR-0023 provenance block; selected **only by an absolute path** through **`KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE`**, with **no default path, no directory scan, no newest-file selection and no fallback**; held to the **same trust boundary as the other two private artifacts, by the same code**; and **the identity gate is handed that account rather than looking one up**, so **loading the binding is not identity proof** and one `sts:GetCallerIdentity` still establishes the actor. **The ADR-0023 and ADR-0024 schemas, the acquisition entry point, the assessment outcome vocabulary and exit codes, the assessment IAM policy and the operation arithmetic are each unchanged**, and **no provider or credential capability is introduced**. **assessment-binding contract: IMPLEMENTED / OFFLINE-VALIDATED · assessment-binding materialization gate: IMPLEMENTED / OFFLINE-VALIDATED / NEVER RUN · real assessment runtime binding: NOT MATERIALIZED · Terraform reachable from the assessment: NO · private Terraform input reachable: NO · operator tools reachable from the assessment: NO · provider or credential reachable: NO · AWS activity: NONE · Terraform activity: NONE · provider/Sharadar activity: NONE · new execution identifiers: 0 · Run A: COMPLETED ONCE / 2026-09-04 · a Run A retry: NOT AUTHORIZED / NOT RUN · assessment-binding materialization: NOT AUTHORIZED / NOT RUN · binding preflight: NOT AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · Run B earliest approved target: 12 SEPTEMBER 2026 · combined assessment: NOT AUTHORIZED / NOT RUN · P1-P9: UNEVALUATED · data correctness and quality: NOT ESTABLISHED · third ADR-0017 acquisition: NOT AUTHORIZED · sixth binding preflight: NOT AUTHORIZED · G1: OPEN · G2: OPEN · provider selected: NONE · backtesting: NOT STARTED · Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED** |
 | Applied qualification infrastructure — PR #60, controlled saved-plan apply | **APPLIED / INDEPENDENTLY VERIFIED** — the **controlled saved-plan apply COMPLETED** and an **independent post-apply verification PASSED**: **live customer-managed IAM policies 2 VERIFIED · live Identity Center permission sets 2 VERIFIED · live customer-managed-policy references 2 VERIFIED · live account assignments 2 VERIFIED · generated Identity Center runtime roles 2 VERIFIED**. **Infrastructure existence is not qualification success**, and **materialized access is not authority to use it** — the operator and profile state recorded on the day of the apply has since been superseded, and the governing record is *The qualified operator access*: **operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED**, **operator membership MATERIALIZED / INDEPENDENTLY VERIFIED**, **governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **profile crossover NONE**, **AWS config ACL EFFECTIVE ACCESS PRESERVED**, **membership/profile gate COMPLETED**, **sixth private-binding preflight NOT AUTHORIZED / NOT RUN**, **provider credential retrieval NONE**, **S3/provider activity NONE**, **further infrastructure mutation NOT AUTHORIZED**, **qualification and binding-preflight execution NOT AUTHORIZED / NOT RUN**, **third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN**, **Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN**, **provider acquisition NOT AUTHORIZED / NOT RUN**, **backtesting NOT STARTED**, **G1 OPEN · G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | Qualified operator access — membership and governed profiles | **MATERIALIZED / INDEPENDENTLY VERIFIED** — one owner-approved human operator was added to the governed Identity Center group, both governed AWS profiles were materialized, and an **independent review read the result rather than producing it**: **operator selection OWNER-APPROVED · operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership MATERIALIZED / INDEPENDENTLY VERIFIED · governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · profile crossover NONE · AWS config ACL EFFECTIVE ACCESS PRESERVED · membership/profile gate COMPLETED**. **Who the operator is stays out of this repository** — the count is recorded and the person is not. **Materialized access is not authority to use it**: **sixth private-binding preflight NOT AUTHORIZED / NOT RUN · provider credential retrieval NONE · S3/provider activity NONE · qualification execution NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN · further infrastructure mutation NOT AUTHORIZED · backtesting NOT STARTED · G1 OPEN · G2 OPEN · provider selected NONE · Phase 3 NOT COMPLETE · CONTROL DEFERRED · live trading HARD-DISABLED** |
 | Ingestion runner · ECS task or image · a third authenticated qualification attempt | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
@@ -2963,6 +2964,142 @@ live trading:                                 HARD-DISABLED
 runtime binding, the binding preflight, allocating an execution identifier, Run A, Run B and the
 combined assessment are **seven separate written authorizations**, and none of them is implied by
 any other or by this decision.
+
+### The assessment runtime binding, and ADR-0025 — PROPOSED, and the assessment stays unauthorized
+
+**ADR-0023 corrected one actor and said so.** It took the licensed bucket out of Terraform remote
+state for the Run A acquisition path, and its own text records that **the assessment entry point was
+deliberately out of scope and that correcting it was a separate authorization**. This is that
+authorization, and ADR-0023's text is not rewritten by it.
+
+**The combined assessment had two prohibited dependencies, not one**, and they fail differently —
+which is why a correction that removed only the first would have looked finished:
+
+```text
+sharadar_qualification_assessment.main()
+    run_qualification_assessment()
+        _governed_identity_gate()
+            qualification_identity_gate(ASSESSMENT)
+                expected_account()
+                    terraform.tfvars          <- the private Terraform input
+        _governed_licensed_bucket()
+            tf_outputs()
+                Terraform / governed remote state   <- the state read
+```
+
+| | |
+|---|---|
+| **the Terraform state read** | `tf_outputs()` starts a Terraform child process, and Terraform inherits the process environment — so the read was attempted under `kalpamani-qualification-assessment`, an actor with **no grant of any kind on the state bucket**. It could not have succeeded |
+| **the private Terraform input** | the account-finding identity gate calls `expected_account()`, which parses `terraform.tfvars`. That is a plain local file read rather than a subprocess, so it *worked* — and it made a governed identity check depend on a Terraform input inside a closure that must be able to prove it contains none |
+
+**[ADR-0025](docs/decisions/ADR-0025-private-runtime-binding-for-the-combined-assessment.md) is
+PROPOSED and carries no authority while its pull request is open.** On independent review and merge
+it becomes **ACCEPTED / IN FORCE** as architecture plus the offline implementation the same pull
+request carries — and **nothing more**.
+
+**Widening the actor was the wrong repair, and was rejected.** Terraform state carries the whole
+infrastructure inventory and can hold plaintext-sensitive values; granting the assessment actor
+access would hand a compromised assessment process reach that ADR-0019 and ADR-0021 deliberately
+withheld, and would void the two-actor compromise argument ADR-0018 §10.3 rests on. **The assessment
+IAM policy is untouched**, and so is every `.tf` declaration, Identity Center resource and AWS
+profile.
+
+**The acquisition artifact was not reused either, and that is a decision rather than an oversight.**
+The ADR-0023 binding carries `acquisition_profile` as a required field compared against a compiled
+constant, so it **is** an acquisition-actor artifact by construction; adding an actor field or a
+flag to a shared real artifact would let one private file choose which principal reads licensed
+bytes; and one artifact means one wrong or stale file misdirects both actors at once. The two
+artifacts share the environment binding they are derived from, the writer that creates them and the
+trust boundary they are read under — and **share no output**.
+
+| | |
+|---|---|
+| **Its own variable, its own kind, its own contract** | `KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE`, kind `kalpamani-qualification-assessment-runtime`, contract `qualification-assessment-runtime-binding/v1`. It differs from the acquisition document in one field name — `assessment_profile` — so **neither artifact validates as the other**, and a swapped path is a refusal rather than a silent actor substitution |
+| **Selected, never searched** | the variable names the exact file, or nothing is read. **No default path, no directory scan, no newest-file selection and no fallback**, and the private root stays a containment boundary rather than a search path |
+| **One trust boundary, one implementation** | containment, the link chain, ownership, inheritance, the single Allow entry, the absent Deny, the size ceiling and the before-and-after verification are **the same functions** the other two private artifacts use. **No second ACL parser was written**, and a platform that cannot answer is `SECURITY_UNVERIFIABLE` |
+| **It carries the account, on purpose** | the acquisition binding drops it because a governed local Terraform input supplied it. This path may not read that input, so the artifact **is** the account binding — and a value the caller never receives is a value the caller cannot compare an identity against |
+| **Loading it is not identity proof** | the bound account fixes only *which* account the authenticated identity must be in. The proof stays **one `sts:GetCallerIdentity`**, matched against that account, the governed assessment permission-set role and the configured profile. A binding naming another account misdirects nothing: the gate refuses, and no client is built, no locator key derived and no licensed byte read |
+| **It carries no capability** | no secret identifier, credential, token, provider endpoint, execution identifier, locator, report key or payload — and no field in the schema for one. **The assessment still reaches no provider and retrieves no credential** |
+| **Read, never written by the run** | the run creates no file, creates no directory and repairs no permission. The real binding is the owner's, made under a separately authorized materialization gate |
+
+**Stages 4 and 5 changed places, and the public surface did not.**
+
+```text
+ 1  require the assessment singleton authorization
+ 2  refuse under automation, CI, pytest and import-only contexts
+ 3  pin the governed assessment profile
+ 4  load and validate the private assessment binding -- LOCALLY
+ 5  one identity call, against the account THAT binding names
+ 6  accept the two owner-known execution identities and the assessment identity
+ 7  construct the S3 client
+ 8+ the existing locator, pair-validation, payload-read, evaluation and report stages
+```
+
+An invalid, unsafe, absent or unusable binding is the closed, value-free
+`REFUSED_LICENSED_BUCKET`; an identity mismatch is `REFUSED_IDENTITY`. **The outcome vocabulary and
+the exit-code map are unchanged**, and no member is added, removed or renumbered.
+
+**Three defenses, and the mutations that prove them.** A **name-level call graph** followed per name
+rather than per module, because reaching the verifier is legitimate and reaching `tf_outputs`,
+`expected_account`, `TFVARS` or the account-finding gate is not; a **runtime sentinel** that traps
+Terraform, `subprocess` and the Terraform input on the real verifier while stages 4 and 5 run for
+real; and a **capability check** proving the closure reaches no credential, no provider transport, no
+operator tool and no writer. **Mutation tests reintroduce both defects in memory** — directly, behind
+an alias, through the foundation profile, through a raw bucket environment variable, through the
+capture, through the materializer, through the account-finding gate, and by reading the Terraform
+input under the corrected gate — and prove each guard fails. **No production file is rewritten by any
+of it.**
+
+**One shared refusal message became source-neutral.** `qualification_identity_refusal` takes its
+account binding as a parameter, and two callers now obtain it from two different governed sources, so
+a message naming one of them would have been wrong for the other — and would have put a Terraform
+file name inside a closure that must not reach one.
+
+```text
+ADR-0025:                                     PROPOSED / NO AUTHORITY WHILE ITS PR IS OPEN
+assessment-binding contract:                  IMPLEMENTED / OFFLINE-VALIDATED
+assessment-binding materialization gate:      IMPLEMENTED / OFFLINE-VALIDATED / NEVER RUN
+real assessment runtime binding:              NOT MATERIALIZED
+real private runtime binding:                 NOT MATERIALIZED
+assessment IAM policy:                        UNCHANGED
+Terraform-state access for assessment actor:  NONE
+Terraform reachable from the assessment:      NO
+private Terraform input reachable:            NO
+operator tools reachable from the assessment: NO
+provider or credential reachable:             NO
+AWS activity:                                 NONE
+Terraform activity:                           NONE
+provider/Sharadar activity:                   NONE
+new execution identifiers:                    0
+new assessment identifiers:                   0
+Run A:                                        COMPLETED ONCE / 2026-09-04
+a Run A retry:                                NOT AUTHORIZED / NOT RUN
+assessment-binding materialization:           NOT AUTHORIZED / NOT RUN
+binding preflight:                            NOT AUTHORIZED / NOT RUN
+Run B:                                        NOT AUTHORIZED / NOT RUN
+Run B minimum separation:                     AT LEAST 8 CALENDAR DAYS AFTER RUN A
+Run B earliest approved target:               12 SEPTEMBER 2026
+combined assessment:                          NOT AUTHORIZED / NOT RUN
+P1-P9:                                        UNEVALUATED
+data correctness and quality:                 NOT ESTABLISHED
+production ingestion/backfill/update:         NOT AUTHORIZED / NOT RUN
+third ADR-0017 acquisition:                   NOT AUTHORIZED / NOT RUN
+sixth private-binding preflight:              NOT AUTHORIZED / NOT RUN
+further infrastructure mutation:              NOT AUTHORIZED
+G1 / G2:                                      OPEN / OPEN
+provider selected:                            NONE
+backtesting:                                  NOT STARTED
+Phase 3:                                      NOT COMPLETE
+CONTROL:                                      DEFERRED
+live trading:                                 HARD-DISABLED
+```
+
+**Removing a blocker is not clearing a gate.** An implemented contract is not a materialized
+binding, a materialized binding is not an authorized run, and **the combined assessment has not run
+and is not authorized to**: it comes after Run B, which is itself unauthorized and no earlier than
+**12 September 2026**. **P1–P9 remain unevaluated**, data correctness and quality remain **not
+established**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is **NOT COMPLETE**, CONTROL
+stays **DEFERRED** and live trading stays **HARD-DISABLED**.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

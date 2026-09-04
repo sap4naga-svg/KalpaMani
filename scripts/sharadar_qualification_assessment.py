@@ -29,8 +29,8 @@ sits inside a function body.
  1  require a DIFFERENT singleton authorization
  2  refuse under automation, CI, pytest and import-only contexts
  3  pin the governed AWS profile
- 4  pass the governed identity gate
- 5  resolve only the LICENSED bucket
+ 4  load and validate the PRIVATE assessment runtime binding -- LOCALLY
+ 5  pass the governed identity gate, against the account THAT binding names
  6  accept the two owner-known execution identities privately, and refuse a repeat
  7  derive BOTH exact locator keys -- WITHOUT LISTING
  8  retrieve and validate BOTH locators, then validate the PAIR -- before any payload
@@ -41,6 +41,34 @@ sits inside a function body.
 13  publish ONE owner-only private combined report
 14  emit only a closed public result
 ```
+
+**Stages 4 and 5 changed places, and that is the correction** (ADR-0025). This command
+used to resolve the licensed bucket from governed Terraform remote state and take its
+account binding from the local Terraform variables file, so a Terraform child process
+and a private Terraform input were both inside the closure of a run that must contain
+neither. The bucket and the account now arrive together, from one ACL-protected
+private JSON file named by absolute path through
+`KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE` -- **an assessment-specific
+artifact**, not the acquisition one, so no private file selects which actor reads
+licensed bytes. Loading it settles *which* account; it proves nothing, and the
+identity gate at stage 5 is still one `sts:GetCallerIdentity` matched against that
+account and against the governed assessment permission-set role.
+
+**The operator contract, in full.**
+
+```text
+AWS_PROFILE                                              kalpamani-qualification-assessment
+KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE  an ABSOLUTE path to the private
+                                                         assessment binding, beneath
+                                                         %LOCALAPPDATA%\\KalpaMani\\private
+```
+
+**Neither is an option, and neither may be.** A profile and a private path on a command
+line enter shell history and every process listing on the workstation, so each arrives
+from the environment and every spelling of a corresponding flag is refused by name.
+There is **no default path, no directory scan, no newest-file selection and no
+fallback**, and a binding that fails any clause of the trust boundary is refused with
+the same closed `REFUSED_LICENSED_BUCKET` as one that is simply absent.
 
 **Nothing this command prints is a finding.** No P-status, no measurement, no
 security name, no key, no digest, no identity, no report content and no
@@ -75,9 +103,19 @@ AUTHORIZATION_FLAG: Final = "--i-am-the-operator-authorizing-qualification-asses
 EXPECTED_PROFILE: Final = "kalpamani-qualification-assessment"
 EXPECTED_REGION: Final = "us-east-1"
 
-#: The Terraform output holding the licensed research bucket. The control bucket has
-#: a different output key and this module never names it.
-LICENSED_BUCKET_OUTPUT: Final = "licensed_bucket_name"
+#: The one fixed, non-secret environment-variable *name* naming the private assessment
+#: binding file, restated from
+#: :mod:`kalpamani.data.qualify.sharadar.runtime_binding` so this surface states its
+#: own operator contract. A test asserts the two spellings are identical.
+#:
+#: ADR-0025 replaced a Terraform state read with this file, and it is deliberately
+#: **not** the acquisition binding's variable: two actors reading one private file
+#: would make that file choose which principal reads licensed bytes. The CONTROL
+#: bucket still cannot be substituted -- the binding carries one named field, this
+#: module never names a control one, and the loader returns a closed value object.
+ASSESSMENT_RUNTIME_BINDING_ENV_VAR: Final = (
+    "KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE"
+)
 
 #: Options refused by name, each with the reason.
 REFUSED_OPTIONS: Final[dict[str, str]] = {
@@ -91,7 +129,11 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--arn": "an ARN names an account; it is never supplied and never printed",
     "--profile": "the governed profile is pinned in code and compared, never supplied",
     "--aws-profile": "same as --profile: the pin is not an operator choice",
-    "--bucket": "the licensed bucket is resolved from governed state, never supplied",
+    "--bucket": "the licensed bucket comes from the private assessment binding, never argv",
+    "--binding": "the private binding path is named by one fixed environment variable",
+    "--binding-file": "same as --binding: a private path would enter every process listing",
+    "--runtime-binding": "same as --binding: a private path is not an operator choice",
+    "--path": "same as --binding: a private path would enter every process listing",
     "--endpoint": "no endpoint is accepted; the SDK resolves the governed one",
     "--list": "no listing exists anywhere in this architecture, and none will be added",
     "--list-locators": "there is deliberately no index of locators; naming one is the only route",
@@ -291,8 +333,8 @@ def run_qualification_assessment(
     env: Mapping[str, str],
     modules: Mapping[str, object],
     profile_of: Callable[[], str],
-    identity_gate: Callable[[], str | None],
-    resolve_licensed_bucket: Callable[[], str],
+    load_binding: Callable[[], Any],
+    identity_gate: Callable[[str], str | None],
     s3_client_factory: Callable[[], Any],
     clock: Any,
 ) -> tuple[AssessmentOutcome, Any]:
@@ -325,20 +367,37 @@ def run_qualification_assessment(
     if profile != EXPECTED_PROFILE:
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_PROFILE) from None
 
-    # 4. The account identity gate. Its reason string can name an account, so it is
+    # 4. The private assessment binding, read locally. It carries the licensed bucket
+    #    AND the account the next stage compares against, so it must come first -- and
+    #    it starts no process and makes no request to do it. Every private reason it
+    #    could give names a rule rather than a value, and all of them collapse into one
+    #    public outcome here.
+    try:
+        binding = load_binding()
+    except Exception:
+        raise QualificationAssessmentError(AssessmentOutcome.REFUSED_LICENSED_BUCKET) from None
+    bound_account = getattr(binding, "target_account_id", None)
+    licensed_bucket = getattr(binding, "licensed_bucket_name", None)
+    if (
+        type(bound_account) is not str
+        or type(licensed_bucket) is not str
+        or getattr(binding, "assessment_profile", None) != EXPECTED_PROFILE
+    ):
+        raise QualificationAssessmentError(AssessmentOutcome.REFUSED_LICENSED_BUCKET) from None
+
+    # 5. The account identity gate, against the account the binding names. **Loading a
+    #    local file is not identity proof**: this is where the actor is established, by
+    #    one sts:GetCallerIdentity matched against that account and against the
+    #    governed assessment permission-set role. A credential resolving to the
+    #    acquisition role refuses here, before a locator key is derived and before any
+    #    licensed object is read. The reason string can name an account, so it is
     #    consumed as a pass/fail and never printed.
     try:
-        reason = identity_gate()
+        reason = identity_gate(bound_account)
     except Exception:
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_IDENTITY) from None
     if reason is not None:
         raise QualificationAssessmentError(AssessmentOutcome.REFUSED_IDENTITY) from None
-
-    # 5. The licensed bucket, from governed state. Never the control one.
-    try:
-        licensed_bucket = resolve_licensed_bucket()
-    except Exception:
-        raise QualificationAssessmentError(AssessmentOutcome.REFUSED_LICENSED_BUCKET) from None
 
     # 6. The three identities, held privately. None is printed, here or anywhere.
     #    The two execution identities must differ: one run named twice is not a
@@ -471,8 +530,8 @@ def main(argv: list[str] | None = None) -> int:
             env=os.environ,
             modules=sys.modules,
             profile_of=_ambient_profile,
+            load_binding=_assessment_runtime_binding,
             identity_gate=_governed_identity_gate,
-            resolve_licensed_bucket=_governed_licensed_bucket,
             s3_client_factory=_s3_client,
             clock=SystemClock(),
         )
@@ -492,30 +551,53 @@ def _ambient_profile() -> str:
     return os.environ.get("AWS_PROFILE", "")
 
 
-def _governed_identity_gate() -> str | None:
+def _assessment_runtime_binding() -> Any:
+    """The private assessment binding: the licensed bucket, and the bound account.
+
+    **ADR-0025 removed the Terraform state read that used to live here**, and the
+    private Terraform variables file the account-finding identity gate used to reach.
+    This runs under ``kalpamani-qualification-assessment``, and a Terraform child
+    process inherits that profile -- so the state read was attempted by an actor that
+    holds nothing at all on the state bucket, and could not succeed.
+    Widening the actor to make it succeed would have handed a compromised assessment
+    process the whole infrastructure inventory, so the bucket name arrives as
+    configuration instead.
+
+    It is **its own** artifact, not the acquisition one. A single shared file with an
+    actor field would be a private input choosing which principal reads licensed bytes,
+    and no private file gets that decision.
+
+    **No AWS call and no process is started here**: the account this returns is
+    compared against a live identity one stage later, and that comparison is between
+    two values, not a second lookup.
+    """
+    from kalpamani.data.qualify.sharadar.runtime_binding import load_assessment_runtime_binding
+
+    return load_assessment_runtime_binding()
+
+
+def _governed_identity_gate(bound_account: str) -> str | None:
     """The governed ADR-0021 identity gate, bound to the ASSESSMENT actor.
 
-    Not a second implementation of one: the account binding, the profile pin and the
-    single ``sts:GetCallerIdentity`` call all live in the existing verifier, and this
-    supplies only which of the two actors is being proved. A credential that resolves
-    to the acquisition permission-set role refuses here, before any locator key is
-    derived and before any licensed object is read.
+    Not a second implementation of one: the profile pin, the single
+    ``sts:GetCallerIdentity`` call, the assumed-role parsing and the permission-set
+    role-name grammar all live in the existing verifier, and this supplies only which
+    of the two actors is being proved and which account it must be in. A credential
+    that resolves to the acquisition permission-set role refuses here, before any
+    locator key is derived and before any licensed object is read.
+
+    The account binding is **passed in** rather than looked up, which is the ADR-0025
+    correction: the gate that finds its own reads a local Terraform variables file, and
+    that file has no business inside this closure.
     """
     from aws_foundation_verify import (  # type: ignore[import-not-found]
         QualificationActor,
-        qualification_identity_gate,
+        qualification_identity_gate_for,
     )
 
-    return qualification_identity_gate(  # type: ignore[no-any-return]
-        QualificationActor.ASSESSMENT
+    return qualification_identity_gate_for(  # type: ignore[no-any-return]
+        QualificationActor.ASSESSMENT, bound_account=bound_account
     )
-
-
-def _governed_licensed_bucket() -> str:
-    """The licensed bucket from governed Terraform state. Never the control one."""
-    from aws_foundation_verify import tf_outputs  # type: ignore[import-not-found]
-
-    return str(tf_outputs()[LICENSED_BUCKET_OUTPUT])
 
 
 def _s3_client() -> Any:

@@ -260,11 +260,24 @@ def test_the_verifier_keeps_the_state_read_for_its_own_actor() -> None:
     assert "outputs = tf_outputs()" in verifier
 
 
-def test_the_assessment_entry_point_is_untouched_and_said_to_be_out_of_scope() -> None:
-    """Scope stated rather than implied -- and stated as a gap, not as a non-issue."""
-    assert "tf_outputs" in ASSESS.read_text(encoding="utf-8")
+def test_the_assessment_scope_exclusion_is_still_stated_as_this_decision_made_it() -> None:
+    """ADR-0023's own text is not rewritten now that a later decision corrected it.
+
+    It said the assessment entry point was out of scope and that correcting it was a
+    separate authorization, and both are historical facts about that slice. ADR-0025
+    is that separate authorization; it removed the Terraform state read here, so the
+    predecessor of this test -- which asserted ``tf_outputs`` was still present -- is
+    now asking the wrong question. The properties that survive are that ADR-0023 still
+    records its own boundary, and that the correction happened in a decision of its own
+    rather than silently.
+    """
     assert "The assessment entry point is deliberately out of scope" in ADR_FLAT
     assert "correcting it is a separate authorization" in ADR_FLAT
+    assert "ADR-0025" not in ADR_TEXT
+
+    successor = DECISIONS / "ADR-0025-private-runtime-binding-for-the-combined-assessment.md"
+    assert successor.is_file()
+    assert "tf_outputs" not in ASSESS.read_text(encoding="utf-8")
 
 
 # -- the status document agrees -----------------------------------------------
