@@ -1442,7 +1442,7 @@ class TestTheClarificationAmendmentClaimsNothing:
             "implementation candidate may be merged",
             "the implementation is deployed",
             "qualification infrastructure is deployed",
-            "run a was executed",
+            "run a qualified the provider",
             "run b was executed",
             "the combined assessment was executed",
             "the empirical qualification passed",

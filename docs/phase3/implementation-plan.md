@@ -623,6 +623,25 @@ authorizes no run** — completing the membership and profile gate **opened none
 and **acceptance, implementation, deployment, access and execution stay distinct gates that are
 never collapsed into one**.
 
+**Run A has since COMPLETED once, on 4 September 2026, and it is a command outcome rather than a
+provider verdict.** The ADR-0018 / ADR-0019 / ADR-0020 empirical acquisition implementation was run
+once under its own separate written authorization. Current status: **Run A: COMPLETED / 4 SEPTEMBER
+2026 · Run A entry-point invocations: 1 · Run A exit code: 0 · Run A closed public outcome:
+empirical acquisition completed · provider requests: 48 · provider retries: 0 · licensed-S3
+PutObject: 145 · conditional HeadObject: 0 · object-byte GetObject: 0 · listing operations: 0 ·
+CONTROL operations: 0 · total S3 operations: 145 · credential retrievals (GetSecretValue): 1 ·
+Terraform operations: 0 · locator: PUBLISHED LAST / ADDRESSABLE · newly written objects: 145 ·
+execution identifier: ALLOCATED AND PERMANENTLY RETIRED · a Run A retry: NOT AUTHORIZED / NOT RUN ·
+Run B: NOT AUTHORIZED / NOT RUN · Run B minimum separation: AT LEAST 8 CALENDAR DAYS AFTER RUN A ·
+Run B earliest approved target: 12 SEPTEMBER 2026 · combined assessment: NOT AUTHORIZED / NOT RUN ·
+P1-P9: UNEVALUATED · data correctness and quality: NOT ESTABLISHED · provider-wide entitlement:
+UNKNOWN · subscription-wide entitlement: UNKNOWN · production ingestion/backfill/update: NOT
+AUTHORIZED / NOT RUN · backtesting: NOT STARTED · G1 / G2: OPEN / OPEN · provider selected: NONE ·
+Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED**. **A completed
+acquisition authorizes no further run** — a Run A retry, Run B and the combined assessment each
+remain a separate written authorization, and **P1–P9 remain unevaluated by the combined
+assessment**.
+
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.
 - No `latest` / `current` / `most_recent` / `today` identifier in research paths.

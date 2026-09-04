@@ -1972,7 +1972,13 @@ class TestForwardDriftMutations:
             ("phase 3: not complete", "phase 3: complete", "phase 3: complete"),
             ("control: deferred", "control: published", "control: published"),
             ("live trading: hard-disabled", "live trading: enabled", "live trading: enabled"),
-            ("run a: not authorized / not run", "run a: completed", "run a: completed"),
+            # "run a: completed" was retired from the denylist when Run A was run;
+            # the retry that stays unauthorized is what the mutation now drives.
+            (
+                "a run a retry: not authorized / not run",
+                "a run a retry: authorized",
+                "a run a retry: authorized",
+            ),
             ("run b: not authorized / not run", "run b: completed", "run b: completed"),
             (
                 "combined assessment: not authorized / not run",

@@ -6879,7 +6879,13 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "read surface has executed",
     "read surface is live",
     "read surface is in use",
-    "run a completed",
+    # "run a completed" and "run a was executed" are retired here: Run A really was
+    # run once, on 2026-09-04, under its own separate written authorization, so
+    # refusing those spellings would refuse the fact the status documents now have
+    # to state. What replaces them is the mirror image -- everything a completed
+    # acquisition still did not buy -- which is the treatment the pre-apply
+    # infrastructure bans were given when the apply happened. "run b completed" and
+    # "the combined assessment was executed" stay: neither has happened.
     "run b completed",
     "empirical qualification executed",
     # The superseded HeadObject arithmetic, in both spellings the status
@@ -6930,8 +6936,16 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # ("it is dormant and not deployed") contains none of these.
     "the implementation is deployed",
     "qualification infrastructure is deployed",
-    "run a was executed",
     "run b was executed",
+    "run a qualified the provider",
+    "run a selected a provider",
+    "run a closed g1",
+    "run a closed g2",
+    "run a is a provider verdict",
+    "run a proves the data is correct",
+    "run a may be repeated",
+    "run a may be retried",
+    "the run a execution identifier may be reused",
     "the combined assessment was executed",
     "the empirical qualification passed",
     "provider selection has occurred",
@@ -9153,7 +9167,10 @@ QUALIFICATION_IAM_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "this merge grants a principal aws authority",
     "the foundation grants a principal aws authority",
     "run a: authorized",
-    "run a: completed",
+    # "run a: completed" is retired here, for the reason its ADR-0018 sibling is:
+    # Run A completed once and the status documents say so. A retry is what stays
+    # unauthorized, so that is what is refused instead.
+    "a run a retry: authorized",
     "run b: authorized",
     "run b: completed",
     "combined assessment: authorized",
@@ -11636,10 +11653,14 @@ INFRA_README_VALIDATION_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "an iam identity-policy simulation is a policy evaluation rather than an end-to-end "
         "authorization proof",
     ),
+    # The combined "no qualification run ... has happened" clause is retired here for
+    # the reason the empty-group clause above was: Run A really was run once, on
+    # 2026-09-04, so requiring that wording would require this file to state what is no
+    # longer true. What replaces it closes the runs that genuinely have not happened,
+    # and RUN_A_INFRA_REQUIRED holds the completed one to its observed accounting.
     (
-        "closes every downstream run",
-        "no qualification run, binding preflight, provider acquisition, run a, run b or combined "
-        "assessment has happened",
+        "closes the remaining downstream runs",
+        "no binding preflight and no combined assessment has happened",
     ),
     ("selects no provider", "no provider is selected"),
     ("keeps both gates open", "g1 and g2 stay open"),
@@ -11723,13 +11744,26 @@ APPLIED_INFRA_SUPERSEDED_BANNER: Final = (
     "historical — the state as of that apply, superseded by *the qualified operator access*."
 )
 
+#: The banner the materialization's own superseded block must carry.
+#:
+#: The membership and profile materialization happened, and its Run A, execution and
+#: activity lines were true on the day it ran. Run A ended them, so they are framed by
+#: *their own* successor -- a third event, and a third banner, for the reason there are
+#: already two: a block framed by the wrong successor would pass while naming a state
+#: that did not supersede it.
+OPERATOR_ACCESS_SUPERSEDED_BANNER: Final = (
+    "historical — the state as of that materialization, superseded by *the completed run a "
+    "empirical acquisition*."
+)
+
 #: Every level-four heading whose block records a superseded state, and the banner
 #: that block's own successor requires.
 #:
-#: A mapping rather than one shared constant, because two different events superseded
-#: these blocks: the per-merge blocks were superseded by the apply, and the apply's own
-#: operator, profile and membership-gate lines were superseded by the materialization.
-#: One banner serving both would let either block name the other's successor and still
+#: A mapping rather than one shared constant, because three different events superseded
+#: these blocks: the per-merge blocks were superseded by the apply, the apply's own
+#: operator, profile and membership-gate lines were superseded by the materialization,
+#: and the materialization's own Run A and activity lines were superseded by Run A.
+#: One banner serving all three would let any block name another's successor and still
 #: pass. "What the apply established" is deliberately absent -- the apply really did
 #: establish those resources, and nothing has superseded them.
 SUPERSEDED_STATUS_BANNERS: Final[dict[str, str]] = {
@@ -11740,6 +11774,7 @@ SUPERSEDED_STATUS_BANNERS: Final[dict[str, str]] = {
     "#### Carried-forward implementation findings": SUPERSEDED_STATUS_BANNER,
     "#### What the apply did not establish": APPLIED_INFRA_SUPERSEDED_BANNER,
     "#### Verified status": APPLIED_INFRA_SUPERSEDED_BANNER,
+    "#### Qualified operator status": OPERATOR_ACCESS_SUPERSEDED_BANNER,
 }
 
 #: The headings those blocks carry, derived from the mapping rather than restated.
@@ -12261,6 +12296,234 @@ OPERATOR_ACCESS_INFRA_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
         "records no s3 or provider activity",
         "no s3 object operation and no provider request occurred",
     ),
+)
+
+
+# ---------------------------------------------------------------------------
+# The completed Run A empirical acquisition
+# ---------------------------------------------------------------------------
+#
+# Run A was run once, on 2026-09-04, under its own separate written authorization.
+# It is the newest governed event, so its section governs and every section below
+# it records its own date. The guards here hold the observed accounting in place
+# and hold the section away from the one claim a completed command cannot make: a
+# provider verdict.
+
+#: The section that governs the current state, and its level.
+#:
+#: It sits ahead of every section it supersedes, for the reason the operator-access
+#: section sits ahead of the apply: a reader meets the state that governs before the
+#: states that used to.
+RUN_A_STATUS_HEADING: Final = (
+    "The completed Run A empirical acquisition — COMPLETED, and what it does and does not establish"
+)
+
+#: The level at which that heading, and only that heading, may sit.
+RUN_A_STATUS_HEADING_LEVEL: Final = 3
+
+#: The level-four subsections that section is allowed to contain.
+RUN_A_STATUS_SUBSECTIONS: Final[tuple[str, ...]] = (
+    "What Run A established",
+    "What Run A did not establish",
+    "Run A status",
+)
+
+
+class RunAStatusSectionScan(NamedTuple):
+    """Every completed-Run-A status section a document carries, and its defects.
+
+    Separate from the other section scans for the reason they are separate from each
+    other: a malformed structure can yield exactly one plausible-looking section, and a
+    vacuous pass is what the caller must be able to refuse.
+    """
+
+    sections: tuple[str, ...]
+    defects: tuple[str, ...]
+
+
+def scan_run_a_status_sections(text: str) -> RunAStatusSectionScan:
+    """Extract the completed-Run-A status section(s) from a document, by heading."""
+    return RunAStatusSectionScan(
+        *_scan_status_sections(
+            text,
+            heading=RUN_A_STATUS_HEADING,
+            level=RUN_A_STATUS_HEADING_LEVEL,
+            subsections=RUN_A_STATUS_SUBSECTIONS,
+            label="completed Run A acquisition",
+        )
+    )
+
+
+#: What both status documents must say inside their completed-Run-A section.
+#:
+#: Section-scoped, for the reason every other section-scoped list is: several of these
+#: figures have a near-neighbour in an architecture block that states the *admitted*
+#: arithmetic rather than the observed one, so a flat scan is answered by the design
+#: and a section-local deletion of the observation goes unreported.
+RUN_A_STATUS_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    # ------------------------------------------------------ what actually happened
+    ("records the completed run and its date", "run a: completed / 4 september 2026"),
+    ("counts the one invocation", "run a entry-point invocations: 1"),
+    ("records the exit code", "run a completed with exit code `0`"),
+    ("records the closed public outcome", "run a closed public outcome: empirical acquisition"),
+    ("counts the provider requests", "provider requests: 48"),
+    ("counts the provider retries", "provider retries: 0"),
+    ("counts the append-only writes", "licensed-s3 putobject: 145"),
+    ("counts the conditional head requests", "conditional headobject: 0"),
+    ("counts the object-byte reads", "object-byte getobject: 0"),
+    ("counts the listings", "listing operations: 0"),
+    ("counts the control operations", "control operations: 0"),
+    ("counts the total s3 operations", "total s3 operations: 145"),
+    ("counts the credential retrievals", "credential retrievals (getsecretvalue): 1"),
+    ("counts the terraform operations", "terraform operations: 0"),
+    ("counts the identity invocations", "sts getcalleridentity invocations: 2"),
+    ("records the locator ordering", "locator: published last / addressable"),
+    ("counts the newly written objects", "newly written objects: 145"),
+    (
+        "retires the execution identifier",
+        "execution identifier: allocated and permanently retired",
+    ),
+    ("records the untouched private inputs", "private inputs: unchanged"),
+    ("records that the repository was not written", "repository mutation during run a: none"),
+    ("names no private identifier", "nothing private is recorded here"),
+    # ------------------------------------------- and what a completed command is not
+    ("separates a command outcome from a verdict", "it is not a provider verdict"),
+    ("establishes no data quality", "no data correctness and no data quality"),
+    ("keeps provider-wide entitlement unknown", "provider-wide entitlement: unknown"),
+    ("keeps subscription-wide entitlement unknown", "subscription-wide entitlement: unknown"),
+    ("keeps the p-tests unevaluated", "p1-p9: unevaluated"),
+    ("records that run a cannot be repeated", "a run a retry is not authorized"),
+    ("closes a run a retry", "a run a retry: not authorized / not run"),
+    ("closes run b", "run b: not authorized / not run"),
+    ("records the minimum separation", "at least 8 calendar days after run a"),
+    ("records the earliest approved target", "run b earliest approved target: 12 september 2026"),
+    ("closes the combined assessment", "combined assessment: not authorized / not run"),
+    (
+        "closes production ingestion",
+        "production ingestion/backfill/update: not authorized / not run",
+    ),
+    ("closes a third acquisition", "third adr-0017 acquisition: not authorized / not run"),
+    (
+        "closes the sixth binding preflight",
+        "sixth private-binding preflight: not authorized / not run",
+    ),
+    ("closes further mutation", "further infrastructure mutation: not authorized"),
+    ("records that no backtest began", "backtesting: not started"),
+    ("keeps both gates open", "g1 / g2: open / open"),
+    ("selects no provider", "provider selected: none"),
+    ("keeps phase 3 incomplete", "phase 3: not complete"),
+    ("defers control", "control: deferred"),
+    ("keeps live trading disabled", "live trading: hard-disabled"),
+    (
+        "records that a completed run authorizes none of the others",
+        "a completed acquisition authorizes no further run",
+    ),
+    ("edits no decision record", "no adr document and no historical review report is rewritten"),
+)
+
+#: The overstatements a completed acquisition still did not buy.
+#:
+#: Document-wide, because a claim that Run A settled the provider question is wrong
+#: wherever it is written. Anchored on "run a" or on a colon-terminated status key, so
+#: the honest negations survive -- the documents are *required* to say the p-tests are
+#: unevaluated and the gates are open, and a loose refusal would refuse them for it.
+RUN_A_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "run a qualified the provider",
+    "run a selected a provider",
+    "run a closed g1",
+    "run a closed g2",
+    "run a is a provider verdict",
+    "run a established the data is correct",
+    "run a: retried",
+    "a run a retry: authorized",
+    "a run a retry: performed",
+    "the run a execution identifier was reused",
+    "run b: completed",
+    "combined assessment: completed",
+    "p1-p9: evaluated",
+    "p1–p9: evaluated",  # noqa: RUF001
+    "the empirical qualification is complete",
+)
+
+#: The pre-Run-A wording, refused inside the section that governs now.
+#:
+#: Section-scoped on purpose: every one of these spellings is *required* to survive in
+#: the per-merge and per-ADR sections, which are the record of their own dates.
+RUN_A_REVERSE_DRIFT_FORBIDDEN: Final[tuple[str, ...]] = (
+    "run a: not authorized / not run",
+    "run a: blocked pending materialization",
+    "empirical-package executions zero",
+    "provider requests by this package zero",
+    "s3 operations by this package zero",
+    "the offline implementation is merged, dormant and never executed",
+)
+
+#: The two binding-correction sections, and the banner their successor requires.
+#:
+#: Their status blocks sit in prose rather than under a level-four heading, so the
+#: positional banner check cannot reach them. They are held to the same property by
+#: section instead: the block that says Run A is blocked has to open with the banner
+#: that says which event unblocked it.
+RUN_A_SUPERSEDED_BINDING_SECTIONS: Final[tuple[str, ...]] = (
+    "### The private runtime binding, and ADR-0023",
+    "### The environment binding, and ADR-0024",
+)
+
+#: The banner those two sections must carry, flattened.
+RUN_A_BINDING_SUPERSEDED_BANNER: Final = (
+    "historical — the state as of that merge, superseded by *the completed run a empirical "
+    "acquisition*."
+)
+
+
+def run_a_binding_framing_defects(text: str) -> list[str]:
+    """Every binding-correction section that does not frame its blocked status as history.
+
+    Pure, and reads only what it is given: no file is opened and no state is carried
+    between calls, so two documents scanned in either order give the same answer.
+    """
+    defects: list[str] = []
+    for heading in RUN_A_SUPERSEDED_BINDING_SECTIONS:
+        parts = text.split(heading)
+        if len(parts) != 2:
+            defects.append(f"{heading}: expected exactly one section, found {len(parts) - 1}")
+            continue
+        section = parts[1].split("\n### ")[0]
+        reading = " ".join(section.replace("**", "").replace(">", " ").split()).lower()
+        if RUN_A_BINDING_SUPERSEDED_BANNER not in reading:
+            defects.append(f"{heading}: unframed superseded status block")
+    return defects
+
+
+#: What the implementation plan must say about the completed Run A acquisition.
+#:
+#: The plan is a separate document with a separate reader, and merged main has more
+#: than once carried a fact in one status file and a stale contradiction in another.
+RUN_A_PLAN_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the completed run and its date", "run a: completed / 4 september 2026"),
+    ("counts the provider requests", "provider requests: 48"),
+    ("counts the provider retries", "provider retries: 0"),
+    ("counts the append-only writes", "licensed-s3 putobject: 145"),
+    ("counts the object-byte reads", "object-byte getobject: 0"),
+    ("counts the credential retrievals", "credential retrievals (getsecretvalue): 1"),
+    ("retires the execution identifier", "execution identifier: allocated and permanently retired"),
+    ("closes a run a retry", "a run a retry: not authorized / not run"),
+    ("closes run b", "run b: not authorized / not run"),
+    ("records the earliest approved target", "run b earliest approved target: 12 september 2026"),
+    ("closes the combined assessment", "combined assessment: not authorized / not run"),
+    ("keeps the p-tests unevaluated", "p1-p9: unevaluated"),
+    ("separates a command outcome from a verdict", "rather than a provider verdict"),
+    ("records that a completed run authorizes none", "a completed acquisition authorizes no"),
+)
+
+#: What the infrastructure README must say about the completed Run A acquisition.
+RUN_A_INFRA_REQUIRED: Final[tuple[tuple[str, str], ...]] = (
+    ("records the completed run and its date", "run a has since completed once, on 2026-09-04"),
+    ("counts the provider requests", "48 provider requests"),
+    ("counts the append-only writes", "145 append-only licensed-s3 writes"),
+    ("separates a command outcome from a verdict", "a command outcome, not a provider verdict"),
+    ("records that run a cannot be repeated", "a run a retry is not authorized"),
+    ("records the minimum separation", "at least eight calendar days later"),
 )
 
 
@@ -20922,6 +21185,69 @@ def main() -> int:
         and PR_56_MERGE_COMMIT not in (PR_56_FIRST_PARENT, PR_56_SECOND_PARENT),
         "a merge commit and its two ordered parents must be three different commits",
     )
+
+    # -- the completed Run A empirical acquisition ------------------------
+    #
+    # Run A was run once, on 2026-09-04, under its own separate written
+    # authorization. Its section is the one that governs, so it is held to the
+    # observed accounting rather than to the arithmetic the architecture admits,
+    # and it is held away from the claim a completed command cannot make.
+    run_a_sections: dict[str, str] = {}
+    for name, document in sorted(adr_0018_documents.items()):
+        flat = " ".join(document.replace("**", "").split()).lower()
+        scan = scan_run_a_status_sections(document)
+        f.check(
+            f"{name} carries exactly one completed-Run-A status section",
+            len(scan.sections) == 1 and not scan.defects,
+            "; ".join((f"{len(scan.sections)} sections", *scan.defects)),
+        )
+        run_a_sections[name] = scan.sections[0] if len(scan.sections) == 1 else ""
+        section = " ".join(" ".join(scan.sections).replace("**", "").split()).lower()
+        for label, phrase in RUN_A_STATUS_REQUIRED:
+            f.check(
+                f"{name} {label} for the completed Run A acquisition",
+                phrase in section,
+                f"missing from the Run A section of {name}: {phrase}",
+            )
+        run_a_overstated = [claim for claim in RUN_A_STATUS_FORBIDDEN if claim in flat]
+        f.check(
+            f"{name} does not overstate the completed Run A acquisition",
+            not run_a_overstated,
+            ", ".join(run_a_overstated),
+        )
+        run_a_reverted = [claim for claim in RUN_A_REVERSE_DRIFT_FORBIDDEN if claim in section]
+        f.check(
+            f"{name} does not revert the Run A section to the pre-Run-A state",
+            not run_a_reverted,
+            ", ".join(run_a_reverted),
+        )
+
+    f.check(
+        # Byte-identical, not merely structurally parallel, for the reason every other
+        # paired section is: the two documents have repeatedly carried a fact in one
+        # file and a stale contradiction in the other.
+        "both status documents carry byte-identical completed-Run-A sections",
+        len(set(run_a_sections.values())) == 1 and all(run_a_sections.values()),
+        "the two completed-Run-A status sections differ",
+    )
+    f.check(
+        "the status document frames both binding sections as history",
+        not run_a_binding_framing_defects(read(REPO_ROOT / "README.md")),
+        ", ".join(run_a_binding_framing_defects(read(REPO_ROOT / "README.md"))),
+    )
+    for label, phrase in RUN_A_PLAN_REQUIRED:
+        f.check(
+            f"the implementation plan {label} for the completed Run A acquisition",
+            phrase in adr_0018_plan,
+            f"missing from the implementation plan: {phrase}",
+        )
+    run_a_infra_flat = " ".join(read(INFRA / "README.md").replace("**", "").split()).lower()
+    for label, phrase in RUN_A_INFRA_REQUIRED:
+        f.check(
+            f"the infra README {label} for the completed Run A acquisition",
+            phrase in run_a_infra_flat,
+            f"missing from the infra README: {phrase}",
+        )
 
     # The implementation half. The offline implementation candidate exists, and
     # every boundary it rests on is checked against the repository rather than
