@@ -117,9 +117,10 @@ membership/profile gate                              COMPLETED
 one entry-point invocation, exit code `0`, 48 provider requests, zero provider retries, 145
 append-only licensed-S3 writes, zero object-byte reads, zero listings, zero CONTROL operations and
 zero Terraform operations. **That is a command outcome, not a provider verdict.** **A Run A retry
-is not authorized**, **Run B is a separately authorized second acquisition at least eight calendar
-days later, with an earliest approved target of 2026-09-12**, and **the combined assessment runs
-only after Run B, under another authorization**.
+is not authorized**, **Run B is a separate second acquisition that requires its own written
+authorization and has not run — at least eight calendar days later, with an earliest approved
+scheduling target of 2026-09-12**, and **the combined assessment runs only after Run B, under
+another authorization**.
 
 **No binding preflight and no combined assessment has happened**, **no provider credential was
 retrieved by this transition**, **no S3 object operation and no provider request occurred** during
