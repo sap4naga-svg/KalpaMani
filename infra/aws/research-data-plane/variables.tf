@@ -152,3 +152,29 @@ variable "provider_secret_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "qualification_acquisition_secret_arns" {
+  description = <<-EOT
+    ARNs of the Secrets Manager secret holding the ONE governed provider credential
+    the qualification acquisition actor may retrieve. This variable binds that
+    credential to the qualification acquisition policy and to nothing else: the
+    routine research task role reads `provider_secret_arns`, and the assessment
+    actor reads no credential at all (ADR-0018 s.10.2).
+
+    Separate from `provider_secret_arns` because the two are different grants to
+    different principals. The routine task role's statement also carries the SSM
+    parameter reads, so a single shared variable meant that binding the
+    qualification credential silently re-scoped the routine research role as well.
+    Populating this one changes the qualification acquisition policy only.
+
+    EMPTY BY DEFAULT, AND EMPTY IS THE CURRENT CORRECT VALUE. No qualification run
+    is authorized, so by default the acquisition policy grants no Secrets Manager
+    access at all. This configuration creates NO secret and stores NO secret value;
+    it records only the interface by which one would later be read.
+
+    An ARN contains an account id, so this is supplied at apply time from an
+    uncommitted `.tfvars`, is never committed, and binds this actor alone.
+  EOT
+  type        = list(string)
+  default     = []
+}

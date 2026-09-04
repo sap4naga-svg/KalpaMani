@@ -172,19 +172,29 @@ data "aws_iam_policy_document" "qualification_acquisition" {
   }
 
   # One governed secret retrieval, and only if a secret ARN is supplied at apply
-  # time. `provider_secret_arns` is empty by default and empty is the correct current
-  # value, so by default this policy grants no Secrets Manager access at all.
-  # Narrower than the routine research role in iam.tf, which also grants the SSM
-  # parameter reads: the acquisition entry point calls `get_secret_value` and nothing
-  # else, so nothing else is granted.
+  # time. `qualification_acquisition_secret_arns` is empty by default and empty is the
+  # correct current value, so by default this policy grants no Secrets Manager access
+  # at all.
+  #
+  # Its OWN variable, and not the routine role's `provider_secret_arns`. Sharing one
+  # variable coupled two unrelated grants: the routine research role's statement in
+  # iam.tf also carries `ssm:GetParameter` and `ssm:GetParameters`, so binding the
+  # qualification credential would have re-scoped that role at the same time -- a
+  # widening nobody asked for, arriving as a side effect of a `.tfvars` value. Each
+  # consumer now reads the variable that names its own principal, and populating one
+  # cannot change the other's policy.
+  #
+  # Narrower than the routine research role, which also grants the SSM parameter
+  # reads: the acquisition entry point calls `get_secret_value` and nothing else, so
+  # nothing else is granted.
   dynamic "statement" {
-    for_each = length(var.provider_secret_arns) > 0 ? [1] : []
+    for_each = length(var.qualification_acquisition_secret_arns) > 0 ? [1] : []
 
     content {
       sid       = "RetrieveTheGovernedProviderCredential"
       effect    = "Allow"
       actions   = ["secretsmanager:GetSecretValue"]
-      resources = var.provider_secret_arns
+      resources = var.qualification_acquisition_secret_arns
     }
   }
 }

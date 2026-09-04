@@ -808,7 +808,13 @@ class TestTheCandidate:
         assert CLAIM_PREFIX not in granted_on(real.documents[ASSESSMENT], "s3:GetObject")
 
     def test_the_secret_retrieval_is_conditional_on_a_supplied_arn(self) -> None:
-        """Empty by default is the current correct value, so the grant is absent by default."""
+        """Empty by default is the current correct value, so the grant is absent by default.
+
+        Guarded on the acquisition actor's OWN variable. It shared
+        `var.provider_secret_arns` with the routine research task role until that
+        binding was isolated, so the variable this asserts is part of the contract
+        rather than an incidental spelling.
+        """
         document = next(
             block
             for block in parse_hcl(_real_text())
@@ -816,7 +822,8 @@ class TestTheCandidate:
         )
         dynamic = document.children("dynamic")
         assert [block.labels for block in dynamic] == [("statement",)]
-        assert "var.provider_secret_arns" in dynamic[0].attributes["for_each"]
+        assert "var.qualification_acquisition_secret_arns" in dynamic[0].attributes["for_each"]
+        assert "var.provider_secret_arns" not in dynamic[0].attributes["for_each"]
 
     def test_both_policy_arns_are_exposed_as_outputs(self) -> None:
         outputs = {
@@ -1025,6 +1032,535 @@ class TestNegativeControls:
             'resource "aws_iam_policy" "qualification_assessment" {\n  name = "b"\n}\n'
         )
         assert violations(analyse(text))
+
+
+# ---------------------------------------------------------------------------
+# The secret binding, and which principal each variable can widen
+# ---------------------------------------------------------------------------
+#
+# Two policy documents read a credential ARN out of a Terraform input, and until
+# this correction they read the SAME one. `var.provider_secret_arns` fed both the
+# routine research task role in `iam.tf` and the qualification acquisition policy
+# here -- so supplying the qualification credential at apply time would have
+# granted it to the routine role as well, together with that role's
+# `ssm:GetParameter` and `ssm:GetParameters`. A binding for one actor silently
+# re-scoped another, arriving as a side effect of an uncommitted `.tfvars` value
+# no reviewer of this repository ever sees.
+#
+# The correction is one variable per consumer. What is checked below is that they
+# STAY one per consumer, and the rules run over the whole directory rather than
+# one file at a time: the coupling was invisible precisely because each document
+# read a plausible-looking variable and neither named the other.
+
+#: The routine research task role's binding, in `iam.tf`. Its statement also
+#: carries the SSM parameter reads, which is what made sharing it a widening.
+TASK_CREDENTIAL_VARIABLE = "provider_secret_arns"
+
+#: The qualification acquisition actor's binding. One credential, one retrieval.
+ACQUISITION_CREDENTIAL_VARIABLE = "qualification_acquisition_secret_arns"
+
+CREDENTIAL_VARIABLES = (TASK_CREDENTIAL_VARIABLE, ACQUISITION_CREDENTIAL_VARIABLE)
+
+IAM_TF = INFRA / "iam.tf"
+VARIABLES_TF = INFRA / "variables.tf"
+
+#: The document each variable belongs to, and the file that document lives in.
+CREDENTIAL_CONSUMERS = {
+    "task": (TASK_CREDENTIAL_VARIABLE, "iam.tf"),
+    ACQUISITION: (ACQUISITION_CREDENTIAL_VARIABLE, "qualification_policies.tf"),
+}
+
+#: The exact action set each conditional credential statement may carry. The task
+#: role's three are pre-existing and must not drift; the acquisition actor's one
+#: is ADR-0018 s.10.1 -- `get_secret_value` and nothing else.
+TASK_CREDENTIAL_ACTIONS = frozenset(
+    {"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters"}
+)
+ACQUISITION_CREDENTIAL_ACTIONS = frozenset({"secretsmanager:GetSecretValue"})
+
+_VAR_REFERENCE = re.compile(r"\bvar\.([A-Za-z_][A-Za-z0-9_-]*)")
+
+
+def expression_references(expression: str) -> set[str]:
+    """Every `var.<name>` one attribute expression names, ignoring its comments.
+
+    A comment inside a bracketed multi-line expression is part of the attribute
+    text the parser hands back, and a comment mentioning a variable is prose
+    rather than a reference. Counting it would report the explanation of this
+    correction as a re-coupling.
+    """
+    return set(_VAR_REFERENCE.findall(re.sub(r"(?m)(#|//).*$", "", expression)))
+
+
+def variable_source(text: str, name: str) -> str:
+    """The raw source of one `variable` block, heredoc body included.
+
+    `Block.attributes` records an expression as far as its first newline outside a
+    bracket, which for a heredoc is the `<<-EOT` marker alone -- enough to see that
+    a description exists, and not enough to read what it says. The block is located
+    on the masked copy so a mention of the declaration inside a comment or another
+    description cannot be mistaken for the declaration itself.
+    """
+    masked = _strip_noise(text)
+    marker = f'variable "{name}"'
+    start = text.find(marker)
+    while start != -1:
+        if masked[start : start + len("variable")] == "variable":
+            opening = masked.index("{", start + len(marker))
+            return text[start : _matching(masked, opening, "{", "}") + 1]
+        start = text.find(marker, start + 1)
+    return ""
+
+
+def variable_references(block: Block) -> set[str]:
+    """Every variable ``block`` and its descendants reference."""
+    found = {name for value in block.attributes.values() for name in expression_references(value)}
+    for child in block.blocks:
+        found |= variable_references(child)
+    return found
+
+
+def conditional_credential_statement(document: Block, variable: str) -> Block | None:
+    """The `dynamic "statement"` guarded on ``var.<variable>``, if there is one."""
+    for dynamic in document.children("dynamic"):
+        if dynamic.labels[:1] != ("statement",):
+            continue
+        if variable not in expression_references(dynamic.attributes.get("for_each", "")):
+            continue
+        content = dynamic.children("content")
+        if content:
+            return content[0]
+    return None
+
+
+def policy_documents(sources: dict[str, str]) -> dict[str, Block]:
+    """Every `aws_iam_policy_document` across ``sources``, by its name."""
+    return {
+        block.labels[1]: block
+        for text in sources.values()
+        for block in parse_hcl(text)
+        if block.type == "data" and block.labels[:1] == ("aws_iam_policy_document",)
+    }
+
+
+def binding_violations(sources: dict[str, str]) -> list[str]:
+    """Every secret-binding isolation rule the parsed directory breaks.
+
+    One function over the whole directory rather than one per file, because the
+    property is a relationship BETWEEN files: a variable declared in
+    `variables.tf`, read by a document in `iam.tf`, and read by another in
+    `qualification_policies.tf`. A rule that can only see one file at a time is
+    how the coupling survived review in the first place.
+    """
+    broken: list[str] = []
+
+    # -- one declaration each, typed as a resource list, empty ------------
+    declarations: dict[str, list[Block]] = {name: [] for name in CREDENTIAL_VARIABLES}
+    for text in sources.values():
+        for block in parse_hcl(text):
+            if block.type == "variable" and block.labels and block.labels[0] in declarations:
+                declarations[block.labels[0]].append(block)
+
+    for name, found in declarations.items():
+        if len(found) != 1:
+            broken.append(f"{name} is declared {len(found)} times, not once")
+            continue
+        declaration = found[0]
+        if declaration.attributes.get("type", "").strip() != "list(string)":
+            broken.append(f"{name} is not typed list(string)")
+        default = declaration.attributes.get("default")
+        if default is None:
+            broken.append(f"{name} has no default, so an apply could prompt for one")
+        elif default.strip() != "[]":
+            broken.append(f"{name} does not default to empty: {default!r}")
+        if not declaration.attributes.get("description", "").strip():
+            broken.append(f"{name} carries no description")
+
+    # The prose lives in a heredoc, so it is read from the block's source span.
+    for name, found in declarations.items():
+        if len(found) != 1:
+            continue
+        source = next(
+            (
+                block
+                for text in sources.values()
+                for block in [variable_source(text, name)]
+                if block
+            ),
+            "",
+        )
+        if "arn:" in source:
+            broken.append(f"{name} carries a literal ARN")
+        if re.search(r"\d{12}", source):
+            broken.append(f"{name} carries an account-shaped literal")
+
+    isolated_source = next(
+        (
+            block
+            for text in sources.values()
+            for block in [variable_source(text, ACQUISITION_CREDENTIAL_VARIABLE)]
+            if block
+        ),
+        "",
+    )
+    if isolated_source and "qualification acquisition" not in isolated_source.lower():
+        broken.append(
+            f"{ACQUISITION_CREDENTIAL_VARIABLE} does not say it belongs to the qualification "
+            "acquisition actor"
+        )
+
+    # -- each consumer reads its own variable, and only its own -----------
+    documents = policy_documents(sources)
+    for document_name, (expected, _) in CREDENTIAL_CONSUMERS.items():
+        document = documents.get(document_name)
+        if document is None:
+            broken.append(f"missing policy document: {document_name}")
+            continue
+        other = next(name for name in CREDENTIAL_VARIABLES if name != expected)
+        referenced = variable_references(document)
+        if expected not in referenced:
+            broken.append(f"{document_name} does not read {expected}")
+        if other in referenced:
+            broken.append(f"{document_name} reads {other}, which binds a different principal")
+
+        statement = conditional_credential_statement(document, expected)
+        if statement is None:
+            broken.append(f"{document_name} has no credential statement guarded on {expected}")
+            continue
+        if expected not in expression_references(statement.attributes.get("resources", "")):
+            broken.append(f"{document_name} does not scope its credential statement to {expected}")
+        actions = frozenset(string_list(statement.attributes.get("actions", "")))
+        wanted = (
+            TASK_CREDENTIAL_ACTIONS if document_name == "task" else ACQUISITION_CREDENTIAL_ACTIONS
+        )
+        if actions != wanted:
+            broken.append(
+                f"{document_name} credential actions are {sorted(actions)}, not {sorted(wanted)}"
+            )
+
+    # -- nothing else in the directory reads either variable --------------
+    permitted = {(where, variable) for variable, where in CREDENTIAL_CONSUMERS.values()}
+    for filename, text in sources.items():
+        for block in parse_hcl(text):
+            if block.type == "variable":
+                continue
+            for name in sorted(variable_references(block) & set(CREDENTIAL_VARIABLES)):
+                if (filename, name) not in permitted:
+                    broken.append(f"{filename}/{block.labels} reads {name}")
+                elif block.type != "data" or block.labels[:1] != ("aws_iam_policy_document",):
+                    broken.append(f"{filename}/{block.labels} reads {name} outside a document")
+
+    return broken
+
+
+def _sources() -> dict[str, str]:
+    return {path.name: path.read_text(encoding="utf-8") for path in sorted(INFRA.glob("*.tf"))}
+
+
+class TestTheSecretBindingIsIsolated:
+    def test_the_directory_breaks_no_binding_rule(self) -> None:
+        found = binding_violations(_sources())
+        assert found == [], "\n".join(found)
+
+    def test_the_new_variable_is_declared_exactly_once(self) -> None:
+        declarations = [
+            block
+            for text in _sources().values()
+            for block in parse_hcl(text)
+            if block.type == "variable" and block.labels == (ACQUISITION_CREDENTIAL_VARIABLE,)
+        ]
+        assert len(declarations) == 1
+        assert declarations[0].attributes["type"].strip() == "list(string)"
+        assert declarations[0].attributes["default"].strip() == "[]"
+
+    def test_both_secret_variables_default_to_empty(self) -> None:
+        declarations = {
+            block.labels[0]: block
+            for text in _sources().values()
+            for block in parse_hcl(text)
+            if block.type == "variable" and block.labels[0] in CREDENTIAL_VARIABLES
+        }
+        assert sorted(declarations) == sorted(CREDENTIAL_VARIABLES)
+        for name, block in declarations.items():
+            assert block.attributes["default"].strip() == "[]", name
+
+    def test_the_new_variable_carries_no_identifier(self) -> None:
+        """A description is committed; an ARN, an account and a secret name are not."""
+        source = variable_source(
+            VARIABLES_TF.read_text(encoding="utf-8"), ACQUISITION_CREDENTIAL_VARIABLE
+        )
+        assert source, "the declaration was not located"
+        assert "qualification acquisition" in source.lower()
+        assert "arn:" not in source
+        assert re.search(r"\d{12}", source) is None
+        assert "*" not in source
+
+    def test_the_acquisition_policy_reads_only_the_qualification_variable(self) -> None:
+        document = next(
+            block
+            for block in parse_hcl(_real_text())
+            if block.type == "data" and block.labels[1] == ACQUISITION
+        )
+        referenced = variable_references(document)
+        assert ACQUISITION_CREDENTIAL_VARIABLE in referenced
+        assert TASK_CREDENTIAL_VARIABLE not in referenced
+
+    def test_the_routine_task_policy_reads_only_the_provider_variable(self) -> None:
+        document = next(
+            block
+            for block in parse_hcl(IAM_TF.read_text(encoding="utf-8"))
+            if block.type == "data" and block.labels == ("aws_iam_policy_document", "task")
+        )
+        referenced = variable_references(document)
+        assert TASK_CREDENTIAL_VARIABLE in referenced
+        assert ACQUISITION_CREDENTIAL_VARIABLE not in referenced
+
+    def test_the_assessment_policy_reads_neither_secret_variable(self) -> None:
+        """ADR-0018 s.10.2: the assessment actor retrieves no credential at all."""
+        document = next(
+            block
+            for block in parse_hcl(_real_text())
+            if block.type == "data" and block.labels[1] == ASSESSMENT
+        )
+        assert variable_references(document) & set(CREDENTIAL_VARIABLES) == set()
+
+    def test_no_other_block_in_the_directory_reads_either_variable(self) -> None:
+        readers = {
+            (filename, block.labels)
+            for filename, text in _sources().items()
+            for block in parse_hcl(text)
+            if block.type != "variable" and variable_references(block) & set(CREDENTIAL_VARIABLES)
+        }
+        assert readers == {
+            ("iam.tf", ("aws_iam_policy_document", "task")),
+            ("qualification_policies.tf", ("aws_iam_policy_document", ACQUISITION)),
+        }
+
+    def test_the_two_secret_action_sets_are_unchanged(self) -> None:
+        acquisition = conditional_credential_statement(
+            next(
+                block
+                for block in parse_hcl(_real_text())
+                if block.type == "data" and block.labels[1] == ACQUISITION
+            ),
+            ACQUISITION_CREDENTIAL_VARIABLE,
+        )
+        task = conditional_credential_statement(
+            next(
+                block
+                for block in parse_hcl(IAM_TF.read_text(encoding="utf-8"))
+                if block.type == "data" and block.labels == ("aws_iam_policy_document", "task")
+            ),
+            TASK_CREDENTIAL_VARIABLE,
+        )
+        assert acquisition is not None and task is not None
+        assert frozenset(string_list(acquisition.attributes["actions"])) == (
+            ACQUISITION_CREDENTIAL_ACTIONS
+        )
+        assert frozenset(string_list(task.attributes["actions"])) == TASK_CREDENTIAL_ACTIONS
+
+    def test_the_acquisition_secret_statement_is_otherwise_untouched(self) -> None:
+        statement = conditional_credential_statement(
+            next(
+                block
+                for block in parse_hcl(_real_text())
+                if block.type == "data" and block.labels[1] == ACQUISITION
+            ),
+            ACQUISITION_CREDENTIAL_VARIABLE,
+        )
+        assert statement is not None
+        assert string_list(statement.attributes["sid"]) == ["RetrieveTheGovernedProviderCredential"]
+        assert string_list(statement.attributes["effect"]) == ["Allow"]
+
+    def test_the_accepted_policy_rules_still_hold(self, real: Configuration) -> None:
+        """Isolating the binding changed no grant: the ADR rule set is the control."""
+        assert violations(real) == []
+        assert granted(real.documents[ACQUISITION]) == {
+            "s3:PutObject",
+            "secretsmanager:GetSecretValue",
+        }
+
+    def test_the_principals_file_is_untouched_by_the_correction(self) -> None:
+        """Permission sets, their policy attachments and their assignments are unchanged."""
+        inventory = {
+            (block.type, block.labels)
+            for block in parse_hcl(
+                (INFRA / "qualification_principals.tf").read_text(encoding="utf-8")
+            )
+        }
+        assert inventory == {
+            ("variable", ("identity_center_instance_arn",)),
+            ("variable", ("qualification_operator_group_id",)),
+            ("variable", ("qualification_target_account_id",)),
+            ("locals", ()),
+            ("resource", ("aws_ssoadmin_permission_set", ACQUISITION)),
+            ("resource", ("aws_ssoadmin_customer_managed_policy_attachment", ACQUISITION)),
+            ("resource", ("aws_ssoadmin_account_assignment", ACQUISITION)),
+            ("resource", ("aws_ssoadmin_permission_set", ASSESSMENT)),
+            ("resource", ("aws_ssoadmin_customer_managed_policy_attachment", ASSESSMENT)),
+            ("resource", ("aws_ssoadmin_account_assignment", ASSESSMENT)),
+        }
+
+    def test_the_correction_added_one_variable_and_renamed_no_resource(self) -> None:
+        """A rebinding declares one input; it adds, renames and destroys nothing else."""
+        blocks = [block for text in _sources().values() for block in parse_hcl(text)]
+        assert sorted(block.labels[0] for block in blocks if block.type == "variable") == [
+            "allowed_account_ids",
+            "aws_region",
+            "bucket_suffix",
+            "identity_center_instance_arn",
+            "log_retention_days",
+            "multipart_abort_days",
+            "name_prefix",
+            TASK_CREDENTIAL_VARIABLE,
+            "public_subnet_count",
+            ACQUISITION_CREDENTIAL_VARIABLE,
+            "qualification_operator_group_id",
+            "qualification_target_account_id",
+            "untagged_image_expiry_days",
+            "vpc_cidr",
+        ]
+        assert {
+            (block.type, block.labels)
+            for block in parse_hcl(_real_text())
+            if block.type != "locals"
+        } == {
+            ("data", ("aws_iam_policy_document", ACQUISITION)),
+            ("data", ("aws_iam_policy_document", ASSESSMENT)),
+            ("resource", ("aws_iam_policy", ACQUISITION)),
+            ("resource", ("aws_iam_policy", ASSESSMENT)),
+        }
+
+
+#: Each entry rebinds, removes or widens one variable in one file. ``filename``
+#: names which source the substitution applies to, so a mutation of `iam.tf` is
+#: judged by the same rule set as one of `qualification_policies.tf`.
+BINDING_MUTATIONS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "the acquisition policy is bound back to the routine variable",
+        "qualification_policies.tf",
+        "var.qualification_acquisition_secret_arns",
+        "var.provider_secret_arns",
+        f"{ACQUISITION} reads {TASK_CREDENTIAL_VARIABLE}",
+    ),
+    (
+        "the routine task policy is bound to the qualification variable",
+        "iam.tf",
+        "var.provider_secret_arns",
+        "var.qualification_acquisition_secret_arns",
+        f"task reads {ACQUISITION_CREDENTIAL_VARIABLE}",
+    ),
+    (
+        "the new variable is removed",
+        "variables.tf",
+        'variable "qualification_acquisition_secret_arns" {',
+        'variable "an_unrelated_placeholder" {',
+        f"{ACQUISITION_CREDENTIAL_VARIABLE} is declared 0 times",
+    ),
+    (
+        "the new variable gains a non-empty default",
+        "variables.tf",
+        "binds this actor alone.\n  EOT\n  type        = list(string)\n  default     = []\n}\n",
+        "binds this actor alone.\n  EOT\n  type        = list(string)\n"
+        '  default     = ["placeholder"]\n}\n',
+        f"{ACQUISITION_CREDENTIAL_VARIABLE} does not default to empty",
+    ),
+    (
+        "the acquisition consumer references both variables",
+        "qualification_policies.tf",
+        "for_each = length(var.qualification_acquisition_secret_arns) > 0 ? [1] : []",
+        "for_each = length(var.qualification_acquisition_secret_arns) > 0 || "
+        "length(var.provider_secret_arns) > 0 ? [1] : []",
+        f"{ACQUISITION} reads {TASK_CREDENTIAL_VARIABLE}",
+    ),
+    (
+        "the routine consumer references both variables",
+        "iam.tf",
+        "for_each = length(var.provider_secret_arns) > 0 ? [1] : []",
+        "for_each = length(var.provider_secret_arns) > 0 || "
+        "length(var.qualification_acquisition_secret_arns) > 0 ? [1] : []",
+        f"task reads {ACQUISITION_CREDENTIAL_VARIABLE}",
+    ),
+    (
+        "the new variable is introduced into an unrelated policy",
+        "iam.tf",
+        'resources = ["${aws_s3_bucket.licensed.arn}/*"]',
+        "resources = var.qualification_acquisition_secret_arns",
+        f"reads {ACQUISITION_CREDENTIAL_VARIABLE}",
+    ),
+    (
+        "the acquisition credential retrieval is removed",
+        "qualification_policies.tf",
+        'actions   = ["secretsmanager:GetSecretValue"]',
+        'actions   = ["secretsmanager:DescribeSecret"]',
+        f"{ACQUISITION} credential actions are",
+    ),
+    (
+        "the acquisition credential retrieval is broadened",
+        "qualification_policies.tf",
+        'actions   = ["secretsmanager:GetSecretValue"]',
+        'actions   = ["secretsmanager:GetSecretValue", "ssm:GetParameter"]',
+        f"{ACQUISITION} credential actions are",
+    ),
+    (
+        "the routine task role loses an SSM read",
+        "iam.tf",
+        '        "ssm:GetParameter",\n        "ssm:GetParameters",\n',
+        '        "ssm:GetParameters",\n',
+        "task credential actions are",
+    ),
+    (
+        "the routine task role gains a broader SSM read",
+        "iam.tf",
+        '        "ssm:GetParameters",\n',
+        '        "ssm:GetParameters",\n        "ssm:GetParametersByPath",\n',
+        "task credential actions are",
+    ),
+)
+
+
+class TestBindingMutations:
+    @pytest.mark.parametrize(
+        ("label", "filename", "before", "after", "expected"),
+        BINDING_MUTATIONS,
+        ids=[mutation[0] for mutation in BINDING_MUTATIONS],
+    )
+    def test_each_binding_mutation_is_caught(
+        self, label: str, filename: str, before: str, after: str, expected: str
+    ) -> None:
+        sources = _sources()
+        text = sources[filename]
+        assert before in text, f"the {label!r} mutation no longer applies to {filename}"
+        sources[filename] = text.replace(before, after, 1)
+        assert sources[filename] != text, f"the {label!r} mutation changed nothing"
+        found = binding_violations(sources)
+        assert any(expected in entry for entry in found), (
+            f"{label}: expected a violation containing {expected!r}, got {found}"
+        )
+
+    def test_the_unmutated_directory_is_the_control(self) -> None:
+        """Every mutation above is compared against a clean baseline of zero."""
+        assert binding_violations(_sources()) == []
+
+
+class TestBindingNegativeControls:
+    """A rule set that passes on nothing is not a rule set."""
+
+    def test_an_empty_directory_fails(self) -> None:
+        assert binding_violations({})
+
+    def test_declarations_without_their_consumers_fail(self) -> None:
+        text = (
+            'variable "provider_secret_arns" {\n'
+            '  description = "the routine research task role\'s credential"\n'
+            "  type        = list(string)\n"
+            "  default     = []\n}\n"
+            'variable "qualification_acquisition_secret_arns" {\n'
+            '  description = "the qualification acquisition actor\'s credential"\n'
+            "  type        = list(string)\n"
+            "  default     = []\n}\n"
+        )
+        assert binding_violations({"variables.tf": text})
 
 
 # ---------------------------------------------------------------------------
