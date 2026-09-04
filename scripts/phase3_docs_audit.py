@@ -10357,6 +10357,18 @@ ADR_0023_BINDING_TESTS: Final = REPO_ROOT / "tests" / "unit" / "test_sharadar_ru
 #: The one fixed, non-secret environment-variable *name* that selects the binding.
 ADR_0023_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE"
 
+#: ADR-0024: the environment binding the runtime binding's digest field names, and
+#: the two operator tools that produce and consume it.
+ADR_0024: Final = DECISIONS / "ADR-0024-governed-qualification-environment-binding-source.md"
+ADR_0024_WRITER: Final = REPO_ROOT / "scripts" / "qualification_private_artifacts.py"
+ADR_0024_CAPTURE: Final = REPO_ROOT / "scripts" / "qualification_environment_binding_capture.py"
+ADR_0024_GATE: Final = REPO_ROOT / "scripts" / "qualification_runtime_binding_materialize.py"
+ADR_0024_TESTS: Final = REPO_ROOT / "tests" / "unit" / "test_qualification_environment_binding.py"
+
+#: The one fixed, non-secret environment-variable *name* that selects the environment
+#: binding. Declared in the contract module and never read there.
+ADR_0024_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE"
+
 #: The pull request whose merge accepted ADR-0022.
 #:
 #: Quoted once. ``MERGED_ADR_STATUS`` is built from it, the in-force row guard is
@@ -21511,6 +21523,174 @@ def main() -> int:
                 "real private runtime binding:                 NOT MATERIALIZED",
                 "acquisition IAM policy:                       UNCHANGED / WRITE-ONLY",
                 "Run A:                                        BLOCKED PENDING MATERIALIZATION",
+            )
+        ),
+        "a status document that omits the blocker reads as though the blocker is gone",
+    )
+
+    # -- ADR-0024: the environment binding, and its producer ---------------
+    #
+    # ADR-0023 required `provenance.environment_binding_sha256` and validated only its
+    # grammar. Nothing said what those bytes were, wrote them, or handed a digest to a
+    # materialization that also did not exist. These checks hold the artifact, its one
+    # producer and its one consuming gate in place -- and hold the run away from all
+    # three.
+    source_adr = read(ADR_0024) if ADR_0024.is_file() else ""
+    source_flat = " ".join(source_adr.split())
+    contract = _executable_python(ADR_0023_LOADER) if ADR_0023_LOADER.is_file() else ""
+    writer_code = _executable_python(ADR_0024_WRITER) if ADR_0024_WRITER.is_file() else ""
+    capture_code = _executable_python(ADR_0024_CAPTURE) if ADR_0024_CAPTURE.is_file() else ""
+    gate_code = _executable_python(ADR_0024_GATE) if ADR_0024_GATE.is_file() else ""
+
+    f.check(
+        "the ADR-0024 decision record exists",
+        ADR_0024.is_file(),
+        "a required field with no defined artifact behind it is an ADR-level gap",
+    )
+    f.check(
+        "ADR-0024 carries a conditional acceptance status",
+        "Status: PROPOSED -- NOT IN FORCE" in source_adr.replace("—", "--"),
+        "an ADR carries no authority until its pull request is reviewed and merged",
+    )
+    f.check(
+        "ADR-0024 states what the digest field means",
+        "environment_binding_sha256" in source_adr
+        and "SHA-256" in source_adr
+        and "exact byte sequence of the environment binding" in source_flat,
+        "a digest of a re-serialisation would name a shape rather than bytes",
+    )
+    f.check(
+        "ADR-0024 rejects the two artifacts that are not the source",
+        "The applied secret-access receipt is not the environment binding" in source_flat
+        and "The private Terraform input is not the environment binding either" in source_flat,
+        "an artifact rejected without a written reason is one somebody proposes again",
+    )
+    f.check(
+        "ADR-0024 names the one environment variable and no default path",
+        ADR_0024_ENV_VAR in source_adr and "There is no default path" in source_flat,
+        "a fallback location would read a file nobody selected",
+    )
+    f.check(
+        "ADR-0024 keeps Terraform away from the acquisition run",
+        "Terraform reachable from Run A:               NO" in source_adr
+        and "operator tools reachable from Run A:          NO" in source_adr,
+        "the producer is the new route back to the state read, so it is named too",
+    )
+    f.check(
+        "ADR-0024 records that neither artifact is materialized",
+        "real environment binding:                     NOT MATERIALIZED" in source_adr
+        and "real private runtime binding:                 NOT MATERIALIZED" in source_adr,
+        "an implemented contract is not a created file",
+    )
+    f.check(
+        "ADR-0024 keeps every downstream gate separate",
+        all(
+            line in source_adr
+            for line in (
+                "environment-binding capture:                  NOT AUTHORIZED / NOT RUN",
+                "runtime-binding materialization:              NOT AUTHORIZED / NOT RUN",
+                "binding preflight:                            NOT AUTHORIZED / NOT RUN",
+                "execution-identifier allocation:              NOT AUTHORIZED / NOT PERFORMED",
+                "Run B / combined assessment:                  NOT AUTHORIZED / NOT RUN",
+            )
+        ),
+        "a gate an ADR does not name is a gate somebody treats as opened",
+    )
+    f.check(
+        "ADR-0024 supersedes and amends nothing",
+        "This ADR supersedes no earlier decision and amends no earlier ADR document" in source_flat,
+        "defining a missing artifact is not licence to move an accepted one",
+    )
+    f.check(
+        "the contract module declares the environment binding beside the runtime one",
+        # The declaration is read from the raw file, like the runtime binding's above:
+        # the executable form is unparsed, so its string literals are re-quoted.
+        f'ENVIRONMENT_BINDING_ENV_VAR: Final = "{ADR_0024_ENV_VAR}"'
+        in (read(ADR_0023_LOADER) if ADR_0023_LOADER.is_file() else "")
+        and "def parse_environment_binding" in contract
+        and "def load_environment_binding" in contract,
+        "one module owns the private-binding contract, so one trust boundary exists",
+    )
+    f.check(
+        "the contract module never looks the environment-binding name up",
+        # Every spelling an unparsed tree can produce: through the constant, through
+        # the literal, and through a subscript rather than a `get`.
+        "os.environ.get(ENVIRONMENT_BINDING_ENV_VAR" not in contract
+        and "os.environ[ENVIRONMENT_BINDING_ENV_VAR" not in contract
+        and f"os.environ.get('{ADR_0024_ENV_VAR}'" not in contract
+        and f"os.environ['{ADR_0024_ENV_VAR}'" not in contract,
+        "a loader that found its own path would be reachable from the run",
+    )
+    f.check(
+        "the two operator tools and the one writer exist",
+        ADR_0024_WRITER.is_file() and ADR_0024_CAPTURE.is_file() and ADR_0024_GATE.is_file(),
+        "a materialization gate nobody wrote is a gate nobody can perform",
+    )
+    f.check(
+        "the acquisition entry point names none of them",
+        all(
+            name not in acquire
+            for name in (
+                "qualification_private_artifacts",
+                "qualification_environment_binding_capture",
+                "qualification_runtime_binding_materialize",
+                "load_environment_binding",
+            )
+        ),
+        "a run that could reach the producer could manufacture its own configuration",
+    )
+    f.check(
+        "only the capture reaches the governed outputs",
+        "tf_outputs" in capture_code
+        and "tf_outputs" not in gate_code
+        and "tf_outputs" not in writer_code,
+        "the gate must be provably unable to read state, and one module cannot be both",
+    )
+    f.check(
+        "the capture pins the foundation actor before it reads anything",
+        "EXPECTED_PROFILE" in capture_code and "identity_gate" in capture_code,
+        "Terraform inherits the process environment, which is how this went wrong once",
+    )
+    f.check(
+        "the materialization gate makes no AWS call and starts no process",
+        not any(token in gate_code for token in ("boto3", "botocore", "subprocess", "-chdir=")),
+        "deriving one file from another must not become a request",
+    )
+    f.check(
+        "the writer creates exclusively and never overwrites",
+        "O_EXCL" in writer_code and "DESTINATION_OCCUPIED" in writer_code,
+        "a check followed by a write is a race, and losing it replaces somebody's file",
+    )
+    f.check(
+        "the writer reuses the loader's own access-control policy",
+        "require_exclusive_security" in writer_code
+        and "def require_exclusive_security" not in writer_code,
+        "a second definition of owner-only is a second security model",
+    )
+    f.check(
+        "no new operator surface carries a private identifier",
+        all(
+            not any(marker in read(surface) for marker in ("arn:aws:", "amazonaws.com", "AKIA"))
+            and re.search(r"\b\d{12}\b", read(surface)) is None
+            for surface in (ADR_0024, ADR_0024_WRITER, ADR_0024_CAPTURE, ADR_0024_GATE)
+            if surface.is_file()
+        ),
+        "a bucket, an account or an ARN in Git is a disclosure a deletion does not undo",
+    )
+    f.check(
+        "the environment binding has its own synthetic suite",
+        ADR_0024_TESTS.is_file(),
+        "the trust boundary is only real if every clause of it is exercised",
+    )
+    f.check(
+        "the status document records the environment-binding contract",
+        all(
+            line in read(REPO_ROOT / "README.md")
+            for line in (
+                "environment-binding contract:                 IMPLEMENTED / OFFLINE-VALIDATED",
+                "real environment binding:                     NOT MATERIALIZED",
+                "operator tools reachable from Run A:          NO",
+                "runtime-binding materialization:              NOT AUTHORIZED / NOT RUN",
             )
         ),
         "a status document that omits the blocker reads as though the blocker is gone",

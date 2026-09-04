@@ -38,6 +38,7 @@ mistaken for a decision.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -133,6 +134,83 @@ _PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
         "environment_binding_sha256",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# The environment binding -- the artifact ``environment_binding_sha256`` digests
+# ---------------------------------------------------------------------------
+#
+# The runtime binding above requires ``provenance.environment_binding_sha256`` and
+# checks its grammar. A grammar check does not say what the bytes *are*, and until
+# this contract existed nothing in the repository did: no schema named the artifact,
+# no producer wrote one, and no code handed a digest to a materialization that also
+# did not exist. Sixty-four hex characters that mean nothing in particular are not
+# provenance -- they are a field somebody has to fill in, from whatever they like.
+#
+# So the environment binding is a second private artifact with its own contract. It
+# carries the authoritative qualification-environment values -- the governed account
+# and the licensed bucket -- captured from infrastructure outputs by an operator-only
+# producer, and it is the exact byte sequence that digest is taken over.
+#
+# It is deliberately **actor-neutral**: it describes the deployment, not the actor.
+# The acquisition profile is added by the runtime binding, one layer later, so a
+# captured environment cannot silently select which principal will use it.
+
+#: The one fixed, non-secret environment-variable *name* that selects the environment
+#: binding. Declared here so the producer, the materializer and this contract cannot
+#: drift; **this module never reads it**, because Run A must not read this artifact at
+#: all -- the operator tools pass an absolute path in explicitly.
+ENVIRONMENT_BINDING_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE"
+
+#: The one schema version this contract accepts. An exact match, as above.
+ENVIRONMENT_BINDING_SCHEMA_VERSION: Final = 1
+
+#: The document's self-declared kind. Distinct from the runtime binding's, so neither
+#: artifact can be handed to the other's loader and validate.
+ENVIRONMENT_BINDING_KIND: Final = "kalpamani-qualification-environment"
+
+#: The contract this validator implements, version included.
+ENVIRONMENT_BINDING_CONTRACT_ID: Final = "qualification-environment-binding/v1"
+
+#: The one admitted capture mechanism. A closed vocabulary of exactly one member: a
+#: document that says it came from somewhere else is refused rather than trusted,
+#: because "where did this value come from" is the question this artifact exists to
+#: answer.
+ENVIRONMENT_BINDING_SOURCE_KIND: Final = "terraform-output"
+
+#: Largest environment binding this validator will read, in bytes. Same ceiling and
+#: same reason as the runtime binding's.
+MAX_ENVIRONMENT_BINDING_BYTES: Final = 16 * 1024
+
+#: The exact top-level field set of the environment binding.
+_ENVIRONMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "binding_kind",
+        "contract_id",
+        "aws_partition",
+        "aws_region",
+        "target_account_id",
+        "licensed_bucket_name",
+        "provenance",
+    }
+)
+
+#: The exact provenance field set of the environment binding. Enough to identify the
+#: infrastructure output the values were captured from, and nothing wider: the
+#: mechanism, the instant, and a digest over the exact governed outputs consumed.
+_ENVIRONMENT_PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "source_kind",
+        "captured_at_utc",
+        "outputs_digest",
+    }
+)
+
+#: An RFC3339 UTC instant at second precision, with the ``Z`` designator and no
+#: offset spelling. One shape, so two captures are comparable and neither carries a
+#: local timezone that says where the workstation is.
+_CAPTURED_AT: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 class RuntimeBindingDefect(StrEnum):
@@ -264,6 +342,40 @@ class QualificationRuntimeBinding:
             f"partition={self.partition!r}, "
             f"region={self.region!r}, "
             f"profile={self.acquisition_profile!r})"
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QualificationEnvironmentBinding:
+    """The captured qualification environment, and the digest of the bytes it arrived in.
+
+    Unlike :class:`QualificationRuntimeBinding` this **does** carry the account: the
+    materializer one layer up has to copy it into the runtime binding it writes, and
+    a value it never receives is a value it cannot copy. ``__repr__`` therefore omits
+    the account, the bucket and the digest -- no logging call, assertion failure or
+    debugger echo can spill any of the three.
+
+    ``digest`` is the SHA-256 of the **exact bytes that were read**, not of a
+    re-serialisation of the parsed document. That is what makes it usable as
+    ``provenance.environment_binding_sha256``: the runtime binding then names a byte
+    sequence somebody can re-read and re-digest, rather than a shape somebody could
+    have re-rendered differently.
+    """
+
+    target_account_id: str
+    licensed_bucket_name: str
+    partition: str
+    region: str
+    digest: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing: a subclass could give the private values a repr."""
+        raise TypeError("QualificationEnvironmentBinding may not be subclassed")
+
+    def __repr__(self) -> str:
+        """The governed public values only. **Never the account, bucket or digest.**"""
+        return (
+            f"QualificationEnvironmentBinding(partition={self.partition!r}, region={self.region!r})"
         )
 
 
@@ -604,18 +716,22 @@ def _within(candidate: Path, root: Path) -> bool:
     return normalised == boundary or boundary in normalised.parents
 
 
-def _safe_private_path(raw: str, root: Path) -> Path:
-    """One validated private path, or a refusal naming only the rule it broke.
+def contained_private_path(raw: str, root: Path) -> Path:
+    """One path proven to name a location inside the private boundary.
 
-    Three questions, in the order that makes each answer meaningful:
+    Two questions, in the order that makes each answer meaningful:
 
     1. Is the *given* string an absolute path strictly inside the boundary, once
        ``.`` and ``..`` are removed lexically? A ``..`` that walks out is refused
        here, and so is the boundary directory itself.
-    2. Is every component from the boundary down to the file free of links? A
-       junction anywhere in the chain would make the containment above cosmetic.
-    3. Is it a regular file? A directory, a device and a pipe are each a thing this
-       loader must not read.
+    2. Is every component from the boundary down to the named location free of
+       links? A junction anywhere in the chain would make the containment above
+       cosmetic.
+
+    **It does not require the location to exist**, which is what separates it from
+    :func:`_safe_private_path`. A private artifact is written before it can be read,
+    and an operator tool that derived containment its own way would be a second
+    boundary nobody reviewed against the first.
     """
     if type(raw) is not str or not raw.strip():
         raise _refuse(RuntimeBindingDefect.ENVIRONMENT_UNSET) from None
@@ -636,7 +752,17 @@ def _safe_private_path(raw: str, root: Path) -> Path:
     for element in chain:
         if _is_link(element):
             raise _refuse(RuntimeBindingDefect.PATH_IS_A_LINK) from None
+    return normalised
 
+
+def _safe_private_path(raw: str, root: Path) -> Path:
+    """One validated private path to an existing regular file, or a refusal.
+
+    Containment and the link chain first, then the third question this adds: is it a
+    regular file? A directory, a device and a pipe are each a thing this loader must
+    not read.
+    """
+    normalised = contained_private_path(raw, root)
     try:
         entry = normalised.lstat()
     except OSError:
@@ -653,6 +779,18 @@ def _identity(path: Path) -> tuple[int, int, int, int]:
     except OSError:
         raise _refuse(RuntimeBindingDefect.FILE_UNREADABLE) from None
     return (entry.st_dev, entry.st_ino, entry.st_size, entry.st_mtime_ns)
+
+
+def require_exclusive_security(security: object) -> None:
+    """The ACL policy, exported so a private-artifact writer reuses this one.
+
+    A writer that decided for itself what "owner-only" meant would be a second
+    security model, and two security models are one more than anybody reviews. The
+    writer applies a descriptor and then asks **this** function whether the result is
+    admissible -- the same question, answered by the same code, that the loader asks
+    before it reads.
+    """
+    _require_exclusive_security(security)
 
 
 def _require_exclusive_security(security: object) -> None:
@@ -797,6 +935,107 @@ def parse_runtime_binding(
     )
 
 
+def _resolved_root(root_source: Callable[[], Path] | None) -> Path:
+    """The private boundary, from the production source or an injected one."""
+    root = (private_root if root_source is None else root_source)()
+    # ``isinstance`` rather than an exact type check, unlike the ``str`` guards
+    # elsewhere: ``Path`` is a factory that answers with ``WindowsPath`` or
+    # ``PosixPath``, so an exact check would refuse every genuine path this receives.
+    if not isinstance(root, Path) or not root.is_absolute():
+        raise _refuse(RuntimeBindingDefect.PRIVATE_ROOT_UNRESOLVED) from None
+    return root
+
+
+def _read_private_bytes(
+    raw_path: str,
+    root: Path,
+    inspect: Callable[[Path], FileSecurity],
+    max_bytes: int,
+) -> bytes:
+    """The exact bytes of one owner-only private file, or a refusal naming a rule.
+
+    **The order is the security property**, and both private artifacts get the same
+    order because they get the same function. Containment and ownership are settled
+    before a byte is read, so a file somewhere else, a file reached through a junction
+    and a file other principals can write are each refused **without being opened**.
+    The identity and the security state are then re-read afterwards, so a file swapped
+    between the check and the read is refused rather than trusted.
+    """
+    path = _safe_private_path(raw_path, root)
+
+    before_security = inspect(path)
+    _require_exclusive_security(before_security)
+    before = _identity(path)
+    if before[2] == 0:
+        raise _refuse(RuntimeBindingDefect.FILE_EMPTY) from None
+    if before[2] > max_bytes:
+        raise _refuse(RuntimeBindingDefect.FILE_TOO_LARGE) from None
+
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raise _refuse(RuntimeBindingDefect.FILE_UNREADABLE) from None
+
+    if _identity(path) != before or inspect(path) != before_security:
+        raise _refuse(RuntimeBindingDefect.FILE_CHANGED_DURING_READ) from None
+
+    if not raw:
+        raise _refuse(RuntimeBindingDefect.FILE_EMPTY) from None
+    if len(raw) > max_bytes:
+        raise _refuse(RuntimeBindingDefect.FILE_TOO_LARGE) from None
+    return raw
+
+
+def _decode_document(raw: bytes) -> object:
+    """One private artifact's bytes, decoded into a JSON value. **No file is read.**"""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        # A byte-order mark is legal UTF-8 and is refused anyway: this contract is a
+        # bare UTF-8 JSON object, and admitting an optional prefix would mean two
+        # byte sequences for one document.
+        raise _refuse(RuntimeBindingDefect.ENCODING_INVALID) from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _refuse(RuntimeBindingDefect.ENCODING_INVALID) from None
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicate_keys)
+    except RuntimeBindingError:
+        raise
+    except Exception:
+        raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
+
+
+def canonical_binding_bytes(document: object) -> bytes:
+    """One private binding document, as the exact bytes a producer must write.
+
+    **The digest and the file have to agree**, so the serialisation is fixed here
+    rather than left to whichever tool happens to write the artifact: UTF-8, no
+    byte-order mark, sorted keys, compact separators, no escaped non-ASCII and a
+    trailing newline. A producer that formatted its own JSON would produce a file
+    whose bytes differ from the bytes anybody else would compute a digest over.
+
+    Raises:
+        RuntimeBindingError: ``DOCUMENT_MALFORMED`` if the value will not serialise.
+    """
+    try:
+        text = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
+    return (text + chr(10)).encode("utf-8")
+
+
+def sha256_hex(raw: bytes) -> str:
+    """The lowercase-hex SHA-256 of exactly these bytes.
+
+    Spelled once, here, so the producer that writes an artifact, the materializer
+    that digests it and any test checking the two agree all compute the same thing
+    over the same input.
+    """
+    if type(raw) is not bytes:
+        raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
+    return hashlib.sha256(raw).hexdigest()
+
+
 def load_runtime_binding(
     *,
     expected_account: str | None,
@@ -826,62 +1065,165 @@ def load_runtime_binding(
             fragment of the document.**
     """
     read_path = environment_binding_path if path_source is None else path_source
-    read_root = private_root if root_source is None else root_source
-    inspect = windows_file_security if security_of is None else security_of
+    root = _resolved_root(root_source)
+    raw = _read_private_bytes(
+        read_path(),
+        root,
+        windows_file_security if security_of is None else security_of,
+        MAX_RUNTIME_BINDING_BYTES,
+    )
+    return parse_runtime_binding(_decode_document(raw), expected_account=expected_account)
 
-    root = read_root()
-    # ``isinstance`` rather than an exact type check, unlike the ``str`` guards below:
-    # ``Path`` is a factory that answers with ``WindowsPath`` or ``PosixPath``, so an
-    # exact check here would refuse every genuine path this ever receives.
-    if not isinstance(root, Path) or not root.is_absolute():
-        raise _refuse(RuntimeBindingDefect.PRIVATE_ROOT_UNRESOLVED) from None
 
-    path = _safe_private_path(read_path(), root)
+# ---------------------------------------------------------------------------
+# The environment binding -- the captured source the runtime binding is built from
+# ---------------------------------------------------------------------------
 
-    before_security = inspect(path)
-    _require_exclusive_security(before_security)
-    before = _identity(path)
-    if before[2] == 0:
-        raise _refuse(RuntimeBindingDefect.FILE_EMPTY) from None
-    if before[2] > MAX_RUNTIME_BINDING_BYTES:
-        raise _refuse(RuntimeBindingDefect.FILE_TOO_LARGE) from None
 
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        raise _refuse(RuntimeBindingDefect.FILE_UNREADABLE) from None
+def _validate_environment_provenance(raw: object) -> None:
+    """Shape-check the capture provenance. **Nothing here is returned.**
 
-    if _identity(path) != before or inspect(path) != before_security:
-        raise _refuse(RuntimeBindingDefect.FILE_CHANGED_DURING_READ) from None
+    It answers *where did these values come from*, which is the question the runtime
+    binding's digest field could not answer on its own. The mechanism is a closed
+    vocabulary of one, the instant has one exact shape, and the outputs digest binds
+    the exact governed outputs that were consumed.
+    """
+    if type(raw) is not dict:
+        raise _refuse(RuntimeBindingDefect.PROVENANCE_MALFORMED) from None
+    names = set(raw)
+    if names - _ENVIRONMENT_PROVENANCE_FIELDS:
+        raise _refuse(RuntimeBindingDefect.FIELD_UNKNOWN) from None
+    if _ENVIRONMENT_PROVENANCE_FIELDS - names:
+        raise _refuse(RuntimeBindingDefect.FIELD_MISSING) from None
+    if _exact_string(raw, "source_kind") != ENVIRONMENT_BINDING_SOURCE_KIND:
+        raise _refuse(RuntimeBindingDefect.PROVENANCE_MALFORMED) from None
+    for field, grammar in (
+        ("captured_at_utc", _CAPTURED_AT),
+        ("outputs_digest", _SHA256_HEX),
+    ):
+        value = raw[field]
+        if type(value) is not str or not grammar.match(value):
+            raise _refuse(RuntimeBindingDefect.PROVENANCE_MALFORMED) from None
 
-    if not raw:
-        raise _refuse(RuntimeBindingDefect.FILE_EMPTY) from None
-    if len(raw) > MAX_RUNTIME_BINDING_BYTES:
-        raise _refuse(RuntimeBindingDefect.FILE_TOO_LARGE) from None
-    if raw.startswith(b"\xef\xbb\xbf"):
-        # A byte-order mark is legal UTF-8 and is refused anyway: this contract is a
-        # bare UTF-8 JSON object, and admitting an optional prefix would mean two
-        # byte sequences for one document.
-        raise _refuse(RuntimeBindingDefect.ENCODING_INVALID) from None
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise _refuse(RuntimeBindingDefect.ENCODING_INVALID) from None
 
-    try:
-        document = json.loads(text, object_pairs_hook=_no_duplicate_keys)
-    except RuntimeBindingError:
-        raise
-    except Exception:
+def parse_environment_binding(
+    document: object, *, expected_account: str | None, digest: str
+) -> QualificationEnvironmentBinding:
+    """Validate an already-decoded environment binding. **Reads no file.**
+
+    Separated from :func:`load_environment_binding` for the same reason the runtime
+    binding's parser is: every rule below is then testable with synthetic structures
+    and no filesystem at all, which is the only way this can be tested, since the
+    real artifact must never exist in a test.
+
+    Args:
+        document: the decoded JSON value. Anything but an object is refused.
+        expected_account: the governed account this deployment is bound to, supplied
+            by the caller from the same local binding the identity gate reads. **No
+            AWS call is made here.**
+        digest: the SHA-256 of the exact bytes ``document`` was decoded from.
+
+    Raises:
+        RuntimeBindingError: one closed :class:`RuntimeBindingDefect`. The refusal
+            names the rule and never the value.
+    """
+    if expected_account is None or not _ACCOUNT_ID.match(str(expected_account)):
+        raise _refuse(RuntimeBindingDefect.EXPECTED_ACCOUNT_UNAVAILABLE) from None
+    if type(digest) is not str or not _SHA256_HEX.match(digest):
+        raise _refuse(RuntimeBindingDefect.PROVENANCE_MALFORMED) from None
+
+    if type(document) is not dict:
         raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
+    names = set(document)
+    if names - _ENVIRONMENT_FIELDS:
+        raise _refuse(RuntimeBindingDefect.FIELD_UNKNOWN) from None
+    if _ENVIRONMENT_FIELDS - names:
+        raise _refuse(RuntimeBindingDefect.FIELD_MISSING) from None
 
-    return parse_runtime_binding(document, expected_account=expected_account)
+    version = document["schema_version"]
+    if type(version) is not int:
+        raise _refuse(RuntimeBindingDefect.FIELD_MALFORMED) from None
+    if version != ENVIRONMENT_BINDING_SCHEMA_VERSION:
+        raise _refuse(RuntimeBindingDefect.SCHEMA_VERSION_UNKNOWN) from None
+    if _exact_string(document, "binding_kind") != ENVIRONMENT_BINDING_KIND:
+        raise _refuse(RuntimeBindingDefect.BINDING_KIND_UNKNOWN) from None
+    if _exact_string(document, "contract_id") != ENVIRONMENT_BINDING_CONTRACT_ID:
+        raise _refuse(RuntimeBindingDefect.CONTRACT_ID_UNKNOWN) from None
+    if _exact_string(document, "aws_partition") != EXPECTED_PARTITION:
+        raise _refuse(RuntimeBindingDefect.PARTITION_UNEXPECTED) from None
+    if _exact_string(document, "aws_region") != EXPECTED_REGION:
+        raise _refuse(RuntimeBindingDefect.REGION_UNEXPECTED) from None
+
+    account = _exact_string(document, "target_account_id")
+    if not _ACCOUNT_ID.match(account):
+        raise _refuse(RuntimeBindingDefect.ACCOUNT_MALFORMED) from None
+    if account != expected_account:
+        raise _refuse(RuntimeBindingDefect.ACCOUNT_MISMATCH) from None
+
+    bucket = _exact_string(document, "licensed_bucket_name")
+    if not _BUCKET_NAME.match(bucket):
+        raise _refuse(RuntimeBindingDefect.BUCKET_NAME_MALFORMED) from None
+
+    _validate_environment_provenance(document["provenance"])
+
+    return QualificationEnvironmentBinding(
+        target_account_id=account,
+        licensed_bucket_name=bucket,
+        partition=EXPECTED_PARTITION,
+        region=EXPECTED_REGION,
+        digest=digest,
+    )
+
+
+def load_environment_binding(
+    *,
+    path: str,
+    expected_account: str | None,
+    root_source: Callable[[], Path] | None = None,
+    security_of: Callable[[Path], FileSecurity] | None = None,
+) -> QualificationEnvironmentBinding:
+    """Read and validate the environment binding at one **explicitly given** path.
+
+    The path is a required argument rather than an environment lookup, and that is an
+    isolation property rather than a style choice: **Run A must not read this
+    artifact at all**. A loader that resolved its own path from the environment could
+    be called from anywhere and would find something; one that has to be handed an
+    absolute path is reachable only from a caller that chose to hand it one, and a
+    call graph shows exactly which callers those are.
+
+    The trust boundary is the runtime binding's, applied by the same function, so
+    containment, ownership, the ACL and the before-and-after verification are one
+    implementation rather than two that could drift.
+
+    Raises:
+        RuntimeBindingError: one closed :class:`RuntimeBindingDefect`. **No refusal
+            names the path, the account, the bucket, a digest, a principal or any
+            fragment of the document.**
+    """
+    root = _resolved_root(root_source)
+    raw = _read_private_bytes(
+        path,
+        root,
+        windows_file_security if security_of is None else security_of,
+        MAX_ENVIRONMENT_BINDING_BYTES,
+    )
+    return parse_environment_binding(
+        _decode_document(raw),
+        expected_account=expected_account,
+        digest=sha256_hex(raw),
+    )
 
 
 __all__ = [
+    "ENVIRONMENT_BINDING_CONTRACT_ID",
+    "ENVIRONMENT_BINDING_ENV_VAR",
+    "ENVIRONMENT_BINDING_KIND",
+    "ENVIRONMENT_BINDING_SCHEMA_VERSION",
+    "ENVIRONMENT_BINDING_SOURCE_KIND",
     "EXPECTED_ACQUISITION_PROFILE",
     "EXPECTED_PARTITION",
     "EXPECTED_REGION",
+    "MAX_ENVIRONMENT_BINDING_BYTES",
     "MAX_RUNTIME_BINDING_BYTES",
     "PRIVATE_ROOT_ENV_VAR",
     "PRIVATE_ROOT_SEGMENTS",
@@ -890,12 +1232,19 @@ __all__ = [
     "RUNTIME_BINDING_KIND",
     "RUNTIME_BINDING_SCHEMA_VERSION",
     "FileSecurity",
+    "QualificationEnvironmentBinding",
     "QualificationRuntimeBinding",
     "RuntimeBindingDefect",
     "RuntimeBindingError",
+    "canonical_binding_bytes",
+    "contained_private_path",
     "environment_binding_path",
+    "load_environment_binding",
     "load_runtime_binding",
+    "parse_environment_binding",
     "parse_runtime_binding",
     "private_root",
+    "require_exclusive_security",
+    "sha256_hex",
     "windows_file_security",
 ]

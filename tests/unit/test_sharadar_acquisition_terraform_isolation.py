@@ -53,6 +53,14 @@ ACQUIRE_KEY: Final = "scripts:sharadar_empirical_qualification"
 VERIFIER_KEY: Final = "scripts:aws_foundation_verify"
 BINDING_KEY: Final = "src:kalpamani.data.qualify.sharadar.runtime_binding"
 
+#: The three ADR-0024 operator tools. The capture is the one thing in this repository
+#: that may read the governed infrastructure outputs, so it is the one thing Run A must
+#: not be able to reach: reaching it would put Terraform back in the closure by a
+#: route the Terraform checks above are not looking at.
+CAPTURE_KEY: Final = "scripts:qualification_environment_binding_capture"
+MATERIALIZE_KEY: Final = "scripts:qualification_runtime_binding_materialize"
+WRITER_KEY: Final = "scripts:qualification_private_artifacts"
+
 #: The module-level statements, gathered under one pseudo-name so they are walked
 #: alongside the real definitions.
 MODULE_BODY: Final = "<module>"
@@ -266,6 +274,27 @@ def _terraform_findings(entry_source: str) -> list[str]:
     return findings
 
 
+#: Every operator tool the acquisition path must not be able to reach, and what to
+#: call it in a finding. Each is a real module, so a miss here is a miss about
+#: something that exists rather than about a name nobody wrote.
+OPERATOR_TOOLS: Final[tuple[tuple[str, str], ...]] = (
+    (CAPTURE_KEY, "the environment-binding capture"),
+    (MATERIALIZE_KEY, "the runtime-binding materialization gate"),
+    (WRITER_KEY, "the private-artifact writer"),
+)
+
+
+def _operator_tool_findings(entry_source: str) -> list[str]:
+    """Every operator tool this acquisition path could reach. Empty when it cannot.
+
+    Kept separate from :func:`_terraform_findings` rather than folded into it: the
+    Terraform findings are asserted exactly in places below, and a check that grew a
+    new member would change what those assertions mean.
+    """
+    reached = {key for key, _name in _reachability(entry_source).definitions}
+    return [f"{description} is reachable" for key, description in OPERATOR_TOOLS if key in reached]
+
+
 def _environment_names(entry_source: str) -> set[str]:
     """Every environment-variable name the entry point reads, as a literal."""
     tree = ast.parse(entry_source)
@@ -376,6 +405,35 @@ def test_the_governed_verifier_still_owns_the_state_read_for_other_callers() -> 
     verifier = VERIFIER_PATH.read_text(encoding="utf-8")
     assert "def tf_outputs() -> dict[str, Any]:" in verifier
     assert "outputs = tf_outputs()" in verifier
+
+
+# -- defense one, continued: the operator tools are off the run path ----------
+
+
+def test_the_acquisition_path_cannot_reach_any_operator_tool() -> None:
+    """Materialization is somebody's separately authorized action, not a run's.
+
+    The capture reads governed Terraform outputs under the foundation actor; the gate
+    and the writer create private artifacts. A run that could reach any of them could
+    manufacture the configuration it is supposed to be handed.
+    """
+    assert _operator_tool_findings(ACQUIRE_SOURCE) == []
+
+
+def test_the_acquisition_path_cannot_reach_the_environment_binding_loader() -> None:
+    """Run A reads the runtime binding. The artifact behind it is not its business."""
+    reach = _reachability(ACQUIRE_SOURCE)
+    assert (BINDING_KEY, "load_environment_binding") not in reach.definitions
+    assert (BINDING_KEY, "parse_environment_binding") not in reach.definitions
+    assert (BINDING_KEY, "load_runtime_binding") in reach.definitions
+
+
+def test_the_operator_tools_exist_where_the_guard_looks_for_them() -> None:
+    """A positive control: a guard aimed at absent files would pass by accident."""
+    for key, _description in OPERATOR_TOOLS:
+        located = _module_file(key.split(":", 1)[1])
+        assert located is not None, key
+        assert located[0] == key
 
 
 # -- defense two: a runtime sentinel ------------------------------------------
@@ -727,6 +785,25 @@ def test_the_guards_catch_a_raw_bucket_environment_variable() -> None:
     assert _terraform_findings(mutated) == ["the private runtime binding loader is not reachable"]
     assert "KALPAMANI_LICENSED_BUCKET" in _environment_names(mutated)
     assert _environment_names(mutated) != {"AWS_PROFILE", "KALPAMANI_SHARADAR_SECRET_ID"}
+
+
+CAPTURE_REINTRODUCTION: Final = '''def _governed_licensed_bucket() -> str:
+    """The licensed bucket, by capturing it during the run."""
+    from qualification_environment_binding_capture import _governed_outputs
+
+    return str(_governed_outputs()["licensed_bucket_name"])
+
+
+'''
+
+
+def test_the_call_graph_catches_a_capture_reached_from_the_run() -> None:
+    """The operator tool is the new way back to Terraform, so it is watched too."""
+    mutated = _mutated(CAPTURE_REINTRODUCTION)
+    assert "the environment-binding capture is reachable" in _operator_tool_findings(mutated)
+    findings = _terraform_findings(mutated)
+    assert "the Terraform state read is reachable" in findings
+    assert "the private runtime binding loader is not reachable" in findings
 
 
 def test_the_repository_source_is_unchanged_by_any_mutation() -> None:
