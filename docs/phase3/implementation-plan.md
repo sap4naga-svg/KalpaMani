@@ -281,7 +281,8 @@ authorized, so P1–P9 executions by it are ZERO.**
 **A later, separate written authorization opened the implementation gate for one bounded
 offline slice, and that slice has since been merged.** It is **merged and dormant** — synthetic
 fixtures and offline tests only, and **never executed against AWS, a provider or a network**.
-**Infrastructure design and mutation, Run A, Run B and the assessment run each remain NOT
+Status as of that merge — **historical, and subsequently superseded by
+the completed Run A empirical acquisition recorded below**: **infrastructure design and mutation, Run A, Run B and the assessment run each remain NOT
 AUTHORIZED**, and **P1–P9 executions by it are still ZERO**.
 
 | | Ceiling under that package |
@@ -328,7 +329,8 @@ PR #44**. **Merging an implementation authorized no execution, no infrastructure
 run.** **The merge approved clarification of architecture only**: **the PR #42 clarification merge
 conferred no implementation authority.** **The offline implementation later merged dormant through
 PR #41, but its execution and deployment remain unauthorized.**
-**Infrastructure mutation, Run A, Run B and the combined assessment each remain
+Status as of that merge — **historical, and subsequently superseded by
+the completed Run A empirical acquisition recorded below**: **infrastructure mutation, Run A, Run B and the combined assessment each remain
 NOT AUTHORIZED**. **No execution of that package is authorized**, and **P1–P9 executions by it
 are ZERO.**
 
@@ -415,7 +417,9 @@ authorize or begin infrastructure work**; **the next possible gate is a separate
 authorization for offline infrastructure, Terraform and IAM preparation**. **Merging an
 implementation authorizes no infrastructure, no deployment and no run**, and **offline-conforming
 is not deployed, not active, not operational, not authorized to run and not empirically
-validated**. **Infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED · Terraform /
+validated**. Status as of that merge — **historical, and subsequently superseded by the applied
+qualification infrastructure, the qualified operator access and ultimately
+the completed Run A empirical acquisition recorded below**: **Infrastructure design and mutation: NOT AUTHORIZED / NOT IMPLEMENTED · Terraform /
 IAM: NOT AUTHORIZED / NOT IMPLEMENTED · deployment: NOT PERFORMED · execution: ZERO · Run A: NOT
 AUTHORIZED / NOT RUN · Run B: NOT AUTHORIZED / NOT RUN · combined assessment: NOT AUTHORIZED / NOT
 RUN**, and **no deployment or empirical execution has occurred**.
@@ -519,8 +523,8 @@ identity and trust decision adds no S3 operation and changes no deadline term** 
 **The next gate after ADR acceptance is an offline implementation gate** for permission sets,
 assignments, customer-managed-policy attachments, profiles, and actor-specific identity
 verification, including any proven identity-gate and profile-contract corrections. Status as of
-that merge — **historical, and superseded by the applied qualification infrastructure recorded
-below**: **permission-set implementation: MERGED / OFFLINE-VALIDATED / DORMANT · Identity Center
+that merge — **historical, and superseded by the applied qualification infrastructure, the
+qualified operator access and ultimately by the completed Run A empirical acquisition recorded below**: **permission-set implementation: MERGED / OFFLINE-VALIDATED / DORMANT · Identity Center
 assignments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · runtime roles: UNCREATED /
 UNOBSERVED · runtime trust principals: NOT SELECTED IN AWS · customer-managed-policy
 attachments: MERGED / UNCREATED / EXISTENCE NOT ESTABLISHED · governed AWS profiles:
@@ -571,7 +575,8 @@ modified and no provider call reached AWS**. **The next separately authorized ga
 automatically an AWS apply** — **AWS discovery, environment binding, Terraform plan, Terraform
 apply, profile materialization, identity preflight and execution each remain separate gates** and
 each remain separately unauthorized, and **all operational gates remain closed**. Status as of that
-merge — **historical, and superseded by the applied qualification infrastructure recorded below**:
+merge — **historical, and superseded by the applied qualification infrastructure, the qualified
+operator access and ultimately by the completed Run A empirical acquisition recorded below**:
 **AWS discovery: NOT AUTHORIZED · AWS
 account/group/instance binding values: UNKNOWN / UNREAD · authority granted: NONE ·
 infrastructure deployment: BLOCKED · Terraform isolated init/validate: PERFORMED IN EXTERNAL
@@ -586,7 +591,9 @@ successful package: 485 to 490**, **L >= 3 * T_s3 + C** and **remaining >= T_req
 **The qualification infrastructure is now applied and independently verified, and applying it
 authorized no run.** **PR #60 is merged**, the **controlled saved-plan apply COMPLETED**, and an
 **independent post-apply verification PASSED** — it read the result rather than producing it, and
-the Terraform state advanced by exactly one serial with its lineage unchanged. Current status:
+the Terraform state advanced by exactly one serial with its lineage unchanged. Status as of that
+apply — **historical, and superseded by the qualified operator access and ultimately by
+the completed Run A empirical acquisition recorded below**:
 **qualification-principal Terraform declarations: MERGED / APPLIED · controlled saved-plan apply:
 COMPLETED · independent post-apply verification: PASSED · live customer-managed IAM policies: 2
 VERIFIED · live Identity Center permission sets: 2 VERIFIED · live customer-managed-policy
@@ -607,7 +614,8 @@ operator group **was assigned and empty** and **neither governed AWS profile exi
 access is not authority to use it.** One owner-approved human operator was added to the governed
 Identity Center group, both governed AWS profiles were materialized, and an **independent review
 read the result rather than producing it**. **Who the operator is stays out of this repository**
-— the count is recorded and the person is not. Current status: **qualification infrastructure:
+— the count is recorded and the person is not. Status as of that materialization — **historical,
+and subsequently superseded by the completed Run A empirical acquisition recorded below**: **qualification infrastructure:
 APPLIED / INDEPENDENTLY VERIFIED · operator selection: OWNER-APPROVED · operator group: EXACTLY 1
 OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership: MATERIALIZED / INDEPENDENTLY
 VERIFIED · governed acquisition profile: MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed
@@ -622,6 +630,25 @@ NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED**. **A material
 authorizes no run** — completing the membership and profile gate **opened none of the others**,
 and **acceptance, implementation, deployment, access and execution stay distinct gates that are
 never collapsed into one**.
+
+**Run A has since COMPLETED once, on 4 September 2026, and it is a command outcome rather than a
+provider verdict.** The ADR-0018 / ADR-0019 / ADR-0020 empirical acquisition implementation was run
+once under its own separate written authorization. Current status: **Run A: COMPLETED / 4 SEPTEMBER
+2026 · Run A entry-point invocations: 1 · Run A exit code: 0 · Run A closed public outcome:
+empirical acquisition completed · provider requests: 48 · provider retries: 0 · licensed-S3
+PutObject: 145 · conditional HeadObject: 0 · object-byte GetObject: 0 · listing operations: 0 ·
+CONTROL operations: 0 · total S3 operations: 145 · credential retrievals (GetSecretValue): 1 ·
+Terraform operations: 0 · locator: PUBLISHED LAST / ADDRESSABLE · newly written objects: 145 ·
+execution identifier: ALLOCATED AND PERMANENTLY RETIRED · a Run A retry: NOT AUTHORIZED / NOT RUN ·
+Run B: NOT AUTHORIZED / NOT RUN · Run B minimum separation: AT LEAST 8 CALENDAR DAYS AFTER RUN A ·
+Run B earliest approved target: 12 SEPTEMBER 2026 · combined assessment: NOT AUTHORIZED / NOT RUN ·
+P1-P9: UNEVALUATED · data correctness and quality: NOT ESTABLISHED · provider-wide entitlement:
+UNKNOWN · subscription-wide entitlement: UNKNOWN · production ingestion/backfill/update: NOT
+AUTHORIZED / NOT RUN · backtesting: NOT STARTED · G1 / G2: OPEN / OPEN · provider selected: NONE ·
+Phase 3: NOT COMPLETE · CONTROL: DEFERRED · live trading: HARD-DISABLED**. **A completed
+acquisition authorizes no further run** — a Run A retry, Run B and the combined assessment each
+remain a separate written authorization, and **P1–P9 remain unevaluated by the combined
+assessment**.
 
 **Tests**
 - `as_of`, `profile` positional and defaulted nowhere — static test over the package.

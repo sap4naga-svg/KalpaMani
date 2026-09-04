@@ -295,6 +295,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / ACCEPTED — PR #16 MERGED — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3A — SHARADAR QUALIFICATION RUNTIME CORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #17 — CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS.**
 **PHASE 3A — BOUNDED AUTHENTICATED ACQUISITION QUALIFICATION: IMPLEMENTED — PR #35 MERGED — ATTEMPTED TWICE UNDER SEPARATE AUTHORIZATIONS. ATTEMPT ONE REFUSED AT THE AWS IDENTITY GATE (`REFUSED_IDENTITY`, EXIT CODE 6), WITH NO PROVIDER REQUEST, NO CREDENTIAL RETRIEVAL AND NO PUBLICATION. ATTEMPT TWO COMPLETED (`COMPLETED`, EXIT CODE 0), REACHED THE QUALIFICATION RUNTIME AND MADE ONE PROVIDER REQUEST; ITS S3 QUALIFICATION OPERATIONS ARE BOUNDED AT THREE TO SIX — EXACTLY THREE PUTOBJECT AND ZERO TO THREE CONDITIONAL HEADOBJECT — WITH A COMPLETE RETAINED ACQUISITION RECORD, AND HOW MANY OBJECTS WERE NEWLY WRITTEN NOT ESTABLISHED. COMPLETION IS A COMMAND STATUS — NOT QUALIFICATION PASSED, NOT PROVIDER ACCEPTANCE AND NOT PROVIDER SELECTION; EXACT-REQUEST AUTHENTICATION ESTABLISHED, PROVIDER-WIDE AUTHENTICATION UNKNOWN. A THIRD ATTEMPT NOT AUTHORIZED.**
+**PHASE 3A — BOUNDED PRIVATE EMPIRICAL QUALIFICATION: RUN A COMPLETED ONCE (2026-09-04) — ONE ENTRY-POINT INVOCATION, EXIT CODE 0, 48 PROVIDER REQUESTS, ZERO PROVIDER RETRIES, 145 APPEND-ONLY LICENSED-S3 WRITES, ZERO OBJECT-BYTE READS, ZERO LISTINGS, ZERO CONTROL OPERATIONS, ONE CREDENTIAL RETRIEVAL, ZERO TERRAFORM OPERATIONS, LOCATOR PUBLISHED LAST AND ADDRESSABLE, EXECUTION IDENTIFIER PERMANENTLY RETIRED. A COMMAND OUTCOME, NOT A PROVIDER VERDICT: P1–P9 UNEVALUATED, A RUN A RETRY NOT AUTHORIZED, RUN B NOT AUTHORIZED AND AT LEAST EIGHT CALENDAR DAYS LATER WITH AN EARLIEST APPROVED TARGET OF 2026-09-12, COMBINED ASSESSMENT NOT AUTHORIZED, NO PROVIDER SELECTED.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -439,11 +440,12 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **Applied qualification infrastructure — PR #60, controlled saved-plan apply** | **APPLIED / INDEPENDENTLY VERIFIED** — the **controlled saved-plan apply COMPLETED** and an **independent post-apply verification PASSED**: **live customer-managed IAM policies 2 VERIFIED · live Identity Center permission sets 2 VERIFIED · live customer-managed-policy references 2 VERIFIED · live account assignments 2 VERIFIED · generated Identity Center runtime roles 2 VERIFIED**. **Infrastructure existence is not qualification success**, and **materialized access is not authority to use it** — the operator and profile state recorded on the day of the apply has since been superseded, and the governing record is *The qualified operator access*: **operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED**, **operator membership MATERIALIZED / INDEPENDENTLY VERIFIED**, **governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **profile crossover NONE**, **AWS config ACL EFFECTIVE ACCESS PRESERVED**, **membership/profile gate COMPLETED**, **sixth private-binding preflight NOT AUTHORIZED / NOT RUN**, **provider credential retrieval NONE**, **S3/provider activity NONE**, **further infrastructure mutation NOT AUTHORIZED**, **qualification and binding-preflight execution NOT AUTHORIZED / NOT RUN**, **third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN**, **Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN**, **provider acquisition NOT AUTHORIZED / NOT RUN**, **backtesting NOT STARTED**, **G1 OPEN · G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | **Qualified operator access — membership and governed profiles** | **MATERIALIZED / INDEPENDENTLY VERIFIED** — one owner-approved human operator was added to the governed Identity Center group, both governed AWS profiles were materialized, and an **independent review read the result rather than producing it**: **operator selection OWNER-APPROVED · operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership MATERIALIZED / INDEPENDENTLY VERIFIED · governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · profile crossover NONE · AWS config ACL EFFECTIVE ACCESS PRESERVED · membership/profile gate COMPLETED**. **Who the operator is stays out of this repository** — the count is recorded and the person is not. **Materialized access is not authority to use it**: **sixth private-binding preflight NOT AUTHORIZED / NOT RUN · provider credential retrieval NONE · S3/provider activity NONE · qualification execution NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN · further infrastructure mutation NOT AUTHORIZED · backtesting NOT STARTED · G1 OPEN · G2 OPEN · provider selected NONE · Phase 3 NOT COMPLETE · CONTROL DEFERRED · live trading HARD-DISABLED** |
 | **Ingestion runner · ECS task or image · a third authenticated qualification attempt** | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
-| **ADR-0018 implementation execution · qualification infrastructure deployment · the two new IAM roles · Run A · Run B · the combined assessment run** | **NOT AUTHORIZED** — ADR-0018 is **ACCEPTED / IN FORCE**, and **the merge approved architecture only**. **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED.** **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one.** **The ADR-0018 offline implementation is MERGED and DORMANT — PR #41 merged**, merge commit **`3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`**, approved implementation head **`96daac7963d936f231b37847579c5f28bb313760`**; and **the fixed 48-request assessment-boundary correction is MERGED — PR #44 merged**, merge commit **`c945970613b80bfd4f42acc4f3acb4814895eb42`**, approved correction head **`78b4425077e65eeb12dfd24b35825741370e0e0f`**. It was built, and then corrected, under **later, separate written authorizations for offline construction, offline correction and offline validation only**: **synthetic fixtures and offline tests only**, **zero** AWS, credential, Secrets Manager, provider, S3, Terraform and IAM operations, and **neither entry point has ever been run**. **The offline implementation is merged, dormant and never executed**, and **merging an implementation authorized no execution, no infrastructure deployment and no run**. **The clarification amendment is EFFECTIVE — PR #42 merged**, its **conditional effectiveness event has occurred**, and it **authorizes none of the later gates** |
+| **ADR-0018 implementation execution · qualification infrastructure deployment · the two new IAM roles · Run A · Run B · the combined assessment run** | **NOT AUTHORIZED** — ADR-0018 is **ACCEPTED / IN FORCE**, and **the merge approved architecture only**. **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED.** **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one.** **The ADR-0018 offline implementation is MERGED and DORMANT — PR #41 merged**, merge commit **`3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`**, approved implementation head **`96daac7963d936f231b37847579c5f28bb313760`**; and **the fixed 48-request assessment-boundary correction is MERGED — PR #44 merged**, merge commit **`c945970613b80bfd4f42acc4f3acb4814895eb42`**, approved correction head **`78b4425077e65eeb12dfd24b35825741370e0e0f`**. It was built, and then corrected, under **later, separate written authorizations for offline construction, offline correction and offline validation only**: **synthetic fixtures and offline tests only**, **zero** AWS, credential, Secrets Manager, provider, S3, Terraform and IAM operations, and **neither entry point has ever been run**. **The offline implementation is merged, dormant and never executed**, and **merging an implementation authorized no execution, no infrastructure deployment and no run**. **The clarification amendment is EFFECTIVE — PR #42 merged**, its **conditional effectiveness event has occurred**, and it **authorizes none of the later gates**. **SUPERSEDED IN PART — Run A has since COMPLETED once, on 2026-09-04, under its own separate written authorization; the completed Run A empirical acquisition section governs, and a Run A retry, Run B and the combined assessment stay NOT AUTHORIZED / NOT RUN.** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
 | **Provider credential state · repository consumption · provider API access · Services Data** | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; a **third** authenticated qualification attempt **NOT AUTHORIZED** — the first refused at the AWS identity gate and retrieved no credential, and the second completed with **one provider request** and **provider-wide authentication still UNKNOWN** — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
-| **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
+| **ADR-0018 empirical acquisition — Run A** | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
+| **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | **Short research** | **NOT AUTHORIZED** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** |
 | **Live trading** | **HARD-DISABLED** |
@@ -3138,6 +3140,119 @@ was built, no IAM role was created, no AWS or provider request was made and no r
 it**.
 
 
+### The completed Run A empirical acquisition — COMPLETED, and what it does and does not establish
+
+**Run A ran once, on 4 September 2026, and it finished.** The ADR-0018 / ADR-0019 / ADR-0020
+empirical acquisition implementation — merged, dormant and unexecuted until that day — was
+run once under its own separate written authorization. **Run A completed with exit code `0`**,
+and its closed public outcome was `empirical acquisition completed`.
+
+**This section governs the current state.** The repository's binding-correction history records the
+days those pull requests merged, the operator-access section below records the day of the
+materialization, and every per-merge section beneath it records its own merge. Their Run A,
+execution, materialization and activity lines describe their own dates and **no longer govern**,
+while their forward authorization boundaries are unchanged. **No ADR document and no historical
+review report is rewritten by this synchronization.**
+
+#### What Run A established
+
+**One entry-point invocation, and the accounting the architecture was built to produce.** Every
+figure below is the observed count of that one execution, and each sits inside the band ADR-0019's
+governing arithmetic admits for one successful acquisition run.
+
+| | |
+|---|---|
+| **the run** | one entry-point invocation · exit code `0` · closed public outcome `empirical acquisition completed` |
+| **the provider** | **exactly 48 sequential provider requests**, and **zero provider retries** |
+| **the writes** | **exactly 145 append-only licensed-S3 writes** — 144 Bronze publications and one locator, inside ADR-0019's admitted 145-to-147 band |
+| **the reads** | **zero object-byte `GetObject`**, **zero conditional `HeadObject`** and **zero listing operations**, so acquisition stayed write-only exactly as ADR-0019 requires |
+| **CONTROL** | **zero CONTROL operations** |
+| **the credential** | **one** `GetSecretValue`, with no credential, fragment, digest, fingerprint or measurement recorded anywhere |
+| **Terraform** | **zero Terraform operations** — the ADR-0023 correction held, and the acquisition actor attempted no state read |
+| **identity** | **two** `sts:GetCallerIdentity` invocations in total — one external identity precheck, and the entry point's own internal identity gate |
+| **the locator** | **published last**, and **addressable** |
+| **the objects** | **145 objects newly written** under the append-only collision policy |
+| **the execution identity** | one execution identifier allocated and **permanently retired**, with an owner-only private allocation receipt |
+| **the private inputs** | the environment binding, the runtime binding, the applied secret-access evidence and the private Terraform input each **unchanged** |
+| **the repository** | **no repository mutation occurred during Run A** |
+
+**Nothing private is recorded here, and none of it is needed to state what happened.** No execution
+identifier or recoverable portion of one appears in this repository, and neither does an
+allocation-receipt path or filename, an account id, an ARN, a bucket name, an object key, a secret
+identifier, a credential or token, a user-specific filesystem path, a subject, ticker or provider
+payload, a private digest, or a private P1–P9 result.
+
+#### What Run A did not establish
+
+**A completed command is an operational outcome, and it is not a provider verdict.** Every
+distinction below is load-bearing rather than decorative.
+
+| | |
+|---|---|
+| **a completed acquisition is not a finding** | **P1–P9 remain unevaluated by the combined assessment**, which is the only thing that evaluates them, and it runs after Run B |
+| **retrieved bytes are not correct bytes** | Run A establishes **no data correctness and no data quality** |
+| **one answered inventory is not an entitlement** | **provider-wide entitlement stays UNKNOWN**, and so does **subscription-wide entitlement** |
+| **an acquisition is not a selection** | **no provider is selected**, and **G1 and G2 stay OPEN** |
+| **a completed run is not a phase** | **Phase 3 stays NOT COMPLETE**, and **production ingestion, backfill and update stay unauthorized** |
+| **operational readiness is not trading readiness** | **CONTROL stays DEFERRED**, **live trading stays HARD-DISABLED**, and **backtesting has not started** |
+
+**Run A is spent, and it cannot be repeated.** Its execution identifier is **permanently retired**,
+so the append-only store would refuse a repeat, and **a Run A retry is not authorized**. **Run B is
+a separate second acquisition that requires its own written authorization and has not run.** It
+must fall **at least eight calendar days after Run A**, and the **earliest approved scheduling
+target is 12 September 2026**. **The combined assessment runs only after Run B, under another
+authorization.**
+
+#### Run A status
+
+```text
+Run A:                                            COMPLETED / 4 SEPTEMBER 2026
+Run A entry-point invocations:                    1
+Run A exit code:                                  0
+Run A closed public outcome:                      empirical acquisition completed
+provider requests:                                48
+provider retries:                                 0
+licensed-S3 PutObject:                            145
+conditional HeadObject:                           0
+object-byte GetObject:                            0
+listing operations:                               0
+CONTROL operations:                               0
+total S3 operations:                              145
+credential retrievals (GetSecretValue):           1
+Terraform operations:                             0
+STS GetCallerIdentity invocations:                2
+locator:                                          PUBLISHED LAST / ADDRESSABLE
+newly written objects:                            145
+execution identifier:                             ALLOCATED AND PERMANENTLY RETIRED
+private inputs:                                   UNCHANGED
+repository mutation during Run A:                 NONE
+a Run A retry:                                    NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT AUTHORIZED / NOT RUN
+Run B minimum separation:                         AT LEAST 8 CALENDAR DAYS AFTER RUN A
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT AUTHORIZED / NOT RUN
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+provider-wide entitlement:                        UNKNOWN
+subscription-wide entitlement:                    UNKNOWN
+production ingestion/backfill/update:             NOT AUTHORIZED / NOT RUN
+third ADR-0017 acquisition:                       NOT AUTHORIZED / NOT RUN
+sixth private-binding preflight:                  NOT AUTHORIZED / NOT RUN
+further infrastructure mutation:                  NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A completed acquisition authorizes no further run.** Completing Run A **opened none of the other
+gates**: a Run A retry, Run B, the combined assessment, a third ADR-0017 acquisition, a sixth
+private-binding preflight, further infrastructure mutation and production ingestion each remain a
+separate written authorization, and **acceptance, implementation, deployment, access and execution
+stay distinct gates that are never collapsed into one**.
+
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
 **One owner-approved human operator now holds the governed qualification access, both governed AWS
@@ -3145,12 +3260,13 @@ profiles are materialized, and an independent review confirmed each identity pre
 principals applied under PR #60 are no longer capability without a holder: a person can reach them,
 and a review that did not perform the materialization confirmed that they do.
 
-**This section governs the current state.** The applied-infrastructure section below records the
-day of the apply, and its operator-group, profile and membership-gate lines now carry a historical
-banner; every per-merge section beneath it carries its own. Their existence, occurrence, membership
-and deployment lines describe their own dates and no longer govern, while their forward
-authorization boundaries are unchanged. **No ADR document and no historical review report is
-rewritten by this synchronization.**
+**The completed Run A empirical acquisition above governs the current state.** This section records
+the materialization, and its Run A, execution and activity lines now carry a historical banner. The
+applied-infrastructure section below records the day of the apply, and its operator-group, profile
+and membership-gate lines carry their own; every per-merge section beneath it carries its own. Their
+existence, occurrence, membership and deployment lines describe their own dates and no longer
+govern, while their forward authorization boundaries are unchanged. **No ADR document and no
+historical review report is rewritten by this synchronization.**
 
 **Who the operator is stays out of this repository.** The group holds **exactly one owner-approved
 human member**, and that is the whole of what is recorded here: **no name, user name, email address,
@@ -3201,6 +3317,11 @@ nothing has been run with them, and every distinction below is load-bearing rath
 | **qualified access is not Phase 3** | **no acquisition has succeeded**, **no backtest has begun**, **Phase 3 is NOT COMPLETE**, **CONTROL stays DEFERRED** and **live trading stays HARD-DISABLED** |
 
 #### Qualified operator status
+
+> **HISTORICAL — the state as of that materialization, superseded by *The completed Run A
+> empirical acquisition*.** Run A has since been run once under a separate authorization, so every
+> Run A, execution and activity line below records that day and **no longer governs**. Its forward
+> authorization boundaries are unchanged.
 
 ```text
 qualification infrastructure:                     APPLIED / INDEPENDENTLY VERIFIED

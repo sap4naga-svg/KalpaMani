@@ -113,10 +113,19 @@ AWS config ACL                                       EFFECTIVE ACCESS PRESERVED
 membership/profile gate                              COMPLETED
 ```
 
-**No qualification run, binding preflight, provider acquisition, Run A, Run B or combined
-assessment has happened**, **no provider credential was retrieved by this transition**, **no S3
-object operation and no provider request occurred**, **no provider is selected**, and **G1 and G2
-stay OPEN**. Each of those is a separate, ungranted authorization — see each file's own header.
+**Run A has since COMPLETED once, on 2026-09-04**, under its own separate written authorization —
+one entry-point invocation, exit code `0`, 48 provider requests, zero provider retries, 145
+append-only licensed-S3 writes, zero object-byte reads, zero listings, zero CONTROL operations and
+zero Terraform operations. **That is a command outcome, not a provider verdict.** **A Run A retry
+is not authorized**, **Run B is a separate second acquisition that requires its own written
+authorization and has not run — at least eight calendar days later, with an earliest approved
+scheduling target of 2026-09-12**, and **the combined assessment runs only after Run B, under
+another authorization**.
+
+**No binding preflight and no combined assessment has happened**, **no provider credential was
+retrieved by this transition**, **no S3 object operation and no provider request occurred** during
+the membership and profile materialization, **no provider is selected**, and **G1 and G2 stay
+OPEN**. Each of those is a separate, ungranted authorization — see each file's own header.
 
 ---
 

@@ -33,6 +33,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
+from typing import Protocol
 
 import pytest
 
@@ -1972,7 +1973,13 @@ class TestForwardDriftMutations:
             ("phase 3: not complete", "phase 3: complete", "phase 3: complete"),
             ("control: deferred", "control: published", "control: published"),
             ("live trading: hard-disabled", "live trading: enabled", "live trading: enabled"),
-            ("run a: not authorized / not run", "run a: completed", "run a: completed"),
+            # "run a: completed" was retired from the denylist when Run A was run;
+            # the retry that stays unauthorized is what the mutation now drives.
+            (
+                "a run a retry: not authorized / not run",
+                "a run a retry: authorized",
+                "a run a retry: authorized",
+            ),
             ("run b: not authorized / not run", "run b: completed", "run b: completed"),
             (
                 "combined assessment: not authorized / not run",
@@ -3855,3 +3862,401 @@ class TestMaterializedAccessIsNotAuthority:
         _before, section, _after = split_at_access_section(document)
         assert re.search(r"(?<!\d)\d{12}(?!\d)", section) is None
         assert re.search(r"(?<![0-9a-f])[0-9a-f]{40,}(?![0-9a-f])", section) is None
+
+
+# ---------------------------------------------------------------------------
+# The completed Run A acquisition, and the four gaps an independent review of
+# PR #68 found in the guards around it.
+#
+# Three of the four were invisible to the audit rather than absent from the
+# documents: the implementation plan was checked for the presence of the
+# completed-Run-A phrases and never for whether some other block contradicted
+# them; the infrastructure README's Run B sentence was checked by nothing at
+# all; and the data-correctness status line could be flipped in both status
+# documents at once because only the neighbouring prose was pinned.
+#
+# Every guard below is the audit's own, driven rather than restated, and every
+# mutation is applied to in-memory text: no tracked file is written, no
+# Terraform runs, and no AWS or private material is read.
+
+PLAN_DENIALS: tuple[str, ...] = GUARD.PLAN_RUN_A_DENIALS
+PLAN_GOVERNING: str = GUARD.PLAN_RUN_A_GOVERNING
+PLAN_SUCCESSOR: str = GUARD.PLAN_RUN_A_SUCCESSOR
+PLAN_MARKER: str = GUARD.PLAN_RUN_A_HISTORICAL_MARKER
+PLAN_CURRENT: str = GUARD.PLAN_RUN_A_CURRENT_LABEL
+RUN_A_PLAN_REQUIRED: tuple[tuple[str, str], ...] = GUARD.RUN_A_PLAN_REQUIRED
+RUN_A_INFRA_REQUIRED: tuple[tuple[str, str], ...] = GUARD.RUN_A_INFRA_REQUIRED
+RUN_A_INFRA_RUN_B_FORBIDDEN: tuple[str, ...] = GUARD.RUN_A_INFRA_RUN_B_FORBIDDEN
+PLAN_RUN_B_FORBIDDEN: tuple[str, ...] = GUARD.PLAN_RUN_B_FORBIDDEN
+RUN_A_STATUS_REQUIRED: tuple[tuple[str, str], ...] = GUARD.RUN_A_STATUS_REQUIRED
+RUN_A_STATUS_FORBIDDEN: tuple[str, ...] = GUARD.RUN_A_STATUS_FORBIDDEN
+RUN_A_SHARED_FRAMING_FORBIDDEN: tuple[str, ...] = GUARD.RUN_A_SHARED_FRAMING_FORBIDDEN
+
+#: The governing paragraph's label and opening claim, as the plan spells them.
+PLAN_GOVERNING_OPENING = "Current status: **Run A: COMPLETED / 4 SEPTEMBER\n2026 ·"
+
+#: The banner the operator-access block carries, and the successor it names.
+PLAN_MATERIALIZATION_BANNER = (
+    "Status as of that materialization — **historical,\nand subsequently superseded by "
+    "the completed Run A empirical acquisition recorded below**: "
+)
+
+#: The infrastructure README's Run B sentence, and the wording it replaced.
+INFRA_RUN_B_SENTENCE = (
+    "Run B is a separate second acquisition that requires its own written\n"
+    "authorization and has not run"
+)
+INFRA_RUN_B_REGRESSION = "Run B is a separately authorized second acquisition"
+
+#: The data-correctness status line, and the claim it must never make.
+DATA_CORRECTNESS_LINE = "data correctness and quality:                     NOT ESTABLISHED"
+DATA_CORRECTNESS_FLIPPED = "data correctness and quality:                     ESTABLISHED"
+
+#: The shared framing sentence, and the position-dependent wording it replaced.
+SHARED_FRAMING = (
+    "The repository's binding-correction history records the\n"
+    "days those pull requests merged, the operator-access section below records the day of the\n"
+    "materialization, and every per-merge section beneath it records its own merge."
+)
+SHARED_FRAMING_REGRESSION = (
+    "The two binding-correction sections below record the\n"
+    "days their pull requests merged, the operator-access section records the day of the "
+    "materialization,\nand every per-merge section beneath them records its own merge."
+)
+
+
+class PlanRunAScanResult(Protocol):
+    """The shape of the audit's plan scan.
+
+    The audit is loaded by path, so every attribute reached through ``GUARD`` is
+    untyped. Naming the shape here lets the call sites below be type-checked
+    against it rather than against ``Any``.
+    """
+
+    @property
+    def governing(self) -> tuple[str, ...]: ...
+
+    @property
+    def historical(self) -> tuple[str, ...]: ...
+
+    @property
+    def defects(self) -> tuple[str, ...]: ...
+
+
+def plan_scan(text: str) -> PlanRunAScanResult:
+    """The audit's own paragraph scan over an implementation-plan reading."""
+    scan: PlanRunAScanResult = GUARD.scan_plan_run_a_blocks(text)
+    return scan
+
+
+def run_a_section(document: Path) -> str:
+    """The one completed-Run-A section a status document carries, verbatim."""
+    found = GUARD.scan_run_a_status_sections(read(document))
+    assert not found.defects, f"{document.name}: {found.defects}"
+    assert len(found.sections) == 1, f"{document.name}: {len(found.sections)} sections"
+    return str(found.sections[0])
+
+
+def plan_missing(text: str) -> list[str]:
+    """Every required governing Run A fact the reading does not carry, by label."""
+    return [label for label, phrase in RUN_A_PLAN_REQUIRED if phrase not in text]
+
+
+def infra_run_a_missing(text: str) -> list[str]:
+    """Every required infra-README Run A clause the reading does not carry, by label."""
+    return [label for label, phrase in RUN_A_INFRA_REQUIRED if phrase not in text]
+
+
+def infra_run_b_overstated(text: str) -> list[str]:
+    """Every forbidden infra-README Run B claim the reading does carry."""
+    return [claim for claim in RUN_A_INFRA_RUN_B_FORBIDDEN if claim in text]
+
+
+def status_missing(text: str) -> list[str]:
+    """Every required completed-Run-A clause the reading does not carry, by label."""
+    return [label for label, phrase in RUN_A_STATUS_REQUIRED if phrase not in text]
+
+
+def status_overstated(text: str) -> list[str]:
+    """Every forbidden completed-Run-A claim the reading does carry."""
+    return [claim for claim in RUN_A_STATUS_FORBIDDEN if claim in text]
+
+
+def misframed(text: str) -> list[str]:
+    """Every position-dependent cross-reference the reading does carry."""
+    return [claim for claim in RUN_A_SHARED_FRAMING_FORBIDDEN if claim in text]
+
+
+class TestThePlanSeparatesTheGoverningRunAStatusFromItsHistory:
+    """The unmutated plan: one current Run A status, and framed history behind it."""
+
+    def test_exactly_one_paragraph_governs(self) -> None:
+        scan = plan_scan(read(PLAN))
+        assert scan.defects == ()
+        assert len(scan.governing) == 1
+
+    def test_the_history_is_kept_rather_than_deleted(self) -> None:
+        """Deleting the stale lines would also remove the contradiction. It is not the fix."""
+        scan = plan_scan(read(PLAN))
+        assert len(scan.historical) >= GUARD.PLAN_RUN_A_HISTORICAL_MINIMUM
+
+    def test_every_historical_block_is_framed_and_names_the_right_successor(self) -> None:
+        scan = plan_scan(read(PLAN))
+        assert scan.historical
+        for block in scan.historical:
+            assert PLAN_MARKER in block
+            assert PLAN_SUCCESSOR in block
+            assert PLAN_CURRENT not in block
+
+    def test_the_governing_paragraph_carries_every_required_fact(self) -> None:
+        assert plan_missing(plan_scan(read(PLAN)).governing[0]) == []
+
+    def test_the_plan_does_not_authorize_run_b(self) -> None:
+        reading = flat(read(PLAN))
+        assert [claim for claim in PLAN_RUN_B_FORBIDDEN if claim in reading] == []
+
+
+class TestThePlanRunAScanRefusesEveryDrift:
+    """The mutations finding F1 turns on, driven through the audit's own scan."""
+
+    def test_reverting_the_governing_paragraph_is_reported(self) -> None:
+        """The one paragraph that governs, written back to the pre-Run-A state."""
+        text = read(PLAN)
+        assert plan_scan(text).defects == ()
+        mutated = text.replace(
+            PLAN_GOVERNING_OPENING, "Current status: **Run A: NOT AUTHORIZED / NOT RUN ·"
+        )
+        assert mutated != text
+        scan = plan_scan(mutated)
+        assert scan.governing == ()
+        assert any("labelled current status" in defect for defect in scan.defects)
+
+    def test_a_denial_outside_a_historical_block_is_reported(self) -> None:
+        """The obsolete wording is history's to keep -- inside a block that says so."""
+        text = read(PLAN)
+        mutated = text.replace(
+            "**Tests**\n- `as_of`, `profile` positional",
+            "Run A: NOT AUTHORIZED / NOT RUN.\n\n**Tests**\n- `as_of`, `profile` positional",
+        )
+        assert mutated != text
+        defects = plan_scan(mutated).defects
+        assert any("records no as-of-that-event framing" in defect for defect in defects)
+        assert any("names no successor" in defect for defect in defects)
+
+    def test_deleting_a_historical_banner_is_reported(self) -> None:
+        text = read(PLAN)
+        mutated = text.replace(PLAN_MATERIALIZATION_BANNER, "Current status: ")
+        assert mutated != text
+        defects = plan_scan(mutated).defects
+        assert any("labelled current status" in defect for defect in defects)
+        assert any("names no successor" in defect for defect in defects)
+
+    def test_a_banner_naming_the_wrong_successor_is_reported(self) -> None:
+        """Naming the immediate successor is not enough: that chain stops too early."""
+        text = read(PLAN)
+        mutated = text.replace(
+            PLAN_MATERIALIZATION_BANNER,
+            "Status as of that materialization — **historical,\nand subsequently superseded "
+            "by the applied qualification infrastructure recorded below**: ",
+        )
+        assert mutated != text
+        assert any("names no successor" in defect for defect in plan_scan(mutated).defects)
+
+    def test_deleting_the_history_is_reported(self) -> None:
+        text = read(PLAN)
+        mutated = text
+        for denial in PLAN_DENIALS:
+            mutated = re.sub(re.escape(denial), "", mutated, flags=re.IGNORECASE)
+        assert mutated != text
+        assert len(plan_scan(mutated).historical) < GUARD.PLAN_RUN_A_HISTORICAL_MINIMUM
+
+    def test_a_second_governing_paragraph_is_reported(self) -> None:
+        mutated = read(PLAN) + f"\n\nCurrent status: **{PLAN_GOVERNING.upper()}**.\n"
+        assert len(plan_scan(mutated).governing) == 2
+
+    def test_a_governing_paragraph_placed_ahead_of_its_history_is_reported(self) -> None:
+        mutated = read(PLAN) + "\n\nStatus as of that merge: Run A: NOT AUTHORIZED / NOT RUN.\n"
+        assert any(
+            "placed ahead of a pre-Run-A block" in defect for defect in plan_scan(mutated).defects
+        )
+
+    def test_an_unlabelled_governing_paragraph_is_reported(self) -> None:
+        text = read(PLAN)
+        mutated = text.replace(
+            "Current status: **Run A: COMPLETED / 4 SEPTEMBER", "**Run A: COMPLETED / 4 SEPTEMBER"
+        )
+        assert mutated != text
+        assert any("not labelled current" in defect for defect in plan_scan(mutated).defects)
+
+    def test_a_plan_without_the_governing_paragraph_fails_rather_than_passing(self) -> None:
+        assert plan_scan("nothing to see here").governing == ()
+
+    @pytest.mark.parametrize("replacement", ["Run B: AUTHORIZED", "Run B: COMPLETED"])
+    def test_authorizing_every_run_b_denial_is_refused(self, replacement: str) -> None:
+        """Changing them all at once is what a flat presence check cannot see."""
+        mutated = flat(read(PLAN).replace("Run B: NOT AUTHORIZED / NOT RUN", replacement))
+        assert [claim for claim in PLAN_RUN_B_FORBIDDEN if claim in mutated] != []
+
+    def test_the_governing_facts_are_not_answered_by_a_historical_block(self) -> None:
+        """Section-scoped, so deleting a fact cannot be covered from elsewhere in the plan."""
+        text = read(PLAN)
+        mutated = text.replace(
+            "data correctness and quality: NOT ESTABLISHED · provider-wide entitlement:",
+            "provider-wide entitlement:",
+        )
+        assert mutated != text
+        assert plan_missing(plan_scan(mutated).governing[0]) != []
+
+
+class TestTheInfraReadmeHoldsRunBToItsMeaning:
+    """Finding F2: the Run B sentence was corrected, and guarded by nothing."""
+
+    def test_every_required_clause_is_present(self) -> None:
+        assert infra_run_a_missing(flat(read(INFRA_README))) == []
+
+    def test_the_real_readme_makes_no_forbidden_run_b_claim(self) -> None:
+        assert infra_run_b_overstated(flat(read(INFRA_README))) == []
+
+    def test_the_original_regression_is_detected(self) -> None:
+        """The exact wording the review stopped, put back."""
+        text = read(INFRA_README)
+        mutated = text.replace(INFRA_RUN_B_SENTENCE, INFRA_RUN_B_REGRESSION)
+        assert mutated != text
+        reading = flat(mutated)
+        assert infra_run_a_missing(reading) != []
+        assert infra_run_b_overstated(reading) != []
+
+    def test_removing_the_has_not_run_clause_is_detected(self) -> None:
+        text = read(INFRA_README)
+        mutated = text.replace(
+            "requires its own written\nauthorization and has not run —",
+            "requires its own written\nauthorization —",
+        )
+        assert mutated != text
+        assert infra_run_a_missing(flat(mutated)) != []
+
+    def test_removing_the_written_authorization_clause_is_detected(self) -> None:
+        text = read(INFRA_README)
+        mutated = text.replace(
+            INFRA_RUN_B_SENTENCE, "Run B is a separate second acquisition that has not run"
+        )
+        assert mutated != text
+        assert infra_run_a_missing(flat(mutated)) != []
+
+    def test_removing_the_scheduling_target_is_detected(self) -> None:
+        text = read(INFRA_README)
+        mutated = text.replace("earliest approved\nscheduling target of 2026-09-12", "")
+        assert mutated != text
+        assert infra_run_a_missing(flat(mutated)) != []
+
+    def test_removing_the_separate_assessment_clause_is_detected(self) -> None:
+        text = read(INFRA_README)
+        mutated = text.replace(
+            "the combined assessment runs only after Run B, under\nanother authorization", ""
+        )
+        assert mutated != text
+        assert infra_run_a_missing(flat(mutated)) != []
+
+    @pytest.mark.parametrize("claim", RUN_A_INFRA_RUN_B_FORBIDDEN)
+    def test_a_forbidden_run_b_claim_is_refused(self, claim: str) -> None:
+        assert infra_run_b_overstated(flat(read(INFRA_README) + f"\n\n{claim}\n")) != []
+
+    def test_the_forbidden_claims_are_not_satisfied_by_the_honest_negation(self) -> None:
+        """The negation sits between "run b:" and "authorized", so neither list eats it."""
+        honest = "run b: not authorized / not run. a run a retry: not authorized / not run."
+        assert infra_run_b_overstated(honest) == []
+        assert [claim for claim in PLAN_RUN_B_FORBIDDEN if claim in honest] == []
+
+
+class TestThePairedRunASectionsPinTheirStatusLines:
+    """Findings F3 and F4, driven identically against both status documents."""
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_every_required_clause_is_present(self, document: Path) -> None:
+        assert status_missing(flat(run_a_section(document))) == []
+
+    def test_the_two_sections_are_byte_identical(self) -> None:
+        assert len({run_a_section(document) for document in DOCUMENTS}) == 1
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_flipping_the_data_correctness_line_is_refused(self, document: Path) -> None:
+        """The review's mutation: identical in both files, and previously invisible."""
+        text = read(document)
+        mutated = text.replace(DATA_CORRECTNESS_LINE, DATA_CORRECTNESS_FLIPPED)
+        assert mutated != text, document.name
+        reading = flat(mutated)
+        assert status_missing(reading) != [], document.name
+        assert status_overstated(reading) != [], document.name
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_prose_and_the_status_line_are_independent(self, document: Path) -> None:
+        """Neither substitutes for the other: deleting either one is reported."""
+        prose = "no data correctness and no data quality"
+        line = "data correctness and quality: not established"
+        reading = flat(run_a_section(document))
+        assert prose in reading
+        assert line in reading
+        assert status_missing(reading.replace(prose, "")) != []
+        assert status_missing(reading.replace(line, "")) != []
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            "data correctness and quality: established",
+            "run a established data correctness",
+            "run a established the data correctness",
+            "run a established the data quality",
+        ],
+    )
+    def test_a_data_quality_claim_is_refused(self, claim: str) -> None:
+        assert status_overstated(flat(read(PROJECT_ROOT / "CLAUDE.md") + f"\n\n{claim}\n")) != []
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_the_shared_cross_reference_is_true_of_both_documents(self, document: Path) -> None:
+        """F4: only README.md carries binding-correction sections below this sentence."""
+        reading = flat(run_a_section(document))
+        assert misframed(reading) == []
+        assert (
+            "the repository's binding-correction history records the days those "
+            "pull requests merged" in reading
+        )
+
+    @pytest.mark.parametrize("document", DOCUMENTS, ids=lambda p: p.name)
+    def test_reverting_the_cross_reference_is_refused(self, document: Path) -> None:
+        text = read(document)
+        mutated = text.replace(SHARED_FRAMING, SHARED_FRAMING_REGRESSION)
+        assert mutated != text, document.name
+        reading = flat(mutated)
+        assert misframed(reading) != [], document.name
+        assert status_missing(reading) != [], document.name
+
+    def test_making_the_two_sections_differ_is_reported(self) -> None:
+        claude = read(PROJECT_ROOT / "CLAUDE.md")
+        mutated = claude.replace("#### What Run A established", "#### What Run A established (x)")
+        assert mutated != claude
+        found = GUARD.scan_run_a_status_sections(mutated)
+        readme_section = run_a_section(PROJECT_ROOT / "README.md")
+        assert found.defects != () or str(found.sections[0]) != readme_section
+
+    def test_the_lists_are_not_empty_and_carry_no_duplicate(self) -> None:
+        for name, entries in (
+            ("RUN_A_PLAN_REQUIRED", [phrase for _label, phrase in RUN_A_PLAN_REQUIRED]),
+            ("RUN_A_INFRA_REQUIRED", [phrase for _label, phrase in RUN_A_INFRA_REQUIRED]),
+            ("RUN_A_INFRA_RUN_B_FORBIDDEN", list(RUN_A_INFRA_RUN_B_FORBIDDEN)),
+            ("PLAN_RUN_B_FORBIDDEN", list(PLAN_RUN_B_FORBIDDEN)),
+            ("PLAN_RUN_A_DENIALS", list(PLAN_DENIALS)),
+            ("RUN_A_SHARED_FRAMING_FORBIDDEN", list(RUN_A_SHARED_FRAMING_FORBIDDEN)),
+        ):
+            assert entries, name
+            assert len(entries) == len(set(entries)), name
+            assert all(entry == entry.lower().strip() for entry in entries), name
+
+    def test_no_required_phrase_is_also_forbidden(self) -> None:
+        required = {phrase for _label, phrase in RUN_A_PLAN_REQUIRED}
+        required |= {phrase for _label, phrase in RUN_A_INFRA_REQUIRED}
+        required |= {phrase for _label, phrase in RUN_A_STATUS_REQUIRED}
+        forbidden = set(RUN_A_INFRA_RUN_B_FORBIDDEN) | set(PLAN_RUN_B_FORBIDDEN)
+        forbidden |= set(RUN_A_STATUS_FORBIDDEN) | set(RUN_A_SHARED_FRAMING_FORBIDDEN)
+        assert required & forbidden == set()
+        for phrase in required:
+            assert not any(claim in phrase for claim in forbidden), phrase
