@@ -235,12 +235,28 @@ def test_the_adr_records_the_corrected_stage_order() -> None:
 def test_the_adr_pins_the_implementation_provenance_the_gate_writes() -> None:
     """The decision and the tool name the same accepted implementation.
 
-    Read out of the gate rather than restated: two spellings of one provenance is a
-    provenance that drifts.
+    Read out of the gate and compared against the decision, which is what makes the
+    docstring above a property rather than a claim: two spellings of one provenance is
+    a provenance that drifts, and grammar alone would admit any two hex strings. This
+    is the guard ADR-0024 already holds its own gate to.
     """
     assert re.fullmatch(r"[0-9a-f]{40}", gate.IMPLEMENTATION_COMMIT)
     assert re.fullmatch(r"[0-9a-f]{40}", gate.IMPLEMENTATION_TREE)
     assert gate.IMPLEMENTATION_COMMIT != gate.IMPLEMENTATION_TREE
+    assert gate.IMPLEMENTATION_COMMIT in ADR_TEXT
+    assert gate.IMPLEMENTATION_TREE in ADR_TEXT
+
+
+def test_the_adr_says_which_objects_the_provenance_names() -> None:
+    """Naming the pair is not enough; the decision has to say what they identify.
+
+    A baseline would satisfy the grammar and the equality above while pointing at a
+    tree in which this contract does not exist, so the meaning is recorded where a
+    later reviewer reads it rather than only in a comment beside the constants.
+    """
+    assert "names the reviewed commit this contract's implementation arrived in" in ADR_FLAT
+    assert "would have been the wrong value, not a harmless one" in ADR_FLAT
+    assert "never returns, prints or logs them" in ADR_FLAT
 
 
 # -- the rejected alternatives ------------------------------------------------

@@ -70,20 +70,28 @@ from kalpamani.data.qualify.sharadar.runtime_binding import (  # noqa: E402
     parse_assessment_runtime_binding,
 )
 
-#: The reviewed repository state this gate's contract was written against, named by
+#: The accepted implementation of the assessment runtime-binding contract, named by
 #: the Git objects that carry it. Not a secret -- a Git object name is public -- and
-#: not decoration: it records *which* reviewed state an operator's private file was
-#: made for, so a binding written against one contract is identifiable after the
-#: contract has moved on.
+#: not decoration: it records *which* reviewed implementation an operator's private
+#: file was made for, so a binding written against one contract is identifiable after
+#: the contract has moved on.
 #:
-#: **These name the baseline this slice was built on, not this slice's own merge**,
-#: which cannot exist while the slice is being written. The acquisition gate's pair
-#: names an already-merged slice because that slice had merged before its gate was
-#: added. If a reviewer would rather this named this correction's own accepted
-#: objects, that is a one-line follow-up after merge; it changes no behaviour, because
-#: the field is validated for grammar and never interpreted.
-IMPLEMENTATION_COMMIT: Final = "3bab8d362f292fed9aea243b4135467d609c61a9"
-IMPLEMENTATION_TREE: Final = "23436ebd420a2bc09a3142cc161706a7dab3d89e"
+#: **These name the reviewed commit this contract's implementation arrived in, and
+#: that commit's tree.** That is the convention the acquisition gate already follows:
+#: its pair names the single approved implementation commit of the ADR-0023 pull
+#: request, rather than the merge that landed it or the state it was branched from. A
+#: normal merge preserves that commit in ``main``, so the pair keeps resolving for as
+#: long as the history does, and a later commit correcting this record moves no part
+#: of the contract and so does not move the pair.
+#:
+#: **A baseline would have been the wrong value, not a harmless one.** The state this
+#: slice was branched from contains no assessment-binding contract at all, so a
+#: reviewer resolving it would find a tree in which
+#: ``qualification-assessment-runtime-binding/v1`` does not exist -- which is exactly
+#: the identification this field is for. A governance test holds both values equal to
+#: the ones ADR-0025 records, so one provenance cannot be spelled two ways.
+IMPLEMENTATION_COMMIT: Final = "f19608a024a33383bb271f0f6df54045fd3b6f2e"
+IMPLEMENTATION_TREE: Final = "5b786da9f95000d355f5f1902d85d06cd1978985"
 
 #: The single flag that authorizes one materialization, and nothing else. Distinct from
 #: the acquisition gate's, so neither authorization can be pasted into the other.

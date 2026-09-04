@@ -265,6 +265,22 @@ and then **re-reads the artifact through the loader the assessment itself uses**
 output if it does not verify. **A collision is a refusal**, never a replacement. It prints no private
 value, and it is **unreachable from Run A, Run B and the combined assessment**.
 
+**The accepted implementation provenance names the reviewed commit this contract's implementation
+arrived in, and that commit's tree** — `f19608a024a33383bb271f0f6df54045fd3b6f2e` and
+`5b786da9f95000d355f5f1902d85d06cd1978985`. That is the convention ADR-0024 established for the
+acquisition gate, whose pair names the single approved implementation commit of the ADR-0023 pull
+request rather than the merge that landed it or the state it was branched from; a normal merge
+preserves that commit in `main`, so the pair keeps resolving for as long as the history does. A
+later commit on this slice that corrects the provenance record itself does not move the pair,
+because it moves no part of the contract.
+
+**The state this slice was branched from would have been the wrong value, not a harmless one.** It
+carries no assessment-binding contract at all, so a reviewer resolving it would find a tree in which
+`qualification-assessment-runtime-binding/v1` does not exist — which is exactly the identification
+this field is for. The loader validates both values for grammar and **never returns, prints or logs
+them**, and a governance test holds the gate's constants equal to the values recorded here, so one
+provenance is never spelled two ways.
+
 ### 2.7 What the assessment still cannot do
 
 **No provider capability is introduced anywhere.** The assessment process retrieves no credential,
