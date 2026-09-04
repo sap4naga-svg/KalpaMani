@@ -60,6 +60,8 @@ WRITER_PATH: Final = SCRIPTS / "qualification_private_artifacts.py"
 CAPTURE_PATH: Final = SCRIPTS / "qualification_environment_binding_capture.py"
 MATERIALIZE_PATH: Final = SCRIPTS / "qualification_runtime_binding_materialize.py"
 ACQUIRE_PATH: Final = SCRIPTS / "sharadar_empirical_qualification.py"
+ASSESS_PATH: Final = SCRIPTS / "sharadar_qualification_assessment.py"
+ASSESSMENT_MATERIALIZE_PATH: Final = SCRIPTS / "qualification_assessment_binding_materialize.py"
 
 #: Synthetic, and matching no deployment. A twelve-digit run of zeroes is not an
 #: account anybody holds, and the bucket names itself.
@@ -1434,8 +1436,22 @@ def test_the_materialization_gate_names_no_terraform_reach() -> None:
 
 
 def test_the_capture_is_the_only_tool_that_reaches_the_governed_outputs() -> None:
+    """One reader of the governed outputs, and every other surface named explicitly.
+
+    The two entry points are in the list because both are now bound to a private file
+    instead: ADR-0023 removed the state read from acquisition, and ADR-0025 removed it
+    from the combined assessment. Naming them here is a text check and not the
+    semantic one -- each has its own call-graph guard -- but a list that omitted them
+    would be a list nobody notices a new caller joining.
+    """
     assert "tf_outputs" in _imported_names(CAPTURE_PATH)
-    for other in (MATERIALIZE_PATH, WRITER_PATH, ACQUIRE_PATH):
+    for other in (
+        MATERIALIZE_PATH,
+        ASSESSMENT_MATERIALIZE_PATH,
+        WRITER_PATH,
+        ACQUIRE_PATH,
+        ASSESS_PATH,
+    ):
         assert "tf_outputs" not in other.read_text(encoding="utf-8"), other.name
 
 

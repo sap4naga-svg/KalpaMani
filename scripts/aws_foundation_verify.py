@@ -419,7 +419,13 @@ def qualification_identity_refusal(
         return f"AWS_PROFILE is not pinned to the governed {actor.value} profile"
 
     if bound_account is None:
-        return "no 12-digit account binding found in the local terraform.tfvars"
+        # Deliberately source-neutral. ``bound_account`` is a parameter, and the two
+        # actors obtain it from two different governed sources -- the acquisition path
+        # from the local Terraform variables file, the assessment path from its own
+        # private runtime binding. A message naming one of them would be wrong for the
+        # other, and would put a Terraform file name inside a closure that must not be
+        # able to reach one.
+        return "no 12-digit account binding was supplied for this actor"
 
     outcome = caller_identity()
     if not outcome.ok:
@@ -452,6 +458,32 @@ def qualification_identity_gate(actor: QualificationActor) -> str | None:
         actor,
         profile=os.environ.get("AWS_PROFILE", ""),
         bound_account=expected_account(),
+        caller_identity=lambda: _run_aws(("sts", "get-caller-identity")),
+    )
+
+
+def qualification_identity_gate_for(actor: QualificationActor, *, bound_account: str) -> str | None:
+    """The ADR-0021 gate against an account binding **the caller supplies**.
+
+    The same question ``qualification_identity_gate`` asks, with one difference that
+    is the whole reason it exists: it does not call ``expected_account``, so nothing
+    in its closure reads the local Terraform variables file. The combined assessment
+    actor obtains its account binding from its own private runtime binding, and a gate
+    that went looking for a Terraform input would put that file back inside an
+    execution closure that must not contain one.
+
+    ``bound_account`` is not trusted for being supplied. It fixes only *which* account
+    the authenticated identity must be in; the proof is still one
+    ``sts:GetCallerIdentity``, matched against that account and against the actor's own
+    permission-set role name.
+
+    Returns an error reason, or ``None`` on success. Never prints or returns the
+    account id, the ARN, the role name, the session name or the SSO URL.
+    """
+    return qualification_identity_refusal(
+        actor,
+        profile=os.environ.get("AWS_PROFILE", ""),
+        bound_account=bound_account,
         caller_identity=lambda: _run_aws(("sts", "get-caller-identity")),
     )
 

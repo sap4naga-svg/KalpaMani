@@ -551,14 +551,28 @@ def test_neither_command_reimplements_the_identity_gate() -> None:
         # the name-level call graph and the runtime sentinel in
         # ``test_sharadar_acquisition_terraform_isolation.py``.
         assert "terraform" not in source.lower()
-        # The ADR-0021 gate, still imported from the one governed verifier rather
-        # than rebuilt here. The account-only gate is no longer enough for either
-        # actor, so importing it would be the drift this replaces.
-        assert (
-            "from aws_foundation_verify import QualificationActor, qualification_identity_gate"
-            in source
-        )
         assert "import identity_gate" not in source
+
+    # The ADR-0021 gate, still imported from the one governed verifier rather than
+    # rebuilt in either command. **Each actor's gate is pinned exactly**, because the
+    # two are no longer the same function: ADR-0025 gave the assessment one that takes
+    # its account binding as an argument, so the acquisition path keeps the gate that
+    # reads the local Terraform variables file and the assessment path gets the one
+    # that cannot. A substring assertion would let either drift onto the other's.
+    acquire_imports = {line.strip() for line in ACQUIRE_EXECUTABLE.splitlines()}
+    assess_imports = {line.strip() for line in ASSESS_EXECUTABLE.splitlines()}
+    assert (
+        "from aws_foundation_verify import QualificationActor, qualification_identity_gate"
+    ) in acquire_imports
+    assert "qualification_identity_gate_for" not in ACQUIRE_EXECUTABLE
+    assert (
+        "from aws_foundation_verify import QualificationActor, qualification_identity_gate_for"
+    ) in assess_imports
+    # Necessary and not sufficient, and the semantic guard is the call graph in
+    # ``test_sharadar_assessment_terraform_isolation.py``: the assessment path must
+    # reach neither the state read nor the local Terraform account binding.
+    for forbidden in ("tf_outputs", "expected_account", "terraform.tfvars"):
+        assert forbidden not in ASSESS_EXECUTABLE, forbidden
 
 
 def test_each_command_proves_its_own_actor_and_not_the_other() -> None:

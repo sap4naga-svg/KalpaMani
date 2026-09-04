@@ -137,6 +137,72 @@ _PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 # ---------------------------------------------------------------------------
+# The assessment runtime binding -- the same boundary, a different actor
+# ---------------------------------------------------------------------------
+#
+# The combined assessment is the other qualification actor, and it had the defect
+# ADR-0023 corrected for acquisition and deliberately left here: it resolved the
+# licensed bucket from Terraform remote state, and it took its account binding from
+# the local Terraform variables file. Both put Terraform inside an execution closure
+# that must not contain one -- the assessment actor holds no authority on the state
+# bucket, and a Terraform child process inherits whichever profile the run pinned.
+#
+# The repair is the ADR-0023 shape applied to this actor, and **not** the ADR-0023
+# artifact reused. A shared file with an actor field would be one private input that
+# selects which principal reads licensed bytes, and a second contract is cheaper than
+# arguing about that field forever. So: a separate variable, a separate kind, a
+# separate contract id, a separate loader -- and **the same trust boundary**, because
+# containment, ownership, the ACL and the before-and-after verification are performed
+# for it by the functions the other two artifacts already use.
+
+#: The one fixed, non-secret environment-variable *name* that selects the assessment
+#: binding. The name is a public part of the contract; the value is a private path,
+#: and it is never printed, logged, returned or included in a refusal.
+ASSESSMENT_RUNTIME_BINDING_ENV_VAR: Final = (
+    "KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE"
+)
+
+#: The one schema version this loader accepts. An exact match, not a minimum.
+ASSESSMENT_RUNTIME_BINDING_SCHEMA_VERSION: Final = 1
+
+#: The document's self-declared kind. Distinct from the acquisition runtime binding's
+#: and from the environment binding's, so no artifact validates as another one.
+ASSESSMENT_RUNTIME_BINDING_KIND: Final = "kalpamani-qualification-assessment-runtime"
+
+#: The contract this loader implements, version included.
+ASSESSMENT_RUNTIME_BINDING_CONTRACT_ID: Final = "qualification-assessment-runtime-binding/v1"
+
+#: Largest private input this loader will read, in bytes. The same ceiling as the
+#: other two private artifacts, and for the same reason.
+MAX_ASSESSMENT_RUNTIME_BINDING_BYTES: Final = 16 * 1024
+
+#: The governed assessment profile. Restated here and compared rather than accepted
+#: from the file, exactly as the acquisition profile is: a private input that could
+#: select its own actor would be a routing decision taken outside the repository.
+EXPECTED_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"
+
+#: The exact top-level field set of the assessment runtime binding.
+#:
+#: It differs from the acquisition binding's in exactly one name -- ``assessment_profile``
+#: where that one carries ``acquisition_profile`` -- and that single difference is what
+#: makes each document refuse the other's loader on the field-set check, before any
+#: value is examined.
+_ASSESSMENT_DOCUMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "binding_kind",
+        "contract_id",
+        "aws_partition",
+        "aws_region",
+        "target_account_id",
+        "assessment_profile",
+        "licensed_bucket_name",
+        "provenance",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
 # The environment binding -- the artifact ``environment_binding_sha256`` digests
 # ---------------------------------------------------------------------------
 #
@@ -342,6 +408,48 @@ class QualificationRuntimeBinding:
             f"partition={self.partition!r}, "
             f"region={self.region!r}, "
             f"profile={self.acquisition_profile!r})"
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QualificationAssessmentRuntimeBinding:
+    """The validated assessment runtime values, and only the ones runtime needs.
+
+    **The private account number is deliberately present here**, which is the one
+    place this differs from :class:`QualificationRuntimeBinding`. The acquisition
+    binding drops it because the identity gate one stage earlier already read the
+    governed account from a local Terraform variables file; the assessment path must
+    not read that file at all, so this artifact **is** the account binding the
+    identity comparison is made against. A value the caller never receives is a value
+    the caller cannot compare.
+
+    Carrying it is not the same as trusting it. It fixes only which account the
+    authenticated identity must be in; the proof is still
+    ``sts:GetCallerIdentity``, so a binding naming some other account refuses at the
+    identity stage rather than redirecting anything.
+
+    ``target_account_id`` and ``licensed_bucket_name`` are private, so ``__repr__``
+    omits both -- no logging call, assertion failure or debugger echo can spill
+    either.
+    """
+
+    target_account_id: str
+    licensed_bucket_name: str
+    partition: str
+    region: str
+    assessment_profile: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing: a subclass could give the private values a repr."""
+        raise TypeError("QualificationAssessmentRuntimeBinding may not be subclassed")
+
+    def __repr__(self) -> str:
+        """The governed public values only. **Never the account, never the bucket.**"""
+        return (
+            "QualificationAssessmentRuntimeBinding("
+            f"partition={self.partition!r}, "
+            f"region={self.region!r}, "
+            f"profile={self.assessment_profile!r})"
         )
 
 
@@ -655,6 +763,28 @@ def environment_binding_path() -> str:
             location of its own would read a file nobody selected.
     """
     value = os.environ.get(RUNTIME_BINDING_ENV_VAR, "")
+    if not value.strip():
+        raise _refuse(RuntimeBindingDefect.ENVIRONMENT_UNSET) from None
+    return value
+
+
+def assessment_runtime_binding_path() -> str:
+    """The assessment binding path, from the one fixed environment-variable name.
+
+    A second, deliberately separate reader. The acquisition path resolves its own
+    variable and this one resolves its own, so neither actor can be routed to the
+    other's artifact by setting one name -- and neither entry point exposes an option
+    that could supply a path either way.
+
+    The *name* is a constant and is not a secret; the *value* is a private path, and
+    it is never printed, logged, returned in a result or included in a refusal.
+
+    Raises:
+        RuntimeBindingError: ``ENVIRONMENT_UNSET`` if the variable is absent or
+            blank. **There is no default path**, no directory scan, no newest-file
+            selection and no fallback.
+    """
+    value = os.environ.get(ASSESSMENT_RUNTIME_BINDING_ENV_VAR, "")
     if not value.strip():
         raise _refuse(RuntimeBindingDefect.ENVIRONMENT_UNSET) from None
     return value
@@ -1076,6 +1206,116 @@ def load_runtime_binding(
 
 
 # ---------------------------------------------------------------------------
+# The assessment runtime binding -- parsed and loaded, on the same boundary
+# ---------------------------------------------------------------------------
+
+
+def parse_assessment_runtime_binding(document: object) -> QualificationAssessmentRuntimeBinding:
+    """Validate an already-decoded assessment binding document. **Reads no file.**
+
+    Separated from :func:`load_assessment_runtime_binding` for the reason the other
+    two parsers are: every rule below is then testable with synthetic structures and
+    no filesystem at all, which is the only way this can be tested, since the real
+    binding must never exist in a test.
+
+    **There is no ``expected_account`` parameter, and its absence is the design.**
+    The acquisition parser takes one because a governed local Terraform variables file
+    supplies it; the assessment path is forbidden to read that file, so this document
+    *is* where the bound account comes from. The value is validated for shape and
+    returned, and the caller compares the authenticated ``sts:GetCallerIdentity``
+    account against it. A binding naming an account the operator's session is not in
+    therefore refuses at the identity gate -- it can misdirect nothing, because
+    nothing is reached before that comparison passes.
+
+    Raises:
+        RuntimeBindingError: one closed :class:`RuntimeBindingDefect`. The refusal
+            names the rule and never the value.
+    """
+    if type(document) is not dict:
+        raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
+    names = set(document)
+    if names - _ASSESSMENT_DOCUMENT_FIELDS:
+        raise _refuse(RuntimeBindingDefect.FIELD_UNKNOWN) from None
+    if _ASSESSMENT_DOCUMENT_FIELDS - names:
+        raise _refuse(RuntimeBindingDefect.FIELD_MISSING) from None
+
+    version = document["schema_version"]
+    if type(version) is not int:
+        raise _refuse(RuntimeBindingDefect.FIELD_MALFORMED) from None
+    if version != ASSESSMENT_RUNTIME_BINDING_SCHEMA_VERSION:
+        raise _refuse(RuntimeBindingDefect.SCHEMA_VERSION_UNKNOWN) from None
+    if _exact_string(document, "binding_kind") != ASSESSMENT_RUNTIME_BINDING_KIND:
+        raise _refuse(RuntimeBindingDefect.BINDING_KIND_UNKNOWN) from None
+    if _exact_string(document, "contract_id") != ASSESSMENT_RUNTIME_BINDING_CONTRACT_ID:
+        raise _refuse(RuntimeBindingDefect.CONTRACT_ID_UNKNOWN) from None
+    if _exact_string(document, "aws_partition") != EXPECTED_PARTITION:
+        raise _refuse(RuntimeBindingDefect.PARTITION_UNEXPECTED) from None
+    if _exact_string(document, "aws_region") != EXPECTED_REGION:
+        raise _refuse(RuntimeBindingDefect.REGION_UNEXPECTED) from None
+    if _exact_string(document, "assessment_profile") != EXPECTED_ASSESSMENT_PROFILE:
+        raise _refuse(RuntimeBindingDefect.PROFILE_UNEXPECTED) from None
+
+    account = _exact_string(document, "target_account_id")
+    if not _ACCOUNT_ID.match(account):
+        raise _refuse(RuntimeBindingDefect.ACCOUNT_MALFORMED) from None
+
+    bucket = _exact_string(document, "licensed_bucket_name")
+    if not _BUCKET_NAME.match(bucket):
+        raise _refuse(RuntimeBindingDefect.BUCKET_NAME_MALFORMED) from None
+
+    _validate_provenance(document["provenance"])
+
+    return QualificationAssessmentRuntimeBinding(
+        target_account_id=account,
+        licensed_bucket_name=bucket,
+        partition=EXPECTED_PARTITION,
+        region=EXPECTED_REGION,
+        assessment_profile=EXPECTED_ASSESSMENT_PROFILE,
+    )
+
+
+def load_assessment_runtime_binding(
+    *,
+    path_source: Callable[[], str] | None = None,
+    root_source: Callable[[], Path] | None = None,
+    security_of: Callable[[Path], FileSecurity] | None = None,
+) -> QualificationAssessmentRuntimeBinding:
+    """Read and validate the private assessment binding the environment selects.
+
+    The order is the security property, and it is **the same order**, performed by
+    **the same functions**, that the other two private artifacts are read under.
+    Containment and ownership are settled before a byte is read, so a file somewhere
+    else, a file reached through a junction and a file other principals can write are
+    each refused **without being opened**. The identity and the security state are
+    then re-read afterwards, so a file swapped between the check and the read is
+    refused rather than trusted.
+
+    ``path_source``, ``root_source`` and ``security_of`` are injection seams **for
+    tests only**, each defaulting to ``None`` rather than to the function itself so
+    the production default is looked up when the call happens.
+
+    **Loading this is not identity proof.** It settles which account and which bucket
+    the assessment is bound to; the authenticated identity is still established by
+    ``sts:GetCallerIdentity`` against that account and the governed assessment
+    permission-set role.
+
+    Raises:
+        RuntimeBindingError: one closed :class:`RuntimeBindingDefect`. **No refusal
+            names the path, the account, the bucket, a digest, a principal or any
+            fragment of the document.**
+    """
+    read_path = assessment_runtime_binding_path if path_source is None else path_source
+    root = _resolved_root(root_source)
+    raw = _read_private_bytes(
+        read_path(),
+        root,
+        windows_file_security if security_of is None else security_of,
+        MAX_ASSESSMENT_RUNTIME_BINDING_BYTES,
+    )
+    return parse_assessment_runtime_binding(_decode_document(raw))
+
+
+# ---------------------------------------------------------------------------
 # The environment binding -- the captured source the runtime binding is built from
 # ---------------------------------------------------------------------------
 
@@ -1215,14 +1455,20 @@ def load_environment_binding(
 
 
 __all__ = [
+    "ASSESSMENT_RUNTIME_BINDING_CONTRACT_ID",
+    "ASSESSMENT_RUNTIME_BINDING_ENV_VAR",
+    "ASSESSMENT_RUNTIME_BINDING_KIND",
+    "ASSESSMENT_RUNTIME_BINDING_SCHEMA_VERSION",
     "ENVIRONMENT_BINDING_CONTRACT_ID",
     "ENVIRONMENT_BINDING_ENV_VAR",
     "ENVIRONMENT_BINDING_KIND",
     "ENVIRONMENT_BINDING_SCHEMA_VERSION",
     "ENVIRONMENT_BINDING_SOURCE_KIND",
     "EXPECTED_ACQUISITION_PROFILE",
+    "EXPECTED_ASSESSMENT_PROFILE",
     "EXPECTED_PARTITION",
     "EXPECTED_REGION",
+    "MAX_ASSESSMENT_RUNTIME_BINDING_BYTES",
     "MAX_ENVIRONMENT_BINDING_BYTES",
     "MAX_RUNTIME_BINDING_BYTES",
     "PRIVATE_ROOT_ENV_VAR",
@@ -1232,15 +1478,19 @@ __all__ = [
     "RUNTIME_BINDING_KIND",
     "RUNTIME_BINDING_SCHEMA_VERSION",
     "FileSecurity",
+    "QualificationAssessmentRuntimeBinding",
     "QualificationEnvironmentBinding",
     "QualificationRuntimeBinding",
     "RuntimeBindingDefect",
     "RuntimeBindingError",
+    "assessment_runtime_binding_path",
     "canonical_binding_bytes",
     "contained_private_path",
     "environment_binding_path",
+    "load_assessment_runtime_binding",
     "load_environment_binding",
     "load_runtime_binding",
+    "parse_assessment_runtime_binding",
     "parse_environment_binding",
     "parse_runtime_binding",
     "private_root",

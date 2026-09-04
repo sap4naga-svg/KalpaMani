@@ -219,12 +219,17 @@ def test_exactly_one_qualification_module_reads_the_environment() -> None:
     assert readers == ["runtime_binding.py"]
 
 
-def test_the_runtime_binding_module_reads_exactly_two_governed_variable_names() -> None:
-    """The binding selector and the private root, and nothing ambient beyond them.
+def test_the_runtime_binding_module_reads_exactly_three_governed_variable_names() -> None:
+    """Two binding selectors and the private root, and nothing ambient beyond them.
 
     Read out of the AST rather than by substring, so a name assembled at runtime --
     which is how an unreviewed variable would arrive -- is not a literal this can
-    find, and the count below stops matching.
+    find, and the set below stops matching.
+
+    The second selector is ADR-0025's: the combined assessment reads **its own**
+    private binding rather than the acquisition one, so the module owning the contract
+    resolves two names. They are pinned individually rather than counted, because a
+    count would admit a third name that replaced one of these.
     """
     binding = QUALIFY / "sharadar" / "runtime_binding.py"
     tree = ast.parse(_source(binding))
@@ -265,7 +270,11 @@ def test_the_runtime_binding_module_reads_exactly_two_governed_variable_names() 
         else:  # a key this scan cannot resolve is a key nobody reviewed
             raise AssertionError("an environment key is not a module-level literal")
 
-    assert names == {"KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE", "LOCALAPPDATA"}
+    assert names == {
+        "KALPAMANI_QUALIFICATION_RUNTIME_BINDING_FILE",
+        "KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE",
+        "LOCALAPPDATA",
+    }
     assert "os.environ[" not in _executable(binding)
 
 

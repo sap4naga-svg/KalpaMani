@@ -10386,6 +10386,25 @@ ADR_0024_TESTS: Final = REPO_ROOT / "tests" / "unit" / "test_qualification_envir
 #: binding. Declared in the contract module and never read there.
 ADR_0024_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE"
 
+#: ADR-0025: the assessment actor's own private runtime binding, and the gate that
+#: creates it. ADR-0023 corrected the acquisition path and said in its own text that
+#: the assessment was out of scope; this is the decision that closes that gap.
+ADR_0025: Final = DECISIONS / "ADR-0025-private-runtime-binding-for-the-combined-assessment.md"
+ADR_0025_GATE: Final = REPO_ROOT / "scripts" / "qualification_assessment_binding_materialize.py"
+ADR_0025_TESTS: Final = REPO_ROOT / "tests" / "unit" / "test_qualification_assessment_binding.py"
+ADR_0025_ISOLATION_TESTS: Final = (
+    REPO_ROOT / "tests" / "unit" / "test_sharadar_assessment_terraform_isolation.py"
+)
+
+#: The one fixed, non-secret environment-variable *name* that selects the assessment
+#: binding. Deliberately not the acquisition variable: one name for two actors would
+#: be the shared artifact this contract exists to avoid.
+ADR_0025_ENV_VAR: Final = "KALPAMANI_QUALIFICATION_ASSESSMENT_RUNTIME_BINDING_FILE"
+
+#: The README section ADR-0025 owns. Scoped, so a status line found elsewhere in a
+#: four-thousand-line document does not count as this section carrying it.
+ADR_0025_SECTION: Final = "### The assessment runtime binding, and ADR-0025"
+
 #: The pull request whose merge accepted ADR-0022.
 #:
 #: Quoted once. ``MERGED_ADR_STATUS`` is built from it, the in-force row guard is
@@ -22296,6 +22315,319 @@ def main() -> int:
             )
         ),
         "a status document that omits the blocker reads as though the blocker is gone",
+    )
+
+    # -- ADR-0025: the assessment actor's own private binding ---------------
+    #
+    # ADR-0023 corrected the acquisition path and recorded, in its own text, that the
+    # combined assessment was out of scope. That path had TWO prohibited dependencies
+    # rather than one: the Terraform state read, which could not have succeeded, and
+    # the local Terraform variables file its account binding came from, which worked.
+    # These checks hold the corrected contract, its one gate and the run's inability
+    # to reach either Terraform surface.
+    assessment_adr = read(ADR_0025) if ADR_0025.is_file() else ""
+    assessment_flat = " ".join(assessment_adr.split())
+    assess_entry = read(ADR_0018_ASSESS_ENTRY) if ADR_0018_ASSESS_ENTRY.is_file() else ""
+    assess_code = (
+        _executable_python(ADR_0018_ASSESS_ENTRY) if ADR_0018_ASSESS_ENTRY.is_file() else ""
+    )
+    assessment_gate_code = _executable_python(ADR_0025_GATE) if ADR_0025_GATE.is_file() else ""
+    assessment_section = _document_section(read(REPO_ROOT / "README.md"), ADR_0025_SECTION)
+
+    f.check(
+        "the ADR-0025 decision record exists",
+        ADR_0025.is_file(),
+        "a correction to accepted architecture is an ADR, not a code comment",
+    )
+    f.check(
+        "ADR-0025 carries a conditional acceptance status",
+        "Status: PROPOSED -- NOT IN FORCE" in assessment_adr.replace("—", "--"),
+        "an ADR carries no authority until its pull request is reviewed and merged",
+    )
+    f.check(
+        "ADR-0025 names both prohibited dependencies rather than one",
+        "Two prohibited dependencies, not one" in assessment_flat
+        and "tf_outputs()` starts a Terraform child process" in assessment_flat
+        and "which parses `terraform.tfvars`" in assessment_flat,
+        "a correction that removed only the state read would have looked finished",
+    )
+    f.check(
+        "ADR-0025 rejects widening the assessment actor",
+        "Give the assessment actor Terraform-state access" in assessment_flat
+        and "The assessment IAM policy is untouched by this decision" in assessment_flat,
+        "the repair must not undo the boundary that made this visible",
+    )
+    f.check(
+        "ADR-0025 says why the acquisition artifact is not reused",
+        all(
+            clause in assessment_flat
+            for clause in (
+                "It pins the acquisition profile",
+                "An actor field would make a private file choose the principal",
+                "One artifact means one mistake reaches both actors",
+            )
+        ),
+        "a shared binding would let a private file choose which principal reads bytes",
+    )
+    f.check(
+        "ADR-0025 names the one environment variable and no default path",
+        ADR_0025_ENV_VAR in assessment_adr and "There is no default path" in assessment_flat,
+        "a fallback location would read a file nobody selected",
+    )
+    f.check(
+        "ADR-0025 keeps the bound account short of identity proof",
+        "loading it is not identity proof" in assessment_flat
+        and "A binding is not a credential" in assessment_flat,
+        "a local file says where the operator believes they are, not where they are",
+    )
+    f.check(
+        "ADR-0025 rejects every alternative the corrected boundary forbids",
+        all(
+            phrase in assessment_flat
+            for phrase in (
+                "Keep `expected_account()` and replace only `tf_outputs()`",
+                "Fall back to the `kalpamani-foundation` profile",
+                "Treat a successfully loaded binding as identity proof",
+                "Discover the artifact by listing the private directory",
+                "Accept a raw bucket or account environment variable",
+                "Put the assessment contract in a new module",
+            )
+        ),
+        "a rejected alternative nobody wrote down is an alternative somebody retries",
+    )
+    f.check(
+        "ADR-0025 records that the real binding is not materialized",
+        "real assessment runtime binding:              NOT MATERIALIZED" in assessment_adr,
+        "an implemented contract is not a created file",
+    )
+    f.check(
+        "ADR-0025 keeps every downstream gate separate",
+        all(
+            line in assessment_adr
+            for line in (
+                "assessment-binding materialization:           NOT AUTHORIZED / NOT RUN",
+                "binding preflight:                            NOT AUTHORIZED / NOT RUN",
+                "Run B:                                        NOT AUTHORIZED / NOT RUN",
+                "combined assessment:                          NOT AUTHORIZED / NOT RUN",
+                "P1-P9:                                        UNEVALUATED",
+            )
+        ),
+        "a gate an ADR does not name is a gate somebody treats as opened",
+    )
+    f.check(
+        "ADR-0025 records Run A as completed once and unrepeatable",
+        "Run A:                                        COMPLETED ONCE / 2026-09-04"
+        in assessment_adr
+        and "a Run A retry:                                NOT AUTHORIZED / NOT RUN"
+        in assessment_adr,
+        "a correction downstream of Run A must not restate Run A as unrun",
+    )
+    f.check(
+        "ADR-0025 supersedes and amends nothing",
+        "This ADR supersedes no earlier decision and amends no earlier ADR document"
+        in assessment_flat,
+        "closing a gap an earlier decision named is not licence to move it",
+    )
+
+    f.check(
+        "the contract module declares the assessment binding beside the other two",
+        f'ASSESSMENT_RUNTIME_BINDING_ENV_VAR: Final = (\n    "{ADR_0025_ENV_VAR}"\n)'
+        in (read(ADR_0023_LOADER) if ADR_0023_LOADER.is_file() else "")
+        and "def parse_assessment_runtime_binding" in loader_code
+        and "def load_assessment_runtime_binding" in loader_code,
+        "one module owns the private-binding contract, so one trust boundary exists",
+    )
+    f.check(
+        "the three private artifacts cannot be handed to each other's loaders",
+        len(
+            {
+                "kalpamani-qualification-runtime",
+                "kalpamani-qualification-assessment-runtime",
+                "kalpamani-qualification-environment",
+            }
+        )
+        == 3
+        and all(
+            f'"{kind}"' in loader
+            for kind in (
+                "kalpamani-qualification-runtime",
+                "kalpamani-qualification-assessment-runtime",
+                "kalpamani-qualification-environment",
+            )
+        ),
+        "a document that validated as another artifact would substitute an actor silently",
+    )
+    f.check(
+        "the assessment contract pins its own actor and never the acquisition one",
+        'EXPECTED_ASSESSMENT_PROFILE: Final = "kalpamani-qualification-assessment"' in loader
+        # The executable form is unparsed, so its string literals are re-quoted.
+        and "_exact_string(document, 'assessment_profile') != EXPECTED_ASSESSMENT_PROFILE"
+        in loader_code,
+        "a private input that could select the actor is a routing decision outside Git",
+    )
+
+    f.check(
+        "the assessment entry point no longer names the Terraform state read",
+        "tf_outputs" not in assess_entry,
+        "the assessment actor holds nothing on the state bucket, so it must not try",
+    )
+    f.check(
+        "the assessment entry point no longer reads the private Terraform input",
+        "expected_account" not in assess_entry and "terraform.tfvars" not in assess_entry,
+        "a governed identity check must not depend on a Terraform input here",
+    )
+    f.check(
+        "the assessment entry point resolves the bucket from its own private binding",
+        "load_assessment_runtime_binding" in assess_code
+        and "load_runtime_binding(" not in assess_code,
+        "stage 4 has to resolve the bucket from somewhere, and this is the somewhere",
+    )
+    f.check(
+        "the assessment entry point is given the account rather than finding one",
+        "qualification_identity_gate_for" in assess_code
+        and "qualification_identity_gate(" not in assess_code,
+        "the account-finding gate is the route back to the Terraform input",
+    )
+    f.check(
+        "the assessment entry point refuses a binding-path option by name",
+        all(option in assess_entry for option in ('"--binding"', '"--binding-file"', '"--bucket"')),
+        "a private path or a licensed destination in argv enters every process listing",
+    )
+    f.check(
+        "the assessment entry point keeps its closed outcomes and exit codes",
+        all(
+            line in assess_entry
+            for line in (
+                "REFUSED_LICENSED_BUCKET",
+                "AssessmentOutcome.REFUSED_IDENTITY: 5,",
+                "AssessmentOutcome.REFUSED_LICENSED_BUCKET: 6,",
+            )
+        ),
+        "the public result must not change because the private reason did",
+    )
+    f.check(
+        "the assessment entry point still reaches no credential and no provider",
+        not any(
+            token in assess_code
+            for token in ("secretsmanager", "get_secret_value", "SharadarCredential", "transport")
+        ),
+        "removing a Terraform dependency must not add a provider capability",
+    )
+    f.check(
+        "the governed verifier keeps both readers for their own callers",
+        "def tf_outputs() -> dict[str, Any]:" in read(ADR_0021_VERIFIER)
+        and "def expected_account() -> str | None:" in read(ADR_0021_VERIFIER)
+        and "def qualification_identity_gate_for(" in read(ADR_0021_VERIFIER),
+        "callers were removed; the functions others still need were not",
+    )
+    f.check(
+        "the shared identity refusal names no account-binding source",
+        "no 12-digit account binding was supplied for this actor" in read(ADR_0021_VERIFIER),
+        "two callers with two governed sources cannot share a message naming one",
+    )
+    f.check(
+        "the acquisition entry point is unchanged by this correction",
+        "load_runtime_binding" in acquire_code
+        and "expected_account" in acquire_code
+        and "load_assessment_runtime_binding" not in acquire,
+        "correcting one actor must not move the other",
+    )
+
+    f.check(
+        "the assessment materialization gate exists and is its own tool",
+        ADR_0025_GATE.is_file()
+        and "ASSESSMENT_RUNTIME_BINDING_KIND" in assessment_gate_code
+        and "EXPECTED_ACQUISITION_PROFILE" not in assessment_gate_code,
+        "one command with an actor flag would hand one actor the other's binding",
+    )
+    f.check(
+        "the assessment gate makes no AWS call and starts no process",
+        not any(
+            token in assessment_gate_code
+            for token in ("boto3", "botocore", "subprocess", "-chdir=", "tf_outputs")
+        ),
+        "deriving one file from another must not become a request",
+    )
+    f.check(
+        "the assessment gate reuses the one writer and the one loader",
+        "write_private_artifact" in assessment_gate_code
+        and "load_assessment_runtime_binding" in assessment_gate_code
+        and "O_EXCL" not in assessment_gate_code,
+        "a second definition of owner-only is a second security model",
+    )
+    f.check(
+        "the assessment gate removes an artifact the loader will not accept",
+        "discard_artifact" in assessment_gate_code
+        and "def _discard_artifact" in assessment_gate_code
+        and "deleting the output if it does not verify" in assessment_flat,
+        "an unusable private artifact left on disk is one a later run reads",
+    )
+    f.check(
+        "the assessment run cannot reach the gate that writes its binding",
+        "qualification_assessment_binding_materialize" not in assess_entry
+        and "qualification_private_artifacts" not in assess_entry
+        and "load_environment_binding" not in assess_entry,
+        "a run that could reach the producer could manufacture its own configuration",
+    )
+    f.check(
+        "no ADR-0025 surface carries a private identifier",
+        all(
+            not any(marker in read(surface) for marker in ("arn:aws:", "amazonaws.com", "AKIA"))
+            and re.search(r"\b\d{12}\b", read(surface)) is None
+            for surface in (ADR_0025, ADR_0025_GATE, ADR_0018_ASSESS_ENTRY)
+            if surface.is_file()
+        ),
+        "a bucket, an account or an ARN in Git is a disclosure a deletion does not undo",
+    )
+    f.check(
+        "the assessment isolation guard exists and is semantic",
+        ADR_0025_ISOLATION_TESTS.is_file()
+        and all(
+            token in read(ADR_0025_ISOLATION_TESTS)
+            for token in ("_reachability", "_terraform_findings", "SentinelTripped")
+        ),
+        "a source-string check could not see the import that caused this",
+    )
+    f.check(
+        "the assessment isolation guard is proven to fail on every reintroduction",
+        all(
+            token in read(ADR_0025_ISOLATION_TESTS)
+            for token in (
+                "DIRECT_REINTRODUCTION",
+                "ALIASED_REINTRODUCTION",
+                "FOUNDATION_PROFILE_FALLBACK",
+                "RAW_ENVIRONMENT_BYPASS",
+                "ACCOUNT_FINDING_GATE",
+                "TFVARS_ACCOUNT_REINTRODUCTION",
+            )
+        ),
+        "a guard nobody has watched fail is a guard nobody has tested",
+    )
+    f.check(
+        "the assessment binding has its own synthetic suite",
+        ADR_0025_TESTS.is_file(),
+        "the trust boundary is only real if every clause of it is exercised",
+    )
+    f.check(
+        "the status document records the assessment-binding contract",
+        all(
+            line in assessment_section
+            for line in (
+                "assessment-binding contract:                  IMPLEMENTED / OFFLINE-VALIDATED",
+                "real assessment runtime binding:              NOT MATERIALIZED",
+                "Terraform reachable from the assessment:      NO",
+                "private Terraform input reachable:            NO",
+                "combined assessment:                          NOT AUTHORIZED / NOT RUN",
+            )
+        ),
+        "a status document that omits the blocker reads as though the blocker is gone",
+    )
+    f.check(
+        "the status section claims no authority for a proposed decision",
+        "carries no authority while its pull request is open"
+        in " ".join(assessment_section.split())
+        and "ADR-0025: ACCEPTED" not in assessment_section,
+        "a proposed decision must not be reported as one in force",
     )
 
     # ---------------------------------------------------------------- verdict
