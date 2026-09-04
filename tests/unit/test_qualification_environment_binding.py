@@ -67,6 +67,9 @@ ACCOUNT: Final = "000000000000"
 OTHER_ACCOUNT: Final = "999999999999"
 BUCKET: Final = "synthetic-licensed-bucket-zz"
 OTHER_BUCKET: Final = "synthetic-licensed-bucket-yy"
+#: Deliberately a different length from ``BUCKET``, so a document swapped for this
+#: one changes the size in the file identity rather than only its modification time.
+SWAPPED_BUCKET: Final = "synthetic-licensed-bucket-swapped"
 CURRENT: Final = "S-1-5-21-0-0-0-1001"
 OTHER_USER: Final = "S-1-5-21-0-0-0-1002"
 EVERYONE: Final = "S-1-1-0"
@@ -471,14 +474,20 @@ def test_a_file_replaced_between_the_check_and_the_read_refuses(
 ) -> None:
     root = _private_root(tmp_path)
     target = root / "environment.json"
-    target.write_bytes(rb.canonical_binding_bytes(_environment_document()))
+    settled = rb.canonical_binding_bytes(_environment_document())
+    # A different document, of a different length, written by somebody else in the
+    # window between the ownership check and the read. The length is what makes the
+    # identity change deterministic: the size sits in the identity tuple, where a
+    # same-length rewrite would leave the test resting on whether the filesystem
+    # advanced the modification timestamp.
+    swapped = rb.canonical_binding_bytes(_environment_document(licensed_bucket_name=SWAPPED_BUCKET))
+    assert len(settled) != len(swapped)
+    target.write_bytes(settled)
     original = Path.read_bytes
 
     def _swapping(self: Path) -> bytes:
         content = original(self)
-        self.write_bytes(
-            rb.canonical_binding_bytes(_environment_document(licensed_bucket_name=OTHER_BUCKET))
-        )
+        self.write_bytes(swapped)
         return content
 
     monkeypatch.setattr(Path, "read_bytes", _swapping)
