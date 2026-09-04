@@ -3197,10 +3197,11 @@ distinction below is load-bearing rather than decorative.
 | **operational readiness is not trading readiness** | **CONTROL stays DEFERRED**, **live trading stays HARD-DISABLED**, and **backtesting has not started** |
 
 **Run A is spent, and it cannot be repeated.** Its execution identifier is **permanently retired**,
-so the append-only store would refuse a repeat, and **a Run A retry is not authorized**. **Run B is a
-separately authorized second acquisition**, it must fall **at least eight calendar days after
-Run A**, and the **earliest approved scheduling target is 12 September 2026**. **The combined
-assessment runs only after Run B, under another authorization.**
+so the append-only store would refuse a repeat, and **a Run A retry is not authorized**. **Run B is
+a separate second acquisition that requires its own written authorization and has not run.** It
+must fall **at least eight calendar days after Run A**, and the **earliest approved scheduling
+target is 12 September 2026**. **The combined assessment runs only after Run B, under another
+authorization.**
 
 #### Run A status
 
