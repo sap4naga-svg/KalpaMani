@@ -13139,6 +13139,173 @@ def brain_scaffolding(package: str) -> list[str]:
     )
 
 
+# --------------------------------------------------------------------------------------
+# Section 23 -- the Cockpit and Feedback specification package.
+#
+# ADR-0027 introduces six documents describing a subsystem that does not exist, which is
+# the same exposure section 22 was written for at a larger scale: nothing runs, so nothing
+# breaks when a clause loosens. These guards read the package, the decision and the two
+# status documents, and refuse the drifts that would matter -- an area specified but never
+# traced, a closed vocabulary that drifts between the document that defines it and the one
+# that uses it, a maturity stage mapped onto a runtime environment that does not exist, a
+# write route appearing in a catalog that says it has none, a forbidden action losing its
+# name, or a proposed decision being reported as one in force.
+#
+# The runtime enum is read from the source with ``ast`` rather than restated here, on the
+# same reasoning as section 13's Terraform parse: a vocabulary copied into an audit is a
+# second vocabulary that can drift from the first.
+# --------------------------------------------------------------------------------------
+
+#: The decision and the six documents it adopts.
+COCKPIT_ADR: Final = DECISIONS / "ADR-0027-cockpit-and-feedback-architecture-and-governance.md"
+COCKPIT_EXTENSION: Final = ARCHITECTURE / "COCKPIT_FEEDBACK_EXTENSION.md"
+COCKPIT_DIR: Final = REPO_ROOT / "docs" / "cockpit"
+COCKPIT_SPEC: Final = COCKPIT_DIR / "cockpit-v1-specification.md"
+COCKPIT_CONTRACTS: Final = COCKPIT_DIR / "read-model-contracts.md"
+COCKPIT_FEEDBACK: Final = COCKPIT_DIR / "feedback-self-maturation-specification.md"
+COCKPIT_UIUX: Final = COCKPIT_DIR / "ui-ux-specification.md"
+COCKPIT_MATRIX: Final = COCKPIT_DIR / "traceability-matrix.md"
+
+#: The section each status document owns, so a line found elsewhere in a four-thousand-line
+#: document does not count as this section carrying it.
+COCKPIT_README_SECTION: Final = "### The Cockpit and Feedback specification, and ADR-0027"
+COCKPIT_CLAUDE_SECTION: Final = "### The Cockpit and Feedback specification — ACCEPTED"
+
+#: ``## Area N — Title``. Parsed rather than spot-checked: a missing area 19 and a
+#: duplicated area 4 are both invisible to a substring search and both fatal to the claim
+#: that all 36 areas are specified.
+COCKPIT_AREA_HEADING: Final = re.compile(r"^## Area (\d+) — ", re.MULTILINE)
+
+#: A traceability row opens with its area number in the first cell.
+COCKPIT_MATRIX_ROW: Final = re.compile(r"^\| (\d+) \| ", re.MULTILINE)
+
+COCKPIT_AREAS: Final = frozenset(range(1, 37))
+
+#: Availability. Eleven members, and each must be defined in the architecture extension,
+#: used in the contracts and rendered by the specification -- a state defined in one place
+#: and forgotten in another is a state that renders as a blank cell.
+COCKPIT_AVAILABILITY: Final = (
+    "AVAILABLE",
+    "NOT_YET_AVAILABLE",
+    "NOT_IMPLEMENTED",
+    "NOT_AUTHORIZED",
+    "UNEVALUATED",
+    "STALE",
+    "PARTIAL",
+    "ERROR",
+    "NOT_APPLICABLE",
+    "EMPTY_VERIFIED",
+    "INSUFFICIENT_OBSERVATIONS",
+)
+
+COCKPIT_PROVENANCE: Final = (
+    "SYNTHETIC",
+    "SYSTEM_RECORDED",
+    "BACKTEST_SIMULATED",
+    "BROKER_REPORTED",
+)
+
+COCKPIT_CLASSIFICATIONS: Final = (
+    "PUBLIC_SAFE",
+    "PRIVATE_OPERATIONAL",
+    "LICENSED_DERIVED",
+    "UNCLASSIFIED",
+    "CONTROL",
+)
+
+COCKPIT_MATURITY_STAGES: Final = (
+    "RESEARCH",
+    "SHADOW",
+    "AUTOMATED_PAPER",
+    "MICRO_LIVE",
+    "SCALED_LIVE",
+)
+
+#: Owned by ADR-0026 and consumed unchanged.
+COCKPIT_BRAIN_STATES: Final = frozenset(BRAIN_DECISION_STATES)
+
+#: The downstream axis. It must stay disjoint from the Brain vocabulary: one vocabulary
+#: spanning two authority domains makes a status unattributable to the layer that set it.
+COCKPIT_DOWNSTREAM_STAGES: Final = frozenset(
+    {
+        "RISK_REVIEW_PENDING",
+        "RISK_APPROVED",
+        "RISK_REJECTED",
+        "ORDER_SUBMITTED",
+        "ORDER_ACKNOWLEDGED",
+        "ORDER_PARTIALLY_FILLED",
+        "ORDER_FILLED",
+        "ORDER_CANCELLED",
+        "ORDER_REJECTED",
+    }
+)
+
+#: Every action Cockpit V1 may not take, refused by name in the decision and the
+#: specification. A boundary described in spirit is a boundary the next author reasons past.
+COCKPIT_FORBIDDEN_ACTIONS: Final = (
+    "place or cancel an order",
+    "change a stop",
+    "change risk or capital",
+    "activate or promote a strategy",
+    "enable leverage",
+    "change the provider",
+    "execute Run B or an assessment",
+    "publish CONTROL",
+    "alter production strategy state",
+    "approve or reject a governance release",
+)
+
+#: The runtime environment module, read statically so the audit compares the mapping
+#: against the enum that exists rather than against a copy of it.
+ENVIRONMENT_MODULE: Final = REPO_ROOT / "src" / "kalpamani" / "common" / "environment.py"
+
+
+def runtime_environment_members() -> list[str]:
+    """The ``Environment`` StrEnum member names, parsed from the source.
+
+    Static parse, no import: this audit runs against documents and must not pull the
+    package -- or anything it might one day import -- into the process.
+    """
+    tree = ast.parse(ENVIRONMENT_MODULE.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Environment":
+            return [
+                target.id
+                for statement in node.body
+                if isinstance(statement, ast.Assign)
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            ]
+    return []
+
+
+def cockpit_areas(text: str) -> list[int]:
+    return [int(match) for match in COCKPIT_AREA_HEADING.findall(text)]
+
+
+def cockpit_matrix_half(text: str, start_marker: str, end_marker: str) -> str:
+    start = text.find(start_marker)
+    if start == -1:
+        return ""
+    end = text.find(end_marker, start + len(start_marker))
+    return text[start:] if end == -1 else text[start:end]
+
+
+def cockpit_write_routes(text: str) -> list[str]:
+    """Every catalogued endpoint that is not a read.
+
+    The catalog is parsed for its verb rather than searched for ``POST``: a catalog
+    guarded by a denylist admits the first verb nobody thought of.
+    """
+    routes: list[str] = []
+    for block in re.findall(r"```text\n(.*?)```", text, flags=re.DOTALL):
+        for raw in block.splitlines():
+            line = raw.strip()
+            if "/api/v" in line and not line.startswith("GET "):
+                routes.append(line)
+    return routes
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -13159,7 +13326,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/22] Closed vocabularies are defined where they are used")
+    print("[1/23] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -13183,7 +13350,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/22] Source and derived envelopes stay disjoint")
+    print("\n[2/23] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -13218,7 +13385,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/22] Every declared temporal semantics has its required anchor")
+    print("\n[3/23] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -13235,7 +13402,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/22] Exact and bound derivations name the correct fields")
+    print("\n[4/23] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -13262,7 +13429,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/22] Normative rules use the current resolved model")
+    print("\n[5/23] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -13308,7 +13475,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/22] Entities keep source and derived rows apart")
+    print("\n[6/23] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -13378,7 +13545,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/22] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/23] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -13440,7 +13607,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/22] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/23] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -13545,7 +13712,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/22] Resolved-timing wording, closure rules and current status")
+    print("\n[9/23] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -13650,7 +13817,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/22] No document refers to a retired field name")
+    print("\n[10/23] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -13694,7 +13861,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/22] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/23] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -13851,7 +14018,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/22] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/23] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -13943,7 +14110,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/22] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/23] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -14581,7 +14748,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/22] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/23] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -14815,7 +14982,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/22] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/23] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -15205,7 +15372,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/22] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/23] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -15560,7 +15727,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/22] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/23] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -15954,7 +16121,7 @@ def main() -> int:
         )
 
     # ------------------- 18. No status document carries a superseded current state
-    print("\n[18/22] The status documents describe the current governance state, not a past one")
+    print("\n[18/23] The status documents describe the current governance state, not a past one")
 
     for name, path in (
         ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
@@ -16130,7 +16297,7 @@ def main() -> int:
     )
 
     # ------------------- 19. The qualification runtime exists, and cannot be run
-    print("\n[19/22] The Sharadar qualification runtime core is dormant, and says so precisely")
+    print("\n[19/23] The Sharadar qualification runtime core is dormant, and says so precisely")
     f.check(
         "ADR-0012 exists",
         ADR_RUNTIME.is_file(),
@@ -16816,7 +16983,7 @@ def main() -> int:
         )
 
     # ------------------- 20. Acquisition mode replaced a boolean, completely
-    print("\n[20/22] Acquisition mode is a closed vocabulary, and the boolean is gone")
+    print("\n[20/23] Acquisition mode is a closed vocabulary, and the boolean is gone")
     f.check(
         "ADR-0013 exists",
         ADR_ACQUISITION_MODE.is_file(),
@@ -20252,7 +20419,7 @@ def main() -> int:
     )
 
     # ------------------- 21. ADR-0017 proposes an architecture, and builds nothing
-    print("\n[21/22] ADR-0017 is proposed, and nothing is implemented or executed")
+    print("\n[21/23] ADR-0017 is proposed, and nothing is implemented or executed")
 
     f.check(
         "ADR-0017 exists as a tracked decision record",
@@ -22817,7 +22984,7 @@ def main() -> int:
     )
 
     # ------------------------------------------- 22. the Strategy Brain specification
-    print("\n[22/22] The Strategy Brain is specified, and nothing about it is implemented")
+    print("\n[22/23] The Strategy Brain is specified, and nothing about it is implemented")
     f.check(
         "the Brain specification exists at its exact path",
         BRAIN_SPEC.is_file(),
@@ -23137,6 +23304,349 @@ def main() -> int:
             not leaks,
             "; ".join(leaks),
         )
+
+    # ------------------------------------------- 23. the Cockpit and Feedback package
+    print("\n[23/23] The Cockpit is specified, and nothing about it is implemented")
+    cockpit_documents = {
+        "ADR-0027": COCKPIT_ADR,
+        "the architecture extension": COCKPIT_EXTENSION,
+        "the V1 specification": COCKPIT_SPEC,
+        "the read-model contracts": COCKPIT_CONTRACTS,
+        "the feedback specification": COCKPIT_FEEDBACK,
+        "the UI/UX specification": COCKPIT_UIUX,
+        "the traceability matrix": COCKPIT_MATRIX,
+    }
+    for label, path in cockpit_documents.items():
+        f.check(
+            f"{label} exists at its exact path",
+            path.is_file(),
+            str(path.relative_to(REPO_ROOT)),
+        )
+    if not all(path.is_file() for path in cockpit_documents.values()):
+        print("  FAIL: the Cockpit package is incomplete; its remaining checks cannot run")
+        f.failures.append("the Cockpit package is incomplete")
+    else:
+        cockpit_text = {label: read(path) for label, path in cockpit_documents.items()}
+        cockpit_flat = {
+            label: " ".join(text.replace("**", "").split()) for label, text in cockpit_text.items()
+        }
+        adr_27 = cockpit_text["ADR-0027"]
+        adr_27_flat = cockpit_flat["ADR-0027"]
+        spec_27 = cockpit_text["the V1 specification"]
+        spec_27_flat = cockpit_flat["the V1 specification"]
+        extension_27 = cockpit_text["the architecture extension"]
+        extension_27_flat = cockpit_flat["the architecture extension"]
+        contracts_27 = cockpit_text["the read-model contracts"]
+        matrix_27 = cockpit_text["the traceability matrix"]
+
+        # -- the decision is proposed, and is reported as proposed --
+        f.check(
+            "ADR-0027 declares itself proposed and not in force",
+            "Status: PROPOSED — NOT IN FORCE" in adr_27,
+            "a decision that does not say it is proposed will be read as accepted",
+        )
+        f.check(
+            "ADR-0027 claims no authority while its pull request is open",
+            "carries no authority" in adr_27_flat
+            and "ADR-0027 is ACCEPTED / IN FORCE" not in adr_27_flat,
+            "a proposed decision must not be reported as one in force",
+        )
+        f.check(
+            "ADR-0027 records that acceptance would authorize no implementation",
+            "Acceptance authorizes no implementation and no execution" in adr_27_flat,
+            "merging an architecture decision authorizes no implementation",
+        )
+        f.check(
+            "ADR-0027 supersedes and amends nothing",
+            "Supersedes:** nothing" in adr_27 and "No ADR is amended or superseded" in adr_27,
+            "a specification that quietly amends an accepted ADR is an unreviewed change",
+        )
+        f.check(
+            "ADR-0027 states its acceptance event without predicting a merge",
+            "The acceptance event is exact" in adr_27_flat
+            and "No merge SHA and no merge timestamp is predicted here" in adr_27_flat,
+            "a predicted merge SHA is a value nobody observed",
+        )
+        placeholders = [label for label, text in cockpit_text.items() if "PR #NNN" in text]
+        f.check(
+            "no Cockpit document still carries the authoring placeholder",
+            not placeholders,
+            ", ".join(placeholders),
+        )
+        unnumbered = [
+            label
+            for label, text in cockpit_text.items()
+            if not re.search(r"MERGE OF PR #\d+", text.upper())
+        ]
+        f.check(
+            "every Cockpit document names its merge acceptance pull request",
+            not unnumbered,
+            ", ".join(unnumbered),
+        )
+
+        cockpit_readme = _document_section(readme_text, COCKPIT_README_SECTION)
+        cockpit_claude = _document_section(claude_text, COCKPIT_CLAUDE_SECTION)
+        for label, section in (("README.md", cockpit_readme), ("CLAUDE.md", cockpit_claude)):
+            f.check(
+                f"{label} carries the Cockpit specification section",
+                bool(section),
+                "a status document that omits the section cannot carry its status",
+            )
+            f.check(
+                f"{label} reports ADR-0027 as proposed and without authority",
+                "PROPOSED" in section
+                and "carries no authority" in " ".join(section.split())
+                and bool(re.search(r"MERGE OF PR #\d+", section.upper())),
+                "a decision must read as neither in force before its merge nor proposed after it",
+            )
+
+        # -- all 36 areas, parsed rather than spot-checked --
+        specified = cockpit_areas(spec_27)
+        f.check(
+            "the specification defines exactly the 36 product areas, in order",
+            specified == list(range(1, 37)),
+            f"{len(specified)} heading(s), first disagreement at "
+            f"{next((i for i, n in enumerate(specified, 1) if n != i), len(specified) + 1)}",
+        )
+        matrix_a = cockpit_matrix_half(matrix_27, "## 1. Matrix A", "## 2. Matrix B")
+        matrix_b = cockpit_matrix_half(matrix_27, "## 2. Matrix B", "## 3. Delivery sequencing")
+        for label, half in (("A", matrix_a), ("B", matrix_b)):
+            traced = {int(match) for match in COCKPIT_MATRIX_ROW.findall(half)}
+            f.check(
+                f"traceability matrix {label} traces every one of the 36 areas",
+                traced == COCKPIT_AREAS,
+                f"untraced: {sorted(COCKPIT_AREAS - traced)}",
+            )
+        f.check(
+            "area 36 keeps trade history, detail, execution and audit apart",
+            all(
+                concept in spec_27
+                for concept in ("Trade History", "Trade Detail", "Execution History", "Audit Trail")
+            )
+            and "A fill is never counted as a separate trade" in spec_27_flat,
+            "one screen asked to be four is a poor version of each",
+        )
+
+        # -- read-only, by name --
+        unnamed_actions = [
+            action
+            for action in COCKPIT_FORBIDDEN_ACTIONS
+            if action not in adr_27_flat or action not in spec_27_flat
+        ]
+        f.check(
+            "every forbidden Cockpit action is refused by name in both documents",
+            not unnamed_actions,
+            "; ".join(unnamed_actions[:3]),
+        )
+        f.check(
+            "the read-only boundary is defined by absence rather than discouragement",
+            "READ-ONLY is defined by what is absent" in adr_27_flat
+            and "READ-ONLY is defined by what is absent" in spec_27_flat,
+            "a boundary described in spirit is a boundary the next author reasons past",
+        )
+        f.check(
+            "governance screens do not originate authoritative approval records",
+            all(
+                "do not originate authoritative approval records in V1" in flat
+                for flat in (adr_27_flat, spec_27_flat, extension_27_flat)
+            ),
+            "an approval whose authenticity rests on a dashboard session is not an approval",
+        )
+        f.check(
+            "every future control is inert, with no handler and no control route",
+            "no executable handler and no control API route" in adr_27_flat
+            and "no executable handler and no control API route" in spec_27_flat,
+            "a disabled button whose handler exists is not inert",
+        )
+        write_routes = cockpit_write_routes(contracts_27)
+        f.check(
+            "every catalogued Cockpit endpoint is a read",
+            not write_routes,
+            "; ".join(write_routes[:3]),
+        )
+        f.check(
+            "the endpoint catalog is substantial enough to be a catalog",
+            len(re.findall(r"GET  ?/api/v", contracts_27)) >= 30,
+            "a catalog of three routes proves nothing about the boundary",
+        )
+
+        # -- vocabularies agree across the documents that define and use them --
+        drifted = [
+            state
+            for state in COCKPIT_AVAILABILITY
+            if state not in extension_27 or state not in contracts_27 or state not in spec_27
+        ]
+        f.check(
+            "every availability state is defined, contracted and rendered",
+            not drifted,
+            ", ".join(drifted),
+        )
+        drifted = [
+            value
+            for value in COCKPIT_PROVENANCE
+            if value not in extension_27 or value not in contracts_27
+        ]
+        f.check("every provenance value is defined and contracted", not drifted, ", ".join(drifted))
+        drifted = [
+            value
+            for value in COCKPIT_CLASSIFICATIONS
+            if value not in extension_27 or value not in contracts_27 or value not in adr_27
+        ]
+        f.check(
+            "every classification is defined, contracted and decided",
+            not drifted,
+            ", ".join(drifted),
+        )
+        drifted = [
+            stage
+            for stage in COCKPIT_MATURITY_STAGES
+            if stage not in extension_27 or stage not in contracts_27
+        ]
+        f.check("every maturity stage is defined and contracted", not drifted, ", ".join(drifted))
+        drifted = [state for state in sorted(COCKPIT_BRAIN_STATES) if state not in contracts_27]
+        f.check(
+            "the Brain decision vocabulary is consumed unchanged by the contracts",
+            not drifted,
+            ", ".join(drifted),
+        )
+        f.check(
+            "the downstream vocabulary stays disjoint from the Brain vocabulary",
+            COCKPIT_DOWNSTREAM_STAGES.isdisjoint(COCKPIT_BRAIN_STATES)
+            and "The Brain status enum is not extended with downstream states" in adr_27_flat,
+            "one vocabulary over two authority domains makes a status unattributable",
+        )
+
+        # -- the maturity mapping names environments that exist --
+        members = runtime_environment_members()
+        f.check(
+            "the runtime Environment enum still has exactly its three members",
+            sorted(members) == ["LIVE", "PAPER", "RESEARCH"],
+            ", ".join(members),
+        )
+        unmapped: list[str] = []
+        for stage in COCKPIT_MATURITY_STAGES:
+            row = next(
+                (
+                    line.strip()
+                    for line in extension_27.splitlines()
+                    if line.strip().startswith(f"| `{stage}` |")
+                ),
+                "",
+            )
+            named = [member for member in members if f"`{member}`" in row]
+            if not row or not named:
+                unmapped.append(stage)
+        f.check(
+            "every maturity stage maps onto a real runtime environment",
+            not unmapped,
+            ", ".join(unmapped),
+        )
+        f.check(
+            "the extension states that no runtime enum is changed",
+            "No runtime enum is changed, added to or renamed" in extension_27_flat,
+            "a presentation vocabulary must not rename a runtime one",
+        )
+
+        # -- the private-data, hosting and audit boundary --
+        f.check(
+            "a read model is not treated as safe to publish",
+            '"Read model" and "derived" do not mean' in adr_27
+            and '"Read model" and "derived" do not mean' in extension_27,
+            "derived data reconstructable from vendor rows is still vendor data",
+        )
+        f.check(
+            "an unknown classification fails closed and CONTROL is refused",
+            "it fails closed" in adr_27_flat
+            and "it FAILS CLOSED" in contracts_27
+            and "REFUSED AT ADMISSION" in contracts_27,
+            "an unclassified payload must not default into publication",
+        )
+        f.check(
+            "licensed content never enters an immutable audit payload",
+            "never copied into a permanent immutable audit payload" in adr_27_flat
+            and "A reference is not a row" in extension_27,
+            "an audit payload quoting vendor rows is a copy deletion cannot reach",
+        )
+        f.check(
+            "the extension does not pretend the adopted PDF contains the Cockpit",
+            "The adopted Blueprint V3.0 PDF does not describe the Cockpit" in extension_27
+            and "it is not edited" in extension_27_flat,
+            "the Blueprint PDFs are immutable architecture records",
+        )
+
+        # -- the qualification gates are reported as still open --
+        f.check(
+            "ADR-0027 closes no gate",
+            "G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN" in adr_27,
+            "a specification resolves no evidence gate",
+        )
+        f.check(
+            "ADR-0027 reads each gate independently",
+            "No blanket statement about all seven is correct" in adr_27,
+            "G3 is closed for one licence and nothing else",
+        )
+        f.check(
+            "the Cockpit package reports P1-P9 unevaluated and no provider selected",
+            "P1–P9 UNEVALUATED" in adr_27_flat  # noqa: RUF001 -- the document's own en dash
+            and "provider selected NONE" in adr_27_flat
+            and "P1–P9 are UNEVALUATED" in spec_27_flat,  # noqa: RUF001
+            "a specification that implied qualification finished would be false",
+        )
+        f.check(
+            "the Run A to Run B separation stays at least eight calendar days",
+            "at least eight calendar day Run A to Run B separation is unchanged" in adr_27_flat
+            and "AT LEAST 8 CALENDAR DAYS" in matrix_27
+            and not any("seven calendar day" in text.lower() for text in cockpit_text.values()),
+            "seven would be a quietly relaxed governance rule",
+        )
+        f.check(
+            "passing the date gate is not recorded as execution authorization",
+            "Passing the 2026-09-12 date gate is not execution authorization" in adr_27,
+            "a calendar does not authorize a run",
+        )
+        undisclosed = [label for label, text in cockpit_text.items() if "HARD-DISABLED" not in text]
+        f.check(
+            "every Cockpit document records live trading as hard-disabled",
+            not undisclosed,
+            ", ".join(undisclosed),
+        )
+
+        # -- nothing was implemented, and no third-party stack is claimed --
+        f.check(
+            "ADR-0027 records that it creates no source module",
+            "No source module is created by this decision" in adr_27_flat
+            and "no placeholder application package is created" in adr_27_flat,
+            "scaffolding is not progress",
+        )
+        f.check(
+            "ADR-0027 pins no package version and installs nothing",
+            "No version is pinned here" in adr_27 and "installs no dependency" in adr_27_flat,
+            "a documentation cycle cannot validate a lockfile it never installs",
+        )
+        f.check(
+            "no third-party internal technology stack is claimed",
+            "claims no knowledge of the Atlas or SIRE internal technology stack" in adr_27_flat
+            and "no retrieval was performed in this cycle"
+            in cockpit_flat["the UI/UX specification"],
+            "a visual benchmark is not evidence of how anyone built anything",
+        )
+        ungated = [
+            label for label, flat in cockpit_flat.items() if "five separate gates" not in flat
+        ]
+        f.check(
+            "every Cockpit document keeps the five gates separate",
+            not ungated,
+            ", ".join(ungated),
+        )
+
+        # -- the new documents carry no identifier --
+        for label, text in cockpit_text.items():
+            leaks = adr_0021_identifier_leaks(text)
+            f.check(
+                f"{label} carries no account id, access key, SSO start URL or concrete ARN",
+                not leaks,
+                "; ".join(leaks),
+            )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
