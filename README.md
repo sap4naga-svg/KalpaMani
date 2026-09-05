@@ -285,8 +285,11 @@ Nothing below exists yet, and none of it is authorized:
 - **The Cockpit application, its read models and the feedback engine.** Their architecture is
   *specified* in [docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
   and [docs/cockpit/](docs/cockpit/cockpit-v1-specification.md) under ADR-0027, **accepted on the
-  merge of PR #71**, with four contract and boundary corrections proposed under
-  [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md); no
+  merge of PR #71**, with four contract and boundary corrections accepted on the merge of PR #72
+  under [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
+  and two further corrections — valid zero measurements, and absolute cache freshness deadlines —
+  proposed under
+  [ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md); no
   application, read API, projection, database, scheduler or feedback automation exists, and none is
   authorized
 - Short-selling logic, borrow checks, SSR/squeeze controls
