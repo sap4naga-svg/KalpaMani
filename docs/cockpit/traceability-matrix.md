@@ -1,6 +1,6 @@
 # Cockpit — traceability matrix and delivery sequencing
 
-**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #NNN, and PROPOSED until that merge —
+**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #71, and PROPOSED until that merge —
 NOT IMPLEMENTED, NOT AUTHORIZED.**
 
 Every one of the **36 Cockpit V1 product areas** is traced here to its specification section, its
@@ -164,7 +164,7 @@ private artifact**, whatever a screen it is building would eventually display.
 ## 6. Status
 
 ```text
-Cockpit specification:                   ACCEPTED EFFECTIVE ON MERGE OF PR #NNN
+Cockpit specification:                   ACCEPTED EFFECTIVE ON MERGE OF PR #71
 Cockpit implementation:                  NOT STARTED / NOT AUTHORIZED
 areas in V1 scope:                       36
 areas traced:                            36

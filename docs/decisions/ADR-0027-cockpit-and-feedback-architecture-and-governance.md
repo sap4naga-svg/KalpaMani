@@ -9,7 +9,7 @@ it is not to be rewritten as though this decision had authority before it was ac
 this ADR becomes **ACCEPTED / IN FORCE** as **architecture, contracts, governance and future
 implementation boundaries** — and nothing else.
 
-**The acceptance event is exact:** the independent review and merge of **PR #NNN** into `main`. No
+**The acceptance event is exact:** the independent review and merge of **PR #71** into `main`. No
 merge SHA and no merge timestamp is predicted here; those are repository state, recorded after the
 fact if they are recorded at all.
 
@@ -406,7 +406,7 @@ implementation boundaries — and nothing else.**
 
 | | |
 |---|---|
-| Cockpit specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #NNN** |
+| Cockpit specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #71** |
 | Cockpit application implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Read-model, projection and API implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Feedback and learning-engine implementation | **NOT STARTED / NOT AUTHORIZED** |

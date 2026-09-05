@@ -1,6 +1,6 @@
 # Feedback and self-maturation — specification
 
-**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #NNN, and PROPOSED until that merge —
+**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #71, and PROPOSED until that merge —
 NOT IMPLEMENTED, NOT AUTHORIZED.**
 
 This document specifies how KalpaMani would learn from its own operation: the stages of the loop,
@@ -310,7 +310,7 @@ establishes no threshold                  changes no risk or capital value
 
 | | |
 |---|---|
-| Feedback specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #NNN** |
+| Feedback specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #71** |
 | Learning-engine implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Research automation | **NOT STARTED / NOT AUTHORIZED** |
 | Backtesting | **NOT STARTED** |

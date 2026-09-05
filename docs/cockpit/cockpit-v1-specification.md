@@ -1,6 +1,6 @@
 # Cockpit V1 — functional specification
 
-**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #NNN, and PROPOSED until that merge —
+**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #71, and PROPOSED until that merge —
 NOT IMPLEMENTED, NOT AUTHORIZED.**
 
 This document specifies the 36 product areas of Cockpit V1: what each one is for, what it presents,
@@ -989,7 +989,7 @@ changes no runtime enum                   changes no risk or capital value
 
 | | |
 |---|---|
-| Cockpit specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #NNN** |
+| Cockpit specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #71** |
 | Cockpit implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Brain runtime | **NOT STARTED / NOT AUTHORIZED** |
 | Backtesting | **NOT STARTED** |

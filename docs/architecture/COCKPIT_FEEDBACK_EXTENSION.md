@@ -1,6 +1,6 @@
 # Cockpit and Feedback — Blueprint V3.0 architecture extension
 
-**Status: PROPOSED — NOT IN FORCE, and ACCEPTED EFFECTIVE ON MERGE OF PR #NNN.** While the pull
+**Status: PROPOSED — NOT IN FORCE, and ACCEPTED EFFECTIVE ON MERGE OF PR #71.** While the pull
 request introducing this extension is open it carries no authority. That is a statement about these
 days; it stays true of them after any later merge, and it is not rewritten as though the extension
 had authority before it was accepted.

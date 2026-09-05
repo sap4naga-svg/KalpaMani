@@ -1,6 +1,6 @@
 # Cockpit read-model and API contracts
 
-**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #NNN, and PROPOSED until that merge —
+**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #71, and PROPOSED until that merge —
 NOT IMPLEMENTED, NOT AUTHORIZED.**
 
 This document specifies the envelopes, read models, endpoint catalog, query semantics and metric

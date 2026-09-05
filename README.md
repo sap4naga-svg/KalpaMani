@@ -3222,7 +3222,7 @@ read API, projection runtime, metric engine, feedback automation, database, migr
 has been written or authorized**.
 
 **[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) is
-ACCEPTED — EFFECTIVE ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #NNN, and until that merge it
+ACCEPTED — EFFECTIVE ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #71, and until that merge it
 is PROPOSED and carries no authority.** On that merge it becomes **ACCEPTED / IN FORCE** as
 **architecture, contracts, governance and future implementation boundaries** — and **nothing more**.
 That it carries no authority today is a statement about these days; it stays true of them after any
@@ -3320,7 +3320,7 @@ adopted as platform evidence**.
 **no performance figure in the package is a result**.
 
 ```text
-Cockpit specification:                            ACCEPTED EFFECTIVE ON MERGE OF PR #NNN
+Cockpit specification:                            ACCEPTED EFFECTIVE ON MERGE OF PR #71
 Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
 read-model, projection and API implementation:    NOT STARTED / NOT AUTHORIZED
 feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
