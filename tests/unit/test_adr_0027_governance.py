@@ -1280,9 +1280,35 @@ SCAFFOLD_FILENAMES: Final[frozenset[str]] = frozenset(
 )
 
 
-def test_no_application_scaffolding_is_tracked_anywhere() -> None:
-    tracked = {Path(path).name for path in _tracked(".")}
-    assert not (tracked & SCAFFOLD_FILENAMES), sorted(tracked & SCAFFOLD_FILENAMES)
+#: The one directory a separately authorized implementation cycle was permitted to
+#: scaffold. The C3 Cockpit application foundation lives here, under its own written
+#: authorization; ADR-0027 itself scaffolded nothing, which is what the guard below still
+#: establishes for everywhere else.
+AUTHORIZED_APPLICATION_ROOT: Final[str] = "apps/cockpit/"
+
+
+def test_the_specification_cycle_scaffolded_no_application() -> None:
+    """ADR-0027 created no scaffolding, and nothing outside the C3 app may create any.
+
+    The historical claim is unchanged: the specification cycle built nothing. What this
+    now permits is exactly one directory, scaffolded later under its own authorization --
+    so an unauthorized manifest appearing anywhere else still fails.
+    """
+    tracked = {path for path in _tracked(".") if not path.startswith(AUTHORIZED_APPLICATION_ROOT)}
+    names = {Path(path).name for path in tracked}
+    assert not (names & SCAFFOLD_FILENAMES), sorted(names & SCAFFOLD_FILENAMES)
+
+
+def test_the_specification_documents_still_scaffolded_nothing_themselves() -> None:
+    """The ADR and its package documents remain specification-only, in their own words."""
+    assert "no application was scaffolded" in ADR_FLAT
+    assert "installs no dependency" in ADR_FLAT
+
+
+def test_the_authorized_application_root_is_the_only_scaffolded_directory() -> None:
+    """A second application appearing beside it would not be covered by that exemption."""
+    manifests = sorted(path for path in _tracked(".") if Path(path).name == "package.json")
+    assert manifests == ["apps/cockpit/package.json"], manifests
 
 
 #: The packages a Cockpit backend would eventually live in. None may exist yet -- not even
