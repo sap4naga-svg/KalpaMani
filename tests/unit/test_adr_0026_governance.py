@@ -79,7 +79,7 @@ def _section(document: Path, heading: str) -> str:
 
 
 README_SECTION: Final = _section(README, "### The Strategy Brain specification, and ADR-0026")
-CLAUDE_SECTION: Final = _section(CLAUDE, "### The Strategy Brain specification — PROPOSED")
+CLAUDE_SECTION: Final = _section(CLAUDE, "### The Strategy Brain specification — ACCEPTED ON MERGE")
 
 
 #: Looked up by name rather than parametrized by value: a parametrized document body
@@ -133,6 +133,10 @@ def test_each_status_section_reports_the_decision_as_proposed(name: str) -> None
     flat = " ".join(section.split())
     assert "PROPOSED" in section
     assert "carries no authority" in flat
+    # The acceptance must be merge-conditional, so the status is true on both sides of the
+    # merge. A flat "PROPOSED / IN REVIEW" would be stale the moment the pull request lands,
+    # and the guard would then enforce the stale claim rather than catch it.
+    assert "EFFECTIVE ON MERGE OF PR #70" in section.upper()
 
 
 # -- the CandidateIntent boundary --------------------------------------------------------

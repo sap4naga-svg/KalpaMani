@@ -12972,7 +12972,7 @@ ADR_0026: Final = DECISIONS / "ADR-0026-strategy-brain-architecture-and-governan
 #: The section each status document owns, so a line found elsewhere in a four-thousand-line
 #: document does not count as this section carrying it.
 BRAIN_README_SECTION: Final = "### The Strategy Brain specification, and ADR-0026"
-BRAIN_CLAUDE_SECTION: Final = "### The Strategy Brain specification — PROPOSED"
+BRAIN_CLAUDE_SECTION: Final = "### The Strategy Brain specification — ACCEPTED ON MERGE"
 
 #: Everything ``CandidateIntent`` may never carry. ADR-0006 §E named the first six; the
 #: specification adds the four that would otherwise arrive through a "just for reference"
@@ -13076,7 +13076,7 @@ BRAIN_ALPHA_CLAIMS: Final[tuple[tuple[str, str], ...]] = (
 #: The status lines both documents must carry, verbatim, inside the Brain section. A
 #: status document that drops the blocker reads as though the blocker is gone.
 BRAIN_STATUS_LINES: Final[tuple[str, ...]] = (
-    "Brain specification:                              PROPOSED / IN REVIEW",
+    "Brain specification:                              ACCEPTED EFFECTIVE ON MERGE OF PR #70",
     "Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED",
     "core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED",
     "new src/ modules created by this specification:   NONE",
@@ -22867,8 +22867,10 @@ def main() -> int:
         )
         f.check(
             f"{label} reports ADR-0026 as proposed and without authority",
-            "PROPOSED" in section and "carries no authority" in " ".join(section.split()),
-            "a proposed decision must not be reported as one in force",
+            "PROPOSED" in section
+            and "carries no authority" in " ".join(section.split())
+            and "EFFECTIVE ON MERGE OF PR #70" in section.upper(),
+            "a decision must read as neither in force before its merge nor proposed after it",
         )
 
     # -- the CandidateIntent exclusion, by name and structurally --

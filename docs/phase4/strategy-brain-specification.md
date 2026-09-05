@@ -1,6 +1,7 @@
 # Phase 4 — Strategy Brain specification
 
-**Status: PROPOSED SPECIFICATION — NOT IMPLEMENTED, NOT AUTHORIZED.**
+**Status: ACCEPTED SPECIFICATION EFFECTIVE ON MERGE OF PR #70, and PROPOSED until that merge —
+NOT IMPLEMENTED, NOT AUTHORIZED.**
 
 This document specifies the future KalpaMani Strategy Brain: its contracts, its boundaries, its
 lifecycle, its deterministic decision semantics, its strategy taxonomy, its research and promotion
@@ -28,7 +29,7 @@ validated**, never a finding.
 | | |
 |---|---|
 | **Governed by** | Blueprint V3.0, then approved ADRs, then `CLAUDE.md`, then the approved task specification |
-| **Introduced by** | [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — **PROPOSED — NOT IN FORCE** while its pull request is open |
+| **Introduced by** | [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — **ACCEPTED EFFECTIVE ON MERGE OF PR #70**, and **PROPOSED — NOT IN FORCE** until that merge |
 | **Builds on** | [ADR-0006](../decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md) §C self-maturation, §D taxonomy, §E the `CandidateIntent` boundary |
 | **Depends on** | [ADR-0005](../decisions/ADR-0005-point-in-time-data-architecture.md) point-in-time architecture — **still PROPOSED**; the Phase-3 point-in-time contract; the A1 foundation kernel |
 | **Does not amend** | any accepted ADR. It **refines ADR-0006 §D and §E into checkable contracts** and supersedes nothing |
@@ -880,7 +881,7 @@ contacts no broker                        produces no order
 
 | | |
 |---|---|
-| Brain specification | **PROPOSED / IN REVIEW** |
+| Brain specification | **ACCEPTED EFFECTIVE ON MERGE OF PR #70** |
 | Brain runtime implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Core strategy implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Backtesting | **NOT STARTED** |

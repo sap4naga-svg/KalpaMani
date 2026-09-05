@@ -90,8 +90,9 @@ lineage and risk context, but never shares, dollar size, order type, route or an
 Portfolio construction, sizing, risk, order approval and execution stay deterministic and
 downstream. **None of this is implemented or authorized** (Blueprint V3.0 §8, Appendix A). The
 contracts, decision states, lifecycle and AI boundaries are specified in
-[docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under a
-**PROPOSED** [ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md).
+[docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under
+[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md),
+**accepted effective on merge of PR #70**.
 
 **Alpha families (V3.0 §9):** Momentum Continuation — containing the *Breakout* and
 *Pullback* modules under one shared factor-risk budget · Event / Information Drift (PEAD) ·
@@ -192,7 +193,7 @@ KalpaMani/
 │   │                         BLUEPRINT_ERRATA.md  (V2.1 empirical corrections index)
 │   ├── decisions/            Architecture Decision Records
 │   ├── phase3/               Point-in-time data foundation plan
-│   ├── phase4/               Strategy Brain SPECIFICATION  (ADR-0026 PROPOSED;
+│   ├── phase4/               Strategy Brain SPECIFICATION  (ADR-0026 accepted on merge;
 │   │                         no Brain runtime exists and none is authorized)
 │   └── runbooks/             Operational procedures
 ├── infra/
@@ -279,7 +280,8 @@ Nothing below exists yet, and none of it is authorized:
 - Breakout, Pullback, PEAD and Deterioration Short strategy logic
 - **The Strategy Brain runtime.** Its architecture is *specified* in
   [docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under
-  a **PROPOSED** ADR-0026; a specification is not an implementation, and no Brain module exists
+  ADR-0026, **accepted effective on merge**; a specification is not an implementation, and no
+  Brain module exists
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)
@@ -3109,15 +3111,16 @@ and is not authorized to**: it comes after Run B, which is itself unauthorized a
 established**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is **NOT COMPLETE**, CONTROL
 stays **DEFERRED** and live trading stays **HARD-DISABLED**.
 
-### The Strategy Brain specification, and ADR-0026 — PROPOSED, and nothing is implemented
+### The Strategy Brain specification, and ADR-0026 — ACCEPTED ON MERGE, and nothing is implemented
 
 **The Brain is specified. The Brain does not exist.** Those are two different facts, and this
 section keeps them apart: a reviewable specification now sits in the repository, and **no Brain
 runtime module, strategy module, factor calculation, scanner, AI agent, portfolio sizing or order
 routing has been written or authorized**.
 
-**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is PROPOSED and
-carries no authority while its pull request is open.** On independent review and merge it becomes
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is ACCEPTED — EFFECTIVE
+ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #70, and until that merge it is PROPOSED and
+carries no authority.** On that merge it becomes
 **ACCEPTED / IN FORCE** as **architecture, contracts, governance and future implementation
 boundaries** — and **nothing more**. That it carries no authority today is a statement about these
 days; it stays true of them after any later merge, and it is not rewritten as though the decision
@@ -3178,7 +3181,7 @@ momentum is superior or that an options overlay helps. Its experiment matrix is 
 **Specifying is not implementing, and this specification depends on no provider data.**
 
 ```text
-Brain specification:                              PROPOSED / IN REVIEW
+Brain specification:                              ACCEPTED EFFECTIVE ON MERGE OF PR #70
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED
 factor, scanner and AI-agent implementation:      NOT STARTED / NOT AUTHORIZED

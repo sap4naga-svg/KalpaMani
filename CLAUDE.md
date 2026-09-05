@@ -394,8 +394,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 
 **The Strategy Brain is SPECIFIED and NOT IMPLEMENTED.** A reviewable specification exists at
 [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) under
-**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — PROPOSED, and
-carrying no authority while its pull request is open**. **A specification is not an
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — ACCEPTED EFFECTIVE ON
+MERGE OF PR #70, and PROPOSED and carrying no authority until that merge**. **A specification is not an
 implementation**: no Brain runtime module, strategy module, factor calculation, scanner, AI agent,
 portfolio sizing or order routing exists, and **none is authorized**. **Specification,
 implementation, research, deployment and execution are five separate gates** — see *The Strategy
@@ -456,7 +456,7 @@ Brain specification* below.
 | **ADR-0018 empirical acquisition — Run A** | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | **Short research** | **NOT AUTHORIZED** |
-| **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — Strategy Brain architecture and governance** | **PROPOSED — NOT IN FORCE** while its pull request is open. It introduces [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) as **specification only**. On independent review and merge it would accept **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Brain runtime implementation NOT AUTHORIZED · strategy, factor, scanner and AI-agent implementation NOT AUTHORIZED · portfolio and risk engine implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider data usage NOT AUTHORIZED · broker activity NOT AUTHORIZED · capital change NOT AUTHORIZED**. It **amends and supersedes no ADR**, refining ADR-0006 §D and §E into checkable contracts, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
+| **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — Strategy Brain architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #70**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Brain runtime implementation NOT AUTHORIZED · strategy, factor, scanner and AI-agent implementation NOT AUTHORIZED · portfolio and risk engine implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider data usage NOT AUTHORIZED · broker activity NOT AUTHORIZED · capital change NOT AUTHORIZED**. It **amends and supersedes no ADR**, refining ADR-0006 §D and §E into checkable contracts, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under a proposed ADR-0026 and **not implemented**; a specification is not an implementation |
 | **Live trading** | **HARD-DISABLED** |
 
@@ -3263,7 +3263,7 @@ private-binding preflight, further infrastructure mutation and production ingest
 separate written authorization, and **acceptance, implementation, deployment, access and execution
 stay distinct gates that are never collapsed into one**.
 
-### The Strategy Brain specification — PROPOSED, and nothing is implemented
+### The Strategy Brain specification — ACCEPTED ON MERGE, and nothing is implemented
 
 **The Brain is specified. The Brain does not exist.** Those are two facts, and they are kept apart:
 a reviewable specification now sits in the repository at
@@ -3271,8 +3271,9 @@ a reviewable specification now sits in the repository at
 **no Brain runtime module, strategy module, factor calculation, scanner, AI agent, portfolio sizing
 or order routing has been written or authorized**.
 
-**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is PROPOSED and
-carries no authority while its pull request is open.** On independent review and merge it becomes
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is ACCEPTED — EFFECTIVE
+ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #70, and until that merge it is PROPOSED and
+carries no authority.** On that merge it becomes
 **ACCEPTED / IN FORCE** as **architecture, contracts, governance and future implementation
 boundaries** — and **nothing more**. That it carries no authority today is a statement about these
 days; it stays true of them after any later merge, and it is **not** rewritten as though the
@@ -3318,7 +3319,7 @@ overlay helps. Its experiment matrix is a list of **unanswered questions**, and 
 run**.
 
 ```text
-Brain specification:                              PROPOSED / IN REVIEW
+Brain specification:                              ACCEPTED EFFECTIVE ON MERGE OF PR #70
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED
 factor, scanner and AI-agent implementation:      NOT STARTED / NOT AUTHORIZED
