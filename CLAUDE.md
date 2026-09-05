@@ -405,11 +405,15 @@ Brain specification* below.
 [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
 and [`docs/cockpit/`](docs/cockpit/cockpit-v1-specification.md) under
 **[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) — ACCEPTED EFFECTIVE ON
-MERGE OF PR #71, and PROPOSED and carrying no authority until that merge**. **A specification is not
+MERGE OF PR #71, and PROPOSED and carrying no authority until that merge**. **That merge has since
+occurred, so ADR-0027 is ACCEPTED / IN FORCE.** Four issues in those accepted specifications are
+corrected by
+**[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) —
+PROPOSED, and carrying no authority while its pull request is open**. **A specification is not
 an implementation**: no Cockpit application, read API, projection runtime, metric engine, feedback
 automation, database, migration or scheduler exists, and **none is authorized**. **V1 is
 observational**, and **every future control is inert with no handler and no control API route** — see
-*The Cockpit and Feedback specification* below.
+*The Cockpit and Feedback specification* and *The Cockpit contract corrections* below.
 
 ### Current phase state
 
@@ -468,6 +472,7 @@ observational**, and **every future control is inert with no handler and no cont
 | **Short research** | **NOT AUTHORIZED** |
 | **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — Strategy Brain architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #70**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Brain runtime implementation NOT AUTHORIZED · strategy, factor, scanner and AI-agent implementation NOT AUTHORIZED · portfolio and risk engine implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider data usage NOT AUTHORIZED · broker activity NOT AUTHORIZED · capital change NOT AUTHORIZED**. It **amends and supersedes no ADR**, refining ADR-0006 §D and §E into checkable contracts, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) — Cockpit and Feedback architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #71**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md) and the five documents under [`docs/cockpit/`](docs/cockpit/cockpit-v1-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Cockpit application implementation NOT AUTHORIZED · read-model, projection and API implementation NOT AUTHORIZED · feedback and learning-engine implementation NOT AUTHORIZED · database, migration, scheduler and deployment NOT AUTHORIZED · dependency installation NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED · capital, risk and strategy change NOT AUTHORIZED**. **V1 is observational** — no order, stop, risk, capital, strategy, provider, Run B, assessment, CONTROL or authoritative governance mutation, and **every future control is inert with no handler and no control API route**. It **amends and supersedes no ADR**, consumes ADR-0026 unchanged, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, **no `src/` module is created by it**, and **no Blueprint PDF is edited** |
+| **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Cockpit contract completion and boundary corrections** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the specification corrections that ship with it. It corrects four issues in the specifications ADR-0027 adopted — **A** the §4.1 field-level deferral, replaced by declarative contracts for every catalogued read model, a resolution for every reference, a per-endpoint contract and a completed metric dictionary; **B** out-of-sample reuse, now recorded against the **locked set** and read across research lineage so a new registration or Challenger identity clears nothing and unknown exposure history fails closed; **C** licensed-data admission, separating an absolute ban on credentials and infrastructure identifiers from classification of payload content, making **classification a label and publication a separate recorded authorization**, and adding the `REPOSITORY_TRACKED` provenance so a real tracked governance fact is never relabelled `SYNTHETIC`; **D** the single phrase *planned risk*, now four contracts — immutable **initial** planned risk as the only R denominator, **current open** planned risk as a risk-engine assessment with its as-of, **permitted** risk with its policy reference, and separately modelled gap and event risk. It **amends and supersedes no ADR** and does not edit ADR-0027. **All 36 areas, the C1–C10 sequence, the four trade concepts, the `CandidateIntent` boundary, the runtime `Environment` enum and every risk, capital and stop policy are unchanged** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under ADR-0026, accepted effective on merge of PR #70, and **not implemented**; a specification is not an implementation |
 | **Cockpit / read models / feedback engine** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Cockpit is **specified** under ADR-0027, accepted effective on merge, and **not implemented**; no application, read API, projection, database or feedback automation exists, and a specification is not an implementation |
 | **Live trading** | **HARD-DISABLED** |
@@ -3496,6 +3501,103 @@ live trading:                                     HARD-DISABLED
 **"Cockpit specified" does not mean Cockpit implementation started.** **Specification,
 implementation, research, deployment and execution are five separate gates**, and they are never
 collapsed into one.
+
+### The Cockpit contract corrections, and ADR-0028 — PROPOSED, and nothing is implemented
+
+**ADR-0027 is ACCEPTED / IN FORCE.** Its conditional acceptance event occurred on the independent
+review and merge of **PR #71** into `main` — merged **2026-09-05T16:02:48Z**, merge commit
+**`751bf759fd6516149421a99ebf6c2c997c6c6766`**, final reviewed pull-request head
+**`2eecade03c8c74265507bf9c030e7986e5ff3931`**. **The conditional text ADR-0027 was written with is
+preserved as the record of the days before that merge and is not rewritten**, and **ADR-0027 is not
+reverted, reopened or restated as proposed.**
+
+**Four issues in the accepted specifications were identified and not resolved, and
+[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
+corrects them.** **ADR-0028 is PROPOSED and carries no authority while the pull request introducing
+it is open**, and so are the specification corrections that ship with it. On independent review and
+merge it accepts **corrected contracts, corrected boundaries and governance** — and **nothing
+else**.
+
+| | |
+|---|---|
+| **A — the contracts stopped at a deferral** | `read-model-contracts.md` §4.1 was *Selected payload shapes*, and full field-level definitions were left to the implementation cycle. Fields were `metric-defined` with no resolvable definition, every `_ref` was named and none stated how it resolves, endpoints declared no response type, filters, sorts, page sizes, extent bounds, cursor semantics or error codes, and four catalogued endpoints resolved to no read model at all |
+| **B — a rename bought fresh out-of-sample data** | §2.7 consumed a locked set *once per registration*, and a second evaluation *required a new registration*. Re-registration is free, so a new identity produced a fresh out-of-sample claim over exposed data and reset the trial budget with it |
+| **C — classification contradicted itself** | `LICENSED_DERIVED` was a legitimate class inside the private boundary while §10 banned reconstructable derivatives from *every* read model; and `PUBLIC_EDGE` admitted `SYNTHETIC` provenance only, while `QualificationStatus` is `AVAILABLE`, `PUBLIC_SAFE` and composed of **real** tracked facts. Underneath both, a sensitivity label was doing a publication gate's job |
+| **D — "planned risk" was four facts** | an Executive tile of *open* planned risk, a per-position field, a Risk Dashboard heading, and the R denominator — with one §12 definition, the entry-time one. A trailing stop could plausibly be read as moving the R denominator, and a missing initial risk reported `NOT_APPLICABLE` |
+
+**What ADR-0028 decides.**
+
+```text
+A   field-level contracts for every catalogued read model, reusable defined types, a
+    closed per-field reason vocabulary, a resolution for every reference, four added read
+    models so no endpoint dangles, a per-endpoint contract with response, filters, sorts,
+    page sizes, extent bounds, cursor and closed error codes, and a completed metric
+    dictionary with formulas, units, denominators, bases, cost treatment, sign and sample
+    conventions, minimum observations and unavailable outcomes
+B   exposure recorded against the LOCKED SET and read across research lineage, so a new
+    hypothesis, registration or Challenger identity clears nothing; unknown exposure
+    history fails closed; budgets and multiple-testing records do not reset through
+    renaming; and three evaluation classes of which only CONFIRMATORY is confirmation
+C   two separately governed lists -- credentials and infrastructure identifiers banned
+    absolutely, classified payload content governed by classification; LICENSED_DERIVED
+    legitimate inside the approved private boundary; classification a LABEL and
+    publication a separate recorded AUTHORIZATION; one added provenance member,
+    REPOSITORY_TRACKED, so a real tracked fact is never relabelled SYNTHETIC; and audit
+    corrections and deletions that APPEND linked events rather than mutate
+D   four risk quantities with four contracts -- immutable initial planned risk as the only
+    R denominator, current open planned risk as a risk-engine assessment with its as-of,
+    permitted risk with its policy reference, and separately modelled gap and event risk;
+    partial fills, partial exits, adds, protection changes, stale and missing assessments
+    and aggregation each decided; and a missing initial risk reported as unavailable
+    rather than inapplicable
+```
+
+**What it does not do.** **It amends and supersedes no ADR** — it corrects the specifications
+ADR-0027 adopted, at the clauses its §3 names, and **ADR-0027's own document is not edited**. **All
+36 product areas stay in V1 scope**, the **C1–C10 delivery sequence is unchanged**, **Trade History,
+Trade Detail, Execution History and Audit Trail stay four separate screens**, **the Brain ends at
+`CandidateIntent`** with sizing and execution downstream and **no field added to it**, the **runtime
+`Environment` enum and the ADR-0026 lifecycle and health vocabularies are unchanged**, **V1 stays
+observational with every future control inert**, and **no risk limit, capital value, leverage
+setting, sizing rule or stop policy changes.**
+
+**Page sizes and extent bounds are proposed read-resource limits.** They bound a read API's work and
+its response size. **They are not trading risk limits, position limits, capital limits or any other
+governed value.**
+
+```text
+ADR-0028:                                         PROPOSED / IN REVIEW
+Cockpit contract corrections:                     PROPOSED / IN REVIEW
+ADR-0027:                                         ACCEPTED / IN FORCE
+ADR-0026:                                         ACCEPTED / IN FORCE
+Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
+read-model, projection, metric-engine and API:    NOT STARTED / NOT AUTHORIZED
+feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+new src/ modules created by this correction:      NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+backtesting:                                      NOT STARTED
+provider data used by this correction:            NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+Run A to Run B separation:                        AT LEAST 8 CALENDAR DAYS
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A corrected specification is still a specification.** **Specification, implementation, research,
+deployment and execution are five separate gates**, and they are never collapsed into one.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
