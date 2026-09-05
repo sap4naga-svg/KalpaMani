@@ -11,6 +11,9 @@ later implementation cycle must satisfy.
 file, route or screenshot exists because this document describes one.
 
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
+**Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
+— §5 and a new §9.4. ADR-0028 is **PROPOSED and carries no authority while the pull request
+introducing it is open**.
 
 ---
 
@@ -221,6 +224,12 @@ the overview.
 **A synthetic deployment is labelled at page level and at component level.** A screenshot of one
 tile must still show that it is synthetic, because screenshots travel.
 
+**A real fact is never badged synthetic.** Tracked repository governance facts carry the
+`REPOSITORY_TRACKED` provenance badge, visually distinct from `SYNTHETIC`, and a page carrying both
+badges each component **individually** rather than choosing one badge for the whole page. **The provenance
+badge is not the publication decision** — a `PUBLIC_SAFE` badge says what the content is, and an
+externally hosted deployment additionally requires its recorded release authorization.
+
 **Scoping travels with everything.** Cache keys, filters, URLs, exports, deep links and assistant
 queries all carry environment and source, so a shared link cannot open under a different environment
 than the one it was captured in.
@@ -323,6 +332,24 @@ STALE                 is not   AVAILABLE
 **A loading skeleton never resembles a real value.** Skeletons are shape-only — no digits, no
 plausible placeholder numbers, no "0.00" while loading, and no last-known value presented as
 current. A screenshot taken mid-load must not be mistakable for data.
+
+---
+
+### 9.4 Labels that must never be interchangeable
+
+**Four pairs, and each pair is two different facts.** A shared label makes the screen assert
+something nobody computed, so each is rendered with its own label, its own tooltip and its own
+as-of.
+
+| Never one label | Because |
+|---|---|
+| **initial planned risk** / **current open planned risk** | the first is the immutable entry record and the R denominator; the second is the risk engine's assessment of the remaining exposure, and it carries an as-of. **A moving stop changes only the second** |
+| **current open planned risk** / **permitted risk** | one is what is carried, the other is what policy allows. The permitted value renders with its policy reference, and **the interface grants no permission by showing one** |
+| **trade status** / **data completeness** | a partially exited trade and a trade with a missing bar are different things, and each has its own column |
+| **`SYNTHETIC`** / **`REPOSITORY_TRACKED`** | a fixture and a real tracked fact. **Neither is ever rendered under the other's badge** |
+
+**A stale or missing assessment renders as stale or missing**, with its as-of where one exists —
+never as a number, never as zero, and never as `NOT_APPLICABLE`.
 
 ---
 
