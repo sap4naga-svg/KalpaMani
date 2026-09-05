@@ -284,9 +284,11 @@ Nothing below exists yet, and none of it is authorized:
   Brain module exists
 - **The Cockpit application, its read models and the feedback engine.** Their architecture is
   *specified* in [docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
-  and [docs/cockpit/](docs/cockpit/cockpit-v1-specification.md) under ADR-0027, **accepted effective on
-  merge**; no application, read API, projection, database, scheduler or feedback automation exists,
-  and none is authorized
+  and [docs/cockpit/](docs/cockpit/cockpit-v1-specification.md) under ADR-0027, **accepted on the
+  merge of PR #71**, with four contract and boundary corrections proposed under
+  [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md); no
+  application, read API, projection, database, scheduler or feedback automation exists, and none is
+  authorized
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)
@@ -3352,6 +3354,121 @@ live trading:                                     HARD-DISABLED
 **"Cockpit specified" does not mean Cockpit implementation started.** **Specification,
 implementation, research, deployment and execution are five separate gates**, and they are never
 collapsed into one.
+
+### The Cockpit contract corrections, and ADR-0028 — PROPOSED, and nothing is implemented
+
+**ADR-0027 is ACCEPTED / IN FORCE.** Its conditional acceptance event occurred on the independent
+review and merge of **PR #71** into `main` — merged **2026-09-05T16:02:48Z**, merge commit
+**`751bf759fd6516149421a99ebf6c2c997c6c6766`**, final reviewed pull-request head
+**`2eecade03c8c74265507bf9c030e7986e5ff3931`**. **The conditional text ADR-0027 was written with is
+preserved as the record of the days before that merge and is not rewritten**, and **ADR-0027 is not
+reverted, reopened or restated as proposed.**
+
+**Four issues in the accepted specifications were identified and not resolved, and
+[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
+corrects them.** **ADR-0028 is PROPOSED and carries no authority while PR #72, the pull request
+introducing it, is open**, and so are the specification corrections that ship with it. On independent review and
+merge it accepts **corrected contracts, corrected boundaries and governance** — and **nothing
+else**.
+
+| | |
+|---|---|
+| **A — the contracts stopped at a deferral** | `read-model-contracts.md` §4.1 was *Selected payload shapes*, and full field-level definitions were left to the implementation cycle. Fields were `metric-defined` with no resolvable definition, every `_ref` was named and none stated how it resolves, endpoints declared no response type, filters, sorts, page sizes, extent bounds, cursor semantics or error codes, and four catalogued endpoints resolved to no read model at all |
+| **B — a rename bought fresh out-of-sample data** | §2.7 consumed a locked set *once per registration*, and a second evaluation *required a new registration*. Re-registration is free, so a new identity produced a fresh out-of-sample claim over exposed data and reset the trial budget with it |
+| **C — classification contradicted itself** | `LICENSED_DERIVED` was a legitimate class inside the private boundary while §10 banned reconstructable derivatives from *every* read model; and `PUBLIC_EDGE` admitted `SYNTHETIC` provenance only, while `QualificationStatus` is `AVAILABLE`, `PUBLIC_SAFE` and composed of **real** tracked facts. Underneath both, a sensitivity label was doing a publication gate's job |
+| **D — "planned risk" was four facts** | an Executive tile of *open* planned risk, a per-position field, a Risk Dashboard heading, and the R denominator — with one §12 definition, the entry-time one. A trailing stop could plausibly be read as moving the R denominator, and a missing initial risk reported `NOT_APPLICABLE` |
+
+**Four further defects were found by the independent review of PR #72, and are corrected in the
+same pull request.** They are defects in the corrections above rather than in the accepted package,
+and ADR-0028 §2.5 records each one.
+
+| | |
+|---|---|
+| **an availability value spelled as a reason code** | `UPSTREAM_INPUT_MISSING` is a `FieldReasonCode` and was written where an `AvailabilityState` belongs, in the §4.1 rule, in the missing-initial-risk contract and in eight metric rows; `UNKNOWN`, a `completeness` value, was the `coverage` metric's availability outcome. **A consumer switching on availability would have found values that are not in the enum.** One exhaustive validity matrix now governs state, reason and value presence together, `NOT_APPLICABLE` has the two routes the ratio rules already required, and a successful value carries `NONE` rather than **a fabricated failure reason** |
+| **a required nested record with no unavailable shape** | `InitialPlannedRisk` was `required` with every field concrete while the same section said initial risk may be absent, so an implementation would have invented a zeroed amount, a synthesised policy identifier or the response's own timestamp. A `RecordValue` wrapper carries all four quantities, an absent record is **absent rather than a skeleton**, and six payloads are written out — including the unavailable and partially available cases |
+| **a ratio labelled in basis points** | the slippage formula divided two prices and called the quotient `BPS`, **out by a factor of 10,000**, with its side convention undefined. The formula multiplies by 10,000, `side_sign` is `+1` for every buy and `−1` for every sell so **positive is adverse cost on both sides**, `Bps` carries a decimal string with a stated scale so fractional basis points survive, and four cases are worked through by hand |
+| **freshness that measured the build** | `as_of_time − newest contributing projected_time` measures when a machine last ran, could go negative, and reported the freshest input while concealing an older required one. Source age, projection lag and build age are now three separate numbers, **a rebuild resets only the last**, every required input is measured against its own contract, and the composite reports its **oldest** required input |
+
+**Two smaller corrections in the same round.** Out-of-sample exposure is looked up by **measured
+overlap** rather than by locked-set identity alone, so a subset, superset, shifted window or re-cut
+of an exposed set is exposed — **any overlap disqualifies a confirmatory claim, and an unmeasurable
+overlap fails closed**. And `return.time_weighted` requires **one** complete sub-period rather than
+two, because a flow-free holding period is a complete and valid time-weighted return; **no research
+restriction was invented to preserve the old number**.
+
+**What ADR-0028 decides.**
+
+```text
+A   field-level contracts for every catalogued read model, reusable defined types, a
+    closed per-field reason vocabulary, a resolution for every reference, four added read
+    models so no endpoint dangles, a per-endpoint contract with response, filters, sorts,
+    page sizes, extent bounds, cursor and closed error codes, and a completed metric
+    dictionary with formulas, units, denominators, bases, cost treatment, sign and sample
+    conventions, minimum observations and unavailable outcomes
+B   exposure recorded against the LOCKED SET and read across research lineage, so a new
+    hypothesis, registration or Challenger identity clears nothing; unknown exposure
+    history fails closed; budgets and multiple-testing records do not reset through
+    renaming; and three evaluation classes of which only CONFIRMATORY is confirmation
+C   two separately governed lists -- credentials and infrastructure identifiers banned
+    absolutely, classified payload content governed by classification; LICENSED_DERIVED
+    legitimate inside the approved private boundary; classification a LABEL and
+    publication a separate recorded AUTHORIZATION; one added provenance member,
+    REPOSITORY_TRACKED, so a real tracked fact is never relabelled SYNTHETIC; and audit
+    corrections and deletions that APPEND linked events rather than mutate
+D   four risk quantities with four contracts -- immutable initial planned risk as the only
+    R denominator, current open planned risk as a risk-engine assessment with its as-of,
+    permitted risk with its policy reference, and separately modelled gap and event risk;
+    partial fills, partial exits, adds, protection changes, stale and missing assessments
+    and aggregation each decided; and a missing initial risk reported as unavailable
+    rather than inapplicable
+```
+
+**What it does not do.** **It amends and supersedes no ADR** — it corrects the specifications
+ADR-0027 adopted, at the clauses its §3 names, and **ADR-0027's own document is not edited**. **All
+36 product areas stay in V1 scope**, the **C1–C10 delivery sequence is unchanged**, **Trade History,
+Trade Detail, Execution History and Audit Trail stay four separate screens**, **the Brain ends at
+`CandidateIntent`** with sizing and execution downstream and **no field added to it**, the **runtime
+`Environment` enum and the ADR-0026 lifecycle and health vocabularies are unchanged**, **V1 stays
+observational with every future control inert**, and **no risk limit, capital value, leverage
+setting, sizing rule or stop policy changes.**
+
+**Page sizes and extent bounds are proposed read-resource limits.** They bound a read API's work and
+its response size. **They are not trading risk limits, position limits, capital limits or any other
+governed value.**
+
+```text
+ADR-0028:                                         PROPOSED / IN REVIEW / PR #72
+Cockpit contract corrections:                     PROPOSED / IN REVIEW
+ADR-0027:                                         ACCEPTED / IN FORCE
+ADR-0026:                                         ACCEPTED / IN FORCE
+Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
+read-model, projection, metric-engine and API:    NOT STARTED / NOT AUTHORIZED
+feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+new src/ modules created by this correction:      NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+backtesting:                                      NOT STARTED
+provider data used by this correction:            NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+Run A to Run B separation:                        AT LEAST 8 CALENDAR DAYS
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A corrected specification is still a specification.** **Specification, implementation, research,
+deployment and execution are five separate gates**, and they are never collapsed into one.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

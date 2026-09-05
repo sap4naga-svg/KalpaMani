@@ -538,8 +538,18 @@ AVAILABILITY_STATES: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: ADR-0028 added ``REPOSITORY_TRACKED`` -- a real fact read from tracked repository
+#: authority. It is here rather than in the ADR-0028 suite because this parametrization is
+#: what proves a provenance value is defined in the extension *and* the contracts; a member
+#: added to one document and forgotten in the other is the drift it exists to catch.
 PROVENANCE_VALUES: Final[frozenset[str]] = frozenset(
-    {"SYNTHETIC", "SYSTEM_RECORDED", "BACKTEST_SIMULATED", "BROKER_REPORTED"}
+    {
+        "SYNTHETIC",
+        "REPOSITORY_TRACKED",
+        "SYSTEM_RECORDED",
+        "BACKTEST_SIMULATED",
+        "BROKER_REPORTED",
+    }
 )
 
 CLASSIFICATIONS: Final[frozenset[str]] = frozenset(
@@ -891,8 +901,22 @@ def test_open_positions_stay_pinned_to_the_versions_that_opened_them() -> None:
 
 
 def test_leakage_and_out_of_sample_reuse_protections_are_specified() -> None:
+    """ADR-0028 replaced the per-registration consumption rule, and this guard follows it.
+
+    The clause this used to assert -- consumed once *per registration* -- was the defect:
+    re-registration is free, so a new identity bought a fresh out-of-sample claim over
+    exposed data. The invariant is protected here at its corrected and strictly stronger
+    form: consumption is per *locked set*, a new identity does not clear it, and the
+    unknown-history case fails closed instead of passing quietly.
+    """
     assert "the locked set is locked" in FEEDBACK_FLAT
-    assert "consumed **once** per registration" in FEEDBACK_TEXT
+    assert "consumed **once per locked set**" in FEEDBACK_TEXT
+    assert "not once per registration" in FEEDBACK_FLAT
+    assert (
+        "a new hypothesis, registration or Challenger identity does not make exposed data "
+        "untouched again" in FEEDBACK_FLAT
+    )
+    assert "Unknown exposure history cannot support a fresh out-of-sample claim" in FEEDBACK_FLAT
     assert "purging and embargo" in FEEDBACK_FLAT
     assert "reproducibility evidence" in FEEDBACK_FLAT
     assert "without a network" in FEEDBACK_FLAT
@@ -924,7 +948,21 @@ def test_control_publication_is_refused_and_deferred() -> None:
 
 
 def test_external_hosting_admits_only_public_safe_synthetic_output() -> None:
-    assert "admits PUBLIC_SAFE with SYNTHETIC provenance ONLY" in CONTRACTS_TEXT
+    """ADR-0028 widened the admitted provenance by exactly one member, and no further.
+
+    ``QualificationStatus`` is real, tracked and public-safe, so the old rule forced a
+    choice between not displaying it and relabelling it ``SYNTHETIC`` -- which would be
+    false. The replacement admits ``REPOSITORY_TRACKED`` beside ``SYNTHETIC`` and refuses
+    the other three by name, so the protection is checked at its boundary rather than at
+    one sentence, and the three that would leak a real operating figure are asserted
+    individually.
+    """
+    assert "admits PUBLIC_SAFE payloads ONLY, and within that only" in CONTRACTS_TEXT
+    assert "SYNTHETIC or REPOSITORY_TRACKED provenance" in CONTRACTS_FLAT
+    refusal = CONTRACTS_FLAT[CONTRACTS_FLAT.index("admits exactly two provenances") :][:400]
+    for refused in ("SYSTEM_RECORDED", "BACKTEST_SIMULATED", "BROKER_REPORTED"):
+        assert refused in refusal, refused
+    assert "never admitted to an externally hosted deployment" in refusal
     assert "must not silently receive a licensed payload" in ADR_FLAT
     assert "must not silently receive a licensed payload" in EXTENSION_FLAT
 
