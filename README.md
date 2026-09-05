@@ -282,6 +282,11 @@ Nothing below exists yet, and none of it is authorized:
   [docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under
   ADR-0026, **accepted effective on merge**; a specification is not an implementation, and no
   Brain module exists
+- **The Cockpit application, its read models and the feedback engine.** Their architecture is
+  *specified* in [docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
+  and [docs/cockpit/](docs/cockpit/cockpit-v1-specification.md) under ADR-0027, **accepted effective on
+  merge**; no application, read API, projection, database, scheduler or feedback automation exists,
+  and none is authorized
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)
@@ -3208,6 +3213,145 @@ live trading:                                     HARD-DISABLED
 **"Brain started" does not mean runtime coding started.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and this document opens only the first — subject
 to independent review and merge.
+
+### The Cockpit and Feedback specification, and ADR-0027 — ACCEPTED ON MERGE, and nothing is implemented
+
+**The Cockpit is specified. The Cockpit does not exist.** Those are two facts, and they are kept
+apart: a reviewable specification package now sits in the repository, and **no Cockpit application,
+read API, projection runtime, metric engine, feedback automation, database, migration or scheduler
+has been written or authorized**.
+
+**[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) is
+ACCEPTED — EFFECTIVE ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #NNN, and until that merge it
+is PROPOSED and carries no authority.** On that merge it becomes **ACCEPTED / IN FORCE** as
+**architecture, contracts, governance and future implementation boundaries** — and **nothing more**.
+That it carries no authority today is a statement about these days; it stays true of them after any
+later merge, and it is **not** rewritten as though the decision had authority before it was accepted.
+
+**It amends and supersedes no ADR.** It consumes
+[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — **ACCEPTED / IN
+FORCE** through the merge of PR #70 — unchanged, applies
+[ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md)'s authority
+split rather than altering it, and leaves ADR-0005 **PROPOSED**.
+
+**The specification package.**
+
+| Document | What it governs |
+|---|---|
+| [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md) | the Blueprint V3.0 architecture extension — subsystem position, data flow, boundaries, vocabularies |
+| [`docs/cockpit/cockpit-v1-specification.md`](docs/cockpit/cockpit-v1-specification.md) | the 36 Cockpit V1 product areas and their functional contracts |
+| [`docs/cockpit/read-model-contracts.md`](docs/cockpit/read-model-contracts.md) | envelopes, read-model contracts, the endpoint catalog and the metric dictionary |
+| [`docs/cockpit/feedback-self-maturation-specification.md`](docs/cockpit/feedback-self-maturation-specification.md) | the feedback loop, its stage contracts and its authority matrix |
+| [`docs/cockpit/ui-ux-specification.md`](docs/cockpit/ui-ux-specification.md) | presentation, interaction and observable UI acceptance |
+| [`docs/cockpit/traceability-matrix.md`](docs/cockpit/traceability-matrix.md) | all 36 areas traced, plus the C1–C10 delivery sequencing |
+
+**The adopted Blueprint V3.0 PDF does not describe the Cockpit, and it is not edited.** The
+extension is tracked Markdown indexed beside the immutable adopted document, exactly as the
+Document Control override is. **No claim is made that the adopted PDF already contains this
+material.**
+
+**V1 is observational, and READ-ONLY is defined by absence.** No Cockpit endpoint, command,
+assistant tool, hidden handler, background job or scheduled action may place or cancel an order,
+change a stop, change risk or capital, activate or promote a strategy, enable leverage, change the
+provider, execute Run B or an assessment, publish CONTROL, alter production strategy state, or
+approve or reject a governance release. **Governance screens display recorded decisions and packets;
+they do not originate authoritative approval records in V1.** Every future control is **inert** —
+explicitly unavailable, **with no executable handler and no control API route**.
+
+**The read-model boundary applies to the backend as well as the browser.** Facts and events become
+projections, projections become a versioned read API, and the interface consumes that and nothing
+else. The Cockpit reaches **no provider API, no provider or AWS credential, no brokerage API or
+credential, no mutable Brain internal and no private qualification artifact**, and **an API proxy
+must not become a disguised provider or broker integration**.
+
+**The ownership split is preserved exactly.** Brain → `CandidateIntent` only; portfolio and risk →
+ownership permission, sizing, shares and risk constraints; execution → order type, route, fills,
+protection and reconciliation. **No sizing or execution field is added to `CandidateIntent` to
+simplify a screen** — Trade Detail joins separately owned downstream facts by **safe internal
+references**. **The Brain status vocabulary is not extended with downstream states.**
+
+**Five maturity stages map onto existing vocabularies and replace none of them.** `RESEARCH`,
+`SHADOW`, `AUTOMATED_PAPER`, `MICRO_LIVE` and `SCALED_LIVE` present ADR-0026 lifecycle values over
+the unchanged runtime `Environment` enum. **Shadow has no order authority**, **Automated Paper stays
+the first order-producing stage and requires human approval**, and **selecting an environment in the
+interface advances no maturity**.
+
+**Availability is typed, and a missing value is never a zero.** `AVAILABLE`, `NOT_YET_AVAILABLE`,
+`NOT_IMPLEMENTED`, `NOT_AUTHORIZED`, `UNEVALUATED`, `STALE`, `PARTIAL`, `ERROR`, `NOT_APPLICABLE`,
+`EMPTY_VERIFIED` and `INSUFFICIENT_OBSERVATIONS` are distinct states, and **none is rendered as
+zero, healthy, passed or no incidents**. **SYNTHETIC/DEMO is provenance, not an environment**, and
+**a historical success carries its as-of time**.
+
+**"Read model" and "derived" do not mean safe to publish.** `PUBLIC_SAFE` may be hosted externally;
+`PRIVATE_OPERATIONAL` and `LICENSED_DERIVED` stay inside the approved private boundary;
+`UNCLASSIFIED` **fails closed**; and `CONTROL` is **refused at admission** with CONTROL publication
+still **DEFERRED**. **A server-side render, an API proxy, an edge cache and a build-time fetch are
+each a copy**, and none may silently receive a licensed payload. **Licensed content is never copied
+into an immutable audit payload** — audit events carry classified references, and deletion uses
+authorized tombstone semantics that keep the governance evidence and retain no vendor data.
+
+**Self-maturing is not self-governing.** Automation may monitor, diagnose, detect drift and failure
+clusters, preregister and run authorized-scope research, operate authorized shadow Challengers,
+prepare governance packets and fail closed. **It may never** promote into order-producing Paper or
+live operation, replace a production model or parameter, increase capital, risk, leverage or short
+exposure, buy a licence, add a provider, resume a governed suspension, or change kill-switch
+behaviour. **Preregistration is immutable and results append**; **all trials count, including failed
+and abandoned runs**; **no production parameter mutates automatically**; and **no numerical threshold
+becomes a production rule because it appeared in a synthetic example**.
+
+**The stack is decided and nothing is deployed.** Next.js App Router, TypeScript, Tailwind,
+shadcn/ui on Radix, TanStack Query and Table, Zod and Zustand where justified; Recharts,
+TradingView Lightweight Charts and selective Apache ECharts; FastAPI and Pydantic; PostgreSQL for
+operational projections and DuckDB with Parquet for qualified heavy research later; Vercel
+acceptable for an eligible Next.js deployment with Python services separately containerized. **No
+version is pinned**, **no dependency is installed**, **nothing is deployed** and **no spending is
+authorized**. **LEAN remains the research and execution engine**, and **no claim is made about the
+Atlas or SIRE internal technology stack** — the visual benchmark is owner-supplied direction, no
+retrieval was performed in this cycle, and a coordinator retrieval returned 404.
+
+**All 36 areas stay in V1 scope and are traced**, including **area 36**, which keeps four concepts
+apart: **Trade History** is the trade ledger, **Trade Detail** is the complete story of one trade,
+**Execution History** is order and fill mechanics, and the **Audit Trail** is immutable forensic
+events. **A fill is never counted as a separate trade**, **a partial exit reduces a trade rather
+than closing it**, **a missing event is never inferred**, and **the owner's manual activity is never
+adopted as platform evidence**.
+
+**No alpha is claimed anywhere.** No screen, metric or example asserts that any strategy works, and
+**no performance figure in the package is a result**.
+
+```text
+Cockpit specification:                            ACCEPTED EFFECTIVE ON MERGE OF PR #NNN
+Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
+read-model, projection and API implementation:    NOT STARTED / NOT AUTHORIZED
+feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
+database, migration, scheduler and deployment:    NOT STARTED / NOT AUTHORIZED
+new src/ modules created by this specification:   NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+backtesting:                                      NOT STARTED
+provider data used by this specification:         NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+Run A to Run B separation:                        AT LEAST 8 CALENDAR DAYS
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**"Cockpit specified" does not mean Cockpit implementation started.** **Specification,
+implementation, research, deployment and execution are five separate gates**, and they are never
+collapsed into one.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
