@@ -14,6 +14,9 @@ mechanism exists or is authorized because this document describes one.
 **No alpha is claimed anywhere in this document. No result is asserted, and none exists.**
 
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
+**Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — §2.7 only.
+ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it is open**,
+and the correction it makes here is proposed with it.
 **Builds on** [ADR-0006](../decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md)
 §C and [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md)'s
 [Brain specification](../phase4/strategy-brain-specification.md) §12, §13, §22 and §25 —
@@ -124,12 +127,12 @@ displays the authorization it is waiting on.
 | | |
 |---|---|
 | **Inputs** | a queue item and its evidence |
-| **Outputs** | an **immutable** registration: identity, registration time, trigger, strategy, thesis, baseline, variation, **trial budget**, success criteria, failure criteria, data requirements, research version |
+| **Outputs** | an **immutable** registration: identity, registration time, trigger, strategy, thesis, baseline, variation, **trial budget**, **declared evaluation class**, **research lineage**, success criteria, failure criteria, data requirements, research version |
 | **Owner** | the hypothesis registry |
 | **Pins** | data manifest, information-set profile, revision view, factor-definition version, research code identity |
 | **Prerequisites** | success **and** failure criteria stated **before** any result is seen |
 | **Transitions** | `REGISTERED` → `AMENDED` (linked) or `SUPERSEDED_BY_NEW_REGISTRATION`; results attach as **linked records** |
-| **Refusals** | `CRITERIA_INCOMPLETE`, `NO_FAILURE_CRITERION`, `BUDGET_EXHAUSTED`, `DATA_REQUIREMENT_UNAVAILABLE` |
+| **Refusals** | `CRITERIA_INCOMPLETE`, `NO_FAILURE_CRITERION`, `BUDGET_EXHAUSTED`, `BUDGET_EXHAUSTED_ACROSS_LINEAGE`, `DATA_REQUIREMENT_UNAVAILABLE` |
 | **Audit** | the registration is itself an immutable audit record |
 
 **Preregistration is immutable.** A design change creates a **linked amendment or a new
@@ -166,7 +169,7 @@ position stays governed by the exact versions that opened it**.
 | **Pins** | manifest, profile, revision view, code and configuration identity, metric dictionary version |
 | **Prerequisites** | ADR-0026's Brain specification §22 methodology standards, and **a named baseline first** |
 | **Transitions** | `PLANNED` → `RUNNING` → `COMPLETED` / `FAILED` / `ABANDONED`; every terminal state **counts against the trial budget** |
-| **Refusals** | `BUDGET_EXHAUSTED`, `OUT_OF_SAMPLE_ALREADY_CONSUMED`, `MANIFEST_UNAVAILABLE`, `LEAKAGE_RISK_DETECTED`, `AUTHORIZATION_MISSING` |
+| **Refusals** | `BUDGET_EXHAUSTED`, `OUT_OF_SAMPLE_ALREADY_CONSUMED`, `EXPOSURE_HISTORY_UNKNOWN`, `RELATED_LINEAGE_EXPOSED`, `BUDGET_EXHAUSTED_ACROSS_LINEAGE`, `REUSE_METHODOLOGY_UNAUTHORIZED`, `REPRODUCTION_MISMATCH`, `MANIFEST_UNAVAILABLE`, `LEAKAGE_RISK_DETECTED`, `AUTHORIZATION_MISSING` |
 | **Audit** | every run, including failed and abandoned runs, is recorded against its registration |
 
 **All trials are tracked, including failed and abandoned runs.** A multiple-testing control whose
@@ -177,12 +180,81 @@ is the one that most needs counting.
 
 | | |
 |---|---|
-| **the locked set is locked** | out-of-sample data is consumed **once** per registration. A second evaluation against the same locked set requires a **new registration**, and the registry records the consumption |
+| **the locked set is locked** | out-of-sample data is consumed **once per locked set**, and **not once per registration**. Exposure is recorded against the **locked set**, and **a new hypothesis, registration or Challenger identity does not make exposed data untouched again** |
+| **exposure is tracked, not reset** | §2.7.1 holds the exposure ledger, the lineage rule, the three evaluation classes and their refusals |
 | **purging and embargo** | overlapping-horizon research purges and embargoes around the evaluation boundary; the parameters are recorded, not assumed |
 | **no peeking through selection** | universe construction, feature selection and parameter neighbourhoods are declared before the locked evaluation, not tuned against it |
 | **point-in-time only** | every input resolves as of the decision instant, through the declared revision view. **No "latest" shortcut** |
 | **survivorship awareness** | the universe is historical membership, never today's list |
 | **reproducibility evidence** | a run records manifest, profile, revision view, code identity, configuration identity, random seeds and environment, sufficient to reproduce it **without a network** |
+
+#### 2.7.1 Out-of-sample exposure is tracked across registrations
+
+**A registration identity is not a reset button.** The earlier rule — a second evaluation against the
+same locked set requires a new registration — made re-registration the price of reuse, and
+re-registration is free. **A new hypothesis, a new registration and a new Challenger identity leave
+the data exactly as exposed as it was**, and a control that a rename defeats is not a control.
+
+**The exposure ledger is keyed by the locked set.**
+
+| | |
+|---|---|
+| **identity** | every locked set has a **locked-set identity** derived from its manifest, its information-set profile, its revision view and its evaluation boundary. **Two sets with the same identity are the same set**, whatever they are called |
+| **the ledger** | an append-only record **attached to the locked set**, not to a registration. Every evaluation that touches it appends an entry |
+| **each entry records** | the registration identity · the Challenger identity · the research code and configuration identity · the evaluation class · the instant · the requested extent · **the overlap with every prior entry** |
+| **it is read across lineage** | a registration reads the whole ledger for the sets it names, including entries written under **other** registrations |
+
+**Related research lineage counts as exposure.** Exposure follows the research, not the label. A
+registration inherits every ledger entry reachable through its **parent registration**, its
+**amendment chain**, the registration it **supersedes or was superseded by**, a **shared named
+baseline**, a **shared queue trigger or failure cluster**, and a **shared Challenger derivation**.
+**A derived experiment does not get a clean set because it was given a new name.**
+
+**Unknown exposure history cannot support a fresh out-of-sample claim.** If the ledger is missing,
+incomplete, unresolvable, or cannot be shown to cover every prior evaluation of the set, the state
+is `EXPOSURE_HISTORY_UNKNOWN` and **a confirmatory evaluation is refused**. **An absence of recorded
+exposure is not evidence of absent exposure**, and it is never read as one.
+
+**Trial budgets and multiple-testing records do not reset through renaming.** Both are read across
+the lineage above. A registration whose lineage has exhausted its budget is `BUDGET_EXHAUSTED`
+**even on its first run of its own**, and **failed and abandoned runs count wherever they occurred**.
+
+**Three evaluation classes, and only one of them is confirmation.**
+
+| Class | What it is | What it may claim |
+|---|---|---|
+| `DETERMINISTIC_REPRODUCTION` | re-executing a **frozen** prior run at its exact manifest, profile, revision view, code identity, configuration identity, seeds and environment, and reproducing its recorded results | **no new confirmation of anything.** It confirms reproducibility and nothing else. It adds **no** new exposure entry beyond a reproduction note, and it **does not** consume trial budget |
+| `EXPLORATORY_REUSE` | any further look at data the ledger already records as exposed | **disclosed, and never presented as fresh out-of-sample.** It appends an exposure entry, it **consumes trial budget**, and every downstream comparison, packet and report **carries the disclosure** |
+| `CONFIRMATORY` | eligible **only** against an untouched holdout, or new forward evidence generated after the exposure, or under a **separately governed methodology that explicitly accounts for the reuse** | the **only** class that may be described as out-of-sample confirmation, and only within the limits its methodology states |
+
+**The class is declared in the registration and checked against the ledger before the run starts.**
+A run that declares `CONFIRMATORY` against a set the ledger shows as exposed is **refused**, not
+downgraded silently — although the researcher may re-declare it as `EXPLORATORY_REUSE` and proceed
+with the disclosure that entails.
+
+**Refusals, closed:**
+
+```text
+OUT_OF_SAMPLE_ALREADY_CONSUMED     the ledger records prior exposure of this locked set
+EXPOSURE_HISTORY_UNKNOWN           the ledger cannot be shown to be complete
+RELATED_LINEAGE_EXPOSED            a related registration exposed this set
+BUDGET_EXHAUSTED_ACROSS_LINEAGE    the lineage budget is spent, whatever this identity's own
+                                   count says
+REUSE_METHODOLOGY_UNAUTHORIZED     a reuse-accounting methodology was claimed and is not
+                                   separately governed and authorized
+REPRODUCTION_MISMATCH              a declared deterministic reproduction did not reproduce
+```
+
+**What is preserved unchanged.** **Preregistration stays immutable**, results and decisions still
+**append** as linked records, **failed and abandoned trials are still retained and still count**,
+and a design change still creates a **linked amendment or a new registration before additional
+research**. **None of that is relaxed here** — what changes is that the new registration inherits
+the exposure rather than escaping it.
+
+**The negative control this rule exists for.** *A new registration identity, a new Challenger
+identity and a new research question, evaluated against a holdout the ledger already records as
+exposed, is refused with `OUT_OF_SAMPLE_ALREADY_CONSUMED` — and is not admitted as fresh
+out-of-sample evidence under any name.* That case is a required test of any implementation.
 
 ### 2.8 Shadow
 
@@ -204,13 +276,13 @@ stated assumptions, and it is never presented in a series with realized results.
 
 | | |
 |---|---|
-| **Inputs** | registration, all runs against it, locked out-of-sample and stress results, shadow evidence, Champion comparison, exposure and operational impact |
-| **Outputs** | an assembled packet: proposal, cause, evidence, risk, factor and operational impact, failure modes, comparison, **recommendation**, and a place for the human decision |
+| **Inputs** | registration, all runs against it, locked out-of-sample and stress results, **the exposure ledger of every locked set the evidence rests on**, shadow evidence, Champion comparison, exposure and operational impact |
+| **Outputs** | an assembled packet: proposal, cause, evidence, risk, factor and operational impact, failure modes, comparison, **the evaluation class and exposure disclosure of every result it cites**, **recommendation**, and a place for the human decision |
 | **Owner** | the governance packet assembler |
 | **Pins** | every version and manifest identity referenced |
 | **Prerequisites** | complete evidence for every claim the packet makes |
 | **Transitions** | `ASSEMBLING` → `READY_FOR_HUMAN_REVIEW`; and no further transition is automatic |
-| **Refusals** | `EVIDENCE_INCOMPLETE`, `TRIAL_COUNT_UNRECORDED`, `NO_BASELINE_COMPARISON`, `CRITERIA_NOT_EVALUATED` |
+| **Refusals** | `EVIDENCE_INCOMPLETE`, `TRIAL_COUNT_UNRECORDED`, `NO_BASELINE_COMPARISON`, `CRITERIA_NOT_EVALUATED`, `EXPOSURE_DISCLOSURE_INCOMPLETE` |
 | **Audit** | the packet is immutable once ready, and the decision attaches to it |
 
 **A recommendation is input to a human decision, never the decision.** **`READY_FOR_HUMAN_REVIEW`
