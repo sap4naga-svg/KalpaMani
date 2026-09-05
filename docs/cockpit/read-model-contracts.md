@@ -105,7 +105,8 @@ BLOCKED_AI              BLOCKED_CONTRADICTION   BLOCKED_BORROW
 ```
 
 This vocabulary belongs to
-[ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md) §7 and is **consumed
+[ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md)'s
+[Brain specification](../phase4/strategy-brain-specification.md) §7 and is **consumed
 unchanged**. `MAYBE`, `BUY`, `SELL`, `EXECUTE` and `APPROVED_ORDER` remain **refused by name**.
 
 ### 2.7 `DownstreamStage` — a separate axis, owned by separate layers
@@ -128,7 +129,7 @@ HEALTHY   WATCH   DEGRADED   NEW_ENTRIES_REDUCED   NEW_ENTRIES_DISABLED
 SUSPENDED   RETIRED
 ```
 
-ADR-0026 §13 owns this vocabulary.
+ADR-0026's Brain specification §13 owns this vocabulary.
 
 ### 2.9 Information-set profiles — consumed, never extended
 

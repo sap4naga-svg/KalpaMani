@@ -163,8 +163,8 @@ a dashboard's name. **An API proxy must not become a disguised provider or broke
 reconstructs a whole trade by joining separately owned downstream facts through **safe internal
 references**, and the Brain contract is untouched by it. **The Brain never chooses final shares,
 dollars, position size, broker order type, route, client order ID or broker order ID** — this
-decision restates [ADR-0026](ADR-0026-strategy-brain-architecture-and-governance.md) §6 rather than
-amending it.
+decision restates [ADR-0026](ADR-0026-strategy-brain-architecture-and-governance.md)'s
+[Brain specification](../phase4/strategy-brain-specification.md) §6 rather than amending it.
 
 **Downstream states are separately typed.** ADR-0026's Brain decision vocabulary is closed at
 `READY_FOR_RISK_REVIEW`, `WATCHLIST`, `REJECTED`, `BLOCKED_DATA`, `BLOCKED_EVENT`, `BLOCKED_AI`,
@@ -208,7 +208,7 @@ EMPTY_VERIFIED                    INSUFFICIENT_OBSERVATIONS
 
 **A missing value is never converted to zero, healthy, passed or no incidents.** A zero that stands
 in for an unknown reads downstream as a measurement, and every later check treats it as one — the
-same defect ADR-0026 §4 blocks at the point-in-time gate.
+same defect ADR-0026's Brain specification §4 blocks at the point-in-time gate.
 
 **A historical success carries its as-of time.** A past identity preflight is not proof of current
 authentication health.

@@ -173,7 +173,8 @@ proximity, borrow state, liquidity and capacity.
 
 **Boundaries.** **Exposure grouping is not a risk decision.** The dashboard shows the groupings the
 risk engine uses; it does not compute a permitted exposure and does not imply one. **Borrow state is
-displayed from a borrow record, never inferred from price behaviour** (ADR-0026 §20).
+displayed from a borrow record, never inferred from price behaviour** (ADR-0026's Brain
+specification §20).
 
 **V1 availability.** `SYNTHETIC` demonstration; real positions `NOT_IMPLEMENTED`.
 
@@ -192,10 +193,11 @@ trade template and factor. Aggregated to alpha family.
 version.
 
 **Boundaries.** **Breakout Long and Pullback Long keep separate module attribution and share a
-family risk context**, exactly as ADR-0026 §3.1 specifies; whether they are economically distinct is
-**open gate G7**, and this document does not decide it. **No diversification or alpha claim is made
-without evidence** — two modules in one family are one exposure with two names until measured
-otherwise. Results are always attributed to the exact strategy version that produced them.
+family risk context**, exactly as ADR-0026's Brain specification §3.1 specifies; whether they are
+economically distinct is **open gate G7**, and this document does not decide it. **No
+diversification or alpha claim is made without evidence** — two modules in one family are one
+exposure with two names until measured otherwise. Results are always attributed to the exact
+strategy version that produced them.
 
 **V1 availability.** `SYNTHETIC` demonstration; real strategy results `NOT_IMPLEMENTED` — no
 strategy module exists.
@@ -206,8 +208,8 @@ strategy module exists.
 
 **Purpose.** Show whether a strategy is behaving as researched, and what the system did about it.
 
-**Presents.** The health state, from the vocabulary ADR-0026 §13 fixes and this document does not
-extend:
+**Presents.** The health state, from the vocabulary ADR-0026's Brain specification §13 fixes and
+this document does not extend:
 
 ```text
 HEALTHY   WATCH   DEGRADED   NEW_ENTRIES_REDUCED   NEW_ENTRIES_DISABLED
@@ -222,9 +224,9 @@ with reasons · the safety action taken · **the human action required**.
 **Read-model owner.** `StrategyHealth` projection over recorded health-state transitions.
 
 **Boundaries.** **Reducing or disabling new entries is automatic; restoring them is not**, and
-**recovery past a governed suspension is never automatic** (ADR-0026 §13). The Cockpit **displays**
-a transition; it never causes one. **A degradation creates a research queue entry and does not
-mutate a parameter.**
+**recovery past a governed suspension is never automatic** (ADR-0026's Brain specification §13). The
+Cockpit **displays** a transition; it never causes one. **A degradation creates a research queue
+entry and does not mutate a parameter.**
 
 **V1 availability.** `SYNTHETIC` demonstration; real health facts `NOT_IMPLEMENTED`.
 
@@ -362,7 +364,7 @@ results decomposed by regime.
 
 **Boundaries.** **The regime context is versioned and is an input, not a conclusion.** The Cockpit
 shows the regime the system recorded; it computes no new regime and it does not size exposure — that
-stays in the deterministic portfolio and risk logic (ADR-0026 §18).
+stays in the deterministic portfolio and risk logic (ADR-0026's Brain specification §18).
 
 **V1 availability.** `NOT_IMPLEMENTED` — no regime engine exists and no provider is selected.
 `SYNTHETIC` demonstration only.
@@ -401,9 +403,9 @@ events · short strategy statistics · blocked shorts and borrow-related misses.
 
 **Boundaries.** **Borrow availability is never inferred from price data.** Hard-to-borrow conditions
 and price action correlate; a correlation is not a borrow record, and a candidate whose borrow state
-is unknown is displayed as `BLOCKED_BORROW` or unknown rather than assumed available (ADR-0026 §20).
-**Gate G5 — historical borrow qualification — is OPEN**, and every borrow statistic in this area
-inherits that.
+is unknown is displayed as `BLOCKED_BORROW` or unknown rather than assumed available (ADR-0026's
+Brain specification §20). **Gate G5 — historical borrow qualification — is OPEN**, and every borrow
+statistic in this area inherits that.
 
 **V1 availability.** `NOT_IMPLEMENTED`; **short research is NOT AUTHORIZED**. `SYNTHETIC`
 demonstration only.
@@ -421,10 +423,11 @@ regime, sector and factor decomposition · curves and distributions · baseline 
 
 **Read-model owner.** `ResearchRun` projection over immutable research manifests.
 
-**Boundaries.** **A named baseline comes first** (ADR-0026 §22); a run without one is displayed as
-incomplete rather than as a result. **The trial count is read from the record, never remembered.**
-**Synthetic studies are demonstrations, not qualification evidence**, and a synthetic run is
-labelled `SYNTHETIC` + `BACKTEST_SIMULATED` and is excluded from every real comparison.
+**Boundaries.** **A named baseline comes first** (ADR-0026's Brain specification §22); a run without
+one is displayed as incomplete rather than as a result. **The trial count is read from the record,
+never remembered.** **Synthetic studies are demonstrations, not qualification evidence**, and a
+synthetic run is labelled `SYNTHETIC` + `BACKTEST_SIMULATED` and is excluded from every real
+comparison.
 
 **V1 availability.** `NOT_IMPLEMENTED` — **backtesting is NOT STARTED** and no provider is selected.
 `SYNTHETIC` demonstration only.
@@ -443,8 +446,9 @@ and shadow evidence · governance readiness.
 
 **Boundaries.** **No self-promotion.** A Challenger may progress automatically only through
 preapproved research and shadow stages; **promotion requires a governance packet and a human
-decision** (ADR-0026 §12). The comparison view **shows readiness and never confers it**, and the
-word "ready" on this screen means *the evidence required by the packet is present*, never *approved*.
+decision** (ADR-0026's Brain specification §12). The comparison view **shows readiness and never
+confers it**, and the word "ready" on this screen means *the evidence required by the packet is
+present*, never *approved*.
 
 **V1 availability.** `NOT_IMPLEMENTED`. `SYNTHETIC` demonstration only.
 
@@ -561,10 +565,10 @@ effect.
 **Read-model owner.** `AiContribution` projection.
 
 **Boundaries.** **Matched comparisons and stated uncertainty, and no unsupported causal alpha
-claim.** The comparison is experiment E in ADR-0026 §23 and **has not been run**. **AI never
-receives money or order authority**, and this view is measurement rather than justification. Where
-the matched population is too small, the view reports `INSUFFICIENT_OBSERVATIONS` instead of a
-difference.
+claim.** The comparison is experiment E in ADR-0026's Brain specification §23 and **has not been
+run**. **AI never receives money or order authority**, and this view is measurement rather than
+justification. Where the matched population is too small, the view reports
+`INSUFFICIENT_OBSERVATIONS` instead of a difference.
 
 **V1 availability.** `NOT_IMPLEMENTED` — no AI agent exists. `SYNTHETIC` demonstration only.
 

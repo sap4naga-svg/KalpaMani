@@ -234,10 +234,10 @@ Two obligations that look opposed and are not:
 | **licensing** | licensed vendor data must be destroyable on short notice (`CLAUDE.md` §4.23) |
 
 **They are reconciled by never putting one inside the other.** An immutable audit event carries
-**classified references and lineage identifiers**, not vendor rows — the rule ADR-0026 §27 already
-applies to the Brain journal, extended here to every Cockpit-visible audit surface. Deletion is
-expressed as **authorized tombstone semantics**: the governance evidence survives, the referenced
-licensed content does not, and the record says which.
+**classified references and lineage identifiers**, not vendor rows — the rule ADR-0026's Brain
+specification §27 already applies to the Brain journal, extended here to every Cockpit-visible audit
+surface. Deletion is expressed as **authorized tombstone semantics**: the governance evidence
+survives, the referenced licensed content does not, and the record says which.
 
 **A reference is not a row**, and an audit payload that quotes vendor data is a copy the deletion
 runbook cannot reach.

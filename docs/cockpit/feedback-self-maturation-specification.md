@@ -15,8 +15,9 @@ mechanism exists or is authorized because this document describes one.
 
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
 **Builds on** [ADR-0006](../decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md)
-§C and [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md) §12, §13,
-§22 and §25 — **consumed unchanged, and neither amended nor superseded**.
+§C and [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md)'s
+[Brain specification](../phase4/strategy-brain-specification.md) §12, §13, §22 and §25 —
+**consumed unchanged, and neither amended nor superseded**.
 
 ---
 
@@ -63,9 +64,9 @@ are closed vocabularies; **a stage that cannot proceed says why in a code, never
 | **Refusals** | `UNPINNED_VERSION`, `SCHEMA_MISMATCH`, `MISSING_LINEAGE` |
 | **Audit** | the journal **is** the primary audit input |
 
-**Provider payload bytes are never written to the journal** — ADR-0026 §27, applied unchanged.
-Licensed rows stay inside the private boundary; the journal carries **references and lineage
-identifiers**, and a reference is not a row.
+**Provider payload bytes are never written to the journal** — ADR-0026's Brain specification §27,
+applied unchanged. Licensed rows stay inside the private boundary; the journal carries **references
+and lineage identifiers**, and a reference is not a row.
 
 ### 2.2 Outcome and attribution
 
@@ -87,12 +88,12 @@ finding, and finalization is an event rather than a quiet overwrite.
 
 | | |
 |---|---|
-| **Inputs** | attribution, the health inputs ADR-0026 §13 names, execution quality, capacity, correlation, regime and incident records |
+| **Inputs** | attribution, the health inputs ADR-0026's Brain specification §13 names, execution quality, capacity, correlation, regime and incident records |
 | **Outputs** | health-state transitions with reasons; drift measurements; **failure clusters** — groups of losses sharing a cause rather than a period |
 | **Owner** | the health monitor |
 | **Pins** | strategy version, factor-definition version, metric dictionary version |
 | **Prerequisites** | the minimum observations the health contract declares |
-| **Transitions** | the ADR-0026 §13 state machine, unchanged: `HEALTHY`, `WATCH`, `DEGRADED`, `NEW_ENTRIES_REDUCED`, `NEW_ENTRIES_DISABLED`, `SUSPENDED`, `RETIRED` |
+| **Transitions** | ADR-0026's Brain specification §13 state machine, unchanged: `HEALTHY`, `WATCH`, `DEGRADED`, `NEW_ENTRIES_REDUCED`, `NEW_ENTRIES_DISABLED`, `SUSPENDED`, `RETIRED` |
 | **Refusals** | `INSUFFICIENT_OBSERVATIONS`, `MISSING_ATTRIBUTION`, `STALE_INPUT` |
 | **Audit** | every transition records its inputs, its rule and its authority |
 
@@ -146,9 +147,9 @@ researcher wishes they had predicted.
 | **Inputs** | a registration, a Champion version, a variation definition |
 | **Outputs** | an immutable Challenger strategy version |
 | **Owner** | the strategy version registry |
-| **Pins** | every version identity ADR-0026 §9 requires |
+| **Pins** | every version identity ADR-0026's Brain specification §9 requires |
 | **Prerequisites** | a registered hypothesis; an authorized environment set that **excludes** order-producing stages |
-| **Transitions** | ADR-0026 §10 lifecycle stages, advanced only with the evidence and authority each requires |
+| **Transitions** | ADR-0026's Brain specification §10 lifecycle stages, advanced only with the evidence and authority each requires |
 | **Refusals** | `UNPINNED_VERSION`, `NO_REGISTRATION`, `UNAUTHORIZED_ENVIRONMENT` |
 | **Audit** | version creation, activation, retirement, promotion and rollback are all recorded |
 
@@ -163,7 +164,7 @@ position stays governed by the exact versions that opened it**.
 | **Outputs** | run results, trial-count increments, decomposition by regime, sector and factor, capacity analysis, stress results |
 | **Owner** | the research runner |
 | **Pins** | manifest, profile, revision view, code and configuration identity, metric dictionary version |
-| **Prerequisites** | the ADR-0026 §22 methodology standards, and **a named baseline first** |
+| **Prerequisites** | ADR-0026's Brain specification §22 methodology standards, and **a named baseline first** |
 | **Transitions** | `PLANNED` → `RUNNING` → `COMPLETED` / `FAILED` / `ABANDONED`; every terminal state **counts against the trial budget** |
 | **Refusals** | `BUDGET_EXHAUSTED`, `OUT_OF_SAMPLE_ALREADY_CONSUMED`, `MANIFEST_UNAVAILABLE`, `LEAKAGE_RISK_DETECTED`, `AUTHORIZATION_MISSING` |
 | **Audit** | every run, including failed and abandoned runs, is recorded against its registration |
