@@ -1,17 +1,16 @@
 # ADR-0028 — Cockpit contract completion, and four boundary corrections
 
-**Status: PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is
-independently reviewed and merged.**
+**Status: PROPOSED — NOT IN FORCE. No authority until PR #72, the pull request introducing this
+ADR, is independently reviewed and merged.**
 
-While the pull request introducing this ADR is open, ADR-0028 is proposed and carries no authority,
+While PR #72 is open, ADR-0028 is proposed and carries no authority,
 and so are the corrections it makes to the Cockpit specifications in the same pull request. That is
 a statement about the present, it will remain true of these days after any later merge, and it is
 not to be rewritten as though this decision had authority before it was accepted. On merge, this ADR
 becomes **ACCEPTED / IN FORCE** as **corrected contracts, corrected boundaries and governance** —
 and nothing else.
 
-**The acceptance event is exact:** the independent review and merge of the pull request introducing
-this ADR into `main`. No merge SHA and no merge timestamp is predicted here; those are repository
+**The acceptance event is exact:** the independent review and merge of **PR #72** into `main`. No merge SHA and no merge timestamp is predicted here; those are repository
 state, recorded after the fact if they are recorded at all.
 
 **Date:** 2026-09-05
@@ -374,7 +373,7 @@ governance — and nothing else.** **Acceptance authorizes no implementation and
 
 | | |
 |---|---|
-| Corrected Cockpit contracts and boundaries | **ACCEPTED EFFECTIVE ON MERGE of the pull request introducing this ADR** |
+| Corrected Cockpit contracts and boundaries | **ACCEPTED EFFECTIVE ON MERGE OF PR #72** |
 | Cockpit application implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Read-model, projection, metric-engine and API implementation | **NOT STARTED / NOT AUTHORIZED** |
 | Feedback and learning-engine implementation | **NOT STARTED / NOT AUTHORIZED** |

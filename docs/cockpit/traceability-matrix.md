@@ -14,7 +14,7 @@ dependencies and its authorizations exist.
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — the acceptance criteria of Areas 1, 3, 12,
 15, 18, 24, 31, 33 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request
-introducing it is open**.
+introducing it, PR #72, is open**.
 
 ---
 

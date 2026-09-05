@@ -25,7 +25,7 @@ figure, chart and statistic described below is a **shape a screen would take**, 
 |---|---|
 | **Governed by** | Blueprint V3.0, then approved ADRs, then `CLAUDE.md`, then the approved task specification |
 | **Introduced by** | [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) |
-| **Amended by** | [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Areas 1, 3, 12, 24, 31 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it is open** |
+| **Amended by** | [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Areas 1, 3, 12, 24, 31 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open** |
 | **Architecture** | [`COCKPIT_FEEDBACK_EXTENSION.md`](../architecture/COCKPIT_FEEDBACK_EXTENSION.md) |
 | **Contracts** | [`read-model-contracts.md`](read-model-contracts.md) |
 | **Feedback** | [`feedback-self-maturation-specification.md`](feedback-self-maturation-specification.md) |

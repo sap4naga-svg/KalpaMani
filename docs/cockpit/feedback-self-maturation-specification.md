@@ -15,7 +15,7 @@ mechanism exists or is authorized because this document describes one.
 
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — §2.7 only.
-ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it is open**,
+ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open**,
 and the correction it makes here is proposed with it.
 **Builds on** [ADR-0006](../decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md)
 §C and [ADR-0026](../decisions/ADR-0026-strategy-brain-architecture-and-governance.md)'s

@@ -3366,8 +3366,8 @@ reverted, reopened or restated as proposed.**
 
 **Four issues in the accepted specifications were identified and not resolved, and
 [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
-corrects them.** **ADR-0028 is PROPOSED and carries no authority while the pull request introducing
-it is open**, and so are the specification corrections that ship with it. On independent review and
+corrects them.** **ADR-0028 is PROPOSED and carries no authority while PR #72, the pull request
+introducing it, is open**, and so are the specification corrections that ship with it. On independent review and
 merge it accepts **corrected contracts, corrected boundaries and governance** — and **nothing
 else**.
 
@@ -3419,7 +3419,7 @@ its response size. **They are not trading risk limits, position limits, capital 
 governed value.**
 
 ```text
-ADR-0028:                                         PROPOSED / IN REVIEW
+ADR-0028:                                         PROPOSED / IN REVIEW / PR #72
 Cockpit contract corrections:                     PROPOSED / IN REVIEW
 ADR-0027:                                         ACCEPTED / IN FORCE
 ADR-0026:                                         ACCEPTED / IN FORCE

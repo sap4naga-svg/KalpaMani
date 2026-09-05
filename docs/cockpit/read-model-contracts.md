@@ -13,7 +13,7 @@ importable, no type here exists, and **no module under `src/` is created by this
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
 **Architecture:** [`COCKPIT_FEEDBACK_EXTENSION.md`](../architecture/COCKPIT_FEEDBACK_EXTENSION.md).
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — §2.2, §2.4, §4, §5, §7, §10, §11 and §12.
-ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it is open**,
+ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open**,
 and the corrections it makes here are proposed with it.
 
 ---

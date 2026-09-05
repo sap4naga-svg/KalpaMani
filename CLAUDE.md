@@ -409,7 +409,7 @@ MERGE OF PR #71, and PROPOSED and carrying no authority until that merge**. **Th
 occurred, so ADR-0027 is ACCEPTED / IN FORCE.** Four issues in those accepted specifications are
 corrected by
 **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) —
-PROPOSED, and carrying no authority while its pull request is open**. **A specification is not
+PROPOSED, and carrying no authority while its pull request, PR #72, is open**. **A specification is not
 an implementation**: no Cockpit application, read API, projection runtime, metric engine, feedback
 automation, database, migration or scheduler exists, and **none is authorized**. **V1 is
 observational**, and **every future control is inert with no handler and no control API route** — see
@@ -3513,8 +3513,8 @@ reverted, reopened or restated as proposed.**
 
 **Four issues in the accepted specifications were identified and not resolved, and
 [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
-corrects them.** **ADR-0028 is PROPOSED and carries no authority while the pull request introducing
-it is open**, and so are the specification corrections that ship with it. On independent review and
+corrects them.** **ADR-0028 is PROPOSED and carries no authority while PR #72, the pull request
+introducing it, is open**, and so are the specification corrections that ship with it. On independent review and
 merge it accepts **corrected contracts, corrected boundaries and governance** — and **nothing
 else**.
 
@@ -3566,7 +3566,7 @@ its response size. **They are not trading risk limits, position limits, capital 
 governed value.**
 
 ```text
-ADR-0028:                                         PROPOSED / IN REVIEW
+ADR-0028:                                         PROPOSED / IN REVIEW / PR #72
 Cockpit contract corrections:                     PROPOSED / IN REVIEW
 ADR-0027:                                         ACCEPTED / IN FORCE
 ADR-0026:                                         ACCEPTED / IN FORCE

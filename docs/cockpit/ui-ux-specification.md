@@ -13,7 +13,7 @@ file, route or screenshot exists because this document describes one.
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
 — §5 and a new §9.4. ADR-0028 is **PROPOSED and carries no authority while the pull request
-introducing it is open**.
+introducing it, PR #72, is open**.
 
 ---
 

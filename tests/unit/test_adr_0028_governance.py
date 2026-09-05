@@ -119,6 +119,13 @@ def test_the_acceptance_event_is_stated_without_predicting_a_merge() -> None:
     assert "No merge SHA and no merge timestamp is predicted here" in ADR_FLAT
 
 
+@pytest.mark.parametrize("name", ["decision", *sorted(AMENDED)])
+def test_every_document_names_the_pull_request_it_is_proposed_in(name: str) -> None:
+    """An unbound "the pull request introducing it" is a reference nobody can follow."""
+    text = ADR_TEXT if name == "decision" else AMENDED[name]
+    assert re.search(r"PR #\d+", text), name
+
+
 def test_the_decision_amends_no_adr_document() -> None:
     assert "**Supersedes:** nothing" in ADR_TEXT
     assert "It does not amend, supersede or edit ADR-0027 itself" in ADR_FLAT
