@@ -25,6 +25,7 @@ figure, chart and statistic described below is a **shape a screen would take**, 
 |---|---|
 | **Governed by** | Blueprint V3.0, then approved ADRs, then `CLAUDE.md`, then the approved task specification |
 | **Introduced by** | [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) |
+| **Amended by** | [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Areas 1, 3, 12, 24, 31 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open** |
 | **Architecture** | [`COCKPIT_FEEDBACK_EXTENSION.md`](../architecture/COCKPIT_FEEDBACK_EXTENSION.md) |
 | **Contracts** | [`read-model-contracts.md`](read-model-contracts.md) |
 | **Feedback** | [`feedback-self-maturation-specification.md`](feedback-self-maturation-specification.md) |
@@ -118,7 +119,8 @@ availability, real-feed gate, implementation cycle and observable acceptance cri
 where is risk, and what requires attention.
 
 **Presents.** Strategy capital, equity and cash · daily, weekly, monthly and cumulative profit and
-loss · return · long, short, gross and net exposure · open planned risk · drawdown · market regime ·
+loss · return · long, short, gross and net exposure · **current open planned risk with its as-of**
+and the **permitted** open risk beside it · drawdown · market regime ·
 system health · data freshness · active strategies · open incidents · last decision and last scout
 run · **What Changed** · a ranked **Attention Required** list.
 
@@ -129,6 +131,11 @@ portfolio, risk, strategy-health, data-quality, operations and governance read m
 observed for reconciliation and never participates in sizing** (`CLAUDE.md` §6). The overview shows
 both and never substitutes one for the other. Every tile carries its own availability and as-of
 time; **a tile whose input is missing shows its availability state, never a zero**.
+
+**Open planned risk is the risk engine's assessment of the remaining exposure**, shown with its own
+as-of and never with initial planned risk's label ([`read-model-contracts.md`](read-model-contracts.md)
+§4.4). **A permitted limit is displayed with its policy reference and is never a permission this
+view grants**, and a stale or missing assessment renders as such rather than as a number.
 
 **V1 availability.** `SYNTHETIC` demonstration. Real inputs are `NOT_IMPLEMENTED` for strategy,
 candidate, execution and broker facts, and `AVAILABLE` only for governance facts that already exist
@@ -164,15 +171,19 @@ meaningless number.
 
 **Purpose.** Show what is owned, why, and what it is exposed to.
 
-**Presents.** Per position — entry and current price, unrealized result, planned risk, invalidation
-level, ownership, holding duration. Grouped by long and short, sector and industry, strategy,
+**Presents.** Per position — entry and current price, unrealized result, **initial planned risk**
+and **current open planned risk** as two separate facts, invalidation level, ownership, holding
+duration. Grouped by long and short, sector and industry, strategy,
 alpha family, factor and correlation cluster. Concentration, gap exposure, event exposure, earnings
 proximity, borrow state, liquidity and capacity.
 
 **Read-model owner.** `PositionSnapshot` and `ExposureAggregate` projections.
 
 **Boundaries.** **Exposure grouping is not a risk decision.** The dashboard shows the groupings the
-risk engine uses; it does not compute a permitted exposure and does not imply one. **Borrow state is
+risk engine uses; it does not compute a permitted exposure and does not imply one. **The two risk
+quantities are displayed separately and neither is derived from the other**: initial planned risk is
+the immutable entry record, current open planned risk is an assessment carrying its own as-of, and
+**a moving stop moves the second and never the first**. **Borrow state is
 displayed from a borrow record, never inferred from price behaviour** (ADR-0026's Brain
 specification §20).
 
@@ -375,8 +386,10 @@ stays in the deterministic portfolio and risk logic (ADR-0026's Brain specificat
 
 **Purpose.** Show the risk the portfolio is carrying and the constraints that bound it.
 
-**Presents.** Planned and permitted risk · concentration · sector, family, factor and correlation
-exposure · portfolio volatility · gap, event, earnings, short and borrow risk · loss and drawdown
+**Presents.** The four risk quantities kept apart — **initial planned risk** per open trade,
+**current open planned risk** with its as-of, **permitted risk** with its policy reference, and
+**gap and event risk** from its own named model · concentration · sector, family, factor and
+correlation exposure · portfolio volatility · earnings, short and borrow risk · loss and drawdown
 thresholds · risk tier · circuit-breaker state · new-entry state.
 
 **Read-model owner.** `RiskSnapshot` projection over recorded risk-engine outputs.
@@ -386,6 +399,11 @@ breaker and reduces no exposure. The governed research values it displays — 0.
 per trade, 0.25% short, approximately 5% maximum open planned risk, approximately 8–10% maximum
 individual position, at most 25% initial gross short, no leverage — are **reproduced for context and
 are research parameters, not performance expectations**. **This specification changes none of them.**
+
+**Aggregation never double-counts.** Portfolio open planned risk sums the current open planned risk
+of open exposure **once per position**; an add belongs to its trade, a closed portion contributes
+nothing, and an aggregate containing a stale or missing component renders `PARTIAL` with the
+components named. **A missing assessment is unavailable, never zero and never `NOT_APPLICABLE`.**
 
 **V1 availability.** `NOT_IMPLEMENTED` — no risk engine exists. `SYNTHETIC` demonstration only.
 
@@ -636,9 +654,16 @@ blank.
 else; G1, G2, G4, G5, G6 and G7 are open for their own reasons. **The view never renders a blanket
 statement about all seven.**
 
-**V1 availability.** `AVAILABLE` from tracked repository authority — the one area whose real inputs
-exist today. Where a governance fact is private, the view reports the public-safe status and nothing
-more.
+**These are real facts, and they are never relabelled synthetic.** Their provenance is
+`REPOSITORY_TRACKED` and their classification is `PUBLIC_SAFE`
+([`read-model-contracts.md`](read-model-contracts.md) §2.2, §7.1). **A `PUBLIC_SAFE` label is not a
+publication permission**: displaying this view on an externally hosted deployment additionally
+requires a recorded release authorization, and without one the view is served inside the private
+boundary only.
+
+**V1 availability.** `AVAILABLE` from tracked repository authority — the one area whose payload is
+composed entirely of real inputs that exist today. Where a governance fact is private, the view
+reports the public-safe status and nothing more.
 
 ---
 
@@ -771,7 +796,7 @@ scope, stated uncertainty, and **abstention when the data is missing**.
 | **no unrestricted data access** | it reads exactly the read models the asking session is authorized for |
 | **no state mutation** | it answers; it changes nothing |
 | **no broker action** | it has no execution vocabulary at all |
-| **no external LLM transmission of licensed data** | `CLAUDE.md` §4.22 governs this surface exactly as it governs an AI assistant session. **A read model derived from licensed rows may not be sent to an external model**, and an unknown classification fails closed |
+| **no external LLM transmission of licensed data** | `CLAUDE.md` §4.22 governs this surface exactly as it governs an AI assistant session. **A read model derived from licensed rows may not be sent to an external model**, and an unknown classification fails closed. A `LICENSED_DERIVED` read model remains legitimate **inside** the private boundary; what is forbidden is transmitting it out of one |
 | **abstention over invention** | where availability is `NOT_YET_AVAILABLE`, `UNEVALUATED`, `PARTIAL` or `INSUFFICIENT_OBSERVATIONS`, it says so and does not estimate |
 
 **V1 availability.** `NOT_IMPLEMENTED`. Specified now so its boundary is designed rather than
@@ -862,13 +887,18 @@ not create the impression that it is.
 
 **Presents.** Open and closed, long and short · strategy, family and symbol · entry and exit
 timestamps and prices · shares and initial position value · realized profit and loss · unrealized
-profit and loss for open trades · return percentage · R multiple · holding period · MFE · MAE ·
-capture ratio · entry and exit reasons · stop and invalidation outcome · strategy, factor and
-risk-policy versions · environment and trade status · search, sort, filters and date ranges ·
+profit and loss for open trades · return percentage · **initial planned risk** and **current open
+planned risk** as two separate columns · **R multiple against initial planned risk** · holding
+period · MFE · MAE · capture ratio · entry and exit reasons · stop and invalidation outcome ·
+strategy, factor and risk-policy versions · environment · **trade status and data completeness as
+two separate columns** · search, sort, filters and date ranges ·
 winners and losers and strategy filters · **safe classified exports where appropriate**.
 
 **An export carries its classification.** A `LICENSED_DERIVED` or `PRIVATE_OPERATIONAL` export
-cannot leave the private boundary, and an export of unknown classification is refused.
+cannot leave the private boundary, and an export of unknown classification is refused. **A
+`PUBLIC_SAFE` classification is not by itself an authorization to publish** — an export leaving for
+an externally hosted destination additionally needs its own recorded release authorization
+([`read-model-contracts.md`](read-model-contracts.md) §7.1).
 
 ### 36.2 Trade Detail
 
@@ -912,8 +942,10 @@ field is added to `CandidateIntent`** to make this view simpler.
 | **trade to position and lot** | the relationship is explicit — a trade maps to a position and to its lots, and the mapping is recorded rather than derived at read time |
 | **partial exits** | reduce a trade; they do not close it and do not create a second trade |
 | **multiple fills** | are fills. **A fill is never counted as a separate trade** |
-| **adds and pyramids** | extend an existing trade under the pyramiding rules, and are attributed to it |
-| **corrections** | are appended as corrections with their own time and reason; a corrected value shows that it was corrected |
+| **adds and pyramids** | extend an existing trade under the pyramiding rules, and are attributed to it. **Each add carries its own initial planned risk record**, and the trade's earlier records are retained unchanged |
+| **initial risk is immutable** | a stop that moves, a protective order that is replaced and a partial exit each move **current open planned risk** and **never** the initial planned risk the R multiple divides by |
+| **business status and data completeness** | are separate facts. A complete trade with a missing bar is `COMPLETE` in status and `PARTIAL` in completeness, and **neither is inferred from the other** |
+| **corrections** | are appended as corrections with their own time and reason; a corrected value shows that it was corrected, and **the corrected record is never mutated in place** |
 | **lifecycle gaps** | are shown as gaps. **A missing event is never inferred**, and a trade with an incomplete lifecycle reports `PARTIAL` |
 
 **Existing manual activity is not silently adopted as platform evidence.** Trades the owner placed

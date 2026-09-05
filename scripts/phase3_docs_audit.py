@@ -13166,6 +13166,36 @@ COCKPIT_FEEDBACK: Final = COCKPIT_DIR / "feedback-self-maturation-specification.
 COCKPIT_UIUX: Final = COCKPIT_DIR / "ui-ux-specification.md"
 COCKPIT_MATRIX: Final = COCKPIT_DIR / "traceability-matrix.md"
 
+#: ADR-0028 corrects four clauses of the accepted package: the field-level contracts, the
+#: out-of-sample reuse rule, the licensed-data admission boundary and the single "planned
+#: risk" phrase. It is a separate decision, and the documents it amends must name it.
+COCKPIT_CORRECTION_ADR: Final = (
+    DECISIONS / "ADR-0028-cockpit-contract-completion-and-boundary-corrections.md"
+)
+
+#: ``| `ReadModelName` | owner | ...`` -- the first cell of a read-model catalog row.
+COCKPIT_CATALOG_ROW: Final = re.compile(r"^\| `([A-Z][A-Za-z]+)` \| ", re.MULTILINE)
+#: ``ReadModelName.payload {`` -- the opening line of a payload contract block.
+COCKPIT_PAYLOAD_BLOCK: Final = re.compile(r"^([A-Z][A-Za-z]+)\.payload \{", re.MULTILINE)
+#: ``| `candidate` | resolves to | ...`` -- a row of the reference-resolution table.
+COCKPIT_REF_ROW: Final = re.compile(r"^\| `([a-z_]+)` \| ", re.MULTILINE)
+#: ``kind candidate`` / ``kind evidence or source_fact`` inside a payload contract.
+COCKPIT_REF_USE: Final = re.compile(r"\bkind ([a-z_]+)(?: or ([a-z_]+))?")
+#: ``GET  /api/v1/portfolio/trades`` in the fenced endpoint catalog.
+COCKPIT_CATALOG_ENDPOINT: Final = re.compile(r"^GET\s+/api/v1(\S*)", re.MULTILINE)
+#: ``| `/portfolio/trades` | response | ...`` in the per-endpoint contract table.
+COCKPIT_CONTRACT_ENDPOINT: Final = re.compile(r"^\| `(/[^`]*)` \| ", re.MULTILINE)
+
+
+def cockpit_document_section(text: str, start: str, end: str) -> str:
+    """One named span of a Cockpit document, so a match elsewhere does not count."""
+    begin = text.find(start)
+    if begin == -1:
+        return ""
+    stop = text.find(end, begin + len(start))
+    return text[begin:] if stop == -1 else text[begin:stop]
+
+
 #: The section each status document owns, so a line found elsewhere in a four-thousand-line
 #: document does not count as this section carrying it.
 COCKPIT_README_SECTION: Final = "### The Cockpit and Feedback specification, and ADR-0027"
@@ -13198,8 +13228,11 @@ COCKPIT_AVAILABILITY: Final = (
     "INSUFFICIENT_OBSERVATIONS",
 )
 
+#: ADR-0028 added ``REPOSITORY_TRACKED`` so a real tracked governance fact is never
+#: relabelled ``SYNTHETIC`` to satisfy a hosting rule.
 COCKPIT_PROVENANCE: Final = (
     "SYNTHETIC",
+    "REPOSITORY_TRACKED",
     "SYSTEM_RECORDED",
     "BACKTEST_SIMULATED",
     "BROKER_REPORTED",
@@ -23638,6 +23671,274 @@ def main() -> int:
             not ungated,
             ", ".join(ungated),
         )
+
+        # -- ADR-0028: the four corrections, checked across the documents they span --
+        #
+        # Section 23 above guards ADR-0027's package. These guards are the cross-document
+        # half of ADR-0028: a contract completed in one file and forgotten in another, a
+        # vocabulary member added to the contracts and missing from the extension, or a
+        # correction claimed in the decision and absent from the specification it names.
+        # The per-document detail is ``tests/unit/test_adr_0028_governance.py``.
+        adr_28 = read(COCKPIT_CORRECTION_ADR) if COCKPIT_CORRECTION_ADR.is_file() else ""
+        adr_28_flat = " ".join(adr_28.replace("**", "").split())
+        f.check(
+            "ADR-0028 exists at its exact path",
+            COCKPIT_CORRECTION_ADR.is_file(),
+            str(COCKPIT_CORRECTION_ADR.relative_to(REPO_ROOT)),
+        )
+        if not adr_28:
+            print("  FAIL: ADR-0028 is absent; its remaining checks cannot run")
+            f.failures.append("ADR-0028 is absent")
+        else:
+            f.check(
+                "ADR-0028 declares itself proposed and claims no authority",
+                "Status: PROPOSED — NOT IN FORCE" in adr_28
+                and "carries no authority" in adr_28_flat
+                and "ADR-0028 is ACCEPTED / IN FORCE" not in adr_28_flat,
+                "a correction must not carry authority before it is reviewed",
+            )
+            f.check(
+                "ADR-0028 records ADR-0027 as accepted rather than reopening it",
+                "ADR-0027 is ACCEPTED / IN FORCE" in adr_28_flat
+                and "does not revert, reopen or restate ADR-0027 as proposed" in adr_28_flat,
+                "PR #71 merged; a correction does not un-merge the decision it corrects",
+            )
+            f.check(
+                "ADR-0027 is not edited by the correction",
+                "ADR-0028" not in adr_27,
+                "an accepted decision keeps its own text",
+            )
+            unamended = [
+                label
+                for label, text in (
+                    ("the architecture extension", extension_27),
+                    ("the V1 specification", spec_27),
+                    ("the read-model contracts", contracts_27),
+                    ("the feedback specification", cockpit_text["the feedback specification"]),
+                    ("the UI/UX specification", cockpit_text["the UI/UX specification"]),
+                    ("the traceability matrix", matrix_27),
+                )
+                if "ADR-0028" not in text
+            ]
+            f.check(
+                "every amended Cockpit document names ADR-0028 as its amender",
+                not unamended,
+                ", ".join(unamended),
+            )
+            leaks = adr_0021_identifier_leaks(adr_28)
+            f.check(
+                "ADR-0028 carries no account id, access key, SSO start URL or concrete ARN",
+                not leaks,
+                "; ".join(leaks),
+            )
+
+            # A. every catalogued read model has a contract, and every contract a catalog row
+            catalog = cockpit_document_section(
+                contracts_27, "## 4. Read-model catalog", "### 4.1 How to read"
+            )
+            payloads = cockpit_document_section(
+                contracts_27, "### 4.5 The payload contracts", "### 4.6 Synthetic"
+            )
+            catalogued = set(COCKPIT_CATALOG_ROW.findall(catalog))
+            contracted = {
+                name
+                for block in re.findall(r"```text\n(.*?)```", payloads, flags=re.DOTALL)
+                for name in COCKPIT_PAYLOAD_BLOCK.findall(block)
+            }
+            f.check(
+                "the read-model catalog is substantial enough to be a catalog",
+                len(catalogued) >= 35,
+                f"{len(catalogued)} row(s) parsed",
+            )
+            f.check(
+                "every catalogued read model has a field-level payload contract",
+                catalogued <= contracted,
+                f"uncontracted: {sorted(catalogued - contracted)}",
+            )
+            f.check(
+                "every payload contract belongs to a catalogued read model",
+                contracted <= catalogued,
+                f"orphaned: {sorted(contracted - catalogued)}",
+            )
+            f.check(
+                "the field-level deferral is gone from the contracts",
+                "Selected payload shapes" not in contracts_27
+                and "metric-defined" not in contracts_27,
+                "a deferral is not a contract",
+            )
+
+            # A. every catalogued endpoint declares its per-endpoint contract
+            endpoint_section = cockpit_document_section(
+                contracts_27, "## 5. Endpoint catalog", "### 5.2 Cursor, snapshot"
+            )
+            catalog_endpoints = {
+                match
+                for block in re.findall(r"```text\n(.*?)```", endpoint_section, flags=re.DOTALL)
+                for match in COCKPIT_CATALOG_ENDPOINT.findall(block)
+            }
+            table_endpoints = set(COCKPIT_CONTRACT_ENDPOINT.findall(endpoint_section))
+            f.check(
+                "every catalogued endpoint declares its response, filters, sorts and bounds",
+                bool(catalog_endpoints) and catalog_endpoints <= table_endpoints,
+                f"undeclared: {sorted(catalog_endpoints - table_endpoints)}",
+            )
+            f.check(
+                "every per-endpoint contract row names a catalogued endpoint",
+                table_endpoints <= catalog_endpoints,
+                f"orphaned: {sorted(table_endpoints - catalog_endpoints)}",
+            )
+            f.check(
+                "read-resource limits are not described as trading limits",
+                "They are not trading risk limits" in contracts_27
+                and "They are not trading risk limits" in adr_28,
+                "a page size is not a risk limit",
+            )
+
+            # A. no reference used in a payload lacks a declared resolution
+            refs = cockpit_document_section(
+                contracts_27, "### 4.3 Resolving a reference", "### 4.4 The four risk"
+            )
+            declared_kinds = set(COCKPIT_REF_ROW.findall(refs))
+            used_kinds: set[str] = set()
+            for block in re.findall(r"```text\n(.*?)```", payloads, flags=re.DOTALL):
+                for first, second in COCKPIT_REF_USE.findall(block):
+                    used_kinds.add(first)
+                    if second:
+                        used_kinds.add(second)
+            f.check(
+                "no reference used in a payload contract lacks a declared resolution",
+                bool(declared_kinds) and used_kinds <= declared_kinds,
+                f"dangling: {sorted(used_kinds - declared_kinds)}",
+            )
+
+            # B. out-of-sample exposure is tracked across registrations
+            feedback_27 = cockpit_text["the feedback specification"]
+            feedback_27_flat = cockpit_flat["the feedback specification"]
+            f.check(
+                "out-of-sample consumption is per locked set, not per registration",
+                "consumed **once per locked set**" in feedback_27
+                and "not once per registration" in feedback_27_flat
+                and "consumed **once** per registration" not in feedback_27,
+                "a control a rename defeats is not a control",
+            )
+            f.check(
+                "a new registration or Challenger identity does not clear exposure",
+                "a new hypothesis, registration or Challenger identity does not make exposed "
+                "data untouched again" in feedback_27_flat,
+                "exposure follows the research, not the label",
+            )
+            f.check(
+                "unknown exposure history fails closed",
+                "Unknown exposure history cannot support a fresh out-of-sample claim"
+                in feedback_27_flat
+                and "An absence of recorded exposure is not evidence of absent exposure"
+                in feedback_27_flat,
+                "an unrecorded exposure is not an absent one",
+            )
+            missing_classes = [
+                name
+                for name in ("DETERMINISTIC_REPRODUCTION", "EXPLORATORY_REUSE", "CONFIRMATORY")
+                if name not in feedback_27 or name not in adr_28
+            ]
+            f.check(
+                "the three evaluation classes are defined in the specification and the decision",
+                not missing_classes,
+                ", ".join(missing_classes),
+            )
+            f.check(
+                "the governance packet carries the exposure disclosure",
+                "EXPOSURE_DISCLOSURE_INCOMPLETE" in feedback_27
+                and "exposure_disclosure" in contracts_27,
+                "a packet that hides a reuse is a packet that misleads a human",
+            )
+
+            # C. classification, hosting and the publication gate
+            f.check(
+                "the real-governance provenance is defined wherever it is used",
+                all(
+                    "REPOSITORY_TRACKED" in text
+                    for text in (extension_27, contracts_27, spec_27, adr_28)
+                ),
+                "a vocabulary member added in one place and forgotten in another",
+            )
+            f.check(
+                "external hosting admits exactly two provenances, in both documents",
+                "SYNTHETIC or REPOSITORY_TRACKED provenance" in contracts_27
+                and "only SYNTHETIC or REPOSITORY_TRACKED provenance" in extension_27,
+                "a hosting rule that disagrees between two documents is two rules",
+            )
+            f.check(
+                "a real tracked fact is never relabelled synthetic",
+                "never relabelled SYNTHETIC" in cockpit_flat["the read-model contracts"]
+                and "never relabelled `SYNTHETIC` to satisfy a hosting rule" in adr_28,
+                "a hosting rule is not a reason to misdescribe data",
+            )
+            f.check(
+                "classification is a label and publication is a separate authorization",
+                "Classification is a label; publication is a gate" in contracts_27
+                and "publication is a separate authorization" in extension_27_flat
+                and "It does not bypass a required release" in adr_28_flat,
+                "a sensitivity label must not act as a release authorization",
+            )
+            f.check(
+                "credentials and classified payload content are governed separately",
+                "List A — credentials and infrastructure identifiers" in contracts_27
+                and "List B — classified payload content" in contracts_27
+                and "Licensed-derived is not a defect; publishing it is" in contracts_27,
+                "one list for an absolute ban and one for a classification rule",
+            )
+            f.check(
+                "audit corrections and deletions append rather than mutate",
+                "Deletion and correction append; they never mutate" in contracts_27
+                and "Corrections and deletions append; they never mutate" in extension_27,
+                "in-place redaction of an immutable record is not immutability",
+            )
+
+            # D. initial risk and current risk are separate facts
+            missing_risk = [
+                name
+                for name in (
+                    "InitialPlannedRisk",
+                    "CurrentOpenPlannedRisk",
+                    "PermittedRisk",
+                    "GapEventRisk",
+                )
+                if name not in contracts_27
+            ]
+            f.check(
+                "each of the four risk quantities has its own contract",
+                not missing_risk,
+                ", ".join(missing_risk),
+            )
+            f.check(
+                "the four risk quantities are kept apart in the contracts and the extension",
+                "The four risk quantities, kept apart" in contracts_27
+                and "The four risk quantities, kept apart" in extension_27,
+                "one phrase over four facts makes a screen assert what nobody computed",
+            )
+            f.check(
+                "a moving stop never moves the R denominator",
+                "the only denominator an R multiple may use"
+                in cockpit_flat["the read-model contracts"]
+                and "a moving stop does not move it" in extension_27_flat.lower(),
+                "an R multiple whose denominator drifts is not an R multiple",
+            )
+            f.check(
+                "missing initial planned risk is unavailable rather than inapplicable",
+                "It is unavailable, not inapplicable" in cockpit_flat["the read-model contracts"]
+                and "`NOT_DEFINED_FOR_SUBJECT` is the only route to `NOT_APPLICABLE`"
+                in contracts_27,
+                "inapplicability is a property of the subject, not a synonym for unknown",
+            )
+            f.check(
+                "the Cockpit still invents no trading permission",
+                "invents no trading permission" in cockpit_flat["the read-model contracts"]
+                and "invents no trading permission" in extension_27_flat
+                and "no risk limit, capital value, leverage setting, sizing rule or stop "
+                "policy changes"
+                in adr_28_flat,
+                "displaying a limit is not granting it",
+            )
 
         # -- the new documents carry no identifier --
         for label, text in cockpit_text.items():

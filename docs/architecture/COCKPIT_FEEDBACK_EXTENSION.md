@@ -6,6 +6,9 @@ days; it stays true of them after any later merge, and it is not rewritten as th
 had authority before it was accepted.
 
 **Introduced by** [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md).
+**Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — §4.3, §4.5, §5 and a new §4.6.
+ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open**,
+and the corrections it makes here are proposed with it.
 
 ---
 
@@ -168,6 +171,7 @@ A closed vocabulary. Every read model carries one value.
 | Value | Meaning |
 |---|---|
 | `SYNTHETIC` | a repository-owned deterministic fixture. No vendor row, no broker record, no owner private data |
+| `REPOSITORY_TRACKED` | a **real** fact read from tracked repository authority — a merged ADR state, a gate state, a recorded governance status. **Real, and never relabelled `SYNTHETIC`** |
 | `SYSTEM_RECORDED` | produced by KalpaMani's own deterministic runtime from authorized inputs |
 | `BACKTEST_SIMULATED` | produced by an authorized research run. **Hypothetical, never realized** |
 | `BROKER_REPORTED` | observed from a brokerage under an authorized session |
@@ -215,12 +219,56 @@ checked.
 be recovered from this artifact?* Yes **or uncertain** means licensed.
 
 ```text
-PUBLIC_EDGE         externally hosted; admits PUBLIC_SAFE with SYNTHETIC provenance only
+PUBLIC_EDGE         externally hosted; admits PUBLIC_SAFE payloads only, and within that
+                    only SYNTHETIC or REPOSITORY_TRACKED provenance
 PRIVATE_BOUNDARY    inside the approved private deployment boundary
 ```
 
+**`SYSTEM_RECORDED`, `BACKTEST_SIMULATED` and `BROKER_REPORTED` are never admitted to an externally
+hosted deployment**, whatever their classification. `REPOSITORY_TRACKED` is admitted only from the
+governance read models the contracts enumerate, and only under a recorded release authorization.
+
+**Classification is a sensitivity label; publication is a separate authorization.** A `PUBLIC_SAFE`
+label says the content would disclose no licensed row, no private operational state and no
+identifier. **It does not say that anyone approved putting it on an externally hosted deployment**,
+and a correct label never substitutes for the release authorization that publication requires.
+
+**A licensed-derived read model is legitimate inside the private boundary.** A qualified, authorized
+private price projection is `LICENSED_DERIVED` and belongs there; the classification forbids public
+Git, an external LLM, third-party hosting, an external cache, telemetry, a build artifact and an
+ordinary log line — **never its existence inside the boundary that already holds the rows it came
+from**. **Uncertain classification fails closed** and is treated as `LICENSED_DERIVED` for every
+boundary decision.
+
 **A server-side render, an API proxy, an edge cache and a build-time fetch are each a copy.** An externally
 hosted deployment must not silently receive a licensed payload through any of them.
+
+---
+
+### 4.6 The four risk quantities, kept apart
+
+**"Planned risk" is one phrase covering four different facts**, and a screen that shows one under
+another's label asserts something nobody computed.
+
+| Quantity | Question it answers | Owner | Lifetime |
+|---|---|---|---|
+| **initial planned risk** | what risk was this position *opened* with? | the risk record written at entry | **immutable** |
+| **current open planned risk** | what risk does the *remaining* exposure carry, as of when? | the risk engine's assessment | changes, and is meaningless without its as-of |
+| **permitted risk** | what does policy *allow*? | a separately governed policy value | changes only by governed policy change |
+| **gap and event risk** | what does a *scenario model* say, where one applies? | a named model version | changes with the model |
+
+**Initial planned risk is the only denominator an R multiple may use**, and **a moving stop does not
+move it**. A protective-order change, a partial exit, an add and a size change each move current
+open planned risk and leave the entry record untouched; **an add carries its own initial planned
+risk record, and the original is retained unchanged**.
+
+**A permitted value never appears without its versioned policy reference**, and a missing reference
+is a refusal rather than a number. **The Cockpit displays these four facts and invents no trading
+permission**: showing a limit is not granting it, and showing headroom is not authorizing its use.
+
+**Missing initial planned risk is unavailable, not inapplicable.** Inapplicability is reserved for a
+subject the question genuinely does not apply to, and **this extension changes no risk limit, no
+capital value, no leverage, no sizing rule and no stop policy.**
 
 ---
 
@@ -238,6 +286,16 @@ Two obligations that look opposed and are not:
 specification §27 already applies to the Brain journal, extended here to every Cockpit-visible audit
 surface. Deletion is expressed as **authorized tombstone semantics**: the governance evidence
 survives, the referenced licensed content does not, and the record says which.
+
+**Corrections and deletions append; they never mutate.** A correction is a **new** linked event
+naming the event it supersedes; a deletion is a **new** linked tombstone event carrying its recorded
+deletion authority. **The original event is not edited, redacted in place or overwritten**, and both
+events remain.
+
+**An authorized cached copy carries the deletion obligation with it.** Wherever such a copy exists
+inside the approved private boundary it is enumerable and destroyable on the same terms as its
+source. **This extension states that obligation and implements no deletion**, and it grants no
+operational authority to delete, retain or copy anything.
 
 **A reference is not a row**, and an audit payload that quotes vendor data is a copy the deletion
 runbook cannot reach.
