@@ -3585,8 +3585,9 @@ its response size. **They are not trading risk limits, position limits, capital 
 governed value.**
 
 ```text
-ADR-0028:                                         PROPOSED / IN REVIEW / PR #72
-Cockpit contract corrections:                     PROPOSED / IN REVIEW
+ADR-0029:                                         ACCEPTED - EFFECTIVE ON MERGE OF PR #73
+ADR-0028:                                         ACCEPTED / IN FORCE
+Cockpit contract corrections:                     ACCEPTED / IN FORCE
 ADR-0027:                                         ACCEPTED / IN FORCE
 ADR-0026:                                         ACCEPTED / IN FORCE
 Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED

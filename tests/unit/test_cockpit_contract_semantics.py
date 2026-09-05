@@ -217,10 +217,10 @@ ZERO_SPAN: Final = section(
 )
 
 
-def zero_cases() -> list[tuple[str, str, str]]:
+def zero_cases(span: str) -> list[tuple[str, str, str]]:
     """``(measurement, availability, reason)`` read from the decided-cases table of 4.1.2."""
     cases: list[tuple[str, str, str]] = []
-    for cells in table_rows(ZERO_SPAN):
+    for cells in table_rows(span):
         if len(cells) != 4:
             continue
         state = MEMBER.match(cells[1])
@@ -233,7 +233,7 @@ def zero_cases() -> list[tuple[str, str, str]]:
     return cases
 
 
-ZERO_CASES: Final = zero_cases()
+ZERO_CASES: Final = zero_cases(ZERO_SPAN)
 
 
 def test_the_zero_case_parser_sees_the_decided_table() -> None:
@@ -241,9 +241,20 @@ def test_the_zero_case_parser_sees_the_decided_table() -> None:
 
 
 def test_the_zero_case_parser_would_notice_an_emptied_table() -> None:
-    """The parser is the thing under test here, not a constant it happens to agree with."""
-    assert zero_cases.__doc__
-    assert zero_cases() and not [row for row in zero_cases() if row[1] not in AVAILABILITY_STATES]
+    """Fed a table it has never seen, the parser must report that one, not the real one."""
+    emptied = "\n".join(
+        line for line in ZERO_SPAN.splitlines() if not line.lstrip().startswith("|")
+    )
+    assert zero_cases(emptied) == []
+    assert len(zero_cases(emptied)) != 7, "an emptied table must not satisfy the count"
+
+    synthetic = (
+        "| Measurement | `availability` | `reason` | Why |\n"
+        "|---|---|---|---|\n"
+        "| a synthetic measured zero | `AVAILABLE` | `NONE` | it ran |\n"
+    )
+    assert zero_cases(synthetic) == [("a synthetic measured zero", "AVAILABLE", "NONE")]
+    assert zero_cases(synthetic) != ZERO_CASES, "a parser ignoring input returns these"
 
 
 def test_every_decided_zero_case_is_admissible_under_the_matrix() -> None:
