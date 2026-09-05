@@ -210,12 +210,122 @@ def test_not_applicable_has_exactly_two_routes() -> None:
     assert MATRIX["NOT_APPLICABLE"][1] == frozenset({"NOT_DEFINED_FOR_SUBJECT", "DENOMINATOR_ZERO"})
 
 
-def test_empty_verified_is_the_only_state_in_which_a_zero_is_correct() -> None:
-    """Elsewhere a zero would be a missing value wearing a real one's shape."""
-    bearing = {state for state, (present, _) in MATRIX.items() if present}
-    assert "EMPTY_VERIFIED" in bearing
-    assert "NOT_YET_AVAILABLE" not in bearing
-    assert "NOT_IMPLEMENTED" not in bearing
+# -- a zero is a measurement, and never an availability state -------------------------------
+
+ZERO_SPAN: Final = section(
+    CONTRACTS_TEXT, "#### 4.1.2 A zero is a measurement", "### 4.2 Reusable defined types"
+)
+
+
+def zero_cases(span: str) -> list[tuple[str, str, str]]:
+    """``(measurement, availability, reason)`` read from the decided-cases table of 4.1.2."""
+    cases: list[tuple[str, str, str]] = []
+    for cells in table_rows(span):
+        if len(cells) != 4:
+            continue
+        state = MEMBER.match(cells[1])
+        reason = MEMBER.match(cells[2])
+        if state is None or reason is None:
+            continue
+        if state.group(1) not in AVAILABILITY_STATES:
+            continue
+        cases.append((cells[0], state.group(1), reason.group(1)))
+    return cases
+
+
+ZERO_CASES: Final = zero_cases(ZERO_SPAN)
+
+
+def test_the_zero_case_parser_sees_the_decided_table() -> None:
+    assert len(ZERO_CASES) == 7, ZERO_CASES
+
+
+def test_the_zero_case_parser_would_notice_an_emptied_table() -> None:
+    """Fed a table it has never seen, the parser must report that one, not the real one."""
+    emptied = "\n".join(
+        line for line in ZERO_SPAN.splitlines() if not line.lstrip().startswith("|")
+    )
+    assert zero_cases(emptied) == []
+    assert len(zero_cases(emptied)) != 7, "an emptied table must not satisfy the count"
+
+    synthetic = (
+        "| Measurement | `availability` | `reason` | Why |\n"
+        "|---|---|---|---|\n"
+        "| a synthetic measured zero | `AVAILABLE` | `NONE` | it ran |\n"
+    )
+    assert zero_cases(synthetic) == [("a synthetic measured zero", "AVAILABLE", "NONE")]
+    assert zero_cases(synthetic) != ZERO_CASES, "a parser ignoring input returns these"
+
+
+def test_every_decided_zero_case_is_admissible_under_the_matrix() -> None:
+    for measurement, state, reason in ZERO_CASES:
+        value_present, _ = MATRIX[state]
+        assert validate(state, reason, value_present), (measurement, state, reason)
+
+
+def test_a_valid_zero_is_carried_by_available_and_not_only_by_empty_verified() -> None:
+    """The defect: a zero was declared correct in exactly one state, which is false."""
+    available = [row for row in ZERO_CASES if row[1] == "AVAILABLE"]
+    assert len(available) >= 3, ZERO_CASES
+    assert validate("AVAILABLE", "NONE", has_value=True)
+    assert MATRIX["AVAILABLE"][0] is True
+
+
+def test_the_retired_single_state_zero_restriction_is_gone() -> None:
+    """Restoring the old sentence puts the contradiction back, so this must fail with it."""
+    flat = " ".join(CONTRACTS_TEXT.split())
+    assert "only state in which a zero is a correct answer" not in flat
+    assert "Zero is a value" in flat
+    assert "never determines availability" in flat
+
+
+def test_a_measured_zero_and_an_empty_population_are_different_answers() -> None:
+    """Zero winners of ten trades is a finding; zero trades is an empty population."""
+    flat = " ".join(ZERO_SPAN.split())
+    assert "zero winners among ten closed trades" in flat
+    measured = [row for row in ZERO_CASES if "ten closed trades" in row[0]]
+    empty = [row for row in ZERO_CASES if "population is empty" in row[0]]
+    assert len(measured) == 1 and len(empty) == 1, ZERO_CASES
+    assert measured[0][1] == "AVAILABLE"
+    assert empty[0][1] == "EMPTY_VERIFIED"
+    assert measured[0][1] != empty[0][1]
+
+
+def test_matching_fill_and_reference_prices_are_a_measured_zero() -> None:
+    slippage = [row for row in ZERO_CASES if "slippage of zero" in row[0]]
+    assert len(slippage) == 1, ZERO_CASES
+    assert slippage[0][1] == "AVAILABLE"
+    assert slippage[0][2] == "NONE"
+    # and the arithmetic agrees: an on-reference fill costs nothing on either side
+    assert slippage_bps("BUY", Decimal("100.00"), Decimal("100.00")) == Decimal("0.00")
+    assert slippage_bps("SELL", Decimal("100.00"), Decimal("100.00")) == Decimal("0.00")
+
+
+def test_an_unavailable_producer_cannot_supply_zero_as_a_replacement() -> None:
+    """A zero standing in for a missing producer renders identically to a real measurement."""
+    for state in ("NOT_IMPLEMENTED", "NOT_AUTHORIZED", "NOT_YET_AVAILABLE", "UNEVALUATED"):
+        assert MATRIX[state][0] is False, state
+    assert validate("NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED", has_value=True) is False
+    assert validate("NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED", has_value=False) is True
+
+
+def test_a_zero_carried_by_stale_data_is_still_stale() -> None:
+    stale = [row for row in ZERO_CASES if row[1] == "STALE"]
+    assert len(stale) == 1, ZERO_CASES
+    assert stale[0][2] == "UPSTREAM_INPUT_STALE"
+    assert validate("STALE", "UPSTREAM_INPUT_STALE", has_value=True) is True
+    # a zero never upgrades the state that qualifies it
+    assert validate("AVAILABLE", "UPSTREAM_INPUT_STALE", has_value=True) is False
+
+
+def test_undefined_division_stays_undefined_and_carries_no_zero() -> None:
+    undefined = [row for row in ZERO_CASES if row[2] == "DENOMINATOR_ZERO"]
+    assert len(undefined) == 1, ZERO_CASES
+    assert undefined[0][1] == "NOT_APPLICABLE"
+    assert MATRIX["NOT_APPLICABLE"][0] is False
+    assert validate("NOT_APPLICABLE", "DENOMINATOR_ZERO", has_value=True) is False
+    with pytest.raises(DivisionByZero):
+        slippage_bps("BUY", Decimal("0"), Decimal("100.00"))
 
 
 # -- every metric outcome is expressible in that matrix -------------------------------------
@@ -542,7 +652,169 @@ def test_a_missing_or_skewed_source_time_refuses_rather_than_reading_as_fresh() 
 def test_a_cache_cannot_freeze_an_available_state_while_the_source_ages() -> None:
     flat = " ".join(FRESHNESS_SPAN.split())
     assert "never frozen AVAILABLE while" in flat
-    assert "at most the strictest contract_max_age" in flat
+    assert "a cache entry EXPIRES at the earliest absolute deadline it carries" in flat
+
+
+# -- freshness deadlines: a cache spends a budget it never refills ---------------------------
+
+DEADLINE_SPAN: Final = section(
+    CONTRACTS_TEXT, "#### 3.1.1 Freshness deadlines", "## 4. Read-model catalog"
+)
+DEADLINE_DEF: Final = re.compile(r"^input_deadline\s*=\s*(\w+)\s*\+\s*(\w+)", re.MULTILINE)
+FRESH_UNTIL_DEF: Final = re.compile(
+    r"^fresh_until\s*=\s*(\w+)\((\w+) over every REQUIRED input\)", re.MULTILINE
+)
+REMAINING_DEF: Final = re.compile(
+    r"^remaining_freshness\s*=\s*max\(0, (\w+) - (\w+)\)", re.MULTILINE
+)
+SERVE_RULE: Final = re.compile(r"^serve_time\s+(<|>=)\s+fresh_until\s+(.+)$", re.MULTILINE)
+
+#: The three declared formulas and the one declared comparison, read from the contract.
+DEADLINE_TERMS: Final[list[tuple[str, str]]] = DEADLINE_DEF.findall(DEADLINE_SPAN)
+FRESH_UNTIL_TERMS: Final[list[tuple[str, str]]] = FRESH_UNTIL_DEF.findall(DEADLINE_SPAN)
+REMAINING_TERMS: Final[list[tuple[str, str]]] = REMAINING_DEF.findall(DEADLINE_SPAN)
+SERVE_RULES: Final[dict[str, str]] = dict(SERVE_RULE.findall(DEADLINE_SPAN))
+
+
+def input_deadline(source_effective_time: int, contract_max_age: int) -> int:
+    """One input's absolute deadline, composed in the order the specification declares."""
+    values = {
+        "source_effective_time": source_effective_time,
+        "contract_max_age": contract_max_age,
+    }
+    left, right = DEADLINE_TERMS[0]
+    return values[left] + values[right]
+
+
+def fresh_until(deadlines: list[int]) -> int:
+    """The composite deadline: the earliest required input's, per the declared rule."""
+    assert FRESH_UNTIL_TERMS[0] == ("minimum", "input_deadline"), FRESH_UNTIL_TERMS
+    return min(deadlines)
+
+
+def remaining_freshness(fresh_until_value: int, serve_time: int) -> int:
+    """What is left of the budget, clamped at zero exactly as the contract clamps it."""
+    values = {"fresh_until": fresh_until_value, "cache_or_serve_time": serve_time}
+    left, right = REMAINING_TERMS[0]
+    return max(0, values[left] - values[right])
+
+
+def may_serve_available(serve_time: int, fresh_until_value: int) -> bool:
+    """The equality rule, taken from the specification rather than assumed."""
+    assert SERVE_RULES["<"].startswith("AVAILABLE"), SERVE_RULES
+    assert "EXPIRED" in SERVE_RULES[">="], SERVE_RULES
+    return serve_time < fresh_until_value
+
+
+def test_the_deadline_parser_sees_all_three_declared_formulas() -> None:
+    assert len(DEADLINE_TERMS) == 1, DEADLINE_TERMS
+    assert len(FRESH_UNTIL_TERMS) == 1, FRESH_UNTIL_TERMS
+    assert len(REMAINING_TERMS) == 1, REMAINING_TERMS
+    assert set(SERVE_RULES) == {"<", ">="}, SERVE_RULES
+
+
+def test_the_deadline_parser_would_notice_a_removed_formula() -> None:
+    """The parsers are what is under test here, not constants they happen to agree with."""
+    assert DEADLINE_DEF.findall("input_deadline = something_else") == []
+    assert REMAINING_DEF.findall("remaining_freshness = fresh_until - now") == []
+    assert SERVE_RULE.findall("serve_time == fresh_until AVAILABLE") == []
+
+
+def test_a_deadline_is_absolute_and_grows_from_the_source_time() -> None:
+    """The defect: a lifetime bounded only by contract_max_age ignores age already spent."""
+    assert DEADLINE_TERMS[0] == ("source_effective_time", "contract_max_age")
+    assert REMAINING_TERMS[0] == ("fresh_until", "cache_or_serve_time")
+
+
+def test_a_cache_does_not_refill_a_budget_that_is_already_spent() -> None:
+    """CASE 3: 290 s consumed against a 300 s contract leaves 10 s, and never 300 s."""
+    deadline = input_deadline(source_effective_time=0, contract_max_age=300)
+    left = remaining_freshness(deadline, serve_time=290)
+    assert left == 10
+    assert left != 300
+
+
+def test_the_serve_comparison_is_strict_before_the_deadline() -> None:
+    """CASE 3, continued: 9 s later is still inside the budget; 10 s later is not."""
+    deadline = input_deadline(source_effective_time=0, contract_max_age=300)
+    assert may_serve_available(299, deadline) is True
+    assert may_serve_available(300, deadline) is False
+    assert may_serve_available(301, deadline) is False
+    assert remaining_freshness(deadline, serve_time=301) == 0
+
+
+def test_the_composite_expires_at_the_earliest_required_deadline() -> None:
+    """CASE 4: a 40/60 input beside a 290/300 input leaves the composite 10 s, not 20 s."""
+    now = 290
+    younger = input_deadline(source_effective_time=now - 40, contract_max_age=60)
+    older = input_deadline(source_effective_time=now - 290, contract_max_age=300)
+    composite = fresh_until([younger, older])
+    assert remaining_freshness(composite, serve_time=now) == 10
+    assert composite == older
+
+
+def test_the_oldest_input_is_not_always_the_binding_one() -> None:
+    """CASE 5: a looser contract gives the OLDEST input the LONGEST remaining budget."""
+    now = 290
+    younger_age, older_age = 40, 290
+    younger = input_deadline(source_effective_time=now - younger_age, contract_max_age=60)
+    older = input_deadline(source_effective_time=now - older_age, contract_max_age=600)
+    assert remaining_freshness(older, serve_time=now) == 310
+    assert remaining_freshness(younger, serve_time=now) == 20
+    composite = fresh_until([younger, older])
+    assert composite == younger, "the earliest deadline binds, and here it is the newer input"
+    assert remaining_freshness(composite, serve_time=now) == 20
+    # 3.1 still reports the composite age against the OLDEST input, which is the other one
+    assert older_age > younger_age
+
+
+def test_a_configured_ttl_shortens_a_budget_and_never_extends_it() -> None:
+    """CASE 6: 5 s cuts a 10 s budget; 3600 s is ignored rather than honoured."""
+    deadline = input_deadline(source_effective_time=0, contract_max_age=300)
+    budget = remaining_freshness(deadline, serve_time=290)
+    assert min(5, budget) == 5
+    assert min(3600, budget) == budget
+    assert "a configured TTL may shorten, never extend" in " ".join(DEADLINE_SPAN.split())
+
+
+def test_recaching_unchanged_facts_does_not_renew_the_deadline() -> None:
+    """A rebuild resets build_age and never source_age, so it cannot move a deadline."""
+    first = input_deadline(source_effective_time=0, contract_max_age=300)
+    rebuilt = input_deadline(source_effective_time=0, contract_max_age=300)
+    assert rebuilt == first
+    assert remaining_freshness(first, serve_time=100) > remaining_freshness(rebuilt, serve_time=200)
+
+
+def test_an_expired_entry_is_served_stale_and_never_available() -> None:
+    assert validate("STALE", "UPSTREAM_INPUT_STALE", has_value=True) is True
+    assert validate("AVAILABLE", "UPSTREAM_INPUT_STALE", has_value=True) is False
+    # an input with no usable source time establishes no deadline at all
+    assert validate("NOT_YET_AVAILABLE", "SOURCE_TIMESTAMP_MISSING", has_value=False) is True
+    assert validate("AVAILABLE", "SOURCE_TIMESTAMP_MISSING", has_value=True) is False
+
+
+def test_a_zero_source_age_is_a_legitimate_measured_age() -> None:
+    """Consistent with 4.1.2: a freshly effective fact has spent none of its budget."""
+    deadline = input_deadline(source_effective_time=0, contract_max_age=300)
+    assert remaining_freshness(deadline, serve_time=0) == 300
+    assert may_serve_available(0, deadline) is True
+
+
+def test_the_worked_deadline_cases_state_the_numbers_the_model_computes() -> None:
+    """The prose cases and the executed model must not drift apart."""
+    flat = " ".join(DEADLINE_SPAN.split())
+    for case in ("CASE 3", "CASE 4", "CASE 5", "CASE 6"):
+        assert case in flat, case
+    deadline = input_deadline(source_effective_time=0, contract_max_age=300)
+    assert f"remaining_freshness {remaining_freshness(deadline, serve_time=290)} s" in flat
+
+
+def test_the_retired_full_window_cache_rule_is_gone() -> None:
+    """Restoring the old bound reinstates the defect, so this must fail alongside it."""
+    flat = " ".join(CONTRACTS_TEXT.split())
+    assert "at most the strictest `contract_max_age`" not in flat
+    assert "at most the strictest contract_max_age" not in flat
+    assert "expires at the **earliest absolute deadline it carries**" in flat
 
 
 # -- out-of-sample exposure: a rename and a re-cut both fail --------------------------------

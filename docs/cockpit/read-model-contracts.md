@@ -15,6 +15,10 @@ importable, no type here exists, and **no module under `src/` is created by this
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — §2.2, §2.4, §4, §5, §7, §10, §11 and §12.
 ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open**,
 and the corrections it makes here are proposed with it.
+**Further amended by** [ADR-0029](../decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md) —
+§3.1 with new §3.1.1, §4.1.1 with new §4.1.2, and §7. ADR-0029 is **PROPOSED and carries no authority
+while the pull request introducing it, PR #73, is open**, and the two corrections it makes here are
+proposed with it.
 
 ---
 
@@ -304,7 +308,7 @@ and its own maximum age, and a consumer reads the age as of that instant rather 
 
 ```text
 a cached response NEVER re-reports source_age as though it were computed now
-a cache entry's maximum lifetime is at most the strictest contract_max_age it carries
+a cache entry EXPIRES at the earliest absolute deadline it carries, and 3.1.1 computes it
 an AVAILABLE classification EXPIRES with the entry -- it is never frozen AVAILABLE while
     the source ages behind it, which is how a screen shows a green tile over dead data
 ```
@@ -327,6 +331,80 @@ CASE 2 -- one fresh input does not conceal a stale one
     source_age              3600 s
     composite_state         STALE, with UPSTREAM_INPUT_STALE, naming input B
     the OLD formula would have reported input A and rendered the view AVAILABLE
+```
+
+#### 3.1.1 Freshness deadlines — a cache spends a budget it never refills
+
+**Age consumed before caching is not returned by caching.** A cache lifetime bounded only by
+`contract_max_age` would hand a fact that was already 290 seconds old a further 300 seconds, and a
+consumer would read it as fresh at 590 seconds against a 300-second contract. **Freshness eligibility
+belongs to the source fact, not to the entry that happens to hold it**, and storing, building,
+serving, revalidating or rebuilding **never resets it**.
+
+**Every required input carries its own absolute deadline, and a composite expires at the earliest.**
+
+```text
+input_deadline        = source_effective_time + contract_max_age   -- ABSOLUTE, and per input
+fresh_until           = minimum(input_deadline over every REQUIRED input)
+remaining_freshness   = max(0, fresh_until - cache_or_serve_time)  -- what is LEFT, in seconds
+
+the clamp at zero bounds the REMAINING budget and nothing else. It never hides clock skew,
+    and it never clamps an invalid, negative or unknown source age -- those refuse under 3.1
+```
+
+**The earliest deadline is not always the oldest input.** §3.1 reports the composite `source_age`
+against the **oldest** required input, because that answers *how old are the facts*. A deadline answers
+a different question — *how long does this answer stay fresh* — and with unequal contracts the two
+name **different inputs**: an input of 290 seconds against a 600-second contract has 310 seconds left,
+while an input of 40 seconds against a 60-second contract has 20. **The oldest input is reported; the
+earliest deadline binds.** Neither rule replaces the other.
+
+**The comparison is stated once, so two layers cannot disagree.**
+
+```text
+serve_time <  fresh_until    AVAILABLE is permitted, if every other rule already permits it
+serve_time >= fresh_until    the entry is EXPIRED -- revalidate, or downgrade to STALE
+```
+
+**Retaining content is not claiming it is fresh.** An expired entry **may be kept and served** — it is
+data, and §4.1.1 keeps a value-bearing state's value — but it is served **explicitly `STALE` with
+`UPSTREAM_INPUT_STALE`**, and **never `AVAILABLE`**. **A refetch, a rebuild or a re-cache over the same
+old facts renews nothing**, because `source_effective_time` is unchanged and the deadline is computed
+from it (§3.1).
+
+| | |
+|---|---|
+| **a configured TTL may shorten, never extend** | the effective lifetime is the **smaller** of the configured TTL and `remaining_freshness`. A TTL longer than the remaining budget is **ignored, not honoured** |
+| **every cache obeys the same deadline** | an origin cache, an intermediate cache and a browser cache each expire at the **same absolute `fresh_until`**. Elapsed time in transit and between layers **spends the same budget** |
+| **unknown timing establishes no deadline** | a required input with no usable source time yields `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING` (§3.1). **No default TTL is invented for it**, and it is never cached as fresh |
+| **TTL upgrades nothing** | an input already `STALE`, `PARTIAL`, missing or in `ERROR` **stays in that state**. A remaining budget is a ceiling on freshness, never a grant of it |
+| **optional inputs answer for themselves** | they report their own state, they **do not** set `fresh_until`, they never silently become required, and they **never conceal a required input's failure** (§3.1) |
+
+**Four worked cases, so the arithmetic is checkable.**
+
+```text
+CASE 3 -- a cache does not refill a spent budget
+    contract_max_age                    300 s
+    source age when the entry is built  290 s
+    remaining_freshness                  10 s   -- NOT 300 s
+    served 9 s later                     AVAILABLE is still permitted
+    served 10 s later                    EXPIRED -- revalidate or downgrade to STALE
+
+CASE 4 -- the composite expires at the earliest deadline
+    required P   source age    40 s   contract_max_age    60 s   remaining   20 s
+    required Q   source age   290 s   contract_max_age   300 s   remaining   10 s
+    composite remaining_freshness       10 s   -- Q binds, and Q is also the oldest
+
+CASE 5 -- the oldest input is not always the binding one
+    required P   source age    40 s   contract_max_age    60 s   remaining   20 s
+    required Q   source age   290 s   contract_max_age   600 s   remaining  310 s
+    composite remaining_freshness       20 s   -- P binds, though Q is the OLDEST
+    composite source_age               290 s   -- still reported against Q, per 3.1
+
+CASE 6 -- a configured TTL shortens and never extends
+    remaining_freshness                  10 s   configured cache TTL     5 s
+    effective entry lifetime              5 s   -- the smaller of the two
+    the same budget against a 3600 s TTL 10 s   -- a longer TTL is ignored
 ```
 
 ---
@@ -450,7 +528,7 @@ blank, an empty string or free text.
 | `AVAILABLE` | **present** | `NONE` — and nothing else |
 | `STALE` | **present**, with the `as_of` it was true at | `UPSTREAM_INPUT_STALE` — and nothing else |
 | `PARTIAL` | **present**, and never read as complete: `coverage` states how much of the extent it covers | `EXTENT_PARTIALLY_COVERED`, `UPSTREAM_INPUT_MISSING`, `UPSTREAM_INPUT_STALE`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED` |
-| `EMPTY_VERIFIED` | **present and empty** — an empty list, or a count of zero. **The only state in which a zero is a correct answer** | `EMPTY_RESULT_VERIFIED` — and nothing else |
+| `EMPTY_VERIFIED` | **present and empty** — an empty list, or the count of an empty population. **The producer ran and the defined result population is empty**, which is a statement about the population and never about the number: see §4.1.2 | `EMPTY_RESULT_VERIFIED` — and nothing else |
 | `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING` |
 | `NOT_IMPLEMENTED` | **absent** | `PRODUCER_NOT_IMPLEMENTED` — and nothing else |
 | `NOT_AUTHORIZED` | **absent** | `PRODUCER_NOT_AUTHORIZED`, `CLASSIFICATION_WITHHELD` |
@@ -477,6 +555,58 @@ that says why.
 qualification, not absences: a consumer that renders them as missing is discarding data, and a
 consumer that renders them as `AVAILABLE` is overstating it. **Both are rendered distinctly from
 each other and from `AVAILABLE`.**
+
+#### 4.1.2 A zero is a measurement, and never an availability state
+
+**Zero is a value.** `AVAILABLE` with `NONE` may carry a numeric zero, and **the number alone never
+determines availability**: a producer that ran, measured the subject and got zero has answered the
+question. A zero realized P/L, a zero drawdown, a zero slippage, a zero net exposure and a **measured
+count of zero** are results, not failures.
+
+**`EMPTY_VERIFIED` is about the population, not about the number.** It means the query **ran** — with
+evidence that it ran — and the **defined result population is empty**. The count of an empty
+population is indeed zero; **the converse does not hold**, and reading it backwards is the defect this
+clause exists to prevent.
+
+| | |
+|---|---|
+| **zero winners among ten closed trades** | a **measured zero over a non-empty population**. `AVAILABLE`, with a win rate of zero |
+| **zero closed trades in the window** | an **empty population**. `EMPTY_VERIFIED`, with a count of zero |
+
+**The two are different answers to different questions**, and a consumer that renders a measured zero
+as "nothing to show" has discarded a finding — a strategy that won nothing is a result a screen must
+show, not an empty state.
+
+**A qualification is not removed by a zero.** A zero carried by `STALE` is **still stale**, and a zero
+carried by `PARTIAL` is **still partial**; the value's magnitude never upgrades the state that
+qualifies it.
+
+**Absence stays absent, and is never filled with a zero.** `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED`,
+`NOT_AUTHORIZED`, `UNEVALUATED`, `INSUFFICIENT_OBSERVATIONS` and `ERROR` carry **no value at all**
+(§4.1.1), and **a producer that cannot answer never substitutes zero for the answer** — a zero
+standing in for a missing producer is a fabricated measurement, and it renders identically to a real
+one.
+
+**Undefined arithmetic is not a zero result.** `DENOMINATOR_ZERO` is a statement about the
+**denominator**: the ratio has no value, so the state is `NOT_APPLICABLE` and the value is absent
+(§4.1.1). **A zero numerator, and a quotient that legitimately evaluates to zero, are values** and
+stay `AVAILABLE`. Division by zero is never rendered as zero, as infinity or as a sentinel.
+
+**The cases, decided rather than left to a producer.**
+
+| Measurement | `availability` | `reason` | Why |
+|---|---|---|---|
+| realized P/L of exactly zero over a non-empty trade population | `AVAILABLE` | `NONE` | the producer ran and measured zero |
+| a fill at the reference price — slippage of zero basis points | `AVAILABLE` | `NONE` | a matching fill and reference is a measured zero cost |
+| zero winners among ten closed trades — a win rate of zero | `AVAILABLE` | `NONE` | the population is non-empty and the measurement is zero |
+| a completed query whose defined population is empty — a count of zero | `EMPTY_VERIFIED` | `EMPTY_RESULT_VERIFIED` | the query ran and there is nothing in the population |
+| a subsystem that does not exist | `NOT_IMPLEMENTED` | `PRODUCER_NOT_IMPLEMENTED` | **zero is never a replacement for an absent producer** |
+| a zero measured outside its freshness contract | `STALE` | `UPSTREAM_INPUT_STALE` | a zero is a value, and it is still qualified |
+| a ratio whose denominator is zero | `NOT_APPLICABLE` | `DENOMINATOR_ZERO` | the arithmetic is undefined, so there is no value to carry |
+
+**No availability state is added by this clause, and no missing-data safeguard is relaxed.** The
+matrix of §4.1.1 is unchanged in membership and in permitted pairings; what is corrected is the claim
+that a zero could only ever be correct in one of its states.
 
 ---
 
@@ -1953,7 +2083,7 @@ rather than silently mixing two.
 | **cache key** | includes `api_version`, `schema_version`, environment, source provenance, access scope, classification and every query parameter. **An environment or provenance omitted from a cache key is a cross-environment leak waiting to happen** |
 | **no shared cache across classification** | a `PUBLIC_SAFE` response and a `LICENSED_DERIVED` response never share a cache entry, a cache namespace or a cache tier |
 | **no external cache for private data** | `PRIVATE_OPERATIONAL` and `LICENSED_DERIVED` responses are **never** stored in an externally hosted cache or CDN |
-| **freshness is data, not policy** | a cached response carries the same `freshness` report and `as_of_time` the origin produced, **and the origin's `evaluation_time` with them**, so a consumer reads a `source_age` as of when it was computed rather than as of now. A cache never makes a stale value look fresh, and **never freezes an `AVAILABLE` state while the source ages** — an entry lives at most as long as the strictest `contract_max_age` it carries (§3.1) |
+| **freshness is data, not policy** | a cached response carries the same `freshness` report and `as_of_time` the origin produced, **and the origin's `evaluation_time` with them**, so a consumer reads a `source_age` as of when it was computed rather than as of now. A cache never makes a stale value look fresh, and **never freezes an `AVAILABLE` state while the source ages** — an entry expires at the **earliest absolute deadline it carries**, computed in §3.1.1 from the source time rather than from the moment it was cached, and a configured TTL may shorten that and never extend it |
 
 ### 7.1 Classification is a label; publication is a gate
 
