@@ -377,8 +377,8 @@ edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 
 ### Still not implemented, and not authorized
 
-Breakout / Pullback / PEAD strategy logic; short-selling logic; AI Research or Challenger
-agents; the portfolio/risk engine; the scanner and factor pipeline; **any point-in-time data
+Breakout / Pullback / PEAD / Deterioration Short strategy logic; the Strategy Brain runtime;
+short-selling logic; AI Research or Challenger agents; the portfolio/risk engine; the scanner and factor pipeline; **any point-in-time data
 platform beyond the vendor-neutral A1 kernel and the code-only Sharadar integration slice** —
 **no ingestion from a real provider**, no filings, fundamentals, earnings, estimates or borrow;
 database schema, dashboard, alerting, kill switch; data purchases; production cloud
@@ -391,6 +391,15 @@ production ingestion are each still **separately unauthorized**.
 The licensed S3 object store authorized by
 [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) is **code
 that has never run against AWS** — see *The licensed S3 object store* below.
+
+**The Strategy Brain is SPECIFIED and NOT IMPLEMENTED.** A reviewable specification exists at
+[`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) under
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — PROPOSED, and
+carrying no authority while its pull request is open**. **A specification is not an
+implementation**: no Brain runtime module, strategy module, factor calculation, scanner, AI agent,
+portfolio sizing or order routing exists, and **none is authorized**. **Specification,
+implementation, research, deployment and execution are five separate gates** — see *The Strategy
+Brain specification* below.
 
 ### Current phase state
 
@@ -447,7 +456,8 @@ that has never run against AWS** — see *The licensed S3 object store* below.
 | **ADR-0018 empirical acquisition — Run A** | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | **Short research** | **NOT AUTHORIZED** |
-| **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** |
+| **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — Strategy Brain architecture and governance** | **PROPOSED — NOT IN FORCE** while its pull request is open. It introduces [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) as **specification only**. On independent review and merge it would accept **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Brain runtime implementation NOT AUTHORIZED · strategy, factor, scanner and AI-agent implementation NOT AUTHORIZED · portfolio and risk engine implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider data usage NOT AUTHORIZED · broker activity NOT AUTHORIZED · capital change NOT AUTHORIZED**. It **amends and supersedes no ADR**, refining ADR-0006 §D and §E into checkable contracts, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
+| **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under a proposed ADR-0026 and **not implemented**; a specification is not an implementation |
 | **Live trading** | **HARD-DISABLED** |
 
 The planning package is accepted and lives in
@@ -3252,6 +3262,88 @@ gates**: a Run A retry, Run B, the combined assessment, a third ADR-0017 acquisi
 private-binding preflight, further infrastructure mutation and production ingestion each remain a
 separate written authorization, and **acceptance, implementation, deployment, access and execution
 stay distinct gates that are never collapsed into one**.
+
+### The Strategy Brain specification — PROPOSED, and nothing is implemented
+
+**The Brain is specified. The Brain does not exist.** Those are two facts, and they are kept apart:
+a reviewable specification now sits in the repository at
+[`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md), and
+**no Brain runtime module, strategy module, factor calculation, scanner, AI agent, portfolio sizing
+or order routing has been written or authorized**.
+
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is PROPOSED and
+carries no authority while its pull request is open.** On independent review and merge it becomes
+**ACCEPTED / IN FORCE** as **architecture, contracts, governance and future implementation
+boundaries** — and **nothing more**. That it carries no authority today is a statement about these
+days; it stays true of them after any later merge, and it is **not** rewritten as though the
+decision had authority before it was accepted.
+
+**It amends and supersedes no ADR.** It **refines
+[ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md) §D and §E
+into checkable contracts**, references
+[ADR-0004](docs/decisions/ADR-0004-deterministic-order-identity-idempotency-and-execution-lifecycle.md)
+rather than changing it, and leaves ADR-0005 **PROPOSED**.
+
+**The locked boundary, expressed as a contract.** The Brain produces **no broker order and no
+position size**; its terminal output is a deterministic typed `CandidateIntent`, which **may never**
+carry shares, a dollar amount, a final position size, a final broker order type, a broker route, a
+client order ID, a broker order ID, a credential, an account number or an arbitrary free-form
+execution instruction. **The exclusion is structural, not conventional** — no field of those
+meanings, no free-text field an instruction could arrive through, and no extension point that admits
+one. The **technical stop is a reference to an invalidation level, not an order**.
+
+**`READY_FOR_RISK_REVIEW` is not an approval to trade**; it records the absence of a deterministic
+objection, and portfolio and risk decide independently. `MAYBE`, `BUY`, `SELL`, `EXECUTE` and
+`APPROVED_ORDER` are **refused by name**.
+
+**A deterministic failure cannot be rescued by AI.** AI may **remove** a candidate; it may never
+**restore** one. The Research Agent consumes **only already shortlisted candidates** — an AI that
+may choose what to look at is a scanner, and the scanner is deterministic by design.
+
+**Short alpha is asymmetric.** **No generic "Breakdown Short" is authorized**, a short module **may
+not be produced by inverting a long breakout**, and **bottom-decile momentum alone is not short
+authorization**. `BLOCKED_BORROW` is a first-class state, borrow is **never inferred from price
+behaviour**, and the live pre-submit borrow recheck belongs to execution and risk.
+
+**Self-maturing is not self-governing**, exactly as ADR-0006 §C holds. Automation may monitor,
+research, generate hypotheses, operate shadow challengers, prepare governance packets, reduce or
+disable new entries under preapproved rules, and fail closed. **It may never** promote a strategy
+into order-producing Paper or live operation, replace a production strategy or model, change
+production parameters, increase capital, risk, leverage or short exposure, purchase a licence, add a
+provider, resume a governed suspension, or bypass the kill switch.
+
+**No alpha is claimed anywhere.** The specification does not claim that Breakout, Pullback, PEAD or
+Deterioration Short works, that AI adds alpha, that residual momentum is superior or that an options
+overlay helps. Its experiment matrix is a list of **unanswered questions**, and **none has been
+run**.
+
+```text
+Brain specification:                              PROPOSED / IN REVIEW
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED
+factor, scanner and AI-agent implementation:      NOT STARTED / NOT AUTHORIZED
+portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
+new src/ modules created by this specification:   NONE
+backtesting:                                      NOT STARTED
+provider data used by this specification:         NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**"Brain started" does not mean runtime coding started.** **Specification, implementation, research,
+deployment and execution are five separate gates**, and they are never collapsed into one.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

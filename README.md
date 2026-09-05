@@ -88,7 +88,10 @@ JOURNAL + ATTRIBUTION + HEALTH
 The Strategy Brain ends at **`CandidateIntent`** — which may carry thesis, evidence,
 lineage and risk context, but never shares, dollar size, order type, route or any order ID.
 Portfolio construction, sizing, risk, order approval and execution stay deterministic and
-downstream. **None of this is implemented or authorized** (Blueprint V3.0 §8, Appendix A).
+downstream. **None of this is implemented or authorized** (Blueprint V3.0 §8, Appendix A). The
+contracts, decision states, lifecycle and AI boundaries are specified in
+[docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under a
+**PROPOSED** [ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md).
 
 **Alpha families (V3.0 §9):** Momentum Continuation — containing the *Breakout* and
 *Pullback* modules under one shared factor-risk budget · Event / Information Drift (PEAD) ·
@@ -189,6 +192,8 @@ KalpaMani/
 │   │                         BLUEPRINT_ERRATA.md  (V2.1 empirical corrections index)
 │   ├── decisions/            Architecture Decision Records
 │   ├── phase3/               Point-in-time data foundation plan
+│   ├── phase4/               Strategy Brain SPECIFICATION  (ADR-0026 PROPOSED;
+│   │                         no Brain runtime exists and none is authorized)
 │   └── runbooks/             Operational procedures
 ├── infra/
 │   └── aws/research-data-plane/   Terraform DESCRIPTION of the private research
@@ -271,7 +276,10 @@ never printed, logged, committed or pasted into an AI chat session.
 Nothing below exists yet, and none of it is authorized:
 
 - Live order submission (paper order submission is certified; see the narrow scope below)
-- Breakout, Pullback and PEAD strategy logic
+- Breakout, Pullback, PEAD and Deterioration Short strategy logic
+- **The Strategy Brain runtime.** Its architecture is *specified* in
+  [docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under
+  a **PROPOSED** ADR-0026; a specification is not an implementation, and no Brain module exists
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)
@@ -3100,6 +3108,103 @@ and is not authorized to**: it comes after Run B, which is itself unauthorized a
 **12 September 2026**. **P1–P9 remain unevaluated**, data correctness and quality remain **not
 established**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is **NOT COMPLETE**, CONTROL
 stays **DEFERRED** and live trading stays **HARD-DISABLED**.
+
+### The Strategy Brain specification, and ADR-0026 — PROPOSED, and nothing is implemented
+
+**The Brain is specified. The Brain does not exist.** Those are two different facts, and this
+section keeps them apart: a reviewable specification now sits in the repository, and **no Brain
+runtime module, strategy module, factor calculation, scanner, AI agent, portfolio sizing or order
+routing has been written or authorized**.
+
+**[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is PROPOSED and
+carries no authority while its pull request is open.** On independent review and merge it becomes
+**ACCEPTED / IN FORCE** as **architecture, contracts, governance and future implementation
+boundaries** — and **nothing more**. That it carries no authority today is a statement about these
+days; it stays true of them after any later merge, and it is not rewritten as though the decision
+had authority before it was accepted.
+
+**What it specifies** —
+[`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md):
+
+| | |
+|---|---|
+| **the locked boundary** | the Brain produces **no broker order and no position size**; its terminal output is a deterministic typed `CandidateIntent` |
+| **taxonomy** | alpha family · strategy module · trade template · feature · filter · risk overlay — refining [ADR-0006](docs/decisions/ADR-0006-adopt-blueprint-v3-and-strategy-brain-governance.md) §D, altering nothing |
+| **families** | Momentum Continuation (Breakout Long, Pullback Long, **one family cap**) · Event / Information Drift (PEAD Long, PEAD Short) · Fundamental Deterioration (Deterioration Short) |
+| **the point-in-time reality gate** | no default profile, no default as-of, no "latest" shortcut; **missing required evidence blocks** rather than defaulting to zero, neutral, false, empty or a current value |
+| **the factor matrix** | five factor **families and contracts** — deliberately **not formulas** |
+| **`CandidateIntent`** | what it must carry, and what it may **never** carry |
+| **decision states** | a closed eight-member vocabulary |
+| **consolidation** | one economic opportunity with many evidence paths, **module attribution preserved** |
+| **`StrategySpec`** | a versioned immutable module definition, with its research governance |
+| **lifecycle** | eleven stages, **none advanced by code, by a backtest or by an AI recommendation** |
+| **versioning** | production versions never mutate; **open positions stay pinned to the versions that opened them** |
+| **Champion / Challenger** | comparison mechanics, and promotion only through a human-read governance packet |
+| **health** | seven states; degradation is automatic, **recovery past a governed suspension is not** |
+| **the AI contract** | two bounded roles, and **a deterministic failure cannot be rescued by AI** |
+| **the compiler** | thirteen ordered validations, stopping at the first refusal, outputting a **status and nothing else** |
+| **the handoff** | Brain → portfolio/risk → execution, with **no module answering all three question classes** |
+
+**`CandidateIntent` may never carry** shares, a dollar amount, a final position size, a final broker
+order type, a broker route, a client order ID, a broker order ID, a credential, an account number or
+an arbitrary free-form execution instruction. **The exclusion is structural, not conventional** —
+no field of those meanings, no free-text field an instruction could arrive through, and no extension
+point that admits one, so *Brain output cannot be treated as a broker ticket* is a property of the
+type rather than a rule a later author could relax. The **technical stop is a reference to an
+invalidation level, not an order**.
+
+**`READY_FOR_RISK_REVIEW` is not an approval to trade.** It records the absence of a deterministic
+objection; portfolio and risk decide independently. `MAYBE`, `BUY`, `SELL`, `EXECUTE` and
+`APPROVED_ORDER` are **refused by name**, because each reads as an instruction.
+
+**Short alpha is asymmetric, and that is architecture rather than a parameter.** **No generic
+"Breakdown Short" is authorized**, a short module **may not be produced by inverting a long
+breakout**, and **bottom-decile momentum alone is not short authorization**. `BLOCKED_BORROW` is a
+first-class state, **borrow is never inferred from price behaviour**, and the **live pre-submit
+borrow recheck belongs to execution and risk**.
+
+**Self-maturing is not self-governing.** Automation may monitor, research, generate hypotheses,
+operate shadow challengers, prepare governance packets, reduce or disable new entries under
+preapproved rules, and fail closed. **It may never** promote a strategy into order-producing Paper
+or live operation, replace a production strategy or model, change production parameters, increase
+capital, risk, leverage or short exposure, purchase a licence, add a provider, resume a governed
+suspension, or bypass the kill switch.
+
+**No alpha is claimed anywhere.** The specification does not claim that Breakout works, that
+Pullback works, that PEAD works, that Deterioration Short works, that AI adds alpha, that residual
+momentum is superior or that an options overlay helps. Its experiment matrix is a list of
+**unanswered questions**, and **no experiment in it has been run**.
+
+**Specifying is not implementing, and this specification depends on no provider data.**
+
+```text
+Brain specification:                              PROPOSED / IN REVIEW
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED
+factor, scanner and AI-agent implementation:      NOT STARTED / NOT AUTHORIZED
+portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
+new src/ modules created by this specification:   NONE
+backtesting:                                      NOT STARTED
+provider data used by this specification:         NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**"Brain started" does not mean runtime coding started.** **Specification, implementation, research,
+deployment and execution are five separate gates**, and this document opens only the first — subject
+to independent review and merge.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

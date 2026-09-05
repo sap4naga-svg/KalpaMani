@@ -12953,6 +12953,192 @@ def scan_retired_arithmetic(text: str) -> RetiredArithmeticScan:
     return RetiredArithmeticScan(tuple(findings), blocks, balanced and depth == 0)
 
 
+# --------------------------------------------------------------------------------------
+# 22. The Strategy Brain specification (ADR-0026)
+#
+# A specification with no implementation is exactly the kind of document that drifts:
+# nothing executes it, so nothing fails when a clause quietly weakens. These guards read
+# the specification, the ADR and the two status documents, and refuse the drifts that
+# would matter -- a forbidden CandidateIntent field acquiring a home, a decision state
+# that reads as an instruction, an alpha claim appearing in a document that says it makes
+# none, a proposed ADR being reported as one in force, or scaffolding arriving under
+# ``src/`` to make a roadmap look started.
+# --------------------------------------------------------------------------------------
+
+#: The Brain specification and the decision that introduces it.
+BRAIN_SPEC: Final = REPO_ROOT / "docs" / "phase4" / "strategy-brain-specification.md"
+ADR_0026: Final = DECISIONS / "ADR-0026-strategy-brain-architecture-and-governance.md"
+
+#: The section each status document owns, so a line found elsewhere in a four-thousand-line
+#: document does not count as this section carrying it.
+BRAIN_README_SECTION: Final = "### The Strategy Brain specification, and ADR-0026"
+BRAIN_CLAUDE_SECTION: Final = "### The Strategy Brain specification — PROPOSED"
+
+#: Everything ``CandidateIntent`` may never carry. ADR-0006 §E named the first six; the
+#: specification adds the four that would otherwise arrive through a "just for reference"
+#: field. Each must be refused **by name** in both documents, because a reader deciding
+#: whether a new field is allowed reads the list, not the intent behind it.
+BRAIN_FORBIDDEN_INTENT_FIELDS: Final[tuple[str, ...]] = (
+    "shares",
+    "dollar amount",
+    "final position size",
+    "final broker order type",
+    "broker route",
+    "client order ID",
+    "broker order ID",
+    "credential",
+    "account number",
+    "arbitrary free-form execution instruction",
+)
+
+#: The closed decision vocabulary. A status outside it is refused, so the vocabulary is
+#: only closed while every member is written down somewhere a reviewer can find it.
+BRAIN_DECISION_STATES: Final[tuple[str, ...]] = (
+    "READY_FOR_RISK_REVIEW",
+    "WATCHLIST",
+    "REJECTED",
+    "BLOCKED_DATA",
+    "BLOCKED_EVENT",
+    "BLOCKED_AI",
+    "BLOCKED_CONTRADICTION",
+    "BLOCKED_BORROW",
+)
+
+#: States that read as instructions. Each must be refused by name: a vocabulary that
+#: merely omits ``EXECUTE`` invites the next author to add it.
+BRAIN_FORBIDDEN_STATES: Final[tuple[str, ...]] = (
+    "MAYBE",
+    "BUY",
+    "SELL",
+    "EXECUTE",
+    "APPROVED_ORDER",
+)
+
+#: The eleven lifecycle stages. Promotion governance is only checkable if the stages it
+#: governs are enumerated.
+BRAIN_LIFECYCLE_STAGES: Final[tuple[str, ...]] = (
+    "IDEA",
+    "REGISTERED_HYPOTHESIS",
+    "TAXONOMY_OVERLAP_REVIEW",
+    "DATA_FEASIBILITY",
+    "BASELINE_RESEARCH",
+    "LOCKED_OUT_OF_SAMPLE_VALIDATION",
+    "SHADOW",
+    "AUTOMATED_PAPER",
+    "MICRO_LIVE_CANARY",
+    "SCALED",
+    "RETIRED",
+)
+
+#: The health states. ``SUSPENDED`` and the two new-entry states are the ones that carry
+#: the fail-closed behaviour, so an incomplete machine is a real weakening.
+BRAIN_HEALTH_STATES: Final[tuple[str, ...]] = (
+    "HEALTHY",
+    "WATCH",
+    "DEGRADED",
+    "NEW_ENTRIES_REDUCED",
+    "NEW_ENTRIES_DISABLED",
+    "SUSPENDED",
+    "RETIRED",
+)
+
+#: Wording that marks a sentence as a disclaimer rather than a claim. The documents state
+#: what they do *not* assert -- "it does not claim that Breakout works" -- and a scanner
+#: blind to negation would read the disclaimer as the claim it forbids. Sentence-scoped,
+#: because a marker three paragraphs away would excuse a real claim.
+BRAIN_CLAIM_DISCLAIMERS: Final[tuple[str, ...]] = (
+    "does not claim",
+    "do not claim",
+    "no alpha is claimed",
+    "must not claim",
+    "claims no",
+    "not claimed",
+    "hypothesis",
+    "hypotheses",
+    "no result is asserted",
+)
+
+#: Claims the specification says it does not make. A document that claims none of these
+#: and then contains one is worse than one that never made the promise, because the
+#: promise is what a reader relies on.
+BRAIN_ALPHA_CLAIMS: Final[tuple[tuple[str, str], ...]] = (
+    ("breakout works", r"breakout (?:strategy )?(?:is proven|works|outperforms)"),
+    ("pullback works", r"pullback (?:strategy )?(?:is proven|works|outperforms)"),
+    ("pead works", r"pead (?:strategy )?(?:is proven|works|outperforms)"),
+    ("ai adds alpha", r"ai (?:adds|generates|produces) alpha"),
+    ("residual momentum superior", r"residual momentum is (?:superior|better|proven)"),
+    ("expected return established", r"expected returns? (?:are|is) established"),
+    ("proven edge", r"proven (?:edge|alpha|profitability)"),
+    ("will outperform", r"will outperform"),
+    ("backtest passed", r"backtests? (?:passed|confirmed|validated) the"),
+)
+
+#: The status lines both documents must carry, verbatim, inside the Brain section. A
+#: status document that drops the blocker reads as though the blocker is gone.
+BRAIN_STATUS_LINES: Final[tuple[str, ...]] = (
+    "Brain specification:                              PROPOSED / IN REVIEW",
+    "Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED",
+    "core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED",
+    "new src/ modules created by this specification:   NONE",
+    "backtesting:                                      NOT STARTED",
+    "Run B:                                            NOT RUN / NOT AUTHORIZED",
+    "combined assessment:                              NOT RUN / NOT AUTHORIZED",
+    "P1-P9:                                            UNEVALUATED",
+    "data correctness and quality:                     NOT ESTABLISHED",
+    "G1 / G2:                                          OPEN / OPEN",
+    "provider selected:                                NONE",
+    "live trading:                                     HARD-DISABLED",
+)
+
+#: The packages the specification must have left empty. Scaffolding is not progress, and
+#: an empty package invites a later session to fill it without an authorization -- so the
+#: guard is that each still holds exactly its ``__init__.py``.
+BRAIN_EMPTY_PACKAGES: Final[tuple[str, ...]] = (
+    "src/kalpamani/strategies",
+    "src/kalpamani/research",
+    "src/kalpamani/portfolio",
+    "src/kalpamani/risk",
+    "src/kalpamani/monitoring",
+)
+
+
+def brain_alpha_claims(text: str) -> list[str]:
+    """Every alpha claim a document asserts rather than disclaims.
+
+    Sentence-scoped. These documents are largely *about* not making these claims, so
+    the same words appear in both a disclaimer and a claim; only the sentence they sit
+    in separates them. A sentence carrying a disclaimer marker is skipped, and every
+    other sentence is read as an assertion.
+    """
+    found: list[str] = []
+    reading = " ".join(text.replace("**", "").replace("`", "").split())
+    for sentence in re.split(r"(?<=[.;:])\s+|\s*\|\s*", reading):
+        lowered = sentence.lower()
+        if any(marker in lowered for marker in BRAIN_CLAIM_DISCLAIMERS):
+            continue
+        for label, pattern in BRAIN_ALPHA_CLAIMS:
+            if re.search(pattern, lowered):
+                found.append(label)
+    return found
+
+
+def brain_scaffolding(package: str) -> list[str]:
+    """Tracked files under `package` that are not an ``__init__.py``.
+
+    Expected: none. The specification authorizes no implementation, so a module
+    appearing under one of these packages is the specification being treated as a
+    permission -- which is the single failure this whole document is written against.
+    """
+    directory = REPO_ROOT / package
+    if not directory.is_dir():
+        return [f"{package}: absent"]
+    return sorted(
+        str(path.relative_to(REPO_ROOT)).replace("\\", "/")
+        for path in tracked_files(directory)
+        if path.name != "__init__.py"
+    )
+
+
 def main() -> int:
     print("KalpaMani Phase 3 documentation-consistency audit")
     print("Planning documents only. No runtime behaviour is exercised.\n")
@@ -12973,7 +13159,7 @@ def main() -> int:
     f = Findings()
 
     # ---------------------------------------------------------------- 1. vocabularies
-    print("[1/21] Closed vocabularies are defined where they are used")
+    print("[1/22] Closed vocabularies are defined where they are used")
     schema_tokens = code_tokens(schema)
     for name, vocab in (
         ("information_origin", INFORMATION_ORIGINS),
@@ -12997,7 +13183,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 2. envelopes
-    print("\n[2/21] Source and derived envelopes stay disjoint")
+    print("\n[2/22] Source and derived envelopes stay disjoint")
     derived_entities = [
         name for name, head in entity_headings(schema) if "DERIVED_ARTIFACT" in head
     ]
@@ -13032,7 +13218,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 3. anchors
-    print("\n[3/21] Every declared temporal semantics has its required anchor")
+    print("\n[3/22] Every declared temporal semantics has its required anchor")
     anchorless: list[str] = []
     for entity, head in entity_headings(schema):
         body = entity_body(schema, entity)
@@ -13049,7 +13235,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4. exact vs bound
-    print("\n[4/21] Exact and bound derivations name the correct fields")
+    print("\n[4/22] Exact and bound derivations name the correct fields")
     crossed: list[str] = []
     for exact_field, exact_vocab in EXACT_DERIVATIONS.items():
         bound_field = exact_field.replace("_time", "_upper_bound")
@@ -13076,7 +13262,7 @@ def main() -> int:
         f.check(f"schema defines every derivation for {fld}", not absent, ", ".join(absent))
 
     # ---------------------------------------------------------------- 4a. stale rules
-    print("\n[5/21] Normative rules use the current resolved model")
+    print("\n[5/22] Normative rules use the current resolved model")
 
     scalar_offenders: list[str] = []
     for path, text in everything.items():
@@ -13122,7 +13308,7 @@ def main() -> int:
         )
 
     # ---------------------------------------------------------------- 4b. entity shapes
-    print("\n[6/21] Entities keep source and derived rows apart")
+    print("\n[6/22] Entities keep source and derived rows apart")
 
     mixed: list[str] = []
     for entity, head in entity_headings(schema):
@@ -13192,7 +13378,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4d. resolved semantics
-    print("\n[7/21] Unusability is decided by resolved values, not by a derivation")
+    print("\n[7/22] Unusability is decided by resolved values, not by a derivation")
 
     rule6 = ""
     for _, line in lines_with(contract, "resolved_public_time` is null"):
@@ -13254,7 +13440,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4c. manifest shape
-    print("\n[8/21] Manifest records per-axis timing and coverage evidence")
+    print("\n[8/22] Manifest records per-axis timing and coverage evidence")
     per_axis = (
         "public_exact_rows",
         "public_bounded_rows",
@@ -13359,7 +13545,7 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 4e. merge closeout
-    print("\n[9/21] Resolved-timing wording, closure rules and current status")
+    print("\n[9/22] Resolved-timing wording, closure rules and current status")
 
     f.check(
         "contract origin table names resolved timing axes",
@@ -13464,7 +13650,7 @@ def main() -> int:
         f.check(f"{name} says planning accepted, implementation unauthorized", ok, "status wording")
 
     # ---------------------------------------------------------------- 5. retired names
-    print("\n[10/21] No document refers to a retired field name")
+    print("\n[10/22] No document refers to a retired field name")
     for old, replacement in RETIRED_NAMES.items():
         offenders: list[str] = []
         for path, text in everything.items():
@@ -13508,7 +13694,7 @@ def main() -> int:
         f.check("manifest_version reflects the current schema", True)
 
     # ---------------------------------------------------------------- 7. blueprint authority
-    print("\n[11/21] Blueprint V3.0 adoption is recorded consistently")
+    print("\n[11/22] Blueprint V3.0 adoption is recorded consistently")
 
     f.check(
         "Blueprint V3.0 exists at the authoritative path",
@@ -13665,7 +13851,7 @@ def main() -> int:
         )
 
     # ------------------------------------------------- 8. provider decision packet
-    print("\n[12/21] The provider decision packet decides nothing and closes no gate")
+    print("\n[12/22] The provider decision packet decides nothing and closes no gate")
 
     f.check(
         "the G1/G3 decision packet exists",
@@ -13757,7 +13943,7 @@ def main() -> int:
             )
 
     # ------------------------------------------- 9. cloud-first research data plane
-    print("\n[13/21] The cloud data plane is described, not built -- and the Terraform enforces it")
+    print("\n[13/22] The cloud data plane is described, not built -- and the Terraform enforces it")
 
     f.check("ADR-0007 exists", ADR_CLOUD.is_file(), f"missing: {ADR_CLOUD}")
     f.check(
@@ -14395,7 +14581,7 @@ def main() -> int:
             )
 
     # ----------------------------------------------- 14. ADR-0008 and the exact gate map
-    print("\n[14/21] The Sharadar licence decision closes G3, and nothing else")
+    print("\n[14/22] The Sharadar licence decision closes G3, and nothing else")
     f.check("ADR-0008 exists", ADR_LICENCE.is_file(), f"missing: {ADR_LICENCE}")
     if ADR_LICENCE.is_file():
         adr8 = read(ADR_LICENCE)
@@ -14629,7 +14815,7 @@ def main() -> int:
         )
 
     # -------------------------- 15. ADR-0009 authorizes code, and only code
-    print("\n[15/21] The Sharadar implementation authorization is code-only, and G1 stays open")
+    print("\n[15/22] The Sharadar implementation authorization is code-only, and G1 stays open")
     f.check(
         "ADR-0009 exists",
         ADR_IMPLEMENTATION.is_file(),
@@ -15019,7 +15205,7 @@ def main() -> int:
         )
 
     # ------------------- 16. ADR-0010 buys access to evaluate, and nothing more
-    print("\n[16/21] The qualification subscription is purchased, and still authorizes no access")
+    print("\n[16/22] The qualification subscription is purchased, and still authorizes no access")
     f.check(
         "ADR-0010 exists",
         ADR_QUALIFICATION.is_file(),
@@ -15374,7 +15560,7 @@ def main() -> int:
         )
 
     # ------------------- 17. The S3 store is written, and has never reached AWS
-    print("\n[17/21] The licensed S3 object store is implemented, and has touched nothing")
+    print("\n[17/22] The licensed S3 object store is implemented, and has touched nothing")
     f.check(
         "ADR-0011 exists",
         ADR_OBJECT_STORE.is_file(),
@@ -15768,7 +15954,7 @@ def main() -> int:
         )
 
     # ------------------- 18. No status document carries a superseded current state
-    print("\n[18/21] The status documents describe the current governance state, not a past one")
+    print("\n[18/22] The status documents describe the current governance state, not a past one")
 
     for name, path in (
         ("CLAUDE.md", REPO_ROOT / "CLAUDE.md"),
@@ -15944,7 +16130,7 @@ def main() -> int:
     )
 
     # ------------------- 19. The qualification runtime exists, and cannot be run
-    print("\n[19/21] The Sharadar qualification runtime core is dormant, and says so precisely")
+    print("\n[19/22] The Sharadar qualification runtime core is dormant, and says so precisely")
     f.check(
         "ADR-0012 exists",
         ADR_RUNTIME.is_file(),
@@ -16630,7 +16816,7 @@ def main() -> int:
         )
 
     # ------------------- 20. Acquisition mode replaced a boolean, completely
-    print("\n[20/21] Acquisition mode is a closed vocabulary, and the boolean is gone")
+    print("\n[20/22] Acquisition mode is a closed vocabulary, and the boolean is gone")
     f.check(
         "ADR-0013 exists",
         ADR_ACQUISITION_MODE.is_file(),
@@ -20066,7 +20252,7 @@ def main() -> int:
     )
 
     # ------------------- 21. ADR-0017 proposes an architecture, and builds nothing
-    print("\n[21/21] ADR-0017 is proposed, and nothing is implemented or executed")
+    print("\n[21/22] ADR-0017 is proposed, and nothing is implemented or executed")
 
     f.check(
         "ADR-0017 exists as a tracked decision record",
@@ -22629,6 +22815,326 @@ def main() -> int:
         and "ADR-0025: ACCEPTED" not in assessment_section,
         "a proposed decision must not be reported as one in force",
     )
+
+    # ------------------------------------------- 22. the Strategy Brain specification
+    print("\n[22/22] The Strategy Brain is specified, and nothing about it is implemented")
+    f.check(
+        "the Brain specification exists at its exact path",
+        BRAIN_SPEC.is_file(),
+        "docs/phase4/strategy-brain-specification.md",
+    )
+    f.check(
+        "ADR-0026 exists at its exact path",
+        ADR_0026.is_file(),
+        "docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md",
+    )
+    brain_spec = read(BRAIN_SPEC)
+    brain_adr = read(ADR_0026)
+    brain_spec_flat = " ".join(brain_spec.replace("**", "").split())
+    brain_adr_flat = " ".join(brain_adr.replace("**", "").split())
+    readme_text = read(REPO_ROOT / "README.md")
+    claude_text = read(REPO_ROOT / "CLAUDE.md")
+    brain_readme = _document_section(readme_text, BRAIN_README_SECTION)
+    brain_claude = _document_section(claude_text, BRAIN_CLAUDE_SECTION)
+
+    # -- the decision is proposed, and is reported as proposed --
+    f.check(
+        "ADR-0026 declares itself proposed and not in force",
+        "Status: PROPOSED — NOT IN FORCE" in brain_adr,
+        "a decision that does not say it is proposed will be read as accepted",
+    )
+    f.check(
+        "ADR-0026 claims no authority while its pull request is open",
+        "carries no authority" in brain_adr_flat
+        and "ADR-0026 is ACCEPTED / IN FORCE" not in brain_adr_flat,
+        "a proposed decision must not be reported as one in force",
+    )
+    f.check(
+        "ADR-0026 records that acceptance would authorize no implementation",
+        "authorizes no implementation and no execution" in brain_adr_flat,
+        "merging an architecture decision authorizes no implementation",
+    )
+    f.check(
+        "ADR-0026 supersedes and amends nothing",
+        "Supersedes:** nothing" in brain_adr and "No ADR is amended or superseded" in brain_adr,
+        "a specification that quietly amends an accepted ADR is an unreviewed change",
+    )
+    for label, section in (("README.md", brain_readme), ("CLAUDE.md", brain_claude)):
+        f.check(
+            f"{label} carries the Brain specification section",
+            bool(section),
+            "a status document that omits the section cannot carry its status",
+        )
+        f.check(
+            f"{label} reports ADR-0026 as proposed and without authority",
+            "PROPOSED" in section and "carries no authority" in " ".join(section.split()),
+            "a proposed decision must not be reported as one in force",
+        )
+
+    # -- the CandidateIntent exclusion, by name and structurally --
+    for field_name in BRAIN_FORBIDDEN_INTENT_FIELDS:
+        f.check(
+            f"the specification refuses {field_name!r} in CandidateIntent by name",
+            field_name.lower() in brain_spec_flat.lower(),
+            "a field refused only in spirit is a field the next author adds",
+        )
+    f.check(
+        "the specification requires the CandidateIntent exclusion to be structural",
+        "structurally impossible for Brain output to be treated as a broker ticket"
+        in brain_spec_flat,
+        "a convention can be relaxed; a type cannot",
+    )
+    f.check(
+        "ADR-0026 records the exclusion as structural rather than conventional",
+        "structural, not conventional" in brain_adr_flat,
+        "the guarantee is the shape of the type, not a rule someone must remember",
+    )
+    f.check(
+        "the specification states the Brain produces no order and no size",
+        "produces no broker order and no position size" in brain_spec_flat,
+        "the whole boundary rests on this sentence",
+    )
+    f.check(
+        "the technical stop is specified as a reference and not an order",
+        "technical stop is a reference, not an order" in brain_spec_flat,
+        "a stop that is an order is an order the Brain issued",
+    )
+
+    # -- the closed decision vocabulary --
+    for state in BRAIN_DECISION_STATES:
+        f.check(
+            f"the specification defines the decision state {state}",
+            state in brain_spec,
+            "a vocabulary is only closed while every member is written down",
+        )
+    for state in BRAIN_FORBIDDEN_STATES:
+        f.check(
+            f"the specification refuses the decision state {state} by name",
+            state in brain_spec,
+            "omitting a forbidden state invites the next author to add it",
+        )
+    f.check(
+        "READY_FOR_RISK_REVIEW is not described as an approval to trade",
+        "READY_FOR_RISK_REVIEW` is not an approval to trade" in brain_spec,
+        "the risk engine decides independently, and must be able to refuse",
+    )
+
+    # -- AI cannot size, route or rescue --
+    f.check(
+        "the specification states a deterministic failure cannot be rescued by AI",
+        "deterministic failure cannot be rescued by AI" in brain_spec_flat,
+        "if AI can restore a blocked candidate, AI decides eligibility",
+    )
+    f.check(
+        "the specification allows AI to remove a candidate and never to restore one",
+        "may remove a candidate; it may never restore one" in brain_spec_flat,
+        "the asymmetry is the whole of the AI boundary",
+    )
+    f.check(
+        "the Research Agent is confined to already shortlisted candidates",
+        "only already shortlisted" in brain_spec_flat,
+        "an AI that chooses what to look at is a scanner",
+    )
+    f.check(
+        "AI-dependent new entries fail closed on an AI outage",
+        "AI-dependent new entries | fail closed" in brain_spec_flat
+        or "new entries fail closed" in brain_spec_flat.lower(),
+        "an outage must not become an unevidenced entry",
+    )
+
+    # -- lifecycle, versioning and promotion authority --
+    for stage in BRAIN_LIFECYCLE_STAGES:
+        f.check(
+            f"the specification defines the lifecycle stage {stage}",
+            stage in brain_spec,
+            "promotion governance needs the stages it governs",
+        )
+    f.check(
+        "no lifecycle stage is advanced by code, a backtest or an AI recommendation",
+        all(
+            phrase in brain_spec_flat
+            for phrase in (
+                "a code module | existing is not evidence",
+                "a result is not a promotion",
+                "input to a human decision, never the decision",
+            )
+        ),
+        "a stage that a backtest advances is a stage nobody approved",
+    )
+    f.check(
+        "promotion to order-producing Paper requires human approval",
+        "strategy promotion to order-producing Paper" in brain_spec
+        and "Human approval required" in brain_spec,
+        "the first order-producing stage is the one that must not be automatic",
+    )
+    f.check(
+        "the specification states that self-maturing is not self-governing",
+        "Self-maturing is not self-governing" in brain_spec,
+        "ADR-0006 §C, restated rather than weakened",
+    )
+    f.check(
+        "production strategy versions are specified as immutable",
+        "production strategy versions are IMMUTABLE" in brain_spec,
+        "a mutable production version cannot be reproduced or audited",
+    )
+    f.check(
+        "open positions stay pinned to the versions that opened them",
+        "stays governed by the exact versions that opened it" in brain_spec_flat,
+        "a rule that changes under an open trade cannot explain the trade",
+    )
+
+    # -- taxonomy, consolidation and the short asymmetry --
+    f.check(
+        "Breakout and Pullback share a family cap and keep module attribution",
+        "share a family exposure cap" in brain_spec_flat
+        and "separate module attribution" in brain_spec_flat,
+        "two names for one exposure must be budgeted as one",
+    )
+    f.check(
+        "different labels are stated not to constitute diversification",
+        "Different labels do not constitute diversification" in brain_spec,
+        "ADR-0006 §D, carried into the specification",
+    )
+    f.check(
+        "no generic Breakdown Short is authorized",
+        'No generic "Breakdown Short" is authorized' in brain_spec
+        and 'No generic "Breakdown Short" is authorized' in brain_adr,
+        "a short book built by inversion has no short alpha",
+    )
+    f.check(
+        "bottom-decile momentum alone is not short authorization",
+        "Bottom-decile momentum alone is not short authorization" in brain_spec
+        and "Bottom-decile momentum alone is not short authorization" in brain_adr,
+        "weak price action is timing, not an economic reason",
+    )
+    f.check(
+        "short context is mandatory and borrow is never inferred from price",
+        "may not infer borrow from price behaviour" in brain_spec_flat
+        and "BLOCKED_BORROW" in brain_spec,
+        "an unknown borrow state blocks; it is never assumed",
+    )
+    f.check(
+        "the live pre-submit borrow recheck stays outside the Brain",
+        "belongs to execution and risk, not to the Brain" in brain_spec_flat,
+        "borrow is perishable, and submission time is what governs",
+    )
+    f.check(
+        "candidate consolidation preserves module attribution",
+        "Module attribution survives consolidation" in brain_spec,
+        "consolidating must not erase the evidence each module produced",
+    )
+    f.check(
+        "consolidation is stated to be neither netting nor sizing",
+        "Consolidation is not netting and not sizing" in brain_spec,
+        "removing double-counting is not allocating capital",
+    )
+
+    # -- the point-in-time gate refuses rather than defaults --
+    f.check(
+        "the point-in-time gate blocks rather than defaulting on missing evidence",
+        all(
+            phrase in brain_spec_flat
+            for phrase in ("no default information profile", "no default as-of", 'no "latest"')
+        ),
+        "a default is a measurement every later check believes",
+    )
+
+    # -- the compiler emits a status and nothing else --
+    f.check(
+        "the compiler's output is a CandidateIntent status and nothing else",
+        "output is a `CandidateIntent` status, and nothing else" in brain_spec,
+        "a compiler that emits a size has crossed the boundary",
+    )
+    f.check(
+        "the compiler stops at the first refusal",
+        "stops at the first refusal" in brain_spec_flat,
+        "ordering is the property that keeps a failed gate from reaching a credential",
+    )
+    f.check(
+        "no single module answers all three handoff question classes",
+        "No single module may answer all three classes of question" in brain_spec,
+        "Brain, risk and execution must stay three decisions",
+    )
+
+    # -- no alpha is claimed --
+    for name, text in (
+        ("specification", brain_spec),
+        ("ADR-0026", brain_adr),
+        ("the README section", brain_readme),
+        ("the CLAUDE.md section", brain_claude),
+    ):
+        claimed = brain_alpha_claims(text)
+        f.check(
+            f"{name} asserts no alpha claim",
+            not claimed,
+            "a hypothesis reported as a finding is the defect this document forbids: "
+            + ", ".join(sorted(set(claimed))),
+        )
+    f.check(
+        "the specification states that no alpha is claimed",
+        "No alpha is claimed anywhere in this document" in brain_spec,
+        "the promise a reader relies on must be made explicitly",
+    )
+    f.check(
+        "the experiment matrix asserts no result",
+        "No result is asserted by this document, and none exists" in brain_spec,
+        "an unrun experiment has no findings",
+    )
+
+    # -- the qualification gates are reported as still open --
+    f.check(
+        "the specification records that P1-P9 are unevaluated and no provider is selected",
+        all(
+            phrase in brain_spec_flat
+            for phrase in (
+                "P1–P9 are UNEVALUATED",  # noqa: RUF001 -- the document's own en dash
+                "no provider is selected",
+                "G1 and G2 are OPEN",
+                "Run B has not run and is not authorized",
+            )
+        ),
+        "a specification that implies qualification finished would be false",
+    )
+    f.check(
+        "ADR-0026 closes no gate",
+        "G1 OPEN · G2 OPEN · G3 CLOSED · G4 OPEN · G5 OPEN · G6 OPEN · G7 OPEN" in brain_adr,
+        "an architecture decision resolves no evidence gate",
+    )
+    for label, section in (("README.md", brain_readme), ("CLAUDE.md", brain_claude)):
+        missing_status = [line for line in BRAIN_STATUS_LINES if line not in section]
+        f.check(
+            f"{label} records the full Brain status block",
+            not missing_status,
+            "; ".join(missing_status[:3]),
+        )
+
+    # -- nothing was implemented --
+    for package in BRAIN_EMPTY_PACKAGES:
+        scaffolding = brain_scaffolding(package)
+        f.check(
+            f"{package} holds no module the specification could be read as authorizing",
+            not scaffolding,
+            ", ".join(scaffolding[:3]),
+        )
+    f.check(
+        "ADR-0026 records that it creates no source module",
+        "No source module is created by this decision" in brain_adr,
+        "scaffolding is not progress",
+    )
+    f.check(
+        "ADR-0026 keeps specification, implementation and execution as separate gates",
+        "five separate gates" in brain_adr_flat and "five separate gates" in brain_spec_flat,
+        "collapsing the gates is how an unauthorized run starts",
+    )
+
+    # -- the new documents carry no identifier --
+    for label, text in (("the specification", brain_spec), ("ADR-0026", brain_adr)):
+        leaks = adr_0021_identifier_leaks(text)
+        f.check(
+            f"{label} carries no account id, access key, SSO start URL or concrete ARN",
+            not leaks,
+            "; ".join(leaks),
+        )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")
