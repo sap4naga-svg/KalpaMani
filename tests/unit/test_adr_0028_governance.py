@@ -722,9 +722,70 @@ def test_aggregation_counts_each_position_once() -> None:
 
 
 def test_missing_initial_risk_is_unavailable_rather_than_inapplicable() -> None:
+    """The earlier guard asserted a single route, which contradicted the ratio rules.
+
+    ``NOT_APPLICABLE`` is reached by subject inapplicability *and* by undefined
+    arithmetic -- ``profit_factor`` and ``capture_ratio`` require the second. What the
+    invariant actually protects is that a **missing input** reaches neither, so that is
+    what is asserted here, and ``test_cockpit_contract_semantics`` executes the matrix
+    those two routes live in.
+    """
     assert "It is unavailable, not inapplicable" in CONTRACTS_FLAT
-    assert "`NOT_DEFINED_FOR_SUBJECT` is the only route to `NOT_APPLICABLE`" in CONTRACTS_TEXT
+    assert "`NOT_APPLICABLE` has exactly two routes" in CONTRACTS_FLAT
+    assert "`UPSTREAM_INPUT_MISSING` in particular never does" in CONTRACTS_FLAT
     assert "Missing initial planned risk is unavailable, not inapplicable" in EXTENSION_FLAT
+
+
+def test_availability_and_reason_are_two_axes_with_one_matrix() -> None:
+    assert "The validity matrix" in CONTRACTS_TEXT
+    assert "This matrix is exhaustive" in CONTRACTS_FLAT
+    assert "neither is ever spelled in the other's vocabulary" in CONTRACTS_FLAT
+    assert "`UNKNOWN` belongs to `completeness`" in CONTRACTS_TEXT
+
+
+def test_a_successful_value_never_carries_a_fabricated_failure_reason() -> None:
+    assert "The reason a successful value carries is `NONE`" in CONTRACTS_FLAT
+    assert "A fabricated failure reason on a good value is a false report" in CONTRACTS_FLAT
+    assert "no producer invents a failure to fill a required field" in EXTENSION_FLAT
+
+
+def test_an_unavailable_nested_record_has_a_shape() -> None:
+    assert "The ONLY wrapper a nested record arrives in" in CONTRACTS_TEXT
+    assert "never a skeleton, never a placeholder, and never a zeroed record" in CONTRACTS_FLAT
+    assert "Six payloads, so the shapes are satisfiable" in CONTRACTS_TEXT
+    assert "an absent record is absent" in EXTENSION_FLAT.lower()
+
+
+def test_slippage_is_multiplied_into_basis_points_and_signed() -> None:
+    assert "* 10,000" in CONTRACTS_TEXT
+    assert "+1 for every buy" in CONTRACTS_FLAT
+    assert "Positive is adverse cost" in CONTRACTS_FLAT
+
+
+def test_freshness_measures_the_facts_and_not_the_build() -> None:
+    assert "six times, and a rebuild is not one of them" in CONTRACTS_FLAT
+    assert "source_age is the freshness question" in CONTRACTS_TEXT
+    assert "A rebuild resets build_age and NEVER source_age" in CONTRACTS_TEXT
+    assert "a rebuild resets only the last of them" in EXTENSION_FLAT
+
+
+def test_overlapping_data_counts_as_exposure() -> None:
+    assert "Overlapping data counts as exposure, not only an identical locked set" in (
+        FEEDBACK_FLAT
+    )
+    assert "there is no threshold below which reuse becomes fresh" in FEEDBACK_FLAT
+    assert "Incomparable is not disjoint" in FEEDBACK_FLAT
+
+
+def test_the_review_round_is_recorded_in_the_decision() -> None:
+    assert "Four corrections from the independent review of PR #72" in ADR_TEXT
+    for claim in (
+        "Availability and reason are two axes",
+        "A required nested record needs a way to be unavailable",
+        "Slippage is basis points",
+        "Freshness is the age of the facts, not the age of the build",
+    ):
+        assert claim in ADR_TEXT, claim
 
 
 def test_the_cockpit_invents_no_trading_permission() -> None:

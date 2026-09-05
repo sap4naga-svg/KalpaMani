@@ -3378,6 +3378,24 @@ else**.
 | **C — classification contradicted itself** | `LICENSED_DERIVED` was a legitimate class inside the private boundary while §10 banned reconstructable derivatives from *every* read model; and `PUBLIC_EDGE` admitted `SYNTHETIC` provenance only, while `QualificationStatus` is `AVAILABLE`, `PUBLIC_SAFE` and composed of **real** tracked facts. Underneath both, a sensitivity label was doing a publication gate's job |
 | **D — "planned risk" was four facts** | an Executive tile of *open* planned risk, a per-position field, a Risk Dashboard heading, and the R denominator — with one §12 definition, the entry-time one. A trailing stop could plausibly be read as moving the R denominator, and a missing initial risk reported `NOT_APPLICABLE` |
 
+**Four further defects were found by the independent review of PR #72, and are corrected in the
+same pull request.** They are defects in the corrections above rather than in the accepted package,
+and ADR-0028 §2.5 records each one.
+
+| | |
+|---|---|
+| **an availability value spelled as a reason code** | `UPSTREAM_INPUT_MISSING` is a `FieldReasonCode` and was written where an `AvailabilityState` belongs, in the §4.1 rule, in the missing-initial-risk contract and in eight metric rows; `UNKNOWN`, a `completeness` value, was the `coverage` metric's availability outcome. **A consumer switching on availability would have found values that are not in the enum.** One exhaustive validity matrix now governs state, reason and value presence together, `NOT_APPLICABLE` has the two routes the ratio rules already required, and a successful value carries `NONE` rather than **a fabricated failure reason** |
+| **a required nested record with no unavailable shape** | `InitialPlannedRisk` was `required` with every field concrete while the same section said initial risk may be absent, so an implementation would have invented a zeroed amount, a synthesised policy identifier or the response's own timestamp. A `RecordValue` wrapper carries all four quantities, an absent record is **absent rather than a skeleton**, and six payloads are written out — including the unavailable and partially available cases |
+| **a ratio labelled in basis points** | the slippage formula divided two prices and called the quotient `BPS`, **out by a factor of 10,000**, with its side convention undefined. The formula multiplies by 10,000, `side_sign` is `+1` for every buy and `−1` for every sell so **positive is adverse cost on both sides**, `Bps` carries a decimal string with a stated scale so fractional basis points survive, and four cases are worked through by hand |
+| **freshness that measured the build** | `as_of_time − newest contributing projected_time` measures when a machine last ran, could go negative, and reported the freshest input while concealing an older required one. Source age, projection lag and build age are now three separate numbers, **a rebuild resets only the last**, every required input is measured against its own contract, and the composite reports its **oldest** required input |
+
+**Two smaller corrections in the same round.** Out-of-sample exposure is looked up by **measured
+overlap** rather than by locked-set identity alone, so a subset, superset, shifted window or re-cut
+of an exposed set is exposed — **any overlap disqualifies a confirmatory claim, and an unmeasurable
+overlap fails closed**. And `return.time_weighted` requires **one** complete sub-period rather than
+two, because a flow-free holding period is a complete and valid time-weighted return; **no research
+restriction was invented to preserve the old number**.
+
 **What ADR-0028 decides.**
 
 ```text

@@ -183,7 +183,7 @@ means "not applicable" or "forgot".
 | `provenance` | `DataProvenance` | where the numbers came from |
 | `availability` | `AvailabilityState` | whether there is an answer at all |
 | `availability_reason` | closed reason code | **why**, from a closed vocabulary — never free text |
-| `freshness` | duration + contract | age, and the freshness contract it is measured against |
+| `freshness` | `FreshnessReport` | **source-data age and projection lag as separate numbers**, per required input, against each input's own contract. §3.1 defines it, and a rebuild never makes an old source fact fresh |
 | `coverage` | ratio + extent | how much of the requested extent is present |
 | `completeness` | closed enum | `COMPLETE`, `PARTIAL` or `UNKNOWN` |
 | `snapshot_version` | string | the projection snapshot this row belongs to |
@@ -208,7 +208,7 @@ ReadModelEnvelope {
     provenance                  SYNTHETIC | SYSTEM_RECORDED | BACKTEST_SIMULATED | BROKER_REPORTED
     availability                <AvailabilityState>
     availability_reason         <closed reason code>
-    freshness                   { age, contract_max_age }
+    freshness                   <FreshnessReport>   -- see §3.1; NEVER one number
     coverage                    { present, requested }
     completeness                COMPLETE | PARTIAL | UNKNOWN
     snapshot_version            projection snapshot id
@@ -224,6 +224,110 @@ ReadModelEnvelope {
 **The envelope is not optional and is not stripped for convenience.** A response without provenance
 and availability is a number with no provenance and no availability, which is how a synthetic figure
 becomes a reported result.
+
+### 3.1 Freshness — six times, and a rebuild is not one of them
+
+**`as_of_time − newest contributing projected_time` is not freshness.** `projected_time` is when the
+projection was *built*, so that difference measures how recently a machine ran, and **rebuilding a
+projection over week-old source data would report it as seconds old**. It can also go **negative**,
+because a historical `as_of` query resolves as of an instant that precedes the build. A screen
+reading it sees a fresh number and stale data.
+
+**Six distinct times, and none of them is a synonym for another.**
+
+| | |
+|---|---|
+| `evaluation_time` | when the answer was computed — the request instant. **Always known** |
+| `as_of_time` | the point-in-time instant the answer is resolved **as of**. Often the same as `evaluation_time`; deliberately earlier for a historical query. **Always known** |
+| `source_effective_time` | when the source fact **was true**. A fill's execution instant, a valuation's close, a governance record's effective date |
+| `source_observation_time` | when KalpaMani **first observed** the source fact. Never earlier than `source_effective_time`, and the gap between them is the source's own reporting delay |
+| `projected_time` | when this projection row was **built**. **Always known** |
+| `source_watermark` | the source position the projection has **consumed to** — the boundary beyond which this row knows nothing |
+
+**Three ages, computed from those, and reported separately.**
+
+```text
+source_age       = evaluation_time - source_effective_time      -- how old the FACTS are
+projection_lag   = projected_time  - source_effective_time      -- how far the BUILD lags
+build_age        = evaluation_time - projected_time             -- how old the BUILD is
+
+source_age is the freshness question. A rebuild resets build_age and NEVER source_age.
+```
+
+**Units are whole seconds, on UTC instants**, with a monotonic clock used wherever one is available
+for a duration; **calendar arithmetic is never used to measure an age**.
+
+**Every required input is evaluated on its own, against its own contract.** A composite view holds
+several required inputs with different tolerances — a position mark that is stale after a minute, a
+governance record that is current for a month — and **a single "newest contributing" number reports
+the freshest and conceals the rest**. So:
+
+| | |
+|---|---|
+| **per input** | each required input reports its own `source_age`, its own `contract_max_age` and its own resulting state |
+| **the composite** | reports the **oldest** required input, names it, and takes the **worst** state any required input reached. **One fresh input never raises the composite** |
+| **optional inputs** | are reported and **do not** set the composite state, and which inputs are required is declared per read model, never inferred |
+| **the state** | `AVAILABLE` while every required input is inside its own contract; `STALE` with `UPSTREAM_INPUT_STALE` as soon as any one is outside it |
+
+**Missing, skewed and future timestamps refuse rather than resolve.**
+
+| Situation | Result |
+|---|---|
+| an input carries **no usable source time** | `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING`. **Its age is unknown, not zero**, and it is never treated as fresh |
+| a source time is **later than `evaluation_time`** beyond the declared tolerance | `NOT_YET_AVAILABLE` with `CLOCK_UNSYNCHRONIZED`. **A negative age is never clamped to zero and never rendered** |
+| a source time is later by **less than** the declared tolerance | reported as an age of zero **and flagged**, because a small skew is ordinary and a silent one is not |
+| two contributing clocks are **not known to be synchronized** | `CLOCK_UNSYNCHRONIZED`, exactly as §12.4 already requires of latency |
+| the requested extent is **partly covered** | `PARTIAL` against the `source_watermark`, which says what the row does not know |
+
+**`FreshnessReport`, the envelope's shape.**
+
+```text
+FreshnessReport {
+    inputs            [ { input_id: SafeId, required: boolean,
+                          source_effective_time: Instant or ABSENT,
+                          source_observation_time: Instant or ABSENT,
+                          source_age: MetricValue,        -- unit SECONDS
+                          contract_max_age: Duration,     -- THIS input's own contract
+                          state: AvailabilityState, reason: FieldReasonCode } ]
+    oldest_required   SafeId or ABSENT   -- the input the composite is reported against
+    source_age        MetricValue        -- the oldest REQUIRED input's age
+    projection_lag    MetricValue
+    build_age         MetricValue
+    composite_state   AvailabilityState  -- the WORST state any required input reached
+}
+```
+
+**A cache serves a response; it does not stop time.** §7's rule that a cached response carries the
+`freshness` the origin produced is about **not overwriting** it — not about freezing it. A cached
+`source_age` was computed at the origin's `evaluation_time`, so **a cache entry states that instant
+and its own maximum age, and a consumer reads the age as of that instant rather than as of now.**
+
+```text
+a cached response NEVER re-reports source_age as though it were computed now
+a cache entry's maximum lifetime is at most the strictest contract_max_age it carries
+an AVAILABLE classification EXPIRES with the entry -- it is never frozen AVAILABLE while
+    the source ages behind it, which is how a screen shows a green tile over dead data
+```
+
+**Two worked cases, so the separation is checkable.**
+
+```text
+CASE 1 -- a rebuild does not refresh a fact
+    evaluation_time         12:00      source_effective_time   11:00
+    projected_time          11:59
+    source_age              3600 s     -- SIXTY MINUTES, and that is the freshness answer
+    projection_lag          3540 s     build_age  60 s
+    the OLD formula would have reported 60 s and called week-old data fresh
+
+CASE 2 -- one fresh input does not conceal a stale one
+    evaluation_time         12:00
+    input A (required)      as-of 11:58   source_age    120 s   contract  300 s   AVAILABLE
+    input B (required)      as-of 11:00   source_age   3600 s   contract  600 s   STALE
+    oldest_required         input B
+    source_age              3600 s
+    composite_state         STALE, with UPSTREAM_INPUT_STALE, naming input B
+    the OLD formula would have reported input A and rendered the view AVAILABLE
+```
 
 ---
 
@@ -302,21 +406,77 @@ governance-derived entries drawn from those same tracked facts; **every other pa
 ```text
 FieldReasonCode -- closed, and extended only by an ADR
 
+NONE                         nothing is wrong. The value is present and nothing is withheld
+EMPTY_RESULT_VERIFIED        the producer ran and the correct answer is nothing
+EXTENT_PARTIALLY_COVERED     part of the requested extent is present and part is not
+EXTENT_NOT_DETERMINABLE      the requested extent cannot be resolved, so coverage has no
+                             denominator
+NOT_YET_ASSESSED             the question has not been put to a producer at all
 PRODUCER_NOT_IMPLEMENTED     the subsystem that would compute this does not exist
 PRODUCER_NOT_AUTHORIZED      it exists and may not run
 UPSTREAM_INPUT_MISSING       a declared input was absent
 UPSTREAM_INPUT_STALE         a declared input is older than its freshness contract
+SOURCE_TIMESTAMP_MISSING     an input carries no usable source time, so its age is unknowable
+CLOCK_UNSYNCHRONIZED         two contributing clocks are not known to be synchronized, or a
+                             source time is later than the evaluation time beyond tolerance
 PRICE_PATH_INCOMPLETE        a path-dependent value cannot be computed from the bars held
 CORPORATE_ACTION_UNRESOLVED  an action in the window has no resolved treatment
 BELOW_MINIMUM_OBSERVATIONS   the metric's declared minimum is not met
-DENOMINATOR_ZERO             the ratio is undefined for this subject
+DENOMINATOR_ZERO             the ratio is mathematically undefined for this subject
 NOT_DEFINED_FOR_SUBJECT      the question does not apply to this subject at all
 POLICY_REFERENCE_MISSING     a separately governed policy value has no versioned reference
 CLASSIFICATION_WITHHELD      the value exists and this caller's scope may not read it
 PROJECTION_ERROR             production failed, and the failure is reported
 ```
 
-**`NOT_DEFINED_FOR_SUBJECT` is the only route to `NOT_APPLICABLE`.** A value that is merely absent is `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED` or `UPSTREAM_INPUT_MISSING`. **Inapplicability is a property of the subject, not a synonym for "we do not have it"** — collapsing the two is how a screen reports that a question does not apply when the truth is that nobody answered it.
+#### 4.1.1 The validity matrix — state, reason and value together
+
+**Availability and reason are two separate typed axes, and neither is ever spelled in the other's
+vocabulary.** `AvailabilityState` answers *is there an answer?*; `FieldReasonCode` answers *why?*.
+`UPSTREAM_INPUT_MISSING` is a **reason** and is never written where a state belongs; `NOT_IMPLEMENTED`
+is a **state** and is never written where a reason belongs; and `UNKNOWN` belongs to `completeness`
+and is **not** an availability value at all. **A field crossing the two axes is refused at the
+boundary rather than rendered.**
+
+**Every `MetricValue` carries a reason, always — including a successful one.** The reason a
+successful value carries is `NONE`, which exists so a producer never has to invent a failure to fill
+a required field. **A fabricated failure reason on a good value is a false report**, and so is a
+blank, an empty string or free text.
+
+**This matrix is exhaustive**, and a combination absent from it is invalid.
+
+| `availability` | `value` | Permitted `reason` |
+|---|---|---|
+| `AVAILABLE` | **present** | `NONE` — and nothing else |
+| `STALE` | **present**, with the `as_of` it was true at | `UPSTREAM_INPUT_STALE` — and nothing else |
+| `PARTIAL` | **present**, and never read as complete: `coverage` states how much of the extent it covers | `EXTENT_PARTIALLY_COVERED`, `UPSTREAM_INPUT_MISSING`, `UPSTREAM_INPUT_STALE`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED` |
+| `EMPTY_VERIFIED` | **present and empty** — an empty list, or a count of zero. **The only state in which a zero is a correct answer** | `EMPTY_RESULT_VERIFIED` — and nothing else |
+| `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING` |
+| `NOT_IMPLEMENTED` | **absent** | `PRODUCER_NOT_IMPLEMENTED` — and nothing else |
+| `NOT_AUTHORIZED` | **absent** | `PRODUCER_NOT_AUTHORIZED`, `CLASSIFICATION_WITHHELD` |
+| `UNEVALUATED` | **absent** | `NOT_YET_ASSESSED` — and nothing else |
+| `INSUFFICIENT_OBSERVATIONS` | **absent** — §9 already refuses to return a ratio below its minimum | `BELOW_MINIMUM_OBSERVATIONS` — and nothing else |
+| `NOT_APPLICABLE` | **absent** | `NOT_DEFINED_FOR_SUBJECT`, `DENOMINATOR_ZERO` — and nothing else |
+| `ERROR` | **absent** | `PROJECTION_ERROR` — and nothing else |
+
+**`NOT_APPLICABLE` has exactly two routes, and they are different questions.**
+
+| | |
+|---|---|
+| `NOT_DEFINED_FOR_SUBJECT` | **the subject** does not have this property. An R multiple on a trade that never opened; a strategy pin on a row no strategy produced |
+| `DENOMINATOR_ZERO` | **the arithmetic** is undefined. A profit factor with zero gross loss; a capture ratio with a non-positive MFE. **Never infinity, never a sentinel, never a large number** |
+
+**Nothing else reaches `NOT_APPLICABLE`, and `UPSTREAM_INPUT_MISSING` in particular never does.**
+**Inapplicability is a property of the subject or of the arithmetic, not a synonym for "we do not
+have it"** — collapsing them is how a screen reports that a question does not apply when the truth
+is that nobody answered it. A value that is merely absent is `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED`,
+`NOT_AUTHORIZED`, `UNEVALUATED`, `INSUFFICIENT_OBSERVATIONS` or `ERROR`, carrying the reason code
+that says why.
+
+**A value-bearing state still carries its value.** `STALE` and `PARTIAL` are answers with a
+qualification, not absences: a consumer that renders them as missing is discarding data, and a
+consumer that renders them as `AVAILABLE` is overstating it. **Both are rendered distinctly from
+each other and from `AVAILABLE`.**
 
 ---
 
@@ -335,7 +495,12 @@ Money           object      { amount: decimal string, currency: "USD" }. Decimal
                             never binary floating point
 Ratio           object      { value: decimal string, denominator: <closed name> }.
                             A ratio with no named denominator is refused at the boundary
-Bps             integer     signed basis points, one hundredth of one percent
+Bps             object      { value: decimal string, scale: integer }. SIGNED basis
+                            points -- one basis point is one ten-thousandth, so a ratio
+                            becomes Bps by multiplying by 10,000. A decimal string with a
+                            stated scale, NEVER a bare integer: truncating 8.4 bps to 8
+                            discards four tenths of a basis point on every fill, and an
+                            aggregate over fifty thousand fills carries the whole of it
 Quantity        integer     whole shares. Signed only where the field says so
 SignedMoney     object      Money plus an explicit sign convention: profit positive,
                             loss negative, for both long and short
@@ -350,6 +515,13 @@ MetricValue     object      { value: <typed value or absent>, unit: <closed unit
                               metric_definition_version: string }
                             The ONLY wrapper a nullable number arrives in
 CountValue      MetricValue a MetricValue whose unit is COUNT and whose value is an integer
+RecordValue     object      { record: <the named record type, or ABSENT>,
+                              availability: AvailabilityState, reason: FieldReasonCode,
+                              as_of: Instant or ABSENT }
+                            The ONLY wrapper a nested record arrives in. The record is
+                            present exactly when the availability state is value-bearing
+                            under the §4.1.1 matrix, and is ABSENT otherwise -- never a
+                            skeleton, never a placeholder, and never a zeroed record
 Ref             object      { ref_id: SafeId, ref_kind: <closed RefKind>,
                               resolution: <closed Resolution>, classification:
                               DataClassification }
@@ -470,7 +642,10 @@ CurrentOpenPlannedRisk {
     risk_policy_ref       PolicyRef     required
     protection_state      ReasonCoded   required -- from the protective-order record
     source                enum{RISK_ENGINE_ASSESSMENT}  required
-    staleness             enum{FRESH,STALE,MISSING}     required
+    staleness             enum{FRESH,STALE}             required -- of a PRESENT assessment.
+                                        A MISSING assessment has no record at all, and is
+                                        carried by the RecordValue wrapper, not by a record
+                                        whose required fields nobody could fill
 }
 
 PermittedRisk {
@@ -490,6 +665,25 @@ GapEventRisk {
 }
 ```
 
+**Every one of the four is carried in a `RecordValue`, and never bare.** Each record above states
+what it contains **when it exists**; whether it exists is the wrapper's question, answered by the
+§4.1.1 matrix. A field declared `initial_planned_risk: RecordValue<InitialPlannedRisk> required`
+is **always present in the payload** and carries its record **only when its availability state is
+value-bearing**.
+
+**Nothing is invented to fill a required field.** A producing system that has not written a risk
+record has produced no `recorded_at`, no `risk_policy_ref`, no `reference_price` and no
+`invalidation_ref`, and **a skeleton record carrying a zeroed amount, a synthesised policy
+identifier or the response's own timestamp is a fabricated fact wearing a contract's shape**. The
+record is `ABSENT`, and the wrapper says why.
+
+**An absent source time is not the response's time.** `as_of_time` and `projected_time` in the
+envelope belong to the *response*: the instant the answer was resolved as of, and the instant the
+projection row was built. They are always known. A record's own `recorded_at` or `as_of` belongs to
+the *source fact*, and when the source fact does not exist neither does its time — the wrapper's
+`as_of` is then `ABSENT`, and `SOURCE_TIMESTAMP_MISSING` says so. **Substituting a response time for
+a missing source time would date a fact to the moment somebody asked about it.**
+
 | | |
 |---|---|
 | **initial planned risk is immutable** | it is the entry-time reference and **the only denominator an R multiple may use**. **A moving stop does not move it**, a protective-order change does not move it, and no projection recomputes it from a current price |
@@ -501,21 +695,97 @@ GapEventRisk {
 
 | Situation | Contract |
 |---|---|
-| **partial fill** | `InitialPlannedRisk` is recorded against the **filled** quantity at entry, and is written once the entry stage reaches its recorded terminal fill state. An entry still filling reports `NOT_YET_AVAILABLE` |
+| **partial fill** | `InitialPlannedRisk` is recorded against the **filled** quantity at entry, and is written once the entry stage reaches its recorded terminal fill state. An entry still filling carries an **absent** record, availability `NOT_YET_AVAILABLE`, reason `UPSTREAM_INPUT_MISSING`, `as_of` **absent** |
 | **partial exit** | `InitialPlannedRisk` is **unchanged** — a partial exit reduces a trade, it does not restate why the trade was opened. `CurrentOpenPlannedRisk` falls with the remaining exposure |
 | **add or pyramid** | the add carries **its own** `InitialPlannedRisk` record, at its own reference price and its own as-of. **The trade's original record is retained unchanged**, and the trade-level R methodology is stated in §12.4 |
 | **protection change** | recorded as a protective-order event that moves `CurrentOpenPlannedRisk` and **never** `InitialPlannedRisk` |
-| **closed portion** | closed and remaining exposure are reported as separate quantities. A fully closed trade reports `CurrentOpenPlannedRisk` as `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`, and retains its `InitialPlannedRisk` |
-| **stale assessment** | `staleness = STALE`, availability `STALE`, and the value shown with its `as_of`. **A stale assessment is never presented as current** |
-| **missing assessment** | `staleness = MISSING`, availability `NOT_YET_AVAILABLE` or `NOT_IMPLEMENTED`. **Never zero, and never `NOT_APPLICABLE`** |
-| **missing initial risk** | availability `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED` or `UPSTREAM_INPUT_MISSING` — **whichever is true. It is unavailable, not inapplicable**, and `NOT_APPLICABLE` is reserved for a subject the question genuinely does not apply to, such as a trade that was never opened |
+| **closed portion** | closed and remaining exposure are reported as separate quantities. A fully closed trade carries an **absent** `CurrentOpenPlannedRisk` record, availability `NOT_APPLICABLE`, reason `NOT_DEFINED_FOR_SUBJECT` — there is no remaining exposure for the question to be about — and **retains its `InitialPlannedRisk` record unchanged** |
+| **stale assessment** | the record is **present**, `staleness = STALE`, wrapper availability `STALE`, reason `UPSTREAM_INPUT_STALE`, and the value is shown with the `as_of` it was true at. **A stale assessment is never presented as current, and never discarded as missing** |
+| **missing assessment** | the record is **absent** and carries no `staleness`, because there is no assessment to describe. Availability is `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`, or `NOT_IMPLEMENTED` with `PRODUCER_NOT_IMPLEMENTED` — whichever is true. **Never zero, never a skeleton record, and never `NOT_APPLICABLE`** |
+| **missing initial risk** | the record is **absent**. Availability is `NOT_YET_AVAILABLE` while the entry is still filling, `NOT_IMPLEMENTED` where no risk-record producer exists, or `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` where the historical evidence was never written — **whichever is true. It is unavailable, not inapplicable**, and `NOT_APPLICABLE` is reserved for a subject the question genuinely does not apply to, such as a trade that was never opened |
 | **aggregation** | portfolio open planned risk sums `CurrentOpenPlannedRisk` over **open** exposure only, **once per position**. An add is part of its trade and is not counted a second time; a closed portion contributes nothing; and an aggregate containing any `STALE` or missing component is `PARTIAL` with the components named |
+| **missing policy reference** | a `PermittedRisk` whose governing policy reference is absent carries an **absent** record, availability `NOT_YET_AVAILABLE`, reason `POLICY_REFERENCE_MISSING`. **A permitted limit is never served under a default nobody approved**, and never as a number with an invented `policy_id` |
+| **partially available composite** | a view carrying several of these records reports each wrapper on its own, and the envelope is `PARTIAL` naming the absent ones. **One available record never raises the page to `AVAILABLE`, and one absent record never suppresses the ones that exist** |
 
 **The Cockpit displays these facts and invents no trading permission.** Showing a permitted limit is
 not granting it, showing headroom is not authorizing its use, and **no view computes a permitted
 exposure**. **This document changes no risk limit, no capital value, no leverage, no sizing rule and
 no stop policy** — the governed research values in `CLAUDE.md` §6 are reproduced for display context
 and are unchanged.
+
+#### 4.4.1 Six payloads, so the shapes are satisfiable rather than described
+
+**Every combination the contract permits is written out**, because a contract whose unavailable case
+nobody drafted is a contract whose unavailable case does not fit. Values are **synthetic**, from the
+§4.6 template, and are not results.
+
+```text
+1. INITIAL RISK AVAILABLE -- the ordinary case
+initial_planned_risk {
+    availability  AVAILABLE      reason  NONE      as_of  2026-08-14T14:31:07.000Z
+    record {
+        risk_money            { amount: "400.00", currency: "USD" }
+        risk_pct_of_capital   { value: "0.0050", denominator: STRATEGY_CAPITAL_AT_ENTRY }
+        reference_price       { amount: "184.20", currency: "USD" }
+        invalidation_ref      { ref_id: <safe id>, ref_kind: evidence,
+                                resolution: AUTHORIZED_READ, classification:
+                                PRIVATE_OPERATIONAL }
+        recorded_at           2026-08-14T14:31:07.000Z
+        risk_policy_ref       { policy_id: <safe id>, policy_version: "risk.v1",
+                                as_of: 2026-08-01T00:00:00.000Z }
+        source                RISK_RECORD_AT_ENTRY
+    }
+}
+
+2. INITIAL RISK NOT YET AVAILABLE -- the entry is still filling
+initial_planned_risk {
+    availability  NOT_YET_AVAILABLE   reason  UPSTREAM_INPUT_MISSING   as_of  ABSENT
+    record        ABSENT
+}
+-- the entry stage has not reached its recorded terminal fill state, so no risk record has
+-- been written. There is no recorded_at to report, and the response's own times are NOT
+-- substituted for one.
+
+3. INITIAL RISK EVIDENCE MISSING -- a historical trade whose record was never written
+initial_planned_risk {
+    availability  NOT_YET_AVAILABLE   reason  UPSTREAM_INPUT_MISSING   as_of  ABSENT
+    record        ABSENT
+}
+-- indistinguishable in shape from case 2 and different in fact, which is why the trade's
+-- own lifecycle state is read alongside it. It is NOT NOT_APPLICABLE: the trade opened, so
+-- the question applies and nobody answered it. Every r_multiple over this trade is
+-- NOT_YET_AVAILABLE with UPSTREAM_INPUT_MISSING, and is NEVER computed from a current stop.
+
+4. CURRENT ASSESSMENT MISSING -- the risk engine does not exist in V1
+open_planned_risk {
+    availability  NOT_IMPLEMENTED     reason  PRODUCER_NOT_IMPLEMENTED   as_of  ABSENT
+    record        ABSENT
+}
+-- no staleness is reported, because there is no assessment to call fresh or stale.
+
+5. PERMITTED LIMIT WITH NO POLICY REFERENCE
+permitted_open_risk {
+    availability  NOT_YET_AVAILABLE   reason  POLICY_REFERENCE_MISSING   as_of  ABSENT
+    record        ABSENT
+}
+-- the number may be knowable and is still not served. A permitted limit without its
+-- versioned reference is a limit nobody approved at a version nobody can name.
+
+6. PARTIALLY AVAILABLE COMPOSITE -- one trade row, three wrappers, three answers
+envelope        availability PARTIAL   reason EXTENT_PARTIALLY_COVERED
+                completeness PARTIAL
+                unavailable_components [ open_planned_risk, permitted_risk ]
+initial_planned_risk  { availability AVAILABLE,        reason NONE,   record present }
+open_planned_risk     { availability NOT_IMPLEMENTED,  reason PRODUCER_NOT_IMPLEMENTED,
+                        record ABSENT }
+permitted_risk        { availability NOT_YET_AVAILABLE, reason POLICY_REFERENCE_MISSING,
+                        record ABSENT }
+-- the available record is served in full, the absent ones are named, and the page is not
+-- rounded up to AVAILABLE or down to ERROR.
+```
+
+**These six are the required cases**, and an implementation that cannot produce all six against its
+own schema has not implemented this section.
 
 ---
 
@@ -548,12 +818,15 @@ ExecutiveOverview.payload {
                                             method TIME_WEIGHTED
     exposure                  { long: Magnitude, short: Magnitude, gross: Magnitude,
                                 net: Magnitude }   required
-    open_planned_risk         CurrentOpenPlannedRisk   required
-    permitted_open_risk       PermittedRisk required -- scope OPEN_PORTFOLIO
+    open_planned_risk         RecordValue<CurrentOpenPlannedRisk>   required
+    permitted_open_risk       RecordValue<PermittedRisk>   required -- scope OPEN_PORTFOLIO
     drawdown                  MetricValue   required -- unit PERCENT
     regime_ref                Ref           required, kind regime_context
     system_health             ReasonCoded   required
-    data_freshness            MetricValue   required -- unit SECONDS
+    data_freshness            MetricValue   required -- unit SECONDS, metric_id
+                                            freshness.source_age. The age of the
+                                            OLDEST required input, never the
+                                            newest and never the build age
     active_strategies         CountValue    required
     open_incidents            CountValue    required
     last_decision             { at: MetricValue, ref: Ref }   required
@@ -678,9 +951,10 @@ PositionSnapshot.payload {
     entry_price               MetricValue   required -- unit USD, position-weighted basis
     current_price             MetricValue   required -- unit USD, with its own as_of
     unrealized                SignedMoney   required
-    initial_planned_risk      InitialPlannedRisk        required
-    open_planned_risk         CurrentOpenPlannedRisk    required
-    gap_event_risk            GapEventRisk  conditional -- present where the model applies
+    initial_planned_risk      RecordValue<InitialPlannedRisk>       required
+    open_planned_risk         RecordValue<CurrentOpenPlannedRisk>   required
+    gap_event_risk            RecordValue<GapEventRisk>   conditional -- present where the
+                                            model applies
     invalidation_ref          Ref           required, kind evidence -- a REFERENCE to a
                                             level, never an order
     holding_duration          MetricValue   required -- unit TRADING_DAYS
@@ -705,11 +979,12 @@ ExposureAggregate.payload {
     grouping                  ReasonCoded   required -- the grouping axis
     buckets                   [ { bucket: ReasonCoded, long: Magnitude, short: Magnitude,
                                   gross: Magnitude, net: Magnitude,
-                                  open_planned_risk: CurrentOpenPlannedRisk,
+                                  open_planned_risk: RecordValue<CurrentOpenPlannedRisk>,
                                   position_count: CountValue } ]   required
     base                      ReasonCoded   required -- the named base every magnitude is
                                             measured against
-    permitted                 [ PermittedRisk ]   required -- displayed, never computed
+    permitted                 [ RecordValue<PermittedRisk> ]   required -- displayed,
+                                            never computed
     concentration             MetricValue   required
     correlation_ref           Ref           conditional, kind evidence
 }
@@ -747,8 +1022,8 @@ TradeSummary.payload {
     unrealized_pnl            MetricValue   required -- unit USD, OPEN portion only
     return_pct                MetricValue   required -- unit PERCENT, denominator
                                             INITIAL_POSITION_VALUE
-    initial_planned_risk      InitialPlannedRisk        required
-    open_planned_risk         CurrentOpenPlannedRisk    required
+    initial_planned_risk      RecordValue<InitialPlannedRisk>       required
+    open_planned_risk         RecordValue<CurrentOpenPlannedRisk>   required
     r_multiple                MetricValue   required -- unit R_MULTIPLE, denominator
                                             INITIAL_PLANNED_RISK, per §12.3
     holding_period            MetricValue   required -- unit TRADING_DAYS or CALENDAR_DAYS,
@@ -1049,13 +1324,15 @@ matches the architecture extension exactly · **Shadow shows no order authority*
 ```text
 RiskSnapshot.payload {
     as_of                     Instant       required
-    open_planned_risk         CurrentOpenPlannedRisk    required -- portfolio aggregate
-    initial_planned_risk_open [ { trade_ref: Ref, value: InitialPlannedRisk } ]   required
-    permitted                 [ PermittedRisk ]   required
+    open_planned_risk         RecordValue<CurrentOpenPlannedRisk>   required -- portfolio
+                                            aggregate
+    initial_planned_risk_open [ { trade_ref: Ref,
+                                  value: RecordValue<InitialPlannedRisk> } ]   required
+    permitted                 [ RecordValue<PermittedRisk> ]   required
     concentration             MetricValue   required
     exposure_refs             RefList       required, kind source_fact
     portfolio_volatility      MetricValue   required
-    gap_event_risk            GapEventRisk  conditional
+    gap_event_risk            RecordValue<GapEventRisk>   conditional
     loss_thresholds           [ { threshold: ReasonCoded, value: MetricValue,
                                   policy_ref: PolicyRef } ]   required
     risk_tier                 ReasonCoded   required
@@ -1085,7 +1362,7 @@ ShortSideSnapshot.payload {
     ssr_state                 ReasonCoded   required
     recall_risk               ReasonCoded   required
     gross_short               Magnitude     required
-    permitted_gross_short     PermittedRisk required -- scope GROSS_SHORT
+    permitted_gross_short     RecordValue<PermittedRisk>   required -- scope GROSS_SHORT
     blocked_shorts            [ { candidate_ref: Ref, reason: ReasonCoded } ]   required
 }
 ```
@@ -1352,7 +1629,9 @@ DataQuality.payload {
     information_profile       enum{PUBLIC_PIT,PROVIDER_REALISTIC_PIT,FORWARD_SYSTEM}
                                             required -- declared, never inferred
     coverage                  { present: CountValue, requested: CountValue }   required
-    freshness                 MetricValue   required -- unit SECONDS
+    freshness                 FreshnessReport   required -- §3.1: per required
+                                            input, with source age and projection
+                                            lag reported separately
     lineage_refs              RefList       required, kind source_fact
     quality_checks            [ { check: ReasonCoded, result: ReasonCoded,
                                   as_of: Instant } ]   required
@@ -1504,8 +1783,14 @@ SYNTHETIC EXAMPLE TEMPLATE
 
 UNAVAILABLE EXAMPLE TEMPLATE
     availability      the exact AvailabilityState, from §2.1
-    reason            the exact FieldReasonCode, from §4.1
+    reason            the exact FieldReasonCode, from §4.1, and a pairing the
+                      §4.1.1 matrix permits -- never a state written where a
+                      reason belongs, and never the reverse
     value             ABSENT -- never zero, never healthy, never passed, never no incidents
+    a record          ABSENT inside its RecordValue wrapper -- never a skeleton
+                      carrying invented times, policy ids or zeroed money
+    an AVAILABLE one  carries reason NONE. A good value never wears a failure
+                      reason to satisfy a required field
     as_of             present when a prior value existed, so a reader can see how old it is
     meaning           EMPTY_VERIFIED and NOT_YET_AVAILABLE look identical on a naive screen
                       and mean opposite things, so both are rendered distinctly
@@ -1668,7 +1953,7 @@ rather than silently mixing two.
 | **cache key** | includes `api_version`, `schema_version`, environment, source provenance, access scope, classification and every query parameter. **An environment or provenance omitted from a cache key is a cross-environment leak waiting to happen** |
 | **no shared cache across classification** | a `PUBLIC_SAFE` response and a `LICENSED_DERIVED` response never share a cache entry, a cache namespace or a cache tier |
 | **no external cache for private data** | `PRIVATE_OPERATIONAL` and `LICENSED_DERIVED` responses are **never** stored in an externally hosted cache or CDN |
-| **freshness is data, not policy** | a cached response carries the same `freshness` and `as_of_time` the origin produced. A cache never makes a stale value look fresh |
+| **freshness is data, not policy** | a cached response carries the same `freshness` report and `as_of_time` the origin produced, **and the origin's `evaluation_time` with them**, so a consumer reads a `source_age` as of when it was computed rather than as of now. A cache never makes a stale value look fresh, and **never freezes an `AVAILABLE` state while the source ages** — an entry lives at most as long as the strictest `contract_max_age` it carries (§3.1) |
 
 ### 7.1 Classification is a label; publication is a gate
 
@@ -1736,11 +2021,11 @@ than the one it was captured in.
 
 | Situation | Response |
 |---|---|
-| one contributing input failed | envelope `availability = PARTIAL`, the failing component named by a closed code, the rest served |
+| one contributing input failed | envelope `availability = PARTIAL`, the failing component named by a closed code, the rest served. **The composite takes the worst state any required input reached** (§3.1), and one healthy input never raises it |
 | a whole view failed | `availability = ERROR`, with a closed reason code and no fabricated payload |
 | an input is not implemented | `NOT_IMPLEMENTED`, distinctly from `EMPTY_VERIFIED` |
 | an input exists but may not run | `NOT_AUTHORIZED`, distinctly from `NOT_IMPLEMENTED` |
-| too few observations | `INSUFFICIENT_OBSERVATIONS`, and **no ratio is returned** |
+| too few observations | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`, and **no ratio is returned** |
 
 **A composite view reports the availability of each contributing part**, so an executive tile can be
 `AVAILABLE` while the page around it is `PARTIAL`, and the reader can see which is which. **No
@@ -1855,8 +2140,8 @@ name.
 | **window and timezone** | every window states its calendar basis and its timezone. Daily boundaries follow the stated market calendar, not the viewer's clock |
 | **sample versus population** | stated for every dispersion or risk-adjusted measure |
 | **cost treatment** | stated: gross, net of commissions, or net of commissions plus spread, slippage and borrow |
-| **missingness** | a missing input yields an availability state, **never a zero** |
-| **minimum observations** | every metric declares one and returns `INSUFFICIENT_OBSERVATIONS` below it |
+| **missingness** | a missing input yields an availability state **and its reason code**, never a zero, and never a state borrowed from the reason vocabulary |
+| **minimum observations** | every metric declares one and returns `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` below it |
 
 ### 12.2 Metric identity
 
@@ -1872,38 +2157,40 @@ timezone basis, its cost treatment, its sign convention, its sample convention, 
 observations and what it returns when it cannot be computed.** A metric may state `n/a` for a
 dimension that genuinely does not apply to it — that is a statement, not an omission.
 
-| `metric_id` | Formula or rule | Unit · denominator | Basis | Minimum obs. | Unavailable outcome |
+| `metric_id` | Formula or rule | Unit · denominator | Basis | Minimum obs. | Unavailable outcome — **state, then reason** |
 |---|---|---|---|---|---|
 | `pnl.realized` | sum of closed-portion proceeds minus closed-portion cost basis, weighted by filled quantity at each stage | USD · n/a | trade dates on the named calendar, UTC storage | 0 | `NOT_YET_AVAILABLE` if no closed portion exists |
-| `pnl.unrealized` | open quantity × (mark − position-weighted basis), signed | USD · n/a | mark as-of, named source | 0 | `UPSTREAM_INPUT_MISSING` when the mark is absent — **never zero** |
+| `pnl.unrealized` | open quantity × (mark − position-weighted basis), signed | USD · n/a | mark as-of, named source | 0 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when the mark is absent — **never zero** |
 | `pnl.combined` | `pnl.realized + pnl.unrealized`, **labelled combined and never presented as realized** | USD · n/a | as above | 0 | `PARTIAL` when either component is |
-| `return.time_weighted` | chain-link sub-period returns across every external cash-flow boundary: `∏(1 + r_i) − 1`, where each `r_i` spans a flow-free sub-period | RATIO · chained sub-period beginning values | daily on the named calendar, UTC | 2 sub-periods | `INSUFFICIENT_OBSERVATIONS` |
+| `return.time_weighted` | chain-link sub-period returns across every external cash-flow boundary: `∏(1 + r_i) − 1`, where each `r_i` spans a flow-free sub-period. **A flow-free period is one sub-period and is a complete, valid time-weighted return** — the chaining exists to survive flows, not to require them | RATIO · chained sub-period beginning values | daily on the named calendar, UTC | **1 sub-period**, each sub-period requiring a beginning and an ending valuation | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` when no complete sub-period exists; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when a sub-period's beginning value is zero |
 | `return.money_weighted` | internal rate of return over the dated external cash flows and the terminal value | RATIO · dated flows | as above | 2 flows | `INSUFFICIENT_OBSERVATIONS`; only returned when explicitly requested, always labelled |
 | `return.naive` | **not defined, and not offered.** Begin/end division across a period containing a cash flow is refused at the boundary | — | — | — | refused |
 | `cashflow.external` | deposits and withdrawals, dated and signed | USD · n/a | flow dates | 0 | `NOT_YET_AVAILABLE` |
 | `drawdown.current` | `equity / running_peak − 1` on the named equity series, after cash-flow adjustment | RATIO · running peak | series frequency and basis named | 2 points | `PARTIAL` on a gapped series |
 | `drawdown.max` | the minimum of `drawdown.current` over the stated window | RATIO · running peak | window, frequency and `CLOSE_ONLY` or `INTRADAY` all named | 2 points | `PARTIAL` |
-| `exposure.long` · `.short` · `.gross` · `.net` | signed position values aggregated against a named base; short reported as a **positive magnitude with `direction = SHORT`** | USD or PERCENT · the named base | snapshot as-of | 0 | `UPSTREAM_INPUT_MISSING` |
-| `risk.initial_planned` | the immutable entry-time risk record: `shares_filled_at_entry × abs(entry_reference_price − entry_invalidation_level)` | USD and PERCENT · strategy capital **at entry** | recorded at entry | 0 | `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED` or `UPSTREAM_INPUT_MISSING` — **whichever is true, and never `NOT_APPLICABLE`** |
-| `risk.open_planned` | the risk engine's assessment of the **remaining** exposure, as of its own instant | USD and PERCENT · strategy capital **as of** | assessment as-of, always displayed | 0 | `STALE` when past its contract, `NOT_YET_AVAILABLE` when absent |
-| `risk.permitted` | a separately governed policy value, carried with its `PolicyRef` | USD and PERCENT · the policy's own base | policy version and as-of | 0 | `POLICY_REFERENCE_MISSING` |
-| `expectancy.currency` | `Σ outcome / n` over the **defined** closed-trade population | USD · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS` |
-| `expectancy.r` | `Σ r_multiple / n` over the same population | R_MULTIPLE · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS`; refused for any trade lacking `risk.initial_planned` |
+| `exposure.long` · `.short` · `.gross` · `.net` | signed position values aggregated against a named base; short reported as a **positive magnitude with `direction = SHORT`** | USD or PERCENT · the named base | snapshot as-of | 0 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` |
+| `risk.initial_planned` | the immutable entry-time risk record: `shares_filled_at_entry × abs(entry_reference_price − entry_invalidation_level)` | USD and PERCENT · strategy capital **at entry** | recorded at entry | 0 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`, or `NOT_IMPLEMENTED` with `PRODUCER_NOT_IMPLEMENTED` — **whichever is true, and never `NOT_APPLICABLE`** |
+| `risk.open_planned` | the risk engine's assessment of the **remaining** exposure, as of its own instant | USD and PERCENT · strategy capital **as of** | assessment as-of, always displayed | 0 | `STALE` with `UPSTREAM_INPUT_STALE` past its contract; `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when absent |
+| `risk.permitted` | a separately governed policy value, carried with its `PolicyRef` | USD and PERCENT · the policy's own base | policy version and as-of | 0 | `NOT_YET_AVAILABLE` with `POLICY_REFERENCE_MISSING` |
+| `expectancy.currency` | `Σ outcome / n` over the **defined** closed-trade population | USD · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` |
+| `expectancy.r` | `Σ r_multiple / n` over the same population | R_MULTIPLE · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`; refused for any trade lacking `risk.initial_planned` |
 | `profit_factor` | `gross_profit / gross_loss`, both from closed trades, both under one stated cost treatment | RATIO · gross loss | trade dates | 20 trades | `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when gross loss is zero — **never infinity, never a sentinel, never a large number** |
-| `win_rate` | `winners / population`, where the population is defined and **break-even trades are counted in a stated bucket** | RATIO · defined population | trade dates | 20 trades | `INSUFFICIENT_OBSERVATIONS` |
+| `win_rate` | `winners / population`, where the population is defined and **break-even trades are counted in a stated bucket** | RATIO · defined population | trade dates | 20 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` |
 | `sharpe` | `(mean(r) − rf) / stdev(r) × √A`, with `r` at the stated frequency, `rf` the stated risk-free assumption, `A` the stated annualization factor and `stdev` the stated **sample** convention | DIMENSIONLESS · standard deviation of `r` | frequency, calendar and timezone named | 60 periods | `INSUFFICIENT_OBSERVATIONS` — **a Sharpe from twelve observations is decoration** |
-| `r_multiple` | `realized_and_unrealized_outcome / risk.initial_planned` | R_MULTIPLE · **initial** planned risk | fixed at entry | 0 | `NOT_YET_AVAILABLE` or `UPSTREAM_INPUT_MISSING` when initial planned risk is absent; `NOT_APPLICABLE` **only** when the trade never opened |
+| `r_multiple` | `realized_and_unrealized_outcome / risk.initial_planned` | R_MULTIPLE · **initial** planned risk | fixed at entry | 0 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when initial planned risk is absent; `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT` **only** when the trade never opened; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when the recorded initial planned risk is zero |
 | `holding_period` | exit-or-`as_of` minus entry, on the stated calendar, stating **calendar or trading days** | TRADING_DAYS or CALENDAR_DAYS · n/a | named calendar | 0 | an open trade reports elapsed-to-`as_of`, **labelled open** |
 | `mfe` | `max(favourable excursion from entry)` over the holding period, on the stated bar frequency and price basis | USD **and** R_MULTIPLE, both offered, never mixed in one value · entry reference | bar frequency and basis named | 1 bar | `PARTIAL` on any missing bar — **never an optimistic value** |
 | `mae` | `max(adverse excursion from entry)`, same frequency and basis as `mfe` | as `mfe` | as `mfe` | 1 bar | `PARTIAL` |
 | `capture_ratio` | `realized_outcome / mfe`, **both in the same unit and on the same bar frequency and basis** | RATIO · MFE | as `mfe` | 1 bar | `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when MFE is zero or negative |
-| `slippage` | `signed(fill_price − reference_price) / reference_price`, against a **named** reference price with its timestamp and side convention | BPS · reference price | fill timestamps, clock source named | 1 fill | `UPSTREAM_INPUT_MISSING` when the reference is absent |
-| `slippage.aggregate` | the per-fill values combined by a **named** aggregation method, quantity-weighted by default | BPS · reference price | as above | 20 fills | `INSUFFICIENT_OBSERVATIONS` |
-| `latency.signal_to_order` | `order_submitted_at − signal_at`, from recorded timestamps | SECONDS · n/a | clock source and accuracy stated | 1 | `UPSTREAM_INPUT_MISSING` |
-| `latency.order_to_fill` | `first_fill_at − order_submitted_at` | SECONDS · n/a | as above | 1 | `UPSTREAM_INPUT_MISSING` |
+| `slippage` | `side_sign × (fill_price − reference_price) / reference_price × 10,000`, against a **named** reference price carrying its own timestamp. `side_sign` is **+1 for every buy** — buy-to-open and buy-to-cover — and **−1 for every sell** — sell-to-close and sell-to-open. **Positive is adverse cost; negative is a favourable fill.** §12.3.1 works the arithmetic through | BPS · reference price | fill timestamps, clock source named | 1 fill | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when the reference is absent; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when the reference price is zero |
+| `slippage.aggregate` | the per-fill values combined by a **named** aggregation method, **quantity-weighted by default**: `Σ(bps_i × qty_i) / Σ qty_i` over fills that each have a resolvable reference. **Fills with no reference are excluded and counted**, and the result is `PARTIAL` naming how many — an average over a silently reduced population is a different metric | BPS · reference price | as above | 20 fills | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when total weight is zero |
+| `latency.signal_to_order` | `order_submitted_at − signal_at`, from recorded timestamps | SECONDS · n/a | clock source and accuracy stated | 1 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`, or with `CLOCK_UNSYNCHRONIZED` across unsynchronized clocks |
+| `latency.order_to_fill` | `first_fill_at − order_submitted_at` | SECONDS · n/a | as above | 1 | as `latency.signal_to_order` |
 | `benchmark.movement` | benchmark return over **exactly** the trade or period boundaries used, stating `PRICE_RETURN` or `TOTAL_RETURN` | RATIO · benchmark beginning value | same calendar and boundaries as the subject | 2 points | `PARTIAL` on a gapped benchmark |
-| `coverage` | `present / requested` over the requested extent | RATIO · requested extent | request window | 0 | `UNKNOWN` when the requested extent is not determinable |
-| `freshness` | `as_of_time − newest contributing projected_time` | SECONDS · n/a | UTC | 0 | `UPSTREAM_INPUT_MISSING` |
+| `coverage` | `present / requested` over the requested extent | RATIO · requested extent | request window | 0 | `NOT_YET_AVAILABLE` with `EXTENT_NOT_DETERMINABLE` when the requested extent cannot be resolved. **`UNKNOWN` is a `completeness` value and is never an availability state** |
+| `freshness.source_age` | `evaluation_time − source_effective_time`, **per required input**, reported for the **oldest** required input and assessed against **that input's own** contract. §3.1 governs | SECONDS · n/a | UTC, monotonic where available | 0 | `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING`; `NOT_YET_AVAILABLE` with `CLOCK_UNSYNCHRONIZED` beyond tolerance — **never clamped to zero** |
+| `freshness.projection_lag` | `projected_time − source_effective_time` of the newest required input the projection consumed — how far behind its sources the build is. **A separate number from source age, and never a substitute for it** | SECONDS · n/a | UTC | 0 | as `freshness.source_age` |
+| `freshness.build_age` | `evaluation_time − projected_time` — how long ago this row was built. **The least interesting of the three, and the only one a rebuild resets** | SECONDS · n/a | UTC | 0 | as `freshness.source_age` |
 
 **Cost treatment applies to every economic metric above and is stated on every value**, as one of
 `GROSS`, `NET_COMMISSIONS` or `NET_ALL_COSTS` — the last meaning net of commissions, fees, borrow
@@ -1913,6 +2200,51 @@ one series.**
 **Sign convention applies to every economic metric above.** Profit is positive and loss is negative
 **for both long and short**, so a profitable short is positive. **Exposure carries a magnitude and a
 direction and never a profit sign**, and the two are separate fields.
+
+#### 12.3.1 Slippage, worked through
+
+**The unit is basis points, so the ratio is multiplied by 10,000.** A formula that divides two prices
+and calls the quotient `BPS` is out by four orders of magnitude, and the error is invisible on any
+single fill.
+
+```text
+slippage_bps = side_sign * (fill_price - reference_price) / reference_price * 10,000
+
+side_sign   +1  BUY_TO_OPEN     +1  BUY_TO_COVER
+            -1  SELL_TO_CLOSE   -1  SELL_TO_OPEN
+
+positive    ADVERSE -- the fill cost more than the reference said
+negative    FAVOURABLE -- the fill was better than the reference
+zero        the fill matched the reference exactly
+```
+
+**Four cases, hand-calculated, and the convention is what makes them agree.**
+
+| Side | Reference | Fill | Ratio | × 10,000 | `side_sign` | Result | Reading |
+|---|---|---|---|---|---|---|---|
+| buy | 100.00 | 100.10 | `+0.001` | `+10` | `+1` | **+10 bps** | paid 10 bps more — **adverse** |
+| sell | 100.00 | 99.90 | `−0.001` | `−10` | `−1` | **+10 bps** | received 10 bps less — **adverse** |
+| buy | 100.00 | 99.95 | `−0.0005` | `−5` | `+1` | **−5 bps** | paid less — **favourable** |
+| sell | 100.00 | 100.05 | `+0.0005` | `+5` | `−1` | **−5 bps** | received more — **favourable** |
+
+**A buy 10 bps above its reference and a sell 10 bps below it are the same cost**, and `side_sign` is
+what makes both report `+10` rather than `+10` and `−10`. **Without it, an equally-weighted book of
+adverse buys and adverse sells averages to zero and reports perfect execution.**
+
+**Precision is stated, and rounding happens once.** A value carries a decimal string and its `scale`;
+**the declared minimum scale is two decimal places of a basis point**, so `8.42` survives and is not
+truncated to `8`. Rounding is **half-even at the declared scale, applied to the final value only** —
+never to intermediate quotients, and never per fill before aggregation.
+
+**Missing and degenerate inputs refuse rather than resolve.** A fill with no named reference price is
+`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`; **a zero reference price is `NOT_APPLICABLE` with
+`DENOMINATOR_ZERO`**, never a division and never a substituted price. A reference price whose
+timestamp is unusable is `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING`, because a reference
+that cannot be placed in time is not a reference.
+
+**Slippage measures a fill; it never restates one.** The costs-already-in-the-fill rule of §12.4
+governs: an actual fill price already incorporates what was crossed, so this metric **reports** that
+against a reference and is **never subtracted from the same fill's economics again**.
 
 ### 12.4 The hard cases, decided rather than left open
 
@@ -1929,12 +2261,12 @@ direction and never a profit sign**, and the two are separate fields.
 | **corporate-action adjustment** | adjusted prices and actual fill prices are different series, labelled as such. **An actual fill is never restated by an adjustment factor** |
 | **costs already in the fill** | **an actual fill price already incorporates the spread crossed and the slippage realized.** `slippage` measures that fill against a named reference; it is **never** subtracted again from the same fill's economics, and no modelled spread or slippage estimate is applied on top of an actual fill. A **hypothetical** outcome — a counterfactual, a backtest, a shadow result — has no actual fill, so it states its modelled spread, slippage and capacity assumptions explicitly, and is **never placed in a series with realized results** |
 | **MFE, MAE and capture ratio units** | `capture_ratio` requires its numerator and `mfe` in the **same unit, frequency and price basis**. A realized outcome in USD over an MFE in R is refused rather than divided |
-| **latency clocks** | every latency states its clock source and accuracy. **A latency across two unsynchronized clocks is `UPSTREAM_INPUT_MISSING`, not a small number** |
-| **undefined ratios** | a zero denominator yields `NOT_APPLICABLE` with `DENOMINATOR_ZERO`. **Never infinity, never a sentinel, never a large number** |
+| **latency clocks** | every latency states its clock source and accuracy. **A latency across two unsynchronized clocks is `NOT_YET_AVAILABLE` with `CLOCK_UNSYNCHRONIZED`, not a small number** |
+| **undefined ratios** | a zero denominator yields `NOT_APPLICABLE` with `DENOMINATOR_ZERO` — one of the **two** routes to `NOT_APPLICABLE` in the §4.1.1 matrix, the other being `NOT_DEFINED_FOR_SUBJECT`. **Never infinity, never a sentinel, never a large number** |
 | **provisional versus final attribution** | provisional is labelled, and finalization is a recorded event |
 | **insufficient samples** | `INSUFFICIENT_OBSERVATIONS` rather than a computed number, against the declared minimum |
 | **missing price paths** | `PARTIAL` for every path-dependent metric, and **the affected metrics are named** |
-| **inapplicable versus unavailable** | `NOT_APPLICABLE` requires `NOT_DEFINED_FOR_SUBJECT`. **Everything else that is simply absent is unavailable**, with the reason code that says why |
+| **inapplicable versus unavailable** | `NOT_APPLICABLE` requires `NOT_DEFINED_FOR_SUBJECT` — the subject has no such property — or `DENOMINATOR_ZERO` — the arithmetic is undefined. **Everything else that is simply absent is unavailable**, with the state and the reason code the §4.1.1 matrix permits, and **`UPSTREAM_INPUT_MISSING` never reaches `NOT_APPLICABLE`** |
 
 ### 12.5 Display sufficiency is not evidence of validity
 

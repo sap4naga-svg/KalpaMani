@@ -202,7 +202,21 @@ the data exactly as exposed as it was**, and a control that a rename defeats is 
 | **identity** | every locked set has a **locked-set identity** derived from its manifest, its information-set profile, its revision view and its evaluation boundary. **Two sets with the same identity are the same set**, whatever they are called |
 | **the ledger** | an append-only record **attached to the locked set**, not to a registration. Every evaluation that touches it appends an entry |
 | **each entry records** | the registration identity · the Challenger identity · the research code and configuration identity · the evaluation class · the instant · the requested extent · **the overlap with every prior entry** |
-| **it is read across lineage** | a registration reads the whole ledger for the sets it names, including entries written under **other** registrations |
+| **it is read across lineage** | a registration reads the whole ledger for the sets it names **and for every set overlapping them**, including entries written under **other** registrations |
+
+**Overlapping data counts as exposure, not only an identical locked set.** Identity by manifest,
+profile, revision view and boundary catches a **repeat**; it does not catch a locked set that is a
+**subset**, a **superset**, a **shifted window** or a **re-cut** of one already evaluated. A
+researcher who evaluates 2015-2019, then registers 2015-2020 as a new locked set, has a new identity
+over four-fifths of the same data — and under identity alone the ledger of the first set is never
+read.
+
+| | |
+|---|---|
+| **the lookup is by overlap** | a registration reads the ledger of **every** locked set whose extent intersects the set it names, not only the ledger of an exactly matching identity |
+| **overlap is measured, not assumed** | on the declared axes a locked set is cut along — its securities, its time extent and its evaluation boundary — and the **measured overlap is recorded on the entry** |
+| **any overlap disqualifies a confirmatory claim** | `CONFIRMATORY` requires an **untouched** holdout. **A partly-exposed set is partly exposed**, and there is no threshold below which reuse becomes fresh. The refusal is `OUT_OF_SAMPLE_ALREADY_CONSUMED`, naming the overlapping set |
+| **an unmeasurable overlap fails closed** | a locked set whose extent cannot be compared against a prior one is `EXPOSURE_HISTORY_UNKNOWN`. **Incomparable is not disjoint** |
 
 **Related research lineage counts as exposure.** Exposure follows the research, not the label. A
 registration inherits every ledger entry reachable through its **parent registration**, its
@@ -235,7 +249,8 @@ with the disclosure that entails.
 **Refusals, closed:**
 
 ```text
-OUT_OF_SAMPLE_ALREADY_CONSUMED     the ledger records prior exposure of this locked set
+OUT_OF_SAMPLE_ALREADY_CONSUMED     the ledger records prior exposure of this locked set,
+                                   or of a set overlapping it
 EXPOSURE_HISTORY_UNKNOWN           the ledger cannot be shown to be complete
 RELATED_LINEAGE_EXPOSED            a related registration exposed this set
 BUDGET_EXHAUSTED_ACROSS_LINEAGE    the lineage budget is spent, whatever this identity's own

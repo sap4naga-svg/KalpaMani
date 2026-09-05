@@ -23923,12 +23923,71 @@ def main() -> int:
                 and "a moving stop does not move it" in extension_27_flat.lower(),
                 "an R multiple whose denominator drifts is not an R multiple",
             )
+            # The first revision of this guard required "NOT_DEFINED_FOR_SUBJECT is the
+            # only route", which contradicted the ratio rows that require NOT_APPLICABLE
+            # with DENOMINATOR_ZERO. The invariant that actually matters is that a MISSING
+            # INPUT reaches neither route, so that is what is checked; the matrix itself is
+            # executed by tests/unit/test_cockpit_contract_semantics.py.
             f.check(
                 "missing initial planned risk is unavailable rather than inapplicable",
                 "It is unavailable, not inapplicable" in cockpit_flat["the read-model contracts"]
-                and "`NOT_DEFINED_FOR_SUBJECT` is the only route to `NOT_APPLICABLE`"
-                in contracts_27,
-                "inapplicability is a property of the subject, not a synonym for unknown",
+                and "`NOT_APPLICABLE` has exactly two routes"
+                in cockpit_flat["the read-model contracts"]
+                and "`UPSTREAM_INPUT_MISSING` in particular never does"
+                in cockpit_flat["the read-model contracts"],
+                "inapplicability is a property of the subject or of the arithmetic, "
+                "never a synonym for unknown",
+            )
+            f.check(
+                "availability and reason stay two axes, under one exhaustive matrix",
+                "The validity matrix" in contracts_27
+                and "This matrix is exhaustive" in cockpit_flat["the read-model contracts"]
+                and "no producer invents a failure to fill a required field" in extension_27_flat,
+                "a state written where a reason belongs is a value no consumer can switch on",
+            )
+            f.check(
+                "an unavailable nested record has a shape rather than a skeleton",
+                "The ONLY wrapper a nested record arrives in" in contracts_27
+                and "never a skeleton, never a placeholder, and never a zeroed record"
+                in cockpit_flat["the read-model contracts"]
+                and "an absent record is absent" in extension_27_flat.lower(),
+                "a required record with no unavailable shape gets invented values",
+            )
+            f.check(
+                "slippage is multiplied into basis points and carries its side sign",
+                "* 10,000" in contracts_27
+                and "+1 for every buy" in cockpit_flat["the read-model contracts"]
+                and "Positive is adverse cost" in cockpit_flat["the read-model contracts"],
+                "a ratio labelled BPS is out by four orders of magnitude",
+            )
+            f.check(
+                "freshness measures the age of the facts, not the age of the build",
+                "A rebuild resets build_age and NEVER source_age" in contracts_27
+                and "a rebuild resets only the last of them" in extension_27_flat,
+                "a rebuilt projection over week-old data is not fresh",
+            )
+            f.check(
+                "overlapping data counts as out-of-sample exposure",
+                "Overlapping data counts as exposure, not only an identical locked set"
+                in cockpit_flat["the feedback specification"]
+                and "Incomparable is not disjoint" in cockpit_flat["the feedback specification"],
+                "identity catches a repeat and not a re-cut of the same data",
+            )
+            f.check(
+                "the independent review round is recorded in the decision",
+                "Four corrections from the independent review of PR #72" in adr_28,
+                "a semantic change nobody records is a change nobody can review",
+            )
+            unrecorded = [
+                label
+                for label, text in (("README.md", readme_text), ("CLAUDE.md", claude_text))
+                if "Four further defects were found by the independent review of PR #72"
+                not in " ".join(text.replace("**", "").split())
+            ]
+            f.check(
+                "both status documents record the independent review round",
+                not unrecorded,
+                ", ".join(unrecorded),
             )
             f.check(
                 "the Cockpit still invents no trading permission",

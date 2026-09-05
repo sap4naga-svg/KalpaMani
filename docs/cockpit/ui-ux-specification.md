@@ -226,8 +226,8 @@ tile must still show that it is synthetic, because screenshots travel.
 
 **A real fact is never badged synthetic.** Tracked repository governance facts carry the
 `REPOSITORY_TRACKED` provenance badge, visually distinct from `SYNTHETIC`, and a page carrying both
-badges each component **individually** rather than choosing one badge for the whole page. **The provenance
-badge is not the publication decision** — a `PUBLIC_SAFE` badge says what the content is, and an
+kinds badges **each component individually** rather than choosing one badge for the whole page.
+**The provenance badge is not the publication decision** — a `PUBLIC_SAFE` badge says what the content is, and an
 externally hosted deployment additionally requires its recorded release authorization.
 
 **Scoping travels with everything.** Cache keys, filters, URLs, exports, deep links and assistant

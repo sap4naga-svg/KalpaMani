@@ -243,6 +243,13 @@ boundary decision.
 **A server-side render, an API proxy, an edge cache and a build-time fetch are each a copy.** An externally
 hosted deployment must not silently receive a licensed payload through any of them.
 
+**Freshness is the age of the facts, not the age of the build.** Source age, projection lag and
+build age are three separate numbers, **a rebuild resets only the last of them**, every required
+input is measured against its own contract, and a composite reports its **oldest** required input
+and the **worst** state any of them reached — so one fresh input never conceals a stale one. A
+cached response carries the instant its ages were computed at, and **a cache never freezes an
+available state while its source ages.**
+
 ---
 
 ### 4.6 The four risk quantities, kept apart
@@ -267,8 +274,22 @@ is a refusal rather than a number. **The Cockpit displays these four facts and i
 permission**: showing a limit is not granting it, and showing headroom is not authorizing its use.
 
 **Missing initial planned risk is unavailable, not inapplicable.** Inapplicability is reserved for a
-subject the question genuinely does not apply to, and **this extension changes no risk limit, no
-capital value, no leverage, no sizing rule and no stop policy.**
+subject the question genuinely does not apply to, or for arithmetic that is undefined — the two
+routes the contracts enumerate — and **a missing input reaches neither**.
+
+**Availability and reason are two typed axes, and neither is spelled in the other's vocabulary.**
+One says whether there is an answer; the other says why. A successful value carries the reason that
+means *nothing is wrong*, so **no producer invents a failure to fill a required field**, and a state
+is never written where a reason belongs.
+
+**A record that can be unavailable is carried in a wrapper.** Each of the four quantities is present
+in the payload always and carries its record only when there is one — **an absent record is absent,
+never a skeleton carrying an invented timestamp, a synthesised policy identifier or a zeroed
+amount**. A record's own time belongs to the source fact; **the response's own times are never
+substituted for a source time that does not exist**.
+
+**This extension changes no risk limit, no capital value, no leverage, no sizing rule and no stop
+policy.**
 
 ---
 

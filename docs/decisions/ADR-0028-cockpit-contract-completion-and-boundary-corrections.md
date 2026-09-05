@@ -52,6 +52,13 @@ ADR-0027 as proposed.**
 not resolved.** They are not editorial. Each one either leaves a contract unbuildable, or lets a
 later implementation reach a wrong conclusion while obeying the text.
 
+**Four further defects were found by the independent review of PR #72, and are corrected in the
+same pull request.** They are recorded in §2.5 rather than in a separate decision, because they are
+defects in *these* corrections rather than in the accepted package: an availability value and a
+reason code that were spelled in each other's vocabularies, a required nested record with no way to
+be unavailable, a basis-point figure that was never multiplied into basis points, and a freshness
+number that measured when a projection was built rather than how old its facts were.
+
 ### 1.1 The read-model contracts stopped short of being implementable
 
 [`read-model-contracts.md`](../cockpit/read-model-contracts.md) §4.1 was titled *Selected payload
@@ -270,13 +277,141 @@ assessments, missing assessments and aggregation are each decided.** Aggregation
 quantity over open exposure **once per position**, an aggregate with a stale or missing component is
 `PARTIAL` with its components named, and **an add is never counted twice.**
 
-**Missing initial planned risk is unavailable, not inapplicable.** `NOT_APPLICABLE` requires the new
-`NOT_DEFINED_FOR_SUBJECT` reason code and is reserved for a subject the question genuinely does not
-apply to — a trade that never opened. **Everything merely absent is unavailable, with the reason
-code that says why.**
+**Missing initial planned risk is unavailable, not inapplicable.** `NOT_APPLICABLE` has **exactly
+two** routes — `NOT_DEFINED_FOR_SUBJECT`, where the subject has no such property, and
+`DENOMINATOR_ZERO`, where the arithmetic is undefined — and **`UPSTREAM_INPUT_MISSING` reaches
+neither**. **Everything merely absent is unavailable, with the state and the reason code that say
+why.**
+
+**A record that can be unavailable is carried in a wrapper, not declared required and left
+unfillable.** Every one of the four quantities is a `RecordValue`, so an absent record is *absent*
+rather than a skeleton carrying an invented timestamp, a synthesised policy identifier or a zeroed
+amount. §2.5 records that correction.
 
 **The Cockpit displays these facts and invents no trading permission.** Showing a limit is not
 granting it, showing headroom is not authorizing its use, and no view computes a permitted exposure.
+
+### 2.5 Four corrections from the independent review of PR #72
+
+**These are defects in the corrections above, found by the review of this pull request and fixed in
+it.** They are recorded here so the semantic change is discoverable rather than buried in a diff.
+
+#### 2.5.1 Availability and reason are two axes, and one validity matrix governs both
+
+**They were being spelled in each other's vocabularies.** `UPSTREAM_INPUT_MISSING` — a
+`FieldReasonCode` — was written where an `AvailabilityState` belongs, in §4.1's own rule, in the
+missing-initial-risk contract and in eight metric rows; and `UNKNOWN`, a `completeness` value, was
+written as the `coverage` metric's availability outcome. **A consumer switching on availability
+would have found values that are not in the enum.**
+
+**`read-model-contracts.md` §4.1.1 now carries one exhaustive validity matrix** over the
+availability state, the permitted reason codes and whether a value is present. `AVAILABLE`,
+`STALE`, `PARTIAL` and `EMPTY_VERIFIED` are **value-bearing**; the rest are absences.
+`EMPTY_VERIFIED` is named as **the only state in which a zero is a correct answer**.
+
+**A successful value no longer needs a fabricated failure reason.** `reason` is required on every
+`MetricValue`, including a good one, and there was no member meaning *nothing is wrong* — so a
+producer had to pick a failure. **`NONE` is added, and is the only reason `AVAILABLE` admits.**
+
+**`NOT_APPLICABLE` has two routes and not one.** The package required `NOT_APPLICABLE` with
+`DENOMINATOR_ZERO` for `profit_factor` and `capture_ratio` while also stating that
+`NOT_DEFINED_FOR_SUBJECT` was the only route — **both could not hold**. Subject inapplicability and
+undefined arithmetic are now two named routes, and **nothing else reaches `NOT_APPLICABLE`**.
+
+**`FieldReasonCode` gains six members**, taken through this ADR exactly as a closed vocabulary
+requires: `NONE`, `EMPTY_RESULT_VERIFIED`, `EXTENT_PARTIALLY_COVERED`, `EXTENT_NOT_DETERMINABLE`,
+`NOT_YET_ASSESSED` and, for §2.5.4, `SOURCE_TIMESTAMP_MISSING` and `CLOCK_UNSYNCHRONIZED`.
+**`AvailabilityState` gains nothing**, and no member of either vocabulary is removed or renamed.
+
+#### 2.5.2 A required nested record needs a way to be unavailable
+
+**`InitialPlannedRisk` was declared `required` with every field concrete and required** — money, a
+reference price, an invalidation reference, a `recorded_at`, a `PolicyRef` and a source enum — while
+the same section said initial risk may be `NOT_YET_AVAILABLE`. **There was no shape for the
+unavailable case**, so an implementation would have invented one: a zeroed amount, a synthesised
+policy identifier, or the response's own timestamp standing in for a source time that does not
+exist.
+
+**`RecordValue` is added to §4.2 and applied to all four risk quantities**, and to every payload
+that carries them. The record is present exactly when the state is value-bearing and **`ABSENT`
+otherwise — never a skeleton, never a placeholder, never a zeroed record**. `CurrentOpenPlannedRisk`
+keeps `staleness` for a **present** assessment and `MISSING` moves to the wrapper, because a missing
+assessment has no `as_of` and no `assessment_ref` to report.
+
+**An absent source time is not the response's time.** `as_of_time` and `projected_time` belong to
+the response and are always known; a record's own `recorded_at` belongs to the source fact, and when
+the fact does not exist neither does its time. **§4.4.1 writes out six payloads** — available
+initial risk, not-yet-available during entry filling, missing historical evidence, missing current
+assessment, missing policy reference, and a partially available composite — so the shapes are
+satisfiable rather than described.
+
+#### 2.5.3 Slippage is basis points, and its sign says which way
+
+**The formula produced a ratio and labelled it `BPS`.** `signed(fill − reference) / reference` is
+out by a factor of 10,000, and `signed` was never defined, so the side convention the row referred
+to did not exist anywhere.
+
+```text
+slippage_bps = side_sign * (fill_price - reference_price) / reference_price * 10,000
+side_sign    +1 for every buy (open and cover)   -1 for every sell (close and open)
+positive     ADVERSE COST        negative  FAVOURABLE FILL
+```
+
+**Positive is adverse cost, for both sides.** A buy at 100.10 against a 100.00 reference and a sell
+at 99.90 against the same reference are **each +10 bps**; without `side_sign` a book of equally
+adverse buys and sells averages to zero and reports perfect execution. **§12.3.1 works all four
+cases through by hand.**
+
+**`Bps` becomes a decimal string with a stated scale, minimum two decimal places**, because
+truncating 8.42 to 8 discards four tenths of a basis point on every fill and an aggregate over fifty
+thousand fills carries the whole of it. Rounding is **half-even, at the declared scale, on the final
+value only**. Aggregation is quantity-weighted with the method named, **fills with no reference are
+excluded and counted**, and a zero reference price is `NOT_APPLICABLE` with `DENOMINATOR_ZERO`
+rather than a division.
+
+**Nothing is subtracted twice.** §12.4's costs-already-in-the-fill rule is unchanged and governs.
+
+#### 2.5.4 Freshness is the age of the facts, not the age of the build
+
+**`as_of_time − newest contributing projected_time` measures when a machine last ran.** Rebuilding a
+projection over week-old source data would have reported it seconds old; a historical `as_of` query
+would have produced a **negative** number; and *newest contributing* reports the freshest input
+while **concealing an older required one**.
+
+**§3.1 separates six times** — `evaluation_time`, `as_of_time`, `source_effective_time`,
+`source_observation_time`, `projected_time` and `source_watermark` — and derives three ages that are
+reported separately: **`source_age`** (how old the facts are, and the freshness question),
+**`projection_lag`** (how far the build lags its sources) and **`build_age`** (how old the build is,
+**and the only one a rebuild resets**).
+
+**Every required input is evaluated against its own contract.** The composite reports the **oldest**
+required input by name and takes the **worst** state any required input reached, so **one fresh
+input never raises a view carrying a stale one**. Optional inputs are reported and do not set the
+composite state.
+
+**Missing and skewed clocks refuse rather than resolve.** An input with no usable source time is
+`SOURCE_TIMESTAMP_MISSING` — **its age is unknown, not zero**; a source time later than the
+evaluation time beyond tolerance is `CLOCK_UNSYNCHRONIZED`, and **a negative age is never clamped**.
+**A cache cannot freeze an `AVAILABLE` state**: a cached response carries the origin's
+`evaluation_time` with its report, and an entry lives at most as long as the strictest
+`contract_max_age` it carries.
+
+#### 2.5.5 Two smaller corrections, in the same round
+
+**Overlapping data is exposure.** §2.2's ledger was keyed by a locked-set identity derived from
+manifest, profile, revision view and boundary — which catches a **repeat** and not a **subset, a
+superset, a shifted window or a re-cut**. Evaluating 2015-2019 and then registering 2015-2020 as a
+new locked set produced a new identity over four-fifths of the same data. **The lookup is now by
+measured overlap**, on the axes a locked set is cut along; **any overlap disqualifies a
+`CONFIRMATORY` claim**, there is no threshold below which reuse becomes fresh, and **an unmeasurable
+overlap is `EXPOSURE_HISTORY_UNKNOWN`, because incomparable is not disjoint**.
+
+**A flow-free holding period is one valid sub-period.** `return.time_weighted` required **two**
+sub-periods, so a perfectly ordinary period containing no external cash flow reported
+`INSUFFICIENT_OBSERVATIONS`. The minimum is **one complete sub-period**, each requiring a beginning
+and an ending valuation — **the chaining exists to survive cash flows, not to require them**. **No
+research restriction is invented to preserve the old number**, and `return.naive` is still not
+offered.
 
 ---
 
@@ -288,8 +423,8 @@ and no others.
 
 | Document | Clauses |
 |---|---|
-| [`read-model-contracts.md`](../cockpit/read-model-contracts.md) | §2.2 provenance · §2.4 hosting · §4 catalog and payload contracts, with new §4.1–§4.6 · §5 endpoint contracts, with new §5.1–§5.2 · new §7.1 · §10 identifiers · §11 audit and deletion · §12 metric dictionary, renumbered to §12.1–§12.6 |
-| [`feedback-self-maturation-specification.md`](../cockpit/feedback-self-maturation-specification.md) | §2.5 registration outputs and refusals · §2.7 reuse protections, with new §2.7.1 · §2.9 packet inputs, outputs and refusals |
+| [`read-model-contracts.md`](../cockpit/read-model-contracts.md) | §2.2 provenance · §2.4 hosting · §3 envelope `freshness`, with new §3.1 · §4 catalog and payload contracts, with new §4.1–§4.6, new §4.1.1 and new §4.4.1 · §5 endpoint contracts, with new §5.1–§5.2 · §7 caching · new §7.1 · §9 partial data · §10 identifiers · §11 audit and deletion · §12 metric dictionary, renumbered to §12.1–§12.6, with new §12.3.1 |
+| [`feedback-self-maturation-specification.md`](../cockpit/feedback-self-maturation-specification.md) | §2.5 registration outputs and refusals · §2.7 reuse protections, with new §2.7.1 including the overlap rule of §2.5.5 · §2.9 packet inputs, outputs and refusals |
 | [`COCKPIT_FEEDBACK_EXTENSION.md`](../architecture/COCKPIT_FEEDBACK_EXTENSION.md) | §4.3 provenance · §4.5 classification and hosting · new §4.6 · §5 audit and deletion |
 | [`cockpit-v1-specification.md`](../cockpit/cockpit-v1-specification.md) | Areas 1, 3, 12, 24, 31 and 36 |
 | [`traceability-matrix.md`](../cockpit/traceability-matrix.md) | the acceptance criteria of Areas 1, 3, 12, 15, 18, 24, 31, 33 and 36 |
@@ -337,6 +472,13 @@ dollar amount, position size, order type, route or order identifier.
 | **Keep one "planned risk" and disambiguate in the UI** | the ambiguity is in the contract, and a label cannot repair a definition. Four facts need four contracts |
 | **Recompute initial planned risk from the current stop** | it would make the R denominator drift with a trailing stop, which is the specific error this separation prevents |
 | **Report `NOT_APPLICABLE` when initial planned risk is missing** | it asserts that the question does not apply when nobody answered it. Absence is unavailability, with a reason code |
+| **Let a successful value carry the least-wrong failure reason** | it is a false report, and it makes every reason code unreadable — a consumer cannot tell a real `UPSTREAM_INPUT_MISSING` from a filler one. `NONE` costs one member |
+| **Keep `NOT_DEFINED_FOR_SUBJECT` as the only route and drop the `DENOMINATOR_ZERO` ratio rule** | a zero gross loss is not a subject that lacks the property; the subject has it and the arithmetic is undefined. Merging them would lose the distinction a reader needs |
+| **Make the four risk records `optional` instead of wrapping them** | §4.1 already forbids using `optional` to make a missing producer look intentional, and an absent field carries no reason. The wrapper says *why* |
+| **Report slippage as a ratio and let the UI multiply** | the unit would live in the presentation layer, two screens would disagree, and the dictionary's own `BPS` declaration would stay wrong |
+| **Keep one freshness number and document that it means build age** | the field is read as *how old is this data*. Renaming it would not stop that, and the composite would still conceal a stale required input |
+| **Treat overlap below a threshold as fresh out-of-sample** | there is no honest threshold. A partly-exposed holdout is exposed, and a number would become the thing researchers tune against |
+| **Require two sub-periods so the chaining is always exercised** | it refuses a valid return to make a formula look used, and inventing a research restriction to preserve an arithmetic convenience is the wrong direction |
 
 ---
 
@@ -361,8 +503,15 @@ dollar amount, position size, order type, route or order identifier.
   counting per registration, and it is the only version that is a control.
 - **Read-resource limits are proposals.** They are reviewable numbers chosen for a read API and
   nothing else, and a later cycle may lower them; raising one is a decision, not a tuning.
-- **A closed vocabulary gained a member.** `REPOSITORY_TRACKED` is one more value every consumer
+- **Closed vocabularies gained members.** `DataProvenance` gained `REPOSITORY_TRACKED`, and
+  `FieldReasonCode` gained the seven of §2.5.1 and §2.5.4. Each is one more value every consumer
   must handle, taken deliberately through an ADR rather than assumed by an implementation.
+- **A reason is now mandatory on a successful value.** `NONE` is not decoration: it is what stops a
+  producer inventing a failure to fill a required field, and every consumer must read it.
+- **Freshness is three numbers where it was one.** A view now states the age of its facts, the lag
+  of its build and the age of its build separately, and evaluates every required input against its
+  own contract. That is more work than one subtraction, and one subtraction was measuring the wrong
+  thing.
 
 ---
 
