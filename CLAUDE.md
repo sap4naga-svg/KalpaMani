@@ -484,7 +484,7 @@ observational**, and **every future control is inert with no handler and no cont
 | **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Cockpit contract completion and boundary corrections** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the specification corrections that ship with it. It corrects four issues in the specifications ADR-0027 adopted — **A** the §4.1 field-level deferral, replaced by declarative contracts for every catalogued read model, a resolution for every reference, a per-endpoint contract and a completed metric dictionary; **B** out-of-sample reuse, now recorded against the **locked set** and read across research lineage so a new registration or Challenger identity clears nothing and unknown exposure history fails closed; **C** licensed-data admission, separating an absolute ban on credentials and infrastructure identifiers from classification of payload content, making **classification a label and publication a separate recorded authorization**, and adding the `REPOSITORY_TRACKED` provenance so a real tracked governance fact is never relabelled `SYNTHETIC`; **D** the single phrase *planned risk*, now four contracts — immutable **initial** planned risk as the only R denominator, **current open** planned risk as a risk-engine assessment with its as-of, **permitted** risk with its policy reference, and separately modelled gap and event risk. It **amends and supersedes no ADR** and does not edit ADR-0027. **All 36 areas, the C1–C10 sequence, the four trade concepts, the `CandidateIntent` boundary, the runtime `Environment` enum and every risk, capital and stop policy are unchanged** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md) — Valid zero values and cache freshness deadlines** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the two specification corrections that ship with it. It corrects two rules ADR-0028 introduced into `read-model-contracts.md`, and **nothing else** — **A** §4.1.1 named `EMPTY_VERIFIED` the *only* state in which a zero is correct, which is false of every measurement that legitimately evaluates to zero; a measured zero is now `AVAILABLE` with `NONE`, `EMPTY_VERIFIED` describes an **empty population** rather than the number, a zero never removes a `STALE` or `PARTIAL` qualification, and an absent producer still **never substitutes zero**; **B** §3.1 and §7 bounded a cache entry by the whole `contract_max_age`, returning age the fact had already spent — freshness now expires at an **absolute per-input deadline**, `input_deadline = source_effective_time + contract_max_age`, a composite expires at the **earliest** required deadline, a configured TTL may **shorten and never extend** it, and a rebuild, refetch or re-cache renews nothing. It **amends and supersedes no ADR** and edits neither ADR-0027 nor ADR-0028. **No availability state or reason code is added, and no missing-data safeguard is relaxed** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under ADR-0026, accepted effective on merge of PR #70, and **not implemented**; a specification is not an implementation |
-| **Cockpit / read models / feedback engine** | **C3 APPLICATION FOUNDATION IMPLEMENTED — EFFECTIVE ON MERGE OF PR #74, and carrying no such status until that merge. EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, and the **C3 foundation** — design system, shell, navigation, the transcribed contract layer, and two substantive screens on a **local fixture adapter** — is implemented under its own separate written authorization. **A foundation is not the Cockpit**: no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. Merging it authorizes **no further cycle** |
+| **Cockpit / read models / feedback engine** | **C3 APPLICATION FOUNDATION IMPLEMENTED — EFFECTIVE ON MERGE OF PR #74, and carrying no such status until that merge. EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, and the **C3 foundation** — design system, shell, navigation, the transcribed contract layer, and two substantive screens on a **local fixture adapter** — is implemented under its own separate written authorization. **A foundation is not the Cockpit**: no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. Merging it authorizes **no further cycle**. **The C4 cycle — Executive Overview, Attention Required, project and qualification governance, and environment and deployment maturity — is implemented under a later separate written authorization, EFFECTIVE ON ITS OWN MERGE and carrying no such status until then**, taking the implemented product areas to **4 of 36**; **every boundary in this row is unchanged by it**, and it closes no gate |
 | **Live trading** | **HARD-DISABLED** |
 
 The planning package is accepted and lives in
@@ -3441,6 +3441,87 @@ live trading:                                     HARD-DISABLED
 **A foundation is not a dashboard, and merging it authorizes no further cycle.** **Specification,
 implementation, deployment and execution stay separate gates**, and the next Cockpit cycle — C4,
 Executive Overview and Governance — is a **separate written authorization** that has not been given.
+
+**That authorization was given afterwards, and C4 is implemented under it** — see *The C4
+Executive Overview and governance* below. The sentence above records what was true on the day
+this section was written, and it is not rewritten: on that day the C4 authorization did not
+exist.
+
+### The C4 Executive Overview and governance — IMPLEMENTED, and it is not the Cockpit
+
+**C4 is implemented; the Cockpit V1 is not.** Those are two facts, and this section keeps them
+apart. **This status is EFFECTIVE ON MERGE of the pull request introducing it, and the
+repository carries no such status until that merge** — while that pull request is open, C4 is an
+unmerged implementation candidate, exactly as C3 was before PR #74.
+
+**Four of the thirty-six product areas are implemented** — areas **1** (Executive Overview),
+**24** (Project and Qualification Governance), **25** (Environment and Deployment Maturity) and
+**28** (Executive Attention Required), which is the C4 row of the traceability matrix. The other
+thirty-two remain registered, reachable placeholders, and **the C5–C10 sequencing is unchanged**.
+
+**It runs on the same local fixture adapter.** No production read API, projection runtime, metric
+engine, database, migration, scheduler, container or deployment exists, and **none is
+authorized**. The application makes **no provider, broker, AWS, GitHub, LLM, font, telemetry or
+analytics request**, at runtime or at build time, and adds **no `src/kalpamani` module, no Python
+dependency and no Blueprint change**.
+
+**Two residual freshness defects in the merged C3 foundation were corrected first**, before any
+C4 consumer was added to them.
+
+| | |
+|---|---|
+| **a negative age could still become a measured zero** | C3's note claimed "a negative age is refused rather than clamped", and the code refused only *beyond* the declared two-second clock tolerance, then applied `Math.max(0, ...)` on three age paths. A source dated up to two seconds after its own evaluation instant became a clean `0` carrying `AVAILABLE`/`NONE` — a fabricated "just now" with nothing saying two clocks disagreed. §3.1's three bands are now implemented rather than approximated: beyond tolerance the age is **UNKNOWN and refused**, inside it the age is **zero AND FLAGGED**, and otherwise it is `floor()` of a non-negative quantity. **No age clamp remains** |
+| **a composite over mixed required failures was order-dependent** | the renderer returned the **first** required input that was not `AVAILABLE`, so reordering the same two inputs changed the diagnosis on screen with no change to the facts. **No enum ordering was invented**: §3.1 fixes `AVAILABLE` and `STALE` and defines no ordering across the other nine states, so one distinct failure **is** the worst one, and **several distinct failures are refused at admission** — with every individual input failure left intact for inspection |
+
+**No trading, provider, AWS, broker or governance operation is performed, enabled or approached
+by any of it.** Every future control is **absent**, not disabled: there is no acknowledge,
+dismiss, resolve, snooze, assign or suppress on the attention surface; no run, authorize,
+approve, start, execute, promote, advance or retry on either governance surface; and **no form,
+no input element, no route handler, no server action, no API route and no mutation of any kind**
+anywhere in the application.
+
+**The governance snapshot was refreshed from tracked authority, and nothing was inferred.** The
+tracked facts were re-read from `CLAUDE.md` and the ADR documents at commit
+`74790b82b9939e3a8f21e4ed71425717318288ad` — the merge commit of PR #74, verified during the
+session that wrote them. **A date arriving still authorizes nothing**: Run B's earliest approved
+target and its written authorization render as **two separate facts** on a stated calendar basis,
+and the interface says so in those words.
+
+```text
+C4 executive overview and governance:             IMPLEMENTED - EFFECTIVE ON MERGE
+Cockpit product areas implemented:                4 of 36
+full Cockpit V1:                                  NOT COMPLETE
+production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
+feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
+database, migration, scheduler, deployment:       NOT IMPLEMENTED / NOT AUTHORIZED
+real-source and provider wiring:                  NOT AUTHORIZED
+route handlers, server actions, API routes:       NONE
+control handlers and mutations:                   NONE
+network requests made by the application:         NONE
+new src/kalpamani modules:                        NONE
+Python runtime dependency changes:                NONE
+frontend dependency changes:                      RECHARTS 3.10.1 ONLY
+Blueprint PDF changes:                            NONE
+backtesting:                                      NOT STARTED
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A dashboard is not the Cockpit, and merging it authorizes no further cycle.**
+**Specification, implementation, deployment and execution stay separate gates**, and the next
+Cockpit cycle — C5 — is a **separate written authorization that has not been given**.
+
 
 ### The Cockpit and Feedback specification — ACCEPTED ON MERGE, and nothing is implemented
 
