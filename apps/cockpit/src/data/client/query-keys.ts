@@ -33,9 +33,20 @@ export function scopeKey(scope: ViewScope): readonly string[] {
   return [scope.environment, scope.scenario, scope.mode];
 }
 
+/**
+ * `period` is NOT part of `scopeKey`, and that is deliberate.
+ *
+ * §7 asks for "every query parameter" of a read. A period is a parameter of exactly ONE read
+ * model — the performance series — and folding it into the shared scope key would hand the
+ * governance, attention and overview reads a fresh cache entry every time a reader changed
+ * the chart's range. Over-separation is safe but is not free, so the one read model that
+ * depends on a period passes it explicitly through `params`, and every key still describes
+ * every parameter its own request depends on.
+ */
 export function readModelKey(
   identity: ReadModelIdentity,
   scope: ViewScope,
+  params: readonly string[] = [],
 ): readonly string[] {
   return [
     "cockpit",
@@ -46,5 +57,6 @@ export function readModelKey(
     identity.classification,
     identity.accessScope,
     ...scopeKey(scope),
+    ...params,
   ];
 }

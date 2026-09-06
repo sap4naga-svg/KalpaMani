@@ -20,16 +20,29 @@ import type { EnvelopeOf } from "@/contracts/envelope";
 import type {
   AttentionItemPayload,
   ExecutiveOverviewPayload,
+  PerformanceSeriesPayload,
   QualificationStatusPayload,
   WhatChangedEntryPayload,
 } from "@/contracts/read-models";
 import type { HostingBoundary } from "@/contracts/vocabularies";
 import type { ViewScope } from "@/lib/scope";
 
+/**
+ * The comparison window, and both of its endpoints.
+ *
+ * A change is a statement about two instants. Carrying the window and both as-of times in the
+ * payload is what lets a screen SAY what it compared, rather than presenting a delta whose
+ * endpoints the reader has to assume (`ui-ux-specification.md` §7).
+ */
 export interface WhatChangedPayload {
   readonly baseline_label: string;
   readonly baseline_as_of?: string;
   readonly comparison_as_of?: string;
+  /** Why no comparison was possible, when none was. A missing baseline is not a zero. */
+  readonly baseline_state?: {
+    readonly availability: import("@/contracts/vocabularies").AvailabilityState;
+    readonly reason: import("@/contracts/vocabularies").FieldReasonCode;
+  };
   readonly entries: WhatChangedEntryPayload[];
 }
 
@@ -42,6 +55,14 @@ export interface ReadClient {
   attention(scope: ViewScope): Promise<EnvelopeOf<AttentionListPayload>>;
   whatChanged(scope: ViewScope): Promise<EnvelopeOf<WhatChangedPayload>>;
   qualificationStatus(scope: ViewScope): Promise<EnvelopeOf<QualificationStatusPayload>>;
+  /**
+   * The performance overview's series, over the scope's period.
+   *
+   * The period is a REQUEST PARAMETER and not a presentation preference: it changes the
+   * extent the answer covers, so a caller that varies it is asking a different question and
+   * gets a different cache entry.
+   */
+  performanceSeries(scope: ViewScope): Promise<EnvelopeOf<PerformanceSeriesPayload>>;
 }
 
 export class ContractViolationError extends Error {

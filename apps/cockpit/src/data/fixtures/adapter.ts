@@ -27,16 +27,20 @@
 import {
   attentionListEnvelope,
   executiveOverviewEnvelope,
+  performanceSeriesEnvelope,
   qualificationStatusEnvelope,
   whatChangedEnvelope,
 } from "@/contracts/read-models";
 import type {
   ExecutiveOverviewPayload,
+  PerformanceSeriesPayload,
   QualificationStatusPayload,
 } from "@/contracts/read-models";
+import { CLOCK_SKEW_TOLERANCE_SECONDS } from "@/contracts/freshness";
 import type { EnvelopeOf } from "@/contracts/envelope";
 import type {
   AvailabilityState,
+  Completeness,
   Environment,
   FieldReasonCode,
   HostingBoundary,
@@ -51,6 +55,7 @@ import {
 import {
   ATTENTION_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
+  PERFORMANCE_SERIES_IDENTITY,
   QUALIFICATION_IDENTITY,
   WHAT_CHANGED_IDENTITY,
   type ReadModelIdentity,
@@ -61,6 +66,7 @@ import type { ViewScope } from "@/lib/scope";
 
 import { instantOf } from "@/contracts/factories";
 import { buildEnvelope, type InputSpec } from "./envelopes";
+import { syntheticPerformanceSeries } from "./performance";
 import {
   syntheticAttention,
   syntheticExecutiveOverview,
@@ -97,10 +103,34 @@ const DEMO_MARK_AGE_AT_ORIGIN_SECONDS = 45;
 
 function governanceInput(originMs: number): InputSpec {
   const snapshotMs = Date.parse(`${SNAPSHOT_AS_OF}T00:00:00.000Z`);
+  const exactAgeSeconds = (originMs - snapshotMs) / 1000;
+  /*
+   * NOT CLAMPED AT ZERO, and not thrown either.
+   *
+   * `Math.max(0, ...)` stood here and reported a snapshot dated AFTER the session origin --
+   * a workstation whose clock disagrees with the transcription date -- as a snapshot
+   * transcribed THIS INSTANT: the freshest required input on the page, on the one read model
+   * whose facts are real.
+   *
+   * The honest answer is neither a zero nor a crash. Beyond the declared tolerance, this
+   * clock cannot establish when the snapshot was true, so the input carries NO SOURCE TIME
+   * and §3.1's fixed answer applies -- NOT_YET_AVAILABLE, SOURCE_TIMESTAMP_MISSING, and an
+   * age that is UNKNOWN. The page still renders, and it says what it does not know. Within
+   * the tolerance the negative age reaches `buildInput`, which flags it.
+   */
+  if (exactAgeSeconds < -CLOCK_SKEW_TOLERANCE_SECONDS) {
+    return {
+      id: "governance.tracked_snapshot",
+      required: true,
+      ageAtOriginSeconds: 0,
+      contractMaxAgeSeconds: GOVERNANCE_SNAPSHOT_CONTRACT_SECONDS,
+      sourceTimeUnavailable: true,
+    };
+  }
   return {
     id: "governance.tracked_snapshot",
     required: true,
-    ageAtOriginSeconds: Math.max(0, Math.floor((originMs - snapshotMs) / 1000)),
+    ageAtOriginSeconds: Math.floor(exactAgeSeconds),
     contractMaxAgeSeconds: GOVERNANCE_SNAPSHOT_CONTRACT_SECONDS,
   };
 }
@@ -128,6 +158,8 @@ interface Resolution<T> {
   readonly availabilityReason: FieldReasonCode;
   readonly payload?: T;
   readonly maturityStage?: MaturityStage;
+  /** `PARTIAL` where the payload covers only part of the extent it was asked for. */
+  readonly completeness?: Completeness;
 }
 
 /**
@@ -192,6 +224,7 @@ export class FixtureReadClient implements ReadClient {
       payload: resolution.payload,
       originMs: this.originMs,
       evaluationMs,
+      completeness: resolution.completeness,
     });
     return admit(identity.readModel, schema, candidate, this.boundary) as EnvelopeOf<T>;
   }
@@ -230,7 +263,7 @@ export class FixtureReadClient implements ReadClient {
       : {
           availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
           availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
-          payload: demo ? syntheticAttention(asOf) : undefined,
+          payload: demo ? syntheticAttention(asOf, instantOf(this.originMs - 86_400_000)) : undefined,
           maturityStage: POPULATED_MATURITY,
         };
     return this.respond(
@@ -247,20 +280,37 @@ export class FixtureReadClient implements ReadClient {
    * What Changed needs TWO valid, consistently scoped endpoints. Without them the correct
    * answer is the unavailable state, NEVER an invented delta -- a delta computed against a
    * missing baseline is a fabricated change (ui-ux-specification.md section 7).
+   *
+   * The demonstration variant selects WHICH of §7's four behaviours to show, and is only
+   * honoured inside the already-labelled synthetic scenario. In project scope the answer is
+   * the same one it has always been, because there is genuinely no baseline endpoint to
+   * compare against: no projection exists that could have produced one.
    */
   async whatChanged(scope: ViewScope): Promise<EnvelopeOf<WhatChangedPayload>> {
     const asOf = instantOf(this.clock.now());
     const demo = scope.scenario === "demo";
     const populated = isPopulated(scope);
     const baselineAsOf = instantOf(this.originMs - 86_400_000);
+    const variant = scope.changes === "auto" ? "valid" : scope.changes;
+    const payload = demo ? syntheticWhatChanged(variant, asOf, baselineAsOf) : undefined;
     const resolution: Resolution<WhatChangedPayload> = !populated
       ? unpopulated()
       : {
           // In project scope there is no baseline endpoint at all.
           availability: demo ? "AVAILABLE" : "NOT_YET_AVAILABLE",
           availabilityReason: demo ? "NONE" : "UPSTREAM_INPUT_MISSING",
-          payload: demo ? syntheticWhatChanged(asOf, baselineAsOf) : undefined,
+          payload,
           maturityStage: POPULATED_MATURITY,
+          /*
+           * A comparison whose endpoints are degraded, or which has no baseline at all, has
+           * not covered the extent it was asked for. The envelope says PARTIAL rather than
+           * letting a complete-looking response carry an incomplete answer.
+           */
+          completeness:
+            payload !== undefined &&
+            (variant === "degraded" || payload.baseline_state !== undefined)
+              ? "PARTIAL"
+              : "COMPLETE",
         };
     return this.respond(
       WHAT_CHANGED_IDENTITY,
@@ -269,6 +319,53 @@ export class FixtureReadClient implements ReadClient {
       [governanceInput(this.originMs)],
       resolution,
       whatChangedEnvelope,
+    );
+  }
+
+  /**
+   * The performance overview's series.
+   *
+   * `PerformanceSeries` is §4.5's own contract, so the chart draws a validated read model
+   * with provenance, an as-of, coverage and an availability state -- rather than a
+   * chart-shaped array that would bypass admission and carry none of them.
+   *
+   * IN PROJECT SCOPE THERE IS NO SERIES AT ALL. The portfolio projection does not exist, so
+   * there is no equity history, and the honest answer is a PAYLOADLESS `NOT_IMPLEMENTED` --
+   * never a flat line at strategy capital, which would read as a portfolio that traded and
+   * returned nothing.
+   */
+  async performanceSeries(scope: ViewScope): Promise<EnvelopeOf<PerformanceSeriesPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const demo = scope.scenario === "demo";
+    const populated = isPopulated(scope);
+    /** The `ALL` period demonstrates a gapped extent, so `PARTIAL` is reachable on screen. */
+    const withGap = scope.period === "ALL";
+    const payload = demo
+      ? syntheticPerformanceSeries({
+          period: scope.period,
+          originMs: this.originMs,
+          asOf,
+          withGap,
+        })
+      : undefined;
+    const resolution: Resolution<PerformanceSeriesPayload> = !populated
+      ? unpopulated()
+      : {
+          availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
+          availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
+          payload,
+          maturityStage: POPULATED_MATURITY,
+          completeness: payload === undefined ? undefined : withGap ? "PARTIAL" : "COMPLETE",
+        };
+    return this.respond(
+      PERFORMANCE_SERIES_IDENTITY,
+      "performance-series",
+      scope,
+      populated && demo
+        ? [DEMO_MARK_INPUT, governanceInput(this.originMs)]
+        : [governanceInput(this.originMs)],
+      resolution,
+      performanceSeriesEnvelope,
     );
   }
 

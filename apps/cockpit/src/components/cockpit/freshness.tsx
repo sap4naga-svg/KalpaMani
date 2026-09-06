@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/primitives";
 import {
   effectiveComposite,
   freshUntil,
+  hasFlaggedClockSkew,
   isExpired,
   remainingFreshnessSeconds,
   type FreshnessReport,
@@ -21,6 +22,13 @@ export interface LiveFreshness {
   readonly sourceAgeSeconds: number | null;
   readonly oldestRequired: string | undefined;
   readonly expired: boolean;
+  /**
+   * §3.1: a source dated after the evaluation time WITHIN the declared tolerance reports an
+   * age of zero "AND FLAGGED, because a small skew is ordinary and a silent one is not". A
+   * flag that never reaches a screen is the silence the rule forbids, so it is carried here
+   * and rendered beside the age.
+   */
+  readonly clockSkewFlagged: boolean;
 }
 
 interface ServeTimeStore {
@@ -124,6 +132,7 @@ export function useLiveFreshness(report: FreshnessReport): LiveFreshness {
     sourceAgeSeconds: typeof sourceAge === "number" ? sourceAge : null,
     oldestRequired: report.oldest_required,
     expired: isExpired(report, serveTime),
+    clockSkewFlagged: hasFlaggedClockSkew(report),
   };
 }
 
@@ -162,11 +171,23 @@ export function FreshnessIndicator({
           {live.sourceAgeSeconds !== null && ` · ${formatAge(live.sourceAgeSeconds)}`}
         </span>
       </Badge>
+      {/*
+        * §3.1: a within-tolerance skew is reported as a zero age AND FLAGGED. It is not a
+        * failure state -- the age is genuinely zero -- so it is shown as its own mark rather
+        * than by fabricating a worse availability.
+        */}
+      {live.clockSkewFlagged && (
+        <Badge tone="warning" data-testid="clock-skew-flag" title="A contributing source is dated after the evaluation time, within the declared tolerance. Its age is reported as zero and flagged.">
+          <span aria-hidden="true">⚠</span>
+          <span>Clock skew</span>
+        </Badge>
+      )}
       {showDetail && (
         <span className="font-mono text-label-s text-text-tertiary">
           {live.oldestRequired !== undefined && `oldest: ${live.oldestRequired}`}
           {live.remainingSeconds !== null && ` · ${live.remainingSeconds}s left`}
           {stale && ` · ${live.reason}`}
+          {live.clockSkewFlagged && " · CLOCK_SKEW_WITHIN_TOLERANCE"}
         </span>
       )}
       {/* Availability and freshness changes are announced politely, never assertively. */}

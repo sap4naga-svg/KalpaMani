@@ -22,7 +22,7 @@ import {
   maturityStage,
 } from "./vocabularies";
 import type { Environment, MaturityStage } from "./vocabularies";
-import { instant, refList, safeId } from "./values";
+import { instant, refList, safeId, versionPins } from "./values";
 import { validityFailure } from "./validity";
 
 /**
@@ -70,9 +70,25 @@ export const envelopeFields = z.object({
   coverage,
   completeness,
   snapshot_version: z.string().min(1),
+  /**
+   * §3: "the source position the projection has CONSUMED TO -- the boundary beyond which this
+   * row knows nothing." C3 omitted it because no view read it; C4's Operator detail does, and
+   * §3.1 reports a `PARTIAL` extent against it.
+   *
+   * Optional because a payloadless absence has consumed nothing to a position. A
+   * payload-bearing response states one, and the refinement below requires it.
+   */
+  watermark: instant.optional(),
   classification: dataClassification,
   access_scope: z.string().min(1),
   metric_definition_version: z.string().min(1),
+  /**
+   * §3 `pins` — "strategy, factor, risk-policy, entry-policy, exit-policy, model, prompt and
+   * code identities, WHERE APPLICABLE". Optional for the same reason `maturity_stage` is: a
+   * payloadless absence pins nothing. Where present, every field is stated, and a pin that
+   * does not apply SAYS SO rather than being omitted (§4.2).
+   */
+  pins: versionPins.optional(),
 });
 
 /**
@@ -106,6 +122,31 @@ export function envelope<T extends z.ZodTypeAny>(payload: T, schemaVersion: stri
         ctx.addIssue({
           code: "custom",
           message: "a payload-bearing response states the maturity stage it was produced at",
+        });
+      }
+      /*
+       * A payload knows something, so it knows how far it has read. An absent watermark on a
+       * payload-bearing response leaves "what does this row NOT know" unanswerable, which is
+       * the question a PARTIAL extent is reported against (3.1).
+       */
+      if (candidate.payload !== undefined && candidate.watermark === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a payload-bearing response states the source position it has consumed to",
+        });
+      }
+      /*
+       * The watermark is a source position, and a projection cannot have consumed past the
+       * instant it was built at. A watermark ahead of `projected_time` claims knowledge of
+       * source the build never saw.
+       */
+      const watermarkMs =
+        candidate.watermark === undefined ? null : Date.parse(candidate.watermark);
+      const projectedMs = Date.parse(candidate.projected_time);
+      if (watermarkMs !== null && Number.isFinite(watermarkMs) && watermarkMs > projectedMs) {
+        ctx.addIssue({
+          code: "custom",
+          message: "watermark is later than projected_time: the build consumed no such source",
         });
       }
       /*

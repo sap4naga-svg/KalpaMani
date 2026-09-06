@@ -290,7 +290,9 @@ Nothing below exists yet, and none of it is authorized:
   and two further corrections — valid zero measurements, and absolute cache freshness deadlines —
   under [ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
 
-  **The C3 application foundation is implemented**, at [apps/cockpit/](apps/cockpit/README.md),
+  **The C3 application foundation is implemented**, and the **C4 Executive Overview and
+  governance** cycle is implemented on top of it — **effective on its own merge, and carrying no
+  such status until then** — at [apps/cockpit/](apps/cockpit/README.md),
   under its own separate written authorization and **effective on the merge of PR #74**. It is a
   local, read-only frontend on a repository-owned fixture adapter: design system, shell,
   navigation, the transcribed contract layer and two substantive screens. **A foundation is not

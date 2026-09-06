@@ -29,6 +29,9 @@ and the attribution is recorded because the pattern is derived work.
 | class-variance-authority | Apache-2.0 |
 | clsx, tailwind-merge | MIT |
 | lucide-react | ISC |
+| Recharts | MIT |
+| d3 modules bundled by Recharts (d3-scale, d3-shape, d3-array and related) | ISC |
+| victory-vendor | MIT AND ISC |
 
 Each package ships its own licence text in `node_modules/<package>/LICENSE`. The complete,
 resolved dependency set is recorded in `package-lock.json`.

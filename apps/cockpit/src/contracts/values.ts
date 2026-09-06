@@ -12,6 +12,7 @@ import { z } from "zod";
 import {
   availabilityState,
   cardinality,
+  completeness,
   dataClassification,
   fieldReasonCode,
   resolution,
@@ -105,11 +106,52 @@ export const ref = z.object({
 });
 export type Ref = z.infer<typeof ref>;
 
-export const refList = z.object({
-  items: z.array(ref),
-  cardinality,
-  truncated: z.boolean(),
-});
+/**
+ * `RefList` — §4.2, now including the `total` C3 omitted.
+ *
+ * "A list of references states how many there are, so a truncated list is never read as a
+ * complete one." C3 carried `items`, `cardinality` and `truncated` and asserted that nothing
+ * was truncated; C4 renders reference COUNTS, and a count taken from `items.length` is the
+ * length of what survived truncation rather than how many exist.
+ *
+ * `total` is a `CountValue`, so a producer that cannot count them says so with a state
+ * instead of reporting the page size as the population.
+ */
+export const refList = z
+  .object({
+    items: z.array(ref),
+    cardinality,
+    total: z.lazy(() => countValue),
+    truncated: z.boolean(),
+  })
+  .superRefine((candidate, ctx) => {
+    if (typeof candidate.total.value !== "number") {
+      return;
+    }
+    if (candidate.total.value < candidate.items.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a reference list cannot hold more items than it states a total of",
+      });
+    }
+    if (!candidate.truncated && candidate.total.value !== candidate.items.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "an untruncated reference list states a total equal to the items it carries",
+      });
+    }
+    if (candidate.truncated && candidate.total.value === candidate.items.length) {
+      /*
+       * "There are more than this" and "there are exactly this many" are two claims about
+       * one population, and a list that makes both has told a reader nothing was left out
+       * while flagging that something was.
+       */
+      ctx.addIssue({
+        code: "custom",
+        message: "a truncated reference list states a total greater than the items it carries",
+      });
+    }
+  });
 
 export const reasonCoded = z.object({
   code: z.string().min(1),
@@ -144,7 +186,16 @@ const metricValueBase = z.object({
  * on an AVAILABLE reading, and every one of those reaches a formatter with no honest
  * answer for it.
  */
-export type MetricShape = "DECIMAL_STRING" | "INTEGER" | "TOKEN" | "DATE_ONLY";
+/**
+ * `INSTANT` follows the precedent `DATE_ONLY` already set.
+ *
+ * §4.2's `Unit` vocabulary is closed and holds no unit for a POINT IN TIME — it has
+ * `SECONDS`, `CALENDAR_DAYS` and `TRADING_DAYS`, which are all DURATIONS. C3 hit this with a
+ * run's date gate: carrying `2026-09-12` under `CALENDAR_DAYS` stated a count of days nobody
+ * measured. It is carried under `DIMENSIONLESS` with a `DATE_ONLY` shape instead, and
+ * `last_decision.at` and `last_scout_run.at` are the same question at instant precision.
+ */
+export type MetricShape = "DECIMAL_STRING" | "INTEGER" | "TOKEN" | "DATE_ONLY" | "INSTANT";
 
 export interface MetricSpec {
   readonly unit: Unit;
@@ -200,6 +251,33 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
    * date with a "d" suffix.
    */
   "governance.run_date_gate": { unit: "DIMENSIONLESS", shape: "DATE_ONLY" },
+
+  /* ---------------------------------------------------------------- added by C4 */
+
+  /** The portfolio valuation a `PerformanceSeries` point carries (§4.5). */
+  "portfolio.equity": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** A benchmark's own time-weighted return. NEVER drawn on one line with the portfolio's. */
+  "benchmark.return": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** An attention item whose impact is a dollar figure rather than an R-multiple. */
+  "attention.impact_usd": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Governance counts, so a summary tile never derives one from an array it rendered. */
+  "governance.gates_open": { unit: "COUNT", shape: "INTEGER" },
+  "governance.gates_total": { unit: "COUNT", shape: "INTEGER" },
+  "governance.provider_tests_unevaluated": { unit: "COUNT", shape: "INTEGER" },
+  /** The named regime state, as a closed-vocabulary token. */
+  "market.regime_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** Points in time, under the `DATE_ONLY` precedent above. */
+  "decision.last_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "scout.last_run_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** A `VersionPins` entry that genuinely does not apply to the subject (§4.2). */
+  "governance.version_pin": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** `RefList.total` — how many references EXIST, which a truncated page's length is not. */
+  "reference.total": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * The separation a run must keep from the one before it. A genuine DURATION in calendar
+   * days, unlike `governance.run_date_gate`, which is a date and is carried as one.
+   */
+  "governance.minimum_separation": { unit: "CALENDAR_DAYS", shape: "INTEGER" },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;
@@ -231,6 +309,11 @@ export function metricShapeFailure(value: unknown, spec: MetricSpec): string | n
       return typeof value === "string" && isRealCalendarDate(value)
         ? null
         : "requires a real ISO 8601 calendar date";
+    case "INSTANT":
+      // The same round-trip a timestamp field gets: a spelled instant is not a real one.
+      return typeof value === "string" && parseInstantMs(value) !== null
+        ? null
+        : "requires a real RFC 3339 UTC instant";
   }
 }
 
@@ -326,3 +409,110 @@ export const policyRef = z.object({
   policy_version: z.string().min(1),
   as_of: instant,
 });
+
+/* ------------------------------------------------------------------ added by C4 */
+
+/** §4.2 `SeriesPoint` — `{ t: Instant or DateOnly, v: MetricValue }`, and never a bare number. */
+export const seriesPoint = z.object({
+  t: z.union([instant, dateOnly]),
+  v: metricValue,
+});
+export type SeriesPoint = z.infer<typeof seriesPoint>;
+
+export const SERIES_GRANULARITIES = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+export const seriesGranularity = z.enum(SERIES_GRANULARITIES);
+export type SeriesGranularity = z.infer<typeof seriesGranularity>;
+
+/**
+ * §4.2 `Series`.
+ *
+ * A chart is a read model like any other, and this is the shape it arrives in. Three
+ * properties are enforced here rather than trusted to whichever component draws it:
+ *
+ *   MIXED PROVENANCE IS NOT ONE LINE   a point's provenance rides on the envelope carrying
+ *                                      the series, so a series is single-provenance by
+ *                                      construction. `series_id` separates them (4.5).
+ *   MISSING POINTS ARE PARTIAL         `coverage` and `completeness` say how much of the
+ *                                      requested extent is present. A gap is never a zero.
+ *   TIME IS ORDERED AND UNIQUE         two points at one instant are two answers to one
+ *                                      question, and an unordered series draws as a scribble.
+ */
+export const series = z
+  .object({
+    points: z.array(seriesPoint),
+    granularity: seriesGranularity,
+    /** The named market calendar. A date range without one is not a date range. */
+    calendar: z.lazy(() => reasonCoded),
+    timezone: z.literal("UTC"),
+    coverage: z.object({
+      present: z.number().int().nonnegative(),
+      requested: z.number().int().nonnegative(),
+    }),
+    completeness,
+  })
+  .superRefine((candidate, ctx) => {
+    const keys = candidate.points.map((point) => point.t);
+    for (let index = 1; index < keys.length; index += 1) {
+      if (keys[index] <= keys[index - 1]) {
+        ctx.addIssue({
+          code: "custom",
+          message: "series points are strictly ordered in time, with no duplicate instant",
+        });
+        return;
+      }
+    }
+    if (candidate.coverage.present !== candidate.points.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "series coverage.present states the number of points actually carried",
+      });
+    }
+    if (candidate.coverage.present > candidate.coverage.requested) {
+      ctx.addIssue({ code: "custom", message: "series coverage exceeds the requested extent" });
+    }
+    const complete = candidate.coverage.present === candidate.coverage.requested;
+    if (candidate.completeness === "COMPLETE" && !complete) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a COMPLETE series covers its whole requested extent -- a gap is PARTIAL",
+      });
+    }
+  });
+export type Series = z.infer<typeof series>;
+
+/**
+ * §4.2 `VersionPins`.
+ *
+ * "Each a `SafeId` or a `MetricValue` carrying `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`
+ * where a pin genuinely does not apply." A pin that does not apply is stated as not applying;
+ * it is never an empty string, a `"none"` or an omitted key, because each of those reads as a
+ * pin nobody recorded rather than as one that has no subject.
+ */
+export const versionPin = z.union([
+  safeId,
+  metricValue.superRefine((candidate, ctx) => {
+    if (
+      candidate.availability !== "NOT_APPLICABLE" ||
+      candidate.reason !== "NOT_DEFINED_FOR_SUBJECT"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "a VersionPins entry is a SafeId, or NOT_APPLICABLE with NOT_DEFINED_FOR_SUBJECT",
+      });
+    }
+  }),
+]);
+
+export const versionPins = z.object({
+  strategy_version: versionPin,
+  factor_definition_version: versionPin,
+  risk_policy_version: versionPin,
+  entry_policy_version: versionPin,
+  exit_policy_version: versionPin,
+  model_version: versionPin,
+  prompt_version: versionPin,
+  code_identity: versionPin,
+  config_identity: versionPin,
+});
+export type VersionPins = z.infer<typeof versionPins>;
