@@ -3572,8 +3572,11 @@ apart. **This status is EFFECTIVE ON MERGE of the pull request introducing it, a
 carries no such status until that merge** — while that pull request is open, C5 is an unmerged
 implementation candidate, exactly as C4 was before its own merge.
 
-**Eleven of the thirty-six product areas are implemented.** C5 adds areas **2** (Portfolio
-Performance), **3** (Positions and Exposure), **4** (Strategy Performance), **11** (Market and
+**Eleven of the thirty-six product areas are addressed, and one of the eleven is delivered in
+part.** Ten are implemented as their specification describes them; **Area 36 is deliberately
+split** — the trade ledger is complete and the trade detail is **basic**, with the full lifecycle
+belonging to C6. A count of areas touched is not a count of areas finished. C5 adds areas **2**
+(Portfolio Performance), **3** (Positions and Exposure), **4** (Strategy Performance), **11** (Market and
 Regime), **12** (Risk Dashboard), **13** (Short-Side Dashboard) and **36** (Trade History and a
 **basic** Trade Detail) to the four C4 delivered. The other twenty-five remain registered,
 reachable placeholders, and **the C6–C10 sequencing is unchanged** — **C6 owns the complete trade
@@ -3616,7 +3619,9 @@ no strategy, risk or sizing rule.**
 | **permitted risk** | **every limit is absent**, with `POLICY_REFERENCE_MISSING`: no risk-limit policy version exists, and a limit is never served under a default nobody approved. **No headroom is computed anywhere**, because subtracting a carried figure from a limit presents capital as available to deploy |
 | **research parameters** | the `CLAUDE.md` §6 values are carried by the **tracked** governance read model and badged `REPOSITORY_TRACKED` on a page whose other panel is `SYNTHETIC` — a real fact is never relabelled synthetic to fit a page |
 | **trade status and data completeness** | two columns and two fields, and one trade in the book is `CLOSED` in status and `PARTIAL` in completeness |
-| **a fill and a trade** | one trade with an entry, a pyramid add and a partial exit is **one row with one identity**, and the partial exit **reduces** it rather than closing it |
+| **a fill and a trade** | a trade with an entry and a pyramid add is **one row with one identity**, and a partial exit **reduces** a trade rather than closing it |
+| **an entry and what followed it** | `shares_at_entry` and `entry_price` are the **original entry stage's**, and a later add never restates them; what the trade went on to hold, and the basis the add produced, are carried as separate fields. Each stage keeps **its own** retained initial-risk record at its own reference price, as-of and policy version, and the trade-level R denominator is the **sum** of them — three facts, carried as three, and **the sum is served rather than computed on a screen** |
+| **a position reduction and an order fill** | different producers and different facts. A partial exit is routinely executed by an order that filled completely, so **no order state is inferred from a quantity comparison**, and per-order and per-fill evidence stays named as absent |
 | **R and its denominator** | R divides by the **initial** record. One historical trade's record was never written, so it has **no R**, and it is **excluded from the population and counted** rather than dropped |
 | **borrow** | read from a record. One short has none, and it renders **unknown** — never available, and never inferred from price |
 | **the regime** | displayed from a **versioned** context and never recomputed, and its information-set profile is **declared as `FORWARD_SYSTEM`**: a fixture that knows its own window is not point-in-time, and **`PUBLIC_PIT` is not reachable** from anything this project holds |
@@ -3640,7 +3645,8 @@ change no scope and grant no permission.
 
 ```text
 C5 portfolio, strategy and risk screens:          IMPLEMENTED - EFFECTIVE ON MERGE
-Cockpit product areas implemented:                11 of 36
+Cockpit product areas addressed:                  11 of 36
+Cockpit product areas fully implemented:          10 of 36 - AREA 36 IS SPLIT
 trade detail:                                     BASIC - C6 OWNS THE FULL LIFECYCLE
 strategy health:                                  RECORDED STATE ONLY - C7 OWNS AREA 5
 full Cockpit V1:                                  NOT COMPLETE

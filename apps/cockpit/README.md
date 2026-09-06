@@ -15,9 +15,12 @@ What Changed and two governance screens; C5 adds seven product areas and one dee
 still running on a **local fixture adapter**, and still with no production read API, projection
 or metric engine behind it.
 
-**Eleven of the thirty-six product areas are implemented.** Areas 1, 24, 25 and 28 from C4, and
-areas 2, 3, 4, 11, 12, 13 and 36 from C5 — the C5 row of the traceability matrix. The other
-twenty-five remain registered, reachable placeholders, and the C6–C10 sequencing is unchanged.
+**Eleven of the thirty-six product areas are addressed, and ten of them are finished.** Areas 1,
+24, 25 and 28 from C4, and areas 2, 3, 4, 11, 12, 13 and 36 from C5 — the C5 row of the
+traceability matrix. **Area 36 is deliberately split and is delivered in part**: its ledger is
+complete and its trade detail is basic, so a count of areas touched is not a count of areas
+finished. The other twenty-five remain registered, reachable placeholders, and the C6-C10
+sequencing is unchanged.
 
 **Two boundaries inside area 36 are worth naming up front.** The matrix splits it: **C5 owns the
 trade history and a BASIC trade detail, and C6 owns the complete lifecycle and the chart
@@ -65,16 +68,21 @@ bundled by `eslint-config-next@16.3.4` fails to load under it
 depends on the TypeScript compiler API targets the 5.x line; 5.9.3 is the compatible stable
 choice for this stack.
 
-**Recharts is pinned to 3.10.1**, the current stable release, and it is the one dependency C4
-adds. `ui-ux-specification.md` §13 assigns "executive and time series — KPI trends, equity and
+**Recharts is pinned to 3.10.1**, the current stable release, and it was the one dependency C4
+added. `ui-ux-specification.md` §13 assigns "executive and time series — KPI trends, equity and
 drawdown curves, ordinary comparisons" to Recharts, so the choice is transcribed rather than
 made here. Its published peer range is `react ^16.8 || ^17 || ^18 || ^19` and
 `react-dom ^16 || ^17 || ^18 || ^19` against this project's React 19.2.8, and its engine range is
-`node >=18` against Node 22.21.0; `npm ls` resolves it with no unmet peer. **No other dependency
-was added, upgraded or removed**, and the lockfile is otherwise unchanged.
+`node >=18` against Node 22.21.0; `npm ls` resolves it with no unmet peer.
 
-TradingView Lightweight Charts and Apache ECharts — the other two classes §13 names — are **not**
-installed. They belong to price/trade overlays and dense analytics, neither of which C4 renders.
+**TradingView Lightweight Charts 5.2.1 is installed, and C5 added it.** §13 assigns
+price and trade overlays to it, and the trade detail is that surface — the full entry is under
+*Dependencies added by C5* below. An earlier revision of this file said it was **not** installed,
+which was true of C4 and stopped being true when C5 added it; the statement is corrected here
+rather than left to contradict the lockfile.
+
+**Apache ECharts — the third class §13 names — is still not installed.** It belongs to dense
+analytics, which no cycle so far renders.
 
 ---
 
@@ -301,6 +309,51 @@ and metrics arrive with the cycles that produce them.
 | `/risk` | 12 | **implemented** — the four risk quantities kept apart, permitted limits reported as unapproved, named thresholds, and the tracked research parameters beside them |
 | `/risk/short-side` | 13 | **implemented** — gross short, the borrow records with their sources, the short-specific states and the blocked shorts |
 
+### Corrected in independent review
+
+Six defects were found by reading the fixture against `read-model-contracts.md` §4.5, §12.4
+and `cockpit-v1-specification.md` §5, reproduced on the reviewed head, and corrected here. The
+three below are the trade-semantics ones; three more follow the table. Each has a regression that
+fails for the intended reason. **Two carry an in-test negative control** asserting that the
+retired rule gives a **different** answer, so the assertion distinguishes the two rules rather
+than passing under both; a third was verified by temporarily reintroducing the defect, observing
+the regression fail for its intended reason, and restoring the tree — that check was run, and it
+is not committed.
+
+| | |
+|---|---|
+| **a later add restated the original entry** | `shares_at_entry` summed every stage and `entry_price` reported the blended basis, so the pyramid's ledger row read **100 shares at 63.88** for an entry of **60 at 62.40** — a size and a price the trade never entered at. §4.5 calls this field "filled at entry" and calls `PositionSnapshot.entry_price` a "position-weighted basis" in the same document, so they are two questions. The entry facts are now the entry stage's, what the trade went on to hold is carried by the additive `shares_acquired` and `current_basis`, and **the admission rule that forced the conflation was corrected rather than the fact**: the status rules bound the open quantity by what the trade FILLED, so a pyramid holding more than it entered with is admitted, and a trade holding more than it ever filled is still refused |
+| **one blended record stood in for every stage's** | the single retained `InitialPlannedRisk` carried the **summed** risk of both stages against the **combined** basis, while dating itself at the entry and pointing at the entry's invalidation level — a record describing no stage that ever existed, and the number the trade detail printed under "Recorded at entry". §12.4 requires each add to keep "its own record, at its own reference price and its own as-of" with "the trade's original record retained unchanged", and makes the **sum** the trade-level R denominator, which is a third thing. All three are now separate: the original record, each add's own, and `r_denominator` — **served rather than derived**, because a screen computing it would be a screen computing a metric. Every contributing policy version is printed with its own record, and the book's add now names a later one so that case is visible rather than theoretical. **The R denominator itself is unchanged** — it was already the sum, and §12.4 says it must be |
+| **a historical valuation used a future add** | MFE and MAE were measured across the **whole** path at the final quantity and the final basis, so the thirty sessions during which the pyramid held 60 shares at 62.40 were valued as 100 at 63.88. On this trade that reported **29.00 / −342.00** where the position could only have reached **106.20 / −314.00**, and `capture_ratio` divided by the wrong MFE. Every session is now valued with the quantity and basis it actually carried, exits included |
+
+A fourth was an internal contradiction inside the book itself: `stop_outcome` returned
+**`STOP_TRAILED_THEN_TRIGGERED` for every non-losing outcome**, so a trade whose recorded
+`exit_reason` was **`PLANNED_TARGET_REACHED`** also claimed its trailed stop had triggered, and so
+did the exact break-even, whose reason is `TIME_STOP_REACHED`. Two fields describing one event
+disagreed on roughly a fifth of the closed ledger. They now share the thresholds of the reason
+that produces them, and a regression walks every closed trade asserting that a reason which says
+the stop did not fire is never paired with an outcome that says it did — checking first that both
+contradicting cases actually occur in the book, so the assertion is exercised rather than vacuous.
+
+Correcting the second one exposed a **sixth**, in the surface that matters most. The risk
+dashboard lists the retained entry-time records of open exposure, and it listed **one per trade**
+— which, once each record described its own stage truthfully, reported the pyramid's planned risk
+as **186.00** where its retained records total **398.00**. Understating planned risk on a risk
+dashboard is the wrong direction to be wrong in, so it now lists **one entry per retained stage
+record**, stage-labelled so two records sharing a trade reference stay apart, with a regression
+asserting the listed records total the trade's own retained sum.
+
+A fifth was corrected in the lifecycle: an exit reported **`ORDER_PARTIALLY_FILLED`** whenever
+its quantity was smaller than the trade's, inferring an **order's** fulfilment from a **position**
+comparison — while `absent_kinds` declared `INDIVIDUAL_FILL` as `PRODUCER_NOT_IMPLEMENTED` in the
+same payload. A partial exit is routinely executed by an order that filled completely. This book
+records completed stage and exit fills and nothing else, so every event reports the fill state it
+actually has and per-order evidence stays explicitly unavailable. The same comparison also decided
+**partial versus final**, which is a question about what is **left**: an exit closing the remainder
+after earlier partial exits is smaller than the entry and is still the final one. That defect was
+**latent** — no shipped row exercises it, because every generated trade exits in one go — so its
+regression is a constructed trade, and the report says so rather than claiming a visible fix.
+
 **A basic trade detail is not the full lifecycle**, and this cycle claims neither it nor Area 5.
 The complete Candidate → Brain → Risk → Execution → Reconciliation → Attribution workflow is
 **C6's**, Strategy Health is **C7's**, and Execution History and the Audit Trail are separate
@@ -333,7 +386,8 @@ disagree**.
 
 | | |
 |---|---|
-| a **pyramid add** | `demo-trade-nvl-0002` — two stages, each with its own retained initial-risk record, one row in the ledger |
+| a **pyramid add** | `demo-trade-nvl-0002` — entered 60 at 62.40, added 40 at 66.10, and **the entry facts are not restated**: the ledger row reports 60 at entry, 100 acquired, 100 open, and a current basis of 63.88 that is shown as a basis and never as an entry price. One row in the ledger |
+| **two contributing risk-policy versions** | the same pyramid — each stage keeps its own retained record at its own reference price and as-of, they name **different** policy versions, and §12.4's R denominator is the **sum** of the two, carried explicitly rather than derived on the screen |
 | a **partial exit** | `demo-trade-cir-0003` — realized on the closed portion, unrealized on the remaining one, and it is not closed |
 | a **moved stop** | `demo-trade-arb-0001` — the assessment moved and the entry record did not |
 | a **stale assessment** | `demo-trade-plm-0005` — present, marked stale, shown with the instant it was true at |
@@ -455,7 +509,8 @@ C4 executive overview and governance              MERGED (PR #75)
 C5 portfolio, strategy, exposure and trades       IMPLEMENTED HERE / PENDING REVIEW
 trade detail                                      BASIC -- C6 owns the full lifecycle
 strategy health                                   RECORDED STATE ONLY -- C7 owns area 5
-full Cockpit V1                                   NOT COMPLETE -- 11 of 36 areas implemented
+full Cockpit V1                                   NOT COMPLETE -- 11 of 36 addressed,
+                                                  10 finished; area 36 is split
 production read API, projections, metric engine   NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation           NOT IMPLEMENTED / NOT AUTHORIZED
 Strategy Brain runtime                            NOT IMPLEMENTED / NOT AUTHORIZED
