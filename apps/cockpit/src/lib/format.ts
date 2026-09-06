@@ -19,6 +19,13 @@ const PRESERVED: Readonly<Record<string, string>> = {
   A: "A",
   B: "B",
   R: "R",
+  /* Added by C5: strategy, excursion and market-rule acronyms keep their own casing. */
+  PEAD: "PEAD",
+  MFE: "MFE",
+  MAE: "MAE",
+  SSR: "SSR",
+  XNYS: "XNYS",
+  OHLC: "OHLC",
 };
 
 export function humanizeCode(code: string): string {

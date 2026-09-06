@@ -76,11 +76,30 @@ export const CHANGE_VARIANT_LABEL: Readonly<Record<ChangeVariant, string>> = {
   degraded: "Degraded endpoints",
 };
 
+/**
+ * The granularity a performance series is requested at.
+ *
+ * Like `period`, it is a REQUEST PARAMETER of the performance read and not a presentation
+ * preference: daily, weekly and monthly returns are three different chain-linked series over
+ * the same window, not one series drawn three ways. It lives in the URL so a link reproduces
+ * the view (U13), and it joins that read model's cache key so one granularity's points can
+ * never be drawn under another's label.
+ */
+export const SERIES_GRANULARITIES = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+export type ScopeGranularity = (typeof SERIES_GRANULARITIES)[number];
+
+export const GRANULARITY_LABEL: Readonly<Record<ScopeGranularity, string>> = {
+  DAILY: "Daily",
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+};
+
 export interface ViewScope {
   readonly mode: ViewMode;
   readonly environment: Environment;
   readonly scenario: DataScenario;
   readonly period: PerformancePeriod;
+  readonly granularity: ScopeGranularity;
   readonly changes: ChangeVariant;
 }
 
@@ -90,6 +109,7 @@ export const DEFAULT_SCOPE: ViewScope = {
   environment: "RESEARCH",
   scenario: "project",
   period: "3M",
+  granularity: "DAILY",
   changes: "auto",
 };
 
@@ -109,6 +129,7 @@ export function parseScope(params: URLSearchParams | ReadonlyMap<string, string>
     environment: oneOf(ENVIRONMENTS, read("env"), DEFAULT_SCOPE.environment),
     scenario: oneOf(DATA_SCENARIOS, read("scenario"), DEFAULT_SCOPE.scenario),
     period: oneOf(PERFORMANCE_PERIODS, read("period"), DEFAULT_SCOPE.period),
+    granularity: oneOf(SERIES_GRANULARITIES, read("gran"), DEFAULT_SCOPE.granularity),
     changes: oneOf(CHANGE_VARIANTS, read("changes"), DEFAULT_SCOPE.changes),
   };
 }
@@ -120,6 +141,7 @@ export function scopeToSearchParams(scope: ViewScope): URLSearchParams {
   params.set("env", scope.environment);
   params.set("scenario", scope.scenario);
   params.set("period", scope.period);
+  params.set("gran", scope.granularity);
   params.set("changes", scope.changes);
   return params;
 }
