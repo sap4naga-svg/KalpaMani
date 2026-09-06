@@ -85,7 +85,7 @@ function AnswerTile({
 }) {
   return (
     <Card className="flex h-full flex-col" data-testid={testId}>
-      <CardBody className="flex flex-1 flex-col gap-1.5 pt-4">
+      <CardBody className="flex flex-1 flex-col gap-1 pt-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-label-s font-medium uppercase tracking-[0.09em] text-accent">
@@ -95,7 +95,7 @@ function AnswerTile({
           </div>
           {provenance}
         </div>
-        <div className="flex flex-1 flex-col justify-center py-1">{children}</div>
+        <div className="flex flex-1 flex-col justify-center py-0.5">{children}</div>
         {footer !== undefined && (
           <div className="text-label-s leading-relaxed text-text-tertiary">{footer}</div>
         )}
@@ -231,7 +231,7 @@ export default function ExecutiveOverviewPage() {
       />
 
       {/* TIER 1 -- the five ten-second answers, in the first viewport. */}
-      <section aria-labelledby="tier-one" className="mb-4">
+      <section aria-labelledby="tier-one" className="mb-2">
         <h2 id="tier-one" className="sr-only">
           The five ten-second answers
         </h2>

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { available, emptyRefList, pinsOf, refListOf } from "@/contracts/factories";
+import { available, emptyRefList, pinsOf, reason, refListOf } from "@/contracts/factories";
 import {
   attentionListEnvelope,
   executiveOverviewEnvelope,
@@ -325,10 +325,11 @@ describe("attention ranking, deduplication and completeness", () => {
     const ranked = rankAttention(await load());
     const ranks = ranked.map((item) => item.materiality_rank);
     expect([...ranks]).toEqual([...ranks].sort((left, right) => left - right));
-    expect(severityRank("HIGH")).toBeLessThan(severityRank("MEDIUM"));
-    expect(severityRank("MEDIUM")).toBeLessThan(severityRank("LOW"));
+    const sev = (code: string) => reason(code, "kalpamani.demo");
+    expect(severityRank(sev("HIGH"))).toBeLessThan(severityRank(sev("MEDIUM")));
+    expect(severityRank(sev("MEDIUM"))).toBeLessThan(severityRank(sev("LOW")));
     // An unknown severity sorts after every known one rather than being guessed at.
-    expect(severityRank("URGENT")).toBeGreaterThan(severityRank("LOW"));
+    expect(severityRank(sev("URGENT"))).toBeGreaterThan(severityRank(sev("LOW")));
   });
 
   it("produces the same order under every permutation of the producer's output", async () => {

@@ -261,7 +261,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <ScenarioBanner />
 
-      <div className="mx-auto flex w-full max-w-[110rem] gap-6 px-4 py-6">
+      <div className="mx-auto flex w-full max-w-[110rem] gap-6 px-4 pb-6 pt-3">
         <aside className="hidden w-60 shrink-0 lg:block">
           <div className="sticky top-[9.5rem]">
             <NavTree scope={scope} />

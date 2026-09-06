@@ -24,12 +24,22 @@ export default defineConfig({
       name: "desktop-1440",
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    /*
+     * U1 IS STATED AT ONE WIDTH, SO IT IS REGISTERED AT ONE WIDTH. `ui-ux-specification.md`
+     * 14 states U1 "at 1440 x 900", and 12 gives tablet and mobile their OWN, different
+     * requirements. Ignoring the U1 spec here is not a suppression: a `test.skip` inside it
+     * would report a criterion as SKIPPED at two viewports it was never in scope for, which
+     * reads as coverage that was withheld rather than coverage that does not apply. Every
+     * other spec still runs at all three widths.
+     */
     {
       name: "tablet-1024",
+      testIgnore: /u1-first-viewport\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 768 } },
     },
     {
       name: "mobile-390",
+      testIgnore: /u1-first-viewport\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } },
     },
   ],

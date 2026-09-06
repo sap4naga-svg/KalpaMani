@@ -3487,8 +3487,48 @@ session that wrote them. **A date arriving still authorizes nothing**: Run B's e
 target and its written authorization render as **two separate facts** on a stated calendar basis,
 and the interface says so in those words.
 
+**Six further defects were found by independent review of the C4 head, and all six are
+corrected.** Each was **reproduced against the reviewed implementation before a fix was
+written**, and each correction was confirmed by re-introducing its defect and watching the
+regression fail. **None of them changes an accepted contract**; each brings the implementation
+back to one.
+
+| | |
+|---|---|
+| **a degraded endpoint was presented as a valid change** | §7 and **U17** require an unavailable, stale or partial endpoint to report **that state instead of a delta**. The row drew `before → after`, asserted materiality, and carried **one** badge taken from the *after* endpoint — so a **stale baseline was reported behind the comparison endpoint's `AVAILABLE`**. Each endpoint now answers for itself, with its own state, reason and as-of; there is no arrow, no delta and no asserted materiality over an unsound comparison, and the values stay as labelled diagnostic detail |
+| **absence was treated as proof of appearance** | §4.5: **"a change is never synthesised from the absence of a value"**. A missing prior value rendered as an appearance, which reads *the subject was not there* out of *this response carries no prior value*. **No completeness metadata was invented**: the claim is read from the envelope's own `completeness`, and a `PARTIAL` or `UNKNOWN` population reports the change as unevidenced rather than inferring one. A valid numeric zero in an observed prior record stays a delta |
+| **an empty list asserted a verified nothing** | zero entries rendered `EMPTY_VERIFIED` while the envelope's `completeness` could be `PARTIAL`. **A comparison that did not cover its extent has established nothing about the part it did not cover**, and `EMPTY_VERIFIED` now requires a complete, available comparison |
+| **evidence was a count, not a drill-down** | a reference total and a raw resolution string, operator-only. Every reference is now disclosed in both modes with its kind, its **own** resolution, its classification and a link to the owning area; `UNRESOLVABLE_V1` renders **with** its stated resolution rather than being dropped, and a change carrying no reference at all is withheld and counted |
+| **attention deduplication was order-dependent** | the pairwise fold was **not transitive** over mixed known and unknown occurrence counts, so **all three records of one group won, one per input permutation**, and equal-identity records with conflicting content kept whichever arrived first. Deduplication is now grouped and narrowed only by rules that establish a winner; **what survives is reported as a conflict rather than silently resolved**, one record is still shown so the issue stays visible, and the four diagnostic counts are never conflated |
+| **severity was ranked by a bare code string** | `HIGH` in **any** vocabulary took this vocabulary's rank, tone and glyph. The ordering is now declared over exactly one `(vocabulary, version)` pair, and everything else is `UNRANKED` and labelled |
+
+**And the first-viewport criterion was measured against the running application, where it did
+not hold.** **U1** and §6 put the five answers **and** Attention Required inside the first
+viewport at 1440 × 900. The check measured each **question label's** box and only the **top
+edge** of the first attention item; measured properly, that item spanned **818 → 1024**, so its
+impact, its recommended governance action and its evidence affordance sat **124 pixels below
+the fold**. **The criterion was reported as met and was not met.**
+
+**The layout was corrected, not the assertion.** The executive summary renders a denser
+attention row — **all five presented things still rendered, at the same type sizes**, rows
+combined and **no content reduced, truncated or hidden** — and the page reclaims spacing. After
+the correction, at 1440 × 900, every answer tile ends above the fold and the first ranked item
+spans **758 → 883**; in the default project view the attention panel's own availability answer
+ends at **895**; and `window.scrollY` is `0`. The check now measures whole tiles and the whole
+item, asserts each of the five things is visible, **opens the evidence affordance to prove it
+works**, and checks for vertical clipping. **U1 is stated at one width, so it is now registered
+at one width** rather than skipped at two it was never in scope for — the tablet and mobile
+viewports keep their own, different §12 coverage in full.
+
+**The two prerequisite freshness corrections are preserved exactly as merged.** `§3.1`'s
+within-tolerance band — an age of **zero AND FLAGGED** — is accepted authority, and
+`clock_skew_flagged` implements it as a separate boolean axis rather than a reason code, is
+checked in both directions at admission, and renders visibly on the freshness indicator.
+
 ```text
 C4 executive overview and governance:             IMPLEMENTED - EFFECTIVE ON MERGE
+independent review:                               PERFORMED / SIX DEFECTS CORRECTED
+first-viewport criterion U1:                      MEASURED AND MET AT 1440 x 900
 Cockpit product areas implemented:                4 of 36
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED

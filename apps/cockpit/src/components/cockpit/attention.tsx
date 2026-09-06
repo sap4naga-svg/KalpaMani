@@ -19,6 +19,7 @@ import {
 } from "@/lib/attention";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { withScope, type ViewScope } from "@/lib/scope";
+import { cn } from "@/lib/utils";
 
 /**
  * Attention Required — `ui-ux-specification.md` §6.
@@ -90,11 +91,30 @@ function ImpactValue({ item }: { item: AttentionItemPayload }) {
  * implemented" loses the evidence they were following. Each reference states its kind, how it
  * resolves and its classification, and links to the owning area where one exists.
  */
-function EvidenceDisclosure({ item, scope }: { item: AttentionItemPayload; scope: ViewScope }) {
+function EvidenceDisclosure({
+  item,
+  scope,
+  dense = false,
+}: {
+  item: AttentionItemPayload;
+  scope: ViewScope;
+  dense?: boolean;
+}) {
   const total = item.evidence_refs.total.value;
   return (
-    <details className="mt-1 rounded-sm border border-border-subtle bg-surface-sunken">
-      <summary className="cursor-pointer px-3 py-1.5 text-label-m text-accent">
+    <details
+      data-testid="attention-evidence"
+      className={cn(
+        "rounded-sm border border-border-subtle bg-surface-sunken",
+        dense ? "inline-block" : "mt-1 block",
+      )}
+    >
+      <summary
+        className={cn(
+          "cursor-pointer px-3 text-label-m text-accent",
+          dense ? "py-1" : "py-1.5",
+        )}
+      >
         Evidence ({typeof total === "number" ? total : item.evidence_refs.items.length})
       </summary>
       <div className="space-y-2 px-3 pb-3 pt-1">
@@ -155,26 +175,54 @@ function EvidenceDisclosure({ item, scope }: { item: AttentionItemPayload; scope
   );
 }
 
+/**
+ * ONE ATTENTION ITEM.
+ *
+ * `dense` is the EXECUTIVE-SUMMARY presentation, and it is a layout choice and nothing more:
+ * ALL FIVE PRESENTED THINGS are still rendered, at the same type sizes, and none is dropped,
+ * truncated or hidden. It exists because 6 requires the ranked list to sit in the FIRST
+ * VIEWPORT at 1440 x 900 -- and an item whose impact, recommended action and evidence fall
+ * below the fold has not been presented to a reader who does not scroll. The rows are
+ * combined; the content is not reduced.
+ */
 function AttentionRow({
   item,
   scope,
   operator,
+  conflicted,
+  dense = false,
 }: {
   item: AttentionItemPayload;
   scope: ViewScope;
   operator: boolean;
+  /** This item's deduplication key holds versions authority does not order (4.5). */
+  conflicted: boolean;
+  dense?: boolean;
 }) {
+  /*
+   * A SEVERITY IS A CODE PLUS ITS VOCABULARY. `HIGH` in some other vocabulary is not this
+   * vocabulary's HIGH, so it takes neither its rank, nor its tone, nor its glyph -- it is
+   * labelled UNRANKED, which is what it is.
+   */
+  const ranked = isKnownSeverity(item.severity);
   return (
     <li
-      className="flex flex-col gap-1.5 border-b border-border-subtle px-5 py-3 last:border-b-0"
+      className={cn(
+        "flex flex-col border-b border-border-subtle px-5 last:border-b-0",
+        dense ? "gap-0.5 py-1.5" : "gap-1.5 py-3",
+      )}
       data-testid="attention-item"
-      data-severity={item.severity.code}
+      data-dense={dense ? "true" : "false"}
+      data-severity={ranked ? item.severity.code : "UNRANKED"}
+      data-conflicted={conflicted ? "true" : "false"}
     >
       <div className="flex flex-wrap items-center gap-2">
         {/* Colour is never the only carrier of meaning (U11): a glyph and a word carry it too. */}
-        <Badge tone={SEVERITY_TONE[item.severity.code] ?? "neutral"}>
-          <span aria-hidden="true">{SEVERITY_GLYPH[item.severity.code] ?? "◇"}</span>
-          <span>{isKnownSeverity(item.severity.code) ? item.severity.code : "UNRANKED"}</span>
+        <Badge tone={ranked ? (SEVERITY_TONE[item.severity.code] ?? "neutral") : "neutral"}>
+          <span aria-hidden="true">
+            {ranked ? (SEVERITY_GLYPH[item.severity.code] ?? "◇") : "◇"}
+          </span>
+          <span>{ranked ? item.severity.code : "UNRANKED"}</span>
         </Badge>
         <span className="text-numeric-s font-medium text-text-primary">
           {humanizeCode(item.what_happened.code)}
@@ -187,25 +235,72 @@ function AttentionRow({
         </span>
       </div>
 
-      <p className="text-label-m text-text-secondary">
+      <p className="text-label-m text-text-secondary" data-testid="attention-why">
         <span className="text-text-tertiary">Why it matters: </span>
         {humanizeCode(item.why_it_matters.code)}
       </p>
 
-      <div className="flex flex-wrap items-center gap-2 text-label-m">
+      {/*
+        * IMPACT AND THE RECOMMENDED ACTION. Two separate facts, each labelled, sharing a row
+        * in the dense presentation and taking one each otherwise. The action is a PERMITTED
+        * GOVERNANCE action, and the sentence saying so travels with it either way -- in the
+        * dense row as the badge's title, so the claim is never dropped to save a line.
+        */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-2 text-label-m",
+          dense ? "gap-x-4" : "",
+        )}
+      >
         <span className="text-text-tertiary">Impact:</span>
         <ImpactValue item={item} />
+        {dense && (
+          <>
+            <span className="text-text-tertiary">Recommended:</span>
+            <Badge
+              tone="accent"
+              data-testid="attention-recommended"
+              title="A governance action for a person. The Cockpit performs none of them."
+            >
+              {humanizeCode(item.recommended_action.code)}
+            </Badge>
+            <EvidenceDisclosure item={item} scope={scope} dense />
+          </>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-label-m text-text-tertiary">Recommended:</span>
-        <Badge tone="accent">{humanizeCode(item.recommended_action.code)}</Badge>
-        <span className="text-label-s text-text-tertiary">
-          — a governance action for a person. The Cockpit performs none.
-        </span>
-      </div>
+      {!dense && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-label-m text-text-tertiary">Recommended:</span>
+          <Badge tone="accent" data-testid="attention-recommended">
+            {humanizeCode(item.recommended_action.code)}
+          </Badge>
+          <span className="text-label-s text-text-tertiary">
+            — a governance action for a person. The Cockpit performs none.
+          </span>
+        </div>
+      )}
 
-      <EvidenceDisclosure item={item} scope={scope} />
+      {/*
+        * AN UNRESOLVED CONFLICT IS SHOWN, NOT SETTLED. Several records share this
+        * deduplication key, they are not the same record, and no rule in accepted authority
+        * orders them -- so the row states that rather than presenting one of them as current.
+        */}
+      {conflicted && (
+        <div
+          data-testid="attention-conflict"
+          className="flex flex-wrap items-center gap-2 rounded-sm border border-border-strong bg-surface-sunken px-3 py-1.5"
+        >
+          <AvailabilityBadge state="PARTIAL" reason="EXTENT_NOT_DETERMINABLE" />
+          <span className="text-label-s text-text-tertiary">
+            Several differing records share this deduplication key and authority does not
+            order them. <strong>One is shown so the issue stays visible</strong>; it is not
+            asserted to be the current version.
+          </span>
+        </div>
+      )}
+
+      {!dense && <EvidenceDisclosure item={item} scope={scope} />}
 
       {operator && (
         <span className="font-mono text-label-s text-text-tertiary">
@@ -312,11 +407,17 @@ export function AttentionPanel({
     shown.length < prepared.visible.length ||
     prepared.deduplicated > 0 ||
     prepared.withheldIncomplete > 0 ||
+    prepared.conflicting > 0 ||
     limit !== undefined;
 
   return (
     <Card data-testid="attention-panel">
-      <CardHeader className="flex flex-wrap items-start justify-between gap-2">
+      <CardHeader
+        className={cn(
+          "flex flex-wrap items-start justify-between gap-2",
+          limit !== undefined ? "pt-3" : "",
+        )}
+      >
         <div>
           <Label>Attention required</Label>
           {payload !== undefined && (
@@ -368,7 +469,14 @@ export function AttentionPanel({
           ) : (
             <ul>
               {shown.map((item) => (
-                <AttentionRow key={item.item_id} item={item} scope={scope} operator={operator} />
+                <AttentionRow
+                  key={item.item_id}
+                  item={item}
+                  scope={scope}
+                  operator={operator}
+                  conflicted={prepared.conflictedKeys.has(item.dedup_key)}
+                  dense={limit !== undefined}
+                />
               ))}
             </ul>
           )}
@@ -388,6 +496,13 @@ export function AttentionPanel({
               {prepared.deduplicated > 0 && (
                 <span data-testid="attention-deduplicated">
                   {prepared.deduplicated} folded into another by deduplication key.
+                </span>
+              )}
+              {prepared.conflicting > 0 && (
+                <span data-testid="attention-conflicting">
+                  {prepared.conflicting} deduplication key
+                  {prepared.conflicting === 1 ? "" : "s"} hold differing records that authority
+                  does not order.
                 </span>
               )}
               {prepared.withheldIncomplete > 0 && (

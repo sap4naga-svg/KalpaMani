@@ -17,7 +17,7 @@ export function PageHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <header className="mb-6">
+    <header className="mb-4">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-numeric-l font-semibold tracking-tight text-text-primary">{title}</h1>
         {pageState === "PARTIAL" && (

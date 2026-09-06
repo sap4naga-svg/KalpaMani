@@ -405,6 +405,131 @@ composite state nor make a supported report ambiguous. If a mixed report ever re
 renderer anyway, it **fails closed** on `ERROR`/`PROJECTION_ERROR` rather than picking one of
 its answers.
 
+### C4 — corrections made under independent review
+
+**An independent review of the C4 head reproduced six further defects, and each is corrected
+here.** They are locked out by
+[`tests/c4-review-corrections.test.tsx`](tests/c4-review-corrections.test.tsx) and
+[`e2e/u1-first-viewport.spec.ts`](e2e/u1-first-viewport.spec.ts). **Every one of them was
+reproduced against the reviewed implementation before a fix was written**, and each correction
+was confirmed by re-introducing its defect into the source and watching the regression fail.
+
+#### A — a degraded endpoint was presented as a valid change
+
+`ui-ux-specification.md` §7 and **U17** require that where either endpoint is
+`NOT_YET_AVAILABLE`, `STALE` or `PARTIAL`, the item **reports that state instead of a delta**.
+The row drew `before → after` with an arrow, asserted the entry's materiality, and attached
+**one** availability badge taken from `entry.after` — so a **stale baseline compared against a
+sound comparison endpoint was reported behind the after endpoint's `AVAILABLE`**, which is the
+one endpoint that was fine.
+
+- **No arrow, no delta and no asserted materiality** over an unsound comparison. The row
+  carries `data-comparison="UNAVAILABLE"` and reads `NOT COMPARABLE` where a materiality badge
+  would otherwise be.
+- **Each endpoint answers for itself.** `baseline` and `comparison` are separately labelled,
+  each with **its own** state badge, **its own** reason and **its own** as-of — so which
+  endpoint is degraded is stated rather than inferred.
+- **The values are kept as diagnostic detail**, because a stale number is still evidence; it is
+  simply never presented as a comparison a reader can trust.
+- Baseline-only, comparison-only, both-degraded, absent and sound endpoints are each covered.
+
+#### B — absence was treated as proof of appearance
+
+`read-model-contracts.md` §4.5 states the invariant plainly: **"a change is never synthesised
+from the absence of a value"**. A missing `before` was rendered as "no prior value for this
+subject — reported as an appearance", which reads *the subject was not there before* out of
+*this response carries no prior value for it*. Those are different claims, and only the second
+was established. The fixture asserted the stronger one **in a code comment**, where neither the
+schema nor the component could check it.
+
+**No population-completeness metadata was invented.** The claim is read from the accepted
+envelope field that already states it — `completeness`:
+
+| | |
+|---|---|
+| `COMPLETE` | the comparison covered the extent it was asked for, so a subject absent from the baseline was **verified absent**, and the appearance is reported as one |
+| `PARTIAL` / `UNKNOWN` | the prior population is **not known to be complete**, so a genuinely absent subject cannot be told apart from one the comparison never covered. The row reports `NOT_YET_AVAILABLE` with `EXTENT_PARTIALLY_COVERED` or `EXTENT_NOT_DETERMINABLE` and **states that no change is inferred** |
+
+**A valid numeric zero in an observed prior record stays a delta** (ADR-0029 §2.1), and a prior
+producer that was unavailable is still refused at admission rather than rendered as a change.
+
+#### C — an empty list asserted a verified nothing
+
+`payload.entries.length === 0` rendered `EMPTY_VERIFIED` and the sentence *"Both endpoints are
+sound and nothing changed between them"* — while the envelope's own `completeness` could be
+`PARTIAL`, which the panel then reported separately, further down, in a footer. **A comparison
+that did not cover its extent has established nothing about the part it did not cover.**
+`EMPTY_VERIFIED` now requires `completeness === "COMPLETE"` **and** an `AVAILABLE` envelope;
+anything else renders the coverage state and says the difference in those words.
+
+**Evidence became a drill-down rather than a count.** The row previously showed
+`evidence 1 · UNRESOLVABLE_V1` as operator-only text. Every reference is now disclosed in
+**both** modes with its kind, its **own** resolution, its classification and a link to the area
+that owns it, and `UNRESOLVABLE_V1` is rendered **with** that stated resolution rather than
+dropped — it is a resolution to an availability state, not a gap (§4.2). A change carrying **no
+reference at all** is not rendered, and the withheld count is stated.
+
+#### D — attention deduplication was order-dependent and could not report a conflict
+
+The pairwise fold compared each arriving record against whichever one it was holding, on
+`last_seen`, then the occurrence count where **both** were known, then the identifier. With
+three records at one `last_seen` and one unknown count the preference is **not transitive** —
+`c` beats `a` on count, `a` beats `b` on identifier, `b` beats `c` on identifier — so the
+survivor depended on the order the producer emitted them in. **All three won**, one per input
+permutation, which the regression reproduces exactly. It also kept whichever record arrived
+**first** when two agreed on identity, time and count but disagreed on content.
+
+Deduplication is now **grouped**, and the group is narrowed only by rules that actually
+establish a winner:
+
+```text
+1. the newest last_seen supersedes older observations of the same thing
+2. a strictly larger occurrence count wins ONLY when every remaining record states one --
+   an unknown count is not a larger number and not a smaller one, so it orders nothing
+3. records identical after that are the same record, and collapse
+```
+
+**What survives step 3 is a genuine conflict, and none is invented.** No JSON ordering, no
+arbitrary severity and no fabricated zero count decides it. The group is reported as
+**conflicting**, one record is still shown **so the underlying issue does not disappear from
+the list**, and the row renders it as an unresolved conflict rather than as the current
+version. The counts stay separate and are never conflated: **ranked total**, **withheld
+incomplete**, **rows folded** and **conflicting keys** answer four different questions.
+
+#### E — severity was ranked by a bare code string
+
+`severityRank` took `item.severity.code` alone, so `HIGH` in **any** vocabulary took this
+vocabulary's rank, its tone and its glyph. A `ReasonCoded` is a code **plus** the vocabulary and
+version it belongs to; the ordering is now declared over exactly one `(vocabulary, version)`
+pair and everything else is `UNRANKED` — after every ranked severity, and labelled.
+
+#### F — the first-viewport criterion was measured, and did not hold
+
+**U1 and §6 require the five answers *and* Attention Required inside the first viewport at
+1440 × 900.** The desktop check measured the bounding box of each **question label** and only
+the **top edge** of the first attention item. Measured against the running application, the
+first ranked item spanned **y = 818 → 1024**: its impact, its recommended governance action and
+its evidence affordance were **124 pixels below the fold**. The criterion was reported as met
+and was not met.
+
+- **The layout was corrected, not the assertion.** The executive summary renders a **dense**
+  attention row — impact, the recommended action and the evidence affordance share a line, and
+  the panel and page reclaim spacing. **All five presented things are still rendered, at the
+  same type sizes**; rows are combined and **no content is reduced, truncated or hidden**. The
+  dedicated `/attention` page is unchanged.
+- **Measured after the correction**, at 1440 × 900: every answer tile ends above the fold, and
+  the first ranked item spans **758 → 883** in the populated demonstration. In the default
+  project view the attention panel's own availability answer ends at **895**. Nothing is
+  scrolled: `window.scrollY` is `0`.
+- **The check now measures the whole tile and the whole item**, asserts each of the five
+  presented things is visible, **opens the evidence affordance to prove it works**, and checks
+  every measured element for vertical clipping of its own box.
+- **U1 is stated at one width, so it is registered at one width.** `playwright.config.ts`
+  ignores this spec in the tablet and mobile projects rather than skipping it inside them: a
+  `test.skip` reported a criterion as skipped at two viewports it was never in scope for. §12
+  gives tablet and mobile their own, different requirements, and every other spec still runs at
+  all three widths.
+
 ### Validation
 
 Reproduced on the C4 head, on Node 22.21.0 and npm 10.9.4:
@@ -417,6 +542,21 @@ npx tsc --noEmit                clean (run after a build; route types are genera
 npx vitest run                  148 passed   (C3 baseline was 84)
 npx playwright test             172 passed, 2 skipped, across 1440x900, 1024x768 and 390x844
 ```
+
+Reproduced again on the reviewed and corrected head, on the same toolchain:
+
+```text
+npm ci                          clean install from the committed lockfile
+npx eslint .                    clean
+npx tsc --noEmit                clean
+npx vitest run                  173 passed   (C4 author head was 148; C3 baseline was 84)
+npx next build                  succeeds -- no API route
+npx playwright test             176 passed, 0 skipped, across 1440x900, 1024x768 and 390x844
+```
+
+**The two skips are gone because the U1 spec is registered only at the width U1 is stated at**,
+not because a skip was suppressed: the tablet and mobile projects no longer register a
+desktop-only criterion at all, and their own viewport coverage is unchanged.
 
 The two skipped Playwright cases are the ten-second-test viewport assertion on the tablet and
 mobile projects: **U1 is stated at the reference desktop width**, and asserting it at a width the

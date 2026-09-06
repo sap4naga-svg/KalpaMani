@@ -19,19 +19,30 @@
  *                                 blended out of them is an invention
  *   NO SUPPRESSION                a filter hides rows and SAYS SO; nothing is dropped for
  *                                 being inconvenient, and the unfiltered total stays visible
+ *   NO INVENTED WINNER            where authority does not determine which of two conflicting
+ *                                 records is current, none is declared current
  */
 import type { AttentionItemPayload } from "@/contracts/read-models";
+import type { ReasonCoded } from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 
 /**
- * The severity ordering, for the one vocabulary this application owns.
+ * The severity ordering, and THE VOCABULARY IT IS DEFINED OVER.
  *
- * Severity is a `ReasonCoded` — a code plus the vocabulary it belongs to — and the contracts
- * do not fix an ordering over any particular vocabulary's members. So this orders the codes
- * of the vocabulary defined here, and treats anything else as UNRANKED rather than guessing:
- * an unknown severity sorts after every known one and is labelled, instead of being silently
- * assigned a rank it never had.
+ * Severity is a `ReasonCoded` — a code, the vocabulary it belongs to, and that vocabulary's
+ * version — and a code string means nothing without the other two. `HIGH` in some other
+ * vocabulary is not this vocabulary's `HIGH`, and ranking it as one orders a screen by a
+ * coincidence of spelling. So the ordering is declared over exactly one (vocabulary,
+ * version) pair, and everything else is UNRANKED rather than guessed at: an unknown severity
+ * sorts after every known one and is LABELLED, instead of being silently assigned a rank it
+ * never had.
+ *
+ * The pair below is the one the only current producer emits. A second producer, or a version
+ * bump, is a deliberate change here — not something that quietly starts ranking.
  */
+export const SEVERITY_VOCABULARY = "kalpamani.demo";
+export const SEVERITY_VOCABULARY_VERSION = "v1";
+
 export const SEVERITY_ORDER: Readonly<Record<string, number>> = {
   HIGH: 0,
   MEDIUM: 1,
@@ -41,12 +52,26 @@ export const SEVERITY_ORDER: Readonly<Record<string, number>> = {
 export const SEVERITY_CODES = ["HIGH", "MEDIUM", "LOW"] as const;
 export type SeverityCode = (typeof SEVERITY_CODES)[number];
 
-export function severityRank(code: string): number {
-  return SEVERITY_ORDER[code] ?? Number.MAX_SAFE_INTEGER;
+/** The rank an unrecognised severity takes: after every ranked one, and never ahead of it. */
+export const UNRANKED_SEVERITY = Number.MAX_SAFE_INTEGER;
+
+/** Whether a `ReasonCoded` belongs to the vocabulary this ordering is defined over. */
+export function isRankedSeverityVocabulary(severity: ReasonCoded): boolean {
+  return (
+    severity.vocabulary === SEVERITY_VOCABULARY &&
+    severity.vocabulary_version === SEVERITY_VOCABULARY_VERSION
+  );
 }
 
-export function isKnownSeverity(code: string): code is SeverityCode {
-  return code in SEVERITY_ORDER;
+export function severityRank(severity: ReasonCoded): number {
+  if (!isRankedSeverityVocabulary(severity)) {
+    return UNRANKED_SEVERITY;
+  }
+  return SEVERITY_ORDER[severity.code] ?? UNRANKED_SEVERITY;
+}
+
+export function isKnownSeverity(severity: ReasonCoded): boolean {
+  return isRankedSeverityVocabulary(severity) && severity.code in SEVERITY_ORDER;
 }
 
 /**
@@ -67,25 +92,27 @@ export function hasAllFivePresented(item: AttentionItemPayload): boolean {
 }
 
 /**
- * Deduplication against the alert feed, by `dedup_key`.
+ * A canonical, key-ordered rendering of one record, used ONLY to tell records apart.
  *
- * §4.5: `item_id` is "stable across occurrences" and `dedup_key` is what the alert feed is
- * deduplicated against. Where two rows share a key they are ONE thing seen twice, and the
- * survivor is chosen deterministically — the most recently seen, then the most frequently
- * seen, then the lexicographically first identifier. Never "the first one in the array":
- * that makes the surviving row depend on the order a producer happened to emit them in.
+ * Two records with the same signature are the SAME record seen twice, and collapsing them
+ * loses nothing. Two with different signatures are two different claims, and this string
+ * never decides which of them is true — §4.5 fixes no ordering over content, so nothing here
+ * invents one.
  */
-export function deduplicate(
-  items: readonly AttentionItemPayload[],
-): readonly AttentionItemPayload[] {
-  const byKey = new Map<string, AttentionItemPayload>();
-  for (const item of items) {
-    const held = byKey.get(item.dedup_key);
-    if (held === undefined || preferOver(item, held)) {
-      byKey.set(item.dedup_key, item);
-    }
+function contentSignature(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value ?? null);
   }
-  return [...byKey.values()];
+  if (Array.isArray(value)) {
+    return `[${value.map(contentSignature).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, held]) => held !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const rendered = entries.map(
+    ([key, held]) => `${JSON.stringify(key)}:${contentSignature(held)}`,
+  );
+  return `{${rendered.join(",")}}`;
 }
 
 function occurrenceOf(item: AttentionItemPayload): number | null {
@@ -95,18 +122,109 @@ function occurrenceOf(item: AttentionItemPayload): number | null {
     : null;
 }
 
-function preferOver(candidate: AttentionItemPayload, held: AttentionItemPayload): boolean {
-  if (candidate.last_seen !== held.last_seen) {
-    return candidate.last_seen > held.last_seen;
+export interface DeduplicationResult {
+  /** One record per `dedup_key`, ordered by that key. */
+  readonly items: readonly AttentionItemPayload[];
+  /** Rows folded into another. Exact duplicates and superseded versions both count here. */
+  readonly folded: number;
+  /** Keys where authority did NOT determine a unique current version. */
+  readonly conflicted: ReadonlySet<string>;
+}
+
+/**
+ * Deduplication against the alert feed, by `dedup_key`, GROUPED rather than folded pairwise.
+ *
+ * §4.5: `item_id` is "stable across occurrences" and `dedup_key` is what the alert feed is
+ * deduplicated against. Where rows share a key they are ONE thing seen several times.
+ *
+ * THE PAIRWISE FOLD THIS REPLACES WAS ORDER-DEPENDENT. It compared each arriving record with
+ * whichever one it happened to be holding, using `last_seen`, then the occurrence count where
+ * both were known, then the identifier. With three records at one `last_seen` and one unknown
+ * count the preference is not transitive — c beats a on count, a beats b on identifier and b
+ * beats c on identifier — so the survivor depended on the order a producer emitted them in,
+ * and all three could win. It also kept whichever record arrived FIRST when two records
+ * agreed on identity, time and count but disagreed on content.
+ *
+ * The group is narrowed only by rules that actually establish a winner:
+ *
+ *   1. the newest `last_seen` supersedes older observations of the same thing
+ *   2. among those, a strictly larger occurrence count wins ONLY when every remaining
+ *      record states one -- an unknown count is not a larger number and not a smaller one,
+ *      so it cannot order anything
+ *   3. records identical after that are the same record, and collapse
+ *
+ * WHAT SURVIVES STEP 3 IS A GENUINE CONFLICT, and no rule in accepted authority resolves it.
+ * It is not silently resolved here: the group is reported as conflicting, and ONE record is
+ * still shown so the underlying issue does not disappear from the list. Which one is shown is
+ * a stated, deterministic choice — the least `item_id`, then the least content signature —
+ * and the row renders as an UNRESOLVED CONFLICT rather than as the current version.
+ */
+export function deduplicateWithDiagnostics(
+  items: readonly AttentionItemPayload[],
+): DeduplicationResult {
+  const groups = new Map<string, AttentionItemPayload[]>();
+  for (const item of items) {
+    const held = groups.get(item.dedup_key);
+    if (held === undefined) {
+      groups.set(item.dedup_key, [item]);
+    } else {
+      held.push(item);
+    }
   }
-  const candidateCount = occurrenceOf(candidate);
-  const heldCount = occurrenceOf(held);
-  // An UNKNOWN occurrence count never wins on count -- it is not a larger number, and it is
-  // not a smaller one either. The comparison falls through to the identifier instead.
-  if (candidateCount !== null && heldCount !== null && candidateCount !== heldCount) {
-    return candidateCount > heldCount;
+
+  const conflicted = new Set<string>();
+  const chosen: AttentionItemPayload[] = [];
+  const keys = [...groups.keys()].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+
+  for (const key of keys) {
+    const records = groups.get(key)!;
+    // 1. The newest observation supersedes the older ones.
+    const newest = records.reduce(
+      (latest, record) => (record.last_seen > latest ? record.last_seen : latest),
+      records[0]!.last_seen,
+    );
+    let candidates = records.filter((record) => record.last_seen === newest);
+
+    // 2. A count orders the group only when EVERY remaining record states one.
+    const counts = candidates.map(occurrenceOf);
+    if (counts.every((count): count is number => count !== null)) {
+      const highest = Math.max(...counts);
+      candidates = candidates.filter((record) => occurrenceOf(record) === highest);
+    }
+
+    // 3. Identical records are one record.
+    const distinct = new Map<string, AttentionItemPayload>();
+    for (const record of candidates) {
+      const signature = contentSignature(record);
+      if (!distinct.has(signature)) {
+        distinct.set(signature, record);
+      }
+    }
+
+    if (distinct.size > 1) {
+      conflicted.add(key);
+    }
+    const ordered = [...distinct.entries()].sort(
+      ([leftSignature, left], [rightSignature, right]) => {
+        if (left.item_id !== right.item_id) {
+          return left.item_id < right.item_id ? -1 : 1;
+        }
+        return leftSignature < rightSignature ? -1 : leftSignature > rightSignature ? 1 : 0;
+      },
+    );
+    chosen.push(ordered[0]![1]);
   }
-  return candidate.item_id < held.item_id;
+
+  return { items: chosen, folded: items.length - chosen.length, conflicted };
+}
+
+/** The surviving record per `dedup_key`. Diagnostics are in `deduplicateWithDiagnostics`. */
+export function deduplicate(
+  items: readonly AttentionItemPayload[],
+): readonly AttentionItemPayload[] {
+  return deduplicateWithDiagnostics(items).items;
 }
 
 /**
@@ -123,7 +241,7 @@ export function rankAttention(
     if (left.materiality_rank !== right.materiality_rank) {
       return left.materiality_rank - right.materiality_rank;
     }
-    const severity = severityRank(left.severity.code) - severityRank(right.severity.code);
+    const severity = severityRank(left.severity) - severityRank(right.severity);
     if (severity !== 0) {
       return severity;
     }
@@ -166,25 +284,34 @@ export interface RankedAttention {
   readonly withheldIncomplete: number;
   /** Rows folded into another by `dedup_key`. */
   readonly deduplicated: number;
+  /** Deduplication keys whose conflicting versions authority does not resolve. */
+  readonly conflicting: number;
+  /** Which keys those are, so a row can say it is one of them. */
+  readonly conflictedKeys: ReadonlySet<string>;
 }
 
 /**
  * The one pipeline: complete → deduplicated → ranked → filtered.
  *
  * Every count it discards is REPORTED rather than absorbed, so a reader is never shown a
- * shorter list than the producer sent without being told why it is shorter.
+ * shorter list than the producer sent without being told why it is shorter. The counts answer
+ * different questions and are never added together or conflated: how many the producer sent
+ * that could not be rendered, how many rows folded, how many keys are in conflict, and how
+ * many survived to be ranked.
  */
 export function prepareAttention(
   items: readonly AttentionItemPayload[],
   filter: AttentionFilter = NO_FILTER,
 ): RankedAttention {
   const complete = items.filter(hasAllFivePresented);
-  const deduplicated = deduplicate(complete);
-  const ranked = rankAttention(deduplicated);
+  const deduplicated = deduplicateWithDiagnostics(complete);
+  const ranked = rankAttention(deduplicated.items);
   return {
     visible: ranked.filter((item) => matchesFilter(item, filter)),
     rankedTotal: ranked.length,
     withheldIncomplete: items.length - complete.length,
-    deduplicated: complete.length - deduplicated.length,
+    deduplicated: deduplicated.folded,
+    conflicting: deduplicated.conflicted.size,
+    conflictedKeys: deduplicated.conflicted,
   };
 }

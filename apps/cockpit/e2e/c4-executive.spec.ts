@@ -24,54 +24,15 @@ async function waitForHydration(page: Page): Promise<void> {
   await expect(page.getByTestId("freshness-indicator")).toBeVisible();
 }
 
-test.describe("the ten-second test", () => {
-  /**
-   * U1 IS AN ACCEPTANCE CRITERION, and this is the check.
-   *
-   * The five answers AND the attention list must be inside the first viewport at 1440 × 900,
-   * without scrolling. §6 requires attention above the fold explicitly: "an attention list
-   * below the fold is a list nobody reads".
-   */
-  test("answers all five questions inside the first viewport at 1440x900 (U1)", async ({
-    page,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop-1440", "U1 is stated at the reference width");
-
-    await page.goto(`/${DEMO}`);
-    await waitForHydration(page);
-
-    const viewport = page.viewportSize();
-    expect(viewport).not.toBeNull();
-    const fold = viewport!.height;
-
-    const questions = [
-      "What are we risking against?",
-      "How are we doing?",
-      "Where is risk?",
-      "Is anything wrong?",
-      "What changed?",
-      "What requires attention?",
-    ];
-    for (const question of questions) {
-      const tile = page.getByText(question, { exact: true }).first();
-      await expect(tile).toBeVisible();
-      const box = await tile.boundingBox();
-      expect(box, `${question} must have a box`).not.toBeNull();
-      expect(box!.y + box!.height, `${question} must be above the fold`).toBeLessThan(fold);
-    }
-
-    // Attention itself, and at least one ranked item, are above the fold too.
-    const attention = page.getByTestId("attention-panel");
-    const attentionBox = await attention.boundingBox();
-    expect(attentionBox!.y).toBeLessThan(fold);
-    const firstItem = page.getByTestId("attention-item").first();
-    const itemBox = await firstItem.boundingBox();
-    expect(itemBox!.y).toBeLessThan(fold);
-
-    // The page has not been scrolled to achieve any of that.
-    expect(await page.evaluate(() => window.scrollY)).toBe(0);
-  });
-
+/**
+ * U1 lives in `u1-first-viewport.spec.ts`.
+ *
+ * It is stated at ONE reference width, so it is REGISTERED at one width by the project's
+ * `testIgnore` rather than skipped at the other two — a skipped criterion reports as
+ * unchecked at viewports it was never in scope for. What remains here is the drill-down
+ * link check, which is a requirement at every viewport.
+ */
+test.describe("the ten-second answers", () => {
   test("links each answer to the area that owns it", async ({ page }) => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
@@ -265,10 +226,20 @@ test.describe("what changed", () => {
       expect: async (page: Page) => {
         const items = page.getByTestId("what-changed-item");
         await expect(items).toHaveCount(2);
-        // Every entry reports ITS state rather than presenting a clean delta (U17).
+        /*
+         * U17: EVERY ENTRY REPORTS ITS ENDPOINT STATES INSTEAD OF A DELTA. The earlier
+         * assertion here accepted a row that drew `before -> after` as long as it carried a
+         * qualifying badge, and the badge it carried was the AFTER endpoint's -- so a stale
+         * baseline reported as AVAILABLE. Both endpoints now answer for themselves, and no
+         * materiality is asserted over a comparison that is not sound.
+         */
         for (const item of await items.all()) {
-          await expect(item).toHaveAttribute("data-degraded", "true");
-          await expect(item).toContainText("INDETERMINATE");
+          await expect(item).toHaveAttribute("data-comparison", "UNAVAILABLE");
+          await expect(item.getByTestId("change-delta")).toHaveCount(0);
+          await expect(item.getByTestId("change-materiality")).toHaveCount(0);
+          await expect(item.getByTestId("endpoint-baseline")).toBeVisible();
+          await expect(item.getByTestId("endpoint-comparison")).toBeVisible();
+          await expect(item).toContainText("NOT COMPARABLE");
         }
       },
     },
