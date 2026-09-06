@@ -31,6 +31,34 @@ import {
   qualificationStatusEnvelope,
   whatChangedEnvelope,
 } from "@/contracts/read-models";
+import {
+  exposureAggregateEnvelope,
+  performanceSummaryEnvelope,
+  positionSnapshotEnvelope,
+  tradeDetailEnvelope,
+  tradeLifecycleEnvelope,
+  tradeSummaryEnvelope,
+} from "@/contracts/portfolio-models";
+import type {
+  ExposureAggregatePayload,
+  PerformanceSummaryPayload,
+  PositionSnapshotPayload,
+  TradeDetailPayload,
+  TradeLifecyclePayload,
+  TradeSummaryPayload,
+} from "@/contracts/portfolio-models";
+import { strategyPerformanceEnvelope } from "@/contracts/strategy-models";
+import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
+import {
+  marketRegimeEnvelope,
+  riskSnapshotEnvelope,
+  shortSideSnapshotEnvelope,
+} from "@/contracts/risk-market-models";
+import type {
+  MarketRegimePayload,
+  RiskSnapshotPayload,
+  ShortSideSnapshotPayload,
+} from "@/contracts/risk-market-models";
 import type {
   ExecutiveOverviewPayload,
   PerformanceSeriesPayload,
@@ -55,18 +83,41 @@ import {
 import {
   ATTENTION_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
+  EXPOSURE_AGGREGATE_IDENTITY,
+  MARKET_REGIME_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
+  PERFORMANCE_SUMMARY_IDENTITY,
+  POSITION_SNAPSHOT_IDENTITY,
   QUALIFICATION_IDENTITY,
+  RISK_SNAPSHOT_IDENTITY,
+  SHORT_SIDE_IDENTITY,
+  STRATEGY_PERFORMANCE_IDENTITY,
+  TRADE_DETAIL_IDENTITY,
+  TRADE_LIFECYCLE_IDENTITY,
+  TRADE_SUMMARY_IDENTITY,
   WHAT_CHANGED_IDENTITY,
   type ReadModelIdentity,
 } from "@/data/client/read-model-identity";
 import type { Clock } from "@/lib/clock";
 import { systemClock } from "@/lib/clock";
-import type { ViewScope } from "@/lib/scope";
+import type { PerformancePeriod, ViewScope } from "@/lib/scope";
 
 import { instantOf } from "@/contracts/factories";
 import { buildEnvelope, type InputSpec } from "./envelopes";
+import { BOOK, bookSessions } from "./book";
+import { equityWindow } from "./equity";
 import { syntheticPerformanceSeries } from "./performance";
+import { syntheticExposure, syntheticPositions } from "./positions";
+import { syntheticMarketRegime } from "./regime";
+import { syntheticRiskSnapshot, syntheticShortSide } from "./risk";
+import { syntheticStrategyPerformance } from "./strategy";
+import { buildPerformanceSummary } from "./summary";
+import {
+  findBookTrade,
+  syntheticTradeDetail,
+  syntheticTradeLifecycle,
+  syntheticTrades,
+} from "./trades";
 import {
   syntheticAttention,
   syntheticExecutiveOverview,
@@ -239,7 +290,7 @@ export class FixtureReadClient implements ReadClient {
           // The producing projections do not exist, so the honest default is PAYLOADLESS.
           availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
           availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
-          payload: demo ? syntheticExecutiveOverview(asOf) : undefined,
+          payload: demo ? syntheticExecutiveOverview(asOf, this.originMs) : undefined,
           maturityStage: POPULATED_MATURITY,
         };
     return this.respond(
@@ -343,6 +394,7 @@ export class FixtureReadClient implements ReadClient {
     const payload = demo
       ? syntheticPerformanceSeries({
           period: scope.period,
+          granularity: scope.granularity,
           originMs: this.originMs,
           asOf,
           withGap,
@@ -366,6 +418,272 @@ export class FixtureReadClient implements ReadClient {
         : [governanceInput(this.originMs)],
       resolution,
       performanceSeriesEnvelope,
+    );
+  }
+
+  /* ================================================================ added by C5 */
+
+  /**
+   * One resolution, for a read model whose whole payload is synthetic.
+   *
+   * Every C5 read model resolves the same way: the producing runtime does not exist, so the
+   * honest project-scope answer is a PAYLOADLESS `NOT_IMPLEMENTED`, and the demonstration
+   * scenario carries the repository-owned fixture. Written once, because thirteen copies of
+   * one branch is thirteen places for one of them to drift.
+   */
+  private syntheticResolution<T>(
+    scope: ViewScope,
+    build: () => T,
+    completeness?: Completeness,
+  ): Resolution<T> {
+    if (!isPopulated(scope)) {
+      return unpopulated();
+    }
+    const demo = scope.scenario === "demo";
+    return {
+      availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
+      availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
+      payload: demo ? build() : undefined,
+      maturityStage: POPULATED_MATURITY,
+      completeness: demo ? completeness : undefined,
+    };
+  }
+
+  /** The inputs a demonstration payload depends on: a live mark, and the tracked snapshot. */
+  private inputsFor(scope: ViewScope): readonly InputSpec[] {
+    return isPopulated(scope) && scope.scenario === "demo"
+      ? [DEMO_MARK_INPUT, governanceInput(this.originMs)]
+      : [governanceInput(this.originMs)];
+  }
+
+  /** The retained extent's sessions, pinned to the session origin. */
+  private sessions(): readonly string[] {
+    return bookSessions(this.originMs);
+  }
+
+  async performanceSummary(
+    scope: ViewScope,
+    window: PerformancePeriod,
+  ): Promise<EnvelopeOf<PerformanceSummaryPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<PerformanceSummaryPayload>(scope, () => {
+      const equity = equityWindow(this.originMs, window);
+      const firstSession = this.sessions().length - equity.days.length;
+      return buildPerformanceSummary({
+        days: equity.days,
+        asOf,
+        /*
+         * The population is the trades that CLOSED INSIDE THE WINDOW, not the trades that
+         * were open during it: a ratio over "closed trades" is a ratio over closed trades.
+         */
+        closed: BOOK.closedTrades.filter(
+          (trade) => trade.exits[trade.exits.length - 1].session >= firstSession,
+        ),
+        periodReturns: equity.periodReturns,
+        totalReturnHundredths: equity.totalReturnHundredths,
+        maxDrawdownHundredths: equity.maxDrawdownHundredths,
+        populationCode: "CLOSED_TRADES_IN_THE_REQUESTED_WINDOW",
+      });
+    });
+    return this.respond(
+      PERFORMANCE_SUMMARY_IDENTITY,
+      `performance-summary-${window.toLowerCase()}`,
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      performanceSummaryEnvelope,
+    );
+  }
+
+  async positions(scope: ViewScope): Promise<EnvelopeOf<PositionSnapshotPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<PositionSnapshotPayload>(
+      scope,
+      () => syntheticPositions(asOf, this.sessions()),
+      /** One assessment in the snapshot is STALE, so the page it covers is PARTIAL. */
+      "PARTIAL",
+    );
+    return this.respond(
+      POSITION_SNAPSHOT_IDENTITY,
+      "position-snapshot",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      positionSnapshotEnvelope,
+    );
+  }
+
+  async exposure(scope: ViewScope): Promise<EnvelopeOf<ExposureAggregatePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ExposureAggregatePayload>(
+      scope,
+      () => syntheticExposure(asOf, this.sessions()),
+      "PARTIAL",
+    );
+    return this.respond(
+      EXPOSURE_AGGREGATE_IDENTITY,
+      "exposure-aggregate",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      exposureAggregateEnvelope,
+    );
+  }
+
+  async trades(scope: ViewScope): Promise<EnvelopeOf<TradeSummaryPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<TradeSummaryPayload>(scope, () =>
+      syntheticTrades(asOf, this.sessions()),
+    );
+    return this.respond(
+      TRADE_SUMMARY_IDENTITY,
+      "trade-summary",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      tradeSummaryEnvelope,
+    );
+  }
+
+  /**
+   * One trade's story.
+   *
+   * An unknown identity is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`: the ledger was
+   * searched and there is no such trade, so the question does not apply to the subject. It is
+   * **not `EMPTY_VERIFIED`** — that state is value-bearing and describes a collection that
+   * came back empty, and a single read model has no empty list to return. It is also not a
+   * 404 a caller has to interpret.
+   */
+  async tradeDetail(
+    scope: ViewScope,
+    tradeId: string,
+  ): Promise<EnvelopeOf<TradeDetailPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const trade = findBookTrade(tradeId);
+    const resolution: Resolution<TradeDetailPayload> = !isPopulated(scope)
+      ? unpopulated()
+      : scope.scenario !== "demo"
+        ? {
+            availability: "NOT_IMPLEMENTED",
+            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
+          }
+        : trade === undefined
+          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
+          : {
+              availability: "AVAILABLE",
+              availabilityReason: "NONE",
+              payload: syntheticTradeDetail(trade, this.sessions(), asOf),
+              maturityStage: POPULATED_MATURITY,
+              /** Every trade's detail names the stages it does not carry. */
+              completeness: "PARTIAL",
+            };
+    return this.respond(
+      TRADE_DETAIL_IDENTITY,
+      `trade-detail-${tradeId}`,
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      tradeDetailEnvelope,
+    );
+  }
+
+  async tradeLifecycle(
+    scope: ViewScope,
+    tradeId: string,
+  ): Promise<EnvelopeOf<TradeLifecyclePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const trade = findBookTrade(tradeId);
+    const resolution: Resolution<TradeLifecyclePayload> = !isPopulated(scope)
+      ? unpopulated()
+      : scope.scenario !== "demo"
+        ? {
+            availability: "NOT_IMPLEMENTED",
+            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
+          }
+        : trade === undefined
+          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
+          : {
+              availability: "AVAILABLE",
+              availabilityReason: "NONE",
+              payload: syntheticTradeLifecycle(trade, this.sessions(), asOf),
+              maturityStage: POPULATED_MATURITY,
+              /** The basic lifecycle carries the trade stages and names every absent kind. */
+              completeness: "PARTIAL",
+            };
+    return this.respond(
+      TRADE_LIFECYCLE_IDENTITY,
+      `trade-lifecycle-${tradeId}`,
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      tradeLifecycleEnvelope,
+    );
+  }
+
+  async strategyPerformance(
+    scope: ViewScope,
+  ): Promise<EnvelopeOf<StrategyPerformancePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<StrategyPerformancePayload>(scope, () =>
+      syntheticStrategyPerformance(asOf, this.sessions()),
+    );
+    return this.respond(
+      STRATEGY_PERFORMANCE_IDENTITY,
+      "strategy-performance",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      strategyPerformanceEnvelope,
+    );
+  }
+
+  async riskSnapshot(scope: ViewScope): Promise<EnvelopeOf<RiskSnapshotPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<RiskSnapshotPayload>(
+      scope,
+      () => syntheticRiskSnapshot(asOf, this.sessions(), this.originMs),
+      "PARTIAL",
+    );
+    return this.respond(
+      RISK_SNAPSHOT_IDENTITY,
+      "risk-snapshot",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      riskSnapshotEnvelope,
+    );
+  }
+
+  async shortSide(scope: ViewScope): Promise<EnvelopeOf<ShortSideSnapshotPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ShortSideSnapshotPayload>(
+      scope,
+      () => syntheticShortSide(asOf, this.sessions()),
+      /** One borrow record is missing, so the snapshot covers part of its short book. */
+      "PARTIAL",
+    );
+    return this.respond(
+      SHORT_SIDE_IDENTITY,
+      "short-side-snapshot",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      shortSideSnapshotEnvelope,
+    );
+  }
+
+  async marketRegime(scope: ViewScope): Promise<EnvelopeOf<MarketRegimePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<MarketRegimePayload>(scope, () =>
+      syntheticMarketRegime(asOf, this.sessions()),
+    );
+    return this.respond(
+      MARKET_REGIME_IDENTITY,
+      "market-regime",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      marketRegimeEnvelope,
     );
   }
 

@@ -333,7 +333,7 @@ export default function ExecutiveOverviewPage() {
                 metric={
                   payload?.open_planned_risk.record !== undefined
                     ? {
-                        value: payload.open_planned_risk.record.amount.amount,
+                        value: payload.open_planned_risk.record.risk_money.value,
                         unit: "USD",
                         availability: payload.open_planned_risk.availability,
                         reason: payload.open_planned_risk.reason,
@@ -629,7 +629,7 @@ export default function ExecutiveOverviewPage() {
               <MetricTile
                 label="Permitted open risk"
                 metric={{
-                  value: payload?.permitted_open_risk.record?.amount.amount,
+                  value: payload?.permitted_open_risk.record?.limit_money.value,
                   unit: "USD",
                   availability: payload?.permitted_open_risk.availability ?? "NOT_IMPLEMENTED",
                   reason: payload?.permitted_open_risk.reason ?? "PRODUCER_NOT_IMPLEMENTED",

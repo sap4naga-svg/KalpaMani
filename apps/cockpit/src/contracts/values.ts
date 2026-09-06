@@ -278,6 +278,167 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
    * days, unlike `governance.run_date_gate`, which is a date and is carried as one.
    */
   "governance.minimum_separation": { unit: "CALENDAR_DAYS", shape: "INTEGER" },
+
+  /* ---------------------------------------------------------------- added by C5 */
+
+  /*
+   * TWO GROUPS, AND THE DIFFERENCE BETWEEN THEM IS STATED RATHER THAN BLURRED.
+   *
+   * The first group is transcribed from 12.3: the identifier, the unit and the rule are
+   * the dictionary's, and nothing here restates them differently. The second group is a
+   * PRESENTATION DEFINITION PROPOSED BY THIS CYCLE, for a 4.5 payload field 12.3 carries
+   * no row for -- 12.6 asks for exactly that to be labelled, and each one below names the
+   * payload field it serves. A presentation definition changes no strategy, risk or sizing
+   * rule, and adopting one for a screen adopts it nowhere else.
+   */
+
+  /* ---- 12.3 rows, transcribed */
+
+  /** Realized plus unrealized, LABELLED COMBINED and never presented as realized. */
+  "pnl.combined": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * The time-weighted return of ONE period, rather than since the window opened.
+   *
+   * A SEPARATE IDENTIFIER, because it is a separate quantity. `return.time_weighted` on a
+   * series point is the chain-linked return SINCE THE WINDOW OPENED; this is the return of
+   * that period alone. 12.2 forbids two values sharing a `metric_id` and meaning different
+   * things, so a monthly heat map reads this one and never derives it from the other.
+   */
+  "return.period": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Returned only when explicitly requested, and always labelled as such (12.4). */
+  "return.money_weighted": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Deposits and withdrawals, dated and signed. NEVER profit. */
+  "cashflow.external": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** The minimum of `drawdown.current` over the stated window. Never positive. */
+  "drawdown.max": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * Exposure carries a MAGNITUDE and a DIRECTION and never a profit sign (12.1), so a
+   * short exposure is a positive magnitude whose `direction` says `SHORT`.
+   */
+  "exposure.long": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "exposure.short": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "exposure.gross": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "exposure.net": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * The three risk quantities of 4.4, each in BOTH units 12.3 names for it.
+   *
+   * 12.3 gives one row per quantity, reading "USD and PERCENT". A dictionary entry maps
+   * one identifier to ONE unit, so the percent limb carries its own identifier rather than
+   * a second unit under the same name -- two values with one `metric_id` and different
+   * units are two metrics wearing one name, which 12.2 exists to prevent.
+   */
+  "risk.initial_planned": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk.initial_planned_pct": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk.open_planned_pct": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk.permitted_pct": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Expectancy in both offered units. Never mixed in one value. */
+  "expectancy.currency": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "expectancy.r": { unit: "R_MULTIPLE", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** `gross_profit / gross_loss`. NOT_APPLICABLE with DENOMINATOR_ZERO on a zero loss. */
+  "profit_factor": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Sample convention, frequency, annualization and risk-free assumption all stated. */
+  "sharpe": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Outcome over INITIAL planned risk. A moving stop never moves the denominator. */
+  "r_multiple": { unit: "R_MULTIPLE", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Exit-or-as-of minus entry, on the stated calendar, in whole trading days. */
+  "holding_period": { unit: "TRADING_DAYS", shape: "INTEGER" },
+  /** Excursions in USD. `capture_ratio` divides an outcome by `mfe` IN THE SAME UNIT. */
+  "mfe": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "mae": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "capture_ratio": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Quantity-weighted by default, with the aggregation method named. Signed. */
+  "slippage.aggregate": { unit: "BPS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Benchmark return over EXACTLY the subject's boundaries, stating its return basis. */
+  "benchmark.movement": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+
+  /* ---- presentation definitions proposed by this cycle (12.6) */
+
+  /**
+   * 4.5 `PositionSnapshot.entry_price` -- position-weighted basis, unit USD.
+   *
+   * It is ONE metric asked in two places: it is also `TradeSummary.current_basis`, the basis a
+   * trade holds after an add. It is deliberately NOT `trade.entry_price`, which is the price
+   * the ORIGINAL entry filled at and a different question (12.4).
+   */
+  "position.entry_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `PositionSnapshot.current_price` -- the mark, carrying its OWN as-of. */
+  "position.current_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `PositionSnapshot.quantity` -- whole shares currently held. */
+  "position.quantity": { unit: "SHARES", shape: "INTEGER" },
+  /** How many positions an exposure bucket was aggregated over. */
+  "position.count": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.5 `TradeSummary.entry_price` and `exit_price` -- filled-quantity weighted. */
+  "trade.entry_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "trade.exit_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `TradeSummary.exit_time` -- a point in time, under the `DATE_ONLY` precedent. */
+  "trade.exit_time": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /**
+   * The mark a trade's own price path carries for one session.
+   *
+   * Distinct from `position.current_price`, which is the CURRENT mark of an open position:
+   * this is a point on a historical path, and a closed trade has one while it has no current
+   * mark at all.
+   */
+  "trade.mark_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `TradeSummary.return_pct` -- denominator INITIAL_POSITION_VALUE. */
+  "trade.return_pct": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `TradeSummary.exit_reason` -- a closed vocabulary member carried as a value. */
+  "trade.exit_reason": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** Trade population sizes. A ratio's denominator is a count somebody can read. */
+  "trade.count": { unit: "COUNT", shape: "INTEGER" },
+  "trade.open_count": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.4 `GapEventRisk.modelled_loss` -- a SEPARATE model, never folded into planned risk. */
+  "gap_event.modelled_loss": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `RiskSnapshot.concentration` and `portfolio_volatility`. */
+  "risk.concentration": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk.portfolio_volatility": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `RiskSnapshot.loss_thresholds[].value` -- a governed policy value, displayed. */
+  "risk.loss_threshold": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ShortSideSnapshot.borrow[]` -- every figure from a RECORD, never from price. */
+  "borrow.fee": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "borrow.quantity": { unit: "SHARES", shape: "INTEGER" },
+  "borrow.deterioration": { unit: "BPS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ShortSideSnapshot.crowding` and `utilization`. */
+  "short.crowding": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "short.utilization": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `MarketRegime.components[].value` and `stress`, both dimensionless scores. */
+  "market.component_score": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "market.stress": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** Area 4 asks for opportunities, turnover and capacity, per strategy module. */
+  "strategy.opportunity_count": { unit: "COUNT", shape: "INTEGER" },
+  "strategy.turnover": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "strategy.capacity": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `PerformanceSummary.average_winner` and `average_loser`. */
+  "pnl.average_winner": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "pnl.average_loser": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * The observation count a ratio was computed over, and the minimum its rule declares.
+   * 12.1 requires a declared minimum and an `INSUFFICIENT_OBSERVATIONS` outcome below it;
+   * a screen showing the ratio without either number has shown half the rule.
+   */
+  "performance.observation_count": { unit: "COUNT", shape: "INTEGER" },
+  "performance.minimum_observations": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * The governed research values of `CLAUDE.md` 6, reproduced for display context.
+   *
+   * THREE IDENTIFIERS, BECAUSE THE VALUES ARE IN THREE UNITS. They are REAL tracked facts and
+   * they are **research parameters, not permitted limits**: a permitted limit is a separately
+   * governed policy value carried with its `PolicyRef`, and no such policy exists. Displaying
+   * one of these grants nothing and changes nothing.
+   */
+  "governance.research_parameter_usd": {
+    unit: "USD",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  "governance.research_parameter_pct": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  "governance.research_parameter_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** 4.5 `PerformanceSummary.r_multiple_distribution[].count`. */
+  "r_multiple.bucket_count": { unit: "COUNT", shape: "INTEGER" },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;
@@ -516,3 +677,76 @@ export const versionPins = z.object({
   config_identity: versionPin,
 });
 export type VersionPins = z.infer<typeof versionPins>;
+
+/* ------------------------------------------------------------------ added by C5 */
+
+/**
+ * 4.2 `Quantity` -- whole shares. Signed only where the field says so.
+ *
+ * A share count is a COUNT OF INDIVISIBLE THINGS. Carrying it as a decimal string would
+ * admit a fractional share this system does not trade, and carrying it as a float would
+ * admit 99.99999999 shares.
+ */
+export const quantity = z.number().int();
+
+/**
+ * 4.2 `Bps` -- SIGNED basis points, as a decimal string with a stated scale.
+ *
+ * "A decimal string with a stated scale, NEVER a bare integer: truncating 8.4 bps to 8
+ * discards four tenths of a basis point on every fill." The declared minimum scale is two
+ * (12.3.1), so a scale below it is refused rather than rounded to.
+ */
+export const bps = z.object({
+  value: decimalString,
+  scale: z.number().int().min(2),
+});
+export type Bps = z.infer<typeof bps>;
+
+/**
+ * The exact integer number of hundredths a decimal string carries, or `null`.
+ *
+ * INVARIANTS OVER MONEY ARE CHECKED IN INTEGERS. `Number("31200.00") + Number("8400.00")`
+ * is exact at these magnitudes, and `0.1 + 0.2` is not -- the difference is not visible
+ * until a refinement that should have failed passes, or one that should have passed fails.
+ * Every cross-field money check below goes through this, so the comparison happens between
+ * two integers and never between two doubles.
+ *
+ * It refuses anything carrying more than two decimal places rather than rounding it: a
+ * value this cannot represent exactly is a value this must not compare.
+ */
+export function hundredths(value: string): number | null {
+  const parts = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(value);
+  if (parts === null) {
+    return null;
+  }
+  const [, sign, whole, fraction = ""] = parts;
+  const magnitude = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(magnitude)) {
+    return null;
+  }
+  return sign === "-" ? -magnitude : magnitude;
+}
+
+/**
+ * A `MetricValue` that must be the named metric, in its dictionary unit.
+ *
+ * A payload field declared "unit USD, `risk.open_planned`" is not satisfied by a correctly
+ * shaped `MetricValue` carrying some other metric. The dictionary already checks that the
+ * unit matches the identifier; this checks that the IDENTIFIER matches the FIELD, which is
+ * the half a per-field contract owns.
+ */
+export function metricOf(metricId: string) {
+  return metricValue.superRefine((candidate, ctx) => {
+    if (candidate.metric_id !== metricId) {
+      ctx.addIssue({
+        code: "custom",
+        message: `this field carries ${metricId}, not ${candidate.metric_id}`,
+      });
+    }
+  });
+}
+
+/** A `Ratio` whose denominator is one exact named population. */
+export function ratioOf(denominator: string) {
+  return z.object({ value: decimalString, denominator: z.literal(denominator) });
+}

@@ -71,11 +71,91 @@ const fact = (
   source: source(options.path ?? CLAUDE_MD),
 });
 
+/**
+ * The governed research values of `CLAUDE.md` section 6, transcribed unchanged.
+ *
+ * THEY ARE RESEARCH PARAMETERS, NOT PERMITTED LIMITS, and not performance expectations. A
+ * permitted limit is a separately governed policy value carried with its `PolicyRef`, and no
+ * such policy exists in this project -- which is why the risk snapshot reports every limit as
+ * `POLICY_REFERENCE_MISSING` while these render as what they are.
+ *
+ * Section 6 of `CLAUDE.md` is BYTE-IDENTICAL at the snapshot commit and at the commit this
+ * branch was built from; the values below are its own, and this cycle changes none of them.
+ * The individual-position row carries the UPPER bound of the stated 8-10% range and says so
+ * in its basis, because a range cannot be rendered as one number without stating which end.
+ */
+const RESEARCH_PARAMETERS = [
+  { code: "STRATEGY_CAPITAL", usd: "80000.00", basis: "AUTHORITATIVE_ALLOCATED_CAPITAL" },
+  { code: "LONG_PLANNED_RISK_PER_TRADE", pct: "0.50", usd: "400.00" },
+  { code: "SHORT_PLANNED_RISK_PER_TRADE", pct: "0.25", usd: "200.00" },
+  { code: "MAX_OPEN_PLANNED_RISK", pct: "5.00", usd: "4000.00", basis: "APPROXIMATE_STATED_VALUE" },
+  {
+    code: "MAX_INDIVIDUAL_POSITION",
+    pct: "10.00",
+    usd: "8000.00",
+    basis: "UPPER_BOUND_OF_STATED_RANGE_8_TO_10_PERCENT",
+  },
+  { code: "MAX_GROSS_SHORT_EXPOSURE", pct: "25.00", usd: "20000.00" },
+  { code: "LEVERAGE", state: "NONE" },
+] as const;
+
+function researchParameters(asOfInstant: string): QualificationStatusPayload["research_parameters"] {
+  const rows: QualificationStatusPayload["research_parameters"] = [];
+  for (const parameter of RESEARCH_PARAMETERS) {
+    const basis = "basis" in parameter && parameter.basis !== undefined
+      ? parameter.basis
+      : "pct" in parameter
+        ? "PERCENT_OF_STRATEGY_CAPITAL"
+        : "STATED_VALUE";
+    if ("pct" in parameter && parameter.pct !== undefined) {
+      rows.push({
+        parameter: reason(parameter.code, GOV),
+        value: available({
+          metricId: "governance.research_parameter_pct",
+          unit: "PERCENT",
+          value: parameter.pct,
+          asOf: asOfInstant,
+        }),
+        basis: reason(basis, GOV),
+        source: source(CLAUDE_MD),
+      });
+    }
+    if ("usd" in parameter && parameter.usd !== undefined) {
+      rows.push({
+        parameter: reason(parameter.code, GOV),
+        value: available({
+          metricId: "governance.research_parameter_usd",
+          unit: "USD",
+          value: parameter.usd,
+          asOf: asOfInstant,
+        }),
+        basis: reason("USD_ON_THE_AUTHORITATIVE_STRATEGY_CAPITAL", GOV),
+        source: source(CLAUDE_MD),
+      });
+    }
+    if ("state" in parameter && parameter.state !== undefined) {
+      rows.push({
+        parameter: reason(parameter.code, GOV),
+        value: available({
+          metricId: "governance.research_parameter_state",
+          unit: "DIMENSIONLESS",
+          value: parameter.state,
+          asOf: asOfInstant,
+        }),
+        basis: reason("RECORDED_STATE", GOV),
+        source: source(CLAUDE_MD),
+      });
+    }
+  }
+  return rows;
+}
+
 export function qualificationStatusFacts(asOfInstant: string): QualificationStatusPayload {
   return {
     read_at_commit: READ_AT_COMMIT,
     snapshot_extracted_on: SNAPSHOT_EXTRACTED_ON,
     implementation_phase: reason("C4_EXECUTIVE_OVERVIEW_AND_GOVERNANCE", GOV),
+    research_parameters: researchParameters(asOfInstant),
     facts: [
       // CLAUDE.md section 6: USD 80,000, AUTHORITATIVE, and separate from broker equity.
       fact("strategy-capital", "KALPAMANI_STRATEGY_CAPITAL_USD", "80000"),

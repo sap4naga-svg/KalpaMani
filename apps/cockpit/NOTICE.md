@@ -32,6 +32,8 @@ and the attribution is recorded because the pattern is derived work.
 | Recharts | MIT |
 | d3 modules bundled by Recharts (d3-scale, d3-shape, d3-array and related) | ISC |
 | victory-vendor | MIT AND ISC |
+| TradingView Lightweight Charts | Apache-2.0 |
+| fancy-canvas (bundled by Lightweight Charts) | MIT |
 
 Each package ships its own licence text in `node_modules/<package>/LICENSE`. The complete,
 resolved dependency set is recorded in `package-lock.json`.
@@ -41,3 +43,15 @@ resolved dependency set is recorded in `package-lock.json`.
 **No font is downloaded at runtime or at build time.** The interface uses locally available
 system font stacks declared in [`src/app/globals.css`](src/app/globals.css). There is no
 runtime font dependency, no CDN request and no third-party telemetry of any kind.
+
+## TradingView Lightweight Charts
+
+**TradingView Lightweight Charts** -- Apache License 2.0, Copyright (c) 2025 TradingView, Inc.
+<https://github.com/tradingview/lightweight-charts>
+
+Added by C5 for the trade detail's price view, which `ui-ux-specification.md` section 13 assigns
+to this library. It is imported inside one effect in
+[`src/components/cockpit/trade-chart.tsx`](src/components/cockpit/trade-chart.tsx) and is named by
+no other module. Its licence and its NOTICE file ship in
+`node_modules/lightweight-charts/`, and the attribution the Apache-2.0 licence requires is
+recorded here.

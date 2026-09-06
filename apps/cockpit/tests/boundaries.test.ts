@@ -8,7 +8,7 @@ import {
   QUALIFICATION_IDENTITY,
   type ReadModelIdentity,
 } from "@/data/client/read-model-identity";
-import { NAV_ROUTES, ROUTES_BY_HREF } from "@/nav/registry";
+import { DEEP_DESTINATIONS, NAV_ROUTES, RESERVED_DESTINATIONS, ROUTES_BY_HREF } from "@/nav/registry";
 import { COMMAND_KINDS } from "@/components/palette/command-palette";
 import { parseScope, scopeToSearchParams, withScope, DEFAULT_SCOPE } from "@/lib/scope";
 
@@ -125,6 +125,7 @@ describe("scope in the URL", () => {
       environment: "PAPER",
       scenario: "demo",
       period: "1Y",
+      granularity: "MONTHLY",
       changes: "degraded",
     } as const;
     expect(parseScope(scopeToSearchParams(scope))).toEqual(scope);
@@ -166,6 +167,54 @@ describe("the navigation registry", () => {
       expect(route.dependency.length, route.href).toBeGreaterThan(3);
       expect(route.cycle.length, route.href).toBeGreaterThan(1);
     }
+  });
+
+  it("resolves every implemented deep destination to a real page, and no other", () => {
+    for (const destination of DEEP_DESTINATIONS) {
+      const segments = destination.route.slice(1).split("/");
+      const page = join(APP, ...segments, "page.tsx");
+      if (destination.status === "implemented") {
+        expect(() => statSync(page), `${destination.route} must resolve`).not.toThrow();
+      } else {
+        // A reserved destination has no page: it is named, and it is not pretended into being.
+        expect(() => statSync(page), `${destination.route} must not exist yet`).toThrow();
+      }
+    }
+    expect(RESERVED_DESTINATIONS).toEqual(["/signals/candidates/[candidateId]"]);
+  });
+
+  /**
+   * The registry's cycle must be the traceability matrix's.
+   *
+   * C3 recorded a cycle for Area 25 that the matrix disagreed with, and the matrix governs.
+   * These are the areas C5 delivers, and recording any of them under another cycle would say
+   * this application implements something it does not, or does not implement something it
+   * does.
+   */
+  it("records the C5 areas as implemented, at the cycle the matrix assigns", () => {
+    const expected: Readonly<Record<string, number>> = {
+      "/portfolio/performance": 2,
+      "/portfolio/positions": 3,
+      "/portfolio/trades": 36,
+      "/strategy/performance": 4,
+      "/market/regime": 11,
+      "/risk": 12,
+      "/risk/short-side": 13,
+    };
+    for (const [href, area] of Object.entries(expected)) {
+      const route = ROUTES_BY_HREF.get(href);
+      expect(route, href).toBeDefined();
+      expect(route?.status, href).toBe("implemented");
+      expect(route?.areas, href).toContain(area);
+      expect(route?.cycle, href).toContain("C5");
+    }
+  });
+
+  /** Area 5 is C7's, and this cycle shows health CONTEXT rather than the health subsystem. */
+  it("keeps Strategy Health recorded as a later cycle", () => {
+    const health = ROUTES_BY_HREF.get("/strategy/health");
+    expect(health?.status).toBe("placeholder");
+    expect(health?.cycle).toBe("C7");
   });
 
   it("keeps the settled route paths of the UI specification", () => {
@@ -259,6 +308,20 @@ describe("the V1 safety boundary, enforced by absence", () => {
     expect(controls).not.toContain("onChange={");
     expect(controls).not.toContain('"use client"');
     expect(controls).not.toContain("<button");
+  });
+
+  it("adds no chart library import outside the one component that owns it", () => {
+    const importers = SOURCE_FILES.filter((path) =>
+      readFileSync(path, "utf8").includes("lightweight-charts"),
+    ).map((path) => relative(SRC, path).replace(/\\/g, "/"));
+    /*
+     * ONE MODULE MAY REACH THE CHART LIBRARY.
+     *
+     * It builds a canvas on construction and needs real browser APIs, so it is imported
+     * inside one effect in one component. A second importer would be a second place for a
+     * server render or a test environment to touch it.
+     */
+    expect(importers).toEqual(["components/cockpit/trade-chart.tsx"]);
   });
 
   it("makes no network call of any kind from the application", () => {

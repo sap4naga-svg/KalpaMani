@@ -448,7 +448,12 @@ test.describe("the C4 surfaces stay within the boundary", () => {
     // The permitted-risk tile is unavailable while the rest of the page renders values.
     await expect(page.getByTestId("page-state")).toBeVisible();
     await expect(page.getByTestId("tile-risk.permitted").getByTestId("unavailable-body")).toBeVisible();
-    await expect(page.getByTestId("tile-exposure")).toContainText("31,200.00");
+    /*
+     * The long exposure of the demonstration book, which C5 rebuilt from a coherent ledger:
+     * the overview, the position table and the exposure aggregates are now three projections
+     * of one set of positions rather than three hand-written numbers.
+     */
+    await expect(page.getByTestId("tile-exposure")).toContainText("17,999.00");
     await expect(page.getByTestId("performance-overview")).toBeVisible();
   });
 });

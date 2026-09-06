@@ -401,14 +401,16 @@ portfolio sizing or order routing exists, and **none is authorized**. **Specific
 implementation, research, deployment and execution are five separate gates** — see *The Strategy
 Brain specification* below.
 
-**The Cockpit is SPECIFIED. Its C3 APPLICATION FOUNDATION is implemented, and the Cockpit is
-not.** Those are three separate facts. The specification package below is unchanged; the C3
-foundation — a local, read-only frontend running on a repository-owned fixture adapter — is
-implemented under its own separate written authorization and is **accepted effective on the merge
-of PR #74, carrying no such status until that merge**. **The full Cockpit V1 does not exist**: no
+**The Cockpit is SPECIFIED. Its C3 FOUNDATION, its C4 EXECUTIVE AND GOVERNANCE SCREENS and its C5
+PORTFOLIO, STRATEGY AND RISK SCREENS are implemented, and the Cockpit is not.** Those are separate
+facts. The specification package below is unchanged; each cycle is a local, read-only frontend
+running on a repository-owned fixture adapter, implemented under its own separate written
+authorization. **C5 is EFFECTIVE ON THE MERGE of the pull request introducing it, and the
+repository carries no such status until that merge.** **The full Cockpit V1 does not exist**: no
 production read API, projection runtime, metric engine, feedback automation, database, migration,
 scheduler or deployment exists, and **none is authorized** — see *The C3 Cockpit application
-foundation* below.
+foundation*, *The C4 Executive Overview and governance* and *The C5 portfolio, strategy and risk
+screens* below.
 
 A reviewable specification package exists at
 [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
@@ -484,7 +486,7 @@ observational**, and **every future control is inert with no handler and no cont
 | **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Cockpit contract completion and boundary corrections** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the specification corrections that ship with it. It corrects four issues in the specifications ADR-0027 adopted — **A** the §4.1 field-level deferral, replaced by declarative contracts for every catalogued read model, a resolution for every reference, a per-endpoint contract and a completed metric dictionary; **B** out-of-sample reuse, now recorded against the **locked set** and read across research lineage so a new registration or Challenger identity clears nothing and unknown exposure history fails closed; **C** licensed-data admission, separating an absolute ban on credentials and infrastructure identifiers from classification of payload content, making **classification a label and publication a separate recorded authorization**, and adding the `REPOSITORY_TRACKED` provenance so a real tracked governance fact is never relabelled `SYNTHETIC`; **D** the single phrase *planned risk*, now four contracts — immutable **initial** planned risk as the only R denominator, **current open** planned risk as a risk-engine assessment with its as-of, **permitted** risk with its policy reference, and separately modelled gap and event risk. It **amends and supersedes no ADR** and does not edit ADR-0027. **All 36 areas, the C1–C10 sequence, the four trade concepts, the `CandidateIntent` boundary, the runtime `Environment` enum and every risk, capital and stop policy are unchanged** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md) — Valid zero values and cache freshness deadlines** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the two specification corrections that ship with it. It corrects two rules ADR-0028 introduced into `read-model-contracts.md`, and **nothing else** — **A** §4.1.1 named `EMPTY_VERIFIED` the *only* state in which a zero is correct, which is false of every measurement that legitimately evaluates to zero; a measured zero is now `AVAILABLE` with `NONE`, `EMPTY_VERIFIED` describes an **empty population** rather than the number, a zero never removes a `STALE` or `PARTIAL` qualification, and an absent producer still **never substitutes zero**; **B** §3.1 and §7 bounded a cache entry by the whole `contract_max_age`, returning age the fact had already spent — freshness now expires at an **absolute per-input deadline**, `input_deadline = source_effective_time + contract_max_age`, a composite expires at the **earliest** required deadline, a configured TTL may **shorten and never extend** it, and a rebuild, refetch or re-cache renews nothing. It **amends and supersedes no ADR** and edits neither ADR-0027 nor ADR-0028. **No availability state or reason code is added, and no missing-data safeguard is relaxed** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under ADR-0026, accepted effective on merge of PR #70, and **not implemented**; a specification is not an implementation |
-| **Cockpit / read models / feedback engine** | **C3 APPLICATION FOUNDATION IMPLEMENTED — EFFECTIVE ON MERGE OF PR #74, and carrying no such status until that merge. EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, and the **C3 foundation** — design system, shell, navigation, the transcribed contract layer, and two substantive screens on a **local fixture adapter** — is implemented under its own separate written authorization. **A foundation is not the Cockpit**: no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. Merging it authorizes **no further cycle**. **The C4 cycle — Executive Overview, Attention Required, project and qualification governance, and environment and deployment maturity — is implemented under a later separate written authorization, EFFECTIVE ON ITS OWN MERGE and carrying no such status until then**, taking the implemented product areas to **4 of 36**; **every boundary in this row is unchanged by it**, and it closes no gate |
+| **Cockpit / read models / feedback engine** | **C3 APPLICATION FOUNDATION IMPLEMENTED — EFFECTIVE ON MERGE OF PR #74, and carrying no such status until that merge. EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, and the **C3 foundation** — design system, shell, navigation, the transcribed contract layer, and two substantive screens on a **local fixture adapter** — is implemented under its own separate written authorization. **A foundation is not the Cockpit**: no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. Merging it authorizes **no further cycle**. **The C4 cycle — Executive Overview, Attention Required, project and qualification governance, and environment and deployment maturity — is implemented under a later separate written authorization, EFFECTIVE ON ITS OWN MERGE and carrying no such status until then**, taking the implemented product areas to **4 of 36**; **every boundary in this row is unchanged by it**, and it closes no gate. **The C5 cycle — portfolio performance, positions and exposure, strategy performance, market and regime, risk, the short side, and trade history with a basic trade detail — is implemented under another later separate written authorization, EFFECTIVE ON ITS OWN MERGE and carrying no such status until then**, taking the implemented product areas to **11 of 36**; **every boundary in this row is unchanged by it**, it adds **one frontend charting dependency and no `src/kalpamani` module, no Python dependency and no Blueprint change**, and it closes no gate |
 | **Live trading** | **HARD-DISABLED** |
 
 The planning package is accepted and lives in
@@ -3561,6 +3563,124 @@ live trading:                                     HARD-DISABLED
 **A dashboard is not the Cockpit, and merging it authorizes no further cycle.**
 **Specification, implementation, deployment and execution stay separate gates**, and the next
 Cockpit cycle — C5 — is a **separate written authorization that has not been given**.
+
+
+### The C5 portfolio, strategy and risk screens — IMPLEMENTED, and it is not the Cockpit
+
+**C5 is implemented; the Cockpit V1 is not.** Those are two facts, and this section keeps them
+apart. **This status is EFFECTIVE ON MERGE of the pull request introducing it, and the repository
+carries no such status until that merge** — while that pull request is open, C5 is an unmerged
+implementation candidate, exactly as C4 was before its own merge.
+
+**Eleven of the thirty-six product areas are addressed, and one of the eleven is delivered in
+part.** Ten are implemented as their specification describes them; **Area 36 is deliberately
+split** — the trade ledger is complete and the trade detail is **basic**, with the full lifecycle
+belonging to C6. A count of areas touched is not a count of areas finished. C5 adds areas **2**
+(Portfolio Performance), **3** (Positions and Exposure), **4** (Strategy Performance), **11** (Market and
+Regime), **12** (Risk Dashboard), **13** (Short-Side Dashboard) and **36** (Trade History and a
+**basic** Trade Detail) to the four C4 delivered. The other twenty-five remain registered,
+reachable placeholders, and **the C6–C10 sequencing is unchanged** — **C6 owns the complete trade
+lifecycle and the chart drill-down**, the candidate funnel, candidate detail and missed
+opportunities, and **C7 owns Strategy Health**, which this cycle displays only as a recorded state
+beside each version's results.
+
+**It runs on the same local fixture adapter.** No production read API, projection runtime, metric
+engine, database, migration, scheduler, container or deployment exists, and **none is authorized**.
+The application makes **no provider, broker, AWS, GitHub, LLM, font, telemetry or analytics
+request**, at runtime or at build time, and adds **no `src/kalpamani` module, no Python dependency
+and no Blueprint change**.
+
+**One synthetic book, and every screen is a projection of it.** The demonstration data was rebuilt
+as a single deterministic ledger of eight obviously fictional securities, six exact strategy
+versions and two hundred recorded trades, with a daily mark path per trade. The equity curve, the
+position table, the exposure aggregates, the trade ledger, the per-version results and the risk
+snapshot are **projections of that one book**, so they agree by construction rather than by
+coincidence — which is what `cockpit-v1-specification.md` §5 asks for, and which the hand-written
+C4 totals could not do. **The C4 executive overview now reads from it too**, so the overview and
+the positions that produce it no longer state different exposures.
+
+**Nothing in it is a result.** Every figure is arithmetic over a fixed table: there is no model, no
+market, no alpha and no claim that any strategy would produce anything resembling it. The book is
+sized so each trade's initial planned risk sits at or under the `CLAUDE.md` §6 research
+parameters, and **those values are reproduced for display context and changed nowhere**.
+
+**The contract was completed where C5 needed it, and the completion is checkable.** The four §4.4
+risk quantities are now defined in full and in one place, so a two-field subset can no longer be
+mistaken for the record; nine catalogued read models were added with their per-field contracts; and
+the metric dictionary gained its C5 rows, each labelled either a §12.3 transcription or a
+**presentation definition proposed by this cycle** under §12.6. **A presentation definition changes
+no strategy, risk or sizing rule.**
+
+**The separations the specification names are enforced in the interface, not asserted in prose.**
+
+| | |
+|---|---|
+| **initial and current planned risk** | separate columns, separate records, separate as-ofs. Two positions in the book carry a **moved stop**, and only the assessment moved with it |
+| **permitted risk** | **every limit is absent**, with `POLICY_REFERENCE_MISSING`: no risk-limit policy version exists, and a limit is never served under a default nobody approved. **No headroom is computed anywhere**, because subtracting a carried figure from a limit presents capital as available to deploy |
+| **research parameters** | the `CLAUDE.md` §6 values are carried by the **tracked** governance read model and badged `REPOSITORY_TRACKED` on a page whose other panel is `SYNTHETIC` — a real fact is never relabelled synthetic to fit a page |
+| **trade status and data completeness** | two columns and two fields, and one trade in the book is `CLOSED` in status and `PARTIAL` in completeness |
+| **a fill and a trade** | a trade with an entry and a pyramid add is **one row with one identity**, and a partial exit **reduces** a trade rather than closing it |
+| **an entry and what followed it** | `shares_at_entry` and `entry_price` are the **original entry stage's**, and a later add never restates them; what the trade went on to hold, and the basis the add produced, are carried as separate fields. Each stage keeps **its own** retained initial-risk record at its own reference price, as-of and policy version, and the trade-level R denominator is the **sum** of them — three facts, carried as three, and **the sum is served rather than computed on a screen** |
+| **a position reduction and an order fill** | different producers and different facts. A partial exit is routinely executed by an order that filled completely, so **no order state is inferred from a quantity comparison**, and per-order and per-fill evidence stays named as absent |
+| **R and its denominator** | R divides by the **initial** record. One historical trade's record was never written, so it has **no R**, and it is **excluded from the population and counted** rather than dropped |
+| **borrow** | read from a record. One short has none, and it renders **unknown** — never available, and never inferred from price |
+| **the regime** | displayed from a **versioned** context and never recomputed, and its information-set profile is **declared as `FORWARD_SYSTEM`**: a fixture that knows its own window is not point-in-time, and **`PUBLIC_PIT` is not reachable** from anything this project holds |
+| **the named benchmarks** | SPY, QQQ and IWM resolve to **nothing**, because **no provider has been selected** and no market-data feed exists. The one drawable curve is an obviously invented demonstration index on its own line |
+| **minimum observations** | every ratio carries its observed count and its declared minimum, and a population below one reports `INSUFFICIENT_OBSERVATIONS` rather than a number. The book is sized so **both** outcomes occur |
+
+**Three defects were found by measuring rather than by reading, and all three are corrected.**
+
+| | |
+|---|---|
+| **the page scrolled sideways while every container looked correct** | a wide table inside an `overflow-x: auto` region still contributed its full width to the document's scroll width, so **U14 failed at 1024 and 390** and a programmatic horizontal scroll moved the page. Paint containment on the shared scroll region makes the clip authoritative, and it fixes the same latent overflow in the merged C4 evidence strip |
+| **secondary chip text failed the contrast requirement** | reference chips dimmed their resolution and classification with opacity, which measured **2.8:1** against the 4.5:1 body-text requirement. Hierarchy now comes from the token, not from fading text out |
+| **a leading plus was printed on quantities that have no direction** | `+41.85 USD` beside an entry price reads as a gain. A price, a risk amount, a limit and a concentration are magnitudes, and only a directional quantity carries a sign now |
+
+**No trading, provider, AWS, broker or governance operation is performed, enabled or approached by
+any of it.** Every future control is **absent**, not disabled: there is no adjust, set, apply,
+approve, promote, run, retry or acknowledge on any C5 surface, and **no form, no route handler, no
+server action, no API route and no mutation of any kind** anywhere in the application. Sorting,
+filtering and grouping re-order and narrow rows that were already served; they issue no request,
+change no scope and grant no permission.
+
+```text
+C5 portfolio, strategy and risk screens:          IMPLEMENTED - EFFECTIVE ON MERGE
+Cockpit product areas addressed:                  11 of 36
+Cockpit product areas fully implemented:          10 of 36 - AREA 36 IS SPLIT
+trade detail:                                     BASIC - C6 OWNS THE FULL LIFECYCLE
+strategy health:                                  RECORDED STATE ONLY - C7 OWNS AREA 5
+full Cockpit V1:                                  NOT COMPLETE
+production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
+feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
+database, migration, scheduler, deployment:       NOT IMPLEMENTED / NOT AUTHORIZED
+real-source and provider wiring:                  NOT AUTHORIZED
+route handlers, server actions, API routes:       NONE
+control handlers and mutations:                   NONE
+network requests made by the application:         NONE
+new src/kalpamani modules:                        NONE
+Python runtime dependency changes:                NONE
+frontend dependency changes:                      LIGHTWEIGHT-CHARTS 5.2.1 ONLY
+Blueprint PDF changes:                            NONE
+backtesting:                                      NOT STARTED
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+G7 strategy-taxonomy evidence:                    OPEN - NO DIVERSIFICATION CLAIM IS MADE
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A portfolio screen is not a portfolio, and merging it authorizes no further cycle.**
+**Specification, implementation, deployment and execution stay separate gates**, and the next
+Cockpit cycle — C6 — is a **separate written authorization that has not been given**.
 
 
 ### The Cockpit and Feedback specification — ACCEPTED ON MERGE, and nothing is implemented

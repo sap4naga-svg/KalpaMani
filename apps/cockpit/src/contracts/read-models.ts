@@ -15,7 +15,6 @@ import {
   magnitude,
   metricValue,
   money,
-  policyRef,
   reasonCoded,
   recordValue,
   ref,
@@ -37,19 +36,23 @@ import { availabilityState, fieldReasonCode } from "./vocabularies";
 const lastRunRecord = z.object({ at: metricValue, ref });
 export type LastRunRecord = z.infer<typeof lastRunRecord>;
 
-/** §4.4 — the four risk quantities, kept apart. C3 renders two of them. */
-export const currentOpenPlannedRisk = z.object({
-  amount: money,
-  as_of: instant,
-  policy: policyRef,
-  staleness: z.enum(["FRESH", "STALE"]),
-});
+/**
+ * §4.4 — the four risk quantities, kept apart.
+ *
+ * C3 carried a two-field subset of two of them; C5 needs all four in full, and **a second
+ * type with the same name is exactly what §4.2 forbids**. They are now defined once, in
+ * `contracts/risk-records.ts`, and re-exported here so the read models that carried them
+ * keep their import path.
+ */
+import { currentOpenPlannedRisk, permittedRisk } from "./risk-records";
 
-export const permittedRisk = z.object({
-  amount: money,
-  policy: policyRef,
-  scope: z.literal("OPEN_PORTFOLIO"),
-});
+export {
+  currentOpenPlannedRisk,
+  gapEventRisk,
+  initialPlannedRisk,
+  permittedRisk,
+  PERMITTED_RISK_SCOPES,
+} from "./risk-records";
 
 const pnlWindow = z.object({
   window: z.enum(["DAY", "WEEK", "MONTH", "CUMULATIVE"]),
@@ -311,6 +314,27 @@ export const qualificationStatusPayload = z.object({
     prerequisite: reasonCoded,
     source: trackedSource,
   }),
+  /**
+   * The governed research values of `CLAUDE.md` §6, reproduced for display context.
+   *
+   * THEY LIVE HERE, IN THE TRACKED READ MODEL, ON PURPOSE. They are REAL facts read from
+   * tracked repository authority, and §2.2 forbids relabelling a real fact `SYNTHETIC` —
+   * which is what carrying them inside the synthetic risk snapshot would do. The risk screen
+   * reads both models and badges each panel individually, exactly as §5 requires of a page
+   * carrying both kinds.
+   *
+   * **They are research parameters, not permitted limits**, and not performance expectations.
+   * Displaying one grants nothing, authorizes nothing and changes nothing.
+   */
+  research_parameters: z.array(
+    z.object({
+      parameter: reasonCoded,
+      value: metricValue,
+      /** What the number is measured against, so a percentage names its denominator. */
+      basis: reasonCoded,
+      source: trackedSource,
+    }),
+  ),
   /** The delivery cycle this application is in, read from tracked authority. */
   implementation_phase: reasonCoded,
   phase_state: reasonCoded,
@@ -405,6 +429,16 @@ export const performanceSeriesPayload = z
     equity: series,
     return_series: series,
     drawdown_series: series,
+    /**
+     * ADDITIVE: the return of EACH period, aligned to the same instants.
+     *
+     * `return_series` is cumulative since the window opened; this is per period, and the two
+     * carry different `metric_id`s because they are different quantities. It exists so a
+     * heat map of monthly returns reads a produced value instead of a screen deriving one —
+     * **a screen that computes its own variant of a metric is reporting a different metric
+     * under the same name** (§12.2).
+     */
+    period_return_series: series.optional(),
     /** CLOSE_ONLY or INTRADAY, stated ON the series (§4.5). */
     drawdown_basis: z.enum(DRAWDOWN_BASES),
     /**
@@ -458,6 +492,15 @@ export const performanceSeriesPayload = z
         });
         return;
       }
+    }
+    if (
+      candidate.period_return_series !== undefined &&
+      candidate.period_return_series.points.length !== candidate.equity.points.length
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "the per-period return series covers the same periods as the equity series",
+      });
     }
     if (candidate.granularity !== candidate.equity.granularity) {
       ctx.addIssue({

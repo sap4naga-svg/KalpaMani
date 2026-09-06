@@ -23,6 +23,20 @@ import {
   QUALIFICATION_STATUS_SCHEMA,
   WHAT_CHANGED_SCHEMA,
 } from "@/contracts/read-models";
+import {
+  EXPOSURE_AGGREGATE_SCHEMA,
+  PERFORMANCE_SUMMARY_SCHEMA,
+  POSITION_SNAPSHOT_SCHEMA,
+  TRADE_DETAIL_SCHEMA,
+  TRADE_LIFECYCLE_SCHEMA,
+  TRADE_SUMMARY_SCHEMA,
+} from "@/contracts/portfolio-models";
+import { STRATEGY_PERFORMANCE_SCHEMA } from "@/contracts/strategy-models";
+import {
+  MARKET_REGIME_SCHEMA,
+  RISK_SNAPSHOT_SCHEMA,
+  SHORT_SIDE_SNAPSHOT_SCHEMA,
+} from "@/contracts/risk-market-models";
 import type { DataClassification, DataProvenance } from "@/contracts/vocabularies";
 
 export interface ReadModelIdentity {
@@ -102,10 +116,135 @@ export const PERFORMANCE_SERIES_IDENTITY: ReadModelIdentity = {
   accessScope: "portfolio:read",
 };
 
+/* ------------------------------------------------------------------ added by C5 */
+
+/*
+ * THE SAME REASONING AS `PerformanceSeries`, APPLIED TO NINE MORE READ MODELS.
+ *
+ * §4.5 classifies every one of these `PRIVATE_OPERATIONAL` — a real recorded position, trade
+ * or risk assessment is private operational state, and the `PUBLIC_EDGE` boundary REFUSES
+ * one. What this application can show is a repository-owned synthetic demonstration, and it
+ * is labelled `PUBLIC_SAFE` / `SYNTHETIC` because that is what it IS. A real payload would
+ * carry `PRIVATE_OPERATIONAL` with `SYSTEM_RECORDED` provenance and would be refused here
+ * rather than relabelled to fit the host.
+ *
+ * **The access scope is the contract's**, not a convenience: §5.1 gives portfolio reads
+ * `portfolio:read`, the lifecycle `execution:read`, strategy `strategy:read`, risk and the
+ * short side `risk:read`, and the regime `market:read`. Two access scopes never share a
+ * cache entry (§7), so a screen holding several of them holds several entries.
+ */
+
+export const PERFORMANCE_SUMMARY_IDENTITY: ReadModelIdentity = {
+  readModel: "PerformanceSummary",
+  queryName: "performance-summary",
+  schemaVersion: PERFORMANCE_SUMMARY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
+export const POSITION_SNAPSHOT_IDENTITY: ReadModelIdentity = {
+  readModel: "PositionSnapshot",
+  queryName: "position-snapshot",
+  schemaVersion: POSITION_SNAPSHOT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
+export const EXPOSURE_AGGREGATE_IDENTITY: ReadModelIdentity = {
+  readModel: "ExposureAggregate",
+  queryName: "exposure-aggregate",
+  schemaVersion: EXPOSURE_AGGREGATE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
+export const TRADE_SUMMARY_IDENTITY: ReadModelIdentity = {
+  readModel: "TradeSummary",
+  queryName: "trade-summary",
+  schemaVersion: TRADE_SUMMARY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
+export const TRADE_DETAIL_IDENTITY: ReadModelIdentity = {
+  readModel: "TradeDetail",
+  queryName: "trade-detail",
+  schemaVersion: TRADE_DETAIL_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
+/**
+ * The lifecycle is `execution:read`, and that separation is the point.
+ *
+ * Execution mechanics are a different screen with a different owner (Area 36.3). Keying the
+ * basic lifecycle under the portfolio scope would put order and fill facts in the same cache
+ * entry as the ledger, which is the collapse the four-concepts rule exists to prevent.
+ */
+export const TRADE_LIFECYCLE_IDENTITY: ReadModelIdentity = {
+  readModel: "TradeLifecycle",
+  queryName: "trade-lifecycle",
+  schemaVersion: TRADE_LIFECYCLE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "execution:read",
+};
+
+export const STRATEGY_PERFORMANCE_IDENTITY: ReadModelIdentity = {
+  readModel: "StrategyPerformance",
+  queryName: "strategy-performance",
+  schemaVersion: STRATEGY_PERFORMANCE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "strategy:read",
+};
+
+export const RISK_SNAPSHOT_IDENTITY: ReadModelIdentity = {
+  readModel: "RiskSnapshot",
+  queryName: "risk-snapshot",
+  schemaVersion: RISK_SNAPSHOT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "risk:read",
+};
+
+export const SHORT_SIDE_IDENTITY: ReadModelIdentity = {
+  readModel: "ShortSideSnapshot",
+  queryName: "short-side-snapshot",
+  schemaVersion: SHORT_SIDE_SNAPSHOT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "risk:read",
+};
+
+export const MARKET_REGIME_IDENTITY: ReadModelIdentity = {
+  readModel: "MarketRegime",
+  queryName: "market-regime",
+  schemaVersion: MARKET_REGIME_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "market:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
   WHAT_CHANGED_IDENTITY,
   QUALIFICATION_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
+  PERFORMANCE_SUMMARY_IDENTITY,
+  POSITION_SNAPSHOT_IDENTITY,
+  EXPOSURE_AGGREGATE_IDENTITY,
+  TRADE_SUMMARY_IDENTITY,
+  TRADE_DETAIL_IDENTITY,
+  TRADE_LIFECYCLE_IDENTITY,
+  STRATEGY_PERFORMANCE_IDENTITY,
+  RISK_SNAPSHOT_IDENTITY,
+  SHORT_SIDE_IDENTITY,
+  MARKET_REGIME_IDENTITY,
 ];

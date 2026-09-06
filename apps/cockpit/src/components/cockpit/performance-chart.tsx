@@ -22,9 +22,12 @@ import type { PerformanceSeriesPayload } from "@/contracts/read-models";
 import type { Series } from "@/contracts/values";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import {
+  GRANULARITY_LABEL,
   PERFORMANCE_PERIODS,
   PERIOD_LABEL,
+  SERIES_GRANULARITIES,
   type PerformancePeriod,
+  type ScopeGranularity,
   type ViewScope,
 } from "@/lib/scope";
 import { cn } from "@/lib/utils";
@@ -125,7 +128,14 @@ function buildRows(
 
   const rows: ChartRow[] = [];
   series.points.forEach((point, index) => {
-    if (index > 0) {
+    /*
+     * A BREAK IS ONLY DERIVABLE AT DAILY GRANULARITY.
+     *
+     * The rule below is "the weekdays between two consecutive points carry no observation",
+     * and that is true of a daily series. A weekly or monthly series is SUPPOSED to skip
+     * weekdays, so applying it there would draw a break through every period.
+     */
+    if (index > 0 && series.granularity === "DAILY") {
       const previous = series.points[index - 1].t;
       if (/^\d{4}-\d{2}-\d{2}$/.test(previous) && /^\d{4}-\d{2}-\d{2}$/.test(point.t)) {
         let cursor = nextWeekday(previous);
@@ -234,11 +244,52 @@ function PeriodSelector({
   );
 }
 
+/** The granularity selector. Like the period, it is a request parameter and lives in the URL. */
+function GranularitySelector({
+  granularity,
+  onSelect,
+}: {
+  granularity: ScopeGranularity;
+  onSelect: (next: ScopeGranularity) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Series granularity"
+      className="flex flex-wrap gap-1"
+      data-testid="granularity-selector"
+    >
+      {SERIES_GRANULARITIES.map((candidate) => (
+        <Button
+          key={candidate}
+          size="sm"
+          variant={candidate === granularity ? "primary" : "subtle"}
+          aria-pressed={candidate === granularity}
+          onClick={() => onSelect(candidate)}
+          title={`${GRANULARITY_LABEL[candidate]} periods`}
+        >
+          {GRANULARITY_LABEL[candidate]}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 export interface PerformanceOverviewProps {
   readonly envelope: EnvelopeOf<PerformanceSeriesPayload> | undefined;
   readonly scope: ViewScope;
   readonly operator: boolean;
   readonly onPeriodChange: (next: PerformancePeriod) => void;
+  /**
+   * Present on the portfolio performance page and absent on the executive overview.
+   *
+   * The overview is an OVERVIEW: one granularity, one question. The performance page asks a
+   * different question at each granularity, so it owns the control.
+   */
+  readonly onGranularityChange?: (next: ScopeGranularity) => void;
+  readonly heading?: string;
+  readonly summary?: string;
+  readonly testId?: string;
 }
 
 export function PerformanceOverview({
@@ -246,6 +297,10 @@ export function PerformanceOverview({
   scope,
   operator,
   onPeriodChange,
+  onGranularityChange,
+  heading = "Performance overview",
+  summary = "Equity, return and drawdown over one stated window. An overview — not the full portfolio performance analysis.",
+  testId = "performance-overview",
 }: PerformanceOverviewProps) {
   const [view, setView] = React.useState<ChartView>("equity");
   const [showBenchmark, setShowBenchmark] = React.useState(false);
@@ -268,18 +323,21 @@ export function PerformanceOverview({
   const partial = series !== undefined && series.completeness !== "COMPLETE";
 
   return (
-    <Card data-testid="performance-overview">
+    <Card data-testid={testId}>
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label>Performance overview</Label>
-          <p className="mt-0.5 max-w-xl text-label-m text-text-secondary">
-            Equity, return and drawdown over one stated window. An overview — not the full
-            portfolio performance analysis.
-          </p>
+          <Label>{heading}</Label>
+          <p className="mt-0.5 max-w-xl text-label-m text-text-secondary">{summary}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {envelope !== undefined && payload !== undefined && (
             <ProvenanceBadge provenance={envelope.provenance} />
+          )}
+          {onGranularityChange !== undefined && (
+            <GranularitySelector
+              granularity={scope.granularity}
+              onSelect={onGranularityChange}
+            />
           )}
           <PeriodSelector period={scope.period} onSelect={onPeriodChange} />
         </div>

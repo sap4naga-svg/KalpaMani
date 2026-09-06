@@ -1,22 +1,32 @@
-# KalpaMani Cockpit — C4 Executive Overview and governance
+# KalpaMani Cockpit — C5 portfolio, strategy, exposure and trade views
 
-The Executive Overview, Attention Required, project and qualification governance, and
-environment and deployment maturity — built on the merged C3 application foundation, under
+Portfolio performance, positions and exposure, strategy performance, market and regime, the risk
+dashboard, the short side, and trade history with a **basic** trade detail — built on the merged
+C3 foundation and C4 screens, under
 [ADR-0027](../../docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md)
 and the corrected contracts of
 [ADR-0028](../../docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
 and
 [ADR-0029](../../docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
 
-**This is C4. It is not the Cockpit.** C3 delivered the design system, shell, navigation and
-contract layer with two substantive screens; C4 adds the Executive Overview, a performance
-overview, the ranked Attention Required list, What Changed, and two governance screens — still
-running on a **local fixture adapter**, and still with no production read API, projection or
-metric engine behind it.
+**This is C5. It is not the Cockpit.** C3 delivered the design system, shell, navigation and
+contract layer; C4 added the Executive Overview, the performance overview, Attention Required,
+What Changed and two governance screens; C5 adds seven product areas and one deep destination —
+still running on a **local fixture adapter**, and still with no production read API, projection
+or metric engine behind it.
 
-**Four of the thirty-six product areas are implemented.** Areas 1, 24, 25 and 28 — the C4 row of
-the traceability matrix. The other thirty-two remain registered, reachable placeholders, and the
-C5–C10 sequencing is unchanged.
+**Eleven of the thirty-six product areas are addressed, and ten of them are finished.** Areas 1,
+24, 25 and 28 from C4, and areas 2, 3, 4, 11, 12, 13 and 36 from C5 — the C5 row of the
+traceability matrix. **Area 36 is deliberately split and is delivered in part**: its ledger is
+complete and its trade detail is basic, so a count of areas touched is not a count of areas
+finished. The other twenty-five remain registered, reachable placeholders, and the C6-C10
+sequencing is unchanged.
+
+**Two boundaries inside area 36 are worth naming up front.** The matrix splits it: **C5 owns the
+trade history and a BASIC trade detail, and C6 owns the complete lifecycle and the chart
+drill-down.** And **Area 5, Strategy Health, is C7's** — this cycle displays a recorded health
+state beside each strategy version's results and implements none of the transitions, drift
+measures, failure clusters or research-queue behaviour that area is about.
 
 ---
 
@@ -24,7 +34,7 @@ C5–C10 sequencing is unchanged.
 
 | | |
 |---|---|
-| **real** | the governance facts on `/governance/qualification`, and the readiness figures on the landing page. Provenance `REPOSITORY_TRACKED`, transcribed from tracked repository authority, each carrying its exact source path, its source commit and its recorded as-of date |
+| **real** | the governance facts on `/governance/qualification`, the readiness figures on the landing page, and the **governed research parameters** on `/risk`. Provenance `REPOSITORY_TRACKED`, transcribed from tracked repository authority, each carrying its exact source path, its source commit and its recorded as-of date |
 | **synthetic** | everything in the `demo` scenario. Repository-owned deterministic fixtures, labelled `SYNTHETIC` at page level and at component level. **Not a result, not a measurement, and not evidence of anything** |
 | **unavailable** | every operational read model in the default `project` scenario. Portfolio, risk, execution, strategy and signal projections do not exist, so their tiles say so — with the state, its closed reason code and its named dependency. **Nothing is estimated in their place** |
 
@@ -58,16 +68,21 @@ bundled by `eslint-config-next@16.3.4` fails to load under it
 depends on the TypeScript compiler API targets the 5.x line; 5.9.3 is the compatible stable
 choice for this stack.
 
-**Recharts is pinned to 3.10.1**, the current stable release, and it is the one dependency C4
-adds. `ui-ux-specification.md` §13 assigns "executive and time series — KPI trends, equity and
+**Recharts is pinned to 3.10.1**, the current stable release, and it was the one dependency C4
+added. `ui-ux-specification.md` §13 assigns "executive and time series — KPI trends, equity and
 drawdown curves, ordinary comparisons" to Recharts, so the choice is transcribed rather than
 made here. Its published peer range is `react ^16.8 || ^17 || ^18 || ^19` and
 `react-dom ^16 || ^17 || ^18 || ^19` against this project's React 19.2.8, and its engine range is
-`node >=18` against Node 22.21.0; `npm ls` resolves it with no unmet peer. **No other dependency
-was added, upgraded or removed**, and the lockfile is otherwise unchanged.
+`node >=18` against Node 22.21.0; `npm ls` resolves it with no unmet peer.
 
-TradingView Lightweight Charts and Apache ECharts — the other two classes §13 names — are **not**
-installed. They belong to price/trade overlays and dense analytics, neither of which C4 renders.
+**TradingView Lightweight Charts 5.2.1 is installed, and C5 added it.** §13 assigns
+price and trade overlays to it, and the trade detail is that surface — the full entry is under
+*Dependencies added by C5* below. An earlier revision of this file said it was **not** installed,
+which was true of C4 and stopped being true when C5 added it; the statement is corrected here
+rather than left to contradict the lockfile.
+
+**Apache ECharts — the third class §13 names — is still not installed.** It belongs to dense
+analytics, which no cycle so far renders.
 
 ---
 
@@ -93,9 +108,10 @@ desktop (1440×900), tablet (1024×768) and mobile (390×844) viewports:
 screenshots/      the C3 author and reviewer captures, regenerated by the C3 specs
 screenshots-c4/   the C4 captures, plus PROVENANCE.txt naming the exact commit they were
                   taken at and whether the working tree was clean
+screenshots-c5/   the C5 captures, with their own PROVENANCE.txt
 ```
 
-Both are git-ignored: they are **review evidence, not a visual-regression baseline**. Visual
+All three are git-ignored: they are **review evidence, not a visual-regression baseline**. Visual
 regression is specified for a later cycle.
 
 **To review the screens by hand**, `npm run dev` and open:
@@ -110,6 +126,17 @@ regression is specified for a later cycle.
 /attention?scenario=demo              the ranked list, its filters and its evidence drawers
 /governance/qualification             the real tracked governance facts
 /governance/maturity                  the stage-to-environment mapping
+
+/portfolio/performance?scenario=demo&gran=MONTHLY   the monthly heat map and the summaries
+/portfolio/positions?scenario=demo&dir=SHORT        a filtered table, with its chips
+/portfolio/positions?scenario=demo&borrow=BORROW_STATE_UNKNOWN   an unknown borrow
+/portfolio/trades?scenario=demo&status=PARTIALLY_EXITED          one trade, reduced not closed
+/portfolio/trades/demo-trade-nvl-0002?scenario=demo              a pyramided trade's detail
+/portfolio/trades/demo-trade-gen-0002?scenario=demo              CLOSED and PARTIAL together
+/strategy/performance?scenario=demo   two versions of one module, kept apart
+/risk?scenario=demo                   permitted limits absent, research parameters tracked
+/risk/short-side?scenario=demo        a borrow record, and one security with none
+/market/regime?scenario=demo          a versioned regime, declared FORWARD_SYSTEM
 ```
 
 ---
@@ -122,8 +149,8 @@ src/contracts/     the closed vocabularies, the 4.1.1 validity matrix, the fresh
                    payload contracts -- transcribed from read-model-contracts.md
 src/data/client/   the typed READ-CLIENT BOUNDARY, the query keys and the query hooks.
                    default-client.ts is the ONE composition point that names the adapter
-src/data/fixtures/ the deterministic fixture adapter, the synthetic scenario and the
-                   tracked governance facts
+src/data/fixtures/ the deterministic fixture adapter, the ONE synthetic book every C5
+                   screen is projected from, and the tracked governance facts
 src/components/    ui/ primitives, cockpit/ contract-aware presentation, shell/ the
                    application shell, palette/ the command palette
 src/nav/           the typed route registry every navigation surface reads
@@ -148,7 +175,15 @@ Mode, environment and scenario live in the URL, so a link reproduces the view:
 
 ```text
 /?mode=executive|operator&env=RESEARCH|PAPER|LIVE&scenario=project|demo
- &period=1M|3M|6M|1Y|ALL&changes=auto|valid|none|no-baseline|degraded
+ &period=1M|3M|6M|1Y|ALL&gran=DAILY|WEEKLY|MONTHLY
+ &changes=auto|valid|none|no-baseline|degraded
+```
+
+Page-local filters live in the same query string, beside the view scope and never instead of it:
+
+```text
+/portfolio/positions?q=&dir=&sector=&strategy=&borrow=
+/portfolio/trades?q=&status=&dir=&strategy=&outcome=&from=&to=
 ```
 
 - **mode** — Executive is status, attention and change; Operator adds reason codes, metric
@@ -174,6 +209,16 @@ Mode, environment and scenario live in the URL, so a link reproduces the view:
 - **period** — the performance overview's comparison window. A **request parameter**, not a
   presentation preference: it changes the extent the series covers, so it is part of that read
   model's cache key, and one range's points can never be drawn under another range's label.
+- **gran** — the granularity a performance series is requested at. Like `period`, it is a
+  **request parameter** of one read model: daily, weekly and monthly returns are three different
+  chain-linked series over the same window, not one series drawn three ways, so it joins that
+  read model's cache key. The monthly heat map reads a **produced** per-period return series
+  and derives nothing.
+- **page filters** — search, side, sector, strategy, borrow, trade status, outcome and a date
+  range. They narrow rows that were already delivered, they are visible as **removable chips**,
+  and they survive a mode switch because they live in the URL (U13). **They change no total, no
+  population and no permission**: every figure on a page is computed over the whole delivered
+  page, and the row count says so.
 - **changes** — which of §7's four comparison behaviours the What Changed panel shows. Three of
   them are only reachable when an endpoint is broken, and a reviewer cannot break a fixture from
   the interface — so the variants are selectable, deterministic, and honoured **only inside the
@@ -207,17 +252,160 @@ Two additions were made to the metric dictionary rather than invented at a call 
 vocabulary holds no unit for a point in time, only durations — and the metric keys the new
 surfaces render. **An unregistered `metric_id` is still refused at admission.**
 
+### Completed by C5
+
+Nine catalogued read models were added with their per-field contracts, and the §4.4 records were
+completed:
+
+| | |
+|---|---|
+| **the four risk quantities** | `InitialPlannedRisk`, `CurrentOpenPlannedRisk`, `PermittedRisk` and `GapEventRisk` are now defined **in full and in one place**, `src/contracts/risk-records.ts`. C3 carried a two-field subset of two of them; **a second type with the same name is what §4.2 forbids**, so the subset was completed rather than duplicated, and the C4 executive overview was updated to the completed record |
+| `PerformanceSummary` | the window, the ratios, the R-multiple distribution, the defined population and the cost treatment — plus per-metric **observation rules** and counted **exclusions**, so a ratio's minimum and its actual sample are displayable rather than implied |
+| `PositionSnapshot`, `ExposureAggregate` | per position and per grouping axis, with the four magnitudes checked in **integer hundredths** at the boundary: gross is long plus short, net is their difference carried as a positive magnitude whose direction states the side, and a magnitude is never negative |
+| `TradeSummary`, `TradeDetail` | the ledger row and one trade's story, with six cross-field invariants enforced at admission — status against share counts, exit fields against status, realized against a closed portion, unrealized against an open one, R against its initial record, and path-dependent values against completeness |
+| `TradeLifecycle` | in the **basic** form C5 owns: the trade-level stages a recorded trade has, ordered by `event_time` with `observed_time` retained, plus an additive `absent_kinds` list naming every event kind this timeline does **not** carry |
+| `StrategyPerformance` | keyed by module **and** exact version, with slices, the per-module measures Area 4 names, a recorded health **context**, and a family roll-up carrying **no diversification figure at all** |
+| `RiskSnapshot`, `ShortSideSnapshot`, `MarketRegime` | the risk aggregate with its per-trade initial records and its named-but-unapproved thresholds; the borrow records with their own sources; and the versioned regime with its **declared** information-set profile |
+
+Three additions were made to the contract rather than invented at a call site, and each is
+labelled where it is defined: an additive `period_return_series` on `PerformanceSeries` — a
+**separate `metric_id`**, because a per-period return and a cumulative one are different
+quantities and §12.2 forbids sharing an identifier; a `scope` carried beside each permitted-risk
+wrapper, so an **absent** limit can still name which limit is missing; and an `EMBEDDED`
+resolution for the security and chart references, so a table of reference identifiers is
+readable. The metric dictionary gained its C5 rows, each marked either a **§12.3 transcription**
+or a **presentation definition proposed by this cycle** under §12.6. **An unregistered
+`metric_id` is still refused at admission.**
+
 ### Still not carried
 
 | | |
 |---|---|
-| **read models** | the rest of the catalogue. `PerformanceSummary`, `TradeDetail`, `ExecutionQuality`, `StrategyHealth`, `SignalFunnel`, `DataQuality`, `Alert`, `FeedbackPipeline`, `SearchResultPage` and `AskAnswer` are not implemented, and their screens remain placeholders |
+| **read models** | the rest of the catalogue. `CandidateFunnel`, `CandidateDetail`, `MissedOpportunity`, `ExecutionQuality`, `ReconciliationStatus`, `StrategyHealth`, `StrategyVersion`, `ResearchRun`, `DataQuality`, `Alert`, `FeedbackPipeline`, `SearchResultPage` and `AskAnswer` are not implemented, and their screens remain placeholders |
+| **the complete `TradeLifecycle`** | order and fill mechanics, protective-order events, reconciliation and corrections. **C6 owns them**, and each is named as an absent event kind rather than left out |
+| **finalized attribution** | strategy, factor, regime, execution and cost attribution are all `NOT_IMPLEMENTED` on the trade detail. A provisional zero would be a decomposition nobody computed |
+| **rolling series and capacity** | no rolling-window series and no capacity figure is derived. Trailing performance is **five separate reads over five windows**, each with its own population; capacity needs a liquidity and market-impact model over qualified provider data, and **G1 is OPEN** |
+| **slippage and execution cost** | unavailable everywhere. It needs a named reference price with its own timestamp per fill, and an execution runtime to record them |
+| **cursor pagination** | the page contract carries its size, its total, its truncation flag, its sort key and its tiebreak. It carries **no cursor**: a cursor is meaningful only against a transport that can continue a page, and this local read client returns one page and continues none |
 | **`PerformanceSeries` classification** | §4.5 classifies a real one `PRIVATE_OPERATIONAL`, which the `PUBLIC_EDGE` boundary **refuses**. What this application can show is a repository-owned synthetic demonstration, labelled `PUBLIC_SAFE` and `SYNTHETIC` because that is what it is. A real recorded series would be refused here rather than relabelled to fit the host |
 | **`source_refs`** | carried, and empty on every response. The fixture adapter references no source fact, and states a total of zero rather than implying one |
 | **`QualificationStatus` sources** | still a tracked `{path, commit}` rather than a §4.2 `Ref`: the reference resolves to a file in this public repository, which a `Ref` could not express |
 
 **No claim is made that the catalogue is complete.** The remaining read models, payload fields
 and metrics arrive with the cycles that produce them.
+
+---
+
+## Implemented in C5
+
+| Route | Area | State |
+|---|---|---|
+| `/portfolio/performance` | 2 | **implemented** — equity, return and drawdown at a selectable granularity; realized and unrealized reported separately; the monthly heat map; the window summary with its observation rules and R distribution; trailing-window performance; and the benchmark surface |
+| `/portfolio/positions` | 3 | **implemented** — a sortable, filterable TanStack table with a row detail, and seven exposure axes over the same positions |
+| `/portfolio/trades` | 36 | **implemented** — the trade ledger, with search, typed filters, a date range and a row detail |
+| `/portfolio/trades/[tradeId]` | 36 | **implemented (basic)** — identity, economics, both risk records, recorded reasons, the trade-level timeline, the price marks with their recorded markers, and every stage this cycle does not carry named as a gap |
+| `/strategy/performance` | 4 | **implemented** — per module and per **exact version**, with slices, module measures, a recorded health context and the family roll-up |
+| `/market/regime` | 11 | **implemented** — the versioned regime, its components, sector standing, long and short context and the recorded stress history |
+| `/risk` | 12 | **implemented** — the four risk quantities kept apart, permitted limits reported as unapproved, named thresholds, and the tracked research parameters beside them |
+| `/risk/short-side` | 13 | **implemented** — gross short, the borrow records with their sources, the short-specific states and the blocked shorts |
+
+### Corrected in independent review
+
+Six defects were found by reading the fixture against `read-model-contracts.md` §4.5, §12.4
+and `cockpit-v1-specification.md` §5, reproduced on the reviewed head, and corrected here. The
+three below are the trade-semantics ones; three more follow the table. Each has a regression that
+fails for the intended reason. **Two carry an in-test negative control** asserting that the
+retired rule gives a **different** answer, so the assertion distinguishes the two rules rather
+than passing under both; a third was verified by temporarily reintroducing the defect, observing
+the regression fail for its intended reason, and restoring the tree — that check was run, and it
+is not committed.
+
+| | |
+|---|---|
+| **a later add restated the original entry** | `shares_at_entry` summed every stage and `entry_price` reported the blended basis, so the pyramid's ledger row read **100 shares at 63.88** for an entry of **60 at 62.40** — a size and a price the trade never entered at. §4.5 calls this field "filled at entry" and calls `PositionSnapshot.entry_price` a "position-weighted basis" in the same document, so they are two questions. The entry facts are now the entry stage's, what the trade went on to hold is carried by the additive `shares_acquired` and `current_basis`, and **the admission rule that forced the conflation was corrected rather than the fact**: the status rules bound the open quantity by what the trade FILLED, so a pyramid holding more than it entered with is admitted, and a trade holding more than it ever filled is still refused |
+| **one blended record stood in for every stage's** | the single retained `InitialPlannedRisk` carried the **summed** risk of both stages against the **combined** basis, while dating itself at the entry and pointing at the entry's invalidation level — a record describing no stage that ever existed, and the number the trade detail printed under "Recorded at entry". §12.4 requires each add to keep "its own record, at its own reference price and its own as-of" with "the trade's original record retained unchanged", and makes the **sum** the trade-level R denominator, which is a third thing. All three are now separate: the original record, each add's own, and `r_denominator` — **served rather than derived**, because a screen computing it would be a screen computing a metric. Every contributing policy version is printed with its own record, and the book's add now names a later one so that case is visible rather than theoretical. **The R denominator itself is unchanged** — it was already the sum, and §12.4 says it must be |
+| **a historical valuation used a future add** | MFE and MAE were measured across the **whole** path at the final quantity and the final basis, so the thirty sessions during which the pyramid held 60 shares at 62.40 were valued as 100 at 63.88. On this trade that reported **29.00 / −342.00** where the position could only have reached **106.20 / −314.00**, and `capture_ratio` divided by the wrong MFE. Every session is now valued with the quantity and basis it actually carried, exits included |
+
+A fourth was an internal contradiction inside the book itself: `stop_outcome` returned
+**`STOP_TRAILED_THEN_TRIGGERED` for every non-losing outcome**, so a trade whose recorded
+`exit_reason` was **`PLANNED_TARGET_REACHED`** also claimed its trailed stop had triggered, and so
+did the exact break-even, whose reason is `TIME_STOP_REACHED`. Two fields describing one event
+disagreed on roughly a fifth of the closed ledger. They now share the thresholds of the reason
+that produces them, and a regression walks every closed trade asserting that a reason which says
+the stop did not fire is never paired with an outcome that says it did — checking first that both
+contradicting cases actually occur in the book, so the assertion is exercised rather than vacuous.
+
+Correcting the second one exposed a **sixth**, in the surface that matters most. The risk
+dashboard lists the retained entry-time records of open exposure, and it listed **one per trade**
+— which, once each record described its own stage truthfully, reported the pyramid's planned risk
+as **186.00** where its retained records total **398.00**. Understating planned risk on a risk
+dashboard is the wrong direction to be wrong in, so it now lists **one entry per retained stage
+record**, stage-labelled so two records sharing a trade reference stay apart, with a regression
+asserting the listed records total the trade's own retained sum.
+
+A fifth was corrected in the lifecycle: an exit reported **`ORDER_PARTIALLY_FILLED`** whenever
+its quantity was smaller than the trade's, inferring an **order's** fulfilment from a **position**
+comparison — while `absent_kinds` declared `INDIVIDUAL_FILL` as `PRODUCER_NOT_IMPLEMENTED` in the
+same payload. A partial exit is routinely executed by an order that filled completely. This book
+records completed stage and exit fills and nothing else, so every event reports the fill state it
+actually has and per-order evidence stays explicitly unavailable. The same comparison also decided
+**partial versus final**, which is a question about what is **left**: an exit closing the remainder
+after earlier partial exits is smaller than the entry and is still the final one. That defect was
+**latent** — no shipped row exercises it, because every generated trade exits in one go — so its
+regression is a constructed trade, and the report says so rather than claiming a visible fix.
+
+**A basic trade detail is not the full lifecycle**, and this cycle claims neither it nor Area 5.
+The complete Candidate → Brain → Risk → Execution → Reconciliation → Attribution workflow is
+**C6's**, Strategy Health is **C7's**, and Execution History and the Audit Trail are separate
+screens in later cycles. **The four concepts stay apart**: the ledger, one trade's story,
+execution mechanics and the audit trail share identifiers and never share a screen.
+
+### The synthetic book
+
+**One deterministic ledger, and every C5 screen is a projection of it.**
+
+```text
+8 fictional securities   DEMO.ARB, DEMO.NVL, DEMO.CIR, DEMO.HLX, DEMO.PLM,
+                         DEMO.KTN, DEMO.MRD, DEMO.SOL -- across eight sectors
+6 exact versions         breakout-long-v3, breakout-long-v2 (superseded),
+                         pullback-long-v2, pead-long-v1, pead-short-v1,
+                         deterioration-short-v1 -- in three alpha families
+200 trades               5 open or partially exited, 195 closed
+504 sessions             two years of weekdays on a named market calendar, ending at T-1
+1 external cash flow     a deposit inside the three-month window
+```
+
+Every value is an **integer number of cents**, and rounding happens once, where a decimal string
+is produced. Each trade carries a **daily mark path** with exact endpoints, and MFE, MAE, the
+capture ratio and the equity curve are all read from those marks rather than invented separately.
+Equity at each session is `strategy capital + realized to date + open unrealized + external
+flows`, which is why the curve, the ledger, the positions and the per-version results **cannot
+disagree**.
+
+**The cases a reviewer should look for are deliberate, and each occurs exactly once:**
+
+| | |
+|---|---|
+| a **pyramid add** | `demo-trade-nvl-0002` — entered 60 at 62.40, added 40 at 66.10, and **the entry facts are not restated**: the ledger row reports 60 at entry, 100 acquired, 100 open, and a current basis of 63.88 that is shown as a basis and never as an entry price. One row in the ledger |
+| **two contributing risk-policy versions** | the same pyramid — each stage keeps its own retained record at its own reference price and as-of, they name **different** policy versions, and §12.4's R denominator is the **sum** of the two, carried explicitly rather than derived on the screen |
+| a **partial exit** | `demo-trade-cir-0003` — realized on the closed portion, unrealized on the remaining one, and it is not closed |
+| a **moved stop** | `demo-trade-arb-0001` — the assessment moved and the entry record did not |
+| a **stale assessment** | `demo-trade-plm-0005` — present, marked stale, shown with the instant it was true at |
+| an **unknown borrow** | the same short — no borrow record exists, and every figure from it is unavailable |
+| a **missing risk record** | `demo-trade-gen-0001` — no R, excluded from the population, and counted |
+| an **incomplete price path** | `demo-trade-gen-0002` — `CLOSED` in status and `PARTIAL` in completeness |
+| an **exact break-even** | several closed trades realize `0.00` — a measured zero, and `AVAILABLE` |
+| a **losing module** | `pead-short-v1` reports a negative expectancy and a profit factor below one |
+| a **population below its minimum** | `breakout-long-v2` has too few closed trades for any trade-count ratio |
+
+**Nothing in it is a result.** There is no model, no market and no alpha: a fixed seed walks a
+fixed step function between endpoints chosen by hand. Position sizes obey the `CLAUDE.md` §6
+research parameters — 0.50% of capital long, 0.25% short, no position near the 8–10% ceiling,
+gross short well inside 25% — and **a fixture obeying them is not a claim that anything enforced
+them**.
+
+**The owner's real activity is nowhere in it.** No account, no broker record, no provider row, no
+private identifier and no real ticker appears anywhere in the book.
 
 ---
 
@@ -259,6 +447,28 @@ destinations; C4 implements none of their workflows.
 
 ---
 
+## What C5 does not contain
+
+Everything in the C4 list below, unchanged, and:
+
+```text
+no rolling series          no capacity model         no slippage or execution cost
+no cursor pagination       no export                 no OHLC or candle data
+no benchmark price         no attribution            no borrow query
+no short research          no regime computation     no strategy health transition
+```
+
+**Sorting, filtering and grouping are presentation.** They re-order and narrow rows this page was
+already served; they issue no request, change no scope, compute no metric and grant no
+permission. A truncated page stays truncated and says so, and every figure above a table is
+computed over the whole delivered page rather than over the filtered view.
+
+**No headroom is computed anywhere.** Showing a permitted limit is not granting it, and
+subtracting a carried figure from a limit would present an amount of capital as available to
+deploy. That is a decision, and no interface takes it.
+
+---
+
 ## What C4 does not contain
 
 ```text
@@ -289,14 +499,18 @@ action** for a person to take elsewhere.
 
 ## Governance
 
-**Implemented by this cycle, and pending independent review and merge.** Merging C4 authorizes
+**Implemented by this cycle, and pending independent review and merge.** Merging C5 authorizes
 no further cycle: **specification, implementation, deployment and execution stay separate
-gates**, and C5 is a separate written authorization that has not been given.
+gates**, and C6 is a separate written authorization that has not been given.
 
 ```text
 C3 application foundation                         MERGED (PR #74)
-C4 executive overview and governance              IMPLEMENTED HERE / PENDING REVIEW
-full Cockpit V1                                   NOT COMPLETE -- 4 of 36 areas implemented
+C4 executive overview and governance              MERGED (PR #75)
+C5 portfolio, strategy, exposure and trades       IMPLEMENTED HERE / PENDING REVIEW
+trade detail                                      BASIC -- C6 owns the full lifecycle
+strategy health                                   RECORDED STATE ONLY -- C7 owns area 5
+full Cockpit V1                                   NOT COMPLETE -- 11 of 36 addressed,
+                                                  10 finished; area 36 is split
 production read API, projections, metric engine   NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation           NOT IMPLEMENTED / NOT AUTHORIZED
 Strategy Brain runtime                            NOT IMPLEMENTED / NOT AUTHORIZED
@@ -305,6 +519,7 @@ Run A retry / Run B / combined assessment         NOT AUTHORIZED / NOT RUN
 P1-P9                                             UNEVALUATED
 data correctness and quality                      NOT ESTABLISHED
 G1 / G2                                           OPEN / OPEN
+G7 strategy-taxonomy evidence                     OPEN -- no diversification claim is made
 provider selected                                 NONE
 backtesting                                       NOT STARTED
 Phase 3                                           NOT COMPLETE
@@ -530,6 +745,23 @@ and was not met.
   gives tablet and mobile their own, different requirements, and every other spec still runs at
   all three widths.
 
+### C5 — three defects found by measuring, and corrected
+
+Each was reproduced against the running application before a fix was written. None changes an
+accepted contract; each brings the implementation back to one.
+
+| | |
+|---|---|
+| **the page scrolled sideways while every container looked correct** | a wide table inside an `overflow-x: auto` region still contributed its full width to the document's scroll width, so **U14 failed on `/portfolio/trades` at 1024 × 768 and on two routes at 390 × 844** — and a programmatic horizontal scroll actually moved the page by the overhang. Paint containment on the shared `ScrollRegion` makes the clip authoritative, and it removes the same latent overflow from the merged C4 evidence strip. **The layout was corrected, not the assertion**, and the column priority of the two dense tables was declared and measured rather than guessed |
+| **secondary chip text failed the contrast requirement** | reference chips dimmed their resolution and classification with `opacity`, which measured **2.83:1** and **3.80:1** against §11's 4.5:1 body-text requirement, on twenty-six nodes of `/risk` alone. Hierarchy now comes from the design token rather than from fading text out. The heat-map tint was capped for the same reason: at full strength its cells measured **1.9:1**, so the tint is now a secondary cue and the signed number is the primary one |
+| **a leading plus was printed on quantities that have no direction** | `+41.85 USD` beside an entry price reads as a gain of 41.85. A unit says a value *could* be directional; the field says whether it *is*. Profit, loss and return carry a sign; a price, a risk amount, a permitted limit, a share count and a concentration are magnitudes, and a negative one still shows its minus |
+
+**One fixture property was corrected for honesty rather than for a test.** The generated entries
+originally stopped far enough from the snapshot that the one-month window contained no closed
+trade at all, so every ratio in that column read `INSUFFICIENT_OBSERVATIONS` — true, and it read
+as a broken column rather than as a rule. Entries now spread closer to the end of the retained
+extent, and the short windows demonstrate the rule with a real population behind it.
+
 ### Validation
 
 Reproduced on the C4 head, on Node 22.21.0 and npm 10.9.4:
@@ -575,15 +807,77 @@ scripts/test_integrity_audit.py AUDIT PASSED
 git diff --check                clean
 ```
 
+Reproduced again on the C5 head, on the same toolchain:
+
+```text
+npm ci                          clean install from the committed lockfile
+npx eslint .                    clean
+npx tsc --noEmit                clean (run after a build; route types are generated)
+npx next build                  succeeds -- 32 routes, one of them dynamic, no API route
+npx vitest run                  261 passed   (C4 baseline was 173)
+npx playwright test             263 passed, 0 skipped, across 1440x900, 1024x768 and 390x844
+```
+
+The repository's own gates were run on the exact baseline commit before any edit, and again on
+the C5 head, so the two are comparable:
+
+```text
+pytest -q                       7074 passed        (unchanged from the baseline)
+ruff check .                    all checks passed
+ruff format --check .           263 files already formatted
+mypy                            no issues in 181 source files
+scripts/phase3_docs_audit.py    AUDIT PASSED
+scripts/test_integrity_audit.py AUDIT PASSED
+git diff --check                clean
+```
+
+**No test was weakened, skipped or suppressed.** Two C4 assertions were **retargeted rather than
+relaxed**: the executive exposure figure now asserts the book-derived long exposure, because the
+overview reads the same ledger the position table does; and the two trade-table separations are
+asserted in the **row detail**, which is present at every viewport, because their columns drop
+under the declared column priority on a narrow screen. Both still assert a concrete rendered
+fact, and one new case was added for the trade that is `CLOSED` in status and `PARTIAL` in
+completeness.
+
 **Local validation is local.** These were run on a workstation, not by a CI service, and no
 CI status check exists for this application.
 
-**What was checked by hand, and what was not.** Every screen was inspected at 1440×900,
+**What was checked by hand, and what was not.** Every C5 screen was inspected at 1440×900,
 1024×768 and 390×844 in the executive, operator, project and demo combinations; keyboard
-navigation, focus restoration and the chart's table alternative were exercised directly; and
-`@axe-core/playwright` reports no serious or critical violation on the substantive routes.
+navigation, focus restoration, the row disclosures, the filter chips and both chart table
+alternatives were exercised directly; and `@axe-core/playwright` reports **no violation at all**
+across the WCAG 2.1 A and AA rule sets on every C5 route, at every viewport, in Operator mode —
+a stricter check than the C4 suite's serious-and-critical filter, and it is asserted rather than
+sampled.
+
 **An automated pass is not an accessible interface**: no screen-reader pass was performed, so
-nothing here claims one. **No performance target was measured** — the specification sets those
-as targets for a later cycle, and this cycle measures nothing and claims nothing.
+nothing here claims one, and the price chart's canvas is explicitly **decorative** with a table
+alternative carrying the same marks and the same recorded events. **No performance target was
+measured** — the specification sets those as targets for a later cycle, and this cycle measures
+nothing and claims nothing.
+
+**Browser network traffic was checked and is empty.** Across every C5 route the browser issued
+**no request to any origin other than the local dev server**, and the console logged **no error
+and no hydration mismatch**.
+
+### Dependencies added by C5
+
+```text
+lightweight-charts  5.2.1   Apache-2.0   TradingView Lightweight Charts
+fancy-canvas        2.1.0   MIT          its single transitive dependency
+```
+
+**One dependency, and the specification names it.** `ui-ux-specification.md` §13 assigns **price
+and trade overlays — OHLC and candles, and Trade Detail entry, add, stop and exit markers** to
+TradingView Lightweight Charts, and the trade detail is that surface. Compatibility was checked
+from the published package metadata: it declares **no peer dependency and no engine constraint**,
+ships its own TypeScript types, and carries exactly one transitive dependency. It is imported
+**inside one effect in one component** — a static test asserts that no other module names it —
+so a server render and the test environment touch no canvas, and the component draws only where
+`matchMedia` and `ResizeObserver` exist.
+
+**It draws a mark line, not candles.** Open, high, low and close need a market-data provider,
+**no provider is selected and G1 is OPEN**, so the chart carries one recorded mark per session
+and says so on screen.
 
 Third-party attribution is in [NOTICE.md](NOTICE.md).

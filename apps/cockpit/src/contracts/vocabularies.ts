@@ -154,3 +154,35 @@ export const DOWNSTREAM_STAGES = [
   "ORDER_REJECTED",
   "ORDER_CANCELLED",
 ] as const;
+
+/**
+ * read-model-contracts.md 2.8 -- ADR-0026's Brain specification 13 owns this vocabulary,
+ * and this application CONSUMES it. Seven members, never extended here.
+ *
+ * Reducing and disabling new entries is automatic; RESTORING them is not, and recovery past
+ * a governed suspension is never automatic. Nothing in this application causes a transition.
+ */
+export const STRATEGY_HEALTH_STATES = [
+  "HEALTHY",
+  "WATCH",
+  "DEGRADED",
+  "NEW_ENTRIES_REDUCED",
+  "NEW_ENTRIES_DISABLED",
+  "SUSPENDED",
+  "RETIRED",
+] as const;
+export const strategyHealthState = z.enum(STRATEGY_HEALTH_STATES);
+export type StrategyHealthState = z.infer<typeof strategyHealthState>;
+
+/**
+ * read-model-contracts.md 2.9 -- consumed exactly as ADR-0005 and the point-in-time contract
+ * define them. NO DEFAULT PROFILE IS INVENTED: a profile is DECLARED, never inferred, and
+ * Sharadar price data never renders as PUBLIC_PIT.
+ */
+export const INFORMATION_PROFILES = [
+  "PUBLIC_PIT",
+  "PROVIDER_REALISTIC_PIT",
+  "FORWARD_SYSTEM",
+] as const;
+export const informationProfile = z.enum(INFORMATION_PROFILES);
+export type InformationProfile = z.infer<typeof informationProfile>;
