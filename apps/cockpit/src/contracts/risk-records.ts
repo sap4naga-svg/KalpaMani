@@ -30,9 +30,10 @@ import { money } from "./values";
 /**
  * §4.4 `InitialPlannedRisk` — the entry-time reference, and **IMMUTABLE**.
  *
- * It is **the only denominator an R multiple may use**. A moving stop does not move it, a
- * protective-order change does not move it, and no projection recomputes it from a current
- * price. Its money is a plain `Money` rather than a `MetricValue`: a record that exists
+ * **The retained records are the only denominator an R multiple may use** — this record alone
+ * on a trade that never added, and the SUM of every stage's on a trade that did (§12.4). A
+ * moving stop does not move it, a protective-order change does not move it, and no projection
+ * recomputes it from a current price. Its money is a plain `Money` rather than a `MetricValue`: a record that exists
  * carries the amount that was recorded, and whether the record exists at all is the
  * `RecordValue` wrapper's question.
  */

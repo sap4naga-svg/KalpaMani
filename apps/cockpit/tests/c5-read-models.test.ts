@@ -1161,7 +1161,8 @@ describe("borrow and risk", () => {
     expect(forPyramid.map((entry) => entry.stage_ordinal)).toEqual([0, 1]);
     /* The retained records total the trade's own retained sum, and nothing is dropped. */
     const totalled = forPyramid.reduce(
-      (total, entry) => total + hundredths(entry.value.record?.risk_money.amount ?? ""),
+      /* A record whose amount does not parse contributes NaN, so a silent zero cannot hide it. */
+      (total, entry) => total + (hundredths(entry.value.record?.risk_money.amount ?? "") ?? NaN),
       0,
     );
     expect(totalled).toBe(pyramid?.initialRiskCents);

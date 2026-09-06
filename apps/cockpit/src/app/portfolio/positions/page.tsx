@@ -417,7 +417,7 @@ function PositionDetail({
     <div className="grid gap-5 lg:grid-cols-2">
       <PanelSection
         title="Initial planned risk — immutable"
-        note="The entry-time record, and the only denominator an R multiple may use. A moving stop does not move it."
+        note="The entry-time record. A moving stop does not move it. An R multiple divides by the retained records — this one on a trade that never added, and the sum of every stage's on a trade that did."
       >
         <InitialPlannedRiskRecord wrapper={row.initial_planned_risk} operator={operator} />
       </PanelSection>

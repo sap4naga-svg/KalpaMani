@@ -319,7 +319,9 @@ export function RiskSeparationNote() {
   return (
     <p className="text-label-s leading-relaxed text-text-tertiary" data-testid="risk-separation-note">
       <strong className="text-text-secondary">Initial planned risk</strong> is the immutable
-      entry-time record and the only denominator an R multiple may use.{" "}
+      entry-time record, and the retained records are the only denominator an R multiple may
+      use &mdash; this one on a trade that never added, and the sum of every stage&rsquo;s on a
+      trade that did.{" "}
       <strong className="text-text-secondary">Current open planned risk</strong> is the risk
       engine&rsquo;s assessment of the remaining exposure, carrying its own as-of.{" "}
       <strong className="text-text-secondary">A moving stop changes only the second.</strong>{" "}
