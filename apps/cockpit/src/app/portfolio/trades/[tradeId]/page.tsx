@@ -299,7 +299,14 @@ function TradeIdentity({
             ["Realized", summary.realized_pnl, undefined],
             ["Unrealized", summary.unrealized_pnl, undefined],
             ["Return", summary.return_pct, "initial position value"],
-            ["R multiple", summary.r_multiple, "initial planned risk"],
+            [
+              "R multiple",
+              summary.r_multiple,
+              /* The retained records: this trade's one, or the sum of its stages' (§12.4). */
+              summary.r_denominator === undefined
+                ? "initial planned risk"
+                : "the retained stage risks, summed",
+            ],
             ["Maximum favourable", summary.mfe, undefined],
             ["Maximum adverse", summary.mae, undefined],
             ["Capture ratio", summary.capture_ratio, "maximum favourable"],

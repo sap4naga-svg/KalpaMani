@@ -11,6 +11,7 @@ import { MetricText, MoneyText } from "@/components/cockpit/metric-text";
 import { PageHeader } from "@/components/cockpit/page-header";
 import { PanelSection, ReadModelPanel, ReferenceChip } from "@/components/cockpit/read-model-panel";
 import {
+  AddPlannedRiskRecords,
   InitialPlannedRiskRecord,
   OpenPlannedRiskRecord,
   RiskSeparationNote,
@@ -521,9 +522,18 @@ function LedgerRowDetail({ row, operator }: { row: TradeSummary; operator: boole
       </PanelSection>
       <PanelSection
         title="Initial planned risk — immutable"
-        note="Recorded at entry, and the only denominator this trade's R multiple may use."
+        note="Recorded at entry, and never restated by a later add."
       >
         <InitialPlannedRiskRecord wrapper={row.initial_planned_risk} operator={operator} />
+        {row.add_planned_risk !== undefined && (
+          <div className="mt-4 border-t border-border-subtle pt-3">
+            <AddPlannedRiskRecords
+              adds={row.add_planned_risk}
+              denominator={row.r_denominator}
+              operator={operator}
+            />
+          </div>
+        )}
       </PanelSection>
       <PanelSection
         title="Current open planned risk — an assessment"
