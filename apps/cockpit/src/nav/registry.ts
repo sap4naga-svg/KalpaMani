@@ -88,40 +88,49 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     label: "Portfolio Performance",
     areas: [2],
     group: "portfolio",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Equity, drawdown and return against the authoritative strategy capital.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C4",
+    dependency: "the portfolio valuation projection and its recorded cash flows",
+    cycle: "C5",
+    keywords: ["equity", "drawdown", "return", "expectancy", "sharpe", "heatmap", "benchmark"],
   },
   {
     href: "/portfolio/positions",
     label: "Positions & Exposure",
     areas: [3],
     group: "portfolio",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Open positions with long, short, gross and net exposure.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C4",
+    dependency: "the portfolio runtime and its recorded positions and lots",
+    cycle: "C5",
+    keywords: ["positions", "exposure", "gross", "net", "sector", "borrow", "concentration"],
   },
   {
     href: "/portfolio/trades",
     label: "Trade History",
     areas: [36],
     group: "portfolio",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Closed and open trades. A fill is never counted as a trade.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    dependency: "the portfolio and execution runtimes and their recorded trades",
+    /*
+     * The matrix splits area 36: C5 owns the history and a BASIC detail, and C6 owns the
+     * complete lifecycle and the chart drill-down. The cycle recorded here is the one that
+     * implemented what is reachable now.
+     */
+    cycle: "C5 history and basic detail, C6 full lifecycle",
+    keywords: ["trades", "ledger", "r multiple", "winners", "losers", "partial exit"],
   },
   {
     href: "/strategy/performance",
     label: "Strategy Performance",
     areas: [4],
     group: "strategy",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Per-strategy results, pinned to the versions that produced them.",
-    dependency: NOT_IMPLEMENTED,
+    dependency: "the strategy runtime — no strategy module exists",
     cycle: "C5",
+    keywords: ["breakout", "pullback", "pead", "deterioration", "expectancy", "family", "G7"],
   },
   {
     href: "/strategy/health",
@@ -131,7 +140,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Health states and transitions, consumed from the ADR-0026 vocabulary.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C5",
+    cycle: "C7",
   },
   {
     href: "/strategy/champion-challenger",
@@ -161,7 +170,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Brain decisions and downstream stages, presented as two separate axes.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C5",
+    cycle: "C6",
   },
   {
     href: "/signals/missed",
@@ -171,37 +180,40 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Candidates the system declined, and why.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C5",
+    cycle: "C6",
   },
   {
     href: "/risk",
     label: "Risk Dashboard",
     areas: [12],
     group: "risk",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Initial and current planned risk, kept apart, with permitted risk.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C4",
+    dependency: "the risk engine — no risk engine exists",
+    cycle: "C5",
+    keywords: ["risk", "planned risk", "permitted", "breaker", "threshold", "research values"],
   },
   {
     href: "/risk/short-side",
     label: "Short-Side Dashboard",
     areas: [13],
     group: "risk",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Gross short exposure and borrow state. Borrow is never inferred from price.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    dependency: "a borrow data feed — G5 historical borrow qualification is OPEN",
+    cycle: "C5",
+    keywords: ["short", "borrow", "squeeze", "SSR", "recall", "blocked", "G5"],
   },
   {
     href: "/market/regime",
     label: "Market & Regime",
     areas: [11],
     group: "risk",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Regime context the Brain resolved its decisions against.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    dependency: "a regime engine and qualified provider data — neither exists",
+    cycle: "C5",
+    keywords: ["regime", "trend", "breadth", "volatility", "stress", "sector leadership"],
   },
   {
     href: "/execution/quality",
@@ -211,7 +223,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Slippage in signed basis points, and latency with synchronized clocks.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    cycle: "C8",
   },
   {
     href: "/execution/reconciliation",
@@ -221,7 +233,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Broker state against internal state. No broker-native order id is displayed.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    cycle: "C8",
   },
   {
     href: "/research/runs",
@@ -271,7 +283,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Where AI removed candidates. AI may remove and may never restore.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C9",
+    cycle: "C7",
   },
   {
     href: "/governance/packets",
@@ -281,7 +293,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Assembled packets for human review. Ready for review is not an approval.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C8",
+    cycle: "C7",
   },
   {
     href: "/governance/qualification",
@@ -338,7 +350,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Point-in-time profile and coverage. A profile is declared, never inferred.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    cycle: "C8",
   },
   {
     href: "/system/operations",
@@ -348,7 +360,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "Runtime health of the deterministic core.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C6",
+    cycle: "C8",
   },
   {
     href: "/system/alerts",
@@ -358,7 +370,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "placeholder",
     purpose: "The alert feed the attention list is deduplicated against.",
     dependency: NOT_IMPLEMENTED,
-    cycle: "C4",
+    cycle: "C8",
   },
   {
     href: "/foundation/states",
@@ -382,12 +394,26 @@ export function routesInGroup(group: NavGroupId): readonly NavRoute[] {
 }
 
 /**
- * Deep destinations reserved as DISTINCT and not implemented in C3.
+ * Deep destinations that are DISTINCT screens with their own workflows.
  *
- * Trade Detail, Candidate Detail, Execution History and the Audit Trail are separate
- * destinations with their own workflows, and C3 does not implement them.
+ * Trade Detail, Candidate Detail, Execution History and the Audit Trail share identifiers and
+ * **never share a screen** (Area 36.3). They are not sidebar entries: each is reached from
+ * the row it belongs to.
+ *
+ * `/portfolio/trades/[tradeId]` is IMPLEMENTED in its **basic** form — C5 owns the history
+ * and a basic detail, and **C6 owns the complete lifecycle and the chart drill-down**.
+ * `/signals/candidates/[candidateId]` remains reserved and unimplemented.
  */
-export const RESERVED_DESTINATIONS: readonly string[] = [
-  "/portfolio/trades/[tradeId]",
-  "/signals/candidates/[candidateId]",
+export const DEEP_DESTINATIONS: readonly {
+  readonly route: string;
+  readonly status: RouteStatus;
+  readonly cycle: string;
+}[] = [
+  { route: "/portfolio/trades/[tradeId]", status: "implemented", cycle: "C5 basic, C6 full" },
+  { route: "/signals/candidates/[candidateId]", status: "placeholder", cycle: "C6" },
 ];
+
+/** The routes with no page of their own, kept for the tests that assert their absence. */
+export const RESERVED_DESTINATIONS: readonly string[] = DEEP_DESTINATIONS.filter(
+  (destination) => destination.status !== "implemented",
+).map((destination) => destination.route);
