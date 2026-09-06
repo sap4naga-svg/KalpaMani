@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens -- ui-ux-specification.md section 4.
+ *
+ * The TOKEN NAMES are the contract; the exact values are an implementation choice within
+ * the stated constraints. Dark-first and calm: the base is a DEEP NEUTRAL, not black, and
+ * not a saturated navy that would tint every number sitting on it. No neon, no terminal
+ * green, no glow.
+ */
+@theme {
+  /* 4.1 Surfaces and structure */
+  --color-surface-base: oklch(0.196 0.006 264);
+  --color-surface-raised: oklch(0.238 0.007 264);
+  --color-surface-overlay: oklch(0.271 0.008 264);
+  --color-surface-sunken: oklch(0.171 0.006 264);
+  --color-border-subtle: oklch(0.318 0.008 264);
+  --color-border-strong: oklch(0.436 0.011 264);
+
+  /* 4.2 Text */
+  --color-text-primary: oklch(0.965 0.002 264);
+  --color-text-secondary: oklch(0.784 0.006 264);
+  --color-text-tertiary: oklch(0.668 0.008 264);
+  --color-text-inverse: oklch(0.184 0.006 264);
+
+  /*
+   * 4.3 Accents and semantic statuses. ONE accent, used sparingly. Semantic colour is
+   * reserved for MEANING, so a coloured element always means something.
+   */
+  --color-accent: oklch(0.746 0.115 232);
+  --color-accent-muted: oklch(0.404 0.062 232);
+  --color-positive: oklch(0.782 0.132 158);
+  --color-negative: oklch(0.721 0.163 22);
+  --color-warning: oklch(0.824 0.121 76);
+  --color-info: oklch(0.754 0.086 254);
+  /* Deliberately LOW-CHROMA and never alarming: NOT_IMPLEMENTED is not an error. */
+  --color-unavailable: oklch(0.646 0.011 264);
+
+  /* 4.4 Typography */
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* Numeric hierarchy -- THREE working sizes, not five. */
+  --text-numeric-xl: 2.5rem;
+  --text-numeric-xl--line-height: 1.05;
+  --text-numeric-l: 1.625rem;
+  --text-numeric-l--line-height: 1.15;
+  --text-numeric-m: 1.125rem;
+  --text-numeric-m--line-height: 1.3;
+  --text-numeric-s: 0.875rem;
+  --text-numeric-s--line-height: 1.35;
+  --text-label-m: 0.8125rem;
+  --text-label-m--line-height: 1.4;
+  --text-label-s: 0.6875rem;
+  --text-label-s--line-height: 1.45;
+
+  /* 4.5 Radius and elevation -- restrained shadow; never a glow. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.875rem;
+  --shadow-elevation-1: 0 1px 2px oklch(0 0 0 / 0.32);
+  --shadow-elevation-2: 0 8px 24px oklch(0 0 0 / 0.38);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --motion-fast: 110ms;
+    --motion-base: 200ms;
+  }
+
+  html {
+    /* Wide content scrolls inside its own container; the page body never scrolls sideways. */
+    overflow-x: hidden;
+  }
+
+  body {
+    background-color: var(--color-surface-base);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular figures everywhere: a digit change must not reflow a row. */
+  .font-mono,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Focus is always visible, and meets the contrast requirement of section 11. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background-color: var(--color-accent-muted);
+    color: var(--color-text-primary);
+  }
+}
+
+/*
+ * prefers-reduced-motion removes every non-essential transition (U12). Nothing in this
+ * interface conveys a change by animation alone.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer utilities {
+  /* A skeleton is SHAPE-ONLY: no digits, no plausible placeholder value (U7). */
+  .skeleton-shape {
+    background-color: var(--color-surface-sunken);
+    border-radius: var(--radius-sm);
+  }
+}

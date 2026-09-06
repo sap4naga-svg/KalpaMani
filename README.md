@@ -282,16 +282,22 @@ Nothing below exists yet, and none of it is authorized:
   [docs/phase4/strategy-brain-specification.md](docs/phase4/strategy-brain-specification.md) under
   ADR-0026, **accepted effective on merge**; a specification is not an implementation, and no
   Brain module exists
-- **The Cockpit application, its read models and the feedback engine.** Their architecture is
+- **The Cockpit V1 application, its read models and the feedback engine.** Their architecture is
   *specified* in [docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md)
   and [docs/cockpit/](docs/cockpit/cockpit-v1-specification.md) under ADR-0027, **accepted on the
   merge of PR #71**, with four contract and boundary corrections accepted on the merge of PR #72
   under [ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
   and two further corrections — valid zero measurements, and absolute cache freshness deadlines —
-  proposed under
-  [ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md); no
-  application, read API, projection, database, scheduler or feedback automation exists, and none is
-  authorized
+  under [ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
+
+  **The C3 application foundation is implemented**, at [apps/cockpit/](apps/cockpit/README.md),
+  under its own separate written authorization and **effective on the merge of PR #74**. It is a
+  local, read-only frontend on a repository-owned fixture adapter: design system, shell,
+  navigation, the transcribed contract layer and two substantive screens. **A foundation is not
+  the Cockpit** — no production read API, projection runtime, metric engine, database, scheduler,
+  deployment or feedback automation exists, **no route handler, server action, API route or
+  control handler exists anywhere in it**, it makes **no network request of any kind**, and none
+  of the remainder is authorized
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)

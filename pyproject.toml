@@ -67,6 +67,10 @@ markers = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# The Cockpit frontend contains no Python. Ruff already skips git-ignored paths, so this
+# excludes nothing that would otherwise be checked; it states the boundary explicitly so a
+# stray build artifact under the app cannot quietly enter a Python lint run.
+extend-exclude = ["apps/cockpit"]
 
 [tool.ruff.lint]
 select = [

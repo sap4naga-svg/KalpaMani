@@ -1,0 +1,57 @@
+{
+  "name": "kalpamani-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3000",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "1.1.23",
+    "@radix-ui/react-slot": "1.3.3",
+    "@radix-ui/react-tooltip": "1.2.16",
+    "@radix-ui/react-visually-hidden": "1.2.11",
+    "@tanstack/react-query": "5.102.8",
+    "@tanstack/react-table": "9.2.4",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "lucide-react": "1.41.0",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwind-merge": "3.6.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "22.20.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "6.1.1",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.4",
+    "jsdom": "29.1.1",
+    "tailwindcss": "^4",
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  },
+  "description": "KalpaMani Cockpit - C3 application foundation. Read-only, synthetic and tracked governance facts only.",
+  "engines": {
+    "node": ">=22.13.0 <23 || >=24.0.0",
+    "npm": ">=10.9.0"
+  }
+}
