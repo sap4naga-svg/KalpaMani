@@ -181,6 +181,12 @@ export default function Page() {
             return (
               <span className="flex flex-col font-mono tabular-nums">
                 <span>{row.shares_at_entry.toLocaleString("en-US")} at entry</span>
+                {/* A pyramid holds more than it entered with, and both facts are shown. */}
+                {row.shares_acquired !== undefined && (
+                  <span className="text-label-s text-text-tertiary">
+                    {row.shares_acquired.toLocaleString("en-US")} acquired
+                  </span>
+                )}
                 <span className="text-label-s text-text-tertiary">
                   {row.shares_open.toLocaleString("en-US")} open
                 </span>

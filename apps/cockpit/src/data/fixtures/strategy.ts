@@ -108,7 +108,7 @@ function moduleMetrics(trades: readonly BookTrade[], asOf: string) {
           trades.reduce((total, trade) => total + trade.holdingSessions, 0) / trades.length,
         );
   const notional = trades.reduce(
-    (total, trade) => total + trade.sharesAtEntry * trade.basisCents,
+    (total, trade) => total + trade.sharesAcquired * trade.basisCents,
     0,
   );
 

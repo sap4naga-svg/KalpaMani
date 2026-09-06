@@ -223,6 +223,41 @@ test.describe("the trade ledger and one trade's story", () => {
     await expect(page.getByTestId("absent-event-kinds")).toContainText("Order submitted");
   });
 
+  /*
+   * The pyramid, in a browser. An earlier revision rendered "100 shares at 63.88" for an
+   * entry of 60 at 62.40, and printed the SUMMED risk of both stages under a heading that
+   * says "Recorded at entry" — so this reads the screen rather than the payload.
+   */
+  test("separates the original entry from the add it never restates", async ({ page }) => {
+    await page.goto(`/portfolio/trades/demo-trade-nvl-0002${OPERATOR}`);
+    await waitForHydration(page);
+    const identity = page.getByTestId("trade-identity");
+
+    await expect(identity).toContainText("Shares at entry");
+    await expect(identity).toContainText("Shares acquired");
+    await expect(identity).toContainText("Current basis");
+    /* The entry price the trade actually filled at, and the basis the add produced. */
+    await expect(identity).toContainText("62.40");
+    await expect(identity).toContainText("63.88");
+    await expect(identity).toContainText("This trade added to its position.");
+
+    /* The entry's own record: its own risk, at its own reference price. */
+    const initial = page.getByTestId("initial-planned-risk").first();
+    await expect(initial).toContainText("186.00");
+    await expect(initial).toContainText("62.40");
+
+    /* The add's own record, and the SUM that R was divided by, which is neither record. */
+    const adds = page.getByTestId("add-planned-risk");
+    await expect(adds).toBeVisible();
+    await expect(adds).toContainText("Add 1");
+    await expect(adds).toContainText("212.00");
+    await expect(adds).toContainText("66.10");
+    await expect(page.getByTestId("r-denominator")).toContainText("398.00");
+    /* Both contributing policy versions are on screen. */
+    await expect(page.getByTestId("trade-risk")).toContainText("0.0.0-demo");
+    await expect(page.getByTestId("trade-risk")).toContainText("0.0.1-demo");
+  });
+
   test("draws the price marks and carries the same values in a table (U10)", async ({
     page,
   }) => {

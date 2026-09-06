@@ -41,9 +41,17 @@ export function demoRef(
 
 export { refListOf };
 
-/** The demonstration risk policy every permitted and planned-risk record is carried with. */
-export function demoPolicyRef(asOf: string) {
-  return { policy_id: "risk-policy-demo", policy_version: "0.0.0-demo", as_of: asOf };
+/**
+ * The demonstration risk policy every permitted and planned-risk record is carried with.
+ *
+ * A stage may name a LATER version than the one before it: §12.4 requires that a trade
+ * "whose stages carry different `risk_policy_version` values reports its `r_multiple` with
+ * every contributing policy version displayed", and a book in which every stage shares one
+ * version can never show that. The pyramid's add is thirty sessions after its entry and
+ * carries the version in force then.
+ */
+export function demoPolicyRef(asOf: string, policyVersion = "0.0.0-demo") {
+  return { policy_id: "risk-policy-demo", policy_version: policyVersion, as_of: asOf };
 }
 
 /** A USD `MetricValue` from an integer number of cents. */

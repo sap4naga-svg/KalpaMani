@@ -83,27 +83,48 @@ function invalidationRef(trade: BookTrade, stageOrdinal: number) {
 }
 
 /**
- * The retained initial planned risk record of a whole trade.
+ * The retained initial planned risk record of ONE stage.
  *
- * §12.4: "the trade-level denominator is the **sum of the retained per-stage initial planned
- * risks**", and "no stop movement, protection change or size change alters any retained
- * record". The reference price is the position-weighted entry basis the stages actually
- * produced, and `recorded_at` is the FIRST stage's session — the instant the trade's risk was
- * first written, never the response's own time.
+ * §12.4: each add carries "its own `risk.initial_planned` record, at its own reference price
+ * and its own as-of", and "the trade's original record is retained unchanged". So a record
+ * describes a stage and never a blend of stages: its `risk_money` is that stage's own risk,
+ * its `reference_price` is the price that stage actually filled at, and its `recorded_at` is
+ * that stage's own session — never the response's own time.
+ *
+ * An earlier revision returned one record per TRADE carrying the summed risk of every stage
+ * against the combined basis, while dating itself at the entry and pointing at the entry's
+ * invalidation level. On a pyramided trade that record described no stage that ever existed:
+ * it reported a reference price of 63.88 for an entry filled at 62.40, thirty sessions before
+ * the add that produced the blend. The sum is the R DENOMINATOR (§12.4) and is carried as
+ * one, separately.
  */
-export function initialRiskRecord(trade: BookTrade, days: readonly string[]): InitialPlannedRisk {
+export function stageRiskRecord(
+  trade: BookTrade,
+  stageOrdinal: number,
+  days: readonly string[],
+): InitialPlannedRisk {
+  const stage = trade.stages[stageOrdinal];
+  const riskCents = stage.shares * Math.abs(stage.priceCents - stage.invalidationCents);
   return {
-    risk_money: { amount: centsToDecimal(trade.initialRiskCents), currency: "USD" },
+    risk_money: { amount: centsToDecimal(riskCents), currency: "USD" },
     risk_pct_of_capital: {
-      value: centsToDecimal(pctOfCapitalHundredths(trade.initialRiskCents)),
+      value: centsToDecimal(pctOfCapitalHundredths(riskCents)),
       denominator: "STRATEGY_CAPITAL_AT_ENTRY",
     },
-    reference_price: { amount: centsToDecimal(trade.basisCents), currency: "USD" },
-    invalidation_ref: invalidationRef(trade, 0),
-    recorded_at: sessionInstant(days[trade.stages[0].session]),
-    risk_policy_ref: demoPolicyRef(sessionInstant(days[trade.stages[0].session])),
+    reference_price: { amount: centsToDecimal(stage.priceCents), currency: "USD" },
+    invalidation_ref: invalidationRef(trade, stageOrdinal),
+    recorded_at: sessionInstant(days[stage.session]),
+    risk_policy_ref: demoPolicyRef(
+      sessionInstant(days[stage.session]),
+      stageOrdinal === 0 ? "0.0.0-demo" : "0.0.1-demo",
+    ),
     source: "RISK_RECORD_AT_ENTRY",
   };
+}
+
+/** The ORIGINAL entry-time record, retained unchanged by every stage that followed. */
+export function initialRiskRecord(trade: BookTrade, days: readonly string[]): InitialPlannedRisk {
+  return stageRiskRecord(trade, 0, days);
 }
 
 /**

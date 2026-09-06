@@ -353,7 +353,13 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
 
   /* ---- presentation definitions proposed by this cycle (12.6) */
 
-  /** 4.5 `PositionSnapshot.entry_price` -- position-weighted basis, unit USD. */
+  /**
+   * 4.5 `PositionSnapshot.entry_price` -- position-weighted basis, unit USD.
+   *
+   * It is ONE metric asked in two places: it is also `TradeSummary.current_basis`, the basis a
+   * trade holds after an add. It is deliberately NOT `trade.entry_price`, which is the price
+   * the ORIGINAL entry filled at and a different question (12.4).
+   */
   "position.entry_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
   /** 4.5 `PositionSnapshot.current_price` -- the mark, carrying its OWN as-of. */
   "position.current_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },

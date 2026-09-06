@@ -304,7 +304,14 @@ export interface BookTrade {
   readonly stages: readonly BookStage[];
   readonly exits: readonly BookExit[];
   readonly status: "OPEN" | "CLOSED" | "PARTIALLY_EXITED";
-  readonly sharesAtEntry: number;
+  /**
+   * The whole quantity this trade ever filled — the entry stage PLUS every add.
+   *
+   * It is deliberately NOT called "shares at entry": the quantity filled at entry is
+   * `stages[0].shares`, and a later add never restates it. Read-model contracts 4.5 keeps
+   * the two apart, so this book keeps them apart too.
+   */
+  readonly sharesAcquired: number;
   readonly sharesOpen: number;
   /** The position-weighted per-share basis of the OPEN portion. Exact, never rounded. */
   readonly basisCents: number;
@@ -370,11 +377,28 @@ function exitReasonFor(rHundredths: number): string {
   return "PLANNED_TARGET_REACHED";
 }
 
+/**
+ * The recorded stop outcome, on the SAME thresholds the exit reason uses.
+ *
+ * The two describe one event and must agree. An earlier revision returned
+ * `STOP_TRAILED_THEN_TRIGGERED` for every non-losing outcome, so a trade whose exit reason was
+ * `PLANNED_TARGET_REACHED` reported that its trailed stop had triggered, and the exact
+ * break-even — exit reason `TIME_STOP_REACHED` — reported the same. A demonstration whose two
+ * fields contradict each other "teaches the wrong thing" (`cockpit-v1-specification.md` §5),
+ * so the boundaries here are the boundaries of `exitReasonFor` and nothing else.
+ *
+ *   <= -95   PROTECTIVE_STOP_HIT      -> the stop triggered as planned
+ *   <   0    THESIS_INVALIDATED       -> exited before the stop was reached
+ *   ==  0    TIME_STOP_REACHED        -> exited before the stop was reached
+ *   <  150   TRAILING_STOP_HIT        -> the stop was trailed and then triggered
+ *   >= 150   PLANNED_TARGET_REACHED   -> exited before the stop was reached
+ */
 function stopOutcomeFor(rHundredths: number | null): string {
   if (rHundredths === null) return "PROTECTIVE_ORDER_STILL_WORKING";
   if (rHundredths <= -95) return "STOP_TRIGGERED_AS_PLANNED";
-  if (rHundredths < 0) return "EXITED_BEFORE_STOP";
-  return "STOP_TRAILED_THEN_TRIGGERED";
+  if (rHundredths <= 0) return "EXITED_BEFORE_STOP";
+  if (rHundredths < 150) return "STOP_TRAILED_THEN_TRIGGERED";
+  return "EXITED_BEFORE_STOP";
 }
 
 /* ----------------------------------------------------------------- path building */
@@ -412,22 +436,50 @@ function buildPath(
   return path;
 }
 
-/** The favourable and adverse excursions of a path, in USD cents, against the entry basis. */
+/**
+ * The favourable and adverse excursions of a path, in USD cents.
+ *
+ * **Each session is valued with what the trade actually held on that session**, at the basis
+ * it actually carried then. A pyramided trade held its original quantity at its original
+ * price until the add filled, so valuing the whole path at the final combined quantity and
+ * the final combined basis would report an excursion the position could not have had:
+ * §12.4's "the trade's original record is retained unchanged" is a statement about the past,
+ * and a later add does not reach back into it.
+ *
+ * `stages` and `exits` are read per session rather than summed once, so a partial exit
+ * reduces the quantity that the remaining path is measured on.
+ */
 function excursions(
+  stages: readonly BookStage[],
+  exits: readonly BookExit[],
   path: readonly number[],
-  basisCents: number,
-  shares: number,
+  firstSession: number,
   direction: "LONG" | "SHORT",
 ): { mfeCents: number; maeCents: number } {
   const sign = direction === "LONG" ? 1 : -1;
   let best = 0;
   let worst = 0;
-  for (const price of path) {
-    const move = (price - basisCents) * sign * shares;
+  for (let step = 0; step < path.length; step += 1) {
+    const session = firstSession + step;
+    const acquired = stages.filter((stage) => stage.session <= session);
+    const filled = acquired.reduce((total, stage) => total + stage.shares, 0);
+    if (filled === 0) {
+      continue;
+    }
+    const released = exits
+      .filter((exit) => exit.session <= session)
+      .reduce((total, exit) => total + exit.shares, 0);
+    const held = filled - released;
+    if (held <= 0) {
+      continue;
+    }
+    const basis =
+      acquired.reduce((total, stage) => total + stage.shares * stage.priceCents, 0) / filled;
+    const move = (path[step] - basis) * sign * held;
     best = Math.max(best, move);
     worst = Math.min(worst, move);
   }
-  return { mfeCents: best, maeCents: worst };
+  return { mfeCents: Math.round(best), maeCents: Math.round(worst) };
 }
 
 /* ------------------------------------------------------------- the featured book */
@@ -533,9 +585,9 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     ...stage,
     kind: index === 0 ? "ENTRY" : "ADD",
   }));
-  const sharesAtEntry = stages.reduce((total, stage) => total + stage.shares, 0);
+  const sharesAcquired = stages.reduce((total, stage) => total + stage.shares, 0);
   const costCents = stages.reduce((total, stage) => total + stage.shares * stage.priceCents, 0);
-  if (costCents % sharesAtEntry !== 0) {
+  if (costCents % sharesAcquired !== 0) {
     /*
      * A weighted basis that does not divide exactly would force a rounded per-share figure,
      * and every P/L derived from it would disagree with the cost it came from by a cent.
@@ -543,7 +595,7 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
      */
     throw new RangeError(`${spec.tradeId} has a weighted basis that is not an exact cent`);
   }
-  const basisCents = costCents / sharesAtEntry;
+  const basisCents = costCents / sharesAcquired;
   const sign = version.direction === "LONG" ? 1 : -1;
 
   const exits: BookExit[] = spec.exits.map((exit) => ({
@@ -551,7 +603,7 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     realizedCents: exit.shares * (exit.priceCents - basisCents) * sign,
   }));
   const exited = exits.reduce((total, exit) => total + exit.shares, 0);
-  const sharesOpen = sharesAtEntry - exited;
+  const sharesOpen = sharesAcquired - exited;
   const realizedCents = exits.reduce((total, exit) => total + exit.realizedCents, 0);
   const unrealizedCents = sharesOpen * (spec.markCents - basisCents) * sign;
 
@@ -570,7 +622,13 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     security.stopDistanceCents,
     firstSession * 7919 + spec.symbol.length,
   );
-  const { mfeCents, maeCents } = excursions(path, basisCents, sharesAtEntry, version.direction);
+  const { mfeCents, maeCents } = excursions(
+    stages,
+    exits,
+    path,
+    firstSession,
+    version.direction,
+  );
 
   return {
     tradeId: spec.tradeId,
@@ -580,7 +638,7 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     stages,
     exits,
     status: sharesOpen === 0 ? "CLOSED" : exited > 0 ? "PARTIALLY_EXITED" : "OPEN",
-    sharesAtEntry,
+    sharesAcquired,
     sharesOpen,
     basisCents,
     realizedCents,
@@ -672,33 +730,41 @@ function buildGenerated(ordinal: number): BookTrade {
     security.stopDistanceCents,
     ordinal * 104_729 + entrySession,
   );
-  const { mfeCents, maeCents } = excursions(path, entryCents, shares, direction);
+  const generatedStages = [
+    {
+      session: entrySession,
+      shares,
+      priceCents: entryCents,
+      invalidationCents,
+      kind: "ENTRY" as const,
+    },
+  ];
+  const generatedExits = [
+    {
+      session: exitSession,
+      shares,
+      priceCents: exitCents,
+      reason: exitReasonFor(rHundredths),
+      realizedCents,
+    },
+  ];
+  const { mfeCents, maeCents } = excursions(
+    generatedStages,
+    generatedExits,
+    path,
+    entrySession,
+    direction,
+  );
 
   return {
     tradeId,
     symbol: security.symbol,
     versionId: version.versionId,
     direction,
-    stages: [
-      {
-        session: entrySession,
-        shares,
-        priceCents: entryCents,
-        invalidationCents,
-        kind: "ENTRY",
-      },
-    ],
-    exits: [
-      {
-        session: exitSession,
-        shares,
-        priceCents: exitCents,
-        reason: exitReasonFor(rHundredths),
-        realizedCents,
-      },
-    ],
+    stages: generatedStages,
+    exits: generatedExits,
     status: "CLOSED",
-    sharesAtEntry: shares,
+    sharesAcquired: shares,
     sharesOpen: 0,
     basisCents: entryCents,
     realizedCents,

@@ -227,17 +227,22 @@ export default function Page() {
               </PanelSection>
 
               <PanelSection
-                title="Initial planned risk of each open trade"
-                note="Listed rather than summed away: each is an immutable entry-time record with its own reference price and its own recorded instant."
+                title="Initial planned risk — every retained record on open exposure"
+                note="Listed rather than summed away: each is an immutable entry-time record with its own reference price and its own recorded instant. A trade that added to its position retains one record per stage, and each is listed."
               >
                 <div className="grid gap-3 lg:grid-cols-2">
                   {payload.initial_planned_risk_open.map((entry) => (
                     <div
-                      key={entry.trade_ref.ref_id}
+                      key={`${entry.trade_ref.ref_id}-${entry.stage_ordinal ?? 0}`}
                       className="rounded-sm border border-border-subtle p-3"
                     >
-                      <div className="mb-2">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
                         <ReferenceChip reference={entry.trade_ref} label={entry.trade_ref.ref_id} />
+                        {entry.stage_ordinal !== undefined && (
+                          <Badge tone="neutral">
+                            {entry.stage_ordinal === 0 ? "Entry" : `Add ${entry.stage_ordinal}`}
+                          </Badge>
+                        )}
                       </div>
                       <InitialPlannedRiskRecord wrapper={entry.value} operator={operator} />
                     </div>

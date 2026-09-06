@@ -25,6 +25,8 @@ import {
   TRADE_LIFECYCLE_IDENTITY,
 } from "@/data/client/read-model-identity";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
+import type { BookTrade } from "@/data/fixtures/book";
+import { syntheticTradeLifecycle } from "@/data/fixtures/trades";
 import {
   BOOK,
   MISSING_RISK_RECORD_TRADE,
@@ -208,6 +210,64 @@ describe("malformed C5 payloads are refused at the boundary", () => {
       rule.met = false;
     }
     expect(performanceSummaryEnvelope.safeParse(response).success).toBe(false);
+  });
+
+  /*
+   * THE ADMISSION RULE THAT FORCED THE DEFECT.
+   *
+   * An earlier revision bounded the open quantity by `shares_at_entry`, so a pyramid holding
+   * 100 after an entry of 60 could only be admitted by restating its entry as 100. The
+   * status rules now compare against what the trade FILLED, and the entry quantity is left
+   * alone — while a trade holding more than it ever filled is still refused.
+   */
+  it("admits a pyramid holding more than it entered with", async () => {
+    const response = await admitted(() => client().trades(DEMO));
+    const payload = response.payload as { items: Record<string, unknown>[] };
+    const pyramided = payload.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    ) as Record<string, number>;
+    expect(pyramided.shares_open).toBeGreaterThan(pyramided.shares_at_entry);
+    expect(tradeSummaryEnvelope.safeParse(response).success).toBe(true);
+  });
+
+  it("refuses a trade holding more than it ever filled", async () => {
+    const response = await admitted(() => client().trades(DEMO));
+    const payload = response.payload as { items: Record<string, unknown>[] };
+    const pyramided = payload.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    ) as Record<string, number>;
+    pyramided.shares_open = pyramided.shares_acquired + 1;
+    expect(tradeSummaryEnvelope.safeParse(response).success).toBe(false);
+  });
+
+  it("refuses an acquired quantity that does not exceed the entry quantity", async () => {
+    const response = await admitted(() => client().trades(DEMO));
+    const payload = response.payload as { items: Record<string, unknown>[] };
+    const pyramided = payload.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    ) as Record<string, number>;
+    pyramided.shares_acquired = pyramided.shares_at_entry;
+    expect(tradeSummaryEnvelope.safeParse(response).success).toBe(false);
+  });
+
+  it("refuses a pyramid that drops the retained record of its add", async () => {
+    const response = await admitted(() => client().trades(DEMO));
+    const payload = response.payload as { items: Record<string, unknown>[] };
+    const pyramided = payload.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    ) as Record<string, unknown>;
+    delete pyramided.add_planned_risk;
+    expect(tradeSummaryEnvelope.safeParse(response).success).toBe(false);
+  });
+
+  it("refuses a pyramid that reports an R without stating its summed denominator", async () => {
+    const response = await admitted(() => client().trades(DEMO));
+    const payload = response.payload as { items: Record<string, unknown>[] };
+    const pyramided = payload.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    ) as Record<string, unknown>;
+    delete pyramided.r_denominator;
+    expect(tradeSummaryEnvelope.safeParse(response).success).toBe(false);
   });
 
   it("refuses a lifecycle whose events are out of order", async () => {
@@ -557,6 +617,173 @@ describe("trade identity, adds and partial exits", () => {
     expect(ids.filter((id) => id === "demo-trade-nvl-0002").length).toBe(1);
   });
 
+  /*
+   * AN ADD DOES NOT RESTATE THE ENTRY.
+   *
+   * The defect this pins: `shares_at_entry` and `entry_price` were the summed quantity and
+   * the blended basis, so the pyramid's ledger row read "100 shares at 63.88" for an entry
+   * of 60 shares at 62.40 — a price and a size the trade never entered at, and the only
+   * shape in which the admission rules of the time would accept it.
+   */
+  it("keeps the original entry quantity and price on a pyramided trade", async () => {
+    const trades = await client().trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    const book = BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002");
+    const entry = book?.stages[0];
+    expect(book?.stages.length).toBe(2);
+
+    expect(pyramided?.shares_at_entry).toBe(entry?.shares);
+    expect(hundredths(String(pyramided?.entry_price.value ?? ""))).toBe(entry?.priceCents);
+    /* The entry facts are NOT the acquired ones, and the row carries both. */
+    expect(pyramided?.shares_acquired).toBe(book?.sharesAcquired);
+    expect(pyramided?.shares_acquired).toBeGreaterThan(pyramided?.shares_at_entry ?? 0);
+    expect(hundredths(String(pyramided?.current_basis?.value ?? ""))).toBe(book?.basisCents);
+    expect(pyramided?.current_basis?.value).not.toBe(pyramided?.entry_price.value);
+    /* And it is still ONE trade, holding more than it entered with, and still OPEN. */
+    expect(pyramided?.trade_status).toBe("OPEN");
+    expect(pyramided?.shares_open).toBe(book?.sharesAcquired);
+  });
+
+  it("carries no add fields on a trade that never added", async () => {
+    const trades = await client().trades(DEMO);
+    const plain = trades.payload?.items.find((item) => item.trade_id === "demo-trade-arb-0001");
+    expect(plain?.shares_acquired).toBeUndefined();
+    expect(plain?.current_basis).toBeUndefined();
+    expect(plain?.add_planned_risk).toBeUndefined();
+    expect(plain?.r_denominator).toBeUndefined();
+    /* With no add, the entry quantity IS everything it holds. */
+    expect(plain?.shares_open).toBe(plain?.shares_at_entry);
+  });
+
+  /*
+   * A HISTORICAL VALUATION DOES NOT USE A FUTURE ADD.
+   *
+   * The defect this pins: MFE and MAE were measured over the WHOLE path at the final
+   * combined quantity and the final combined basis, so the thirty sessions during which the
+   * pyramid held 60 shares at 62.40 were valued as 100 shares at 63.88. It reported an
+   * excursion the position could not have had.
+   */
+  it("measures excursions with the quantity and basis each session actually carried", async () => {
+    const trades = await client().trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    const book = BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002");
+    const stages = book?.stages ?? [];
+    const first = stages[0].session;
+
+    /* Hand-calculated here, and independent of the fixture's own helper. */
+    let best = 0;
+    let worst = 0;
+    for (let step = 0; step < (book?.path.length ?? 0); step += 1) {
+      const session = first + step;
+      const filled = stages.filter((stage) => stage.session <= session);
+      const held = filled.reduce((total, stage) => total + stage.shares, 0);
+      const basis =
+        filled.reduce((total, stage) => total + stage.shares * stage.priceCents, 0) / held;
+      const move = ((book?.path[step] ?? 0) - basis) * held;
+      best = Math.max(best, move);
+      worst = Math.min(worst, move);
+    }
+    expect(hundredths(String(pyramided?.mfe.value ?? ""))).toBe(Math.round(best));
+    expect(hundredths(String(pyramided?.mae.value ?? ""))).toBe(Math.round(worst));
+
+    /*
+     * NEGATIVE CONTROL. The anachronistic calculation — final quantity and final basis over
+     * every session — gives a DIFFERENT answer on this trade, so the assertion above would
+     * fail if the defect returned rather than passing by coincidence.
+     */
+    let anachronisticBest = 0;
+    for (const price of book?.path ?? []) {
+      anachronisticBest = Math.max(
+        anachronisticBest,
+        (price - (book?.basisCents ?? 0)) * (book?.sharesAcquired ?? 0),
+      );
+    }
+    expect(anachronisticBest).not.toBe(Math.round(best));
+  });
+
+  /*
+   * A POSITION REDUCTION IS NOT AN ORDER FILL STATE.
+   *
+   * The defect this pins: the exit event reported `ORDER_PARTIALLY_FILLED` whenever its
+   * quantity was smaller than the trade's — inferring an order's fulfilment from a position
+   * comparison. A partial exit is routinely executed by an order that filled completely, and
+   * this book records completed stage and exit fills and nothing else.
+   */
+  it("never infers an order fill state from a quantity comparison", async () => {
+    const lifecycle = await client().tradeLifecycle(DEMO, "demo-trade-cir-0003");
+    const events = lifecycle.payload?.events ?? [];
+    const exit = events.find((event) => event.event_kind.code === "PARTIAL_EXIT_RECORDED");
+    /* The trade DID reduce: 40 of 96, and the trade itself says so. */
+    expect(exit?.quantity).toBeLessThan(events[0].quantity);
+    /* The ORDER, however, filled. Its state is recorded, not derived from that comparison. */
+    expect(exit?.downstream_stage).toBe("ORDER_FILLED");
+    for (const event of events) {
+      expect(event.downstream_stage).toBe("ORDER_FILLED");
+    }
+    /* And per-fill evidence stays explicitly unavailable rather than being manufactured. */
+    const absent = lifecycle.payload?.absent_kinds ?? [];
+    const fills = absent.find((entry) => entry.kind.code === "INDIVIDUAL_FILL");
+    expect(fills?.availability).toBe("NOT_IMPLEMENTED");
+    expect(fills?.reason).toBe("PRODUCER_NOT_IMPLEMENTED");
+  });
+
+  /*
+   * PARTIAL OR FINAL IS DECIDED BY WHAT IS LEFT.
+   *
+   * The shipped book contains no trade that adds, exits partly and then closes the
+   * remainder, so this defect was LATENT rather than visible: every generated trade exits in
+   * one go. It is exercised here on a constructed trade, because a rule that is only correct
+   * for the rows that happen to exist is not a correct rule.
+   */
+  it("classifies an exit as final from the remaining position, not from the entry size", () => {
+    const days = Array.from({ length: 60 }, (_, index) =>
+      new Date(Date.UTC(2026, 0, 1) + index * 86_400_000).toISOString().slice(0, 10),
+    );
+    const stages = [
+      { session: 0, shares: 60, priceCents: 62_40, invalidationCents: 59_30, kind: "ENTRY" as const },
+      { session: 10, shares: 40, priceCents: 66_10, invalidationCents: 60_80, kind: "ADD" as const },
+    ];
+    const exits = [
+      { session: 20, shares: 30, priceCents: 70_00, reason: "PARTIAL_TARGET_REACHED", realizedCents: 0 },
+      /* Closes the remaining 70 — larger than nothing left, SMALLER than the 100 acquired. */
+      { session: 30, shares: 70, priceCents: 72_00, reason: "TARGET_REACHED", realizedCents: 0 },
+    ];
+    const constructed = {
+      ...(BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002") as BookTrade),
+      tradeId: "constructed-add-then-close",
+      stages,
+      exits,
+      sharesAcquired: 100,
+      sharesOpen: 0,
+      status: "CLOSED",
+      lastSession: 30,
+      path: Array.from({ length: 31 }, () => 68_00),
+    } as BookTrade;
+
+    const lifecycle = syntheticTradeLifecycle(constructed, days, "2026-03-01T00:00:00.000Z");
+    const kinds = lifecycle.events.map((event) => event.event_kind.code);
+    expect(kinds).toEqual([
+      "ENTRY_RECORDED",
+      "PYRAMID_ADD_RECORDED",
+      "PARTIAL_EXIT_RECORDED",
+      "EXIT_RECORDED",
+    ]);
+
+    /*
+     * NEGATIVE CONTROL. The retired rule compared each exit against the acquired quantity,
+     * so BOTH exits here are smaller than 100 and both would have read as partial. The
+     * assertion above therefore distinguishes the two rules rather than passing under both.
+     */
+    const retired = exits.map((exit) =>
+      exit.shares < constructed.sharesAcquired ? "PARTIAL_EXIT_RECORDED" : "EXIT_RECORDED",
+    );
+    expect(retired).toEqual(["PARTIAL_EXIT_RECORDED", "PARTIAL_EXIT_RECORDED"]);
+  });
+
   it("reduces a partially exited trade rather than closing it or splitting it", async () => {
     const trades = await client().trades(DEMO);
     const partial = trades.payload?.items.find(
@@ -602,21 +829,120 @@ describe("trade identity, adds and partial exits", () => {
     expect(expectedOpen).not.toBe(expectedInitial);
   });
 
-  it("sums the retained per-stage initial risks for a pyramided trade", async () => {
+  /*
+   * 12.4, in full: each add carries "its OWN `risk.initial_planned` record, at its own
+   * reference price and its own as-of", "the trade's original record is retained unchanged",
+   * and "the trade-level denominator is the SUM of the retained per-stage initial planned
+   * risks". Those are three separate requirements, and an earlier revision satisfied only
+   * the third — by putting the sum inside the original record, which is the one thing the
+   * second forbids.
+   */
+  it("retains the original entry record unchanged on a pyramided trade", async () => {
     const trades = await client().trades(DEMO);
     const pyramided = trades.payload?.items.find(
       (item) => item.trade_id === "demo-trade-nvl-0002",
     );
     const book = BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002");
     expect(book?.stages.length).toBe(2);
-    const expected = (book?.stages ?? []).reduce(
+    const entry = book?.stages[0];
+    const entryRisk =
+      (entry?.shares ?? 0) * Math.abs((entry?.priceCents ?? 0) - (entry?.invalidationCents ?? 0));
+
+    const record = pyramided?.initial_planned_risk.record;
+    /* The original record's own risk, NOT the two stages summed. */
+    expect(hundredths(record?.risk_money.amount ?? "")).toBe(entryRisk);
+    /* Its reference price is the price the ENTRY filled at, never the blended basis. */
+    expect(hundredths(record?.reference_price.amount ?? "")).toBe(entry?.priceCents);
+    /* And a record dated at the entry points at the invalidation level used at entry. */
+    expect(record?.invalidation_ref.ref_id).toContain("invalidation-0");
+  });
+
+  it("retains each add's own record, at its own reference price and as-of", async () => {
+    const trades = await client().trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    const book = BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002");
+    const add = book?.stages[1];
+
+    expect(pyramided?.add_planned_risk).toHaveLength(1);
+    const carried = pyramided?.add_planned_risk?.[0];
+    expect(carried?.stage_ordinal).toBe(1);
+    expect(hundredths(carried?.record.reference_price.amount ?? "")).toBe(add?.priceCents);
+    expect(hundredths(carried?.record.risk_money.amount ?? "")).toBe(
+      (add?.shares ?? 0) * Math.abs((add?.priceCents ?? 0) - (add?.invalidationCents ?? 0)),
+    );
+    /* Its own as-of: the add's session, thirty sessions after the entry's. */
+    expect(carried?.record.recorded_at).not.toBe(
+      pyramided?.initial_planned_risk.record?.recorded_at,
+    );
+    /* Two stages, two contributing policy references, both displayable. */
+    expect(carried?.record.risk_policy_ref.policy_version).not.toBe(
+      pyramided?.initial_planned_risk.record?.risk_policy_ref.policy_version,
+    );
+  });
+
+  it("divides R by the SUM of the retained per-stage risks, and states that sum", async () => {
+    const trades = await client().trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    const book = BOOK.openTrades.find((trade) => trade.tradeId === "demo-trade-nvl-0002");
+    const summed = (book?.stages ?? []).reduce(
       (total, stage) =>
         total + stage.shares * Math.abs(stage.priceCents - stage.invalidationCents),
       0,
     );
-    expect(hundredths(pyramided?.initial_planned_risk.record?.risk_money.amount ?? "")).toBe(
-      expected,
+    /* The denominator is served, not derived on a screen. */
+    expect(hundredths(pyramided?.r_denominator?.amount ?? "")).toBe(summed);
+    /* It is the sum, and it is NOT the record displayed beside it. */
+    expect(hundredths(pyramided?.initial_planned_risk.record?.risk_money.amount ?? "")).not.toBe(
+      summed,
     );
+    /* And R is that sum's quotient. */
+    const outcome = (book?.realizedCents ?? 0) + (book?.unrealizedCents ?? 0);
+    expect(hundredths(String(pyramided?.r_multiple.value ?? ""))).toBe(
+      Math.round((outcome * 100) / summed),
+    );
+  });
+
+  /*
+   * TWO FIELDS, ONE EVENT.
+   *
+   * `exit_reason` and `stop_outcome` describe the same exit and must agree. An earlier
+   * revision reported `STOP_TRAILED_THEN_TRIGGERED` for every non-losing outcome, so a trade
+   * that reached its planned target also claimed its trailed stop had triggered, and so did
+   * the exact break-even. §5 of the specification asks for a book whose numbers do not
+   * contradict each other.
+   */
+  it("agrees between the recorded exit reason and the recorded stop outcome", async () => {
+    const trades = await client().trades(DEMO);
+    const closed = (trades.payload?.items ?? []).filter(
+      (item) => item.trade_status === "CLOSED",
+    );
+    expect(closed.length).toBeGreaterThan(0);
+
+    /* A stop outcome that claims the stop fired, for each reason that says it did not. */
+    const stoppedOut = new Set(["PROTECTIVE_STOP_HIT", "TRAILING_STOP_HIT"]);
+    let targetExits = 0;
+    let breakEvenExits = 0;
+    for (const trade of closed) {
+      const reason = String(trade.exit_reason.value ?? "");
+      const outcome = trade.stop_outcome.code;
+      if (reason === "PLANNED_TARGET_REACHED") targetExits += 1;
+      if (reason === "TIME_STOP_REACHED") breakEvenExits += 1;
+      if (!stoppedOut.has(reason)) {
+        expect(
+          outcome,
+          `${trade.trade_id} exited on ${reason} and must not claim a stop fired`,
+        ).toBe("EXITED_BEFORE_STOP");
+      } else {
+        expect(outcome).not.toBe("EXITED_BEFORE_STOP");
+      }
+    }
+    /* Both contradicting cases exist in this book, so the assertion is exercised. */
+    expect(targetExits).toBeGreaterThan(0);
+    expect(breakEvenExits).toBeGreaterThan(0);
   });
 
   it("reports no R for a trade whose entry-time risk record was never written", async () => {
@@ -808,6 +1134,40 @@ describe("borrow and risk", () => {
     expect(
       shorts.some((position) => position.borrow_state?.code.includes("UNKNOWN")),
     ).toBe(true);
+  });
+
+  /*
+   * A RISK SURFACE REPORTS EVERY RETAINED RECORD, NOT ONE PER TRADE.
+   *
+   * §12.4 retains one initial-risk record per stage, so a pyramided trade has two. Listing
+   * one per trade would report the pyramid's planned risk as its entry stage's alone — 186.00
+   * where the retained records total 398.00 — and understating planned risk on the risk
+   * dashboard is the wrong direction to be wrong in.
+   */
+  it("lists every retained entry-time record on open exposure, one per stage", async () => {
+    const snapshot = await client().riskSnapshot(DEMO);
+    const listed = snapshot.payload?.initial_planned_risk_open ?? [];
+    const openTrades = BOOK.openTrades;
+    const expectedEntries = openTrades.reduce((total, trade) => total + trade.stages.length, 0);
+    expect(listed.length).toBe(expectedEntries);
+    /* And that is strictly more than one per trade, because the book carries a pyramid. */
+    expect(expectedEntries).toBeGreaterThan(openTrades.length);
+
+    const pyramid = openTrades.find((trade) => trade.stages.length > 1);
+    expect(pyramid).toBeDefined();
+    const forPyramid = listed.filter((entry) => entry.trade_ref.ref_id === pyramid?.tradeId);
+    expect(forPyramid.length).toBe(pyramid?.stages.length);
+    /* Stage-labelled, so two records sharing a trade reference stay distinguishable. */
+    expect(forPyramid.map((entry) => entry.stage_ordinal)).toEqual([0, 1]);
+    /* The retained records total the trade's own retained sum, and nothing is dropped. */
+    const totalled = forPyramid.reduce(
+      (total, entry) => total + hundredths(entry.value.record?.risk_money.amount ?? ""),
+      0,
+    );
+    expect(totalled).toBe(pyramid?.initialRiskCents);
+    /* A trade that never added carries no stage label, because there is nothing to tell apart. */
+    const plain = listed.find((entry) => entry.trade_ref.ref_id === "demo-trade-arb-0001");
+    expect(plain?.stage_ordinal).toBeUndefined();
   });
 
   it("serves no permitted limit without a versioned policy reference", async () => {

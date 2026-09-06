@@ -54,7 +54,7 @@ import {
   usd,
   windowOf,
 } from "./common";
-import { demoPins, initialRiskRecord, openRiskRecord } from "./positions";
+import { demoPins, initialRiskRecord, openRiskRecord, stageRiskRecord } from "./positions";
 
 /** The trade the ledger's page is sorted by, and the tiebreak that makes it deterministic. */
 const LEDGER_SORT = "ENTRY_TIME_DESCENDING";
@@ -85,6 +85,8 @@ export function buildTradeSummary(
   const finalExit = trade.exits[trade.exits.length - 1];
   const positionValue = initialPositionValueCents(trade);
   const partialPathTrade = trade.dataCompleteness === "PARTIAL";
+  /** Whether this trade ever pyramided. The additive add fields exist only when it did. */
+  const added = trade.stages.length > 1;
 
   /*
    * THE EXIT FIELDS OF A TRADE THAT HAS NOT EXITED.
@@ -133,10 +135,18 @@ export function buildTradeSummary(
     alpha_family: demoReason(version.family),
     trade_template: demoReason(version.template),
     entry_time: entryAt,
-    entry_price: usd("trade.entry_price", trade.basisCents, asOf),
+    /** The ORIGINAL entry stage's filled price. A later add never restates it (§12.4). */
+    entry_price: usd("trade.entry_price", trade.stages[0].priceCents, asOf),
     exit_time: exitTime,
     exit_price: exitPrice,
-    shares_at_entry: trade.sharesAtEntry,
+    /** Filled AT ENTRY. What the trade went on to acquire is `shares_acquired`. */
+    shares_at_entry: trade.stages[0].shares,
+    ...(added
+      ? {
+          shares_acquired: trade.sharesAcquired,
+          current_basis: usd("position.entry_price", trade.basisCents, asOf),
+        }
+      : {}),
     shares_open: trade.sharesOpen,
     initial_position_value: { amount: centsToDecimal(positionValue), currency: "USD" },
     /** CLOSED portion only. An OPEN trade has closed none, so it reports no realized result. */
@@ -173,7 +183,25 @@ export function buildTradeSummary(
           availability: "NOT_YET_AVAILABLE",
           reason: "UPSTREAM_INPUT_MISSING",
         },
+    ...(added
+      ? {
+          /** Each add's own retained record, at its own reference price and as-of (§12.4). */
+          add_planned_risk: trade.stages.slice(1).map((_stage, index) => ({
+            stage_ordinal: index + 1,
+            record: stageRiskRecord(trade, index + 1, days),
+          })),
+        }
+      : {}),
     open_planned_risk: openRiskRecord(trade, days, asOf),
+    ...(added && trade.initialRiskRecorded
+      ? {
+          /** The SUM of every retained stage record — what `r_multiple` was divided by. */
+          r_denominator: {
+            amount: centsToDecimal(trade.initialRiskCents),
+            currency: "USD" as const,
+          },
+        }
+      : {}),
     r_multiple: trade.initialRiskRecorded
       ? scaled(
           "r_multiple",
@@ -381,21 +409,43 @@ export function syntheticTradeLifecycle(
       downstream_stage: "ORDER_FILLED" as const,
       source_ref: demoRef(`${trade.tradeId}-stage-${index}-source`, "source_fact"),
     })),
-    ...trade.exits.map((exit, index) => ({
-      event_id: `${trade.tradeId}-exit-${index}`,
-      event_kind: demoReason(
-        exit.shares < trade.sharesAtEntry ? "PARTIAL_EXIT_RECORDED" : "EXIT_RECORDED",
-      ),
-      event_time: sessionInstant(days[exit.session]),
-      observed_time: sessionInstant(days[exit.session]),
-      quantity: exit.shares,
-      price: usd("trade.mark_price", exit.priceCents, asOf),
-      downstream_stage:
-        exit.shares < trade.sharesAtEntry
-          ? ("ORDER_PARTIALLY_FILLED" as const)
-          : ("ORDER_FILLED" as const),
-      source_ref: demoRef(`${trade.tradeId}-exit-${index}-source`, "source_fact"),
-    })),
+    ...trade.exits.map((exit, index) => {
+      /*
+       * PARTIAL OR FINAL IS A QUESTION ABOUT WHAT IS LEFT.
+       *
+       * An earlier revision compared this exit's quantity against the trade's whole filled
+       * quantity, which answers a different question: an exit that closes the remainder
+       * after earlier partial exits is smaller than the entry and is still the final one,
+       * and an exit of 70 out of 100 held is larger than a 60-share entry and is still
+       * partial. The remaining position after this exit decides it, and nothing else does.
+       */
+      const releasedThrough = trade.exits
+        .slice(0, index + 1)
+        .reduce((total, earlier) => total + earlier.shares, 0);
+      const remaining = trade.sharesAcquired - releasedThrough;
+      return {
+        event_id: `${trade.tradeId}-exit-${index}`,
+        event_kind: demoReason(remaining > 0 ? "PARTIAL_EXIT_RECORDED" : "EXIT_RECORDED"),
+        event_time: sessionInstant(days[exit.session]),
+        observed_time: sessionInstant(days[exit.session]),
+        quantity: exit.shares,
+        price: usd("trade.mark_price", exit.priceCents, asOf),
+        /*
+         * A POSITION REDUCTION IS NOT AN ORDER FILL STATE.
+         *
+         * An earlier revision reported `ORDER_PARTIALLY_FILLED` whenever an exit was smaller
+         * than the trade's quantity — but a partial exit is routinely executed by an order
+         * that filled completely, and the two facts are recorded by different producers.
+         * This book records completed stage and exit fills and nothing else; per-order and
+         * per-fill evidence has no producer here, which `absent_kinds` states below as
+         * `INDIVIDUAL_FILL` / `PRODUCER_NOT_IMPLEMENTED`. So every recorded event reports
+         * the fill state it actually has, and no order state is inferred from a quantity
+         * comparison.
+         */
+        downstream_stage: "ORDER_FILLED" as const,
+        source_ref: demoRef(`${trade.tradeId}-exit-${index}-source`, "source_fact"),
+      };
+    }),
   ].sort((left, right) => left.event_time.localeCompare(right.event_time));
 
   /**

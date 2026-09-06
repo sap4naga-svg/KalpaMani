@@ -10,6 +10,7 @@ import { MetricText, MoneyText } from "@/components/cockpit/metric-text";
 import { PageHeader } from "@/components/cockpit/page-header";
 import { PanelSection, ReadModelPanel, ReferenceChip } from "@/components/cockpit/read-model-panel";
 import {
+  AddPlannedRiskRecords,
   InitialPlannedRiskRecord,
   OpenPlannedRiskRecord,
   RiskSeparationNote,
@@ -157,9 +158,13 @@ function markersFrom(lifecycle: TradeLifecyclePayload | undefined): ChartMarker[
 /**
  * The levels a chart may draw.
  *
- * The invalidation level is carried as a REFERENCE, never an order, and the entry-time record
- * is the only one this page has a number for. A current protective level belongs to the
- * protective-order record, which does not exist.
+ * The invalidation level is carried as a REFERENCE, never an order, and the retained risk
+ * records are the only ones this page has a number for. A current protective level belongs to
+ * the protective-order record, which does not exist.
+ *
+ * A pyramided trade draws one line per retained record, at each stage's OWN reference price:
+ * the entry's line is the price the entry actually filled at, and the add's is its own. One
+ * blended line would draw a price no stage was ever recorded against.
  */
 function levelsFrom(payload: TradeDetailPayload): ChartLevel[] {
   const record = payload.summary.initial_planned_risk.record;
@@ -172,6 +177,11 @@ function levelsFrom(payload: TradeDetailPayload): ChartLevel[] {
       price: record.reference_price.amount,
       note: "the price the entry-time risk was set against",
     },
+    ...(payload.summary.add_planned_risk ?? []).map((add) => ({
+      label: `Add ${add.stage_ordinal} reference`,
+      price: add.record.reference_price.amount,
+      note: "the price that add's own risk record was set against",
+    })),
   ];
 }
 
@@ -184,7 +194,7 @@ function TradeIdentity({
 }) {
   const summary = payload.summary;
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-testid="trade-identity">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={summary.direction === "LONG" ? "info" : "warning"}>
           <span aria-hidden="true">{summary.direction === "LONG" ? "▲" : "▼"}</span>
@@ -210,6 +220,15 @@ function TradeIdentity({
         and neither is inferred from the other.
       </p>
 
+      {summary.shares_acquired !== undefined && (
+        <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+          <strong className="text-text-secondary">This trade added to its position.</strong>{" "}
+          The entry quantity and entry price below are the original entry&apos;s and are not
+          restated by the add; what the trade went on to hold is carried separately, with the
+          basis that add produced. Each stage keeps its own retained risk record.
+        </p>
+      )}
+
       <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {(
           [
@@ -217,6 +236,14 @@ function TradeIdentity({
             ["Trade identity", summary.trade_id],
             ["Entry", summary.entry_time],
             ["Shares at entry", summary.shares_at_entry.toLocaleString("en-US")],
+            ...(summary.shares_acquired === undefined
+              ? []
+              : ([
+                  [
+                    "Shares acquired — entry plus adds",
+                    summary.shares_acquired.toLocaleString("en-US"),
+                  ],
+                ] as const)),
             ["Shares open", summary.shares_open.toLocaleString("en-US")],
             ["Environment", summary.environment],
           ] as const
@@ -230,6 +257,24 @@ function TradeIdentity({
             </dd>
           </div>
         ))}
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Entry price
+          </dt>
+          <dd>
+            <MetricText metric={summary.entry_price} neutral operator={operator} />
+          </dd>
+        </div>
+        {summary.current_basis !== undefined && (
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+              Current basis — after adds
+            </dt>
+            <dd>
+              <MetricText metric={summary.current_basis} neutral operator={operator} />
+            </dd>
+          </div>
+        )}
         <div className="flex flex-col gap-0.5">
           <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
             Initial position value
@@ -272,7 +317,10 @@ function TradeIdentity({
         ))}
       </dl>
 
-      <div className="grid gap-5 border-t border-border-subtle pt-3 lg:grid-cols-2">
+      <div
+        className="grid gap-5 border-t border-border-subtle pt-3 lg:grid-cols-2"
+        data-testid="trade-risk"
+      >
         <PanelSection
           title="Initial planned risk — immutable"
           note="Recorded at entry. A moving stop, a replaced protective order and a partial exit each move the OTHER figure and never this one."
@@ -288,6 +336,18 @@ function TradeIdentity({
         >
           <OpenPlannedRiskRecord wrapper={summary.open_planned_risk} operator={operator} />
         </PanelSection>
+        {summary.add_planned_risk !== undefined && (
+          <PanelSection
+            title="Each add's retained record — and the summed R denominator"
+            note="An add carries its own record at its own reference price and as-of. It never edits the entry's."
+          >
+            <AddPlannedRiskRecords
+              adds={summary.add_planned_risk}
+              denominator={summary.r_denominator}
+              operator={operator}
+            />
+          </PanelSection>
+        )}
       </div>
       <RiskSeparationNote />
 

@@ -124,6 +124,64 @@ export function InitialPlannedRiskRecord({
   );
 }
 
+/**
+ * The retained record of each ADD, and the summed denominator R was divided by.
+ *
+ * §12.4 keeps three facts apart that a single figure would merge: the original entry record,
+ * each add's own record at its own reference price and as-of, and the SUM of them, which is
+ * the trade-level R denominator and is not any one of the records. It also requires that a
+ * trade whose stages carry different `risk_policy_version` values shows every contributing
+ * version — which is why each record prints its own policy reference rather than one at the
+ * top. **Nothing here is computed on this screen**: the sum arrives as `r_denominator`.
+ */
+export function AddPlannedRiskRecords({
+  adds,
+  denominator,
+  operator = false,
+}: {
+  adds: readonly { stage_ordinal: number; record: InitialPlannedRisk }[];
+  denominator?: { amount: string; currency: string };
+  operator?: boolean;
+}) {
+  return (
+    <div className="space-y-4" data-testid="add-planned-risk">
+      {adds.map((add) => (
+        <div key={add.stage_ordinal} className="space-y-1.5">
+          <p className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Add {add.stage_ordinal} — its own record
+          </p>
+          <InitialPlannedRiskRecord
+            wrapper={{
+              record: add.record,
+              availability: "AVAILABLE",
+              reason: "NONE",
+              as_of: add.record.recorded_at,
+            }}
+            operator={operator}
+          />
+        </div>
+      ))}
+      {denominator !== undefined && (
+        <div
+          className="border-t border-border-subtle pt-3"
+          data-testid="r-denominator"
+        >
+          <dl className="grid gap-2 sm:grid-cols-2">
+            <Field term="R denominator — the retained records summed">
+              <MoneyText amount={denominator.amount} />
+            </Field>
+          </dl>
+          <p className="mt-1 max-w-2xl text-label-s leading-relaxed text-text-tertiary">
+            The R multiple is divided by the <strong>sum</strong> of every retained stage
+            record, so it is not the entry record shown above it. Each record keeps its own
+            policy version, and every version that contributed is printed with its record.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function OpenPlannedRiskRecord({
   wrapper,
   operator = false,

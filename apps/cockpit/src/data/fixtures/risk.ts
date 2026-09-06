@@ -22,7 +22,7 @@ import type {
 } from "@/contracts/risk-market-models";
 
 import { BOOK, centsToDecimal, pctOfCapitalHundredths, positionValueCents, securityOf } from "./book";
-import { EXPOSURE_AXES, initialRiskRecord } from "./positions";
+import { EXPOSURE_AXES, stageRiskRecord } from "./positions";
 import {
   count,
   demoPolicyRef,
@@ -111,16 +111,23 @@ export function syntheticRiskSnapshot(
       reason: stale ? "UPSTREAM_INPUT_STALE" : "NONE",
       as_of: snapshotAt,
     },
-    /** Listed per trade rather than summed away: each is an immutable entry-time record. */
-    initial_planned_risk_open: open.map((trade) => ({
-      trade_ref: demoRef(trade.tradeId, "source_fact", "ENDPOINT"),
-      value: {
-        record: initialRiskRecord(trade, days),
-        availability: "AVAILABLE" as const,
-        reason: "NONE" as const,
-        as_of: sessionInstant(days[trade.stages[0].session]),
-      },
-    })),
+    /*
+     * Listed per RETAINED STAGE RECORD rather than summed away: each is immutable, each has
+     * its own reference price and as-of, and a pyramided trade retains one per stage (§12.4).
+     * Listing one per trade would report a pyramid's planned risk as its entry stage's alone.
+     */
+    initial_planned_risk_open: open.flatMap((trade) =>
+      trade.stages.map((stage, ordinal) => ({
+        trade_ref: demoRef(trade.tradeId, "source_fact", "ENDPOINT"),
+        ...(trade.stages.length > 1 ? { stage_ordinal: ordinal } : {}),
+        value: {
+          record: stageRiskRecord(trade, ordinal, days),
+          availability: "AVAILABLE" as const,
+          reason: "NONE" as const,
+          as_of: sessionInstant(days[stage.session]),
+        },
+      })),
+    ),
     permitted: PERMITTED_SCOPES.map((scope) => ({
       scope,
       value: {

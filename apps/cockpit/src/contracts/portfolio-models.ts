@@ -415,8 +415,12 @@ export const exposureAggregateEnvelope = envelope(
  * **A fill is never counted as a separate trade**, and **a partial exit reduces a trade; it
  * does not close it and does not create a second one**. Six invariants are enforced here:
  *
- *   STATUS AND SHARES AGREE            OPEN holds its whole entry quantity, PARTIALLY_EXITED
- *                                      holds part of it, CLOSED holds none
+ *   STATUS AND SHARES AGREE            OPEN holds everything it ever filled,
+ *                                      PARTIALLY_EXITED holds part of it, CLOSED holds none
+ *   AN ADD NEVER RESTATES THE ENTRY    `shares_at_entry` and `entry_price` are the ORIGINAL
+ *                                      entry stage's filled quantity and price. A later add
+ *                                      is carried by `shares_acquired` and its own retained
+ *                                      risk record, and it changes neither of them (12.4)
  *   BUSINESS STATUS IS NOT COMPLETENESS  they are separate fields and neither is inferred
  *                                      from the other (§9.4)
  *   A CLOSED TRADE HAS AN EXIT         and an open one has no exit to report, so its exit
@@ -444,9 +448,39 @@ export const tradeSummary = z
     entry_price: metricOf("trade.entry_price"),
     exit_time: metricOf("trade.exit_time"),
     exit_price: metricOf("trade.exit_price"),
-    /** Filled at entry, not ordered. */
+    /**
+     * Filled AT ENTRY, not ordered — and **not** the trade's whole filled quantity.
+     *
+     * 4.5 names this "filled at entry" and names `PositionSnapshot.entry_price` a
+     * "position-weighted basis" in the same document, so the two are different questions
+     * and this one is answered about the original entry stage alone.
+     */
     shares_at_entry: quantity,
+    /**
+     * ADDITIVE (5, additive within a version): the whole quantity ever filled — the entry
+     * stage plus every add.
+     *
+     * Absent on a trade that never added, where it would equal `shares_at_entry`. It exists
+     * because a pyramided trade holds more than it entered with, and the alternative was to
+     * restate its entry quantity, which 12.4 forbids.
+     */
+    shares_acquired: quantity.optional(),
     shares_open: quantity,
+    /**
+     * ADDITIVE: the position-weighted basis of what is still held.
+     *
+     * Present only where it differs from `entry_price` — that is, where an add moved it.
+     * The screen never derives it from the two prices it is shown beside.
+     */
+    current_basis: metricOf("position.entry_price").optional(),
+    /**
+     * The capital this trade put to work, summed over every stage that filled.
+     *
+     * 12.4 aggregates a stage-level fact to trade level by summing the retained stage
+     * records — that is how the R denominator is defined — and this follows the same rule,
+     * so `return_pct` divides the trade's whole outcome by the whole capital that produced
+     * it rather than by the entry stage alone.
+     */
     initial_position_value: money,
     /** CLOSED portion only. */
     realized_pnl: metricOf("pnl.realized"),
@@ -454,8 +488,36 @@ export const tradeSummary = z
     unrealized_pnl: metricOf("pnl.unrealized"),
     /** Denominator INITIAL_POSITION_VALUE. */
     return_pct: metricOf("trade.return_pct"),
+    /**
+     * The ORIGINAL entry-time record, **retained unchanged** (12.4).
+     *
+     * A later add carries its own record and never edits this one, so its `risk_money`,
+     * `reference_price`, `invalidation_ref` and `risk_policy_ref` are the entry stage's and
+     * are not a blend of the stages that followed.
+     */
     initial_planned_risk: recordValue(initialPlannedRisk),
+    /**
+     * ADDITIVE: the retained record of each ADD, in stage order.
+     *
+     * 12.4 requires each add to carry "its own `risk.initial_planned` record, at its own
+     * reference price and its own as-of". Without somewhere to put them, a pyramided trade
+     * could only show one record, and the only way to make that one record cover the whole
+     * trade is to blend it — which is what this field exists to avoid. Absent on a trade
+     * with no adds.
+     */
+    add_planned_risk: z
+      .array(z.object({ stage_ordinal: z.number().int().positive(), record: initialPlannedRisk }))
+      .optional(),
     open_planned_risk: recordValue(currentOpenPlannedRisk),
+    /**
+     * ADDITIVE: the denominator `r_multiple` was actually divided by.
+     *
+     * 12.4 makes it "the sum of the retained per-stage initial planned risks", which for a
+     * pyramided trade is NOT the `initial_planned_risk` record shown beside it. It is served
+     * rather than derived because a screen that computed it would be a screen computing a
+     * metric.
+     */
+    r_denominator: money.optional(),
     /** Denominator INITIAL_PLANNED_RISK, per §12.3. A moving stop never moves it. */
     r_multiple: metricOf("r_multiple"),
     holding_period: metricOf("holding_period"),
@@ -472,13 +534,31 @@ export const tradeSummary = z
   .superRefine((candidate, ctx) => {
     const closed = candidate.trade_status === "CLOSED";
     const open = candidate.trade_status === "OPEN";
+    /*
+     * THE QUANTITY EVERY STATUS RULE IS ABOUT.
+     *
+     * It is what the trade ever FILLED, not what it filled at entry. An earlier revision
+     * compared the open quantity against `shares_at_entry`, so a legitimate pyramid — an
+     * entry of 60 followed by an add of 40, holding 100 — was refused at admission unless
+     * its entry quantity was restated as 100. Restating it is what 12.4 forbids, so the
+     * comparison moved instead of the fact.
+     */
+    const acquired = candidate.shares_acquired ?? candidate.shares_at_entry;
     if (candidate.shares_at_entry <= 0) {
       ctx.addIssue({ code: "custom", message: "a trade filled a positive entry quantity" });
     }
-    if (candidate.shares_open < 0 || candidate.shares_open > candidate.shares_at_entry) {
+    if (candidate.shares_acquired !== undefined && candidate.shares_acquired <= candidate.shares_at_entry) {
       ctx.addIssue({
         code: "custom",
-        message: "open shares lie between none and the whole entry quantity",
+        message:
+          "a stated acquired quantity exceeds the entry quantity; a trade that never added " +
+          "states none",
+      });
+    }
+    if (candidate.shares_open < 0 || candidate.shares_open > acquired) {
+      ctx.addIssue({
+        code: "custom",
+        message: "open shares lie between none and the whole quantity the trade filled",
       });
     }
     if (closed !== (candidate.shares_open === 0)) {
@@ -487,19 +567,61 @@ export const tradeSummary = z
         message: "a CLOSED trade holds no open shares, and a trade holding none is CLOSED",
       });
     }
-    if (open && candidate.shares_open !== candidate.shares_at_entry) {
+    if (open && candidate.shares_open !== acquired) {
       ctx.addIssue({
         code: "custom",
-        message: "an OPEN trade still holds its whole entry quantity; a reduced one is PARTIALLY_EXITED",
+        message:
+          "an OPEN trade still holds everything it filled; a reduced one is PARTIALLY_EXITED",
       });
     }
-    if (
-      candidate.trade_status === "PARTIALLY_EXITED" &&
-      candidate.shares_open >= candidate.shares_at_entry
-    ) {
+    if (candidate.trade_status === "PARTIALLY_EXITED" && candidate.shares_open >= acquired) {
       ctx.addIssue({
         code: "custom",
-        message: "a PARTIALLY_EXITED trade holds fewer shares than it entered with",
+        message: "a PARTIALLY_EXITED trade holds fewer shares than it filled",
+      });
+    }
+    /*
+     * A TRADE THAT ADDED SAYS SO IN BOTH PLACES, OR IN NEITHER.
+     *
+     * `add_planned_risk` carries the retained record of each add, so its presence and the
+     * presence of an acquired quantity larger than the entry quantity are the same fact, and
+     * one of them appearing alone would mean a stage was recorded in one place and not the
+     * other.
+     */
+    const adds = candidate.add_planned_risk ?? [];
+    if (adds.length > 0 && candidate.shares_acquired === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a trade carrying an add record states the quantity that add brought it to",
+      });
+    }
+    if (adds.length === 0 && candidate.shares_acquired !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a trade that acquired more than it entered with retains that add's record",
+      });
+    }
+    for (let index = 0; index < adds.length; index += 1) {
+      if (adds[index].stage_ordinal !== index + 1) {
+        ctx.addIssue({
+          code: "custom",
+          message: "add records are ordered by stage, and the entry stage is not one of them",
+        });
+        break;
+      }
+    }
+    /*
+     * R IS DIVIDED BY THE SUM, AND THE SUM IS STATED WHEREVER IT IS NOT THE ONE RECORD.
+     *
+     * 12.4 makes the trade-level denominator the sum of every retained stage record. On a
+     * trade with adds that sum is not the record displayed beside it, so the denominator is
+     * carried explicitly rather than left to a reader to assume.
+     */
+    if (adds.length > 0 && candidate.r_denominator === undefined && isValueBearing(candidate.r_multiple.availability)) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "a pyramided trade reporting an R states the summed denominator it was divided by",
       });
     }
     for (const [name, metric] of [

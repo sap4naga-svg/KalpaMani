@@ -56,8 +56,23 @@ export const riskSnapshotPayload = z.object({
   /** The portfolio aggregate. PARTIAL where any component is stale or missing. */
   open_planned_risk: recordValue(currentOpenPlannedRisk),
   /** The immutable entry record of each open trade, listed rather than summed away. */
+  /**
+   * Every retained entry-time record on open exposure, one entry per STAGE.
+   *
+   * A pyramided trade retains one record per stage (§12.4), so it contributes more than one
+   * entry and they share a `trade_ref`. `stage_ordinal` distinguishes them and is ADDITIVE:
+   * it is absent on a trade that never added, where there is only the entry's record.
+   *
+   * Listing one record per TRADE would understate a pyramid's planned risk by everything its
+   * adds contributed — on the demonstration book, 186.00 in place of 398.00 — and a risk
+   * surface is the last place to report a smaller number than the records carry.
+   */
   initial_planned_risk_open: z.array(
-    z.object({ trade_ref: ref, value: recordValue(initialPlannedRisk) }),
+    z.object({
+      trade_ref: ref,
+      stage_ordinal: z.number().int().nonnegative().optional(),
+      value: recordValue(initialPlannedRisk),
+    }),
   ),
   /**
    * Every permitted value carries its `PolicyRef`. Displayed, never computed.

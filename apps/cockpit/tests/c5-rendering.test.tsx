@@ -9,6 +9,7 @@ import { ObservationRules, PerformanceSummaryPanel } from "@/components/cockpit/
 import { ReferenceChip } from "@/components/cockpit/read-model-panel";
 import { ReturnHeatmap } from "@/components/cockpit/return-heatmap";
 import {
+  AddPlannedRiskRecords,
   InitialPlannedRiskRecord,
   OpenPlannedRiskRecord,
   PermittedRiskRecord,
@@ -290,6 +291,59 @@ describe("the risk records never share a label", () => {
     expect(screen.getByTestId("permitted-OPEN_PORTFOLIO")).toBeInTheDocument();
     expect(screen.getAllByText("POLICY_REFERENCE_MISSING").length).toBeGreaterThan(0);
     expect(/\d/.test(container.textContent ?? "")).toBe(false);
+  });
+
+  /*
+   * 12.4's three facts, on screen: the original record, each add's own record, and the SUM
+   * that R was divided by, which is none of them. The version of each contributing policy is
+   * printed with its own record, so a trade whose stages differ shows both.
+   */
+  it("shows each add's own record and the summed R denominator beside them", async () => {
+    const trades = await client.trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    expect(pyramided?.add_planned_risk, "the fixture carries one pyramid").toBeDefined();
+    if (pyramided?.add_planned_risk === undefined) return;
+
+    render(
+      <AddPlannedRiskRecords
+        adds={pyramided.add_planned_risk}
+        denominator={pyramided.r_denominator}
+      />,
+    );
+    expect(screen.getByTestId("add-planned-risk")).toBeInTheDocument();
+    expect(screen.getByText("Add 1 — its own record")).toBeInTheDocument();
+    /* The add's own reference price, not the trade's blended basis. */
+    const addPrice = pyramided.add_planned_risk[0].record.reference_price.amount;
+    expect(screen.getByText(new RegExp(addPrice.replace(".", "\.")))).toBeInTheDocument();
+    /* And the summed denominator is stated rather than left to be inferred. */
+    const summed = screen.getByTestId("r-denominator");
+    expect(summed).toHaveTextContent(/retained records summed/);
+    expect(summed).toHaveTextContent(/is not the entry record/);
+  });
+
+  it("prints every contributing policy version, one per retained record", async () => {
+    const trades = await client.trades(DEMO);
+    const pyramided = trades.payload?.items.find(
+      (item) => item.trade_id === "demo-trade-nvl-0002",
+    );
+    if (pyramided?.add_planned_risk === undefined) return;
+    const entryVersion = pyramided.initial_planned_risk.record?.risk_policy_ref.policy_version;
+    const addVersion = pyramided.add_planned_risk[0].record.risk_policy_ref.policy_version;
+    expect(entryVersion).not.toBe(addVersion);
+
+    render(
+      <>
+        <InitialPlannedRiskRecord wrapper={pyramided.initial_planned_risk} />
+        <AddPlannedRiskRecords
+          adds={pyramided.add_planned_risk}
+          denominator={pyramided.r_denominator}
+        />
+      </>,
+    );
+    expect(screen.getByText(new RegExp(String(entryVersion)))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(String(addVersion)))).toBeInTheDocument();
   });
 
   it("states the separation between the two planned-risk quantities", () => {
