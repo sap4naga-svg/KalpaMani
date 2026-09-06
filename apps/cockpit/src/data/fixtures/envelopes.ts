@@ -7,7 +7,11 @@
  * source fact observed at a fixed instant.
  */
 import type { FreshnessInput, FreshnessReport } from "@/contracts/freshness";
-import { CLOCK_SKEW_TOLERANCE_SECONDS } from "@/contracts/freshness";
+import {
+  isFlaggedClockSkew,
+  reportableAgeSeconds,
+  requiredFailureSignatures,
+} from "@/contracts/freshness";
 import type { EnvelopeOf } from "@/contracts/envelope";
 import type {
   AvailabilityState,
@@ -39,15 +43,25 @@ interface BuiltInput {
 function buildInput(spec: InputSpec, originMs: number, evaluationMs: number): BuiltInput {
   const effectiveMs = originMs - spec.ageAtOriginSeconds * 1000;
   const exactAgeSeconds = (evaluationMs - effectiveMs) / 1000;
-  if (exactAgeSeconds < -CLOCK_SKEW_TOLERANCE_SECONDS) {
+  /*
+   * §3.1's three bands, applied by the ONE function that owns them. `Math.max(0, ...)` used
+   * to stand here and collapsed the middle band into the third: a source dated up to two
+   * seconds AFTER its evaluation instant was floored to -1 or -2 and then lifted back to a
+   * clean `0` with `AVAILABLE`/`NONE` beside it. That is a fabricated "just now", and §3.1
+   * asks for a zero that is FLAGGED, "because a small skew is ordinary and a silent one is
+   * not".
+   */
+  const ageSeconds = reportableAgeSeconds(exactAgeSeconds);
+  if (ageSeconds === null) {
     /*
-     * A fixture dated after the instant it is evaluated at is a programming error, not a
-     * state to render. It is refused here rather than clamped to zero: a clamp turns a
-     * negative age into a legitimate-looking "just now" (read-model-contracts.md 3.1).
+     * Beyond the tolerance. A fixture dated after the instant it is evaluated at is a
+     * programming error, not a state to render, so fixture construction REFUSES IT rather
+     * than emitting the NOT_YET_AVAILABLE/CLOCK_UNSYNCHRONIZED report a real skewed producer
+     * would emit. Either way, no age is invented.
      */
     throw new RangeError(`fixture input ${spec.id} is dated after its evaluation time`);
   }
-  const ageSeconds = Math.max(0, Math.floor(exactAgeSeconds));
+  const skewFlagged = isFlaggedClockSkew(exactAgeSeconds);
   const stale = ageSeconds >= spec.contractMaxAgeSeconds;
   return {
     effectiveMs,
@@ -64,8 +78,34 @@ function buildInput(spec: InputSpec, originMs: number, evaluationMs: number): Bu
       contract_max_age: spec.contractMaxAgeSeconds,
       state: stale ? "STALE" : "AVAILABLE",
       reason: stale ? "UPSTREAM_INPUT_STALE" : "NONE",
+      /** Absent rather than `false`, so a flag is a positive statement and never noise. */
+      ...(skewFlagged ? { clock_skew_flagged: true } : {}),
     },
   };
+}
+
+/**
+ * A duration between two instants, in whole seconds, under §3.1's SAME three bands.
+ *
+ * `projection_lag` and `build_age` are durations whose ordering follows from what they
+ * measure: a projection does not precede the source it consumed, and an evaluation does not
+ * precede the build it read. Both orderings are nonetheless measured across two clocks, so a
+ * small negative is the ordinary skew §3.1 already describes — reported as zero, and never
+ * silently, because the input that carries that skew is flagged.
+ *
+ * Beyond the tolerance the ordering is genuinely violated, and that REFUSES. It does not
+ * clamp: clamping does not restore the ordering, it conceals that the ordering was broken and
+ * reports a fabricated `0` in its place.
+ */
+function elapsedSeconds(fromMs: number, toMs: number, description: string): number {
+  const seconds = reportableAgeSeconds((toMs - fromMs) / 1000);
+  if (seconds === null) {
+    throw new RangeError(
+      `fixture ${description} is negative beyond the declared clock tolerance, and a ` +
+        "duration is refused rather than clamped",
+    );
+  }
+  return seconds;
 }
 
 /**
@@ -103,40 +143,63 @@ export function buildFreshness(
   const newest = required.reduce((freshest, entry) =>
     entry.effectiveMs > freshest.effectiveMs ? entry : freshest,
   );
-  const compositeState: AvailabilityState = required.some(
-    (entry) => entry.input.state === "STALE",
-  )
-    ? "STALE"
-    : "AVAILABLE";
+  /*
+   * The composite takes the WORST state any required input reached, and §3.1 defines no
+   * ordering across the eleven states -- so where the required inputs failed in more than
+   * one distinct way, there is no unique worst and this REFUSES rather than picking one.
+   * `buildInput` only ever produces AVAILABLE or STALE, so a fixture cannot reach the
+   * refusal today; it is here so that adding a third outcome cannot silently reintroduce a
+   * first-failure-wins composite.
+   */
+  const failures = requiredFailureSignatures({ inputs: built.map((entry) => entry.input) });
+  if (failures.length > 1) {
+    throw new RangeError(
+      "fixture required inputs failed in more than one distinct way, and the composite state " +
+        "is undetermined",
+    );
+  }
+  const compositeState: AvailabilityState = failures[0]?.state ?? "AVAILABLE";
   const evaluationInstant = instantOf(evaluationMs);
-  const wholeSeconds = (fromMs: number, toMs: number): number =>
-    Math.max(0, Math.floor((toMs - fromMs) / 1000));
   return {
     inputs: built.map((entry) => entry.input),
     oldest_required: oldest.input.input_id,
-    /** evaluation_time - source_effective_time, of the OLDEST required input. */
+    /**
+     * evaluation_time - source_effective_time, of the OLDEST required input.
+     *
+     * Taken from that input's OWN reported age rather than recomputed from its instants. Two
+     * spellings of one measurement are two values that can disagree, and the composite age
+     * §3.1 asks for is definitionally the oldest input's age -- not a second opinion of it.
+     */
     source_age: available({
       metricId: "freshness.source_age",
       unit: "SECONDS",
-      value: wholeSeconds(oldest.effectiveMs, evaluationMs),
+      value: oldest.input.source_age.value,
       asOf: evaluationInstant,
     }),
     /**
-     * projected_time - source_effective_time, of the NEWEST required input (12.3).
+     * projected_time - source_effective_time, of the NEWEST required input (§12.3).
      * It depends on NEITHER the evaluation time NOR a reconstructed instant, so a refetch
      * over unchanged fixtures leaves it exactly where it was.
      */
     projection_lag: available({
       metricId: "freshness.projection_lag",
       unit: "SECONDS",
-      value: wholeSeconds(newest.effectiveMs, projectedMs),
+      value: elapsedSeconds(
+        newest.effectiveMs,
+        projectedMs,
+        "projection_lag: the projection is dated before the newest source it consumed",
+      ),
       asOf: evaluationInstant,
     }),
     /** evaluation_time - projected_time. The ONLY age a rebuild resets. */
     build_age: available({
       metricId: "freshness.build_age",
       unit: "SECONDS",
-      value: wholeSeconds(projectedMs, evaluationMs),
+      value: elapsedSeconds(
+        projectedMs,
+        evaluationMs,
+        "build_age: the evaluation time precedes the projection it read",
+      ),
       asOf: evaluationInstant,
     }),
     composite_state: compositeState,

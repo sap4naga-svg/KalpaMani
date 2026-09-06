@@ -100,7 +100,14 @@ function governanceInput(originMs: number): InputSpec {
   return {
     id: "governance.tracked_snapshot",
     required: true,
-    ageAtOriginSeconds: Math.max(0, Math.floor((originMs - snapshotMs) / 1000)),
+    /*
+     * NOT clamped at zero. A tracked snapshot dated after the session origin is a workstation
+     * whose clock disagrees with the transcription date, and `Math.max(0, ...)` reported that
+     * as a snapshot transcribed THIS INSTANT -- the freshest required input on the page, from
+     * the only read model whose facts are real. The negative age travels to `buildInput`,
+     * which flags it inside the declared tolerance and refuses it beyond one.
+     */
+    ageAtOriginSeconds: Math.floor((originMs - snapshotMs) / 1000),
     contractMaxAgeSeconds: GOVERNANCE_SNAPSHOT_CONTRACT_SECONDS,
   };
 }

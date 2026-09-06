@@ -218,7 +218,7 @@ each regression was confirmed to fail when its defect was re-introduced.
 
 | | |
 |---|---|
-| **`projection_lag` moved when only the evaluation time did** | it reconstructed a source time as `origin − age`, where the age had been measured at *evaluation* time, so the lag became a second copy of `source_age` and grew on every refetch — while the source fact and the build were both unchanged. Each age is now measured from its own pair of instants: `source_age` from the **oldest** required input (§3.1), `projection_lag` from the **newest** (§12.3), `build_age` from `projected_time`. A negative age is **refused rather than clamped to zero** |
+| **`projection_lag` moved when only the evaluation time did** | it reconstructed a source time as `origin − age`, where the age had been measured at *evaluation* time, so the lag became a second copy of `source_age` and grew on every refetch — while the source fact and the build were both unchanged. Each age is now measured from its own pair of instants: `source_age` from the **oldest** required input (§3.1), `projection_lag` from the **newest** (§12.3), `build_age` from `projected_time`. A negative age **beyond the declared clock tolerance** is refused rather than clamped to zero — **as written here that claim was overstated, and C4 corrected what it overstated**; see [C4 — the two foundational corrections](#c4--the-two-foundational-corrections) |
 | **freshness admitted contradictory and unreal input** | `composite_state: AVAILABLE` was trusted over a required input that was `STALE`, and a missing source time was reported as an invented `STALE` rather than the `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING` that §3.1 fixes for it. An instant was validated by **spelling only**, so `2026-02-30` silently rolled over to `2026-03-02` and `2026-13-01` became `NaN` — and `serve_time >= NaN` is false, so that entry could never expire. Instants must now round-trip exactly, and a report that contradicts its own inputs is **refused at the boundary** |
 | **metric payloads were not validated to their types** | `MetricValue.value` was `unknown` with only a presence check, so `null`, an object, a boolean, `NaN` and a malformed decimal all reached a formatter on an `AVAILABLE` reading. Each metric is now registered with its unit and value shape, and the formatter never falls back to `String(value)` |
 | **a scope selector re-badged existing records** | `scope.environment` was applied to reused fixtures while `maturity_stage` stayed `RESEARCH`, so selecting Live showed the **real tracked governance facts** under a Live badge. Cache keys derived provenance from the **scenario**, labelling tracked facts `SYNTHETIC` in demo and fixtures `REPOSITORY_TRACKED` in project. Provenance now comes from the read model itself, keys carry classification and access scope as §7 requires, and unpopulated environments are explicitly unavailable |
@@ -227,6 +227,81 @@ Two smaller corrections followed from them: a run's date gate was carried in `CA
 — a unit of *duration* — for a value that is a calendar date, and money was re-formatted
 through `Number()`, round-tripping a decimal string through a binary float at the last step
 before display.
+
+### C4 — the two foundational corrections
+
+**Two freshness defects survived that review, and C4 corrected them before adding any
+consumer.** Both are locked out by
+[`tests/freshness-corrections.test.ts`](tests/freshness-corrections.test.ts), each with a
+**negative control**: the pre-correction expression is reimplemented inline and shown to
+violate the invariant, and each defect was re-introduced into the source to confirm its
+regression fails.
+
+#### A — a negative age could still become a measured zero
+
+The C3 note above claimed plainly that "a negative age is refused rather than clamped to
+zero". **The implementation refused only *beyond* the declared two-second clock tolerance**,
+and then applied `Math.max(0, Math.floor(exact))` on three paths — the per-input `source_age`,
+the composite `source_age`/`projection_lag`/`build_age`, and the tracked-snapshot age in the
+adapter. A source dated up to two seconds *after* its own evaluation instant floored to −1 or
+−2 and was lifted back to a clean `0` carrying `AVAILABLE` and `NONE`: a fabricated "just now",
+with nothing on the screen saying two clocks disagreed.
+
+**The accepted treatment was already written, and is now implemented rather than approximated.**
+`read-model-contracts.md` §3.1 states three bands, and one function owns all three:
+
+```text
+exact  <  -tolerance   UNKNOWN -- refused; the age is never rendered and never zero
+-tol  <=  exact <  0   ZERO, AND FLAGGED -- "a small skew is ordinary and a silent one is not"
+exact  >=  0           floor(exact) -- whole seconds, on a NON-NEGATIVE quantity only
+```
+
+- **`Math.floor` is applied only to a non-negative quantity**, so it can never deepen a
+  negative duration, and **no age clamp remains anywhere**. The one surviving
+  `Math.max(0, …)` is `remaining_freshness`, where §3.1.1 puts it: it bounds a spent budget,
+  not a measurement.
+- **A valid source age of exactly zero stays valid**, measured, `AVAILABLE`/`NONE` and
+  unflagged. A measured zero is a result (ADR-0029 §2.1); only a *negative* exact age is
+  flagged.
+- **The flag is a separate axis**, `FreshnessInput.clock_skew_flagged`. The §4.1.1 matrix
+  admits only `NONE` beside `AVAILABLE`, so a skew spelled as a reason code would have to
+  either fabricate a failure state or stay silent — and silence is the defect. It renders as
+  its own mark on the freshness indicator.
+- **Admission checks the number, not only the state.** A producer declaring
+  `CLOCK_UNSYNCHRONIZED` while reporting a measured `0` is refused, and so is a reported age
+  that disagrees with the input's own instants, a negative `projection_lag` or `build_age`, and
+  a composite `source_age` that is not the oldest required input's own age.
+- **Fixture construction refuses impossible input** rather than emitting it: a projection dated
+  before the newest source it consumed, or an evaluation dated before the build it read.
+- **`projection_lag` still uses its own defined source input** (the *newest* required input,
+  §12.3) and `source_age` its own (the *oldest*, §3.1). A refetch with fixed source and
+  projected instants leaves the lag exactly where it was.
+
+#### B — a composite over mixed required failures was order-dependent
+
+`effectiveComposite` returned the **first** required input in array order that was not
+`AVAILABLE`, and admission accepted any composite naming **any** unhealthy input's state.
+Reordering the same two required inputs therefore changed the diagnosis on screen with no
+change to the facts: a `STALE` mark and a `SOURCE_TIMESTAMP_MISSING` snapshot rendered as
+either one, depending on which happened to be listed first.
+
+**No enum ordering was invented, and no "first failure wins" policy was written down.** §3.1
+says the composite "takes the **worst** state any required input reached" and fixes only
+`AVAILABLE` and `STALE`; it defines no ordering across the other nine states. So:
+
+| | |
+|---|---|
+| every required input `AVAILABLE` | the composite is `AVAILABLE` |
+| **one** distinct failure `(state, reason)` | that failure **is** the worst one, and the composite must be exactly it |
+| **several** distinct failures | the contract determines no unique composite, so the report is **refused at admission**, naming every way it failed — and each input keeps its own state and reason for inspection |
+
+The signature is the `(state, reason)` **pair**, not the state alone: `PARTIAL` admits five
+reasons, and two `PARTIAL` inputs with different reasons still leave the composite reason
+undetermined. Signatures are compared by value and sorted, so **a supported report produces
+the same result under every permutation of its inputs**, and optional inputs never set the
+composite state nor make a supported report ambiguous. If a mixed report ever reaches the
+renderer anyway, it **fails closed** on `ERROR`/`PROJECTION_ERROR` rather than picking one of
+its answers.
 
 ### Validation
 
