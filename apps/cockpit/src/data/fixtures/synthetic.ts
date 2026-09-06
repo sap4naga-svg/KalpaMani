@@ -19,6 +19,14 @@ import type { ChangeVariant } from "@/lib/scope";
 
 import { absent, available, qualified, reason, refListOf } from "@/contracts/factories";
 
+import {
+  BOOK,
+  STRATEGY_CAPITAL_CENTS,
+  centsToDecimal,
+  pctOfCapitalHundredths,
+} from "./book";
+import { equityWindow } from "./equity";
+
 const DEMO = "kalpamani.demo";
 
 const ref = (
@@ -32,10 +40,58 @@ const ref = (
   classification: "PUBLIC_SAFE",
 });
 
-export function syntheticExecutiveOverview(asOf: string): ExecutiveOverviewPayload {
+/**
+ * Realized profit and loss over the last `sessions` sessions of the retained extent.
+ *
+ * The windows are counted in SESSIONS on the named market calendar, not in wall-clock days,
+ * because the ledger's exits are dated by session. A window containing no exit reports a
+ * measured zero, and ADR-0029 §2.1 keeps a measured zero `AVAILABLE`.
+ */
+function realizedOverSessions(sessions: number): number {
+  const from = BOOK.equityCents.length - sessions;
+  return BOOK.trades.reduce(
+    (total, trade) =>
+      total +
+      trade.exits
+        .filter((exit) => exit.session >= from)
+        .reduce((subtotal, exit) => subtotal + exit.realizedCents, 0),
+    0,
+  );
+}
+
+/**
+ * The executive overview, projected from the SAME demonstration book every C5 screen reads.
+ *
+ * IT USED TO CARRY ITS OWN HAND-WRITTEN TOTALS, and they were internally consistent with
+ * nothing: the overview said gross exposure was USD 39,600 while the positions that produced
+ * it did not exist yet. Now every figure below is read from the book, so the overview, the
+ * position table, the exposure aggregates, the trade ledger and the equity curve are five
+ * projections of one set of numbers.
+ */
+export function syntheticExecutiveOverview(
+  asOf: string,
+  originMs: number,
+): ExecutiveOverviewPayload {
+  const totals = BOOK.totals;
+  const window = equityWindow(originMs, "ALL");
+  /** Cash is what the equity is not carrying as a net position. */
+  const netSignedCents =
+    totals.netDirection === "LONG" ? totals.netValueCents : -totals.netValueCents;
+  const equityCents = BOOK.equityCents[BOOK.equityCents.length - 1];
+  const cashCents = equityCents - netSignedCents;
+  const money = (cents: number) => centsToDecimal(cents);
+  const realized = (cents: number) =>
+    available({ metricId: "pnl.realized", unit: "USD", value: money(cents), asOf });
+  const unrealized = () =>
+    available({
+      metricId: "pnl.unrealized",
+      unit: "USD",
+      value: money(totals.unrealizedCents),
+      asOf,
+    });
   return {
     /** The authoritative strategy capital of CLAUDE.md section 6. Never broker equity. */
-    strategy_capital: { amount: "80000.00", currency: "USD" },
+    strategy_capital: { amount: centsToDecimal(STRATEGY_CAPITAL_CENTS), currency: "USD" },
     /** OBSERVED and informational. It never participates in sizing. */
     broker_reported_equity: available({
       metricId: "portfolio.broker_reported_equity",
@@ -43,72 +99,94 @@ export function syntheticExecutiveOverview(asOf: string): ExecutiveOverviewPaylo
       value: "1000000.00",
       asOf,
     }),
-    cash: available({ metricId: "portfolio.cash", unit: "USD", value: "62450.00", asOf }),
+    cash: available({ metricId: "portfolio.cash", unit: "USD", value: money(cashCents), asOf }),
+    /**
+     * Realized and unrealized are NEVER summed into one unlabelled figure, and each window's
+     * realized figure counts only the exits inside it.
+     *
+     * Unrealized is a POINT-IN-TIME quantity: the open book's mark-to-market right now. It is
+     * the same in every window because it is not a flow, and reporting a different unrealized
+     * per window would state a change nobody measured.
+     */
     pnl: [
-      {
-        window: "DAY",
-        /** ADR-0029 section 2.1: a measured zero is a RESULT, and stays AVAILABLE. */
-        realized: available({ metricId: "pnl.realized", unit: "USD", value: "0.00", asOf }),
-        unrealized: available({
-          metricId: "pnl.unrealized",
-          unit: "USD",
-          value: "-318.40",
-          asOf,
-        }),
-      },
-      {
-        window: "WEEK",
-        realized: available({ metricId: "pnl.realized", unit: "USD", value: "1240.75", asOf }),
-        unrealized: available({
-          metricId: "pnl.unrealized",
-          unit: "USD",
-          value: "-318.40",
-          asOf,
-        }),
-      },
+      { window: "DAY", realized: realized(realizedOverSessions(1)), unrealized: unrealized() },
+      { window: "WEEK", realized: realized(realizedOverSessions(5)), unrealized: unrealized() },
       {
         window: "MONTH",
-        realized: available({ metricId: "pnl.realized", unit: "USD", value: "2915.10", asOf }),
-        /** A value-bearing state that keeps its qualification. */
+        realized: realized(realizedOverSessions(21)),
+        /** A value-bearing state that keeps its qualification. A stale figure is still stale. */
         unrealized: qualified("STALE", "UPSTREAM_INPUT_STALE", {
           metricId: "pnl.unrealized",
           unit: "USD",
-          value: "-318.40",
+          value: money(totals.unrealizedCents),
           asOf,
         }),
       },
       {
         window: "CUMULATIVE",
-        realized: available({ metricId: "pnl.realized", unit: "USD", value: "2915.10", asOf }),
-        unrealized: available({
-          metricId: "pnl.unrealized",
-          unit: "USD",
-          value: "-318.40",
-          asOf,
-        }),
+        realized: realized(totals.realizedCents),
+        unrealized: unrealized(),
       },
     ],
+    /** The chain-linked time-weighted return over the whole retained extent. */
     return_pct: available({
       metricId: "return.time_weighted",
       unit: "PERCENT",
-      value: "3.24",
+      value: centsToDecimal(window.totalReturnHundredths),
       asOf,
     }),
+    /** Magnitude and direction, never a profit sign, and read from the open positions. */
     exposure: {
-      long: { amount: "31200.00", currency: "USD", direction: "LONG" },
-      short: { amount: "8400.00", currency: "USD", direction: "SHORT" },
-      gross: { amount: "39600.00", currency: "USD", direction: "LONG" },
-      net: { amount: "22800.00", currency: "USD", direction: "LONG" },
+      long: { amount: money(totals.longValueCents), currency: "USD", direction: "LONG" },
+      short: { amount: money(totals.shortValueCents), currency: "USD", direction: "SHORT" },
+      gross: { amount: money(totals.grossValueCents), currency: "USD", direction: "LONG" },
+      net: {
+        amount: money(totals.netValueCents),
+        currency: "USD",
+        direction: totals.netDirection,
+      },
     },
+    /**
+     * The §4.4 assessment, in full.
+     *
+     * C3 carried a two-field subset of this record; C5 completed it, so the assessment now
+     * states the instant it was made at, the policy version that produced it, the
+     * protective state it read and the fact that it is an ASSESSMENT rather than an entry
+     * record. USD 1,850.00 is 2.31% of the authoritative USD 80,000 strategy capital.
+     */
     open_planned_risk: {
       record: {
-        amount: { amount: "1850.00", currency: "USD" },
+        risk_money: available({
+          metricId: "risk.open_planned",
+          unit: "USD",
+          value: money(totals.openPlannedRiskCents),
+          asOf,
+        }),
+        risk_pct_of_capital: available({
+          metricId: "risk.open_planned_pct",
+          unit: "PERCENT",
+          value: centsToDecimal(pctOfCapitalHundredths(totals.openPlannedRiskCents)),
+          asOf,
+        }),
         as_of: asOf,
-        policy: { policy_id: "risk-policy-demo", policy_version: "0.0.0-demo", as_of: asOf },
+        assessment_ref: ref("demo-risk-assessment", "risk_decision"),
+        risk_policy_ref: {
+          policy_id: "risk-policy-demo",
+          policy_version: "0.0.0-demo",
+          as_of: asOf,
+        },
+        protection_state: reason("PROTECTIVE_ORDER_WORKING", DEMO),
+        source: "RISK_ENGINE_ASSESSMENT",
         staleness: "FRESH",
       },
-      availability: "AVAILABLE",
-      reason: "NONE",
+      /*
+       * PARTIAL, because one of the five component assessments is STALE.
+       *
+       * §4.4: "an aggregate containing any STALE or missing component is PARTIAL with the
+       * components named". The risk dashboard names them; the overview reports the state.
+       */
+      availability: "PARTIAL",
+      reason: "UPSTREAM_INPUT_STALE",
       as_of: asOf,
     },
     /**
@@ -123,7 +201,14 @@ export function syntheticExecutiveOverview(asOf: string): ExecutiveOverviewPaylo
      * `drawdown.current` is `equity / running_peak - 1` (12.3), which is NEVER positive. The
      * dictionary key is `drawdown.current`; `risk.drawdown` was not a dictionary key.
      */
-    drawdown: available({ metricId: "drawdown.current", unit: "PERCENT", value: "-2.14", asOf }),
+    drawdown: available({
+      metricId: "drawdown.current",
+      unit: "PERCENT",
+      value: centsToDecimal(
+        window.drawdownHundredths[window.drawdownHundredths.length - 1] ?? 0,
+      ),
+      asOf,
+    }),
     /**
      * Completed by C4. The market-regime projection does not exist, so this reference resolves
      * to an availability state rather than to a payload -- which is what `UNRESOLVABLE_V1`
@@ -137,10 +222,11 @@ export function syntheticExecutiveOverview(asOf: string): ExecutiveOverviewPaylo
       value: 45,
       asOf,
     }),
+    /** How many EXACT versions the open book is attributed to, read from the positions. */
     active_strategies: available({
       metricId: "strategy.active_count",
       unit: "COUNT",
-      value: 3,
+      value: new Set(BOOK.openTrades.map((trade) => trade.versionId)).size,
       asOf,
     }),
     /** A completed query over an empty population -- NOT a measured zero. */

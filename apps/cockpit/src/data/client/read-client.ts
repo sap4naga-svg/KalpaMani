@@ -24,8 +24,22 @@ import type {
   QualificationStatusPayload,
   WhatChangedEntryPayload,
 } from "@/contracts/read-models";
+import type {
+  ExposureAggregatePayload,
+  PerformanceSummaryPayload,
+  PositionSnapshotPayload,
+  TradeDetailPayload,
+  TradeLifecyclePayload,
+  TradeSummaryPayload,
+} from "@/contracts/portfolio-models";
+import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
+import type {
+  MarketRegimePayload,
+  RiskSnapshotPayload,
+  ShortSideSnapshotPayload,
+} from "@/contracts/risk-market-models";
 import type { HostingBoundary } from "@/contracts/vocabularies";
-import type { ViewScope } from "@/lib/scope";
+import type { PerformancePeriod, ViewScope } from "@/lib/scope";
 
 /**
  * The comparison window, and both of its endpoints.
@@ -63,6 +77,41 @@ export interface ReadClient {
    * gets a different cache entry.
    */
   performanceSeries(scope: ViewScope): Promise<EnvelopeOf<PerformanceSeriesPayload>>;
+
+  /* ------------------------------------------------------------- added by C5 */
+
+  /**
+   * The window summary — the ratios, over one defined population.
+   *
+   * The window is an EXPLICIT parameter rather than the scope's period, because the portfolio
+   * performance page reads SEVERAL of them at once to show trailing-window performance. Each
+   * is a different question and each gets its own cache entry.
+   */
+  performanceSummary(
+    scope: ViewScope,
+    window: PerformancePeriod,
+  ): Promise<EnvelopeOf<PerformanceSummaryPayload>>;
+
+  positions(scope: ViewScope): Promise<EnvelopeOf<PositionSnapshotPayload>>;
+  exposure(scope: ViewScope): Promise<EnvelopeOf<ExposureAggregatePayload>>;
+  trades(scope: ViewScope): Promise<EnvelopeOf<TradeSummaryPayload>>;
+
+  /**
+   * One trade's story, and one trade's basic lifecycle.
+   *
+   * The trade identity is a request parameter and joins the cache key, so two trades are two
+   * entries and one is never served under the other's identity.
+   */
+  tradeDetail(scope: ViewScope, tradeId: string): Promise<EnvelopeOf<TradeDetailPayload>>;
+  tradeLifecycle(
+    scope: ViewScope,
+    tradeId: string,
+  ): Promise<EnvelopeOf<TradeLifecyclePayload>>;
+
+  strategyPerformance(scope: ViewScope): Promise<EnvelopeOf<StrategyPerformancePayload>>;
+  riskSnapshot(scope: ViewScope): Promise<EnvelopeOf<RiskSnapshotPayload>>;
+  shortSide(scope: ViewScope): Promise<EnvelopeOf<ShortSideSnapshotPayload>>;
+  marketRegime(scope: ViewScope): Promise<EnvelopeOf<MarketRegimePayload>>;
 }
 
 export class ContractViolationError extends Error {
