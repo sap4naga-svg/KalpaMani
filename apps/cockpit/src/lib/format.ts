@@ -9,6 +9,8 @@
 const PRESERVED: Readonly<Record<string, string>> = {
   KALPAMANI: "KalpaMani",
   USD: "USD",
+  UTC: "UTC",
+  S3: "S3",
   PIT: "PIT",
   AI: "AI",
   ADR: "ADR",

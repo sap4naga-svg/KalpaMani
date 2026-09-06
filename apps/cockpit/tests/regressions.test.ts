@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { effectiveComposite, freshUntil, isExpired } from "@/contracts/freshness";
 import type { FreshnessInput, FreshnessReport } from "@/contracts/freshness";
-import { available } from "@/contracts/factories";
+import { available, emptyRefList, pinsOf } from "@/contracts/factories";
 import {
   attentionListEnvelope,
   executiveOverviewEnvelope,
@@ -237,7 +237,7 @@ function envelopeWith(freshness: FreshnessReport): () => unknown {
     api_version: "v1",
     entity_id: "attention-list",
     correlation_id: "attention-list-v1",
-    source_refs: { items: [], cardinality: "ZERO_OR_MORE", truncated: false },
+    source_refs: emptyRefList(AS_OF),
     event_time: AS_OF,
     observed_time: AS_OF,
     as_of_time: AS_OF,
@@ -254,6 +254,8 @@ function envelopeWith(freshness: FreshnessReport): () => unknown {
     classification: "PUBLIC_SAFE",
     access_scope: "executive:read",
     metric_definition_version: "metrics.v1",
+    watermark: AS_OF,
+    pins: pinsOf(),
     payload: { items: [] },
   };
   return () => admit("AttentionItem", attentionListEnvelope, candidate, "PUBLIC_EDGE");

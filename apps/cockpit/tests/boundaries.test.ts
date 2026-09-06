@@ -103,7 +103,12 @@ describe("query scope isolation", () => {
         for (const mode of ["executive", "operator"] as const) {
           keys.add(
             JSON.stringify(
-              readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, { mode, environment, scenario }),
+              readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, {
+                ...DEFAULT_SCOPE,
+                mode,
+                environment,
+                scenario,
+              }),
             ),
           );
         }
@@ -114,8 +119,14 @@ describe("query scope isolation", () => {
 });
 
 describe("scope in the URL", () => {
-  it("round-trips mode, environment and scenario", () => {
-    const scope = { mode: "operator", environment: "PAPER", scenario: "demo" } as const;
+  it("round-trips every scope field, so a link reproduces the whole view", () => {
+    const scope = {
+      mode: "operator",
+      environment: "PAPER",
+      scenario: "demo",
+      period: "1Y",
+      changes: "degraded",
+    } as const;
     expect(parseScope(scopeToSearchParams(scope))).toEqual(scope);
   });
 

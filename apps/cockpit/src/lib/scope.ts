@@ -24,10 +24,64 @@ export type ViewMode = (typeof VIEW_MODES)[number];
 export const DATA_SCENARIOS = ["project", "demo"] as const;
 export type DataScenario = (typeof DATA_SCENARIOS)[number];
 
+/**
+ * The performance overview's comparison period.
+ *
+ * A period is a REQUEST PARAMETER, not a presentation preference: it changes the extent a
+ * series is requested over, so it changes the answer. It lives in the URL with the rest of
+ * the scope, so a link reproduces the view (`ui-ux-specification.md` §8, U13).
+ */
+export const PERFORMANCE_PERIODS = ["1M", "3M", "6M", "1Y", "ALL"] as const;
+export type PerformancePeriod = (typeof PERFORMANCE_PERIODS)[number];
+
+/** The trading days each period requests. `ALL` is the whole retained extent. */
+export const PERIOD_TRADING_DAYS: Readonly<Record<PerformancePeriod, number>> = {
+  "1M": 21,
+  "3M": 63,
+  "6M": 126,
+  "1Y": 252,
+  ALL: 504,
+};
+
+export const PERIOD_LABEL: Readonly<Record<PerformancePeriod, string>> = {
+  "1M": "1 month",
+  "3M": "3 months",
+  "6M": "6 months",
+  "1Y": "1 year",
+  ALL: "Full retained extent",
+};
+
+/**
+ * The What Changed demonstration variant.
+ *
+ * §7 and U17 require four distinct behaviours from a comparison, and three of them are only
+ * reachable when something is WRONG with an endpoint. A reviewer cannot break a fixture from
+ * the interface, so the variants are selectable — deterministically, from the URL, and ONLY
+ * inside the already-labelled synthetic scenario.
+ *
+ *   auto         the honest default for the scenario: no baseline in project, valid in demo
+ *   valid        two sound endpoints, and real deltas between them
+ *   none         both endpoints sound, and NOTHING changed -- EMPTY_VERIFIED, not "no data"
+ *   no-baseline  no prior endpoint at all -- reported as a state, never as a zero baseline
+ *   degraded     endpoints exist and are STALE or PARTIAL -- reported instead of a delta
+ */
+export const CHANGE_VARIANTS = ["auto", "valid", "none", "no-baseline", "degraded"] as const;
+export type ChangeVariant = (typeof CHANGE_VARIANTS)[number];
+
+export const CHANGE_VARIANT_LABEL: Readonly<Record<ChangeVariant, string>> = {
+  auto: "Scenario default",
+  valid: "Verified changes",
+  none: "No verified changes",
+  "no-baseline": "Missing baseline",
+  degraded: "Degraded endpoints",
+};
+
 export interface ViewScope {
   readonly mode: ViewMode;
   readonly environment: Environment;
   readonly scenario: DataScenario;
+  readonly period: PerformancePeriod;
+  readonly changes: ChangeVariant;
 }
 
 /** Selecting Paper or Live as a VIEWING SCOPE advances no maturity and no authority. */
@@ -35,6 +89,8 @@ export const DEFAULT_SCOPE: ViewScope = {
   mode: "executive",
   environment: "RESEARCH",
   scenario: "project",
+  period: "3M",
+  changes: "auto",
 };
 
 function oneOf<T extends string>(
@@ -52,6 +108,8 @@ export function parseScope(params: URLSearchParams | ReadonlyMap<string, string>
     mode: oneOf(VIEW_MODES, read("mode"), DEFAULT_SCOPE.mode),
     environment: oneOf(ENVIRONMENTS, read("env"), DEFAULT_SCOPE.environment),
     scenario: oneOf(DATA_SCENARIOS, read("scenario"), DEFAULT_SCOPE.scenario),
+    period: oneOf(PERFORMANCE_PERIODS, read("period"), DEFAULT_SCOPE.period),
+    changes: oneOf(CHANGE_VARIANTS, read("changes"), DEFAULT_SCOPE.changes),
   };
 }
 
@@ -61,6 +119,8 @@ export function scopeToSearchParams(scope: ViewScope): URLSearchParams {
   params.set("mode", scope.mode);
   params.set("env", scope.environment);
   params.set("scenario", scope.scenario);
+  params.set("period", scope.period);
+  params.set("changes", scope.changes);
   return params;
 }
 

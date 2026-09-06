@@ -19,6 +19,7 @@
 import {
   ATTENTION_LIST_SCHEMA,
   EXECUTIVE_OVERVIEW_SCHEMA,
+  PERFORMANCE_SERIES_SCHEMA,
   QUALIFICATION_STATUS_SCHEMA,
   WHAT_CHANGED_SCHEMA,
 } from "@/contracts/read-models";
@@ -82,9 +83,29 @@ export const QUALIFICATION_IDENTITY: ReadModelIdentity = {
   accessScope: "governance:read",
 };
 
+/**
+ * The performance overview's series (§4.5 `PerformanceSeries`).
+ *
+ * §4.5 classifies a real one `PRIVATE_OPERATIONAL`, which the `PUBLIC_EDGE` boundary REFUSES
+ * — correctly, and that is the point. What this application can show is a repository-owned
+ * synthetic demonstration, and it is labelled `PUBLIC_SAFE` / `SYNTHETIC` because that is
+ * what it IS. A real recorded portfolio series would carry `PRIVATE_OPERATIONAL` with
+ * `SYSTEM_RECORDED` provenance and would be refused here rather than relabelled to fit the
+ * host — the admission rule doing its job, not a gap in it.
+ */
+export const PERFORMANCE_SERIES_IDENTITY: ReadModelIdentity = {
+  readModel: "PerformanceSeries",
+  queryName: "performance-series",
+  schemaVersion: PERFORMANCE_SERIES_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "portfolio:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
   WHAT_CHANGED_IDENTITY,
   QUALIFICATION_IDENTITY,
+  PERFORMANCE_SERIES_IDENTITY,
 ];

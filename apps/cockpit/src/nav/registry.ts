@@ -69,7 +69,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "implemented",
     purpose: "The five ten-second answers, attention and what changed.",
     dependency: "read-model projections",
-    cycle: "C3 foundation, C4 full dashboard",
+    cycle: "C4",
     keywords: ["home", "dashboard", "executive", "operator"],
   },
   {
@@ -77,10 +77,11 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     label: "Attention Required",
     areas: [28],
     group: "overview",
-    status: "placeholder",
+    status: "implemented",
     purpose: "The ranked, deduplicated list of what needs a human, with evidence.",
-    dependency: NOT_IMPLEMENTED,
+    dependency: "the attention projection and the alert feed",
     cycle: "C4",
+    keywords: ["alerts", "severity", "evidence", "ranked", "deduplicated"],
   },
   {
     href: "/portfolio/performance",
@@ -290,7 +291,7 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     status: "implemented",
     purpose: "Real tracked governance and qualification facts, each with its source.",
     dependency: "tracked repository authority",
-    cycle: "C3",
+    cycle: "C4",
     keywords: ["gates", "G1", "G2", "G3", "ADR", "run b", "P1", "readiness"],
   },
   {
@@ -298,10 +299,15 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     label: "Environment & Maturity",
     areas: [25],
     group: "governance",
-    status: "placeholder",
+    status: "implemented",
+    /*
+     * The traceability matrix places area 25 in C4; the C3 registry recorded C8, which
+     * disagreed with it. The matrix governs, and this row now matches it.
+     */
     purpose: "The five maturity stages against the unchanged runtime environment enum.",
-    dependency: NOT_IMPLEMENTED,
-    cycle: "C8",
+    dependency: "the accepted stage-to-environment mapping",
+    cycle: "C4",
+    keywords: ["shadow", "paper", "live", "promotion", "stage"],
   },
   {
     href: "/governance/audit",

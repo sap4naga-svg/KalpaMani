@@ -23,7 +23,7 @@ import {
   type FreshnessInput,
   type FreshnessReport,
 } from "@/contracts/freshness";
-import { absent, available } from "@/contracts/factories";
+import { absent, available, emptyRefList, pinsOf } from "@/contracts/factories";
 import { attentionListEnvelope } from "@/contracts/read-models";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { buildFreshness, type InputSpec } from "@/data/fixtures/envelopes";
@@ -91,7 +91,7 @@ function admitting(freshness: FreshnessReport): () => unknown {
     api_version: "v1",
     entity_id: "attention-list",
     correlation_id: "attention-list-v1",
-    source_refs: { items: [], cardinality: "ZERO_OR_MORE", truncated: false },
+    source_refs: emptyRefList(AS_OF),
     event_time: AS_OF,
     observed_time: AS_OF,
     as_of_time: AS_OF,
@@ -108,6 +108,8 @@ function admitting(freshness: FreshnessReport): () => unknown {
     classification: "PUBLIC_SAFE",
     access_scope: "executive:read",
     metric_definition_version: "metrics.v1",
+    watermark: AS_OF,
+    pins: pinsOf(),
     payload: { items: [] },
   };
   return () => admit("AttentionItem", attentionListEnvelope, candidate, "PUBLIC_EDGE");
