@@ -112,11 +112,42 @@ Mode, environment and scenario live in the URL, so a link reproduces the view:
 - **mode** — Executive is status, attention and change; Operator adds reason codes, metric
   identities, contract versions, provenance and source links.
 - **env** — a **viewing scope** over the runtime `Environment` enum. Selecting Paper or Live
-  advances **no maturity and no authority**; unpopulated scopes show explicit unavailable
-  states, and a scope change is a different cache key, so one environment's values are never
-  flashed under another's badge.
+  advances **no maturity and no authority**; a scope change is a different cache key, so one
+  environment's values are never flashed under another's badge.
+
+  **Only `RESEARCH` is populated, and the other two are empty on purpose.** Every fact this
+  application holds — the repository's own governance record, and the repository-owned
+  synthetic fixtures — was produced in the `RESEARCH` runtime environment. There is no Paper
+  and no Live cockpit data, so `env=PAPER` and `env=LIVE` return **payloadless**
+  `NOT_IMPLEMENTED` responses rather than the same records under a different badge.
+  Re-badging them would manufacture evidence of Paper or Live operation from a viewer's
+  selection: **`AUTOMATED_PAPER` has never been reached, and live trading is HARD-DISABLED.**
+
+  `maturity_stage` is **absent** on those responses. It is stated "where applicable"
+  (`read-model-contracts.md` §3), no strategy version is involved here, and the envelope
+  refuses any stage the accepted mapping of `COCKPIT_FEEDBACK_EXTENSION.md` §4.1 does not
+  pair with the environment — so `AUTOMATED_PAPER` under `RESEARCH` cannot be published.
 - **scenario** — `project` is the honest default; `demo` is the labelled synthetic scenario.
   **Synthetic is provenance, not a runtime environment.**
+
+---
+
+## The contract subset, exactly
+
+**C3 transcribes a SUBSET of `read-model-contracts.md`, and the omissions are stated rather
+than implied.** Four read models are implemented — `ExecutiveOverview`, `AttentionItem`,
+`WhatChangedEntry` and `QualificationStatus` — and within them:
+
+| | |
+|---|---|
+| **payload fields not carried** | `ExecutiveOverview.regime_ref`, `last_decision`, `last_scout_run` and the `what_changed` and `attention` `RefList`s. Each needs a producing subsystem that does not exist, and none is rendered anywhere |
+| **`RefList.total` is not carried** | the §4.2 shape states a `total: CountValue`; C3 carries `items`, `cardinality` and `truncated`. No C3 list is truncated, and `truncated: false` is asserted on every one |
+| **`source_ref` is a tracked source** | `QualificationStatus` facts carry the exact tracked `path` and 40-character `commit` they were read at, rather than a §4.2 `Ref`. The reference resolves to a file in this public repository, which a `Ref` could not express |
+| **envelope fields not carried** | `watermark` and `pins`. Neither has a producer, and no view reads either |
+| **metrics** | the closed `C3_METRIC_DICTIONARY` in `src/contracts/values.ts`. Every metric this application renders is registered there with its unit and its value shape, and **an unregistered `metric_id` is refused at admission** |
+
+**No claim is made that the catalogue is complete.** The full catalogue is larger, and the
+remaining read models, payload fields and metrics arrive with the cycles that produce them.
 
 ---
 
@@ -151,8 +182,9 @@ no control handler            no mutation of any kind
 no provider, broker, AWS, GitHub, LLM or analytics request -- at runtime or at build time
 ```
 
-**Ask KalpaMani is exposed as an unavailable future capability.** No model is called and no
-answer is simulated.
+**Ask KalpaMani is not implemented and is not exposed.** It appears in no route, no
+navigation entry and no palette command, so there is no surface that could accept a
+question. **No model is called, no model SDK is installed, and no answer is simulated.**
 
 ---
 
@@ -177,5 +209,39 @@ Phase 3                                           NOT COMPLETE
 CONTROL publication                               DEFERRED
 live trading                                      HARD-DISABLED
 ```
+
+### Corrections made under independent review
+
+Four defects were found by independent review of this branch and corrected on it. Each is
+locked out by a regression in [`tests/regressions.test.ts`](tests/regressions.test.ts), and
+each regression was confirmed to fail when its defect was re-introduced.
+
+| | |
+|---|---|
+| **`projection_lag` moved when only the evaluation time did** | it reconstructed a source time as `origin − age`, where the age had been measured at *evaluation* time, so the lag became a second copy of `source_age` and grew on every refetch — while the source fact and the build were both unchanged. Each age is now measured from its own pair of instants: `source_age` from the **oldest** required input (§3.1), `projection_lag` from the **newest** (§12.3), `build_age` from `projected_time`. A negative age is **refused rather than clamped to zero** |
+| **freshness admitted contradictory and unreal input** | `composite_state: AVAILABLE` was trusted over a required input that was `STALE`, and a missing source time was reported as an invented `STALE` rather than the `NOT_YET_AVAILABLE` with `SOURCE_TIMESTAMP_MISSING` that §3.1 fixes for it. An instant was validated by **spelling only**, so `2026-02-30` silently rolled over to `2026-03-02` and `2026-13-01` became `NaN` — and `serve_time >= NaN` is false, so that entry could never expire. Instants must now round-trip exactly, and a report that contradicts its own inputs is **refused at the boundary** |
+| **metric payloads were not validated to their types** | `MetricValue.value` was `unknown` with only a presence check, so `null`, an object, a boolean, `NaN` and a malformed decimal all reached a formatter on an `AVAILABLE` reading. Each metric is now registered with its unit and value shape, and the formatter never falls back to `String(value)` |
+| **a scope selector re-badged existing records** | `scope.environment` was applied to reused fixtures while `maturity_stage` stayed `RESEARCH`, so selecting Live showed the **real tracked governance facts** under a Live badge. Cache keys derived provenance from the **scenario**, labelling tracked facts `SYNTHETIC` in demo and fixtures `REPOSITORY_TRACKED` in project. Provenance now comes from the read model itself, keys carry classification and access scope as §7 requires, and unpopulated environments are explicitly unavailable |
+
+Two smaller corrections followed from them: a run's date gate was carried in `CALENDAR_DAYS`
+— a unit of *duration* — for a value that is a calendar date, and money was re-formatted
+through `Number()`, round-tripping a decimal string through a binary float at the last step
+before display.
+
+### Validation
+
+Reproduced on the corrected head, on Node 22.21.0 and npm 10.9.4:
+
+```text
+npm ci --no-audit --no-fund     clean install from the committed lockfile
+npx eslint .                    clean
+npx next build                  succeeds -- 31 static routes, no API route
+npx tsc --noEmit                clean (run after a build; route types are generated)
+npx vitest run                  84 passed
+npx playwright test             87 passed across 1440x900, 1024x768 and 390x844
+```
+
+**Local validation is local.** These were run on a workstation, not by a CI service, and no
+CI status check exists for this application.
 
 Third-party attribution is in [NOTICE.md](NOTICE.md).

@@ -36,3 +36,46 @@ export function humanizeCode(code: string): string {
       : first.charAt(0).toUpperCase() + first.slice(1);
   return [leading, ...rest].join(" ");
 }
+
+const DECIMAL_PARTS = /^(-?)(\d+)(?:\.(\d+))?$/;
+
+/**
+ * Renders a decimal string WITHOUT going through a binary float.
+ *
+ * `Number("80000.00").toLocaleString(...)` round-trips money through a `double`, which is
+ * exactly what "decimal string, never binary floating point" (4.2) exists to prevent. Money
+ * is carried as a decimal string precisely so the value that was measured is the value that
+ * is shown, and parsing it to re-format it discards that guarantee at the last step.
+ *
+ * The digits are never recomputed here: they are grouped, padded to the metric's stated
+ * precision, and signed.
+ */
+export function formatDecimal(
+  value: string,
+  options: { readonly minimumFractionDigits?: number; readonly signed?: boolean } = {},
+): string | null {
+  const parts = DECIMAL_PARTS.exec(value);
+  if (parts === null) {
+    return null;
+  }
+  const [, sign, whole, fraction = ""] = parts;
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const padded = fraction.padEnd(options.minimumFractionDigits ?? 0, "0");
+  const body = padded.length > 0 ? `${grouped}.${padded}` : grouped;
+  const nonZero = /[1-9]/.test(whole + fraction);
+  const lead = sign === "-" && nonZero ? "-" : options.signed === true && nonZero ? "+" : "";
+  return `${lead}${body}`;
+}
+
+/** The sign of a decimal string, decided on its DIGITS rather than on a parsed float. */
+export function decimalSign(value: string): -1 | 0 | 1 {
+  const parts = DECIMAL_PARTS.exec(value);
+  if (parts === null) {
+    return 0;
+  }
+  const [, sign, whole, fraction = ""] = parts;
+  if (!/[1-9]/.test(whole + fraction)) {
+    return 0;
+  }
+  return sign === "-" ? -1 : 1;
+}

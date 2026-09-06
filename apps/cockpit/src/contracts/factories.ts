@@ -5,9 +5,14 @@
  * forbids: an absence carries no value, and a value-bearing state carries one.
  */
 import type { MetricValue } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 import type { AvailabilityState, FieldReasonCode, Unit } from "@/contracts/vocabularies";
 
-export const METRIC_DEFINITION_VERSION = "metrics.v1";
+/**
+ * Re-exported from the contracts, where the VALIDATOR that enforces it also lives. Two
+ * spellings of one dictionary version is how a factory and its boundary come to disagree.
+ */
+export { METRIC_DEFINITION_VERSION };
 
 interface AvailableArgs {
   readonly metricId: string;

@@ -30,7 +30,8 @@ import {
   useQualificationStatus,
   useWhatChanged,
 } from "@/data/client/hooks";
-import { notImplemented } from "@/contracts/factories";
+import { METRIC_DEFINITION_VERSION, notImplemented } from "@/contracts/factories";
+import { formatDecimal } from "@/lib/format";
 import { withScope } from "@/lib/scope";
 
 /**
@@ -66,10 +67,20 @@ export default function ExecutiveOverviewPage() {
         (tile) => tile.availability !== "AVAILABLE",
       ));
 
-  const gates = qualification.data?.payload?.gates ?? [];
+  const qualificationEnvelope = qualification.data;
+  const qualificationPayload = qualificationEnvelope?.payload;
+  /*
+   * The qualification read model is unavailable outside the RESEARCH environment, because
+   * no Paper or Live governance record exists. A settled response with no payload is an
+   * ABSENCE and must render as one: a perpetual loading skeleton implies data is coming,
+   * and `0 of 0` open gates is a fabricated measurement of a thing nobody read.
+   */
+  const qualificationAbsent =
+    qualificationEnvelope !== undefined && qualificationPayload === undefined;
+  const gates = qualificationPayload?.gates ?? [];
   // A tracked governance constant, read from the enumerated governance read model rather
   // than hardcoded into a component (CLAUDE.md section 6).
-  const strategyCapital = qualification.data?.payload?.facts.find(
+  const strategyCapital = qualificationPayload?.facts.find(
     (fact) => fact.fact_id === "strategy-capital",
   )?.state.code;
   const openGates = gates.filter((gate) => gate.state === "OPEN").length;
@@ -101,15 +112,18 @@ export default function ExecutiveOverviewPage() {
                 <Label className="min-w-0 break-words">Strategy capital</Label>
                 <ProvenanceBadge provenance="REPOSITORY_TRACKED" className="shrink-0" />
               </div>
-              {strategyCapital === undefined ? (
+              {qualificationAbsent ? (
+                <UnavailableBody
+                  state={qualificationEnvelope.availability}
+                  reason={qualificationEnvelope.availability_reason}
+                  dependency="the tracked governance record for this environment"
+                />
+              ) : strategyCapital === undefined ? (
                 <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
               ) : (
                 <div className="flex items-baseline gap-1.5">
                   <Numeric size="xl" className="text-text-primary">
-                    {Number(strategyCapital).toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {formatDecimal(strategyCapital, { minimumFractionDigits: 2 })}
                   </Numeric>
                   <span className="text-label-m text-text-tertiary">USD</span>
                 </div>
@@ -149,10 +163,10 @@ export default function ExecutiveOverviewPage() {
                         availability: payload.open_planned_risk.availability,
                         reason: payload.open_planned_risk.reason,
                         as_of: payload.open_planned_risk.as_of,
-                        metric_id: "risk.current_open_planned_risk",
-                        metric_definition_version: "metrics.v1",
+                        metric_id: "risk.open_planned",
+                        metric_definition_version: METRIC_DEFINITION_VERSION,
                       }
-                    : notImplemented("risk.current_open_planned_risk", "USD")
+                    : notImplemented("risk.open_planned", "USD")
                 }
                 provenance={envelope?.provenance ?? "SYNTHETIC"}
                 dependency="the risk engine"
@@ -162,7 +176,7 @@ export default function ExecutiveOverviewPage() {
                 label="Drawdown"
                 metric={
                   payload?.drawdown ??
-                  notImplemented("risk.drawdown", "PERCENT")
+                  notImplemented("drawdown.current", "PERCENT")
                 }
                 provenance={envelope?.provenance ?? "SYNTHETIC"}
                 dependency="the portfolio projection"
@@ -193,6 +207,12 @@ export default function ExecutiveOverviewPage() {
                 <div
                   className="skeleton-shape h-8 w-16"
                   data-testid="skeleton"
+                />
+              ) : qualificationAbsent ? (
+                <UnavailableBody
+                  state={qualificationEnvelope.availability}
+                  reason={qualificationEnvelope.availability_reason}
+                  dependency="the tracked governance record for this environment"
                 />
               ) : (
                 <>
@@ -257,8 +277,8 @@ export default function ExecutiveOverviewPage() {
                     payload?.permitted_open_risk.reason ??
                     "PRODUCER_NOT_IMPLEMENTED",
                   as_of: payload?.permitted_open_risk.as_of,
-                  metric_id: "risk.permitted_open_risk",
-                  metric_definition_version: "metrics.v1",
+                  metric_id: "risk.permitted",
+                  metric_definition_version: METRIC_DEFINITION_VERSION,
                 }}
                 provenance={envelope?.provenance ?? "SYNTHETIC"}
                 dependency="a versioned risk-policy reference"
@@ -333,7 +353,7 @@ export default function ExecutiveOverviewPage() {
                       ["api_version", envelope.api_version],
                       ["entity_id", envelope.entity_id],
                       ["environment", envelope.environment],
-                      ["maturity_stage", envelope.maturity_stage],
+                      ["maturity_stage", envelope.maturity_stage ?? "absent"],
                       ["provenance", envelope.provenance],
                       ["classification", envelope.classification],
                       ["access_scope", envelope.access_scope],
@@ -356,9 +376,7 @@ export default function ExecutiveOverviewPage() {
                   ).map(([key, value]) => (
                     <div key={key} className="flex flex-col">
                       <dt className="text-text-tertiary">{key}</dt>
-                      <dd className="truncate text-text-secondary">
-                        {String(value)}
-                      </dd>
+                      <dd className="truncate text-text-secondary">{value}</dd>
                     </div>
                   ))}
                 </dl>

@@ -61,10 +61,12 @@ describe("the validity matrix", () => {
 
 describe("a zero is a measurement, and never an availability state (ADR-0029 section 2.1)", () => {
   it("accepts a measured zero as AVAILABLE with NONE", () => {
+    // The dictionary key is `win_rate`, defined in RATIO (section 12.3), and a ratio is
+    // carried as a decimal string (section 4.2). The measured zero is what matters here.
     const zeroWinRate = available({
-      metricId: "trade.win_rate",
-      unit: "PERCENT",
-      value: 0,
+      metricId: "win_rate",
+      unit: "RATIO",
+      value: "0",
       asOf: AS_OF,
     });
     expect(metricValue.safeParse(zeroWinRate).success).toBe(true);
@@ -102,7 +104,8 @@ describe("a zero is a measurement, and never an availability state (ADR-0029 sec
 
   it("does not let a zero remove a qualification", () => {
     const staleZero = {
-      value: 0,
+      // Money is a decimal string, never binary floating point (section 4.2).
+      value: "0.00",
       unit: "USD" as const,
       availability: "STALE" as const,
       reason: "UPSTREAM_INPUT_STALE" as const,

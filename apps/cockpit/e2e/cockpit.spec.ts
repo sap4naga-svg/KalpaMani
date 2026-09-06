@@ -125,11 +125,43 @@ test.describe("mode, scope and deep links", () => {
   });
 
   test("carries the scope into a navigation", async ({ page }) => {
-    await page.goto("/?mode=operator&env=PAPER&scenario=demo");
+    // RESEARCH is the environment that carries facts, so the drill-down link exists here.
+    // `mode=operator` and `scenario=demo` are both NON-DEFAULT, and all three keys are
+    // written by the same `withScope` call -- a scope key that was dropped would default.
+    await page.goto("/?mode=operator&env=RESEARCH&scenario=demo");
     await page.getByRole("link", { name: /Each gate is read on its own/ }).click();
     await expect(page).toHaveURL(/\/governance\/qualification/);
-    await expect(page).toHaveURL(/env=PAPER/);
+    await expect(page).toHaveURL(/env=RESEARCH/);
     await expect(page).toHaveURL(/mode=operator/);
+    await expect(page).toHaveURL(/scenario=demo/);
+  });
+
+  /**
+   * An unpopulated environment shows NOTHING, rather than the same records re-badged.
+   *
+   * Every fact this application holds was produced in RESEARCH. Selecting Paper or Live
+   * must not re-label the real tracked governance record as Paper or Live evidence, and it
+   * must not render a count of a thing nobody read: `0 of 0` open gates is a fabricated
+   * measurement, and a permanent loading skeleton implies data that is never coming.
+   */
+  test("shows an unpopulated environment as explicitly unavailable, not re-badged", async ({
+    page,
+  }) => {
+    for (const environment of ["PAPER", "LIVE"]) {
+      await page.goto(`/?mode=operator&env=${environment}&scenario=demo`);
+      const gates = page.getByTestId("tile-open-gates");
+      await expect(gates.getByTestId("unavailable-body")).toBeVisible();
+      // No drill-down into facts that are not there, and no fabricated count.
+      await expect(gates.getByRole("link")).toHaveCount(0);
+      await expect(gates.getByText(/\bof \d/)).toHaveCount(0);
+      // The strategy-capital tile is the other reader of that record.
+      await expect(
+        page.getByTestId("tile-strategy-capital").getByTestId("unavailable-body"),
+      ).toBeVisible();
+      // And no skeleton is left standing in for data that will never arrive.
+      await expect(page.getByTestId("skeleton")).toHaveCount(0);
+      await expect(page.getByText("PRODUCER_NOT_IMPLEMENTED").first()).toBeVisible();
+    }
   });
 
   test("shows different information density in each mode", async ({ page }) => {

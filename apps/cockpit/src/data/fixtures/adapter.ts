@@ -15,12 +15,16 @@
  *            subsystem does not exist are NOT_IMPLEMENTED and PAYLOADLESS -- the honest
  *            default.
  *   demo     SYNTHETIC fixtures that populate the visual states, labelled unmissably.
+ *
+ * ONE ENVIRONMENT IS POPULATED, AND THE OTHER TWO ARE EXPLICITLY UNAVAILABLE. Every fact
+ * this application holds -- the repository's own governance record, and the repository-owned
+ * synthetic fixtures -- belongs to the RESEARCH runtime environment. There is no Paper and
+ * no Live cockpit data, so selecting Paper or Live returns a PAYLOADLESS response saying so
+ * rather than the same record under a different badge. Relabelling would fabricate evidence
+ * of Paper or Live operation out of a viewer's selection, and none exists: `AUTOMATED_PAPER`
+ * has never been reached and live trading is HARD-DISABLED.
  */
 import {
-  ATTENTION_LIST_SCHEMA,
-  EXECUTIVE_OVERVIEW_SCHEMA,
-  QUALIFICATION_STATUS_SCHEMA,
-  WHAT_CHANGED_SCHEMA,
   attentionListEnvelope,
   executiveOverviewEnvelope,
   qualificationStatusEnvelope,
@@ -31,13 +35,26 @@ import type {
   QualificationStatusPayload,
 } from "@/contracts/read-models";
 import type { EnvelopeOf } from "@/contracts/envelope";
-import type { HostingBoundary } from "@/contracts/vocabularies";
+import type {
+  AvailabilityState,
+  Environment,
+  FieldReasonCode,
+  HostingBoundary,
+  MaturityStage,
+} from "@/contracts/vocabularies";
 import {
   admit,
   type AttentionListPayload,
   type ReadClient,
   type WhatChangedPayload,
 } from "@/data/client/read-client";
+import {
+  ATTENTION_IDENTITY,
+  EXECUTIVE_OVERVIEW_IDENTITY,
+  QUALIFICATION_IDENTITY,
+  WHAT_CHANGED_IDENTITY,
+  type ReadModelIdentity,
+} from "@/data/client/read-model-identity";
 import type { Clock } from "@/lib/clock";
 import { systemClock } from "@/lib/clock";
 import type { ViewScope } from "@/lib/scope";
@@ -50,6 +67,13 @@ import {
   syntheticWhatChanged,
 } from "./synthetic";
 import { READ_AT_COMMIT, SNAPSHOT_AS_OF, qualificationStatusFacts } from "./tracked-facts";
+
+/**
+ * The one environment this application holds facts for, and the maturity stage that
+ * accepted mapping pairs with it (COCKPIT_FEEDBACK_EXTENSION.md section 4.1).
+ */
+const POPULATED_ENVIRONMENT: Environment = "RESEARCH";
+const POPULATED_MATURITY: MaturityStage = "RESEARCH";
 
 /**
  * The tracked governance snapshot's own freshness contract.
@@ -98,6 +122,30 @@ export interface FixtureReadClientOptions {
   readonly originMs?: number;
 }
 
+/** What a read model resolves to under one scope. */
+interface Resolution<T> {
+  readonly availability: AvailabilityState;
+  readonly availabilityReason: FieldReasonCode;
+  readonly payload?: T;
+  readonly maturityStage?: MaturityStage;
+}
+
+/**
+ * An unpopulated scope, stated rather than papered over.
+ *
+ * The producing subsystem for a Paper or Live cockpit does not exist, which is what
+ * `NOT_IMPLEMENTED` means exactly (`ui-ux-specification.md` section 9.2). It carries NO
+ * payload and NO maturity stage: nothing has reached `AUTOMATED_PAPER`, and claiming a
+ * stage here would be the fabrication this branch exists to prevent.
+ */
+function unpopulated<T>(): Resolution<T> {
+  return { availability: "NOT_IMPLEMENTED", availabilityReason: "PRODUCER_NOT_IMPLEMENTED" };
+}
+
+function isPopulated(scope: ViewScope): boolean {
+  return scope.environment === POPULATED_ENVIRONMENT;
+}
+
 export class FixtureReadClient implements ReadClient {
   private readonly clock: Clock;
   private readonly boundary: HostingBoundary;
@@ -114,67 +162,85 @@ export class FixtureReadClient implements ReadClient {
     return this.originMs;
   }
 
-  async executiveOverview(scope: ViewScope): Promise<EnvelopeOf<ExecutiveOverviewPayload>> {
+  /**
+   * Builds and admits one response.
+   *
+   * Provenance, classification and access scope come from the READ MODEL'S OWN IDENTITY --
+   * the same object the cache key is built from -- so a response and its cache entry cannot
+   * describe different sources.
+   */
+  private respond<T>(
+    identity: ReadModelIdentity,
+    entityId: string,
+    scope: ViewScope,
+    inputs: readonly InputSpec[],
+    resolution: Resolution<T>,
+    schema: Parameters<typeof admit>[1],
+  ): EnvelopeOf<T> {
     const evaluationMs = this.clock.now();
-    const asOf = instantOf(evaluationMs);
-    const demo = scope.scenario === "demo";
-    const candidate = buildEnvelope<ExecutiveOverviewPayload>({
-      schemaVersion: EXECUTIVE_OVERVIEW_SCHEMA,
-      entityId: "executive-overview",
-      // The producing projections do not exist, so the honest default is PAYLOADLESS.
-      availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
-      availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
-      // This read model is fixture-adapter output in BOTH scenarios -- populated in demo,
-      // and an absence in project scope. Section 7.1 admits REPOSITORY_TRACKED only from
-      // the enumerated governance read models, and this is not one of them.
-      provenance: "SYNTHETIC",
-      classification: "PUBLIC_SAFE",
+    const candidate = buildEnvelope<T>({
+      schemaVersion: identity.schemaVersion,
+      entityId,
+      availability: resolution.availability,
+      availabilityReason: resolution.availabilityReason,
+      provenance: identity.provenance,
+      classification: identity.classification,
       environment: scope.environment,
-      maturityStage: "RESEARCH",
-      accessScope: "executive:read",
-      inputs: demo
-        ? [DEMO_MARK_INPUT, governanceInput(this.originMs)]
-        : [governanceInput(this.originMs)],
-      payload: demo ? syntheticExecutiveOverview(asOf) : undefined,
+      maturityStage: resolution.maturityStage,
+      accessScope: identity.accessScope,
+      inputs,
+      payload: resolution.payload,
       originMs: this.originMs,
       evaluationMs,
     });
-    return admit(
-      "ExecutiveOverview",
+    return admit(identity.readModel, schema, candidate, this.boundary) as EnvelopeOf<T>;
+  }
+
+  async executiveOverview(scope: ViewScope): Promise<EnvelopeOf<ExecutiveOverviewPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const demo = scope.scenario === "demo";
+    const populated = isPopulated(scope);
+    const resolution: Resolution<ExecutiveOverviewPayload> = !populated
+      ? unpopulated()
+      : {
+          // The producing projections do not exist, so the honest default is PAYLOADLESS.
+          availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
+          availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
+          payload: demo ? syntheticExecutiveOverview(asOf) : undefined,
+          maturityStage: POPULATED_MATURITY,
+        };
+    return this.respond(
+      EXECUTIVE_OVERVIEW_IDENTITY,
+      "executive-overview",
+      scope,
+      populated && demo
+        ? [DEMO_MARK_INPUT, governanceInput(this.originMs)]
+        : [governanceInput(this.originMs)],
+      resolution,
       executiveOverviewEnvelope,
-      candidate,
-      this.boundary,
-    ) as EnvelopeOf<ExecutiveOverviewPayload>;
+    );
   }
 
   async attention(scope: ViewScope): Promise<EnvelopeOf<AttentionListPayload>> {
-    const evaluationMs = this.clock.now();
-    const asOf = instantOf(evaluationMs);
+    const asOf = instantOf(this.clock.now());
     const demo = scope.scenario === "demo";
-    const candidate = buildEnvelope<AttentionListPayload>({
-      schemaVersion: ATTENTION_LIST_SCHEMA,
-      entityId: "attention-list",
-      availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
-      availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
-      // This read model is fixture-adapter output in BOTH scenarios -- populated in demo,
-      // and an absence in project scope. Section 7.1 admits REPOSITORY_TRACKED only from
-      // the enumerated governance read models, and this is not one of them.
-      provenance: "SYNTHETIC",
-      classification: "PUBLIC_SAFE",
-      environment: scope.environment,
-      maturityStage: "RESEARCH",
-      accessScope: "executive:read",
-      inputs: [governanceInput(this.originMs)],
-      payload: demo ? syntheticAttention(asOf) : undefined,
-      originMs: this.originMs,
-      evaluationMs,
-    });
-    return admit(
-      "AttentionItem",
+    const populated = isPopulated(scope);
+    const resolution: Resolution<AttentionListPayload> = !populated
+      ? unpopulated()
+      : {
+          availability: demo ? "AVAILABLE" : "NOT_IMPLEMENTED",
+          availabilityReason: demo ? "NONE" : "PRODUCER_NOT_IMPLEMENTED",
+          payload: demo ? syntheticAttention(asOf) : undefined,
+          maturityStage: POPULATED_MATURITY,
+        };
+    return this.respond(
+      ATTENTION_IDENTITY,
+      "attention-list",
+      scope,
+      [governanceInput(this.originMs)],
+      resolution,
       attentionListEnvelope,
-      candidate,
-      this.boundary,
-    ) as EnvelopeOf<AttentionListPayload>;
+    );
   }
 
   /**
@@ -183,66 +249,56 @@ export class FixtureReadClient implements ReadClient {
    * missing baseline is a fabricated change (ui-ux-specification.md section 7).
    */
   async whatChanged(scope: ViewScope): Promise<EnvelopeOf<WhatChangedPayload>> {
-    const evaluationMs = this.clock.now();
-    const asOf = instantOf(evaluationMs);
+    const asOf = instantOf(this.clock.now());
     const demo = scope.scenario === "demo";
+    const populated = isPopulated(scope);
     const baselineAsOf = instantOf(this.originMs - 86_400_000);
-    const candidate = buildEnvelope<WhatChangedPayload>({
-      schemaVersion: WHAT_CHANGED_SCHEMA,
-      entityId: "what-changed",
-      // In project scope there is no baseline endpoint at all.
-      availability: demo ? "AVAILABLE" : "NOT_YET_AVAILABLE",
-      availabilityReason: demo ? "NONE" : "UPSTREAM_INPUT_MISSING",
-      // This read model is fixture-adapter output in BOTH scenarios -- populated in demo,
-      // and an absence in project scope. Section 7.1 admits REPOSITORY_TRACKED only from
-      // the enumerated governance read models, and this is not one of them.
-      provenance: "SYNTHETIC",
-      classification: "PUBLIC_SAFE",
-      environment: scope.environment,
-      maturityStage: "RESEARCH",
-      accessScope: "executive:read",
-      inputs: [governanceInput(this.originMs)],
-      payload: demo ? syntheticWhatChanged(asOf, baselineAsOf) : undefined,
-      originMs: this.originMs,
-      evaluationMs,
-    });
-    return admit(
-      "WhatChangedEntry",
+    const resolution: Resolution<WhatChangedPayload> = !populated
+      ? unpopulated()
+      : {
+          // In project scope there is no baseline endpoint at all.
+          availability: demo ? "AVAILABLE" : "NOT_YET_AVAILABLE",
+          availabilityReason: demo ? "NONE" : "UPSTREAM_INPUT_MISSING",
+          payload: demo ? syntheticWhatChanged(asOf, baselineAsOf) : undefined,
+          maturityStage: POPULATED_MATURITY,
+        };
+    return this.respond(
+      WHAT_CHANGED_IDENTITY,
+      "what-changed",
+      scope,
+      [governanceInput(this.originMs)],
+      resolution,
       whatChangedEnvelope,
-      candidate,
-      this.boundary,
-    ) as EnvelopeOf<WhatChangedPayload>;
+    );
   }
 
   /**
    * The one read model whose facts are REAL in both scenarios. They are REPOSITORY_TRACKED
    * and are never relabelled SYNTHETIC to fit a scenario selector.
+   *
+   * They are also never relabelled into another ENVIRONMENT. These are the repository's own
+   * governance facts, recorded under the project's actual runtime environment, which is
+   * RESEARCH; under a Paper or Live selector there is no such record to show.
    */
   async qualificationStatus(scope: ViewScope): Promise<EnvelopeOf<QualificationStatusPayload>> {
-    const evaluationMs = this.clock.now();
-    const asOf = instantOf(evaluationMs);
-    const candidate = buildEnvelope<QualificationStatusPayload>({
-      schemaVersion: QUALIFICATION_STATUS_SCHEMA,
-      entityId: "qualification-status",
-      availability: "AVAILABLE",
-      availabilityReason: "NONE",
-      provenance: "REPOSITORY_TRACKED",
-      classification: "PUBLIC_SAFE",
-      environment: scope.environment,
-      maturityStage: "RESEARCH",
-      accessScope: "governance:read",
-      inputs: [governanceInput(this.originMs)],
-      payload: qualificationStatusFacts(asOf),
-      originMs: this.originMs,
-      evaluationMs,
-    });
-    return admit(
-      "QualificationStatus",
+    const asOf = instantOf(this.clock.now());
+    const resolution: Resolution<QualificationStatusPayload> = !isPopulated(scope)
+      ? unpopulated()
+      : {
+          availability: "AVAILABLE",
+          availabilityReason: "NONE",
+          payload: qualificationStatusFacts(asOf),
+          maturityStage: POPULATED_MATURITY,
+        };
+    return this.respond(
+      QUALIFICATION_IDENTITY,
+      "qualification-status",
+      scope,
+      [governanceInput(this.originMs)],
+      resolution,
       qualificationStatusEnvelope,
-      candidate,
-      this.boundary,
-    ) as EnvelopeOf<QualificationStatusPayload>;
+    );
   }
 }
 
-export { READ_AT_COMMIT, SNAPSHOT_AS_OF };
+export { POPULATED_ENVIRONMENT, POPULATED_MATURITY, READ_AT_COMMIT, SNAPSHOT_AS_OF };

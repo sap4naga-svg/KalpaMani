@@ -3,27 +3,30 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import type { EnvelopeOf } from "@/contracts/envelope";
-import {
-  ATTENTION_LIST_SCHEMA,
-  EXECUTIVE_OVERVIEW_SCHEMA,
-  QUALIFICATION_STATUS_SCHEMA,
-  WHAT_CHANGED_SCHEMA,
-  type ExecutiveOverviewPayload,
-  type QualificationStatusPayload,
+import type {
+  ExecutiveOverviewPayload,
+  QualificationStatusPayload,
 } from "@/contracts/read-models";
 import { useReadClient } from "@/components/shell/providers";
 import type { ViewScope } from "@/lib/scope";
 
 import { readModelKey } from "./query-keys";
+import {
+  ATTENTION_IDENTITY,
+  EXECUTIVE_OVERVIEW_IDENTITY,
+  QUALIFICATION_IDENTITY,
+  WHAT_CHANGED_IDENTITY,
+} from "./read-model-identity";
 import type { AttentionListPayload, WhatChangedPayload } from "./read-client";
 
 /**
  * Query hooks.
  *
- * Every key carries the API version, the schema version, the environment and the source
- * provenance, so a scope change is a DIFFERENT CACHE ENTRY and old data is never flashed
- * under a new badge. React Query returns no data for a key it has not seen, which is the
- * isolation this depends on rather than a manual cache clear.
+ * Every key carries the API version, the schema version, the source provenance, the
+ * classification, the access scope and the whole scope, so a scope change is a DIFFERENT
+ * CACHE ENTRY and old data is never flashed under a new badge. React Query returns no data
+ * for a key it has not seen, which is the isolation this depends on rather than a manual
+ * cache clear.
  */
 
 export function useExecutiveOverview(
@@ -31,7 +34,7 @@ export function useExecutiveOverview(
 ): UseQueryResult<EnvelopeOf<ExecutiveOverviewPayload>> {
   const client = useReadClient();
   return useQuery({
-    queryKey: readModelKey("executive-overview", EXECUTIVE_OVERVIEW_SCHEMA, scope),
+    queryKey: readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, scope),
     queryFn: () => client.executiveOverview(scope),
   });
 }
@@ -41,7 +44,7 @@ export function useAttention(
 ): UseQueryResult<EnvelopeOf<AttentionListPayload>> {
   const client = useReadClient();
   return useQuery({
-    queryKey: readModelKey("attention", ATTENTION_LIST_SCHEMA, scope),
+    queryKey: readModelKey(ATTENTION_IDENTITY, scope),
     queryFn: () => client.attention(scope),
   });
 }
@@ -51,7 +54,7 @@ export function useWhatChanged(
 ): UseQueryResult<EnvelopeOf<WhatChangedPayload>> {
   const client = useReadClient();
   return useQuery({
-    queryKey: readModelKey("what-changed", WHAT_CHANGED_SCHEMA, scope),
+    queryKey: readModelKey(WHAT_CHANGED_IDENTITY, scope),
     queryFn: () => client.whatChanged(scope),
   });
 }
@@ -61,7 +64,7 @@ export function useQualificationStatus(
 ): UseQueryResult<EnvelopeOf<QualificationStatusPayload>> {
   const client = useReadClient();
   return useQuery({
-    queryKey: readModelKey("qualification-status", QUALIFICATION_STATUS_SCHEMA, scope),
+    queryKey: readModelKey(QUALIFICATION_IDENTITY, scope),
     queryFn: () => client.qualificationStatus(scope),
   });
 }

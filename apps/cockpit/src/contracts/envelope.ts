@@ -21,8 +21,23 @@ import {
   fieldReasonCode,
   maturityStage,
 } from "./vocabularies";
+import type { Environment, MaturityStage } from "./vocabularies";
 import { instant, refList, safeId } from "./values";
 import { validityFailure } from "./validity";
+
+/**
+ * The accepted maturity-to-environment mapping (COCKPIT_FEEDBACK_EXTENSION.md 4.1).
+ *
+ * Transcribed, not invented: `SHADOW` has no order authority and runs in `RESEARCH`;
+ * `AUTOMATED_PAPER` is the first order-producing stage and runs in `PAPER`.
+ */
+export const MATURITY_ENVIRONMENTS: Readonly<Record<MaturityStage, Environment>> = {
+  RESEARCH: "RESEARCH",
+  SHADOW: "RESEARCH",
+  AUTOMATED_PAPER: "PAPER",
+  MICRO_LIVE: "LIVE",
+  SCALED_LIVE: "LIVE",
+};
 
 export const coverage = z.object({
   present: z.number().int().nonnegative(),
@@ -40,7 +55,14 @@ export const envelopeFields = z.object({
   as_of_time: instant,
   projected_time: instant,
   environment,
-  maturity_stage: maturityStage,
+  /**
+   * "the governance stage of the strategy version involved, WHERE APPLICABLE" (3).
+   *
+   * Optional because C3 has no strategy version: asserting a stage for a scope that carries
+   * no facts would state a governance position nothing has reached. A payload-bearing
+   * response must carry one, and the refinement below requires it.
+   */
+  maturity_stage: maturityStage.optional(),
   provenance: dataProvenance,
   availability: availabilityState,
   availability_reason: fieldReasonCode,
@@ -79,6 +101,29 @@ export function envelope<T extends z.ZodTypeAny>(payload: T, schemaVersion: stri
       );
       if (failure !== null) {
         ctx.addIssue({ code: "custom", message: failure });
+      }
+      if (candidate.payload !== undefined && candidate.maturity_stage === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a payload-bearing response states the maturity stage it was produced at",
+        });
+      }
+      /*
+       * THE FIVE AXES STAY SEPARATE (ADR-0027 5), and two of them are checked against the
+       * accepted mapping here: COCKPIT_FEEDBACK_EXTENSION.md 4.1 maps RESEARCH and SHADOW
+       * onto the RESEARCH runtime environment, AUTOMATED_PAPER onto PAPER, and MICRO_LIVE
+       * and SCALED_LIVE onto LIVE. A record carrying `maturity_stage: RESEARCH` under a
+       * PAPER or LIVE environment is a combination the mapping does not admit -- which is
+       * exactly what a scope selector produces when it relabels one record's badge.
+       */
+      const permitted = MATURITY_ENVIRONMENTS[candidate.maturity_stage ?? "RESEARCH"];
+      if (candidate.maturity_stage !== undefined && permitted !== candidate.environment) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `maturity stage ${candidate.maturity_stage} is produced in the ` +
+            `${permitted} environment, not in ${candidate.environment}`,
+        });
       }
     });
 }

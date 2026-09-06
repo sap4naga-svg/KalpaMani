@@ -102,8 +102,9 @@ export function syntheticExecutiveOverview(asOf: string): ExecutiveOverviewPaylo
       availability: "NOT_YET_AVAILABLE",
       reason: "POLICY_REFERENCE_MISSING",
     },
-    /** A measured zero drawdown is a value, not an absence. */
-    drawdown: available({ metricId: "risk.drawdown", unit: "PERCENT", value: "0.00", asOf }),
+    /** A measured zero drawdown is a value, not an absence. `drawdown.current` is the
+     * dictionary key for it (section 12.3); `risk.drawdown` was not a dictionary key. */
+    drawdown: available({ metricId: "drawdown.current", unit: "PERCENT", value: "0.00", asOf }),
     system_health: reason("DEMONSTRATION_ONLY", DEMO),
     data_freshness: available({
       metricId: "freshness.source_age",

@@ -8,6 +8,7 @@ import { ProvenanceBadge } from "@/components/cockpit/provenance";
 import { isValueBearing } from "@/contracts/validity";
 import type { MetricValue } from "@/contracts/values";
 import type { DataProvenance, Unit } from "@/contracts/vocabularies";
+import { decimalSign, formatDecimal } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,23 +30,30 @@ const UNIT_SUFFIX: Readonly<Record<Unit, string>> = {
   DIMENSIONLESS: "",
 };
 
-function formatValue(value: unknown, unit: Unit): string {
+const SIGNED_UNITS: readonly Unit[] = ["USD", "PERCENT", "R_MULTIPLE"];
+
+/**
+ * The displayed text for a metric's value, or `null` when there is no honest rendering.
+ *
+ * It never calls `String(value)`. A `String()` fallback turns `null` into "null", an object
+ * into "[object Object]" and `NaN` into "NaN", and every one of those is rendered in the
+ * same large numeral as a real measurement. Admission now refuses those payloads outright
+ * (`contracts/values.ts`); this returns `null` so that even a value which somehow reached a
+ * tile is shown as a failure rather than as a number.
+ */
+function formatValue(value: unknown, unit: Unit): string | null {
   if (typeof value === "number") {
-    return unit === "COUNT" ? String(value) : value.toLocaleString("en-US");
+    return Number.isFinite(value) ? value.toLocaleString("en-US") : null;
   }
-  if (typeof value === "string") {
-    if (unit === "USD" && /^-?\d+(\.\d+)?$/.test(value)) {
-      const numeric = Number(value);
-      const sign = numeric > 0 ? "+" : "";
-      return `${sign}${numeric.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    }
-    if (unit === "PERCENT" && /^-?\d+(\.\d+)?$/.test(value)) {
-      const numeric = Number(value);
-      return `${numeric > 0 ? "+" : ""}${value}`;
-    }
-    return value;
+  if (typeof value !== "string") {
+    return null;
   }
-  return String(value);
+  const decimal = formatDecimal(value, {
+    minimumFractionDigits: unit === "USD" ? 2 : 0,
+    signed: SIGNED_UNITS.includes(unit),
+  });
+  // A closed-vocabulary token is displayed as itself; only digits are formatted as digits.
+  return decimal ?? value;
 }
 
 /**
@@ -55,12 +63,17 @@ function formatValue(value: unknown, unit: Unit): string {
  * CARRIER OF DIRECTION (U11) -- the sign character carries it too.
  */
 function toneFor(value: unknown, unit: Unit): string {
-  if (unit !== "USD" && unit !== "PERCENT" && unit !== "R_MULTIPLE") {
+  if (!SIGNED_UNITS.includes(unit)) {
     return "text-text-primary";
   }
-  const numeric = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(numeric) || numeric === 0) return "text-text-primary";
-  return numeric > 0 ? "text-positive" : "text-negative";
+  const sign =
+    typeof value === "string"
+      ? decimalSign(value)
+      : typeof value === "number" && Number.isFinite(value)
+        ? Math.sign(value)
+        : 0;
+  if (sign === 0) return "text-text-primary";
+  return sign > 0 ? "text-positive" : "text-negative";
 }
 
 export interface MetricTileProps {
@@ -94,6 +107,13 @@ export function MetricTile({
   denominator,
 }: MetricTileProps) {
   const bearing = isValueBearing(metric.availability);
+  const rendered = bearing ? formatValue(metric.value, metric.unit) : null;
+  /*
+   * A value-bearing metric whose value has no honest rendering is a FAILURE, not a blank
+   * numeral. Admission refuses such a payload before it reaches here; this is the second
+   * line, and it fails closed rather than printing whatever `String()` would have produced.
+   */
+  const unrenderable = bearing && rendered === null;
   return (
     <Card className={cn("flex h-full flex-col", className)} data-testid={`tile-${metric.metric_id}`}>
       <CardBody className="flex flex-1 flex-col gap-2 pt-4">
@@ -104,14 +124,16 @@ export function MetricTile({
             * number, so it carries no provenance either -- the state, its reason code and
             * its named dependency are the whole answer.
             */}
-          {bearing && <ProvenanceBadge provenance={provenance} className="shrink-0" />}
+          {bearing && !unrenderable && (
+            <ProvenanceBadge provenance={provenance} className="shrink-0" />
+          )}
         </div>
 
-        {bearing ? (
+        {bearing && !unrenderable ? (
           <>
             <div className="flex items-baseline gap-1.5">
               <Numeric size={size} className={toneFor(metric.value, metric.unit)}>
-                {formatValue(metric.value, metric.unit)}
+                {rendered}
               </Numeric>
               {UNIT_SUFFIX[metric.unit] !== "" && (
                 <span className="text-label-m text-text-tertiary">
@@ -153,8 +175,8 @@ export function MetricTile({
           </>
         ) : (
           <UnavailableBody
-            state={metric.availability}
-            reason={metric.reason}
+            state={unrenderable ? "ERROR" : metric.availability}
+            reason={unrenderable ? "PROJECTION_ERROR" : metric.reason}
             dependency={dependency}
           />
         )}

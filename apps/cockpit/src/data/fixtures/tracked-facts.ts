@@ -189,7 +189,7 @@ export function qualificationStatusFacts(asOfInstant: string): QualificationStat
           "NOT_APPLICABLE",
           "NOT_DEFINED_FOR_SUBJECT",
           "governance.run_date_gate",
-          "CALENDAR_DAYS",
+          "DIMENSIONLESS",
         ),
         source: source(CLAUDE_MD),
       },
@@ -197,9 +197,14 @@ export function qualificationStatusFacts(asOfInstant: string): QualificationStat
         run: reason("RUN_B", GOV),
         authorization: reason("NOT_AUTHORIZED", GOV),
         // The earliest APPROVED TARGET. Eligibility is not permission.
+        /*
+          * A DATE, carried as one. It was `CALENDAR_DAYS`, which is a unit of DURATION:
+          * that stated a count of days nobody measured, and rendered a calendar date with
+          * a "d" suffix beside it.
+          */
         date_gate: available({
-          metricId: "governance.run_b_earliest_target",
-          unit: "CALENDAR_DAYS",
+          metricId: "governance.run_date_gate",
+          unit: "DIMENSIONLESS",
           value: "2026-09-12",
           asOf: asOfInstant,
         }),
@@ -212,7 +217,7 @@ export function qualificationStatusFacts(asOfInstant: string): QualificationStat
           "NOT_YET_AVAILABLE",
           "UPSTREAM_INPUT_MISSING",
           "governance.run_date_gate",
-          "CALENDAR_DAYS",
+          "DIMENSIONLESS",
         ),
         source: source(CLAUDE_MD),
       },

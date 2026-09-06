@@ -74,7 +74,12 @@ export function withScope(href: string, scope: ViewScope): string {
   return `${path}?${params.toString()}`;
 }
 
-/** The provenance a scenario produces. `demo` is SYNTHETIC; `project` is REPOSITORY_TRACKED. */
-export function scenarioProvenance(scenario: DataScenario): "SYNTHETIC" | "REPOSITORY_TRACKED" {
-  return scenario === "demo" ? "SYNTHETIC" : "REPOSITORY_TRACKED";
-}
+/*
+ * There is deliberately no `scenarioProvenance` here.
+ *
+ * A scenario does not determine a provenance. `QualificationStatus` reads REAL tracked
+ * governance facts in the demo scenario too, and the operational read models are fixture
+ * output in project scope too, so a scenario-to-provenance function states the wrong source
+ * in both directions. Provenance belongs to the read model and lives in
+ * `data/client/read-model-identity.ts`.
+ */

@@ -3,6 +3,11 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { readModelKey } from "@/data/client/query-keys";
+import {
+  EXECUTIVE_OVERVIEW_IDENTITY,
+  QUALIFICATION_IDENTITY,
+  type ReadModelIdentity,
+} from "@/data/client/read-model-identity";
 import { NAV_ROUTES, ROUTES_BY_HREF } from "@/nav/registry";
 import { COMMAND_KINDS } from "@/components/palette/command-palette";
 import { parseScope, scopeToSearchParams, withScope, DEFAULT_SCOPE } from "@/lib/scope";
@@ -26,27 +31,85 @@ function walk(directory: string): string[] {
 const SOURCE_FILES = walk(SRC).filter((path) => /\.(ts|tsx)$/.test(path));
 
 describe("query scope isolation", () => {
-  it("puts the environment and the provenance in every cache key", () => {
-    const research = readModelKey("executive-overview", "v1", DEFAULT_SCOPE);
-    const paper = readModelKey("executive-overview", "v1", {
+  it("puts the environment, provenance, classification and access scope in every key", () => {
+    const research = readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, DEFAULT_SCOPE);
+    const paper = readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, {
       ...DEFAULT_SCOPE,
       environment: "PAPER",
     });
-    const demo = readModelKey("executive-overview", "v1", {
+    const demo = readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, {
       ...DEFAULT_SCOPE,
       scenario: "demo",
     });
     expect(research).not.toEqual(paper);
     expect(research).not.toEqual(demo);
     expect(research).toContain("RESEARCH");
-    expect(demo).toContain("SYNTHETIC");
-    expect(research).toContain("REPOSITORY_TRACKED");
+    // Section 7 names all four, and every one of them is present.
+    expect(research).toContain(EXECUTIVE_OVERVIEW_IDENTITY.provenance);
+    expect(research).toContain("PUBLIC_SAFE");
+    expect(research).toContain("executive:read");
+    expect(research).toContain(EXECUTIVE_OVERVIEW_IDENTITY.schemaVersion);
+    expect(research).toContain("v1");
   });
 
   it("separates two read models under one scope", () => {
-    expect(readModelKey("a", "v1", DEFAULT_SCOPE)).not.toEqual(
-      readModelKey("b", "v1", DEFAULT_SCOPE),
+    expect(readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, DEFAULT_SCOPE)).not.toEqual(
+      readModelKey(QUALIFICATION_IDENTITY, DEFAULT_SCOPE),
     );
+  });
+
+  /**
+   * REGRESSION -- finding D.
+   *
+   * The key took its provenance from the SCENARIO SELECTOR, so the qualification cache
+   * entry was labelled SYNTHETIC whenever the demo scenario was selected, though its facts
+   * are REPOSITORY_TRACKED in both scenarios, and the operational entries were labelled
+   * REPOSITORY_TRACKED in project scope, though they are fixture output in both.
+   */
+  it("keys provenance from the read model's own source, never from the scenario", () => {
+    for (const scenario of ["project", "demo"] as const) {
+      const scope = { ...DEFAULT_SCOPE, scenario };
+      const qualification = readModelKey(QUALIFICATION_IDENTITY, scope);
+      const executive = readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, scope);
+      // A real tracked fact is never keyed as synthetic, in EITHER scenario.
+      expect(qualification).toContain("REPOSITORY_TRACKED");
+      expect(qualification).not.toContain("SYNTHETIC");
+      // And fixture output is never keyed as a tracked fact, in EITHER scenario.
+      expect(executive).toContain("SYNTHETIC");
+      expect(executive).not.toContain("REPOSITORY_TRACKED");
+    }
+  });
+
+  /** Two access scopes never share one entry, so no key can serve the other's payload. */
+  it("never lets two access scopes or classifications share a cache entry", () => {
+    const governance = readModelKey(QUALIFICATION_IDENTITY, DEFAULT_SCOPE);
+    const executive = readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, DEFAULT_SCOPE);
+    expect(governance).toContain("governance:read");
+    expect(executive).toContain("executive:read");
+    expect(governance).not.toContain("executive:read");
+    const withheld: ReadModelIdentity = {
+      ...QUALIFICATION_IDENTITY,
+      classification: "PRIVATE_OPERATIONAL",
+    };
+    // A differently classified response is a DIFFERENT entry -- no shared cache (section 7).
+    expect(readModelKey(withheld, DEFAULT_SCOPE)).not.toEqual(governance);
+  });
+
+  /** Every scope field separates entries, so a rapid scope change cannot flash old data. */
+  it("separates every scope field, so no scope reads another's entry", () => {
+    const keys = new Set<string>();
+    for (const environment of ["RESEARCH", "PAPER", "LIVE"] as const) {
+      for (const scenario of ["project", "demo"] as const) {
+        for (const mode of ["executive", "operator"] as const) {
+          keys.add(
+            JSON.stringify(
+              readModelKey(EXECUTIVE_OVERVIEW_IDENTITY, { mode, environment, scenario }),
+            ),
+          );
+        }
+      }
+    }
+    expect(keys.size).toBe(12);
   });
 });
 

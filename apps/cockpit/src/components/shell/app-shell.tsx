@@ -12,6 +12,7 @@ import { CommandPalette, useCommandPalette } from "@/components/palette/command-
 import { useExecutiveOverview } from "@/data/client/hooks";
 import { DATA_SCENARIOS, VIEW_MODES, withScope, type ViewMode } from "@/lib/scope";
 import { ENVIRONMENTS } from "@/contracts/vocabularies";
+import { humanizeCode } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { NavTree } from "./nav";
@@ -124,12 +125,21 @@ function ContextBar() {
           />
         )}
       </div>
-      {/* Maturity is a governance property of a strategy version, and a filter is a filter. */}
+      {/*
+        * Maturity is a governance property of a strategy version, and a filter is a filter.
+        * It is READ FROM THE RESPONSE rather than hardcoded: a scope that carries no facts
+        * carries no maturity stage either, and a header that always said "Research" would
+        * assert a governance position for a response that states none.
+        */}
       <div className="flex items-center gap-2">
         <span className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
           Maturity
         </span>
-        <Badge tone="unavailable">Research</Badge>
+        <Badge tone="unavailable">
+          {overview.data?.maturity_stage === undefined
+            ? "not applicable"
+            : humanizeCode(overview.data.maturity_stage)}
+        </Badge>
       </div>
     </div>
   );
