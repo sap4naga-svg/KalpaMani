@@ -166,6 +166,15 @@ export function Numeric({
  * A scrollable region must also be reachable by keyboard, so it is focusable and carries an
  * accessible name -- a scroll container a keyboard user cannot reach is content they cannot
  * read.
+ *
+ * PAINT CONTAINMENT IS LOAD-BEARING, AND IT WAS ADDED AGAINST A MEASUREMENT.
+ *
+ * `overflow-x: auto` clips VISUALLY, and a wide table inside one still contributed its full
+ * width to the document's own scroll width — so the page scrolled sideways by exactly the
+ * table's overhang, and a programmatic horizontal scroll moved it. That is U14 failing while
+ * every container looked correct. Paint containment makes the clip authoritative: descendants
+ * cannot contribute scrollable overflow to any ancestor, so the page stops scrolling and the
+ * region keeps its own scrollbar.
  */
 export function ScrollRegion({
   label,
@@ -177,7 +186,7 @@ export function ScrollRegion({
       role="region"
       aria-label={label}
       tabIndex={0}
-      className={cn("overflow-x-auto", className)}
+      className={cn("overflow-x-auto contain-paint", className)}
       {...props}
     />
   );
