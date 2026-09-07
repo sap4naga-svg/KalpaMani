@@ -24,7 +24,7 @@ import {
   type FreshnessReport,
 } from "@/contracts/freshness";
 import { absent, available, emptyRefList, pinsOf } from "@/contracts/factories";
-import { attentionListEnvelope } from "@/contracts/read-models";
+import { ATTENTION_LIST_SCHEMA, attentionListEnvelope } from "@/contracts/read-models";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { buildFreshness, type InputSpec } from "@/data/fixtures/envelopes";
 
@@ -87,7 +87,7 @@ function reportOf(
 /** Drives a freshness report through the REAL envelope admission path. */
 function admitting(freshness: FreshnessReport): () => unknown {
   const candidate = {
-    schema_version: "cockpit.attention_list.v1",
+    schema_version: ATTENTION_LIST_SCHEMA,
     api_version: "v1",
     entity_id: "attention-list",
     correlation_id: "attention-list-v1",

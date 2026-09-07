@@ -10,7 +10,12 @@
  */
 import { available, absent, qualified, reason, refListOf } from "@/contracts/factories";
 import type { MetricValue, Ref } from "@/contracts/values";
-import type { AvailabilityState, FieldReasonCode, Unit } from "@/contracts/vocabularies";
+import type {
+  AvailabilityState,
+  FieldReasonCode,
+  RefKind,
+  Unit,
+} from "@/contracts/vocabularies";
 
 import { centsToDecimal, SESSION_COUNT, STRATEGY_CAPITAL_CENTS } from "./book";
 
@@ -33,7 +38,7 @@ export function demoReason(code: string) {
  */
 export function demoRef(
   refId: string,
-  refKind: string,
+  refKind: RefKind,
   resolution: Ref["resolution"] = "UNRESOLVABLE_V1",
 ): Ref {
   return { ref_id: refId, ref_kind: refKind, resolution, classification: "PUBLIC_SAFE" };

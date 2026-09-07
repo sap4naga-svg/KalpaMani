@@ -15,6 +15,7 @@ import {
   completeness,
   dataClassification,
   fieldReasonCode,
+  refKind,
   resolution,
   unit,
 } from "./vocabularies";
@@ -98,9 +99,26 @@ export const magnitude = z.object({
 });
 export type Magnitude = z.infer<typeof magnitude>;
 
+/**
+ * `Ref` — §4.2, with `ref_kind` CLOSED at the twenty-seven §4.3 rows (ADR-0030 R1).
+ *
+ * It was `z.string().min(1)` — an OPEN string where the contract says closed, which is what
+ * admitted a trade reference labelled `source_fact` carrying a resolution `source_fact`'s
+ * own row does not list. Closing it was blocked until ADR-0030 fixed WHICH members the set
+ * has and WHICH resolutions each admits; both are now accepted, so it is closed here.
+ *
+ * **The kind is closed at this shape; the per-HOST-FIELD rules are not enforceable here.**
+ * Which kinds a given field may carry, and which resolutions each kind admits, depend on the
+ * field the reference sits in — so they are enforced by `refOf` and `refListFieldOf` in
+ * `references.ts`, which know the host field. This shape is the floor, never the whole rule.
+ *
+ * **A `Ref` carries NO `availability` and NO `reason`** (ADR-0030 R9). An unresolvable
+ * target is stated by the value-bearing field it would have filled, or by a §5 error, and
+ * the reference itself stays VISIBLE.
+ */
 export const ref = z.object({
   ref_id: safeId,
-  ref_kind: z.string().min(1),
+  ref_kind: refKind,
   resolution,
   classification: dataClassification,
 });
@@ -152,6 +170,7 @@ export const refList = z
       });
     }
   });
+export type RefList = z.infer<typeof refList>;
 
 export const reasonCoded = z.object({
   code: z.string().min(1),

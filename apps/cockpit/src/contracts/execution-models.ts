@@ -25,12 +25,13 @@
  */
 import { z } from "zod";
 
+import { refOf } from "./references";
+
 import {
   instant,
   metricOf,
   metricValue,
   reasonCoded,
-  ref,
 } from "./values";
 import { isValueBearing } from "./validity";
 
@@ -116,7 +117,7 @@ export const executionQuality = z
   .object({
     scope: executionScope,
     /** Which order, fill or trade this record is about. */
-    subject_ref: ref,
+    subject_ref: refOf("ExecutionQuality.subject_ref"),
     /** The order side, from which the sign is derived. **Never the position's direction.** */
     side: orderSide,
     quantity: metricOf("execution.quantity"),

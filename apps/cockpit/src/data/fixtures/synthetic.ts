@@ -31,7 +31,7 @@ const DEMO = "kalpamani.demo";
 
 const ref = (
   id: string,
-  kind: string,
+  kind: Ref["ref_kind"],
   resolution: Ref["resolution"] = "UNRESOLVABLE_V1",
 ): Ref => ({
   ref_id: id,
@@ -169,7 +169,7 @@ export function syntheticExecutiveOverview(
           asOf,
         }),
         as_of: asOf,
-        assessment_ref: ref("demo-risk-assessment", "risk_decision"),
+        assessment_ref: ref("demo-risk-assessment", "risk_decision", "AUTHORIZED_READ"),
         risk_policy_ref: {
           policy_id: "risk-policy-demo",
           policy_version: "0.0.0-demo",
@@ -214,7 +214,7 @@ export function syntheticExecutiveOverview(
      * to an availability state rather than to a payload -- which is what `UNRESOLVABLE_V1`
      * MEANS (4.3), and why the reference stays VISIBLE instead of being omitted.
      */
-    regime_ref: ref("demo-regime-context", "regime_context"),
+    regime_ref: ref("demo-regime-context", "regime_context", "ENDPOINT"),
     system_health: reason("DEMONSTRATION_ONLY", DEMO),
     data_freshness: available({
       metricId: "freshness.source_age",
@@ -251,7 +251,7 @@ export function syntheticExecutiveOverview(
         "decision.last_at",
         "DIMENSIONLESS",
       ),
-      ref: ref("demo-last-decision", "decision"),
+      ref: ref("demo-last-decision", "decision", "ENDPOINT"),
     },
     last_scout_run: {
       at: absent(
@@ -260,20 +260,23 @@ export function syntheticExecutiveOverview(
         "scout.last_run_at",
         "DIMENSIONLESS",
       ),
-      ref: ref("demo-last-scout-run", "research_run"),
+      ref: ref("demo-last-scout-run", "research_run", "ENDPOINT"),
     },
     /** The reference lists a summary counts from -- `total`, and never `items.length`. */
     what_changed: refListOf(
-      [ref("demo-change-1", "source_fact"), ref("demo-change-2", "source_fact")],
+      [
+        ref("demo-change-1", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-change-2", "source_fact", "AUTHORIZED_READ"),
+      ],
       "ZERO_OR_MORE",
       asOf,
     ),
     attention: refListOf(
       [
-        ref("demo-attention-1", "source_fact"),
-        ref("demo-attention-2", "source_fact"),
-        ref("demo-attention-3", "source_fact"),
-        ref("demo-attention-4", "source_fact"),
+        ref("demo-attention-1", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-2", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-3", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-4", "source_fact", "AUTHORIZED_READ"),
       ],
       "ZERO_OR_MORE",
       asOf,
@@ -313,7 +316,26 @@ export function syntheticExecutiveOverview(
  * broken ranker pass its tests by doing nothing at all.
  */
 export function syntheticAttention(asOf: string, earlier: string): AttentionListPayload {
-  const evidence = (id: string, kind: string) => refListOf([ref(id, kind)], "EXACTLY_ONE", asOf);
+  /*
+   * THE TWO KINDS §4.5 PERMITS HERE, AND IT USED TO TAKE ANY KIND AT ALL.
+   *
+   * `AttentionItem.evidence_refs` is declared "kind `evidence` or `source_fact`" — a
+   * stated SET — and this helper was handing it `data_quality`, `health_transition` and
+   * `reconciliation`, three kinds the field may not carry. **The producer is corrected
+   * rather than the field widened to fit it** (ADR-0030 R2).
+   *
+   * The default is `source_fact`, which is what most of these references ARE: the
+   * recorded fact each item was built from. The borrow item names a BORROW RECORD, which
+   * the catalogue types `evidence` on `ShortSideSnapshot.borrow[].record_ref`, so it is
+   * typed `evidence` here too rather than guessed a second time in the same place.
+   *
+   * The drill-down narrows with the correction: the per-area destinations were reachable
+   * only through the kinds this field may not carry. The disclosure itself is unchanged —
+   * every reference is still carried, still shows its kind, resolution and classification,
+   * and is still counted from `total`.
+   */
+  const evidence = (id: string, kind: "evidence" | "source_fact" = "source_fact") =>
+    refListOf([ref(id, kind, "AUTHORIZED_READ")], "EXACTLY_ONE", asOf);
   const occurrences = (value: number) =>
     available({ metricId: "attention.occurrence_count", unit: "COUNT", value, asOf });
 
@@ -333,7 +355,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-data-quality", "data_quality"),
+        evidence_refs: evidence("demo-evidence-data-quality"),
         recommended_action: reason("REVIEW_DATA_QUALITY_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 2,
@@ -352,7 +374,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           value: "-0.42",
           asOf,
         }),
-        evidence_refs: evidence("demo-evidence-health", "health_transition"),
+        evidence_refs: evidence("demo-evidence-health"),
         /** A PERMITTED GOVERNANCE action, and never an execution instruction. */
         recommended_action: reason("REVIEW_STRATEGY_HEALTH_EVIDENCE", DEMO),
         severity: reason("HIGH", DEMO),
@@ -377,7 +399,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-data-quality-earlier", "data_quality"),
+        evidence_refs: evidence("demo-evidence-data-quality-earlier"),
         recommended_action: reason("REVIEW_DATA_QUALITY_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 2,
@@ -397,7 +419,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           value: "0.00",
           asOf,
         }),
-        evidence_refs: evidence("demo-evidence-borrow", "source_fact"),
+        evidence_refs: evidence("demo-evidence-borrow", "evidence"),
         recommended_action: reason("REVIEW_SHORT_SIDE_BORROW_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 3,
@@ -416,7 +438,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-reconciliation", "reconciliation"),
+        evidence_refs: evidence("demo-evidence-reconciliation"),
         recommended_action: reason("REVIEW_RECONCILIATION_EVIDENCE", DEMO),
         severity: reason("LOW", DEMO),
         materiality_rank: 4,
@@ -467,7 +489,8 @@ export function syntheticWhatChanged(
   asOf: string,
   baselineAsOf: string,
 ): WhatChangedPayload {
-  const evidence = (id: string) => refListOf([ref(id, "source_fact")], "EXACTLY_ONE", asOf);
+  const evidence = (id: string) =>
+    refListOf([ref(id, "source_fact", "AUTHORIZED_READ")], "EXACTLY_ONE", asOf);
 
   if (variant === "no-baseline") {
     /*

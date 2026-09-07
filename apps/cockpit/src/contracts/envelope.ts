@@ -12,6 +12,7 @@
 import { z } from "zod";
 
 import { freshnessReport } from "./freshness";
+import { refListFieldOf } from "./references";
 import {
   availabilityState,
   completeness,
@@ -22,7 +23,7 @@ import {
   maturityStage,
 } from "./vocabularies";
 import type { Environment, MaturityStage } from "./vocabularies";
-import { instant, refList, safeId, versionPins } from "./values";
+import { instant, safeId, versionPins } from "./values";
 import { validityFailure } from "./validity";
 
 /**
@@ -49,7 +50,7 @@ export const envelopeFields = z.object({
   api_version: z.string().min(1),
   entity_id: safeId,
   correlation_id: safeId,
-  source_refs: refList,
+  source_refs: refListFieldOf("Envelope.source_refs"),
   event_time: instant,
   observed_time: instant,
   as_of_time: instant,

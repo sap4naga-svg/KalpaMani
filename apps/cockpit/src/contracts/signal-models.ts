@@ -24,13 +24,12 @@
 import { z } from "zod";
 
 import { envelope } from "./envelope";
+import { checkEmbeddedTruth, refListFieldOf, refOf } from "./references";
 import { collectionPayload } from "./pagination";
 import {
   instant,
   metricOf,
   reasonCoded,
-  ref,
-  refList,
   safeId,
   series,
   versionPins,
@@ -446,7 +445,7 @@ export const candidateFunnelEnvelope = envelope(
 export const candidateSummary = z
   .object({
     candidate_id: safeId,
-    security_ref: ref,
+    security_ref: refOf("CandidateSummary.security_ref"),
     /** EMBEDDED, so a table of reference identifiers is readable (the C5 precedent). */
     security: securityIdentity,
     direction: z.enum(["LONG", "SHORT"]),
@@ -457,10 +456,21 @@ export const candidateSummary = z
     strategy_module: reasonCoded,
     /** §4.5: "a DownstreamStage or its availability". A token, never a second Brain state. */
     downstream_stage: metricOf("candidate.downstream_stage"),
-    detail_ref: ref,
+    detail_ref: refOf("CandidateSummary.detail_ref"),
     pins: versionPins,
   })
   .superRefine((candidate, ctx) => {
+    /*
+     * R4's TRUTH half. PERMISSION was checked by the reference's own declaration; this is
+     * the second half, and it needs the object BESIDE the reference to do its job: the
+     * named carrier must actually be there, and its identity must correspond to the
+     * reference's under the rule the catalogue declares — for the identifier-less
+     * `security` projection, the canonicalized SYMBOL and never the display name.
+     *
+     * Co-location neither compels EMBEDDED nor forbids another resolution (R4.1), so a
+     * carrier present beside a non-embedded reference is not checked and is not an error.
+     */
+    checkEmbeddedTruth(ctx, candidate, [["CandidateSummary.security_ref", "security_ref"]]);
     const stage = candidate.downstream_stage.value;
     if (
       typeof stage === "string" &&
@@ -488,7 +498,7 @@ export const candidateSummaryPayload = collectionPayload(candidateSummary, {
 });
 export type CandidateSummaryPayload = z.infer<typeof candidateSummaryPayload>;
 
-export const CANDIDATE_SUMMARY_SCHEMA = "cockpit.candidate_summary.v1";
+export const CANDIDATE_SUMMARY_SCHEMA = "cockpit.candidate_summary.v2";
 export const candidateSummaryEnvelope = envelope(
   candidateSummaryPayload,
   CANDIDATE_SUMMARY_SCHEMA,
@@ -507,7 +517,7 @@ export const candidateSummaryEnvelope = envelope(
  * time, model version, prompt version, schema version, confidence and evidence quality.
  */
 export const aiEvidenceRecord = z.object({
-  reference: ref,
+  reference: refOf("CandidateDetail.ai_evidence[].reference"),
   source: reasonCoded,
   published_at: metricOf("evidence.published_at"),
   observed_at: metricOf("evidence.observed_at"),
@@ -553,7 +563,7 @@ export const candidateRiskContext = z.object({
 export const candidateShortContext = z.object({
   borrow_required: z.boolean(),
   borrow_state: reasonCoded,
-  borrow_evidence_ref: ref,
+  borrow_evidence_ref: refOf("CandidateDetail.short_context.borrow_evidence_ref"),
   fee_state: reasonCoded,
   squeeze_state: reasonCoded,
   ssr_state: reasonCoded,
@@ -569,7 +579,7 @@ export const deterministicEvidence = z.object({
 export const candidateDetailPayload = z
   .object({
     candidate_id: safeId,
-    security_ref: ref,
+    security_ref: refOf("CandidateDetail.security_ref"),
     security: securityIdentity,
     direction: z.enum(["LONG", "SHORT"]),
     /** Area 7's identity fields. Additive here; `CandidateSummary` already carries the module. */
@@ -588,15 +598,15 @@ export const candidateDetailPayload = z
     setup_quality: metricOf("candidate.setup_quality"),
     conviction_band: reasonCoded,
     deterministic_evidence: z.array(deterministicEvidence),
-    regime_ref: ref,
+    regime_ref: refOf("CandidateDetail.regime_ref"),
     regime_context: reasonCoded,
-    ai_evidence_refs: refList,
+    ai_evidence_refs: refListFieldOf("CandidateDetail.ai_evidence_refs"),
     /** The provenance §4.5 requires on each AI reference, one record per reference. */
     ai_evidence: z.array(aiEvidenceRecord),
     /** Stated when the AI producer answered nothing at all — an absence, never an empty list. */
     ai_availability: availabilityState,
     ai_reason: fieldReasonCode,
-    challenger_objections: refList,
+    challenger_objections: refListFieldOf("CandidateDetail.challenger_objections"),
     challenger_findings: z.array(aiEvidenceRecord),
     brain_state: brainDecisionState,
     blocking_reasons: z.array(reasonCoded),
@@ -611,15 +621,29 @@ export const candidateDetailPayload = z
       }),
     ),
     /** §4.5: the technical stop is a REFERENCE to an invalidation level, and never an order. */
-    invalidation_ref: ref,
+    invalidation_ref: refOf("CandidateDetail.invalidation_ref"),
     risk_context: candidateRiskContext,
     short_context: candidateShortContext.optional(),
     /** Watchlist expiry, where the thesis stands and the entry condition has not fired. */
     expires_at: metricOf("candidate.decided_at").optional(),
-    downstream_refs: z.object({ risk_decision: ref, trade: ref }),
+    downstream_refs: z.object({
+      risk_decision: refOf("CandidateDetail.downstream_refs.risk_decision"),
+      trade: refOf("CandidateDetail.downstream_refs.trade"),
+    }),
     pins: versionPins,
   })
   .superRefine((candidate, ctx) => {
+    /*
+     * R4's TRUTH half. PERMISSION was checked by the reference's own declaration; this is
+     * the second half, and it needs the object BESIDE the reference to do its job: the
+     * named carrier must actually be there, and its identity must correspond to the
+     * reference's under the rule the catalogue declares — for the identifier-less
+     * `security` projection, the canonicalized SYMBOL and never the display name.
+     *
+     * Co-location neither compels EMBEDDED nor forbids another resolution (R4.1), so a
+     * carrier present beside a non-embedded reference is not checked and is not an error.
+     */
+    checkEmbeddedTruth(ctx, candidate, [["CandidateDetail.security_ref", "security_ref"]]);
     const forbidden = forbiddenCandidateUnit(candidate);
     if (forbidden !== null) {
       ctx.addIssue({
@@ -708,7 +732,7 @@ export const candidateDetailPayload = z
   });
 export type CandidateDetailPayload = z.infer<typeof candidateDetailPayload>;
 
-export const CANDIDATE_DETAIL_SCHEMA = "cockpit.candidate_detail.v1";
+export const CANDIDATE_DETAIL_SCHEMA = "cockpit.candidate_detail.v2";
 export const candidateDetailEnvelope = envelope(
   candidateDetailPayload,
   CANDIDATE_DETAIL_SCHEMA,
@@ -743,7 +767,7 @@ export const registeredWindow = z.object({
 export const missedOpportunity = z
   .object({
     miss_id: safeId,
-    candidate_ref: ref,
+    candidate_ref: refOf("MissedOpportunity.candidate_ref"),
     security: securityIdentity,
     strategy_module: reasonCoded,
     brain_state: brainDecisionState,
@@ -780,7 +804,7 @@ export const missedOpportunity = z
     /** The observed follow-up path, drawn as marks. Gaps are shown and never interpolated. */
     follow_up_series: series.optional(),
     /** The trade a taken candidate became, where one exists. */
-    trade_ref: ref.optional(),
+    trade_ref: refOf("MissedOpportunity.trade_ref").optional(),
   })
   .superRefine((candidate, ctx) => {
     /*

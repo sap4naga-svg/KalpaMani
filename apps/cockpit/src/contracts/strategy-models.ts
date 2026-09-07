@@ -13,12 +13,13 @@
 import { z } from "zod";
 
 import { collectionPayload } from "./pagination";
+import { refOf } from "./references";
 import { envelope } from "./envelope";
 import {
   analysisWindow,
   performanceSummaryPayload,
 } from "./portfolio-models";
-import { metricOf, reasonCoded, ref, safeId } from "./values";
+import { metricOf, reasonCoded, safeId } from "./values";
 import { availabilityState, fieldReasonCode } from "./vocabularies";
 
 /**
@@ -39,7 +40,7 @@ export const strategyHealthContext = z.object({
   /** Why the record says what it says. A closed code, never free text. */
   reason: reasonCoded,
   /** Where the transitions, drift and queue entry live — Area 5, and not implemented. */
-  detail_ref: ref,
+  detail_ref: refOf("StrategyPerformance.detail_ref"),
   /** What this context deliberately does not carry, named rather than left blank. */
   omitted: z.array(
     z.object({
@@ -123,7 +124,7 @@ export const strategyPerformancePayload = collectionPayload(strategyPerformance,
 });
 export type StrategyPerformancePayload = z.infer<typeof strategyPerformancePayload>;
 
-export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v1";
+export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v2";
 export const strategyPerformanceEnvelope = envelope(
   strategyPerformancePayload,
   STRATEGY_PERFORMANCE_SCHEMA,

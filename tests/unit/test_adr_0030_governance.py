@@ -1,9 +1,15 @@
 """ADR-0030 governance: the reference contract, parsed out of the specification and executed.
 
-ADR-0030 is a **proposal**. These are therefore **proposal tests**: they check that the
-proposed rules are present, internally consistent and satisfiable, and they check that the
-application's runtime has **not** been changed to implement them. Nothing here asserts that
-the Cockpit behaves this way today, because it does not and is not authorized to.
+ADR-0030 was **accepted** by merge, and the bounded implementation follow-up its §7 assigns
+has since landed. These tests check that the accepted rules are present, internally
+consistent and satisfiable **in the specification**, and that the implementation defect §2.6
+names is gone from the runtime.
+
+**They do not re-assert the ADR's own status.** ADR-0030's document is unedited and still
+carries the conditional line it was authored with, which is the repository's convention for
+a decision's own text: the acceptance is a fact about the merge, not a rewrite of the file.
+The behavioural enforcement lives beside the code it governs, in
+``apps/cockpit/tests/adr-0030-references.test.ts``; what is checked here is the DOCUMENT.
 
 The suite has three parts.
 
@@ -13,8 +19,10 @@ The suite has three parts.
   run. There is no second copy of the table in this file: the reference rows, the field
   assignments, the resolution sets and the reason matrix are all read from the document at
   import time, so a document that reverts to the defective rule fails here.
-* **The pending gap** -- the runtime is asserted to be **unchanged**, so a later reader can
-  tell that the proposal was documented and not silently implemented.
+* **The implementation** -- ADR-0030 has since been accepted and its bounded follow-up has
+  landed, so the guards that asserted the runtime was UNCHANGED are inverted here. The
+  defect they watched for is asserted GONE, and the rules are asserted PRESENT in the
+  code that enforces them.
 
 Every parser carries a self-test proving it can still see the defect it exists to catch: a
 scanner that sees nothing passes every document vacuously.
@@ -650,21 +658,100 @@ def test_both_re_labelled_values_are_recorded_as_affected_surface() -> None:
     assert "This is a second re-labelling" in ADR_FLAT
 
 
-# ------------------------------------------------------------ the pending gap, guarded
+# ------------------------------------------------------- the implementation, guarded
+
+REFERENCES: Final = PROJECT_ROOT / "apps" / "cockpit" / "src" / "contracts" / "references.ts"
+NAVIGATION: Final = PROJECT_ROOT / "apps" / "cockpit" / "src" / "lib" / "reference-navigation.ts"
 
 
-def test_the_runtime_reference_kind_is_still_open_and_the_gap_is_pending() -> None:
-    """ADR-0030 is a proposal. Implementing it here would be implementing an unaccepted rule.
+def test_the_open_ref_kind_is_gone_and_the_closed_one_replaced_it() -> None:
+    """The inversion ADR-0030 section 2.6 scheduled, and the reason it was blocked.
 
-    This is the guard that keeps the two apart. It asserts the defect ADR-0030 section 2.6
-    names is **still present** in the application, so a reader can tell that the proposal was
-    documented and not silently enacted. It is expected to be inverted by the bounded
-    implementation cycle that follows acceptance.
+    ``ref_kind: z.string().min(1)`` was an OPEN string where the contract says closed. It
+    could not be closed until D1, D2 and D3 fixed WHICH members the set has and WHICH
+    resolutions each admits -- closing it against the defective table would have refused the
+    truthful ``EMBEDDED`` declarations and frozen the mislabelled ``source_fact``. Those are
+    now decided, so this asserts the defect is gone and the closed vocabulary replaced it.
     """
-    assert "ref_kind: z.string().min(1)" in VALUES.read_text(encoding="utf-8")
+    values = VALUES.read_text(encoding="utf-8")
+    assert "ref_kind: z.string().min(1)" not in values
+    assert "ref_kind: refKind," in values
 
 
-def test_the_adr_names_the_gap_it_leaves_open() -> None:
+def test_the_closed_kind_vocabulary_has_the_twenty_seven_members_the_table_states() -> None:
+    """Parsed out of the implementation and counted against the DOCUMENT's own table."""
+    vocabularies = (
+        PROJECT_ROOT / "apps" / "cockpit" / "src" / "contracts" / "vocabularies.ts"
+    ).read_text(encoding="utf-8")
+    block = section(vocabularies, "export const REF_KINDS = [", "] as const;")
+    members = set(re.findall(r'"([a-z_]+)",', block))
+    assert members == set(ROWS), sorted(members ^ set(ROWS))
+    assert len(members) == 27
+
+
+def test_the_implementation_carries_the_per_kind_resolution_sets_the_table_states() -> None:
+    """Every row's permitted set, compared member for member against the parsed table.
+
+    ``EMBEDDED`` is excluded on both sides: the document makes it available to every row and
+    gates it on catalogue permission instead of enumeration, so it is checked by the carrier
+    catalogue of section 4.3.2 and never by this table.
+    """
+    text = REFERENCES.read_text(encoding="utf-8")
+    block = section(text, "export const KIND_RESOLUTIONS", "};")
+    compiled: dict[str, set[str]] = {}
+    for line in block.splitlines():
+        match = re.match(r"^\s*([a-z_]+):\s*\[(.*?)\],\s*$", line)
+        if match is None:
+            continue
+        kind, members = match.groups()
+        compiled[kind] = set(re.findall(r'"([A-Z][A-Z0-9_]*)"', members))
+    assert set(compiled) == set(ROWS), sorted(set(compiled) ^ set(ROWS))
+    for kind, (permitted, _cardinality) in ROWS.items():
+        assert compiled[kind] == set(permitted) - {"EMBEDDED"}, kind
+        assert "EMBEDDED" not in compiled[kind], kind
+
+
+def test_the_carrier_catalogue_names_a_carrier_for_every_authorized_embed() -> None:
+    """Section 4.3.2 exists, and every row it carries states all four things R4 requires."""
+    span = section(CONTRACTS_TEXT, "#### 4.3.2 ", "### 4.4 ")
+    assert span, "section 4.3.2 names no carriers"
+    rows = [line for line in span.splitlines() if line.startswith("| `") and "|" in line[3:]]
+    embeds = [row for row in rows if "projection" in row or "complete target" in row]
+    assert len(embeds) == 7, "seven host fields are authorized carriers"
+    for row in embeds:
+        assert re.search(
+            r"CANONICAL_KEY|HOST_SCOPED_SUFFIX|TARGET_ID_FIELD|TARGET_REF_FIELD", row
+        ), row
+
+
+def test_the_carrier_catalogue_refuses_the_four_embeds_that_were_not_true() -> None:
+    """Named, with the reason, rather than quietly dropped."""
+    flat = flatten(section(CONTRACTS_TEXT, "#### 4.3.2 ", "### 4.4 "))
+    for field in (
+        "`TradeDetail.add_refs`",
+        "`TradeDetail.exit_ref`",
+        "`ShortSideSnapshot.borrow[].security_ref`",
+        "`RiskDecision.initial_risk_ref`",
+    ):
+        assert field in flat, f"{field} is not recorded as a refused carrier"
+    assert "a field's name is not proof it contains the referenced entity" in flat
+    assert "untrue of the response" in flat
+
+
+def test_the_navigation_allowlist_is_closed_and_internal() -> None:
+    """R10, in the one module that owns it -- and it owns it alone."""
+    text = NAVIGATION.read_text(encoding="utf-8")
+    assert "const ROUTES" in text
+    for route in re.findall(r'(?:template|path): "([^"]+)"', text):
+        assert route.startswith("/"), route
+        assert "://" not in route, route
+    # Two duplicated destination maps used to live in the components. One allowlist now.
+    components = PROJECT_ROOT / "apps" / "cockpit" / "src" / "components" / "cockpit"
+    for name in ("attention.tsx", "what-changed.tsx"):
+        assert "EVIDENCE_DESTINATION" not in (components / name).read_text(encoding="utf-8")
+
+
+def test_the_adr_names_the_follow_up_this_cycle_implemented() -> None:
     assert "close ref_kind to the twenty-seven members" in ADR_FLAT
     assert "re-label CandidateDetail.downstream_refs.trade AND" in ADR_FLAT
     assert "RiskSnapshot.initial_planned_risk_open[].trade_ref to kind trade" in ADR_FLAT

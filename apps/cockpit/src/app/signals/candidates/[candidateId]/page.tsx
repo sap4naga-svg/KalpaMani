@@ -15,6 +15,7 @@ import type { CandidateDetailPayload } from "@/contracts/signal-models";
 import { isBlockedState } from "@/contracts/signal-models";
 import type { AiEvidenceRecord } from "@/contracts/signal-models";
 import { humanizeCode } from "@/lib/format";
+import { referenceDestination } from "@/lib/reference-navigation";
 import { withScope, type ViewScope } from "@/lib/scope";
 
 /**
@@ -634,7 +635,7 @@ function Lineage({
         <p className="text-label-m text-text-secondary">
           This candidate became a recorded trade.{" "}
           <Link
-            href={withScope(`/portfolio/trades/${trade.ref_id}`, scope)}
+            href={withScope(referenceDestination(trade)?.href ?? "/portfolio/trades", scope)}
             className="text-accent underline underline-offset-2"
           >
             Open its complete lifecycle

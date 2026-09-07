@@ -651,7 +651,24 @@ describe("missed opportunities keep decision-time and outcome evidence apart", (
      */
     const never = await client().candidateDetail(DEMO, "demo-candidate-0016");
     expect(never.payload?.brain_state).toBe("READY_FOR_RISK_REVIEW");
-    expect(never.payload?.downstream_refs.risk_decision.resolution).toBe("UNRESOLVABLE_V1");
+    /*
+     * THE REFERENCE STAYS VISIBLE AND DECLARES THE SAME RESOLUTION.
+     *
+     * `risk_decision` resolves by AUTHORIZED_READ and its row lists nothing else, so
+     * the candidate that was never handed downstream declares exactly what the
+     * declined one does (R3). The absence lands on the value-bearing field the
+     * target would have filled — the summary's `downstream_stage` — as
+     * REFERENT_NOT_FOUND, which is R9's rule and not PRODUCER_NOT_IMPLEMENTED.
+     */
+    expect(never.payload?.downstream_refs.risk_decision.resolution).toBe(
+      "AUTHORIZED_READ",
+    );
+    const summaries = await client().candidates(DEMO);
+    const row = (summaries.payload?.items ?? []).find(
+      (item) => item.candidate_id === "demo-candidate-0016",
+    );
+    expect(row?.downstream_stage.availability).toBe("NOT_YET_AVAILABLE");
+    expect(row?.downstream_stage.reason).toBe("REFERENT_NOT_FOUND");
   });
 });
 
@@ -1293,8 +1310,21 @@ describe("the four concepts stay on separate screens", () => {
     /* The reference is followable: it resolves to a real payload. */
     expect(candidate.payload?.candidate_id).toBe(candidateId);
 
+    /*
+     * A TRADE WITH NO JOURNALED CANDIDATE DECLARES THE SAME RESOLUTION.
+     *
+     * It used to declare `UNRESOLVABLE_V1`, which says the PRODUCER does not exist —
+     * false here, and refused by ADR-0030 R6, because the candidate producer is
+     * implemented for this scope and merely holds no record for this trade. The
+     * absence moves to the value-bearing place that can carry it: the `gaps` entry.
+     */
     const without = await client().tradeDetail(DEMO, MISSING_RISK_RECORD_TRADE);
-    expect(without.payload?.candidate_ref.resolution).toBe("UNRESOLVABLE_V1");
+    expect(without.payload?.candidate_ref.resolution).toBe("ENDPOINT");
+    const candidateGap = without.payload?.gaps.find(
+      (gap) => gap.expected.code === "CANDIDATE_AND_THESIS",
+    );
+    expect(candidateGap?.availability).toBe("NOT_YET_AVAILABLE");
+    expect(candidateGap?.reason).toBe("REFERENT_NOT_FOUND");
   });
 
   it("carries the audit and reconciliation joins without pretending they resolve", async () => {
@@ -1309,8 +1339,12 @@ describe("the four concepts stay on separate screens", () => {
      */
     expect(payload.risk_decision_ref.resolution).toBe("AUTHORIZED_READ");
     expect(payload.risk_decision?.decision_id).toBe(payload.risk_decision_ref.ref_id);
+    /*
+     * `reconciliation` resolves by a catalogued GET and its row lists no other member,
+     * so ENDPOINT is the only resolution it may declare (R3).
+     */
     for (const reference of payload.reconciliation_refs.items) {
-      expect(reference.resolution).toBe("UNRESOLVABLE_V1");
+      expect(reference.resolution).toBe("ENDPOINT");
     }
     /* Order, fill and protective references DO resolve, through the lifecycle endpoint. */
     for (const reference of [
@@ -1353,7 +1387,16 @@ describe("the four concepts stay on separate screens", () => {
      */
     expect(sparseGaps).toContain("RISK_ENGINE_DECISION");
     expect(sparse.payload?.risk_decision).toBeUndefined();
-    expect(sparse.payload?.risk_decision_ref.resolution).toBe("UNRESOLVABLE_V1");
+    /*
+     * The reference stays visible and declares the one resolution its row lists; the
+     * gap beside it is what says no record was written, as REFERENT_NOT_FOUND.
+     */
+    expect(sparse.payload?.risk_decision_ref.resolution).toBe("AUTHORIZED_READ");
+    const riskGap = sparse.payload?.gaps.find(
+      (gap) => gap.expected.code === "RISK_ENGINE_DECISION",
+    );
+    expect(riskGap?.availability).toBe("NOT_YET_AVAILABLE");
+    expect(riskGap?.reason).toBe("REFERENT_NOT_FOUND");
   });
 });
 

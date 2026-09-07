@@ -20,6 +20,7 @@
 import { z } from "zod";
 
 import { envelope } from "./envelope";
+import { refListFieldOf, refOf } from "./references";
 import { analysisWindow, permittedScope } from "./portfolio-models";
 import {
   currentOpenPlannedRisk,
@@ -35,7 +36,6 @@ import {
   reasonCoded,
   recordValue,
   ref,
-  refList,
   safeId,
   series,
 } from "./values";
@@ -69,7 +69,7 @@ export const riskSnapshotPayload = z.object({
    */
   initial_planned_risk_open: z.array(
     z.object({
-      trade_ref: ref,
+      trade_ref: refOf("RiskSnapshot.initial_planned_risk_open[].trade_ref"),
       stage_ordinal: z.number().int().nonnegative().optional(),
       value: recordValue(initialPlannedRisk),
     }),
@@ -85,7 +85,7 @@ export const riskSnapshotPayload = z.object({
     z.object({ scope: permittedScope, value: recordValue(permittedRisk) }),
   ),
   concentration: metricOf("risk.concentration"),
-  exposure_refs: refList,
+  exposure_refs: refListFieldOf("RiskSnapshot.exposure_refs"),
   portfolio_volatility: metricOf("risk.portfolio_volatility"),
   /** A separate model where it applies. Never added into either planned-risk figure. */
   gap_event_risk: recordValue(gapEventRisk).optional(),
@@ -127,7 +127,7 @@ export const riskSnapshotPayload = z.object({
 });
 export type RiskSnapshotPayload = z.infer<typeof riskSnapshotPayload>;
 
-export const RISK_SNAPSHOT_SCHEMA = "cockpit.risk_snapshot.v1";
+export const RISK_SNAPSHOT_SCHEMA = "cockpit.risk_snapshot.v2";
 export const riskSnapshotEnvelope = envelope(riskSnapshotPayload, RISK_SNAPSHOT_SCHEMA);
 
 /* ================================================================ ShortSideSnapshot */
@@ -145,13 +145,13 @@ export const riskSnapshotEnvelope = envelope(riskSnapshotPayload, RISK_SNAPSHOT_
  * own as-of through its own `MetricValue`.
  */
 export const borrowRecord = z.object({
-  security_ref: ref,
+  security_ref: refOf("ShortSideSnapshot.borrow[].security_ref"),
   security_label: z.string().min(1),
   availability: reasonCoded,
   fee: metricOf("borrow.fee"),
   quantity: metricOf("borrow.quantity"),
   deterioration: metricOf("borrow.deterioration"),
-  record_ref: ref,
+  record_ref: refOf("ShortSideSnapshot.borrow[].record_ref"),
 });
 export type BorrowRecord = z.infer<typeof borrowRecord>;
 
@@ -164,7 +164,7 @@ export type BorrowRecord = z.infer<typeof borrowRecord>;
  */
 export const shortSideSnapshotPayload = z.object({
   as_of: instant,
-  short_positions: refList,
+  short_positions: refListFieldOf("ShortSideSnapshot.short_positions"),
   borrow: z.array(borrowRecord),
   crowding: metricOf("short.crowding"),
   utilization: metricOf("short.utilization"),
@@ -185,11 +185,11 @@ export const shortSideSnapshotPayload = z.object({
    */
   blocked_shorts: z.array(z.object({ candidate_ref: ref, reason: reasonCoded })),
   /** What a borrow-related miss summary would need, and does not have. Named, not blank. */
-  missed_opportunity_ref: ref,
+  missed_opportunity_ref: refOf("ShortSideSnapshot.missed_opportunity_ref"),
 });
 export type ShortSideSnapshotPayload = z.infer<typeof shortSideSnapshotPayload>;
 
-export const SHORT_SIDE_SNAPSHOT_SCHEMA = "cockpit.short_side_snapshot.v1";
+export const SHORT_SIDE_SNAPSHOT_SCHEMA = "cockpit.short_side_snapshot.v2";
 export const shortSideSnapshotEnvelope = envelope(
   shortSideSnapshotPayload,
   SHORT_SIDE_SNAPSHOT_SCHEMA,

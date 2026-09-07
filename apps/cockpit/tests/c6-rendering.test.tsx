@@ -82,7 +82,15 @@ describe("an unavailable signals figure renders as a state", () => {
         reason={blocked!.downstream_stage.reason}
       />,
     );
-    expect(screen.getByText("Not implemented")).toBeInTheDocument();
+    /*
+     * "Not yet available", and it used to read "Not implemented".
+     *
+     * The downstream producer IS implemented for this scope — candidates in this book
+     * carry recorded stages — so a candidate without one has no such RECORD, which is
+     * REFERENT_NOT_FOUND under R6. What the test is about is unchanged: the absence is
+     * STATED, and a Brain state is never substituted for it.
+     */
+    expect(screen.getByText("Not yet available")).toBeInTheDocument();
     expect(screen.queryByText(/BLOCKED_DATA/)).toBeNull();
   });
 });
@@ -100,8 +108,17 @@ describe("references render as what they are", () => {
       />,
     );
     const chip = screen.getByText("Risk decision").closest("[data-ref-kind]");
-    expect(chip?.getAttribute("data-resolution")).toBe("UNRESOLVABLE_V1");
-    expect(chip?.getAttribute("title")).toContain("producing subsystem does not exist");
+    /*
+     * THE JOIN IS STILL SHOWN, AND IT IS NO LONGER CALLED AN ABSENT PRODUCER.
+     *
+     * `risk_decision` resolves by AUTHORIZED_READ alone (R3), and the risk-decision
+     * producer is implemented for this scope — so calling this an absent subsystem
+     * asserted something false about it (R6). The reference stays VISIBLE, which is
+     * what this test exists to check.
+     */
+    expect(chip?.getAttribute("data-resolution")).toBe("AUTHORIZED_READ");
+    expect(chip?.getAttribute("data-ref-kind")).toBe("risk_decision");
+    expect(chip?.getAttribute("title")).toContain("authorized_read");
   });
 
   it("marks a resolvable candidate join as an endpoint a reader can follow", async () => {

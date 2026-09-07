@@ -19,6 +19,7 @@ import {
 } from "@/lib/attention";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { withScope, type ViewScope } from "@/lib/scope";
+import { referenceDestination } from "@/lib/reference-navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -47,16 +48,6 @@ const SEVERITY_GLYPH: Readonly<Record<string, string>> = {
   HIGH: "▲",
   MEDIUM: "◆",
   LOW: "▪",
-};
-
-/** The area that OWNS each evidence kind, so a drill-down goes somewhere real. */
-const EVIDENCE_DESTINATION: Readonly<Record<string, { href: string; label: string }>> = {
-  data_quality: { href: "/system/data-quality", label: "Data quality" },
-  health_transition: { href: "/strategy/health", label: "Strategy health" },
-  reconciliation: { href: "/execution/reconciliation", label: "Reconciliation" },
-  alert: { href: "/system/alerts", label: "Alerts" },
-  incident: { href: "/system/operations", label: "Operations" },
-  source_fact: { href: "/governance/audit", label: "Audit trail" },
 };
 
 function ImpactValue({ item }: { item: AttentionItemPayload }) {
@@ -120,7 +111,7 @@ function EvidenceDisclosure({
       <div className="space-y-2 px-3 pb-3 pt-1">
         <ul className="space-y-1.5">
           {item.evidence_refs.items.map((reference) => {
-            const destination = EVIDENCE_DESTINATION[reference.ref_kind];
+            const destination = referenceDestination(reference);
             return (
               <li
                 key={reference.ref_id}
@@ -131,7 +122,7 @@ function EvidenceDisclosure({
                 <span className="font-mono text-text-tertiary">{reference.ref_id}</span>
                 <Badge tone="unavailable">{reference.resolution}</Badge>
                 <Badge tone="neutral">{reference.classification}</Badge>
-                {destination !== undefined && (
+                {destination !== null && (
                   <Link
                     href={withScope(destination.href, scope)}
                     className="text-accent underline underline-offset-2"

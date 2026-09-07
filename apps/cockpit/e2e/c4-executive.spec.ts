@@ -147,7 +147,7 @@ test.describe("attention", () => {
     await page.getByTestId("attention-filters").getByRole("button", { name: "LOW" }).click();
     await page
       .getByTestId("attention-filters")
-      .getByRole("button", { name: "Health transition" })
+      .getByRole("button", { name: "Evidence", exact: true })
       .click();
     await expect(page.getByTestId("attention-panel")).toContainText("hidden by them");
   });
@@ -162,7 +162,14 @@ test.describe("attention", () => {
     await first.getByRole("group").or(first.locator("summary")).first().click();
     const reference = first.getByTestId("evidence-reference").first();
     await expect(reference).toBeVisible();
-    await expect(reference).toContainText("UNRESOLVABLE_V1");
+    /*
+     * AUTHORIZED_READ, AND IT USED TO READ UNRESOLVABLE_V1.
+     *
+     * The kinds this field may carry both resolve by an authorized read (ADR-0030 R3), and
+     * the drill-down is about the reference being SHOWN with its resolution and its
+     * classification -- which it still is.
+     */
+    await expect(reference).toContainText("AUTHORIZED_READ");
     await expect(reference).toContainText("PUBLIC_SAFE");
   });
 

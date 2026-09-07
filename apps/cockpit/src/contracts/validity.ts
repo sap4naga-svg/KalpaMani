@@ -54,6 +54,15 @@ export const PERMITTED_REASONS: Readonly<
     "CORPORATE_ACTION_UNRESOLVED",
     "EXTENT_NOT_DETERMINABLE",
     "POLICY_REFERENCE_MISSING",
+    /*
+     * ADR-0030 R9 — a reference is well formed and its identifier names nothing.
+     *
+     * It reaches this state and NO OTHER. It is an ABSENCE of a target, never an
+     * INAPPLICABILITY, so `NOT_APPLICABLE` keeps its two ADR-0028 routes and this is not one
+     * of them; and it is never `NOT_IMPLEMENTED`, which asserts that the PRODUCER does not
+     * exist rather than that this record was not written.
+     */
+    "REFERENT_NOT_FOUND",
   ],
   NOT_IMPLEMENTED: ["PRODUCER_NOT_IMPLEMENTED"],
   NOT_AUTHORIZED: ["PRODUCER_NOT_AUTHORIZED", "CLASSIFICATION_WITHHELD"],

@@ -976,6 +976,95 @@ REFUSED     a generic resolver, a proxy, an unrestricted fetcher, or a guess for
 
 ---
 
+#### 4.3.2 The authorized carriers, and what each one's identity is
+
+**§4.3.1 requires a carrier to be NAMED before an `EMBEDDED` declaration is admissible, and
+this is where they are named.** ADR-0030 §7 assigns the catalogue below to the implementation
+follow-up; until a host field appears here, **it may not declare `EMBEDDED` at all**, whether
+or not a payload sits beside it.
+
+Each row states four things, and a row missing any of them does not authorize an embed:
+
+```text
+HOST FIELD      the field carrying the reference -- permission is per FIELD, never per KIND
+TARGET KIND     the one kind this field may embed
+CARRIER         the NAMED field on the same object that holds it
+COMPLETENESS    COMPLETE TARGET, or a DECLARED PROJECTION of it
+IDENTITY        how the carrier's identity is compared with the reference's `ref_id`
+```
+
+| Host field | Target kind | Carrier | Completeness | Identity correspondence |
+|---|---|---|---|---|
+| `TradeSummary.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — `security-` + lowercased `symbol` |
+| `PositionSnapshot.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `CandidateSummary.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `CandidateDetail.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `TradeDetail.execution_quality_ref` | `execution_quality` | `execution_quality` | declared projection — **this trade at `AGGREGATE` scope**, never the Area 9 aggregate over a window of fills | `HOST_SCOPED_SUFFIX` — `trade_id` + `-execution-quality` |
+| `TradeDetail.chart_series_ref` | `chart_series` | `chart_series` | declared projection — **a mark line, not OHLC** | `HOST_SCOPED_SUFFIX` — `trade_id` + `-marks` |
+| `TradeDetail.benchmark_series_ref` | `benchmark_series` | `benchmark_series` | declared projection — a synthetic demonstration index aligned to this trade's holding-period boundaries | `HOST_SCOPED_SUFFIX` — `trade_id` + `-benchmark` |
+
+**No other host field is an authorized carrier**, and four that used to declare `EMBEDDED` are
+deliberately absent:
+
+| Field | Why it is not a carrier |
+|---|---|
+| `TradeDetail.add_refs` | `add` resolves to `TradeLifecycle` add and pyramid **events**, and `TradeDetail` carries none. `summary.add_planned_risk[]` is each add's retained **risk record** — a different entity wearing an adjacent name, and **a field's name is not proof it contains the referenced entity** |
+| `TradeDetail.exit_ref` | the exit **event** likewise lives in the lifecycle |
+| `ShortSideSnapshot.borrow[].security_ref` | the only thing beside it is `security_label`, a **display string**: no `symbol`, no identifier, nothing to canonicalize, so **no identity correspondence can be stated**. An embed whose identity rests on a display name is not an embed |
+| `RiskDecision.initial_risk_ref` | `RiskDecision` carries **no initial-risk record at all**, so the declaration was not merely unpermitted — it was **untrue of the response** |
+
+**`TradeDetail.brain_decision_ref` is not a carrier either, and never becomes one.** Adding a
+brain-decision payload to `TradeDetail` would put a Brain payload inside a portfolio read
+model, which §4.3 forbids; the prohibition is structural rather than a special case, because
+an unauthorized carrier is refused whether or not the payload is present.
+
+**The identity-correspondence vocabulary is closed.** A carrier's identity is compared in
+exactly one of these ways, and the row above says which:
+
+```text
+TARGET_ID_FIELD      the carrier holds the target's own identifier; it must EQUAL ref_id
+TARGET_REF_FIELD     the carrier holds a reference to itself; its ref_id must EQUAL ref_id
+CANONICAL_KEY        the carrier holds a NATURAL KEY that a declared deterministic rule
+                     canonicalizes into the identifier -- for `security`, the SYMBOL, and
+                     NEVER the human-readable display_name
+HOST_SCOPED_SUFFIX   the projection carries NO identifier of its own, so the identifier is
+                     derived from the HOST entity's by a declared suffix. It establishes that
+                     the projection belongs to THIS host entity and NOTHING MORE -- which is
+                     why every carrier using it is a DECLARED PROJECTION and never a complete
+                     target. It still refuses one trade's detail carrying another's series
+```
+
+**A nested target names its container route and its in-container selector**, and the reference
+still carries the **target's** identifier (§4.3.1, R8). One field is nested today:
+
+| Field | Container route | In-container selector |
+|---|---|---|
+| `TradeDetail.brain_decision_ref` | `GET /api/v1/signals/candidates/{candidate_id}` | the journaled decision status inside `CandidateDetail` |
+
+**A nested kind therefore gets NO navigation destination from its `ref_id` alone.** The route
+needs the container's identifier and the reference carries the decision's, so a host that
+holds the container id passes it explicitly; interpolating the target's id into the container
+route would navigate to a record that does not exist.
+
+**Cross-provenance references are authorized per host field**, and nowhere else (§4.3.1, R8).
+Environment must always match the resolving envelope; provenance must match too, **except** on
+these fields, and even there the target's own provenance label must be carried and displayed:
+
+```text
+QualificationStatus.facts[].source_ref     each fact read INDEPENDENTLY from tracked
+QualificationStatus.gates[].source_ref     repository authority -- which is the whole
+QualificationStatus.runs[].source_ref      purpose of the view
+SearchResultPage.results[].ref             rows carry their OWN environment, provenance
+                                           and classification, and the per-row label IS
+                                           the contract
+```
+
+**An unlabelled target of differing provenance is refused**, on an authorized field as much as
+on any other: the authorization is to carry a **labelled** cross-provenance link, never to mix
+provenance silently.
+
+---
+
 ### 4.4 The four risk quantities, kept apart
 
 **"Planned risk" was one word doing four jobs**, and the four are different facts with different

@@ -164,7 +164,11 @@ export function openRiskRecord(
         assessedAt,
       ),
       as_of: assessedAt,
-      assessment_ref: demoRef(`${trade.tradeId}-risk-assessment`, "risk_decision"),
+      assessment_ref: demoRef(
+        `${trade.tradeId}-risk-assessment`,
+        "risk_decision",
+        "AUTHORIZED_READ",
+      ),
       risk_policy_ref: demoPolicyRef(assessedAt),
       protection_state: demoReason(
         trade.currentStopCents === trade.stages[0].invalidationCents
@@ -262,7 +266,12 @@ export function syntheticPositions(
         factor_bucket: demoReason(security.factorBucket),
         correlation_cluster: demoReason(security.correlationCluster),
       },
-      trade_ref: demoRef(trade.tradeId, "source_fact", "ENDPOINT"),
+      /*
+       * §4.3.1 names `PositionSnapshot.trade_ref` one of the four required scalar
+       * `source_fact` fields, and `source_fact` resolves by AUTHORIZED_READ alone —
+       * ENDPOINT is not a member of its row's set.
+       */
+      trade_ref: demoRef(trade.tradeId, "source_fact", "AUTHORIZED_READ"),
       pins: demoPins(trade.versionId),
     };
   });
@@ -376,7 +385,11 @@ function bucketRisk(
         assessedAt,
       ),
       as_of: assessedAt,
-      assessment_ref: demoRef(`aggregate-${anchor.tradeId}-risk`, "risk_decision"),
+      assessment_ref: demoRef(
+        `aggregate-${anchor.tradeId}-risk`,
+        "risk_decision",
+        "AUTHORIZED_READ",
+      ),
       risk_policy_ref: demoPolicyRef(assessedAt),
       protection_state: demoReason("PROTECTIVE_ORDERS_WORKING"),
       source: "RISK_ENGINE_ASSESSMENT",
@@ -452,7 +465,7 @@ export function syntheticExposure(
             ),
       correlation_ref:
         axis === "CORRELATION_CLUSTER"
-          ? demoRef("correlation-matrix-demo", "evidence", "UNRESOLVABLE_V1")
+          ? demoRef("correlation-matrix-demo", "evidence", "AUTHORIZED_READ")
           : undefined,
     };
   });

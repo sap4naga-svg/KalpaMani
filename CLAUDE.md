@@ -4100,18 +4100,30 @@ live trading:                                     HARD-DISABLED
 **A corrected specification is still a specification.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
 
-### The reference-contract reconciliation, and ADR-0030 — PROPOSED, and nothing is implemented
+### The reference-contract reconciliation, and ADR-0030 — ACCEPTED / IN FORCE
 
 **The C6 review found the reference contract unenforced. Investigating it found the accepted
-contract unenforceable as written.** Those are two different findings, and the second is why this is
-a proposed amendment rather than a bug fix.
+contract unenforceable as written.** Those are two different findings, and the second is why this was
+an amendment rather than a bug fix.
 
-[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) is
-**PROPOSED and carries no authority while the pull request introducing it is open**, and so are the
-corrections it makes to [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) in the
-same pull request. On independent review and merge it becomes **ACCEPTED / IN FORCE** as **corrected
-contracts and governance** — and nothing else. It **amends and supersedes no ADR document**;
+**[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md):
+ACCEPTED / IN FORCE** — **PR #78 merged**, merge commit
+**`77a59e3f90e24f8509fa3ec36aef255150f081c6`**, merged **2026-09-07T19:53:49Z**, with the
+reviewed PR #78 head as its second parent. Its conditional
+acceptance event has occurred, so it is **no longer proposed**, and the corrections it made to
+[`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) are in force with it.
+
+**While PR #78 was open, ADR-0030 was proposed and carried no authority** — a historical fact about
+those days that stays true and is **not** rewritten as though the decision had authority before it
+was accepted. **ADR-0030's own document is unedited** and still carries the conditional line it was
+authored with, which is this repository's convention for a decision's own text: the acceptance is a
+fact about the merge, recorded here rather than by rewriting the file. **The merge accepted
+corrected contracts and governance and nothing else.** It **amends and supersedes no ADR document**;
 **ADR-0027, ADR-0028 and ADR-0029 each remain ACCEPTED / IN FORCE**.
+
+**The bounded implementation follow-up its §7 assigns has since been built under a later, separate
+written authorization, and is an OPEN PULL REQUEST that is neither reviewed nor merged** — see
+*The ADR-0030 reference-contract implementation* below, which governs the current state.
 
 **Five findings, each parsed out of the accepted text and executed rather than read off by eye.**
 
@@ -4152,6 +4164,11 @@ routes** and that inapplicability is *"not a synonym for 'we do not have it'"*. 
 exactly that, so it carries **`NOT_YET_AVAILABLE`** and `NOT_APPLICABLE` keeps its two routes.
 **No accepted guard was relaxed to fit this proposal's prose.**
 
+> **HISTORICAL — the state while PR #78 was open, superseded by *The ADR-0030
+> reference-contract implementation* below.** Every enforcement, implementation and
+> `schema_version` line in the block records those days and **no longer governs**. Its
+> standing gates are unchanged.
+
 ```text
 ADR-0030:                                         PROPOSED / NOT IN FORCE
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
@@ -4185,9 +4202,127 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**A proposed reconciliation is not an enforced contract.** The bounded implementation cycle that
-would close `ref_kind`, compile the per-kind resolution sets, enforce `EMBEDDED` and cardinality and
-re-label the trade reference is **a separate authorization that has not been given**.
+**A proposed reconciliation is not an enforced contract**, which was the whole of the state above.
+The bounded implementation cycle that closes `ref_kind`, compiles the per-kind resolution sets,
+enforces `EMBEDDED` and cardinality and re-labels both trade references was **a separate
+authorization**, and it has since been given and used — the section that follows records it.
+
+### The ADR-0030 reference-contract implementation — CANDIDATE, and not merged
+
+**The reference contract is enforced in an OPEN PULL REQUEST. It is not merged, and merging it is a
+separate decision.** This section records what the candidate does; **it is neither independently
+reviewed nor accepted**, and nothing in it is authority for anything beyond itself.
+
+**It implements the bounded follow-up ADR-0030 §7 assigns, and nothing wider.** No Brain, scanner,
+strategy, portfolio, risk or execution engine; no production API, projection, database, migration or
+scheduler; no research execution, backtest or feedback automation; no deployment, real-source
+integration or infrastructure mutation; **no AWS, Terraform, provider, brokerage, LEAN or model
+call**; and **no C7 screen** — C7 remains **NOT STARTED**.
+
+#### What it enforces
+
+| | |
+|---|---|
+| **closed `RefKind`** | the **twenty-seven** members, replacing `ref_kind: z.string().min(1)`. A value outside them is refused at admission |
+| **per-kind resolutions** | each row's permitted **set**, compiled and enforced. A kind whose row lists no `UNRESOLVABLE_V1` cannot declare one |
+| **host-field catalogue** | every reference-valued field names its kind — **implemented and specification-only alike**, `RefList` fields included — so the cycle that first emits a C7 payload inherits an enforced contract rather than an open one. **No C7 model, producer, screen, route or fixture is created by recording one** |
+| **`EMBEDDED`** | needs **catalogue permission** and **validated truth**. A new §4.3.2 names **seven** authorized carriers, states whether each holds the complete target or a **declared projection**, and fixes its identity correspondence from a **closed** four-member vocabulary |
+| **identity** | compared against the **target entity**, never its container. The identifier-less `security` projection is compared on its canonicalized **symbol**, and never on the display name |
+| **cardinality** | the **host field's** declaration governs; `items`, `total` and `truncated` stay apart, and no relation is asserted from a truncated page or from a total nobody took |
+| **absence** | **`REFERENT_NOT_FOUND`** added to both closed vocabularies, reachable from `NOT_YET_AVAILABLE` alone. `NOT_APPLICABLE` keeps its two ADR-0028 routes |
+| **access** | scope denial (`SCOPE_MISSING` / `SCOPE_INSUFFICIENT`) stays distinct from `CLASSIFICATION_WITHHELD`, and a denied reference stays **visible** |
+| **navigation** | **one** closed allowlist keyed by `RefKind`. Two duplicated destination maps and one hand-written link are gone; an unmapped kind or a non-`SafeId` identifier yields **no link**, never a guess |
+
+**Both mislabelled trade references are corrected.** `CandidateDetail.downstream_refs.trade` and
+`RiskSnapshot.initial_planned_risk_open[].trade_ref` are kind **`trade`** resolving by `ENDPOINT`.
+
+**Four `EMBEDDED` declarations were withdrawn, and one was untrue rather than merely unpermitted.**
+`TradeDetail.add_refs` and `exit_ref` resolve to lifecycle **events** the response does not carry;
+`ShortSideSnapshot.borrow[].security_ref` sat beside a **display string** with no identifier to
+compare; and `RiskDecision.initial_risk_ref` claimed an embed of a record `RiskDecision` carries
+**nowhere at all**.
+
+**A synthetic producer is still not the real subsystem.** Where a `PRODUCER_NOT_IMPLEMENTED` became
+`REFERENT_NOT_FOUND`, it says *this record was not written* about a producer implemented for
+**`SYNTHETIC` provenance and nothing else**. **The Brain runtime, the scanner and the risk engine
+stay NOT IMPLEMENTED and NOT AUTHORIZED**, and the project scenario reports every operational read
+model `NOT_IMPLEMENTED` exactly as before.
+
+#### The compatibility precheck, and the version decision
+
+**ADR-0030 §6.1 permits a coordinated replacement without a `schema_version` bump only while four
+deployment constraints hold, and §7 requires them re-checked before the follow-up lands. They were
+checked rather than assumed, and the fourth does not hold.**
+
+| Constraint | Verdict | Evidence |
+|---|---|---|
+| 1 — one local application, replaced atomically | **HOLDS** | one private package; producer, contracts and consumers in this tree, landed in a single commit |
+| 2 — no independent consumer or published schema | **HOLDS** | one `package.json`, `private: true`; no OpenAPI or JSON-Schema generator, no exported or vendored schema artifact |
+| 3 — no persisted cache, stored payload or golden file | **HOLDS** | no snapshot directory, no `toMatchSnapshot`, no committed payload JSON, no persisted query cache and no browser storage |
+| 4 — no real producer; provenance `SYNTHETIC` throughout | **DOES NOT HOLD** | `QualificationStatus` carries **`REPOSITORY_TRACKED`** provenance over real tracked governance facts, transcribed at a named commit and documented as *"REAL FACTS … NEVER relabelled `SYNTHETIC`"* |
+
+**So the follow-up bumped rather than proceeded**, which is what the accepted rule requires and not
+an exception invented to avoid one. **The bump is bounded, and which read models it covers was
+established mechanically**: every emitted payload was built from the pre-change tree and from this
+one and the two were diffed, so the affected set is an observation rather than a judgement.
+
+```text
+bumped to v2, payload bytes changed   13   AttentionItem · CandidateDetail · CandidateSummary
+                                           ExecutiveOverview · ExposureAggregate · PositionSnapshot
+                                           RiskSnapshot · ShortSideSnapshot · StrategyPerformance
+                                           TradeDetail · TradeLifecycle · TradeSummary
+                                           WhatChangedEntry
+left at v1, payload byte-identical     6   CandidateFunnel · MarketRegime · MissedOpportunity
+                                           PerformanceSeries · PerformanceSummary
+                                           QualificationStatus
+```
+
+**A payload carrying a superseded version is rejected rather than coerced**, which the suite
+asserts through the real admission path.
+
+#### What it does not do
+
+```text
+ADR-0030:                                         ACCEPTED / IN FORCE
+ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
+reference-contract implementation:                CANDIDATE / OPEN PULL REQUEST
+independent review:                               NOT PERFORMED
+merge:                                            NOT AUTHORIZED / NOT PERFORMED
+ref_kind in the application:                      CLOSED AT TWENTY-SEVEN MEMBERS
+both trade references:                            RE-LABELLED kind trade
+authorized embed carriers:                        SEVEN, EACH NAMED IN 4.3.2
+withdrawn embed declarations:                     FOUR
+schema_version bumped:                            13 OF 19, BY MEASURED PAYLOAD CHANGE
+new src/kalpamani modules:                        NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+CI or branch-protection changes:                  NONE
+C7 research and feedback interfaces:              NOT STARTED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+production API, projections, databases:           NOT IMPLEMENTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker, LEAN and IBKR activity:                   NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**An enforced contract is not a finished Cockpit.** Full Cockpit V1 remains **incomplete**, C7
+remains **NOT STARTED**, the **C5 completion follow-up remains pending**, and **specification,
+implementation, review, merge and deployment stay separate gates that are never collapsed into
+one**.
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

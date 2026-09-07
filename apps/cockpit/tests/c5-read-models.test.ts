@@ -314,7 +314,8 @@ describe("malformed C5 payloads are refused at the boundary", () => {
 
   it("refuses an unknown schema version rather than coercing it", async () => {
     const response = await admitted(() => client().shortSide(DEMO));
-    response.schema_version = "cockpit.short_side_snapshot.v2";
+    /* A version no bump will reach — `.v2` is the CURRENT one after ADR-0030. */
+    response.schema_version = "cockpit.short_side_snapshot.v99";
     expect(shortSideSnapshotEnvelope.safeParse(response).success).toBe(false);
   });
 
@@ -1168,7 +1169,17 @@ describe("borrow and risk", () => {
         expect(metric.reason).toBe("UPSTREAM_INPUT_MISSING");
         expect(metric.value).toBeUndefined();
       }
-      expect(record.record_ref.resolution).toBe("UNRESOLVABLE_V1");
+      /*
+       * THE REFERENCE STAYS VISIBLE, AND ITS RESOLUTION NO LONGER CARRIES THE ABSENCE.
+       *
+       * `evidence` resolves by AUTHORIZED_READ and its row lists no other member, so
+       * the borrow record with nothing behind it declares the same resolution as the
+       * one with a record (ADR-0030 R3). That a record is missing is stated by the
+       * `availability` code and by every unavailable figure asserted just above —
+       * which is where R9 puts it, and which this loop already checks.
+       */
+      expect(record.record_ref.resolution).toBe("AUTHORIZED_READ");
+      expect(record.record_ref.ref_kind).toBe("evidence");
     }
 
     const positions = await read.positions(DEMO);

@@ -20,6 +20,7 @@
 import { z } from "zod";
 
 import { collectionPayload } from "./pagination";
+import { checkEmbeddedTruth, refListFieldOf, refOf } from "./references";
 import { envelope } from "./envelope";
 import { COST_TREATMENTS, signedMoney } from "./read-models";
 import {
@@ -38,8 +39,6 @@ import {
   quantity,
   reasonCoded,
   recordValue,
-  ref,
-  refList,
   safeId,
   series,
   hundredths,
@@ -249,7 +248,7 @@ const positionGroupings = z.object({
 export const positionSnapshot = z
   .object({
     position_id: safeId,
-    security_ref: ref,
+    security_ref: refOf("PositionSnapshot.security_ref"),
     /** The `EMBEDDED` resolution of that reference. A fictional demonstration subject. */
     security: securityIdentity,
     direction: z.enum(["LONG", "SHORT"]),
@@ -263,15 +262,25 @@ export const positionSnapshot = z
     /** Present where the model applies. A modelled scenario, never folded into planned risk. */
     gap_event_risk: recordValue(gapEventRisk).optional(),
     /** A REFERENCE to a level, never an order. */
-    invalidation_ref: ref,
+    invalidation_ref: refOf("PositionSnapshot.invalidation_ref"),
     holding_duration: metricOf("holding_period"),
     /** Required when direction is SHORT. From a borrow RECORD, never inferred from price. */
     borrow_state: reasonCoded.optional(),
     groupings: positionGroupings,
-    trade_ref: ref,
+    trade_ref: refOf("PositionSnapshot.trade_ref"),
     pins: versionPins,
   })
   .superRefine((candidate, ctx) => {
+    /*
+     * R4's TRUTH half. PERMISSION was checked by the reference's own declaration; this is
+     * the second half, and it needs the object BESIDE the reference to do its job: the
+     * named carrier must actually be there, and its identity must correspond to the
+     * reference's under the rule the catalogue declares.
+     *
+     * Co-location neither compels EMBEDDED nor forbids another resolution (R4.1), so a
+     * carrier present beside a non-embedded reference is not checked and is not an error.
+     */
+    checkEmbeddedTruth(ctx, candidate, [["PositionSnapshot.security_ref", "security_ref"]]);
     if (candidate.direction === "SHORT" && candidate.borrow_state === undefined) {
       ctx.addIssue({
         code: "custom",
@@ -295,7 +304,7 @@ export const positionSnapshotPayload = collectionPayload(positionSnapshot, {
 });
 export type PositionSnapshotPayload = z.infer<typeof positionSnapshotPayload>;
 
-export const POSITION_SNAPSHOT_SCHEMA = "cockpit.position_snapshot.v1";
+export const POSITION_SNAPSHOT_SCHEMA = "cockpit.position_snapshot.v2";
 export const positionSnapshotEnvelope = envelope(
   positionSnapshotPayload,
   POSITION_SNAPSHOT_SCHEMA,
@@ -389,7 +398,7 @@ export const exposureAggregate = z.object({
     z.object({ scope: permittedScope, value: recordValue(permittedRisk) }),
   ),
   concentration: metricOf("risk.concentration"),
-  correlation_ref: ref.optional(),
+  correlation_ref: refOf("ExposureAggregate.correlation_ref").optional(),
 });
 export type ExposureAggregate = z.infer<typeof exposureAggregate>;
 
@@ -406,7 +415,7 @@ export const exposureAggregatePayload = collectionPayload(exposureAggregate, {
 });
 export type ExposureAggregatePayload = z.infer<typeof exposureAggregatePayload>;
 
-export const EXPOSURE_AGGREGATE_SCHEMA = "cockpit.exposure_aggregate.v1";
+export const EXPOSURE_AGGREGATE_SCHEMA = "cockpit.exposure_aggregate.v2";
 export const exposureAggregateEnvelope = envelope(
   exposureAggregatePayload,
   EXPOSURE_AGGREGATE_SCHEMA,
@@ -439,7 +448,7 @@ export const exposureAggregateEnvelope = envelope(
 export const tradeSummary = z
   .object({
     trade_id: safeId,
-    security_ref: ref,
+    security_ref: refOf("TradeSummary.security_ref"),
     security: securityIdentity,
     direction: z.enum(["LONG", "SHORT"]),
     /** BUSINESS status only, and never a data-completeness state. */
@@ -534,9 +543,19 @@ export const tradeSummary = z
     stop_outcome: reasonCoded,
     environment: environmentEnum,
     pins: versionPins,
-    detail_ref: ref,
+    detail_ref: refOf("TradeSummary.detail_ref"),
   })
   .superRefine((candidate, ctx) => {
+    /*
+     * R4's TRUTH half. PERMISSION was checked by the reference's own declaration; this is
+     * the second half, and it needs the object BESIDE the reference to do its job: the
+     * named carrier must actually be there, and its identity must correspond to the
+     * reference's under the rule the catalogue declares.
+     *
+     * Co-location neither compels EMBEDDED nor forbids another resolution (R4.1), so a
+     * carrier present beside a non-embedded reference is not checked and is not an error.
+     */
+    checkEmbeddedTruth(ctx, candidate, [["TradeSummary.security_ref", "security_ref"]]);
     const closed = candidate.trade_status === "CLOSED";
     const open = candidate.trade_status === "OPEN";
     /*
@@ -703,7 +722,7 @@ export const tradeSummaryPayload = collectionPayload(tradeSummary, {
 });
 export type TradeSummaryPayload = z.infer<typeof tradeSummaryPayload>;
 
-export const TRADE_SUMMARY_SCHEMA = "cockpit.trade_summary.v1";
+export const TRADE_SUMMARY_SCHEMA = "cockpit.trade_summary.v2";
 export const tradeSummaryEnvelope = envelope(tradeSummaryPayload, TRADE_SUMMARY_SCHEMA);
 
 /* ===================================================================== TradeDetail */
@@ -726,9 +745,9 @@ export const tradeDetailPayload = z
     trade_id: safeId,
     /** EMBEDDED, from the same `snapshot_version` as the ledger row it came from. */
     summary: tradeSummary,
-    candidate_ref: ref,
-    brain_decision_ref: ref,
-    risk_decision_ref: ref,
+    candidate_ref: refOf("TradeDetail.candidate_ref"),
+    brain_decision_ref: refOf("TradeDetail.brain_decision_ref"),
+    risk_decision_ref: refOf("TradeDetail.risk_decision_ref"),
     /**
      * The RESOLVED downstream risk decision, where one was recorded.
      *
@@ -740,14 +759,14 @@ export const tradeDetailPayload = z
      * alone.
      */
     risk_decision: riskDecision.optional(),
-    order_refs: refList,
-    fill_refs: refList,
-    protection_refs: refList,
-    add_refs: refList,
+    order_refs: refListFieldOf("TradeDetail.order_refs"),
+    fill_refs: refListFieldOf("TradeDetail.fill_refs"),
+    protection_refs: refListFieldOf("TradeDetail.protection_refs"),
+    add_refs: refListFieldOf("TradeDetail.add_refs"),
     /** Required when CLOSED. */
-    exit_ref: ref.optional(),
-    reconciliation_refs: refList,
-    execution_quality_ref: ref,
+    exit_ref: refOf("TradeDetail.exit_ref").optional(),
+    reconciliation_refs: refListFieldOf("TradeDetail.reconciliation_refs"),
+    execution_quality_ref: refOf("TradeDetail.execution_quality_ref"),
     /**
      * The EMBEDDED resolution of that reference, at `AGGREGATE` scope, where one exists.
      *
@@ -777,7 +796,7 @@ export const tradeDetailPayload = z
     benchmark_movement: metricOf("benchmark.movement"),
     /** A price-return benchmark is never compared against a total-return portfolio. */
     benchmark_basis: z.enum(BENCHMARK_RETURN_BASES),
-    benchmark_series_ref: ref,
+    benchmark_series_ref: refOf("TradeDetail.benchmark_series_ref"),
     /**
      * The EMBEDDED benchmark path, where one exists, and the window it was aligned to.
      *
@@ -793,9 +812,9 @@ export const tradeDetailPayload = z
     benchmark_window: analysisWindow.optional(),
     benchmark_label: reasonCoded.optional(),
     lineage: versionPins,
-    audit_refs: refList,
+    audit_refs: refListFieldOf("TradeDetail.audit_refs"),
     /** OHLC with entry, add, protection and exit markers. */
-    chart_series_ref: ref,
+    chart_series_ref: refOf("TradeDetail.chart_series_ref"),
     /**
      * The EMBEDDED resolution of that reference, where one exists.
      *
@@ -815,39 +834,28 @@ export const tradeDetailPayload = z
     ),
   })
   .superRefine((candidate, ctx) => {
-    if (
-      (candidate.chart_series_ref.resolution === "EMBEDDED") !==
-      (candidate.chart_series !== undefined)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "an EMBEDDED chart reference carries its series, and a reference that resolves " +
-          "elsewhere carries none",
-      });
-    }
-    if (
-      (candidate.execution_quality_ref.resolution === "EMBEDDED") !==
-      (candidate.execution_quality !== undefined)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "an EMBEDDED execution-quality reference carries its record, and a reference that " +
-          "resolves elsewhere carries none",
-      });
-    }
-    if (
-      (candidate.benchmark_series_ref.resolution === "EMBEDDED") !==
-      (candidate.benchmark_series !== undefined)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "an EMBEDDED benchmark reference carries its series, and a reference that resolves " +
-          "elsewhere carries none",
-      });
-    }
+    /*
+     * R4's TRUTH half, for the three carriers the catalogue authorizes here.
+     *
+     * THIS REPLACES THREE BIDIRECTIONAL CHECKS, AND THE DIRECTION IT DROPPED WAS WRONG.
+     *
+     * Each read `(resolution === "EMBEDDED") !== (carrier !== undefined)`, which also
+     * asserted the converse: that a response CARRYING a payload must declare `EMBEDDED`.
+     * R4.1 chose against exactly that. `EMBEDDED` says "you already have this" and
+     * `ENDPOINT` says "the authoritative record lives here"; both can be true of one
+     * response, and forbidding the second would destroy the route information and churn
+     * every reference an additive payload lands beside.
+     *
+     * What survives is the half that matters, plus the half those checks never had: an
+     * `EMBEDDED` declaration must be PERMITTED by the catalogue for this host field — which
+     * `refOf` checked — and its carrier's identity must CORRESPOND to the reference's,
+     * rather than merely being a field of the right name.
+     */
+    checkEmbeddedTruth(ctx, candidate, [
+      ["TradeDetail.chart_series_ref", "chart_series_ref"],
+      ["TradeDetail.execution_quality_ref", "execution_quality_ref"],
+      ["TradeDetail.benchmark_series_ref", "benchmark_series_ref"],
+    ]);
     /*
      * A BENCHMARK MOVEMENT IS A STATEMENT ABOUT A SERIES OVER A WINDOW.
      *
@@ -917,7 +925,7 @@ export const tradeDetailPayload = z
   });
 export type TradeDetailPayload = z.infer<typeof tradeDetailPayload>;
 
-export const TRADE_DETAIL_SCHEMA = "cockpit.trade_detail.v1";
+export const TRADE_DETAIL_SCHEMA = "cockpit.trade_detail.v2";
 export const tradeDetailEnvelope = envelope(tradeDetailPayload, TRADE_DETAIL_SCHEMA);
 
 /* ================================================================== TradeLifecycle */
@@ -944,8 +952,8 @@ export const tradeLifecycleEvent = z.object({
   price: metricValue,
   downstream_stage: downstreamStage,
   /** A correction references the event it corrects. The corrected one is never mutated. */
-  correction_of: ref.optional(),
-  source_ref: ref,
+  correction_of: refOf("TradeLifecycle.events[].correction_of").optional(),
+  source_ref: refOf("TradeLifecycle.events[].source_ref"),
 });
 export type TradeLifecycleEvent = z.infer<typeof tradeLifecycleEvent>;
 
@@ -1009,5 +1017,5 @@ export const tradeLifecyclePayload = z
   });
 export type TradeLifecyclePayload = z.infer<typeof tradeLifecyclePayload>;
 
-export const TRADE_LIFECYCLE_SCHEMA = "cockpit.trade_lifecycle.v1";
+export const TRADE_LIFECYCLE_SCHEMA = "cockpit.trade_lifecycle.v2";
 export const tradeLifecycleEnvelope = envelope(tradeLifecyclePayload, TRADE_LIFECYCLE_SCHEMA);

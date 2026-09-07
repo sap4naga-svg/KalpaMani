@@ -7,6 +7,7 @@
  *
  * Every instant comes from an explicit fixed clock. Nothing here reads `Date.now()`.
  */
+import { PERFORMANCE_SERIES_SCHEMA } from "@/contracts/read-models";
 import { describe, expect, it } from "vitest";
 
 import { available, emptyRefList, pinsOf, reason, refListOf } from "@/contracts/factories";
@@ -54,7 +55,24 @@ describe("the C3 omissions C4 completes", () => {
     expect(payload).toBeDefined();
     // §4.3 keeps a reference VISIBLE even when it resolves to a state rather than a payload.
     expect(payload?.regime_ref.ref_kind).toBe("regime_context");
-    expect(payload?.regime_ref.resolution).toBe("UNRESOLVABLE_V1");
+    /*
+     * ENDPOINT, AND IT USED TO SAY UNRESOLVABLE_V1.
+     *
+     * `regime_context` resolves by a catalogued GET and its row lists no other
+     * member, so ENDPOINT is the only resolution it may declare (ADR-0030 R3).
+     */
+    expect(payload?.regime_ref.resolution).toBe("ENDPOINT");
+    /*
+     * AND THE TWO AXES STAY SEPARATE, WHICH IS THE POINT OF THE CHANGE ABOVE.
+     *
+     * A resolution says HOW a reference resolves; whether the PRODUCER exists is a
+     * different question, carried by the value-bearing field beside it. Both last-run
+     * records declare a catalogued endpoint AND report NOT_IMPLEMENTED, and the Brain
+     * runtime is no more built than it was.
+     */
+    for (const record of [payload?.last_decision, payload?.last_scout_run]) {
+      expect(record!.ref.resolution).toBe("ENDPOINT");
+    }
     // The Brain runtime does not exist, so neither record is a timestamp.
     for (const record of [payload?.last_decision, payload?.last_scout_run]) {
       expect(record).toBeDefined();
@@ -69,8 +87,8 @@ describe("the C3 omissions C4 completes", () => {
   it("counts a reference list by its stated total, never by its page length", () => {
     const reference = {
       ref_id: "one",
-      ref_kind: "source_fact",
-      resolution: "UNRESOLVABLE_V1" as const,
+      ref_kind: "source_fact" as const,
+      resolution: "AUTHORIZED_READ" as const,
       classification: "PUBLIC_SAFE" as const,
     };
     // An untruncated list states a total equal to what it carries.
@@ -156,7 +174,8 @@ describe("the performance series", () => {
     const envelope = await client().performanceSeries(demo({ period: "3M" }));
     const payload = envelope.payload;
     expect(payload).toBeDefined();
-    expect(envelope.schema_version).toBe("cockpit.performance_series.v1");
+    /* Pinned to the constant, so a later bump cannot leave this asserting a stale one. */
+    expect(envelope.schema_version).toBe(PERFORMANCE_SERIES_SCHEMA);
 
     const { equity, return_series: returns, drawdown_series: drawdowns } = payload!;
     expect(equity.points).toHaveLength(PERIOD_TRADING_DAYS["3M"]);
@@ -387,11 +406,36 @@ describe("attention ranking, deduplication and completeness", () => {
     // The unfiltered total stays visible, so a subset is never read as the whole.
     expect(high.rankedTotal).toBe(4);
 
-    const byEvidence = prepareAttention(items, {
+    /*
+     * THE EVIDENCE KINDS CHANGED, AND THE PROPERTY UNDER TEST DID NOT.
+     *
+     * These items used to carry `data_quality`, `health_transition` and
+     * `reconciliation` evidence — three kinds §4.5 does not permit on
+     * `AttentionItem.evidence_refs`, which declares "evidence or source_fact". The
+     * producer was corrected rather than the field widened, so every item now
+     * carries a `source_fact`.
+     *
+     * What this test is about is that a filter HIDES without CONCEALING, and that
+     * is asserted in both directions below.
+     */
+    const bySourceFact = prepareAttention(items, {
       severities: [],
-      evidenceKinds: ["data_quality"],
+      evidenceKinds: ["source_fact"],
     });
-    expect(byEvidence.visible.map((item) => item.item_id)).toEqual(["demo-attention-2"]);
+    /* Three of the four are source facts; the borrow item names a borrow RECORD. */
+    expect(bySourceFact.visible.length).toBe(3);
+    expect(bySourceFact.rankedTotal).toBe(4);
+    const byEvidence = prepareAttention(items, { severities: [], evidenceKinds: ["evidence"] });
+    expect(byEvidence.visible.length).toBe(1);
+    expect(byEvidence.rankedTotal).toBe(4);
+
+    /* A kind no item carries hides every row, and still reports the whole total. */
+    const byAbsentKind = prepareAttention(items, {
+      severities: [],
+      evidenceKinds: ["incident"],
+    });
+    expect(byAbsentKind.visible).toHaveLength(0);
+    expect(byAbsentKind.rankedTotal).toBe(4);
   });
 
   it("carries evidence with a resolution and a classification on every rendered item", async () => {

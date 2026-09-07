@@ -8,6 +8,8 @@
 import { z } from "zod";
 
 import { envelope } from "./envelope";
+import { refListFieldOf, refOf } from "./references";
+import type { HostFieldKey } from "./references";
 import {
   countValue,
   dateOnly,
@@ -17,8 +19,6 @@ import {
   money,
   reasonCoded,
   recordValue,
-  ref,
-  refList,
   safeId,
   series,
   seriesGranularity,
@@ -33,8 +33,15 @@ import { availabilityState, fieldReasonCode } from "./vocabularies";
  * either way: §4.3 keeps a reference visible even when it resolves to an availability state,
  * so a reader knows the join exists and what it waits on.
  */
-const lastRunRecord = z.object({ at: metricValue, ref });
-export type LastRunRecord = z.infer<typeof lastRunRecord>;
+/*
+ * IT TAKES ITS HOST FIELD, BECAUSE ONE SHAPE CARRIES TWO KINDS.
+ *
+ * `last_decision.ref` is a `decision` and `last_scout_run.ref` is a `research_run` (4.3.1),
+ * so a single shared schema could only have validated whichever kind it was compiled with.
+ * The kind is a property of the FIELD, and the field is what is passed in.
+ */
+const lastRunRecord = (key: HostFieldKey) => z.object({ at: metricValue, ref: refOf(key) });
+export type LastRunRecord = z.infer<ReturnType<typeof lastRunRecord>>;
 
 /**
  * §4.4 — the four risk quantities, kept apart.
@@ -79,18 +86,18 @@ export const executiveOverviewPayload = z.object({
   permitted_open_risk: recordValue(permittedRisk),
   drawdown: metricValue,
   /** §4.3 kind `regime_context`. Carried even when it resolves to a state (§4.3). */
-  regime_ref: ref,
+  regime_ref: refOf("ExecutiveOverview.regime_ref"),
   system_health: reasonCoded,
   /** The age of the OLDEST required input, never the newest and never the build age. */
   data_freshness: metricValue,
   active_strategies: countValue,
   open_incidents: countValue,
   /** Completed by C4: the Brain runtime that would produce one does not exist. */
-  last_decision: lastRunRecord,
-  last_scout_run: lastRunRecord,
+  last_decision: lastRunRecord("ExecutiveOverview.last_decision.ref"),
+  last_scout_run: lastRunRecord("ExecutiveOverview.last_scout_run.ref"),
   /** §4.5, kind `source_fact`. The counts a summary renders come from `total`, not `length`. */
-  what_changed: refList,
-  attention: refList,
+  what_changed: refListFieldOf("ExecutiveOverview.what_changed"),
+  attention: refListFieldOf("ExecutiveOverview.attention"),
   /** One entry per tile, so a PARTIAL page names its failing parts. */
   tile_availability: z.array(
     z.object({ tile_id: safeId, availability: availabilityState, reason: fieldReasonCode }),
@@ -98,7 +105,7 @@ export const executiveOverviewPayload = z.object({
 });
 export type ExecutiveOverviewPayload = z.infer<typeof executiveOverviewPayload>;
 
-export const EXECUTIVE_OVERVIEW_SCHEMA = "cockpit.executive_overview.v1";
+export const EXECUTIVE_OVERVIEW_SCHEMA = "cockpit.executive_overview.v2";
 export const executiveOverviewEnvelope = envelope(
   executiveOverviewPayload,
   EXECUTIVE_OVERVIEW_SCHEMA,
@@ -114,7 +121,7 @@ export const attentionItemPayload = z.object({
   what_happened: reasonCoded,
   why_it_matters: reasonCoded,
   impact: metricValue,
-  evidence_refs: refList,
+  evidence_refs: refListFieldOf("AttentionItem.evidence_refs"),
   recommended_action: reasonCoded,
   severity: reasonCoded,
   materiality_rank: z.number().int(),
@@ -125,7 +132,7 @@ export const attentionItemPayload = z.object({
 });
 export type AttentionItemPayload = z.infer<typeof attentionItemPayload>;
 
-export const ATTENTION_LIST_SCHEMA = "cockpit.attention_list.v1";
+export const ATTENTION_LIST_SCHEMA = "cockpit.attention_list.v2";
 export const attentionListEnvelope = envelope(
   z.object({ items: z.array(attentionItemPayload) }),
   ATTENTION_LIST_SCHEMA,
@@ -143,11 +150,11 @@ export const whatChangedEntryPayload = z.object({
   before: metricValue.optional(),
   after: metricValue,
   materiality: reasonCoded,
-  evidence_refs: refList,
+  evidence_refs: refListFieldOf("WhatChangedEntry.evidence_refs"),
 });
 export type WhatChangedEntryPayload = z.infer<typeof whatChangedEntryPayload>;
 
-export const WHAT_CHANGED_SCHEMA = "cockpit.what_changed.v1";
+export const WHAT_CHANGED_SCHEMA = "cockpit.what_changed.v2";
 export const whatChangedEnvelope = envelope(
   z
     .object({
@@ -449,7 +456,7 @@ export const performanceSeriesPayload = z
     cash_flows: z.array(cashFlow),
     cost_treatment: z.enum(COST_TREATMENTS),
     /** §4.3 kind `benchmark_series`. Present as references; never spliced into one line. */
-    benchmark_refs: refList,
+    benchmark_refs: refListFieldOf("PerformanceSeries.benchmark_refs"),
     /** The benchmark actually drawn, when one is resolvable. ABSENT is the ordinary case. */
     benchmark_series: series.optional(),
     benchmark_label: reasonCoded.optional(),

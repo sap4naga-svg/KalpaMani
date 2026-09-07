@@ -37,7 +37,8 @@
 import { z } from "zod";
 
 import { isValueBearing } from "./validity";
-import { instant, metricOf, policyRef, reasonCoded, ref, safeId } from "./values";
+import { refOf } from "./references";
+import { instant, metricOf, policyRef, reasonCoded, safeId } from "./values";
 
 /** APPROVED assigns a size. REJECTED assigns none. There is no third outcome that sizes. */
 export const RISK_DECISION_OUTCOMES = ["APPROVED", "REJECTED"] as const;
@@ -63,14 +64,14 @@ export const riskDecision = z
   .object({
     decision_id: safeId,
     /** The candidate this decision was taken on. */
-    candidate_ref: ref,
+    candidate_ref: refOf("RiskDecision.candidate_ref"),
     /**
      * The trade it produced, where one exists.
      *
      * A REJECTED decision produced none, and its reference resolves to nothing rather than to
      * a fallback entity.
      */
-    trade_ref: ref,
+    trade_ref: refOf("RiskDecision.trade_ref"),
     decided_at: instant,
     outcome: riskDecisionOutcome,
     /** The closed code that says what was decided. Never free text. */
@@ -88,7 +89,7 @@ export const riskDecision = z
      * An approval names the stage record whose risk it assigned; a rejection retained no
      * record, because nothing was ever entered.
      */
-    initial_risk_ref: ref,
+    initial_risk_ref: refOf("RiskDecision.initial_risk_ref"),
     source: z.literal("RISK_ENGINE_DECISION_RECORD"),
   })
   .superRefine((candidate, ctx) => {
@@ -144,12 +145,23 @@ export const riskDecision = z
           message: "a declined risk decision names why it declined",
         });
       }
-      if (candidate.initial_risk_ref.resolution !== "UNRESOLVABLE_V1") {
-        ctx.addIssue({
-          code: "custom",
-          message: "a declined decision retained no initial-risk record to point at",
-        });
-      }
+      /*
+       * THE MISSING RECORD IS NO LONGER READ OFF THE RESOLUTION, AND IT USED TO BE.
+       *
+       * This clause required a declined decision's `initial_risk_ref` to declare
+       * `UNRESOLVABLE_V1`, using the resolution as a stand-in for "no record was
+       * retained". ADR-0030 R6 and R9 separate the two: a resolution says HOW a reference
+       * resolves, and whether its target EXISTS is a different question that lands on a
+       * value-bearing field or on a §5 error. `evidence` resolves by AUTHORIZED_READ
+       * alone, so the resolution cannot carry that meaning at all any more, and
+       * `UNRESOLVABLE_V1` would have asserted that the producing subsystem does not
+       * exist — which is false, since approvals in this very book retain such records.
+       *
+       * **The substantive declined-decision invariants are unchanged and are checked
+       * above**: nothing sized, no risk assigned, and the reasons it declined for named.
+       * That a declined decision's retained record is absent is now established where it
+       * is true — by FOLLOWING the reference, which yields `REFERENT_NOT_FOUND`.
+       */
     }
   });
 export type RiskDecision = z.infer<typeof riskDecision>;
