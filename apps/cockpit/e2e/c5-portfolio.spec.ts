@@ -205,10 +205,21 @@ test.describe("the trade ledger and one trade's story", () => {
     await expect(rows.first()).toContainText("Partially exited");
   });
 
+  /*
+   * NAMED RATHER THAN FILLED IN, ON A TRADE THAT GENUINELY HAS NOTHING.
+   *
+   * C5 asserted this on `demo-trade-cir-0003`, which had no execution evidence at the time.
+   * C6 records that trade's orders, fills, protective-order events and reconciliation, so
+   * those stages are no longer gaps ON IT — and continuing to assert their absence there
+   * would assert that the interface still fails to carry facts it now carries.
+   *
+   * The property this test exists to pin is unchanged and is asserted where it still applies:
+   * a trade whose evidence was never written NAMES each missing stage rather than inferring
+   * it. Most of the book is in exactly that position.
+   */
   test("opens a trade's detail and names every stage it does not carry", async ({ page }) => {
-    await page.goto(`/portfolio/trades/demo-trade-cir-0003${OPERATOR}`);
+    await page.goto(`/portfolio/trades/demo-trade-gen-0001${OPERATOR}`);
     await waitForHydration(page);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("DEMO.CIR");
     const gaps = page.getByTestId("trade-gaps");
     await expect(gaps).toBeVisible();
     for (const stage of [
@@ -216,11 +227,27 @@ test.describe("the trade ledger and one trade's story", () => {
       "Order and fill mechanics",
       "Broker reconciliation",
       "Performance attribution",
+      "Risk engine decision",
     ]) {
       await expect(gaps).toContainText(stage);
     }
     // The four concepts stay apart: no order or fill mechanics are rendered here.
     await expect(page.getByTestId("absent-event-kinds")).toContainText("Order submitted");
+
+    /*
+     * THE NEGATIVE CONTROL: a trade whose evidence WAS written names fewer gaps.
+     *
+     * Without it, the loop above would pass on an interface that listed every stage as
+     * missing on every trade — which is the opposite failure, and just as wrong.
+     */
+    await page.goto(`/portfolio/trades/demo-trade-cir-0003${OPERATOR}`);
+    await waitForHydration(page);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("DEMO.CIR");
+    const carried = page.getByTestId("trade-gaps");
+    await expect(carried).toBeVisible();
+    await expect(carried).toContainText("Risk engine decision");
+    await expect(carried).not.toContainText("Order and fill mechanics");
+    await expect(carried).not.toContainText("Broker reconciliation");
   });
 
   /*
