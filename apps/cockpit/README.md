@@ -15,7 +15,13 @@ What Changed and two governance screens; C5 added seven product areas and a **ba
 detail; C6 adds three product areas and completes a fourth — still running on a **local fixture
 adapter**, and still with no production read API, projection or metric engine behind it.
 
-**Fourteen of the thirty-six product areas are addressed, and all fourteen are now finished.**
+**Fourteen of the thirty-six product areas are addressed, and all fourteen are finished within
+their documented accepted scope.** *Finished* here means every requirement the accepted
+specification states for that area is either demonstrated or reported as an honest absence with its
+named dependency — it does not mean the area has a production producer behind it, and the count of
+areas is not itself evidence of completion. The named limitations are in *What C6 does not contain*
+and in the **C5 completion follow-up** below, and they are part of this claim rather than
+exceptions to it.
 Areas 1, 24, 25 and 28 from C4; areas 2, 3, 4, 11, 12, 13 and 36 from C5; and areas **6** (Signal
 and Candidate Funnel), **7** (Candidate Detail and Explainability) and **8** (Missed
 Opportunities) from C6 — the C6 row of the traceability matrix. **Area 36 was deliberately split
@@ -294,7 +300,7 @@ Four catalogued read models were added with their per-field contracts, and one w
 
 | | |
 |---|---|
-| `CandidateFunnel` | the four stages, the eight Brain states as a **closed set**, the nine downstream stages on a **separate axis that carries no count**, the conversions with **both** of their counts and **both** of their subjects, and a per-module view. Its refinement refuses a downstream count, a Brain axis that does not partition the consolidated stage, and a rate between two stages counting different subjects |
+| `CandidateFunnel` | the four stages, the eight Brain states as a **closed set**, the nine downstream stages on a **separate axis with its own counts, its own counting basis and its own stated population**, the conversions with **both** of their counts and **both** of their subjects, and a per-module view. §4.5 makes the downstream `count` a required field, so a recorded count is admissible and the V1 `NOT_IMPLEMENTED` invariant governs **real** data — exactly as Area 6's own *V1 availability* reads "`SYNTHETIC` demonstration; real candidates `NOT_IMPLEMENTED`" while the Brain axis beside it is demonstrated the same way. Its refinement refuses a **mixed counting basis**, a count with **no population to divide by**, a stage exceeding that population, an `overlapping` flag contradicting its basis, an availability disagreeing with its own count, and approvals plus declines together exceeding the one population they partition — and still refuses a Brain axis that does not partition the consolidated stage and a rate between two stages counting different subjects |
 | `CandidateSummary`, `CandidateDetail` | the candidate ledger and one decision's whole explanation: thesis, entry condition, ranking context, deterministic factor evidence, AI research and challenger evidence with per-reference provenance, contradictions, evidence gaps, the invalidation **reference**, the risk context and the downstream references. **The refinement refuses a `USD` or `SHARES` quantity anywhere in either payload**, refuses a blocked candidate with no reason, and refuses AI evidence recorded as having cleared a block |
 | `MissedOpportunity` | the recorded cause, the **registered** measurement window, detection and decision instants with the delay between them, both excursions, the counterfactual and its assumptions, the follow-up path, the recurring causes, the taken-versus-missed comparisons and the rates. **The refinement refuses a money counterfactual, refuses an `AVAILABLE` path-dependent value over an incomplete path, refuses a rate with no population and refuses a difference between two arms it has declared incomparable** |
 | `ExecutionQuality` | for **one trade**, embedded on its detail — not the Area 9 aggregate surface, which is a later cycle. Each fill against its named reference price, with the four order sides and the `side_sign` that makes an adverse buy and an adverse sell both read positive |
@@ -328,10 +334,10 @@ producing contract was widened.
 |---|---|
 | **read models** | the rest of the catalogue. `ReconciliationStatus`, `StrategyHealth`, `StrategyVersion`, `ResearchRun`, `DataQuality`, `Alert`, `FeedbackPipeline`, `SearchResultPage` and `AskAnswer` are not implemented, and their screens remain placeholders |
 | **the aggregate `ExecutionQuality` surface** | Area 9 aggregates every fill in a window across every trade. C6 carries **one trade's** record, embedded on its detail; the `/execution/quality` screen remains a placeholder |
-| **the risk decision** | still absent on every trade and every candidate. **No risk engine exists**, so nothing recorded why this size rather than another, and the reference resolves to an availability state on both screens |
+| **a risk ENGINE** | **still does not exist, and none is authorized.** What C6 carries is the *record* — an immutable repository-owned `RiskDecision` for each candidate the book declares one for, joined onto the trade under §4.3's `AUTHORIZED_READ`. It says what size was assigned, against which reference and invalidation prices, under which policy version, and reconciles to the cent with the retained entry-stage record; a **declined** decision assigns nothing and names why. Nothing here computes a size, applies a policy, permits an exposure or authorizes an order, and a trade whose sizing nobody recorded still reports `RISK_ENGINE_DECISION` as a gap |
 | **immutable audit events** | the Audit Trail is a separate screen and a separate read model, and neither exists. `audit_refs` is carried, empty, and states a total of zero |
-| **rolling series and capacity** | no rolling-window series and no capacity figure is derived. Trailing performance is **five separate reads over five windows**, each with its own population; capacity needs a liquidity and market-impact model over qualified provider data, and **G1 is OPEN**. **C6 did not close this**, and it is recorded as outstanding rather than quietly dropped |
-| **real benchmark price history** | the holding-period benchmark C6 added is an obviously synthetic index this repository owns. SPY, QQQ and IWM still resolve to nothing, because **no provider has been selected and G1 is OPEN** |
+| **rolling series and capacity** | no rolling-window series and no capacity figure is derived. Trailing performance is **five separate reads over five windows**, each with its own population. **The two halves are blocked differently and are recorded separately**: a rolling-window series over the synthetic book needs no provider and is outstanding **implementation**; a **capacity** figure needs a liquidity and market-impact model over qualified provider data, and **G1 is OPEN**. Both are assigned to the **C5 completion follow-up** below, which is not authorized to run |
+| **real benchmark price history** | the holding-period benchmark C6 added is an obviously synthetic index this repository owns. **Real** SPY, QQQ and IWM price history resolves to nothing, because **no provider has been selected and G1 is OPEN**. That blocks the *real* series and **not** the comparison itself: a portfolio-level comparison against a repository-owned synthetic index is buildable today on exactly the terms Trade Detail already demonstrates, and it is outstanding **implementation** assigned to the **C5 completion follow-up** rather than blocked on qualification |
 | **cursor pagination** | the page contract carries its size, its total, its truncation flag, its sort key and its tiebreak. It carries **no cursor**: a cursor is meaningful only against a transport that can continue a page, and this local read client returns one page and continues none |
 | **`PerformanceSeries` classification** | §4.5 classifies a real one `PRIVATE_OPERATIONAL`, which the `PUBLIC_EDGE` boundary **refuses**. What this application can show is a repository-owned synthetic demonstration, labelled `PUBLIC_SAFE` and `SYNTHETIC` because that is what it is. A real recorded series would be refused here rather than relabelled to fit the host |
 | **`source_refs`** | carried, and empty on every response. The fixture adapter references no source fact, and states a total of zero rather than implying one |
@@ -367,9 +373,34 @@ and two of them remain open.
 Trade Detail** is Area 36.2's own requirement and is **implemented and demonstrated**: one
 synthetic index, sliced to exactly the trade's entry and last session, stating `PRICE_RETURN`
 because the index and the demonstration securities both pay no dividend. The **portfolio-level
-comparison against SPY, QQQ and IWM** in Area 2 is a different requirement, it needs a qualified
-market-data provider, **G1 is OPEN and no provider is selected** — so it remains outstanding and
-is recorded as such rather than counted as delivered.
+comparison** in Area 2 is a different requirement and was not C6's, so it remains outstanding.
+
+**What blocks it is narrower than an earlier revision of this file claimed.** That revision said the
+portfolio comparison "needs a qualified market-data provider", which is true of **real SPY, QQQ and
+IWM price history** and is not true of the comparison. A **synthetic** portfolio-level benchmark
+demonstration needs no provider at all — Trade Detail already builds one over a repository-owned
+index — so the requirement is **outstanding implementation**, not work gated on G1. The two are now
+recorded apart: the synthetic demonstration is assigned to the **C5 completion follow-up**, and only
+the real vendor series waits on provider selection.
+
+### The C5 completion follow-up — named, owned and not authorized
+
+**An earlier revision recorded rolling series and capacity as outstanding with "no cycle currently
+owns it".** An unowned requirement is one nobody is accountable for, so the residue is given a name
+here: the **C5 completion follow-up**, a bounded later cycle carrying exactly the C5-assigned
+requirements C6 did not close.
+
+| Carried by the C5 completion follow-up | Why it is outstanding |
+|---|---|
+| rolling-window return, expectancy, drawdown and tail-loss series | **implementation.** Derivable over the synthetic book with no provider |
+| portfolio-level benchmark comparison, synthetic index | **implementation.** Not blocked on G1 — the mechanism exists on Trade Detail |
+| capacity, liquidity and market-impact | **blocked.** Needs qualified provider data, and **G1 is OPEN** |
+| real SPY, QQQ and IWM price history | **blocked.** Needs a selected provider, and **none is selected** |
+
+**Naming a follow-up is not completing it, and not authorization to start it.** No part of the
+table above is implemented, none of it is authorized, and this review implemented none of it: a
+portfolio-dashboard rebuild is explicitly outside C6's scope. It is recorded so the requirement has
+an owner rather than disappearing between two cycles.
 
 ### The synthetic book, extended
 
@@ -568,6 +599,7 @@ no Brain runtime           no scanner or factor matrix   no decision compiler
 no AI agent or model call  no risk engine                no order router
 no aggregate execution     no audit trail                no rolling series
 no capacity model          no real benchmark price       no provider data
+no sizing computation      no policy application         no exposure permission
 ```
 
 **No model is called from anywhere in this application.** The AI evidence records carry model,
@@ -646,8 +678,13 @@ trade detail                                      COMPLETE LIFECYCLE
 strategy health                                   RECORDED STATE ONLY -- C7 owns area 5
 aggregate execution quality (area 9)              NOT IMPLEMENTED -- later cycle
 audit trail (area 26)                             NOT IMPLEMENTED -- later cycle
-rolling series and capacity                       REQUIRED AND OUTSTANDING -- no cycle owns it
-portfolio benchmark vs SPY / QQQ / IWM            OUTSTANDING -- needs a qualified provider
+rolling series and capacity                       OUTSTANDING -- owned by the C5 completion
+                                                  follow-up; the series is implementation,
+                                                  capacity is blocked on G1
+portfolio benchmark, synthetic index               OUTSTANDING IMPLEMENTATION -- owned by the
+                                                  C5 completion follow-up, NOT blocked on G1
+real SPY / QQQ / IWM price history                 BLOCKED -- needs a selected provider
+C5 completion follow-up                            NAMED / NOT AUTHORIZED / NOT STARTED
 full Cockpit V1                                   NOT COMPLETE -- 14 of 36 addressed and
                                                   finished; area 36 is now complete
 Strategy Brain runtime                            NOT IMPLEMENTED / NOT AUTHORIZED
@@ -1008,6 +1045,103 @@ nothing and claims nothing.
 **Browser network traffic was checked and is empty.** Across every C5 route the browser issued
 **no request to any origin other than the local dev server**, and the console logged **no error
 and no hydration mismatch**.
+
+### C6 — three defects found by independent review, and corrected
+
+Each was reproduced on the author's head before it was corrected, and each correction carries a
+**negative control**: the retired rule was temporarily reintroduced and the new regression was
+confirmed to fail on it, so the tests distinguish the two rules rather than agreeing with whatever
+the fixture produces.
+
+| | |
+|---|---|
+| **a trade reference was read as order evidence** | `downstreamStageOf` returned `ORDER_FILLED` for any candidate carrying a `tradeId`. **A trade link says a position was opened; it says nothing about whether any order was submitted, acknowledged, partially filled or filled.** The stage is now read from the candidate's declared risk decision and from the execution record's own fills, and a new candidate makes the gap visible: it was approved, a position was opened, **nobody recorded an order**, and its stage stops at `RISK_APPROVED`. Under the retired rule that same candidate reported a fill this book does not contain |
+| **the funnel refused every downstream count** | the refinement rejected any value-bearing downstream availability, so a recorded count was **unexpressible** — a fixture's emptiness had become a permanent property of the contract. §4.5 makes the downstream `count` a **required** field, and Area 6's own *V1 availability* reads "`SYNTHETIC` demonstration; real candidates `NOT_IMPLEMENTED`" — the same terms the Brain axis beside it was already demonstrated on. The axis now carries counts on a **stated basis** (`EVER_REACHED`) over a **stated population**, and the refinement refuses the things that make a count uncheckable instead. The stated rationale for the old rule — that a count "would be the first step of merging" the axes — does not follow: the two remain separate arrays over separate closed vocabularies, and neither acquires the other's members |
+| **two screens contradicted each other about the risk decision** | `/risk` listed three decisions with an outcome of `RISK_APPROVED_AT_RECORDED_SIZE`, while Trade Detail declared `RISK_ENGINE_DECISION` **`NOT_IMPLEMENTED` — "the producing subsystem does not exist"** — for those same trades. Both statements cannot hold over one fixture. The book now declares a `RiskDecision` per candidate that has one, `/risk` indexes those records rather than synthesising three from the first open trades, and the gap is reported **only** where no decision was recorded |
+
+**The risk decision is a record, not an engine.** Nothing added here computes a size, applies a
+policy, permits an exposure or authorizes an order. The records are immutable repository-owned
+declarations, and the builder **refuses** a declaration whose arithmetic does not reconcile with the
+retained entry-stage record — `shares × |reference − invalidation|`, which §4.4 defines the retained
+record by. A declared number nobody checks is how a fixture starts teaching a reader something
+untrue.
+
+**The boundary held.** The sizing lives on the **trade**, joined by reference under §4.3's
+`AUTHORIZED_READ`. `CandidateIntent` acquired no field of it, `CandidateDetail` carries the
+reference alone, and a test asserts that no `SHARES` or `USD` quantity appears anywhere in a
+candidate payload. A **declined** decision assigns nothing — no shares, no risk, no retained record
+to point at — and names why.
+
+**What this correction does not unlock.** The money counterfactual on Missed Opportunities stays
+refused. A dollar counterfactual needs a permitted sizing basis, and a missed candidate was never
+sized: the one decision that touches a miss **declined** it, and a decline assigns no size. The
+field remains structurally present and never served.
+
+### C6 — the baseline timeout, investigated
+
+The C6 author reported an isolated baseline run of **265 passed with one navigation timeout**,
+against a historical baseline of **266 passed**. The review re-ran the **whole baseline suite on
+`main` alone**, in its own clean worktree, with no concurrent mutation and no competing heavyweight
+test run:
+
+```text
+baseline tree                   main @ 4bdc0da54ad14126891870e41ee69ab8726c96a3
+npm run test:e2e                266 passed (7.8m), exit 0
+```
+
+**The first observed result of that run is the one recorded**, and it did not reproduce the
+timeout. **A successful rerun does not retroactively make the author's original run a pass** — that
+run timed out, and it is recorded as having timed out.
+
+**No product defect was identified, and none was corrected.** Two of the three known runs of this
+same baseline tree passed in full, which is what a load- or timing-sensitive failure looks like and
+is not what a product defect looks like. The suite runs a **Next.js dev server**, which compiles
+routes on first request, so a first navigation under load is the plausible pressure point — that is
+a hypothesis about the environment and **not** an established cause, and nothing here claims one.
+
+**No timeout was increased and no retry was added** to obtain a green run. The Playwright
+configuration is unchanged: one worker, a 60-second test timeout, and no retries.
+
+### C6 — validation on the reviewed and corrected head
+
+Run on Node 22.21.0 and npm 10.9.4, from the committed lockfile, in a clean isolated worktree:
+
+```text
+npm ci                          clean install from the committed lockfile
+npx eslint .                    clean
+npx next build                  succeeds -- no API route
+npx tsc --noEmit                clean, strict (run after a build; route types are generated)
+npx vitest run                  372 passed   (C6 author head was 363; C5 baseline was 261)
+npx playwright test             398 passed, 0 skipped, across 1440x900, 1024x768 and 390x844
+```
+
+And the repository-wide gates, from the same tree:
+
+```text
+pytest -q                       7074 passed          (unchanged from the baseline)
+ruff check .                    all checks passed
+ruff format --check .           263 files already formatted
+mypy                            no issues in 181 source files
+scripts/phase3_docs_audit.py    4575 checks, AUDIT PASSED
+scripts/test_integrity_audit.py 85 modules, AUDIT PASSED
+git diff --check                clean
+```
+
+**Nine browser failures were found and fixed during the review, and they were the review's own.**
+The `RiskDecisionRecord` panel was first written with `<dl>` children that were neither `<dt>` nor
+`<dd>`, which `axe-core` correctly reported as `definition-list` on every viewport; and a C5
+negative control asserted `Risk engine decision` as a gap on a trade that now has a recorded
+decision. **The accessibility defect was corrected in the markup, not waived**, and the C5
+assertion was repointed rather than deleted — it now requires the gap on a trade with **no**
+decision and requires its **absence** on a trade with one, so the pair distinguishes the two cases
+instead of accepting either.
+
+**An automated `axe-core` pass is not an accessibility audit**, and none was performed: no screen
+reader was run, and no performance target was measured. Browser traffic was checked and reaches
+**no origin other than the local dev server**, with **no console error and no hydration mismatch**.
+
+**Local validation is local.** These were run on a workstation. **No CI service ran them**, and no
+CI status check exists for this application.
 
 ### C6 — the browser evidence, and what it does not claim
 

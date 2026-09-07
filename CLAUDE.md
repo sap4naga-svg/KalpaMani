@@ -3703,7 +3703,12 @@ apart. **This status is EFFECTIVE ON MERGE of the pull request introducing it, a
 carries no such status until that merge** — while that pull request is open, C6 is an unmerged
 implementation candidate, exactly as C5 was before its own merge.
 
-**Fourteen of the thirty-six product areas are addressed, and all fourteen are now finished.** C6
+**Fourteen of the thirty-six product areas are addressed, and all fourteen are finished within
+their documented accepted scope** — every requirement the accepted specification states for those
+areas is demonstrated or reported as an honest absence with its named dependency. **A count of
+areas is not evidence of completion**, none of them has a production producer behind it, and the
+named limitations below and in the **C5 completion follow-up** are part of that claim rather than
+exceptions to it. C6
 adds areas **6** (Signal / Candidate Funnel), **7** (Candidate Detail / Explainability) and **8**
 (Missed Opportunities), and **completes area 36**, which C5 delivered in part — the trade ledger
 was complete, the trade detail was basic, and C6 adds the complete lifecycle and the chart
@@ -3737,7 +3742,9 @@ four, so deriving an execution history from a position size is the inference Are
 
 | | |
 |---|---|
-| **the two axes** | the eight Brain states and the nine downstream stages are two closed vocabularies on two fields, rendered side by side. **Every downstream member is `NOT_IMPLEMENTED` and carries no count**, and the contract refuses one that does — no risk engine, order router or execution runtime exists |
+| **the two axes** | the eight Brain states and the nine downstream stages are two closed vocabularies on two fields, rendered side by side, and **neither acquires a member of the other**. **Both carry counts.** The downstream counts are a **`SYNTHETIC` demonstration**, on a stated `EVER_REACHED` basis over a stated population, derived from declared risk decisions and recorded fills — **no risk engine, order router or execution runtime exists**, and real downstream data stays `NOT_IMPLEMENTED`. The stages **overlap and do not decrease**, which the payload says and the screen says. **Independent review corrected a contract that refused every downstream count**: §4.5 makes that count a required field, so a fixture's emptiness had become a permanent property of the contract |
+| **a trade link is not order evidence** | **independent review corrected a downstream stage inferred from a `tradeId`**, which reported `ORDER_FILLED` for any candidate that became a trade. The stage is now read from the candidate's declared risk decision and the execution record's own fills, and one candidate was approved and entered with **no order recorded at all** — its stage stops at `RISK_APPROVED` rather than claiming a fill the book does not contain |
+| **the risk decision is a record, not an engine** | **independent review corrected two screens that contradicted each other**: `/risk` listed approved decisions while Trade Detail declared the same trades' risk-decision producer `NOT_IMPLEMENTED`. The book now declares an immutable `RiskDecision` per candidate that has one — the size assigned, its reference and invalidation prices, its policy version, reconciling **to the cent** with the retained entry-stage record — joined on the **trade** under §4.3's `AUTHORIZED_READ`. **Nothing computes a size, applies a policy, permits an exposure or authorizes an order**, a **declined** decision assigns nothing and names why, and a trade nobody sized on record still reports the gap |
 | **`READY_FOR_RISK_REVIEW`** | rendered as a **handoff**, never as a successful end state. It is one of eight peers on the axis, it is not a stage in the funnel, and the page says in words that portfolio and risk decide independently. One candidate in the book was ready and was **declined downstream** |
 | **what a count counts** | each funnel stage states its subject. **The generated stage counts module decisions and is LARGER than the consolidated stage**, which counts candidates, because a security qualifying through several modules is one opportunity with several pieces of evidence. Two stages counting different subjects **carry no rate at all** |
 | **overlapping reasons** | one candidate may carry several blocking reasons, so a reason distribution can sum past its state's candidate count. It is **labelled overlapping**, and the Brain axis still partitions the consolidated stage exactly |
@@ -3750,15 +3757,27 @@ four, so deriving an execution history from a position size is the inference Are
 | **a correction appends** | the corrected event stays in the timeline, unchanged, and the correction references it. A **late observation** is retained at the instant it happened, with its observation time beside it |
 | **slippage** | `side_sign × (fill − reference) / reference × 10,000`, against a **named** reference price with its own timestamp. **Positive is adverse for a buy and for a sell**, and a short's order sides are the opposite of its position direction. The **aggregate** reports `INSUFFICIENT_OBSERVATIONS` against its declared twenty-fill minimum |
 | **attribution** | a **declared** decomposition whose five components sum to the trade's outcome **exactly**, labelled `PROVISIONAL` or `FINAL`. One trade carries none at all and says so |
-| **the benchmark** | one synthetic index, sliced to **exactly** the trade's own entry and last session, stating `PRICE_RETURN` because neither it nor the demonstration securities pay a dividend. **SPY, QQQ and IWM still resolve to nothing** — no provider is selected and **G1 is OPEN** |
+| **the benchmark** | one synthetic index, sliced to **exactly** the trade's own entry and last session, stating `PRICE_RETURN` because neither it nor the demonstration securities pay a dividend. **Real SPY, QQQ and IWM price history still resolves to nothing** — no provider is selected and **G1 is OPEN**. That blocks the real series and not the comparison itself |
 
-**One C5 omission is carried forward rather than quietly dropped.** **Rolling-window series and
+**The C5 residue is carried forward, and it now has an owner.** **Rolling-window series and
 capacity remain outstanding**: Area 2 names rolling returns and Area 4 names rolling expectancy,
 drawdown and tail losses, and neither is derived. C6 did not attempt it — it is a portfolio and
 strategy-performance concern, and widening this cycle into a portfolio rebuild is outside its
-scope. **No cycle currently owns it.** The **holding-period benchmark** Area 36.2 requires **is**
-implemented; the **portfolio-level SPY/QQQ/IWM comparison** of Area 2 is a different requirement,
-needs a qualified provider, and remains outstanding.
+scope. **Independent review assigned it to a named C5 COMPLETION FOLLOW-UP**, a bounded later
+cycle, because an earlier revision recorded it with *no cycle currently owns it* and an unowned
+requirement is one nobody is accountable for.
+
+**Its two halves are blocked differently, and review corrected a claim that conflated them.** A
+**rolling-window series** and a **portfolio-level benchmark comparison against a repository-owned
+synthetic index** need **no provider at all** — Trade Detail already builds exactly such a
+comparison — so both are outstanding **implementation**. Only **capacity**, which needs a liquidity
+and market-impact model, and **real SPY, QQQ and IWM price history** are blocked on provider
+selection while **G1 is OPEN**. The earlier claim that the portfolio comparison "needs a qualified
+provider" was true of the real vendor series and **not** of the requirement.
+
+**Naming the follow-up completes nothing and authorizes nothing.** None of it is implemented, none
+is authorized, and **this review implemented none of it**: a portfolio-dashboard rebuild is outside
+C6's scope. **C5 completion follow-up: NAMED / NOT AUTHORIZED / NOT STARTED.**
 
 **No trading, provider, AWS, broker or governance operation is performed, enabled or approached by
 any of it.** Every future control is **absent**, not disabled: there is no adjust, set, apply,
@@ -3770,13 +3789,25 @@ change no scope and grant no permission.
 ```text
 C6 signals and trade-lifecycle screens:           IMPLEMENTED - EFFECTIVE ON MERGE
 Cockpit product areas addressed:                  14 of 36
-Cockpit product areas fully implemented:          14 of 36 - AREA 36 NOW COMPLETE
+Cockpit product areas fully implemented:          14 of 36 WITHIN THEIR ACCEPTED SCOPE -
+                                                  AREA 36 NOW COMPLETE; A COUNT OF AREAS
+                                                  IS NOT EVIDENCE OF COMPLETION
 trade detail:                                     COMPLETE LIFECYCLE
 strategy health:                                  RECORDED STATE ONLY - C7 OWNS AREA 5
 aggregate execution quality (Area 9):             NOT IMPLEMENTED - LATER CYCLE
 audit trail (Area 26):                            NOT IMPLEMENTED - LATER CYCLE
-rolling series and capacity:                      REQUIRED AND OUTSTANDING - NO CYCLE OWNS IT
-portfolio benchmark against SPY / QQQ / IWM:      OUTSTANDING - REQUIRES A QUALIFIED PROVIDER
+rolling series and capacity:                      OUTSTANDING - OWNED BY THE C5 COMPLETION
+                                                  FOLLOW-UP; THE SERIES IS IMPLEMENTATION,
+                                                  CAPACITY IS BLOCKED ON G1
+portfolio benchmark, synthetic index:             OUTSTANDING IMPLEMENTATION - OWNED BY THE
+                                                  C5 COMPLETION FOLLOW-UP, NOT BLOCKED ON G1
+real SPY / QQQ / IWM price history:               BLOCKED - NO PROVIDER IS SELECTED
+C5 completion follow-up:                          NAMED / NOT AUTHORIZED / NOT STARTED
+risk engine:                                      NOT IMPLEMENTED / NOT AUTHORIZED
+recorded risk decisions:                          SYNTHETIC FIXTURE RECORDS ONLY
+sizing computation, policy application:           NONE
+downstream counts:                                SYNTHETIC DEMONSTRATION - REAL DATA
+                                                  NOT_IMPLEMENTED
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
