@@ -19,6 +19,10 @@ and the corrections it makes here are proposed with it.
 §3.1 with new §3.1.1, §4.1.1 with new §4.1.2, and §7. ADR-0029 is **PROPOSED and carries no authority
 while the pull request introducing it, PR #73, is open**, and the two corrections it makes here are
 proposed with it.
+**Further amended by** [ADR-0030](../decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) —
+§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, and §5's
+error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
+it is open**, and the corrections it makes here are proposed with it.
 
 ---
 
@@ -504,6 +508,11 @@ DENOMINATOR_ZERO             the ratio is mathematically undefined for this subj
 NOT_DEFINED_FOR_SUBJECT      the question does not apply to this subject at all
 POLICY_REFERENCE_MISSING     a separately governed policy value has no versioned reference
 CLASSIFICATION_WITHHELD      the value exists and this caller's scope may not read it
+REFERENT_NOT_FOUND           a reference is well formed and its identifier names nothing in the
+                             producing read model. NEVER a producer that does not exist, and
+                             never a target withheld by scope -- see §4.3.1. It is an ABSENCE
+                             of a target and never an INAPPLICABILITY, so it carries
+                             NOT_YET_AVAILABLE and never NOT_APPLICABLE
 PROJECTION_ERROR             production failed, and the failure is reported
 ```
 
@@ -529,7 +538,7 @@ blank, an empty string or free text.
 | `STALE` | **present**, with the `as_of` it was true at | `UPSTREAM_INPUT_STALE` — and nothing else |
 | `PARTIAL` | **present**, and never read as complete: `coverage` states how much of the extent it covers | `EXTENT_PARTIALLY_COVERED`, `UPSTREAM_INPUT_MISSING`, `UPSTREAM_INPUT_STALE`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED` |
 | `EMPTY_VERIFIED` | **present and empty** — an empty list, or the count of an empty population. **The producer ran and the defined result population is empty**, which is a statement about the population and never about the number: see §4.1.2 | `EMPTY_RESULT_VERIFIED` — and nothing else |
-| `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING` |
+| `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING`, `REFERENT_NOT_FOUND` |
 | `NOT_IMPLEMENTED` | **absent** | `PRODUCER_NOT_IMPLEMENTED` — and nothing else |
 | `NOT_AUTHORIZED` | **absent** | `PRODUCER_NOT_AUTHORIZED`, `CLASSIFICATION_WITHHELD` |
 | `UNEVALUATED` | **absent** | `NOT_YET_ASSESSED` — and nothing else |
@@ -655,10 +664,16 @@ RecordValue     object      { record: <the named record type, or ABSENT>,
 Ref             object      { ref_id: SafeId, ref_kind: <closed RefKind>,
                               resolution: <closed Resolution>, classification:
                               DataClassification }
+                            EVERY Ref-valued field in §4.5 names its kind, and §4.3.1 assigns
+                            one to each field whose contract line does not state it. A Ref
+                            whose kind is outside RefKind, or whose resolution is outside the
+                            set its kind permits, is REFUSED at the boundary
 RefList         object      { items: [Ref], cardinality: <closed Cardinality>,
                               total: CountValue, truncated: boolean }
                             A list of references states how many there are, so a truncated
-                            list is never read as a complete one
+                            list is never read as a complete one. Its `cardinality` RESTATES
+                            the relation cardinality of its kind's §4.3 row, and §4.3.1
+                            states what `items` and `total` must then satisfy
 VersionPins     object      { strategy_version, factor_definition_version,
                               risk_policy_version, entry_policy_version,
                               exit_policy_version, model_version, prompt_version,
@@ -691,19 +706,43 @@ Resolution      ENDPOINT      -- resolvable by a catalogued GET, named in §4.3
                                    availability state rather than to a payload
 Unit            USD  RATIO  PERCENT  BPS  SHARES  SECONDS  TRADING_DAYS  CALENDAR_DAYS
                 COUNT  R_MULTIPLE  DIMENSIONLESS
+RefKind         the TWENTY-SEVEN members that are the rows of the §4.3 table. A value
+                outside them is refused at the boundary, never rendered and never coerced
 ```
+
+**`Cardinality` describes the RELATION, not the count of reference objects.** A required `Ref`
+field always carries exactly one reference object; its kind's cardinality says how many **targets**
+that one reference may resolve to. On a `RefList` the same value additionally constrains `items`
+and `total`, under §4.3.1.
+
+**`Resolution` is declared per reference, from the SET its kind permits.** §4.3's Resolution column
+is a permitted set rather than a single invariant — two accepted rows already carry two members —
+and `EMBEDDED` is **response-relative**: it may be declared exactly when the response carrying the
+reference also carries the referenced payload.
 
 ---
 
 ### 4.3 Resolving a reference — no dangling `_ref`
 
-**Every reference names how it resolves, and nothing resolves by convention.** A `_ref` whose
-resolution is not in this table is refused at the boundary.
+**Every reference names how it resolves, and nothing resolves by convention.** A `_ref` whose kind is
+not a row of this table, or whose resolution is outside the set its row permits, is refused at the
+boundary.
+
+**The Resolution column is a PERMITTED SET.** A reference declares **one** member of its row's set.
+`EMBEDDED` is additionally permitted for **every** row, and is constrained by truth rather than by
+enumeration: a response may declare it exactly when that response carries the referenced payload, so
+it cannot be claimed for a payload that is not there. The rows below name the members that are
+permitted **in addition to** `EMBEDDED`.
+
+**The Cardinality column describes the RELATION** — how many targets a subject may have — and not
+how many reference objects a field carries. §4.3.1 states what that requires of a `Ref` and of a
+`RefList`.
 
 | `ref_kind` | Resolves to | Resolution | Cardinality |
 |---|---|---|---|
-| `candidate` | `CandidateDetail` | `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}` | `ZERO_OR_ONE` |
-| `brain_decision` | the journaled decision status inside `CandidateDetail` | `EMBEDDED` | `EXACTLY_ONE` |
+| `candidate` | `CandidateDetail` | `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}`; `UNRESOLVABLE_V1` | `ZERO_OR_ONE` |
+| `brain_decision` | the journaled decision status inside `CandidateDetail` | `EMBEDDED`; `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}`; `UNRESOLVABLE_V1` | `EXACTLY_ONE` |
+| `trade` | `TradeDetail` | `ENDPOINT` — `GET /api/v1/portfolio/trades/{trade_id}`; `UNRESOLVABLE_V1` | `ZERO_OR_ONE` |
 | `risk_decision` | `RiskSnapshot.decisions[]` | `AUTHORIZED_READ` — `risk:read` | `ZERO_OR_ONE` |
 | `order` | `TradeLifecycle` order events | `ENDPOINT` — `GET /api/v1/portfolio/trades/{trade_id}/lifecycle` | `ZERO_OR_MORE` |
 | `fill` | `TradeLifecycle` fill events | `ENDPOINT` — the same lifecycle response | `ZERO_OR_MORE` |
@@ -731,7 +770,9 @@ resolution is not in this table is refused at the boundary.
 
 **`UNRESOLVABLE_V1` is a stated resolution, not a gap.** It says the join is specified and the
 producer does not exist, so a caller receives an `AvailabilityState` and a reason code rather than a
-404 it has to interpret. **It is never used for a producer that exists.**
+404 it has to interpret. **It is never used for a producer that exists** — and **a producer
+implemented against repository-owned synthetic fixtures exists**, so a reference into one declares
+the resolution its kind and its response actually support.
 
 **Resolving a reference is an authorized read, not a widening.** No producing contract gains a field
 because a view resolves a reference into it, and **no reference resolves to a payload the caller's
@@ -742,6 +783,79 @@ reader knows something exists that they may not see.
 separately owned read model, and resolving one is an authorized read, not a widening of any
 producing contract. **No sizing or execution field is added to `CandidateIntent` to make this view
 simpler**, and `CandidateDetail` continues to carry none.
+
+---
+
+#### 4.3.1 Every reference field names its kind, and every absence names itself
+
+**A reference whose kind was never assigned cannot be checked against anything.** §4.2 types
+`ref_kind` as closed and §4.3 refuses a reference outside its table; neither rule is reachable for a
+field whose kind the catalogue never states. **The eighteen `Ref`-valued fields of §4.5 whose
+contract line does not state a kind are assigned here**, and no §4.5 field is left unassigned.
+
+| Field | `ref_kind` |
+|---|---|
+| `ExecutiveOverview.last_decision.ref` | `decision` |
+| `ExecutiveOverview.last_scout_run.ref` | `research_run` |
+| `TradeLifecycle.events[].correction_of` | the kind of the event it corrects — `order`, `fill`, `protection`, `add` or `exit` |
+| `TradeLifecycle.events[].source_ref` | `source_fact` |
+| `ReconciliationStatus.position_diffs[].security_ref` | `evidence` |
+| `ReconciliationStatus.order_diffs[].local_ref` | `order` |
+| `CandidateDetail.downstream_refs.risk_decision` | `risk_decision` |
+| `CandidateDetail.downstream_refs.trade` | `trade` |
+| `RiskSnapshot.initial_planned_risk_open[].trade_ref` | `trade` |
+| `RiskSnapshot.decisions[].decision_ref` | `risk_decision` |
+| `ShortSideSnapshot.borrow[].security_ref` | `evidence` |
+| `ShortSideSnapshot.deterioration[].record_ref` | `evidence` |
+| `ShortSideSnapshot.blocked_shorts[].candidate_ref` | `candidate` |
+| `HypothesisRegistration.lineage.parent_registration` | `registration` |
+| `HypothesisRegistration.lineage.superseded_by` | `registration` |
+| `QualificationStatus` — each of its three `source_ref` fields | `source_fact` |
+| `SearchResultPage.results[].ref` | any `RefKind` — a search result names whatever was found, and resolves as that kind |
+
+**`security_ref` is `evidence` everywhere.** `CandidateDetail.security_ref` already declares it, and
+**one field name must not mean two kinds** in one catalogue.
+
+**Cardinality, applied.**
+
+```text
+a required Ref field       carries EXACTLY ONE reference OBJECT, always
+its kind's cardinality     says how many TARGETS that one reference may resolve to
+                           ZERO_OR_ONE  -- the target may be absent, and the reference STAYS
+                           EXACTLY_ONE  -- a target exists whenever the subject does
+a RefList field            carries zero or more reference objects
+its cardinality field      RESTATES its kind's relation cardinality, and `items` and `total`
+                           must be consistent with it
+```
+
+**A `RefList` whose `items` count cannot satisfy its declared cardinality is refused**, with one
+stated exception: a `ONE_OR_MORE` relation may carry an empty list when its `total` is **not** an
+`AVAILABLE` zero — the count must carry a state and reason saying why the population could not be
+enumerated. **An `AVAILABLE` zero against a `ONE_OR_MORE` relation asserts that a relation the
+contract says always has members has none**, and no producer states that silently.
+
+**A reference resolves to its own target, or to nothing.** A resolved target matches the
+reference's `ref_id` **exactly** and is of the reference's kind, and its environment and provenance
+match the resolving response's envelope. **No resolver falls back to a nearest match, a default or a
+first row when an identifier is unknown.**
+
+**Four unavailable outcomes, and none is a synonym for another.**
+
+| Outcome | `availability` | `reason` |
+|---|---|---|
+| the reference is well formed and names nothing | `NOT_YET_AVAILABLE` | `REFERENT_NOT_FOUND` |
+| the producing subsystem does not exist | `NOT_IMPLEMENTED` | `PRODUCER_NOT_IMPLEMENTED` |
+| the target exists and this caller may not read it | `NOT_AUTHORIZED` | `CLASSIFICATION_WITHHELD` |
+| the reference is malformed, or its kind is unknown | — | **refused at admission** |
+
+**A malformed reference is a contract violation, not an availability answer.** The boundary rejects
+the response rather than rendering a state for it.
+
+**Navigation is an allowlist, and never a constructed URL.** A destination for a reference comes
+from a **closed allowlist keyed by `RefKind`**; an unknown or unmapped kind yields **no link**. No
+destination is built from `ref_id` or `ref_kind`, and **no generic external URL fetcher, proxy or
+unrestricted resolver exists**. `Ref.classification` **labels** the reference and **is not access or
+publication authorization**.
 
 ---
 
@@ -2041,7 +2155,7 @@ rather than served under a default nobody approved.
 | **cursor** | opaque, and it encodes the projection `snapshot_version`, the sort key, the tiebreak key and the full filter set. **A cursor is never a row offset**, and a cursor from one filter set is refused against another |
 | **snapshot pinning** | a page continues against the snapshot its cursor names. If that snapshot has been superseded, the response is `PARTIAL` with `UPSTREAM_INPUT_STALE` and names the current snapshot — **it never silently continues across two snapshots** |
 | **stable ordering** | every sort has a declared deterministic tiebreak, so two identical requests return identical order |
-| **errors** | a closed error vocabulary, and **no free text**: `UNKNOWN_SCHEMA_VERSION`, `UNKNOWN_API_VERSION`, `UNKNOWN_FILTER`, `UNKNOWN_SORT`, `PAGE_SIZE_EXCEEDED`, `EXTENT_EXCEEDED`, `CURSOR_INVALID`, `CURSOR_SNAPSHOT_SUPERSEDED`, `SCOPE_MISSING`, `SCOPE_INSUFFICIENT`, `CLASSIFICATION_WITHHELD`, `POLICY_REFERENCE_MISSING`, `PROJECTION_ERROR` |
+| **errors** | a closed error vocabulary, and **no free text**: `UNKNOWN_SCHEMA_VERSION`, `UNKNOWN_API_VERSION`, `UNKNOWN_FILTER`, `UNKNOWN_SORT`, `PAGE_SIZE_EXCEEDED`, `EXTENT_EXCEEDED`, `CURSOR_INVALID`, `CURSOR_SNAPSHOT_SUPERSEDED`, `SCOPE_MISSING`, `SCOPE_INSUFFICIENT`, `CLASSIFICATION_WITHHELD`, `POLICY_REFERENCE_MISSING`, `REFERENT_NOT_FOUND`, `PROJECTION_ERROR`. **`REFERENT_NOT_FOUND` means a well-formed identifier named nothing, and is never a substitute for an unimplemented producer or a withheld target** (§4.3.1) |
 | **refusal, not truncation** | `PAGE_SIZE_EXCEEDED` and `EXTENT_EXCEEDED` are refusals. **A silently truncated result is a wrong answer wearing a correct one's shape** |
 | **no error carries data** | an error response carries the envelope and the closed code, and **never a partial payload, a bucket name, a key, an identifier or a backend message** |
 
