@@ -167,20 +167,39 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     label: "Signal & Candidate Funnel",
     areas: [6],
     group: "signals",
-    status: "placeholder",
+    status: "implemented",
     purpose: "Brain decisions and downstream stages, presented as two separate axes.",
-    dependency: NOT_IMPLEMENTED,
+    dependency: "the Brain runtime and its journaled decisions — no Brain runtime exists",
     cycle: "C6",
+    keywords: [
+      "funnel",
+      "candidates",
+      "brain",
+      "watchlist",
+      "blocked",
+      "conversion",
+      "reasons",
+    ],
   },
   {
     href: "/signals/missed",
     label: "Missed Opportunities",
     areas: [8],
     group: "signals",
-    status: "placeholder",
-    purpose: "Candidates the system declined, and why.",
-    dependency: NOT_IMPLEMENTED,
+    status: "implemented",
+    purpose: "Candidates the system declined, and why. Hindsight is never achievable profit.",
+    dependency:
+      "the Brain runtime and a qualified price history — no Brain runtime exists and G1 is OPEN",
     cycle: "C6",
+    keywords: [
+      "missed",
+      "counterfactual",
+      "hindsight",
+      "expiry",
+      "delay",
+      "borrow",
+      "false positive",
+    ],
   },
   {
     href: "/risk",
@@ -400,9 +419,10 @@ export function routesInGroup(group: NavGroupId): readonly NavRoute[] {
  * **never share a screen** (Area 36.3). They are not sidebar entries: each is reached from
  * the row it belongs to.
  *
- * `/portfolio/trades/[tradeId]` is IMPLEMENTED in its **basic** form — C5 owns the history
- * and a basic detail, and **C6 owns the complete lifecycle and the chart drill-down**.
- * `/signals/candidates/[candidateId]` remains reserved and unimplemented.
+ * `/portfolio/trades/[tradeId]` carries the **complete** lifecycle: C5 owned the history and a
+ * basic detail, and C6 added the orders, fills, protective-order events, reconciliation,
+ * execution quality, attribution and benchmark. `/signals/candidates/[candidateId]` is
+ * implemented by C6 and is reached from the funnel row and from the trade it produced.
  */
 export const DEEP_DESTINATIONS: readonly {
   readonly route: string;
@@ -410,7 +430,7 @@ export const DEEP_DESTINATIONS: readonly {
   readonly cycle: string;
 }[] = [
   { route: "/portfolio/trades/[tradeId]", status: "implemented", cycle: "C5 basic, C6 full" },
-  { route: "/signals/candidates/[candidateId]", status: "placeholder", cycle: "C6" },
+  { route: "/signals/candidates/[candidateId]", status: "implemented", cycle: "C6" },
 ];
 
 /** The routes with no page of their own, kept for the tests that assert their absence. */

@@ -23,6 +23,7 @@ import type {
 
 import { BOOK, centsToDecimal, pctOfCapitalHundredths, positionValueCents, securityOf } from "./book";
 import { EXPOSURE_AXES, stageRiskRecord } from "./positions";
+import { CANDIDATE_RECORDS, riskDecisionFor } from "./signals";
 import {
   count,
   demoPolicyRef,
@@ -179,11 +180,28 @@ export function syntheticRiskSnapshot(
     risk_tier: demoReason("RISK_TIER_RECORDED_AS_NORMAL"),
     circuit_breaker_state: demoReason("CIRCUIT_BREAKER_NOT_TRIPPED_BY_RECORD"),
     new_entry_state: demoReason("NEW_ENTRIES_PERMITTED_BY_RECORD"),
-    decisions: open.slice(0, 3).map((trade) => ({
-      decision_ref: demoRef(`${trade.tradeId}-risk-decision`, "risk_decision"),
-      at: sessionInstant(days[trade.stages[0].session]),
-      outcome: demoReason("RISK_APPROVED_AT_RECORDED_SIZE"),
-    })),
+    /*
+     * THE DECISIONS THE BOOK ACTUALLY RECORDS -- APPROVALS AND THE ONE DECLINE.
+     *
+     * An earlier revision listed three approvals synthesised from the first three open
+     * trades, under reference ids that resolved to nothing, while Trade Detail declared the
+     * risk-decision producer NOT_IMPLEMENTED for those same trades. **One fixture said a
+     * decision had been recorded and another said none could exist.** The index now comes
+     * from the decision records themselves, so the two screens cannot disagree, and a
+     * DECLINED decision appears here rather than only approvals.
+     */
+    decisions: CANDIDATE_RECORDS.flatMap((record) => {
+      const decision = riskDecisionFor(record, days, asOf);
+      return decision === undefined
+        ? []
+        : [
+            {
+              decision_ref: demoRef(decision.decision_id, "risk_decision", "AUTHORIZED_READ"),
+              at: decision.decided_at,
+              outcome: decision.outcome_reason,
+            },
+          ];
+    }),
   };
 }
 

@@ -14,10 +14,16 @@
  *                                      written, so its R is unavailable and is **never
  *                                      computed from a current stop**
  *
- * WHAT IS DELIBERATELY ABSENT. Order and fill mechanics, protective-order events,
- * reconciliation and finalized attribution are **not carried**, because the producers do not
- * exist and because Execution History and the Audit Trail are separate screens (Area 36.3).
- * Every one of them is named as a gap rather than filled in.
+ * WHAT C6 ADDED, AND FOR WHICH TRADES. Orders, fills, protective-order events, reconciliation,
+ * appended corrections, per-fill execution quality and a declared attribution are carried for
+ * the **six** trades that have a declared execution record in `execution.ts`. **Every other
+ * trade keeps exactly what C5 carried**, with each of those kinds named as absent — because a
+ * trade ledger row does not say how many fills it took, and inferring one would manufacture an
+ * execution history out of a position size.
+ *
+ * Execution History and the Audit Trail remain separate screens (Area 36.3). This carries ONE
+ * TRADE's execution quality, embedded; it does not implement the Area 9 aggregate surface, and
+ * the audit reference still resolves to an availability state rather than to a payload.
  */
 import type {
   TradeDetailPayload,
@@ -29,6 +35,7 @@ import type { Series } from "@/contracts/values";
 
 import type { BookTrade } from "./book";
 import {
+  BENCHMARK_INDEX,
   BOOK,
   MISSING_RISK_RECORD_TRADE,
   PARTIAL_PATH_TRADE,
@@ -37,9 +44,20 @@ import {
   strategyVersionOf,
 } from "./book";
 import {
+  aggregateQuality,
+  attributionCents,
+  declaredAbsentKinds,
+  executionEvents,
+  executionRefs,
+  fillQuality,
+  hasExecutionRecord,
+} from "./execution";
+import { candidateForTrade, riskDecisionFor } from "./signals";
+import {
   CALENDAR,
   count,
   demoRef,
+  percent as percentValue,
   demoReason,
   instantValue,
   notApplicable,
@@ -271,24 +289,84 @@ export function findBookTrade(tradeId: string): BookTrade | undefined {
 /* ------------------------------------------------------------------ TradeDetail */
 
 /**
- * The stages of one trade's story this cycle does **not** reconstruct.
+ * The stages a trade WITH a declared execution record still does not carry.
  *
- * Each is named with the availability state that explains it, so a reader sees the shape of
- * the whole lifecycle and which parts of it are missing. **A missing event renders as a gap
- * and never as an inference.**
+ * The immutable audit trail is Area 26's and belongs to a later cycle, so a trade whose
+ * orders and fills are fully described still cannot show its own audit events.
  */
-const DETAIL_GAPS = [
-  ["CANDIDATE_AND_THESIS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["BRAIN_DECISION_RECORD", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["RISK_ENGINE_DECISION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["ORDER_AND_FILL_MECHANICS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["PROTECTIVE_ORDER_EVENTS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["BROKER_RECONCILIATION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["EXECUTION_QUALITY", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["PERFORMANCE_ATTRIBUTION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["BENCHMARK_PRICE_HISTORY", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+const RECORDED_DETAIL_GAPS = [
   ["IMMUTABLE_AUDIT_EVENTS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
 ] as const;
+
+/**
+ * The gap a trade whose sizing NOBODY RECORDED still carries.
+ *
+ * **A recorded decision and an absent one are different facts, and they are now told apart.**
+ * An earlier revision declared this gap on every trade, including the ones whose risk
+ * decision the book declares — while `/risk` listed those same decisions with an approved
+ * outcome. Two screens over one fixture said opposite things about whether a producer had
+ * ever written anything down.
+ */
+const NO_RISK_DECISION_GAPS = [
+  ["RISK_ENGINE_DECISION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+] as const;
+
+/** The one gap a trade with no journaled candidate carries, and one with a candidate does not. */
+const NO_CANDIDATE_GAPS = [
+  ["CANDIDATE_AND_THESIS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+  ["BRAIN_DECISION_RECORD", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+] as const;
+
+/** The gaps a trade with no execution record carries, on top of the two above. */
+const NO_EXECUTION_GAPS = [
+  ["ORDER_AND_FILL_MECHANICS", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["PROTECTIVE_ORDER_EVENTS", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["BROKER_RECONCILIATION", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["EXECUTION_QUALITY", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["PERFORMANCE_ATTRIBUTION", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+] as const;
+
+/**
+ * The benchmark slice aligned to EXACTLY this trade's holding period.
+ *
+ * §12.4: "the benchmark is aligned to the **exact** boundaries the subject used". The slice
+ * starts at the trade's own entry session and ends at its own last session, and the values are
+ * the index's return SINCE THAT ENTRY — so the first point is a measured zero rather than an
+ * index level a reader would have to normalise themselves.
+ */
+export function benchmarkSeries(
+  trade: BookTrade,
+  days: readonly string[],
+  asOf: string,
+): { series: Series; movementHundredths: number } {
+  const first = trade.stages[0].session;
+  const last = trade.lastSession;
+  const base = BENCHMARK_INDEX[first];
+  const points = [];
+  for (let session = first; session <= last; session += 1) {
+    points.push({
+      t: days[session],
+      v: percentValue(
+        "benchmark.return",
+        Math.round(((BENCHMARK_INDEX[session] - base) * 10_000) / base),
+        asOf,
+      ),
+    });
+  }
+  return {
+    series: {
+      points,
+      granularity: "DAILY",
+      calendar: CALENDAR,
+      timezone: "UTC",
+      coverage: { present: points.length, requested: points.length },
+      completeness: "COMPLETE",
+    },
+    movementHundredths: Math.round(
+      ((BENCHMARK_INDEX[last] - base) * 10_000) / base,
+    ),
+  };
+}
 
 /**
  * The trade's own mark path, as an EMBEDDED `Series`.
@@ -325,18 +403,65 @@ export function syntheticTradeDetail(
 ): TradeDetailPayload {
   const summary = buildTradeSummary(trade, days, asOf);
   const closed = trade.status === "CLOSED";
+  const recorded = hasExecutionRecord(trade.tradeId);
+  const candidate = candidateForTrade(trade.tradeId);
+  const refs = executionRefs(trade, days, asOf);
+  const quality = aggregateQuality(trade, days, asOf);
+  const attribution = attributionCents(trade);
+  const benchmark = benchmarkSeries(trade, days, asOf);
   const unavailableMetric = (metricId: string) =>
-    unavailable(metricId, "USD", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED");
+    unavailable(metricId, "USD", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING");
+
+  const decision =
+    candidate === undefined ? undefined : riskDecisionFor(candidate, days, asOf);
+  const gaps = [
+    ...(candidate === undefined ? NO_CANDIDATE_GAPS : []),
+    ...(decision === undefined ? NO_RISK_DECISION_GAPS : []),
+    ...(recorded ? RECORDED_DETAIL_GAPS : [...NO_EXECUTION_GAPS, ...RECORDED_DETAIL_GAPS]),
+  ];
 
   return {
     trade_id: trade.tradeId,
     summary,
-    candidate_ref: demoRef(`${trade.tradeId}-candidate`, "candidate"),
-    brain_decision_ref: demoRef(`${trade.tradeId}-brain-decision`, "brain_decision"),
-    risk_decision_ref: demoRef(`${trade.tradeId}-risk-decision`, "risk_decision"),
-    order_refs: refListOf([], "ZERO_OR_MORE", asOf),
-    fill_refs: refListOf([], "ZERO_OR_MORE", asOf),
-    protection_refs: refListOf([], "ZERO_OR_MORE", asOf),
+    /*
+     * THE CANDIDATE RESOLVES BY ENDPOINT WHERE ONE WAS JOURNALED.
+     *
+     * §4.3 assigns `candidate` an ENDPOINT resolution, and C6 implements that endpoint, so a
+     * trade with a journaled candidate carries a reference a reader can actually follow. Most
+     * trades have none, and theirs stays UNRESOLVABLE_V1.
+     */
+    candidate_ref:
+      candidate === undefined
+        ? demoRef(`${trade.tradeId}-candidate`, "candidate")
+        : demoRef(candidate.candidateId, "candidate", "ENDPOINT"),
+    /*
+     * §4.3 assigns `brain_decision` an EMBEDDED resolution, because the journaled decision
+     * status lives INSIDE `CandidateDetail`. It is not inside THIS response, so calling it
+     * EMBEDDED here would claim a payload this response does not carry. Where a candidate was
+     * journaled it is one authorized read away and is carried as ENDPOINT; where none was, it
+     * resolves to an availability state like every other absent producer.
+     */
+    brain_decision_ref:
+      candidate === undefined
+        ? demoRef(`${trade.tradeId}-brain-decision`, "brain_decision")
+        : demoRef(candidate.candidateId, "brain_decision", "ENDPOINT"),
+    /*
+     * §4.3 resolves a `risk_decision` under an AUTHORIZED_READ on `risk:read`.
+     *
+     * Where the book declares a decision the reference resolves to it and the joined record
+     * travels beside it; where none was recorded it resolves to nothing and the gap above
+     * says so. **A reference that always failed to resolve was indistinguishable from one
+     * whose target had simply not been written.**
+     */
+    risk_decision_ref:
+      decision === undefined
+        ? demoRef(`${trade.tradeId}-risk-decision`, "risk_decision")
+        : demoRef(decision.decision_id, "risk_decision", "AUTHORIZED_READ"),
+    /** The joined downstream record — separately owned, and never a field of the candidate. */
+    risk_decision: decision,
+    order_refs: refs.order_refs,
+    fill_refs: refs.fill_refs,
+    protection_refs: refs.protection_refs,
     add_refs: refListOf(
       trade.stages
         .filter((stage) => stage.kind === "ADD")
@@ -345,35 +470,65 @@ export function syntheticTradeDetail(
       asOf,
     ),
     exit_ref: closed ? demoRef(`${trade.tradeId}-exit`, "exit", "EMBEDDED") : undefined,
-    reconciliation_refs: refListOf([], "ZERO_OR_MORE", asOf),
-    execution_quality_ref: demoRef(`${trade.tradeId}-execution-quality`, "execution_quality"),
-    attribution: {
-      /*
-       * NOTHING IS ATTRIBUTED. Strategy, factor, regime, execution and cost attribution each
-       * need a producer that does not exist; a provisional zero would be a decomposition
-       * nobody computed.
-       */
-      strategy: unavailableMetric("pnl.combined"),
-      factor: unavailableMetric("pnl.combined"),
-      regime: unavailableMetric("pnl.combined"),
-      execution: unavailableMetric("pnl.combined"),
-      cost: unavailableMetric("pnl.combined"),
-      state: "PROVISIONAL",
-    },
-    /** No benchmark price history exists, so no benchmark movement is computed. */
-    benchmark_movement: unavailable(
+    reconciliation_refs: refs.reconciliation_refs,
+    execution_quality_ref:
+      quality === undefined
+        ? demoRef(`${trade.tradeId}-execution-quality`, "execution_quality")
+        : demoRef(`${trade.tradeId}-execution-quality`, "execution_quality", "EMBEDDED"),
+    execution_quality: quality,
+    fill_quality: [...fillQuality(trade, days, asOf)],
+    attribution:
+      attribution === null
+        ? {
+            /*
+             * NOTHING IS ATTRIBUTED FOR THIS TRADE. Strategy, factor, regime, execution and
+             * cost attribution each need a producer that does not exist; a provisional zero
+             * would be a decomposition nobody computed.
+             */
+            strategy: unavailableMetric("pnl.combined"),
+            factor: unavailableMetric("pnl.combined"),
+            regime: unavailableMetric("pnl.combined"),
+            execution: unavailableMetric("pnl.combined"),
+            cost: unavailableMetric("pnl.combined"),
+            state: "PROVISIONAL",
+          }
+        : {
+            strategy: usd("pnl.combined", attribution.strategy, asOf),
+            factor: usd("pnl.combined", attribution.factor, asOf),
+            regime: usd("pnl.combined", attribution.regime, asOf),
+            execution: usd("pnl.combined", attribution.execution, asOf),
+            cost: usd("pnl.combined", attribution.cost, asOf),
+            state: attribution.state,
+          },
+    /*
+     * THE BENCHMARK MOVED OVER EXACTLY THIS TRADE'S HOLDING PERIOD.
+     *
+     * `PRICE_RETURN`, because the index pays no dividend and reinvests nothing -- and so do
+     * the demonstration securities it is measured beside. §12.4 forbids comparing a
+     * price-return benchmark against a total-return subject, and the way to obey that is for
+     * both sides to be the same kind of return rather than for the label to be adjusted.
+     */
+    benchmark_movement: percentValue(
       "benchmark.movement",
-      "PERCENT",
-      "NOT_YET_AVAILABLE",
-      "UPSTREAM_INPUT_MISSING",
+      benchmark.movementHundredths,
+      asOf,
     ),
-    benchmark_basis: "TOTAL_RETURN",
-    benchmark_series_ref: demoRef(`${trade.tradeId}-benchmark`, "benchmark_series"),
+    benchmark_basis: "PRICE_RETURN",
+    benchmark_series_ref: demoRef(`${trade.tradeId}-benchmark`, "benchmark_series", "EMBEDDED"),
+    benchmark_series: benchmark.series,
+    benchmark_window: {
+      from: summary.entry_time,
+      to: sessionInstant(days[trade.lastSession]),
+      calendar: CALENDAR,
+      timezone: "UTC",
+    },
+    benchmark_label: demoReason("DEMONSTRATION_BROAD_MARKET_INDEX"),
     lineage: demoPins(trade.versionId),
+    /** The audit trail is a separate screen and a separate read model, and neither exists. */
     audit_refs: refListOf([], "ZERO_OR_MORE", asOf),
     chart_series_ref: demoRef(`${trade.tradeId}-marks`, "chart_series", "EMBEDDED"),
     chart_series: tradeChartSeries(trade, days, asOf),
-    gaps: DETAIL_GAPS.map(([expected, availability, reason]) => ({
+    gaps: gaps.map(([expected, availability, reason]) => ({
       expected: demoReason(expected),
       availability,
       reason,
@@ -383,13 +538,21 @@ export function syntheticTradeDetail(
 
 /* --------------------------------------------------------------- TradeLifecycle */
 
+/**
+ * The kinds a trade with NO declared execution record does not carry.
+ *
+ * `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` rather than `NOT_IMPLEMENTED`: C6 does
+ * implement the producer — six trades in this very book have these events — so the honest
+ * statement for the other one hundred and ninety-four is that **this trade's evidence was
+ * never written**, not that nothing can write it.
+ */
 const ABSENT_LIFECYCLE_KINDS = [
-  ["ORDER_SUBMITTED", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["ORDER_ACKNOWLEDGED", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["INDIVIDUAL_FILL", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["PROTECTIVE_ORDER_PLACED", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["PROTECTIVE_ORDER_AMENDED", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["BROKER_RECONCILIATION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+  ["ORDER_SUBMITTED", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["ORDER_ACKNOWLEDGED", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["INDIVIDUAL_FILL", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["PROTECTIVE_ORDER_PLACED", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["PROTECTIVE_ORDER_AMENDED", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
+  ["BROKER_RECONCILIATION", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING"],
   ["CORRECTION_APPENDED", "EMPTY_VERIFIED", "EMPTY_RESULT_VERIFIED"],
 ] as const;
 
@@ -446,6 +609,7 @@ export function syntheticTradeLifecycle(
         source_ref: demoRef(`${trade.tradeId}-exit-${index}-source`, "source_fact"),
       };
     }),
+    ...executionEvents(trade, days, asOf),
   ].sort((left, right) => left.event_time.localeCompare(right.event_time));
 
   /**
@@ -472,7 +636,10 @@ export function syntheticTradeLifecycle(
     trade_id: trade.tradeId,
     events,
     gaps,
-    absent_kinds: ABSENT_LIFECYCLE_KINDS.map(([kind, availability, reason]) => ({
+    absent_kinds: (hasExecutionRecord(trade.tradeId)
+      ? declaredAbsentKinds(trade.tradeId)
+      : ABSENT_LIFECYCLE_KINDS
+    ).map(([kind, availability, reason]) => ({
       kind: demoReason(kind),
       availability,
       reason,

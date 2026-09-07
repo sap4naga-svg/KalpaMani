@@ -32,6 +32,12 @@ import type {
   TradeLifecyclePayload,
   TradeSummaryPayload,
 } from "@/contracts/portfolio-models";
+import type {
+  CandidateDetailPayload,
+  CandidateFunnelPayload,
+  CandidateSummaryPayload,
+  MissedOpportunityPayload,
+} from "@/contracts/signal-models";
 import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
 import type {
   MarketRegimePayload,
@@ -112,6 +118,23 @@ export interface ReadClient {
   riskSnapshot(scope: ViewScope): Promise<EnvelopeOf<RiskSnapshotPayload>>;
   shortSide(scope: ViewScope): Promise<EnvelopeOf<ShortSideSnapshotPayload>>;
   marketRegime(scope: ViewScope): Promise<EnvelopeOf<MarketRegimePayload>>;
+
+  /* ------------------------------------------------------------- added by C6 */
+
+  /**
+   * The signal funnel, the candidate ledger, one candidate's explanation, and the misses.
+   *
+   * The candidate identity is a request parameter and joins the cache key, so two candidates
+   * are two entries and one is never served under the other's identity — exactly as the trade
+   * identity does on `tradeDetail`.
+   */
+  candidateFunnel(scope: ViewScope): Promise<EnvelopeOf<CandidateFunnelPayload>>;
+  candidates(scope: ViewScope): Promise<EnvelopeOf<CandidateSummaryPayload>>;
+  candidateDetail(
+    scope: ViewScope,
+    candidateId: string,
+  ): Promise<EnvelopeOf<CandidateDetailPayload>>;
+  missedOpportunities(scope: ViewScope): Promise<EnvelopeOf<MissedOpportunityPayload>>;
 }
 
 export class ContractViolationError extends Error {

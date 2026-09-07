@@ -4,12 +4,15 @@
  * `PerformanceSummary`, `PositionSnapshot`, `ExposureAggregate`, `TradeSummary`,
  * `TradeDetail` and `TradeLifecycle` — the read models the C5 portfolio screens render.
  *
- * SCOPE, STATED HONESTLY. `TradeLifecycle` is carried here in the **basic** form C5 owns:
- * the trade-level stages a fixture actually records, with every absent stage named as a gap.
- * **The complete lifecycle and the chart drill-down belong to C6** (traceability matrix §3),
- * and nothing here claims them. `CandidateDetail`, `ExecutionQuality` and
- * `ReconciliationStatus` are not implemented and are reached only as references that resolve
- * to an availability state.
+ * SCOPE, STATED HONESTLY. `TradeLifecycle` carries the **complete** lifecycle C6 owns —
+ * orders, fills, protective-order events, adds, partial exits, the exit, reconciliation and
+ * appended corrections — **for the trades whose execution evidence a fixture actually
+ * records**, and every trade without such a record keeps the trade-level stages C5 carried
+ * with every absent kind named. **A missing event renders as a gap and never as an
+ * inference.** `ExecutionQuality` is carried for ONE TRADE, embedded on its detail; the
+ * aggregate `/execution/quality` surface of Area 9 is a later cycle and nothing here
+ * implements it. `ReconciliationStatus` is reached only as a reference that resolves to an
+ * availability state.
  *
  * THE FOUR CONCEPTS STAY APART (Area 36.3): the trade ledger, one trade's story, execution
  * mechanics and the audit trail "share identifiers and never share a screen".
@@ -49,6 +52,8 @@ import {
   fieldReasonCode,
 } from "./vocabularies";
 import { isValueBearing } from "./validity";
+import { executionQuality } from "./execution-models";
+import { riskDecision } from "./risk-decision";
 
 /** §2.7's downstream axis, as a schema. A SEPARATE axis, never merged with the Brain's. */
 export const downstreamStage = z.enum(DOWNSTREAM_STAGES);
@@ -724,6 +729,17 @@ export const tradeDetailPayload = z
     candidate_ref: ref,
     brain_decision_ref: ref,
     risk_decision_ref: ref,
+    /**
+     * The RESOLVED downstream risk decision, where one was recorded.
+     *
+     * ADDITIVE and documented (§12.6), for the reason `execution_quality` is already carried
+     * beside its own reference: §4.3 resolves this reference under an `AUTHORIZED_READ` on
+     * `risk:read`, and "the join is a read-model concern" is exactly what §4.5's TradeDetail
+     * invariant says a whole-trade view does. **The record arrives here and NOWHERE ELSE**:
+     * `CandidateIntent` acquires no field of it, and `CandidateDetail` carries the reference
+     * alone.
+     */
+    risk_decision: riskDecision.optional(),
     order_refs: refList,
     fill_refs: refList,
     protection_refs: refList,
@@ -732,6 +748,22 @@ export const tradeDetailPayload = z
     exit_ref: ref.optional(),
     reconciliation_refs: refList,
     execution_quality_ref: ref,
+    /**
+     * The EMBEDDED resolution of that reference, at `AGGREGATE` scope, where one exists.
+     *
+     * ADDITIVE, and narrower than the reference it resolves: it is **this trade's** execution
+     * quality, not the Area 9 aggregate over a window of fills. Present exactly when the
+     * reference states it is embedded, so the two cannot disagree about whether it exists.
+     */
+    execution_quality: executionQuality.optional(),
+    /**
+     * One record per recorded fill, at `FILL` scope.
+     *
+     * A trade-level aggregate hides the case §12.3 cares about: a fill with no resolvable
+     * reference is EXCLUDED and COUNTED, and an average over a silently reduced population is
+     * a different metric. The per-fill records are what make that visible.
+     */
+    fill_quality: z.array(executionQuality),
     attribution: z.object({
       strategy: metricValue,
       factor: metricValue,
@@ -746,6 +778,20 @@ export const tradeDetailPayload = z
     /** A price-return benchmark is never compared against a total-return portfolio. */
     benchmark_basis: z.enum(BENCHMARK_RETURN_BASES),
     benchmark_series_ref: ref,
+    /**
+     * The EMBEDDED benchmark path, where one exists, and the window it was aligned to.
+     *
+     * §12.4: "the benchmark is aligned to the **exact** boundaries the subject used". The
+     * window is carried so a reader can check that alignment rather than assume it, and the
+     * basis travels on `benchmark_basis` so a price-return benchmark is never read against a
+     * total-return portfolio.
+     *
+     * **It is a synthetic demonstration index, not a real one.** No provider is selected, G1
+     * is OPEN, and no benchmark price history is requested from anywhere.
+     */
+    benchmark_series: series.optional(),
+    benchmark_window: analysisWindow.optional(),
+    benchmark_label: reasonCoded.optional(),
     lineage: versionPins,
     audit_refs: refList,
     /** OHLC with entry, add, protection and exit markers. */
@@ -778,6 +824,77 @@ export const tradeDetailPayload = z
         message:
           "an EMBEDDED chart reference carries its series, and a reference that resolves " +
           "elsewhere carries none",
+      });
+    }
+    if (
+      (candidate.execution_quality_ref.resolution === "EMBEDDED") !==
+      (candidate.execution_quality !== undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "an EMBEDDED execution-quality reference carries its record, and a reference that " +
+          "resolves elsewhere carries none",
+      });
+    }
+    if (
+      (candidate.benchmark_series_ref.resolution === "EMBEDDED") !==
+      (candidate.benchmark_series !== undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "an EMBEDDED benchmark reference carries its series, and a reference that resolves " +
+          "elsewhere carries none",
+      });
+    }
+    /*
+     * A BENCHMARK MOVEMENT IS A STATEMENT ABOUT A SERIES OVER A WINDOW.
+     *
+     * A movement with no series is a number nobody can check, and a movement with no window is
+     * a number aligned to boundaries nobody stated -- which is exactly what 12.4 forbids.
+     */
+    if (isValueBearing(candidate.benchmark_movement.availability)) {
+      if (candidate.benchmark_series === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a benchmark movement is reported against a series that exists",
+        });
+      }
+      if (candidate.benchmark_window === undefined || candidate.benchmark_label === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a benchmark movement names its window and the benchmark it moved",
+        });
+      }
+    }
+    /*
+     * THE BENCHMARK IS ALIGNED TO THE EXACT BOUNDARIES THE SUBJECT USED (12.4).
+     *
+     * The trade's own entry instant is one of them, and a window that does not start there is
+     * measuring a different holding period from the one it is being compared with.
+     */
+    if (
+      candidate.benchmark_window !== undefined &&
+      candidate.benchmark_window.from !== candidate.summary.entry_time
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "the benchmark window opens at the instant the trade's holding period did",
+      });
+    }
+    for (const record of candidate.fill_quality) {
+      if (record.scope !== "FILL") {
+        ctx.addIssue({
+          code: "custom",
+          message: "a per-fill execution record is at FILL scope",
+        });
+      }
+    }
+    if (candidate.execution_quality !== undefined && candidate.execution_quality.scope !== "AGGREGATE") {
+      ctx.addIssue({
+        code: "custom",
+        message: "the trade-level execution record is the AGGREGATE over its fills",
       });
     }
     if (candidate.summary.trade_id !== candidate.trade_id) {
