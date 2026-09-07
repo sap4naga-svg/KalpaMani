@@ -16,6 +16,8 @@ import {
   RiskSeparationNote,
 } from "@/components/cockpit/risk-records";
 import { TradePriceChart, type ChartLevel, type ChartMarker } from "@/components/cockpit/trade-chart";
+import type { ExecutionQuality } from "@/contracts/execution-models";
+import { isValueBearing } from "@/contracts/validity";
 import { useScope } from "@/components/shell/use-scope";
 import { useTradeDetail, useTradeLifecycle } from "@/data/client/hooks";
 import type { TradeDetailPayload, TradeLifecyclePayload } from "@/contracts/portfolio-models";
@@ -23,20 +25,31 @@ import { humanizeCode } from "@/lib/format";
 import { withScope } from "@/lib/scope";
 
 /**
- * Trade Detail — Area 36.2, in the **basic** form C5 owns.
+ * Trade Detail — Area 36.2, the complete lifecycle C6 owns.
  *
- * WHAT THIS CYCLE IMPLEMENTS: the trade's identity, its recorded reasons, the economics and
- * both risk records, the trade-level timeline a recorded trade actually has, the recorded
- * price marks with entry, add, partial-exit and exit markers, and the references to every
- * downstream fact.
+ * ```text
+ * Candidate -> Brain Decision -> Risk Decision -> Order -> Fill(s) -> Protection
+ *     -> Pyramid / Adds -> Exit -> Reconciliation -> Attribution
+ * ```
  *
- * WHAT IT DELIBERATELY DOES NOT: the candidate and its thesis, the Brain decision, the risk
- * decision, order and fill mechanics, protective-order events, reconciliation, execution
- * quality and finalized attribution. **The producers do not exist**, and the complete
- * lifecycle and the chart drill-down belong to C6. Every one of them is listed as a gap.
+ * WHAT THIS PAGE RECONSTRUCTS, for a trade whose execution evidence was recorded: the
+ * candidate and its thesis by reference, the orders and each of their fills, the reference
+ * price each fill was measured against and the slippage that follows, protective-order
+ * placement, amendment, correction and cancellation, adds, partial exits, the exit,
+ * reconciliation, a declared attribution and a benchmark aligned to exactly this trade's
+ * holding period.
  *
- * **A MISSING EVENT RENDERS AS A GAP AND NEVER AS AN INFERENCE.** Nothing on this page fills
- * a stage in from the stages around it.
+ * WHAT IT STILL DOES NOT: the risk decision — **no risk engine exists, so nothing recorded
+ * why this size rather than another** — and the immutable audit events, which are a separate
+ * screen. Both are named as gaps.
+ *
+ * **A MISSING EVENT RENDERS AS A GAP AND NEVER AS AN INFERENCE.** Most trades in the book
+ * have no execution record at all, and theirs say so rather than being filled in from a
+ * position size.
+ *
+ * **THE FOUR CONCEPTS STAY APART** (Area 36.3). This is one trade's story. Execution History
+ * and the Audit Trail are separate destinations, and this page links to neither by pretending
+ * a reference resolves when it does not.
  */
 export default function Page() {
   const params = useParams<{ tradeId: string }>();
@@ -56,12 +69,12 @@ export default function Page() {
             ? "Trade Detail"
             : `${summary.security.symbol} — ${humanizeCode(summary.direction)}`
         }
-        summary="One trade's story, joined from separately owned records by reference. Every stage this cycle does not carry is named rather than filled in."
+        summary="One trade's story, from the candidate that produced it to the reconciliation that closed it, joined from separately owned records by reference. Every stage without a recorded fact is named rather than filled in."
         pageState="PARTIAL"
       >
         <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="neutral">Area 36 — basic detail</Badge>
-          <Badge tone="unavailable">Full lifecycle: C6</Badge>
+          <Badge tone="neutral">Area 36 — complete lifecycle</Badge>
+          <Badge tone="unavailable">No risk engine exists</Badge>
           <Link
             href={withScope("/portfolio/trades", scope)}
             className="text-label-m text-accent underline underline-offset-2"
@@ -117,6 +130,28 @@ export default function Page() {
         </ReadModelPanel>
 
         <ReadModelPanel
+          title="Execution quality"
+          description="Each fill against the named reference price it was measured on, with the side convention that makes an adverse buy and an adverse sell both read positive."
+          envelope={detail.data}
+          dependency="the execution runtime and its recorded reference prices"
+          operator={operator}
+          testId="trade-execution-panel"
+        >
+          {(payload) => <Execution payload={payload} operator={operator} />}
+        </ReadModelPanel>
+
+        <ReadModelPanel
+          title="Attribution and benchmark"
+          description="A declared decomposition of the trade's outcome, and the benchmark's movement over exactly this trade's holding period."
+          envelope={detail.data}
+          dependency="a factor model, a regime model and a cost model — none exists"
+          operator={operator}
+          testId="trade-attribution-panel"
+        >
+          {(payload) => <Attribution payload={payload} operator={operator} />}
+        </ReadModelPanel>
+
+        <ReadModelPanel
           title="What this detail does not carry"
           description="Each stage the complete story would include, with the state that explains its absence."
           envelope={detail.data}
@@ -135,7 +170,23 @@ function markersFrom(lifecycle: TradeLifecyclePayload | undefined): ChartMarker[
   if (lifecycle === undefined) {
     return [];
   }
-  return lifecycle.events.map((event) => {
+  /*
+   * ONLY POSITION EVENTS PRODUCE A MARKER.
+   *
+   * The complete lifecycle now carries order submissions, acknowledgements, individual fills,
+   * protective-order events and a reconciliation. Drawing a marker for each would put eleven
+   * glyphs on a session that had one entry, and an acknowledgement is not a price the trade
+   * transacted at. The table below the plot carries the whole timeline.
+   */
+  const POSITION_KINDS = [
+    "ENTRY_RECORDED",
+    "PYRAMID_ADD_RECORDED",
+    "PARTIAL_EXIT_RECORDED",
+    "EXIT_RECORDED",
+  ];
+  return lifecycle.events
+    .filter((event) => POSITION_KINDS.includes(event.event_kind.code))
+    .map((event) => {
     const code = event.event_kind.code;
     const kind: ChartMarker["kind"] = code.startsWith("ENTRY")
       ? "ENTRY"
@@ -426,42 +477,6 @@ function TradeIdentity({
         </p>
       </PanelSection>
 
-      <PanelSection
-        title="Attribution and benchmark"
-        note="Strategy, factor, regime, execution and cost attribution each need a producer that does not exist. A provisional zero would be a decomposition nobody computed."
-        state={{ availability: "NOT_IMPLEMENTED", reason: "PRODUCER_NOT_IMPLEMENTED" }}
-      >
-        <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {(
-            [
-              ["Strategy", payload.attribution.strategy],
-              ["Factor", payload.attribution.factor],
-              ["Regime", payload.attribution.regime],
-              ["Execution", payload.attribution.execution],
-              ["Cost", payload.attribution.cost],
-              ["Benchmark move", payload.benchmark_movement],
-            ] as const
-          ).map(([term, metric]) => (
-            <div key={term} className="flex flex-col gap-0.5">
-              <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
-                {term}
-              </dt>
-              <dd>
-                <MetricText metric={metric} />
-              </dd>
-            </div>
-          ))}
-        </dl>
-        <p className="mt-2 text-label-s text-text-tertiary">
-          Attribution state:{" "}
-          <span className="font-mono text-text-secondary">{payload.attribution.state}</span> ·
-          benchmark basis:{" "}
-          <span className="font-mono text-text-secondary">{payload.benchmark_basis}</span>. A
-          price-return benchmark is never compared against a total-return portfolio, so the
-          basis travels with the figure.
-        </p>
-      </PanelSection>
-
       {operator && (
         <ScrollRegion label="Lineage pins">
           <dl className="grid min-w-[30rem] grid-cols-2 gap-x-6 gap-y-1 font-mono text-label-s sm:grid-cols-3">
@@ -476,6 +491,323 @@ function TradeIdentity({
           </dl>
         </ScrollRegion>
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- execution */
+
+/** The four order sides, in words. **A short OPENS with a sell and CLOSES with a buy.** */
+const SIDE_LABEL: Readonly<Record<string, string>> = {
+  BUY_TO_OPEN: "Buy to open",
+  BUY_TO_COVER: "Buy to cover",
+  SELL_TO_CLOSE: "Sell to close",
+  SELL_TO_OPEN: "Sell to open",
+};
+
+function Execution({
+  payload,
+  operator,
+}: {
+  payload: TradeDetailPayload;
+  operator: boolean;
+}) {
+  if (payload.execution_quality === undefined) {
+    return (
+      <div className="space-y-2" data-testid="trade-execution-absent">
+        <AvailabilityBadge state="NOT_YET_AVAILABLE" reason="UPSTREAM_INPUT_MISSING" />
+        <p className="max-w-3xl text-label-m leading-relaxed text-text-secondary">
+          <strong>No order or fill evidence was recorded for this trade.</strong> The ledger row
+          says how many shares it acquired; it does not say whether that was one fill or four,
+          what reference price the order was measured against, or whether anybody reconciled
+          it. Deriving those from a quantity would manufacture an execution history out of a
+          position size.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4" data-testid="trade-execution">
+      <ScrollRegion label="Per-fill execution quality">
+        <table
+          className="w-full min-w-[46rem] border-collapse text-label-m"
+          data-testid="fill-quality"
+        >
+          <caption className="sr-only">
+            Each recorded fill, its order side, the quantity it filled, the price it filled at,
+            the named reference price it was measured against and the resulting slippage in
+            basis points.
+          </caption>
+          <thead>
+            <tr className="border-b border-border-subtle text-left text-text-tertiary">
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Side
+              </th>
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Quantity
+              </th>
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Reference
+              </th>
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Fill
+              </th>
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Slippage
+              </th>
+              <th scope="col" className="py-1.5 font-medium">
+                Order filled
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {payload.fill_quality.map((record) => (
+              <tr
+                key={record.subject_ref.ref_id}
+                className="border-b border-border-subtle last:border-0"
+                data-side={record.side}
+              >
+                <th scope="row" className="py-1.5 pr-4 text-left font-normal text-text-secondary">
+                  {SIDE_LABEL[record.side] ?? record.side}
+                </th>
+                <td className="py-1.5 pr-4">
+                  <MetricText metric={record.quantity} neutral />
+                </td>
+                <td className="py-1.5 pr-4">
+                  <MetricText metric={record.reference_price.price} neutral operator={operator} />
+                </td>
+                <td className="py-1.5 pr-4">
+                  <MetricText metric={record.fill_price} neutral operator={operator} />
+                </td>
+                <td className="py-1.5 pr-4">
+                  <MetricText metric={record.slippage} operator={operator} />
+                </td>
+                <td className="py-1.5">
+                  <MetricText metric={record.fill_rate} neutral />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollRegion>
+
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        <strong className="text-text-secondary">Positive slippage is adverse, on both
+        sides.</strong>{" "}
+        A buy filled above its reference and a sell filled below its reference are the same
+        cost, and the side convention is what makes both report a positive figure — without it
+        a book of adverse buys and adverse sells averages to zero and reports perfect
+        execution. <strong className="text-text-secondary">The order side is not the
+        position&rsquo;s direction</strong>: a short opens with a sell and closes with a buy.
+      </p>
+
+      <AggregateQuality record={payload.execution_quality} operator={operator} />
+    </div>
+  );
+}
+
+function AggregateQuality({
+  record,
+  operator,
+}: {
+  record: ExecutionQuality;
+  operator: boolean;
+}) {
+  return (
+    <PanelSection
+      title="The trade-level aggregate"
+      note="Quantity-weighted over fills with a resolvable reference, under the named aggregation method."
+      testId="aggregate-quality"
+    >
+      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Aggregate slippage
+          </dt>
+          <dd>
+            <MetricText metric={record.slippage} operator={operator} />
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Fill rate
+          </dt>
+          <dd>
+            <MetricText metric={record.fill_rate} neutral />
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Signal to order
+          </dt>
+          <dd>
+            <MetricText metric={record.signal_to_order_latency} neutral />
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+            Order to first fill
+          </dt>
+          <dd>
+            <MetricText metric={record.order_to_fill_latency} neutral />
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-2 max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        Observations:{" "}
+        <span className="font-mono text-text-secondary">
+          {String(record.observation_count.value ?? "—")}
+        </span>{" "}
+        against a declared minimum of{" "}
+        <span className="font-mono text-text-secondary">
+          {String(record.minimum_observations.value ?? "—")}
+        </span>
+        .{" "}
+        {!isValueBearing(record.slippage.availability) && (
+          <>
+            <strong className="text-text-secondary">
+              Below its minimum, so it is not computed.
+            </strong>{" "}
+            A quantity-weighted average over four fills is a number whose own rule says it is
+            not meaningful; the per-fill values above stay available, because their declared
+            minimum is one fill.
+          </>
+        )}{" "}
+        Excluded fills:{" "}
+        <span className="font-mono text-text-secondary">
+          {String(record.excluded_fills?.value ?? "—")}
+        </span>{" "}
+        — a fill with no resolvable reference is excluded and counted, because an average over a
+        silently reduced population is a different metric.
+      </p>
+      <p className="mt-1.5 text-label-s text-text-tertiary">
+        Clock: <span className="font-mono">{humanizeCode(record.clock_source.code)}</span>,
+        accurate to <MetricText metric={record.clock_accuracy} neutral />. Reference:{" "}
+        <span className="font-mono">{humanizeCode(record.reference_price.name.code)}</span> at{" "}
+        <span className="font-mono">{record.reference_price.at}</span>.
+      </p>
+    </PanelSection>
+  );
+}
+
+/* -------------------------------------------------------------- attribution */
+
+function Attribution({
+  payload,
+  operator,
+}: {
+  payload: TradeDetailPayload;
+  operator: boolean;
+}) {
+  const attributed = isValueBearing(payload.attribution.strategy.availability);
+  return (
+    <div className="space-y-4" data-testid="trade-attribution">
+      <PanelSection
+        title="Attribution"
+        note={
+          attributed
+            ? "A DECLARED decomposition of this trade's combined result. The five components sum to the outcome exactly, because a decomposition that does not add up to the thing it decomposes is five numbers rather than an attribution."
+            : "Strategy, factor, regime, execution and cost attribution each need a producer that does not exist. A provisional zero would be a decomposition nobody computed."
+        }
+        state={
+          attributed
+            ? undefined
+            : { availability: "NOT_YET_AVAILABLE", reason: "UPSTREAM_INPUT_MISSING" }
+        }
+      >
+        <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          {(
+            [
+              ["Strategy", payload.attribution.strategy],
+              ["Factor", payload.attribution.factor],
+              ["Regime", payload.attribution.regime],
+              ["Execution", payload.attribution.execution],
+              ["Cost", payload.attribution.cost],
+            ] as const
+          ).map(([term, metric]) => (
+            <div key={term} className="flex flex-col gap-0.5">
+              <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
+                {term}
+              </dt>
+              <dd>
+                <MetricText metric={metric} operator={operator} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-2 text-label-s text-text-tertiary">
+          Attribution state:{" "}
+          <Badge tone={payload.attribution.state === "FINAL" ? "neutral" : "warning"}>
+            {payload.attribution.state}
+          </Badge>{" "}
+          — a provisional decomposition is labelled, and finalization is a recorded event.
+        </p>
+      </PanelSection>
+
+      <PanelSection
+        title="Benchmark over this trade's holding period"
+        note="Aligned to exactly the boundaries the trade used, and stating its return basis so a price-return benchmark is never read against a total-return subject."
+        testId="trade-benchmark"
+      >
+        <div className="flex flex-wrap items-baseline gap-3">
+          <MetricText metric={payload.benchmark_movement} />
+          <Badge tone="neutral">{payload.benchmark_basis}</Badge>
+          {payload.benchmark_label !== undefined && (
+            <Badge tone="unavailable">{humanizeCode(payload.benchmark_label.code)}</Badge>
+          )}
+        </div>
+        {payload.benchmark_window !== undefined && (
+          <p className="mt-1.5 font-mono text-label-s text-text-tertiary">
+            {payload.benchmark_window.from} → {payload.benchmark_window.to}
+          </p>
+        )}
+        <p className="mt-2 max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+          <strong className="text-text-secondary">
+            The index is a synthetic demonstration series, not a real benchmark.
+          </strong>{" "}
+          No provider is selected, G1 is OPEN, and no benchmark price history is requested from
+          anywhere. It pays no dividend and reinvests nothing — and neither do the demonstration
+          securities beside it — so both sides of the comparison are price returns.
+        </p>
+        {payload.benchmark_series !== undefined && (
+          <ScrollRegion
+            label="Benchmark movement since this trade's entry"
+            className="mt-2"
+          >
+            <table className="w-full min-w-[24rem] border-collapse text-label-s">
+              <caption className="sr-only">
+                The benchmark&rsquo;s movement since this trade&rsquo;s entry, one point per
+                session over exactly the trade&rsquo;s holding period.
+              </caption>
+              <thead>
+                <tr className="border-b border-border-subtle text-left text-text-tertiary">
+                  <th scope="col" className="py-1 pr-4 font-medium">
+                    Session
+                  </th>
+                  <th scope="col" className="py-1 font-medium">
+                    Since entry
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {payload.benchmark_series.points.map((point) => (
+                  <tr key={String(point.t)} className="border-b border-border-subtle last:border-0">
+                    <th
+                      scope="row"
+                      className="py-1 pr-4 text-left font-mono font-normal text-text-tertiary"
+                    >
+                      {String(point.t)}
+                    </th>
+                    <td className="py-1">
+                      <MetricText metric={point.v} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollRegion>
+        )}
+      </PanelSection>
     </div>
   );
 }
@@ -504,6 +836,11 @@ function Lifecycle({ payload }: { payload: TradeLifecyclePayload }) {
             <Badge tone="neutral" data-downstream-stage={event.downstream_stage}>
               {humanizeCode(event.downstream_stage)}
             </Badge>
+            {event.observed_time !== event.event_time && (
+              <Badge tone="warning" data-testid="late-observation">
+                observed {event.observed_time.slice(11, 16)}Z — later than it happened
+              </Badge>
+            )}
             {event.correction_of !== undefined && (
               <ReferenceChip reference={event.correction_of} label="Corrects" />
             )}
@@ -530,9 +867,17 @@ function Lifecycle({ payload }: { payload: TradeLifecyclePayload }) {
         </div>
       )}
 
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        <strong className="text-text-secondary">Ordered by when each event happened.</strong>{" "}
+        An event that reached this system late is retained at the instant it occurred, with its
+        observation time shown beside it — a late event advances no watermark it did not cover.
+        <strong className="text-text-secondary"> A correction appends.</strong> The event it
+        corrects stays in this list, unchanged, and the correction points at it.
+      </p>
+
       <PanelSection
         title="Event kinds this timeline does not carry"
-        note="Order and fill mechanics, protective-order events and reconciliation belong to Execution History, and this cycle implements none of them."
+        note="Each with the state that explains it. A kind absent because nobody recorded it for THIS trade is not the same as a kind no producer can write."
       >
         <ul className="flex flex-wrap gap-2" data-testid="absent-event-kinds">
           {payload.absent_kinds.map((absent) => (

@@ -180,7 +180,18 @@ describe("the navigation registry", () => {
         expect(() => statSync(page), `${destination.route} must not exist yet`).toThrow();
       }
     }
-    expect(RESERVED_DESTINATIONS).toEqual(["/signals/candidates/[candidateId]"]);
+    /*
+     * C6 IMPLEMENTED THE LAST RESERVED DESTINATION.
+     *
+     * Both deep destinations now resolve to a real page, so the reserved list is empty. The
+     * loop above still checks BOTH directions — an implemented destination must resolve, and a
+     * reserved one must NOT exist — so an empty list here is a statement about this cycle
+     * rather than a check that stopped checking.
+     */
+    expect(RESERVED_DESTINATIONS).toEqual([]);
+    expect(DEEP_DESTINATIONS.every((destination) => destination.status === "implemented")).toBe(
+      true,
+    );
   });
 
   /**
@@ -208,6 +219,26 @@ describe("the navigation registry", () => {
       expect(route?.areas, href).toContain(area);
       expect(route?.cycle, href).toContain("C5");
     }
+  });
+
+  it("records the C6 areas as implemented, at the cycle the matrix assigns", () => {
+    const expected: Readonly<Record<string, number>> = {
+      "/signals/funnel": 6,
+      "/signals/missed": 8,
+    };
+    for (const [href, area] of Object.entries(expected)) {
+      const route = ROUTES_BY_HREF.get(href);
+      expect(route, href).toBeDefined();
+      expect(route?.status, href).toBe("implemented");
+      expect(route?.areas, href).toContain(area);
+      expect(route?.cycle, href).toContain("C6");
+    }
+    /* Area 7 is a deep destination rather than a sidebar entry (Area 36.3). */
+    const candidate = DEEP_DESTINATIONS.find(
+      (destination) => destination.route === "/signals/candidates/[candidateId]",
+    );
+    expect(candidate?.status).toBe("implemented");
+    expect(candidate?.cycle).toBe("C6");
   });
 
   /** Area 5 is C7's, and this cycle shows health CONTEXT rather than the health subsystem. */
