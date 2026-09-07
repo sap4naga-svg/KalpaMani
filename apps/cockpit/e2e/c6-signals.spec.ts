@@ -21,6 +21,8 @@ const C6_ROUTES = ["/signals/funnel", "/signals/missed"] as const;
 const RECORDED_TRADE = "/portfolio/trades/demo-trade-sol-0006";
 /** A candidate the Brain had no objection to, and that risk declined downstream. */
 const DECLINED_CANDIDATE = "/signals/candidates/demo-candidate-0006";
+/** A trade whose sizing nobody recorded — no candidate was journaled for it. */
+const UNSIZED_TRADE = "/portfolio/trades/demo-trade-gen-0001";
 
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
@@ -127,16 +129,60 @@ test.describe("the signal funnel", () => {
     ).toHaveCount(0);
   });
 
-  test("keeps the downstream axis separate, and gives it no count", async ({ page }) => {
+  test("keeps the downstream axis separate, counted on a stated basis", async ({ page }) => {
     await page.goto(`/signals/funnel${DEMO}`);
     await waitForPanels(page);
     const downstream = page.getByTestId("funnel-downstream-axis");
     await expect(downstream).toContainText("Risk review pending");
     await expect(downstream).toContainText("Order filled");
-    /* Nine stages, and nine unavailable badges: no count anywhere on this axis. */
+    /* All nine stages, and the population every count was drawn over. */
     await expect(downstream.locator("li")).toHaveCount(9);
-    await expect(downstream.locator('[data-availability="NOT_IMPLEMENTED"]')).toHaveCount(9);
-    await expect(downstream).toContainText("carries no count anywhere");
+    await expect(page.getByTestId("funnel-downstream-population")).toContainText("Counted over");
+    /*
+     * THE OVERLAP IS STATED ON THE SCREEN, not left for a reader to assume. An axis of
+     * ever-reached counts does not decrease and is never summed.
+     */
+    await expect(downstream).toContainText("ever reached");
+    await expect(downstream).toContainText("overlap");
+    await expect(downstream).toContainText("no risk engine, order router or execution runtime");
+    /* And the Brain vocabulary is still nowhere on this axis. */
+    await expect(downstream).not.toContainText("Blocked borrow");
+    await expect(downstream).not.toContainText("Ready for risk review");
+  });
+
+  test("resolves a recorded risk decision and reports an absent one", async ({ page }) => {
+    /*
+     * The size a decision assigned lives on the TRADE, with the two prices it was assigned
+     * against, so a reader can check the arithmetic rather than trust the number.
+     */
+    await page.goto(`${RECORDED_TRADE}${DEMO}`);
+    await waitForPanels(page);
+    const decision = page.getByTestId("trade-risk-decision");
+    await expect(decision).toBeVisible();
+    await expect(decision).toContainText("Shares assigned");
+    await expect(decision).toContainText("Invalidation level");
+    await expect(page.getByTestId("risk-decision-outcome")).toContainText("Risk approved");
+
+    /* And a trade nobody sized on record still reports the absence rather than a number. */
+    await page.goto(`${UNSIZED_TRADE}${DEMO}`);
+    await waitForPanels(page);
+    await expect(page.getByTestId("trade-risk-decision-absent")).toBeVisible();
+    await expect(page.getByTestId("trade-risk-decision")).toHaveCount(0);
+  });
+
+  test("does not claim a fill for a candidate whose orders nobody recorded", async ({ page }) => {
+    /*
+     * A trade reference is not order evidence. This candidate was approved and entered, and
+     * no order was ever written down, so its ledger row stops at the risk decision while a
+     * candidate whose fills WERE recorded reports the fill.
+     */
+    await page.goto(`/signals/funnel${DEMO}`);
+    await waitForPanels(page);
+    const unrecorded = page.locator('[data-candidate-id="demo-candidate-0017"]');
+    await expect(unrecorded).toContainText("Risk approved");
+    await expect(unrecorded).not.toContainText("Order filled");
+    const recorded = page.locator('[data-candidate-id="demo-candidate-0001"]');
+    await expect(recorded).toContainText("Order filled");
   });
 
   test("refuses a rate between two stages counting different subjects", async ({ page }) => {

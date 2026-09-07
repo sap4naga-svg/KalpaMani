@@ -483,6 +483,28 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
   "funnel.reason_count": { unit: "COUNT", shape: "INTEGER" },
   /** 4.5 `CandidateFunnel.conversion[].rate`, always carried with both of its counts. */
   "funnel.conversion_rate": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /*
+   * 4.3 resolves a `risk_decision` reference to `RiskSnapshot.decisions[]`, and 4.4 already
+   * defines every quantity such a decision assigns. These six are the DOWNSTREAM sizing
+   * dictionary, kept under their own prefix so a risk decision's assigned risk can never be
+   * read as `risk.initial_planned` -- 12.2 forbids two values sharing a `metric_id` and
+   * meaning different things, and "the risk a decision assigned" and "the risk a stage
+   * retained" are different facts even when their numbers agree.
+   */
+  "risk_decision.assigned_risk": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk_decision.assigned_risk_pct": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  "risk_decision.shares": { unit: "SHARES", shape: "INTEGER" },
+  "risk_decision.reference_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "risk_decision.invalidation_price": {
+    unit: "USD",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  "risk_decision.notional": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
   /** How many candidates a page or a slice was drawn over. */
   "candidate.count": { unit: "COUNT", shape: "INTEGER" },
   /**

@@ -645,8 +645,11 @@ function Lineage({
       <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
         <strong className="text-text-secondary">The risk decision is not on this screen.</strong>{" "}
         Sizing, the order and the fills are separately owned records; this page carries safe
-        references to them and resolves none of them into a candidate. No risk engine exists, so
-        that reference resolves to an availability state rather than to a payload.
+        references to them and resolves none of them into a candidate. Where a decision was
+        recorded the reference resolves and the size it assigned is on the trade&rsquo;s own
+        detail — never here, because a share count, a dollar amount or a position size in a
+        candidate payload is exactly the boundary this screen exists to hold. Where none was
+        recorded the reference resolves to an availability state instead.
       </p>
 
       {operator && (

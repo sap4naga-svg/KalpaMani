@@ -39,9 +39,15 @@ import { withScope } from "@/lib/scope";
  * reconciliation, a declared attribution and a benchmark aligned to exactly this trade's
  * holding period.
  *
- * WHAT IT STILL DOES NOT: the risk decision — **no risk engine exists, so nothing recorded
- * why this size rather than another** — and the immutable audit events, which are a separate
- * screen. Both are named as gaps.
+ * THE RISK DECISION IS CARRIED WHERE THE BOOK RECORDS ONE. It is a SEPARATELY OWNED
+ * downstream fact (`COCKPIT_FEEDBACK_EXTENSION.md` §3) joined here by reference, and it says
+ * what size was assigned, against which prices, under which policy version, and which
+ * retained entry-stage record it reconciles with. **No risk engine exists**: these are
+ * immutable repository-owned records, they authorize nothing, and a trade whose sizing
+ * nobody wrote down still reports the absence rather than a number.
+ *
+ * WHAT IT STILL DOES NOT: the immutable audit events, which are Area 26's separate screen
+ * and are named as a gap.
  *
  * **A MISSING EVENT RENDERS AS A GAP AND NEVER AS AN INFERENCE.** Most trades in the book
  * have no execution record at all, and theirs say so rather than being filled in from a
@@ -51,6 +57,106 @@ import { withScope } from "@/lib/scope";
  * and the Audit Trail are separate destinations, and this page links to neither by pretending
  * a reference resolves when it does not.
  */
+/**
+ * The joined risk decision, or the absence where nobody recorded one.
+ *
+ * **The size is shown WITH the two prices it was assigned against**, because
+ * `shares x |reference - invalidation|` is the risk it assigned and a reader given only the
+ * share count cannot check it. A declined decision assigned nothing, and renders the reasons
+ * rather than a size that was refused.
+ */
+function RiskDecisionRecord({
+  decision,
+  operator,
+}: {
+  decision: TradeDetailPayload["risk_decision"];
+  operator: boolean;
+}) {
+  if (decision === undefined) {
+    return (
+      <div className="space-y-1" data-testid="trade-risk-decision-absent">
+        <AvailabilityBadge state="NOT_IMPLEMENTED" reason="PRODUCER_NOT_IMPLEMENTED" />
+        <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+          No risk decision was recorded for this trade, so nothing here says why this size
+          rather than another. The absence is reported and never filled in from the position.
+        </p>
+      </div>
+    );
+  }
+  const declined = decision.outcome === "REJECTED";
+  return (
+    <div className="space-y-3" data-testid="trade-risk-decision">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={declined ? "warning" : "neutral"} data-testid="risk-decision-outcome">
+          {humanizeCode(decision.outcome_reason.code)}
+        </Badge>
+        <span className="text-label-s text-text-tertiary">{decision.decided_at}</span>
+      </div>
+      {declined ? (
+        <ul className="space-y-1" data-testid="risk-decision-rejection-reasons">
+          {decision.rejection_reasons.map((reason) => (
+            <li key={reason.code} className="text-label-s text-text-secondary">
+              {humanizeCode(reason.code)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="risk-decision-sizing">
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Shares assigned</dt>
+            <dd>
+              <MetricText metric={decision.sizing.shares} neutral operator={operator} />
+            </dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Reference price</dt>
+            <dd>
+              <MetricText metric={decision.sizing.reference_price} neutral operator={operator} />
+            </dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Invalidation level</dt>
+            <dd>
+              <MetricText metric={decision.sizing.invalidation_price} neutral operator={operator} />
+            </dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Risk assigned</dt>
+            <dd>
+              <MetricText metric={decision.assigned_risk} neutral operator={operator} />
+            </dd>
+          </div>
+        </dl>
+      )}
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        {declined
+          ? "Declined at the recorded size. No shares were assigned, no risk was committed and no order was produced."
+          : "Shares times the distance from the reference price to the invalidation level is the risk this decision assigned, and it reconciles with the entry stage's retained record."}
+      </p>
+      {operator && (
+        <dl className="grid gap-3 sm:grid-cols-3" data-testid="risk-decision-operator">
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Decision id</dt>
+            <dd className="font-mono text-label-s text-text-secondary">{decision.decision_id}</dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Risk policy version</dt>
+            <dd className="font-mono text-label-s text-text-secondary">
+              {decision.risk_policy_ref.policy_version}
+            </dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">Traceable to</dt>
+            <dd>
+              <ReferenceChip reference={decision.initial_risk_ref} label="Initial risk record" />
+            </dd>
+          </div>
+        </dl>
+      )}
+    </div>
+  );
+}
+
 export default function Page() {
   const params = useParams<{ tradeId: string }>();
   const tradeId = typeof params.tradeId === "string" ? params.tradeId : "";
@@ -439,6 +545,13 @@ function TradeIdentity({
             </dd>
           </div>
         </dl>
+      </PanelSection>
+
+      <PanelSection
+        title="The risk decision — why this size"
+        note="A separately owned downstream record, joined by reference. It assigned the size; it did not decide the opportunity, and it authorized no order."
+      >
+        <RiskDecisionRecord decision={payload.risk_decision} operator={operator} />
       </PanelSection>
 
       <PanelSection

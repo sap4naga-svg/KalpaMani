@@ -52,7 +52,7 @@ import {
   fillQuality,
   hasExecutionRecord,
 } from "./execution";
-import { candidateForTrade } from "./signals";
+import { candidateForTrade, riskDecisionFor } from "./signals";
 import {
   CALENDAR,
   count,
@@ -291,14 +291,24 @@ export function findBookTrade(tradeId: string): BookTrade | undefined {
 /**
  * The stages a trade WITH a declared execution record still does not carry.
  *
- * Four of the ten above are answered for those six trades; the rest are not. **The risk
- * decision is the one that matters most and is still absent**: no risk engine exists, so
- * nothing recorded why this size rather than another, and a trade whose orders and fills are
- * fully described still cannot say that.
+ * The immutable audit trail is Area 26's and belongs to a later cycle, so a trade whose
+ * orders and fills are fully described still cannot show its own audit events.
  */
 const RECORDED_DETAIL_GAPS = [
-  ["RISK_ENGINE_DECISION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
   ["IMMUTABLE_AUDIT_EVENTS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+] as const;
+
+/**
+ * The gap a trade whose sizing NOBODY RECORDED still carries.
+ *
+ * **A recorded decision and an absent one are different facts, and they are now told apart.**
+ * An earlier revision declared this gap on every trade, including the ones whose risk
+ * decision the book declares — while `/risk` listed those same decisions with an approved
+ * outcome. Two screens over one fixture said opposite things about whether a producer had
+ * ever written anything down.
+ */
+const NO_RISK_DECISION_GAPS = [
+  ["RISK_ENGINE_DECISION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
 ] as const;
 
 /** The one gap a trade with no journaled candidate carries, and one with a candidate does not. */
@@ -402,8 +412,11 @@ export function syntheticTradeDetail(
   const unavailableMetric = (metricId: string) =>
     unavailable(metricId, "USD", "NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING");
 
+  const decision =
+    candidate === undefined ? undefined : riskDecisionFor(candidate, days, asOf);
   const gaps = [
     ...(candidate === undefined ? NO_CANDIDATE_GAPS : []),
+    ...(decision === undefined ? NO_RISK_DECISION_GAPS : []),
     ...(recorded ? RECORDED_DETAIL_GAPS : [...NO_EXECUTION_GAPS, ...RECORDED_DETAIL_GAPS]),
   ];
 
@@ -432,8 +445,20 @@ export function syntheticTradeDetail(
       candidate === undefined
         ? demoRef(`${trade.tradeId}-brain-decision`, "brain_decision")
         : demoRef(candidate.candidateId, "brain_decision", "ENDPOINT"),
-    /** No risk engine exists, so nothing recorded why this size rather than another. */
-    risk_decision_ref: demoRef(`${trade.tradeId}-risk-decision`, "risk_decision"),
+    /*
+     * §4.3 resolves a `risk_decision` under an AUTHORIZED_READ on `risk:read`.
+     *
+     * Where the book declares a decision the reference resolves to it and the joined record
+     * travels beside it; where none was recorded it resolves to nothing and the gap above
+     * says so. **A reference that always failed to resolve was indistinguishable from one
+     * whose target had simply not been written.**
+     */
+    risk_decision_ref:
+      decision === undefined
+        ? demoRef(`${trade.tradeId}-risk-decision`, "risk_decision")
+        : demoRef(decision.decision_id, "risk_decision", "AUTHORIZED_READ"),
+    /** The joined downstream record — separately owned, and never a field of the candidate. */
+    risk_decision: decision,
     order_refs: refs.order_refs,
     fill_refs: refs.fill_refs,
     protection_refs: refs.protection_refs,

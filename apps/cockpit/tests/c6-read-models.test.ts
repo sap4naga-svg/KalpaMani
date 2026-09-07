@@ -170,16 +170,48 @@ describe("the Brain axis and the downstream axis", () => {
     }
   });
 
-  it("renders every downstream stage, and gives none of them a count", async () => {
+  it("renders every downstream stage, on one stated basis and over a stated population", async () => {
     const funnel = await client().candidateFunnel(DEMO);
-    const axis = funnel.payload?.downstream_axis ?? [];
+    const payload = funnel.payload as NonNullable<typeof funnel.payload>;
+    const axis = payload.downstream_axis;
     expect(axis.map((entry) => entry.stage)).toEqual([...DOWNSTREAM_STAGES]);
+    /*
+     * THE AXIS IS DEMONSTRATED, ON THE SAME TERMS THE BRAIN AXIS BESIDE IT IS.
+     *
+     * Area 6's accepted V1 availability is "SYNTHETIC demonstration; real candidates
+     * NOT_IMPLEMENTED", and section 4.5 makes the downstream `count` a REQUIRED field. The
+     * counts here come from declared risk decisions and recorded fills, not from a risk
+     * engine or an order router -- neither of which exists.
+     */
+    const population = payload.downstream_population.count;
+    expect(isValueBearing(population.availability)).toBe(true);
+    const total = population.value as number;
+    const bases = new Set(axis.map((entry) => entry.basis));
+    expect(bases.size).toBe(1);
     for (const entry of axis) {
-      expect(entry.availability).toBe("NOT_IMPLEMENTED");
-      expect(entry.reason).toBe("PRODUCER_NOT_IMPLEMENTED");
-      expect(isValueBearing(entry.count.availability)).toBe(false);
-      expect(entry.count.value).toBeUndefined();
+      expect(entry.basis).toBe("EVER_REACHED");
+      /* An ever-reached axis overlaps: a filled order was also submitted. */
+      expect(entry.overlapping).toBe(true);
+      expect(isValueBearing(entry.availability)).toBe(isValueBearing(entry.count.availability));
+      if (isValueBearing(entry.count.availability)) {
+        expect(entry.count.value as number).toBeLessThanOrEqual(total);
+      }
     }
+    const at = (stage: string) =>
+      (axis.find((entry) => entry.stage === stage)?.count.value as number) ?? 0;
+    /* One decision is approved or declined, never both. */
+    expect(at("RISK_APPROVED") + at("RISK_REJECTED")).toBeLessThanOrEqual(total);
+    /*
+     * THE OVERLAP IS REAL AND VISIBLE, and the counts do NOT decrease down the list: more
+     * candidates were approved than had an order recorded, and one order passed through a
+     * partially filled state on its way to being filled.
+     */
+    expect(at("RISK_APPROVED")).toBeGreaterThan(at("ORDER_FILLED"));
+    expect(at("ORDER_PARTIALLY_FILLED")).toBeGreaterThan(0);
+    expect(at("ORDER_PARTIALLY_FILLED")).toBeLessThan(at("ORDER_FILLED"));
+    /* Nothing was rejected or cancelled by an order router, and that is a measured zero. */
+    expect(at("ORDER_REJECTED")).toBe(0);
+    expect(at("ORDER_CANCELLED")).toBe(0);
   });
 
   it("never admits a downstream stage into the Brain vocabulary, or the reverse", async () => {
@@ -195,29 +227,91 @@ describe("the Brain axis and the downstream axis", () => {
     }
   });
 
-  it("refuses a downstream count on the funnel, whatever a producer supplies", async () => {
+  it("refuses a downstream count a reader could not check", async () => {
     const funnel = await client().candidateFunnel(DEMO);
-    const payload = structuredClone(funnel.payload);
-    expect(payload).toBeDefined();
+    const base = funnel.payload as NonNullable<typeof funnel.payload>;
+    /* The served payload is admissible as it stands. */
+    expect(candidateFunnelEnvelope.safeParse(funnel).success).toBe(true);
+
     /*
-     * NEGATIVE CONTROL. The retired shape — a downstream axis that counts — is constructed
-     * here and must be REFUSED, so the assertion above distinguishes the two rather than
-     * agreeing with whatever the fixture happens to produce.
+     * NEGATIVE CONTROLS. Each forgery is a DIFFERENT way a downstream count stops being
+     * checkable, and each must be refused separately -- so the assertion above distinguishes
+     * a coherent axis from any axis at all, rather than agreeing with whatever is produced.
      */
-    const forged = payload as NonNullable<typeof payload>;
-    forged.downstream_axis[0] = {
-      ...forged.downstream_axis[0],
-      availability: "AVAILABLE",
-      reason: "NONE",
-      count: {
-        ...forged.downstream_axis[0].count,
-        availability: "AVAILABLE",
-        reason: "NONE",
-        value: 7,
-      },
+    const forge = (mutate: (payload: NonNullable<typeof funnel.payload>) => void) => {
+      const payload = structuredClone(base);
+      mutate(payload);
+      return candidateFunnelEnvelope.safeParse({ ...funnel, payload });
     };
-    const refused = candidateFunnelEnvelope.safeParse({ ...funnel, payload: forged });
-    expect(refused.success).toBe(false);
+
+    /* A stage that exceeds the population it was counted over. */
+    expect(
+      forge((payload) => {
+        payload.downstream_axis[0] = {
+          ...payload.downstream_axis[0],
+          count: { ...payload.downstream_axis[0].count, value: 9_999 },
+        };
+      }).success,
+    ).toBe(false);
+
+    /* A count with no population to divide by. */
+    expect(
+      forge((payload) => {
+        payload.downstream_population = {
+          ...payload.downstream_population,
+          count: {
+            ...payload.downstream_population.count,
+            availability: "NOT_IMPLEMENTED",
+            reason: "PRODUCER_NOT_IMPLEMENTED",
+            value: undefined,
+          },
+        };
+      }).success,
+    ).toBe(false);
+
+    /* Two bases on one axis: an ever-reached count beside a current-state one. */
+    expect(
+      forge((payload) => {
+        payload.downstream_axis[0] = {
+          ...payload.downstream_axis[0],
+          basis: "CURRENT_STATE",
+          overlapping: false,
+        };
+      }).success,
+    ).toBe(false);
+
+    /* An overlapping flag that contradicts the basis it travels with. */
+    expect(
+      forge((payload) => {
+        payload.downstream_axis = payload.downstream_axis.map((entry) => ({
+          ...entry,
+          overlapping: false,
+        }));
+      }).success,
+    ).toBe(false);
+
+    /* A stage declared unavailable while still carrying a number. */
+    expect(
+      forge((payload) => {
+        payload.downstream_axis[0] = {
+          ...payload.downstream_axis[0],
+          availability: "NOT_IMPLEMENTED",
+          reason: "PRODUCER_NOT_IMPLEMENTED",
+        };
+      }).success,
+    ).toBe(false);
+
+    /* Approved and declined together exceeding the one population they partition. */
+    expect(
+      forge((payload) => {
+        const total = payload.downstream_population.count.value as number;
+        payload.downstream_axis = payload.downstream_axis.map((entry) =>
+          entry.stage === "RISK_APPROVED" || entry.stage === "RISK_REJECTED"
+            ? { ...entry, count: { ...entry.count, value: total } }
+            : entry,
+        );
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -542,9 +636,22 @@ describe("missed opportunities keep decision-time and outcome evidence apart", (
     );
     expect(declined?.brain_state).toBe("READY_FOR_RISK_REVIEW");
     expect(declined?.cause.code).toBe("DOWNSTREAM_RISK_DECISION_DECLINED");
-    /* The risk decision RECORD still resolves to an availability state: none exists. */
+    /*
+     * THE DECLINE IS A RECORDED DOWNSTREAM FACT, SO ITS REFERENCE RESOLVES.
+     *
+     * A cause of DOWNSTREAM_RISK_DECISION_DECLINED asserts that a risk decision was taken;
+     * a reference that resolved to nothing would have been the journal describing a decision
+     * whose record it also said could not exist.
+     */
     const detail = await client().candidateDetail(DEMO, "demo-candidate-0006");
-    expect(detail.payload?.downstream_refs.risk_decision.resolution).toBe("UNRESOLVABLE_V1");
+    expect(detail.payload?.downstream_refs.risk_decision.resolution).toBe("AUTHORIZED_READ");
+    /*
+     * AND THE NEGATIVE CONTROL: a candidate the Brain left ready that was never handed
+     * downstream at all has no decision, and its reference resolves to nothing.
+     */
+    const never = await client().candidateDetail(DEMO, "demo-candidate-0016");
+    expect(never.payload?.brain_state).toBe("READY_FOR_RISK_REVIEW");
+    expect(never.payload?.downstream_refs.risk_decision.resolution).toBe("UNRESOLVABLE_V1");
   });
 });
 
@@ -1194,7 +1301,14 @@ describe("the four concepts stay on separate screens", () => {
     const detail = await client().tradeDetail(DEMO, MULTI_EXIT_TRADE);
     const payload = detail.payload as NonNullable<typeof detail.payload>;
     expect(payload.audit_refs.items).toHaveLength(0);
-    expect(payload.risk_decision_ref.resolution).toBe("UNRESOLVABLE_V1");
+    /*
+     * THE RISK DECISION RESOLVES, BECAUSE THE BOOK RECORDS ONE FOR THIS TRADE.
+     *
+     * §4.3 resolves a `risk_decision` under an AUTHORIZED_READ, and the joined record travels
+     * with it. A trade whose sizing nobody recorded is a separate case, asserted below.
+     */
+    expect(payload.risk_decision_ref.resolution).toBe("AUTHORIZED_READ");
+    expect(payload.risk_decision?.decision_id).toBe(payload.risk_decision_ref.ref_id);
     for (const reference of payload.reconciliation_refs.items) {
       expect(reference.resolution).toBe("UNRESOLVABLE_V1");
     }
@@ -1212,7 +1326,14 @@ describe("the four concepts stay on separate screens", () => {
   it("still names the stages a complete detail does not carry", async () => {
     const detail = await client().tradeDetail(DEMO, MULTI_EXIT_TRADE);
     const gaps = (detail.payload?.gaps ?? []).map((gap) => gap.expected.code);
-    expect(gaps).toContain("RISK_ENGINE_DECISION");
+    /*
+     * A RECORDED DECISION IS NOT A GAP, AND AN ABSENT ONE STILL IS.
+     *
+     * This trade's decision was recorded, so declaring it missing would contradict both the
+     * joined record here and the outcome `/risk` lists for it. The audit trail is Area 26's
+     * and genuinely does not exist.
+     */
+    expect(gaps).not.toContain("RISK_ENGINE_DECISION");
     expect(gaps).toContain("IMMUTABLE_AUDIT_EVENTS");
     for (const gap of detail.payload?.gaps ?? []) {
       expect(isValueBearing(gap.availability), gap.expected.code).toBe(false);
@@ -1223,6 +1344,16 @@ describe("the four concepts stay on separate screens", () => {
     expect(sparseGaps).toContain("ORDER_AND_FILL_MECHANICS");
     expect(sparseGaps).toContain("EXECUTION_QUALITY");
     expect(sparseGaps.length).toBeGreaterThan(gaps.length);
+    /*
+     * AND A TRADE NOBODY SIZED ON RECORD STILL NAMES THE ABSENCE.
+     *
+     * The negative control for the assertion above: the gap is refused where a decision
+     * exists and reported where none does, so the two are distinguished rather than the
+     * gap simply having been deleted.
+     */
+    expect(sparseGaps).toContain("RISK_ENGINE_DECISION");
+    expect(sparse.payload?.risk_decision).toBeUndefined();
+    expect(sparse.payload?.risk_decision_ref.resolution).toBe("UNRESOLVABLE_V1");
   });
 });
 

@@ -450,6 +450,49 @@ export function hasExecutionRecord(tradeId: string): boolean {
   return BY_TRADE.has(tradeId);
 }
 
+/**
+ * What a trade's ENTRY ORDER RECORD actually shows, or nothing where no record exists.
+ *
+ * **A trade reference is not order evidence.** A candidate that became a trade tells you a
+ * position was opened; it tells you nothing about whether any order was submitted,
+ * acknowledged, partially filled, filled, rejected or cancelled, and six trades in this book
+ * carry an execution record while the rest do not. Anything that wants an order state reads it
+ * here, from the recorded fills, and gets `undefined` when nobody wrote one down.
+ *
+ * `partiallyFilled` is a fact about THIS ORDER and never about the position: an order that
+ * fills in two parts passed through a partially filled state, and an order that fills at once
+ * while reducing a position did not.
+ */
+export interface EntryOrderEvidence {
+  /** The order passed through a partially filled state on its way to being filled. */
+  readonly partiallyFilled: boolean;
+  /** The recorded fills account for the whole ordered quantity. */
+  readonly filled: boolean;
+}
+
+export function entryOrderEvidence(tradeId: string): EntryOrderEvidence | undefined {
+  const spec = BY_TRADE.get(tradeId);
+  if (spec === undefined) {
+    return undefined;
+  }
+  const entry = spec.orders.find(
+    (order) => order.target.kind === "STAGE" && order.target.ordinal === 0,
+  );
+  if (entry === undefined || entry.fills.length === 0) {
+    return undefined;
+  }
+  const total = entry.fills.reduce((running, fill) => running + fill.shares, 0);
+  let running = 0;
+  let partiallyFilled = false;
+  for (const fill of entry.fills) {
+    running += fill.shares;
+    if (running < total) {
+      partiallyFilled = true;
+    }
+  }
+  return { partiallyFilled, filled: running === total };
+}
+
 export function executionSpecFor(tradeId: string): ExecutionSpec | undefined {
   return BY_TRADE.get(tradeId);
 }

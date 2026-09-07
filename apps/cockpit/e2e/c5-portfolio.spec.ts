@@ -245,9 +245,24 @@ test.describe("the trade ledger and one trade's story", () => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText("DEMO.CIR");
     const carried = page.getByTestId("trade-gaps");
     await expect(carried).toBeVisible();
-    await expect(carried).toContainText("Risk engine decision");
+    /*
+     * It still names the stage nobody has built — the audit trail is Area 26's — so the table
+     * is genuinely a gap list and not an empty one.
+     */
+    await expect(carried).toContainText("Immutable audit events");
     await expect(carried).not.toContainText("Order and fill mechanics");
     await expect(carried).not.toContainText("Broker reconciliation");
+    /*
+     * AND IT NO LONGER NAMES THE RISK DECISION, BECAUSE THIS TRADE HAS ONE.
+     *
+     * An earlier revision asserted `Risk engine decision` here, when the gap was declared on
+     * every trade unconditionally — while `/risk` listed an approved outcome for these same
+     * trades. The gap is now reported only where no decision was recorded, and the assertion
+     * above at `demo-trade-gen-0001` still requires it there, so the pair distinguishes a
+     * recorded decision from an absent one rather than accepting either.
+     */
+    await expect(carried).not.toContainText("Risk engine decision");
+    await expect(page.getByTestId("trade-risk-decision")).toBeVisible();
   });
 
   /*

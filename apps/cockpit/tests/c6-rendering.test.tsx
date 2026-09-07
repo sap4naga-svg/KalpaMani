@@ -91,7 +91,8 @@ describe("an unavailable signals figure renders as a state", () => {
 
 describe("references render as what they are", () => {
   it("marks an unresolvable join as specified-but-absent rather than hiding it", async () => {
-    const detail = await client.candidateDetail(DEMO, "demo-candidate-0006");
+    /* A candidate the Brain left ready that was never handed downstream: no decision exists. */
+    const detail = await client.candidateDetail(DEMO, "demo-candidate-0016");
     render(
       <ReferenceChip
         reference={detail.payload!.downstream_refs.risk_decision}

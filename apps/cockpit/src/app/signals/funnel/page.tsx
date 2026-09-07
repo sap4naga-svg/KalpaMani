@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 
-import { Badge, ScrollRegion } from "@/components/ui/primitives";
+import { Badge, Label, ScrollRegion } from "@/components/ui/primitives";
 import { AvailabilityBadge } from "@/components/cockpit/availability";
 import { FilterBar, SearchField, SelectField } from "@/components/cockpit/filters";
 import { MetricText } from "@/components/cockpit/metric-text";
@@ -36,7 +36,12 @@ import { cn } from "@/lib/utils";
  *                                         property of consolidation rather than a defect
  *   THE TWO AXES SIT SIDE BY SIDE         the eight Brain states and the nine downstream
  *                                         stages are two vocabularies on two axes, and this
- *                                         page never appends one to the other
+ *                                         page never appends one to the other. BOTH carry
+ *                                         counts, and neither carries the other's
+ *   THE DOWNSTREAM AXIS OVERLAPS          its counts are how many EVER REACHED each stage,
+ *                                         over a stated population. An order that filled was
+ *                                         also submitted, so the stages do not decrease and
+ *                                         are never summed. The basis is on the payload
  *   READY IS A HANDOFF, NOT AN APPROVAL   `READY_FOR_RISK_REVIEW` means the Brain has no
  *                                         deterministic objection. Portfolio and risk decide
  *                                         independently, and frequently refuse
@@ -369,8 +374,17 @@ function BrainAxis({
 /* ------------------------------------------------------------- downstream axis */
 
 function DownstreamAxis({ payload }: { payload: CandidateFunnelPayload }) {
+  const population = payload.downstream_population;
+  const basis = payload.downstream_axis[0]?.basis;
   return (
-    <div className="space-y-2" data-testid="funnel-downstream-axis">
+    <div className="space-y-3" data-testid="funnel-downstream-axis">
+      <div className="flex flex-wrap items-baseline gap-2" data-testid="funnel-downstream-population">
+        <Label>Counted over</Label>
+        <MetricText metric={population.count} neutral />
+        <span className="text-label-s text-text-tertiary">
+          {humanizeCode(population.subject)} — {humanizeCode(population.definition.code)}
+        </span>
+      </div>
       <ul className="flex flex-wrap gap-2">
         {payload.downstream_axis.map((entry) => (
           <li key={entry.stage}>
@@ -378,17 +392,39 @@ function DownstreamAxis({ payload }: { payload: CandidateFunnelPayload }) {
               <span className="text-label-s text-text-secondary">
                 {humanizeCode(entry.stage)}
               </span>
-              <AvailabilityBadge state={entry.availability} reason={entry.reason} />
+              {isValueBearing(entry.availability) ? (
+                <MetricText metric={entry.count} neutral />
+              ) : (
+                <AvailabilityBadge state={entry.availability} reason={entry.reason} />
+              )}
             </span>
           </li>
         ))}
       </ul>
       <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
-        Every one of these is{" "}
-        <strong className="text-text-secondary">NOT_IMPLEMENTED</strong>: no risk engine, order
-        router or execution runtime exists. The axis is rendered in full so a reader can see the
-        vocabulary the handoff lands in, and it carries no count anywhere — a count here would
-        be the first step of merging two axes that must stay apart.
+        {basis === "EVER_REACHED" ? (
+          <>
+            Each number is how many of that population{" "}
+            <strong className="text-text-secondary">ever reached</strong> that stage, so the
+            stages <strong className="text-text-secondary">overlap</strong> and do not decrease
+            down the list: an order that filled was also submitted and acknowledged, and one
+            passed through a partially filled state on the way. They are not a funnel, they do
+            not subtract, and they are never added together.
+          </>
+        ) : (
+          <>
+            Each number is how many of that population{" "}
+            <strong className="text-text-secondary">stand at</strong> that stage now, so the
+            stages partition the population and the remainder reached no downstream record at
+            all.
+          </>
+        )}{" "}
+        These are repository-owned synthetic records:{" "}
+        <strong className="text-text-secondary">
+          no risk engine, order router or execution runtime exists
+        </strong>
+        , nothing here was decided by one, and no order was ever sent. The stages stay on their
+        own axis and are never appended to the Brain&rsquo;s vocabulary.
       </p>
     </div>
   );

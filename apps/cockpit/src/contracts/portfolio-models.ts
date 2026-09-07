@@ -53,6 +53,7 @@ import {
 } from "./vocabularies";
 import { isValueBearing } from "./validity";
 import { executionQuality } from "./execution-models";
+import { riskDecision } from "./risk-decision";
 
 /** §2.7's downstream axis, as a schema. A SEPARATE axis, never merged with the Brain's. */
 export const downstreamStage = z.enum(DOWNSTREAM_STAGES);
@@ -728,6 +729,17 @@ export const tradeDetailPayload = z
     candidate_ref: ref,
     brain_decision_ref: ref,
     risk_decision_ref: ref,
+    /**
+     * The RESOLVED downstream risk decision, where one was recorded.
+     *
+     * ADDITIVE and documented (§12.6), for the reason `execution_quality` is already carried
+     * beside its own reference: §4.3 resolves this reference under an `AUTHORIZED_READ` on
+     * `risk:read`, and "the join is a read-model concern" is exactly what §4.5's TradeDetail
+     * invariant says a whole-trade view does. **The record arrives here and NOWHERE ELSE**:
+     * `CandidateIntent` acquires no field of it, and `CandidateDetail` carries the reference
+     * alone.
+     */
+    risk_decision: riskDecision.optional(),
     order_refs: refList,
     fill_refs: refList,
     protection_refs: refList,

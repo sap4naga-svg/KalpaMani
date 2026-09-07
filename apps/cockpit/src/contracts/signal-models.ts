@@ -167,16 +167,80 @@ export const funnelBrainEntry = z.object({
 });
 
 /**
- * §4.5: "every downstream member is `NOT_IMPLEMENTED` in V1".
+ * WHAT A DOWNSTREAM COUNT MEASURES, AND OVER WHAT.
  *
- * The count is carried and is an absence, so the axis is visibly present and visibly empty
- * rather than omitted — which is what keeps the two axes side by side without merging them.
+ * The nine downstream stages are **not a partition and not a decreasing funnel**. An order
+ * that filled was also submitted and acknowledged, so a count of the stages a candidate EVER
+ * REACHED overlaps by construction, while a count of where each candidate stands RIGHT NOW
+ * partitions. The two are different questions with different arithmetic, they cannot be mixed
+ * on one axis, and an axis that does not say which it answers is an axis whose reader will
+ * assume the wrong one.
  */
-export const funnelDownstreamEntry = z.object({
-  stage: downstreamStageValue,
-  count: metricOf("funnel.state_count"),
-  availability: availabilityState,
-  reason: fieldReasonCode,
+export const DOWNSTREAM_COUNT_BASES = ["EVER_REACHED", "CURRENT_STATE"] as const;
+export const downstreamCountBasis = z.enum(DOWNSTREAM_COUNT_BASES);
+export type DownstreamCountBasis = z.infer<typeof downstreamCountBasis>;
+
+/**
+ * One downstream stage, its count, and the basis that count was taken on.
+ *
+ * §4.5 declares `{ stage, count, availability }` and makes `count` REQUIRED, so a recorded
+ * count is a value this contract admits. Its V1 invariant — "every downstream member is
+ * `NOT_IMPLEMENTED` in V1" — is a statement about REAL downstream data, exactly as Area 6's
+ * accepted *V1 availability* line reads "`SYNTHETIC` demonstration; real candidates
+ * `NOT_IMPLEMENTED`" while the Brain axis is nonetheless demonstrated with synthetic counts.
+ * A schema that refused every count would make the demonstration Area 6 asks for
+ * unexpressible, and would turn one fixture's emptiness into a permanent property of the
+ * contract.
+ *
+ * **The two axes still never merge.** They stay separate arrays over separate closed
+ * vocabularies; no Brain state acquires a downstream count and no downstream stage acquires a
+ * Brain one. A number on its own axis is not a merge of two axes.
+ *
+ * `basis` and `overlapping` are ADDITIVE and documented under §12.6, for the reason
+ * `funnelReasonCount.overlapping` already exists: a distribution that does not say whether it
+ * partitions is read as though it does.
+ */
+export const funnelDownstreamEntry = z
+  .object({
+    stage: downstreamStageValue,
+    count: metricOf("funnel.state_count"),
+    availability: availabilityState,
+    reason: fieldReasonCode,
+    basis: downstreamCountBasis,
+    overlapping: z.boolean(),
+  })
+  .superRefine((candidate, ctx) => {
+    /*
+     * THE STAGE'S AVAILABILITY AND ITS COUNT'S AGREE.
+     *
+     * A stage declared NOT_IMPLEMENTED while carrying a number, or declared AVAILABLE while
+     * carrying an absence, is a member whose two halves say opposite things.
+     */
+    if (isValueBearing(candidate.availability) !== isValueBearing(candidate.count.availability)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a downstream stage's availability and its count's availability agree",
+      });
+    }
+    if ((candidate.basis === "EVER_REACHED") !== candidate.overlapping) {
+      ctx.addIssue({
+        code: "custom",
+        message: "EVER_REACHED counts overlap, and CURRENT_STATE counts partition",
+      });
+    }
+  });
+
+/**
+ * The population every downstream count was taken over — the denominator, stated.
+ *
+ * ADDITIVE, and load-bearing for the same reason `funnelConversion` carries both of its
+ * counts: a stage count with no visible denominator is a number a reader cannot check, and
+ * cannot turn into a rate.
+ */
+export const funnelDownstreamPopulation = z.object({
+  subject: funnelSubject,
+  definition: reasonCoded,
+  count: metricOf("funnel.stage_count"),
 });
 
 /**
@@ -238,6 +302,8 @@ export const candidateFunnelPayload = z
     stages: z.array(funnelStage),
     brain_axis: z.array(funnelBrainEntry),
     downstream_axis: z.array(funnelDownstreamEntry),
+    /** The population every downstream count was taken over. */
+    downstream_population: funnelDownstreamPopulation,
     conversion: z.array(funnelConversion),
     strategy_views: z.array(funnelStrategyView),
     /** How many candidate decisions the reason distribution was drawn over. */
@@ -269,16 +335,75 @@ export const candidateFunnelPayload = z
       });
     }
     /*
-     * 4.5: "every downstream member is NOT_IMPLEMENTED in V1". The two axes are presented side
-     * by side and are NEVER MERGED, and a downstream count that appeared would be the first
-     * step of merging them.
+     * THE DOWNSTREAM AXIS ANSWERS ONE QUESTION, OVER ONE POPULATION.
+     *
+     * §4.5 makes the downstream `count` a required field, so a recorded count is admissible
+     * and its V1 invariant governs REAL data rather than the synthetic demonstration Area 6
+     * asks for. What is refused here is not a count: it is a count a reader cannot check —
+     * one whose basis is mixed with another's, one with no denominator, or one that exceeds
+     * the population it was drawn over.
      */
-    for (const entry of candidate.downstream_axis) {
-      if (isValueBearing(entry.availability)) {
+    const bases = new Set(candidate.downstream_axis.map((entry) => entry.basis));
+    if (bases.size > 1) {
+      ctx.addIssue({
+        code: "custom",
+        message: "one downstream axis answers one question, on one counting basis",
+      });
+    }
+    const downstreamCounted = candidate.downstream_axis.filter((entry) =>
+      isValueBearing(entry.availability),
+    );
+    const population = candidate.downstream_population.count;
+    const populationKnown = isValueBearing(population.availability);
+    if (downstreamCounted.length > 0 && !populationKnown) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a downstream count is never shown without the population it was taken over",
+      });
+    }
+    if (populationKnown && typeof population.value === "number") {
+      const total = population.value;
+      for (const entry of downstreamCounted) {
+        if (typeof entry.count.value === "number" && entry.count.value > total) {
+          ctx.addIssue({
+            code: "custom",
+            message: "no downstream stage exceeds the population it was counted over",
+          });
+        }
+      }
+      /*
+       * APPROVED AND REJECTED ARE MUTUALLY EXCLUSIVE OUTCOMES OF ONE DECISION.
+       *
+       * A candidate is not both approved and declined by risk, so the two cannot together
+       * exceed the population — on EITHER basis. This is a real property of the vocabulary
+       * and not an invented decreasing funnel over the order stages, which genuinely overlap.
+       */
+      const at = (stage: string) => {
+        const found = downstreamCounted.find((entry) => entry.stage === stage);
+        return typeof found?.count.value === "number" ? found.count.value : 0;
+      };
+      if (at("RISK_APPROVED") + at("RISK_REJECTED") > total) {
         ctx.addIssue({
           code: "custom",
-          message: "no downstream stage carries a count while its producer does not exist",
+          message: "one decision is approved or declined, so the two never exceed the population",
         });
+      }
+      /*
+       * A CURRENT-STATE AXIS PARTITIONS, so its members sum to at most the population — the
+       * remainder being the candidates that reached no downstream record at all.
+       */
+      if (bases.size === 1 && bases.has("CURRENT_STATE")) {
+        const summed = downstreamCounted.reduce(
+          (running, entry) =>
+            running + (typeof entry.count.value === "number" ? entry.count.value : 0),
+          0,
+        );
+        if (summed > total) {
+          ctx.addIssue({
+            code: "custom",
+            message: "a current-state axis partitions its population and never exceeds it",
+          });
+        }
       }
     }
     const seenStages = candidate.stages.map((stage) => stage.stage);

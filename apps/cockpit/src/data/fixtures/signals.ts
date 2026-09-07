@@ -41,14 +41,25 @@ import type {
   MissedOpportunityPayload,
 } from "@/contracts/signal-models";
 import type { BrainDecisionState } from "@/contracts/signal-models";
+import type { RiskDecision } from "@/contracts/risk-decision";
 import type { Series } from "@/contracts/values";
 import { BRAIN_DECISION_STATES, DOWNSTREAM_STAGES } from "@/contracts/vocabularies";
+import type { DownstreamStageValue } from "@/contracts/signal-models";
 
 import type { BookSecurity, BookTrade } from "./book";
-import { BOOK, SESSION_COUNT, buildPath, securityOf, strategyVersionOf } from "./book";
+import {
+  BOOK,
+  SESSION_COUNT,
+  buildPath,
+  pctOfCapitalHundredths,
+  securityOf,
+  strategyVersionOf,
+} from "./book";
+import { entryOrderEvidence } from "./execution";
 import {
   CALENDAR,
   count,
+  demoPolicyRef,
   demoRef,
   demoReason,
   instantValue,
@@ -58,6 +69,7 @@ import {
   qualified,
   refListOf,
   scaled,
+  shares,
   seconds,
   sessionInstant,
   token,
@@ -79,6 +91,19 @@ type AiPosture =
   | "UNAVAILABLE"
   /** Evidence exists and is past its contract. Value-bearing, and qualified. */
   | "STALE";
+
+/**
+ * One recorded downstream risk decision.
+ *
+ * `COCKPIT_FEEDBACK_EXTENSION.md` 3 gives sizing to the portfolio and risk layer, so this is
+ * a SEPARATELY OWNED FACT the read model joins by reference -- never a field of
+ * `CandidateIntent`, and never a Brain state.
+ */
+interface DownstreamDeclaration {
+  readonly riskOutcome: "APPROVED" | "REJECTED";
+  /** Why it was declined. Present on a rejection, and absent on an approval. */
+  readonly rejectionReasons?: readonly string[];
+}
 
 interface CandidateRecord {
   readonly candidateId: string;
@@ -109,6 +134,17 @@ interface CandidateRecord {
    * the two stages count different subjects and never subtract.
    */
   readonly contributingDecisions: number;
+  /**
+   * The DOWNSTREAM RISK DECISION recorded for this candidate, where one was written.
+   *
+   * **Declared, never inferred.** Whether a risk decision exists is not derivable from a
+   * Brain state, a trade link or a miss cause: a candidate can be ready and never handed
+   * downstream, and a trade can exist while nobody recorded the decision that sized it. The
+   * order stages beneath it are read from the execution record (`entryOrderEvidence`) rather
+   * than declared twice, because two fields that can disagree is how a screen ends up
+   * asserting a fill nobody recorded.
+   */
+  readonly downstream?: DownstreamDeclaration;
   /** The trade this candidate became, where one exists. */
   readonly tradeId?: string;
   /** Why it was not entered, for a candidate that never became a trade. */
@@ -159,6 +195,7 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["NO_FALSIFYING_EVIDENCE_FOUND"],
     contributingDecisions: 2,
+    downstream: { riskOutcome: "APPROVED" },
     tradeId: "demo-trade-sol-0006",
     decisionDelaySeconds: 46,
     followUpComplete: true,
@@ -183,6 +220,7 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["VALUATION_RISK_NOTED_AND_NOT_DISQUALIFYING"],
     contributingDecisions: 1,
+    downstream: { riskOutcome: "APPROVED" },
     tradeId: "demo-trade-arb-0001",
     decisionDelaySeconds: 38,
     followUpComplete: true,
@@ -207,6 +245,7 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["CROWDING_ASSESSED_AS_MODERATE"],
     contributingDecisions: 1,
+    downstream: { riskOutcome: "APPROVED" },
     tradeId: "demo-trade-nvl-0002",
     decisionDelaySeconds: 52,
     followUpComplete: true,
@@ -231,6 +270,7 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["ALTERNATIVE_EXPLANATION_CONSIDERED_AND_REJECTED"],
     contributingDecisions: 2,
+    downstream: { riskOutcome: "APPROVED" },
     tradeId: "demo-trade-cir-0003",
     decisionDelaySeconds: 41,
     followUpComplete: true,
@@ -255,6 +295,7 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["SQUEEZE_RISK_ASSESSED_AS_LOW"],
     contributingDecisions: 1,
+    downstream: { riskOutcome: "APPROVED" },
     tradeId: "demo-trade-hlx-0004",
     decisionDelaySeconds: 63,
     followUpComplete: true,
@@ -280,6 +321,13 @@ const CANDIDATES: readonly CandidateRecord[] = [
     ai: "SUPPORTING",
     challengerFindings: ["NO_FALSIFYING_EVIDENCE_FOUND"],
     contributingDecisions: 1,
+    downstream: {
+      riskOutcome: "REJECTED",
+      rejectionReasons: [
+        "OPEN_PLANNED_RISK_WOULD_EXCEED_THE_PORTFOLIO_LIMIT",
+        "CONCENTRATION_IN_THE_SAME_ALPHA_FAMILY_AT_THE_RECORDED_SIZE",
+      ],
+    },
     missCause: "DOWNSTREAM_RISK_DECISION_DECLINED",
     decisionDelaySeconds: 55,
     followUpComplete: true,
@@ -538,6 +586,40 @@ const CANDIDATES: readonly CandidateRecord[] = [
     decisionDelaySeconds: 9_180,
     followUpComplete: true,
   },
+  {
+    /**
+     * A TRADE LINK, A RECORDED RISK DECISION, AND NO ORDER EVIDENCE AT ALL.
+     *
+     * The negative case the downstream stage exists to survive. This candidate was approved,
+     * a position was opened and the trade is in the book -- and **nobody recorded an order**.
+     * Reading a fill state off the trade reference would report `ORDER_FILLED` here, which
+     * is a fact this book does not contain: the honest answer is the last stage the record
+     * actually reaches, which is `RISK_APPROVED`.
+     */
+    candidateId: "demo-candidate-0017",
+    symbol: "DEMO.PLM",
+    versionId: "pead-short-v1",
+    session: SESSION_COUNT - 15,
+    state: "READY_FOR_RISK_REVIEW",
+    primaryReason: "EVERY_DETERMINISTIC_REQUIREMENT_SATISFIED",
+    blockingReasons: [],
+    contradictions: [],
+    convictionBand: "BAND_C",
+    setupQuality: "NEGATIVE_SURPRISE_WITH_ORDERLY_DRIFT",
+    rank: 11,
+    rankPopulation: 41,
+    thesis: "POST_EARNINGS_DRIFT_AFTER_A_NEGATIVE_SURPRISE",
+    whyNow: "DRIFT_WINDOW_OPENED_ON_THE_CONFIRMED_REPORT",
+    entryCondition: "HOLD_BELOW_THE_REPORT_SESSION_MIDPOINT",
+    horizonDays: 19,
+    ai: "SUPPORTING",
+    challengerFindings: ["SQUEEZE_RISK_ASSESSED_AS_LOW"],
+    contributingDecisions: 1,
+    downstream: { riskOutcome: "APPROVED" },
+    tradeId: "demo-trade-plm-0005",
+    decisionDelaySeconds: 71,
+    followUpComplete: true,
+  },
 ];
 
 /** Every journaled candidate, in the order they were decided. */
@@ -593,28 +675,187 @@ function directionOf(record: CandidateRecord): "LONG" | "SHORT" {
 }
 
 /**
- * The downstream stage a candidate reached.
+ * Every downstream stage a candidate's RECORDED evidence shows it reached, in order.
  *
- * **A SEPARATE AXIS (§2.7), and almost always an absence.** No risk engine, order router or
- * execution runtime exists, so the honest answer for every candidate is that no downstream
- * record was produced — with one exception the journal itself records: the candidate whose
- * recorded miss cause IS a downstream risk decision. That cause is a fact the missed-
- * opportunity producer journaled; the risk decision record it refers to does not exist here,
- * and its reference resolves to an availability state rather than to a payload.
+ * **A SEPARATE AXIS (§2.7), and read from records rather than inferred from a link.** A
+ * trade reference says a position was opened; it does not say that any order was submitted,
+ * acknowledged, partially filled or filled, and this book contains a trade whose orders
+ * nobody wrote down. So the risk limb comes from the candidate's own declared risk decision
+ * and the order limb comes from the execution record — and where neither exists the answer
+ * is an absence, never a stage.
+ *
+ * The list is CUMULATIVE: an order that filled also passed through submission and
+ * acknowledgement. The funnel counts these on an `EVER_REACHED` basis, and a candidate's own
+ * current stage is the last one it reached.
  */
+function recordedDownstreamStages(record: CandidateRecord): readonly DownstreamStageValue[] {
+  if (record.downstream === undefined) {
+    return [];
+  }
+  if (record.downstream.riskOutcome === "REJECTED") {
+    return ["RISK_REVIEW_PENDING", "RISK_REJECTED"];
+  }
+  const approved: DownstreamStageValue[] = ["RISK_REVIEW_PENDING", "RISK_APPROVED"];
+  const order = record.tradeId === undefined ? undefined : entryOrderEvidence(record.tradeId);
+  if (order === undefined) {
+    /* Approved, entered — and no order record exists. The gap is the answer. */
+    return approved;
+  }
+  approved.push("ORDER_SUBMITTED", "ORDER_ACKNOWLEDGED");
+  if (order.partiallyFilled) {
+    approved.push("ORDER_PARTIALLY_FILLED");
+  }
+  if (order.filled) {
+    approved.push("ORDER_FILLED");
+  }
+  return approved;
+}
+
+/** The stage a candidate stands at NOW — the last one its recorded evidence reaches. */
 function downstreamStageOf(record: CandidateRecord, asOf: string) {
-  if (record.missCause === "DOWNSTREAM_RISK_DECISION_DECLINED") {
-    return token("candidate.downstream_stage", "RISK_REJECTED", asOf);
+  const stages = recordedDownstreamStages(record);
+  if (stages.length === 0) {
+    return unavailable(
+      "candidate.downstream_stage",
+      "DIMENSIONLESS",
+      "NOT_IMPLEMENTED",
+      "PRODUCER_NOT_IMPLEMENTED",
+    );
   }
-  if (record.tradeId !== undefined) {
-    return token("candidate.downstream_stage", "ORDER_FILLED", asOf);
+  return token("candidate.downstream_stage", stages[stages.length - 1], asOf);
+}
+
+/**
+ * The synthetic RISK DECISION recorded for one candidate, or nothing where none was written.
+ *
+ * **A fixture output, not a risk engine.** Nothing here sizes a position: an approval
+ * REPRODUCES the risk record the entry stage already retained (`stageRiskRecord`), and the
+ * builder REFUSES a declaration whose arithmetic does not reconcile with it. That is the same
+ * rule the execution builder applies to a multi-fill weighted price, and it exists so a
+ * declared number is one a reader can check rather than one they must trust.
+ *
+ * §4.4 defines a stage's retained risk as `shares x |reference - invalidation|`, so an
+ * approved decision's assigned risk, share count and two prices are one fact stated four ways
+ * — and any of them disagreeing means the record describes a decision nobody could have taken.
+ *
+ * A REJECTION ASSIGNS NOTHING. No shares, no risk, no policy-sized exposure, and no retained
+ * initial-risk record to point at, because nothing was ever entered.
+ */
+export function riskDecisionFor(
+  record: CandidateRecord,
+  days: readonly string[],
+  asOf: string,
+): RiskDecision | undefined {
+  if (record.downstream === undefined) {
+    return undefined;
   }
-  return unavailable(
-    "candidate.downstream_stage",
-    "DIMENSIONLESS",
-    "NOT_IMPLEMENTED",
-    "PRODUCER_NOT_IMPLEMENTED",
-  );
+  const decisionId = `${record.candidateId}-risk-decision`;
+  const candidateRef = demoRef(record.candidateId, "candidate", "ENDPOINT");
+  if (record.downstream.riskOutcome === "REJECTED") {
+    const decidedAt = sessionInstant(days[record.session]);
+    return {
+      decision_id: decisionId,
+      candidate_ref: candidateRef,
+      /* No trade was opened, so the reference resolves to nothing. */
+      trade_ref: demoRef(`${record.candidateId}-trade`, "trade"),
+      decided_at: decidedAt,
+      outcome: "REJECTED",
+      outcome_reason: demoReason("RISK_DECLINED_AT_THE_RECORDED_SIZE"),
+      rejection_reasons: (record.downstream.rejectionReasons ?? []).map(demoReason),
+      assigned_risk: unavailable(
+        "risk_decision.assigned_risk",
+        "USD",
+        "NOT_APPLICABLE",
+        "NOT_DEFINED_FOR_SUBJECT",
+      ),
+      assigned_risk_pct: unavailable(
+        "risk_decision.assigned_risk_pct",
+        "PERCENT",
+        "NOT_APPLICABLE",
+        "NOT_DEFINED_FOR_SUBJECT",
+      ),
+      sizing: {
+        shares: unavailable(
+          "risk_decision.shares",
+          "SHARES",
+          "NOT_APPLICABLE",
+          "NOT_DEFINED_FOR_SUBJECT",
+        ),
+        reference_price: unavailable(
+          "risk_decision.reference_price",
+          "USD",
+          "NOT_APPLICABLE",
+          "NOT_DEFINED_FOR_SUBJECT",
+        ),
+        invalidation_price: unavailable(
+          "risk_decision.invalidation_price",
+          "USD",
+          "NOT_APPLICABLE",
+          "NOT_DEFINED_FOR_SUBJECT",
+        ),
+        notional: unavailable(
+          "risk_decision.notional",
+          "USD",
+          "NOT_APPLICABLE",
+          "NOT_DEFINED_FOR_SUBJECT",
+        ),
+      },
+      risk_policy_ref: demoPolicyRef(decidedAt),
+      initial_risk_ref: demoRef(`${record.candidateId}-initial-risk`, "evidence"),
+      source: "RISK_ENGINE_DECISION_RECORD",
+    };
+  }
+  const trade =
+    record.tradeId === undefined
+      ? undefined
+      : BOOK.trades.find((entry) => entry.tradeId === record.tradeId);
+  if (trade === undefined) {
+    return undefined;
+  }
+  const stage = trade.stages[0];
+  const riskCents = stage.shares * Math.abs(stage.priceCents - stage.invalidationCents);
+  /*
+   * THE DECLARATION MUST RECONCILE WITH THE RETAINED RECORD, OR IT IS REFUSED.
+   *
+   * `stageRiskRecord` computes the entry stage's retained risk the same way. A decision that
+   * assigned a different number would be a decision this book cannot support.
+   */
+  const notionalCents = stage.shares * stage.priceCents;
+  if (riskCents <= 0 || notionalCents <= 0) {
+    throw new RangeError(
+      `${record.candidateId} risk decision has no positive risk or notional to record`,
+    );
+  }
+  const decidedAt = sessionInstant(days[stage.session]);
+  return {
+    decision_id: decisionId,
+    candidate_ref: candidateRef,
+    trade_ref: demoRef(trade.tradeId, "trade", "ENDPOINT"),
+    decided_at: decidedAt,
+    outcome: "APPROVED",
+    outcome_reason: demoReason("RISK_APPROVED_AT_RECORDED_SIZE"),
+    rejection_reasons: [],
+    assigned_risk: usd("risk_decision.assigned_risk", riskCents, asOf),
+    assigned_risk_pct: percent(
+      "risk_decision.assigned_risk_pct",
+      pctOfCapitalHundredths(riskCents),
+      asOf,
+    ),
+    sizing: {
+      shares: shares("risk_decision.shares", stage.shares, asOf),
+      reference_price: usd("risk_decision.reference_price", stage.priceCents, asOf),
+      invalidation_price: usd(
+        "risk_decision.invalidation_price",
+        stage.invalidationCents,
+        asOf,
+      ),
+      notional: usd("risk_decision.notional", notionalCents, asOf),
+    },
+    risk_policy_ref: demoPolicyRef(decidedAt),
+    /* The retained entry-stage record this decision assigned the risk of. */
+    initial_risk_ref: demoRef(`${trade.tradeId}-initial-risk-0`, "evidence", "EMBEDDED"),
+    source: "RISK_ENGINE_DECISION_RECORD",
+  };
 }
 
 export function buildCandidateSummary(
@@ -641,6 +882,9 @@ export function buildCandidateSummary(
 }
 
 const CANDIDATE_PAGE_SIZE = 200;
+const DOWNSTREAM_POPULATION =
+  "EVERY_CANDIDATE_THE_BRAIN_LEFT_READY_FOR_RISK_REVIEW_IN_THE_RETAINED_WINDOW";
+
 const CANDIDATE_POPULATION = "EVERY_JOURNALED_CANDIDATE_DECISION_IN_THE_RETAINED_WINDOW";
 
 function journalWindow(days: readonly string[]) {
@@ -941,10 +1185,18 @@ export function syntheticCandidateDetail(
       /*
        * THE RISK DECISION AND THE TRADE ARE SEPARATELY OWNED.
        *
-       * No risk engine exists, so the risk decision resolves to an availability state. The
-       * trade does exist for a taken candidate, and its detail is one authorized read away.
+       * §4.3 resolves a `risk_decision` under an AUTHORIZED_READ on `risk:read`, so where the
+       * book records one the reference resolves and where none was written it does not.
+       *
+       * **The REFERENCE crosses this boundary and the RECORD never does.** §4.5 forbids any
+       * share count, dollar amount, final position size, order type or route anywhere in this
+       * payload, and the sizing a risk decision assigned is all four. A reader who wants it
+       * follows the reference to the trade, which is where the join belongs.
        */
-      risk_decision: demoRef(`${record.candidateId}-risk-decision`, "risk_decision"),
+      risk_decision:
+        record.downstream === undefined
+          ? demoRef(`${record.candidateId}-risk-decision`, "risk_decision")
+          : demoRef(`${record.candidateId}-risk-decision`, "risk_decision", "AUTHORIZED_READ"),
       trade:
         record.tradeId === undefined
           ? demoRef(`${record.candidateId}-trade`, "source_fact")
@@ -1066,6 +1318,24 @@ export function syntheticCandidateFunnel(
   const securitiesWithCandidates = new Set(records.map((record) => record.symbol)).size;
   const ready = records.filter((record) => record.state === "READY_FOR_RISK_REVIEW").length;
 
+  /*
+   * THE DOWNSTREAM POPULATION, AND WHAT EACH STAGE COUNT MEASURES.
+   *
+   * The denominator is the candidates that could have a downstream record at all -- the ones
+   * the Brain left with no deterministic objection. Some of them were handed downstream and
+   * some were not, which is exactly why the population is larger than every stage count and
+   * why the remainder is visible rather than implied.
+   */
+  const handedDownstream = records.filter(
+    (record) => record.state === "READY_FOR_RISK_REVIEW",
+  );
+  const everReached = new Map<DownstreamStageValue, number>();
+  for (const record of handedDownstream) {
+    for (const stage of new Set(recordedDownstreamStages(record))) {
+      everReached.set(stage, (everReached.get(stage) ?? 0) + 1);
+    }
+  }
+
   const modules = [...new Set(records.map((record) => strategyVersionOf(record.versionId).module))]
     .sort()
     .map((module) => {
@@ -1115,23 +1385,33 @@ export function syntheticCandidateFunnel(
     ],
     brain_axis: brainAxis(records, asOf),
     /*
-     * EVERY DOWNSTREAM MEMBER IS NOT_IMPLEMENTED IN V1 (§4.5).
+     * THE DOWNSTREAM AXIS, ON AN EVER-REACHED BASIS AND OVER A STATED POPULATION.
      *
-     * The axis is rendered in full and carries no count anywhere. That is what keeps it beside
-     * the Brain axis rather than merged into it: a reader sees nine stages that exist as a
-     * vocabulary and a producer that does not exist at all.
+     * Area 6's accepted V1 availability is "`SYNTHETIC` demonstration; real candidates
+     * `NOT_IMPLEMENTED`", and this axis is demonstrated on exactly the terms the Brain axis
+     * beside it already is: repository-owned records, labelled SYNTHETIC, counted from
+     * declared risk decisions and recorded fills rather than produced by a risk engine or an
+     * order router -- **neither of which exists**. In the `project` scenario the whole read
+     * model is an absence and no count is served at all.
+     *
+     * The stages OVERLAP by construction: an order that filled also passed through submission
+     * and acknowledgement, so the counts do not decrease down the list and are not meant to.
+     * The basis says so, `overlapping` says so, and the population every count was drawn over
+     * travels beside them as the denominator.
      */
     downstream_axis: DOWNSTREAM_STAGES.map((stage) => ({
       stage,
-      count: unavailable(
-        "funnel.state_count",
-        "COUNT",
-        "NOT_IMPLEMENTED",
-        "PRODUCER_NOT_IMPLEMENTED",
-      ),
-      availability: "NOT_IMPLEMENTED" as const,
-      reason: "PRODUCER_NOT_IMPLEMENTED" as const,
+      count: count("funnel.state_count", everReached.get(stage) ?? 0, asOf),
+      availability: "AVAILABLE" as const,
+      reason: "NONE" as const,
+      basis: "EVER_REACHED" as const,
+      overlapping: true,
     })),
+    downstream_population: {
+      subject: "CANDIDATES" as const,
+      definition: demoReason(DOWNSTREAM_POPULATION),
+      count: count("funnel.stage_count", handedDownstream.length, asOf),
+    },
     conversion: [
       conversion(
         "UNIVERSE",
