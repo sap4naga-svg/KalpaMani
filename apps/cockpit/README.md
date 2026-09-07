@@ -328,6 +328,26 @@ is carried as `ENDPOINT`; where none was, it resolves to an availability state l
 absent producer. `ENDPOINT` is an accepted member of the closed `Resolution` vocabulary, and no
 producing contract was widened.
 
+**That choice is now the subject of a proposed contract reconciliation, and the reference contract
+is NOT ENFORCED here yet.** The C6 review recorded that `ref_kind` is admitted as an open string and
+that no reference-kind-to-resolution table is enforced. Investigating it established that the
+accepted text **cannot** be enforced as written:
+[ADR-0030](../../docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md)
+records the five findings — twenty-five reference-valued fields in the accepted catalogue carry no
+kind at all, nineteen scalar `Ref` and six `RefList`, `brain_decision`'s only carrier cannot embed
+it, the Resolution column is already a set rather than an invariant, the Cardinality column has
+three possible referents, and no reason code distinguishes an unknown identifier from an
+unimplemented producer.
+
+**ADR-0030 is PROPOSED and carries no authority while its pull request is open**, and **no runtime
+behaviour in this application was changed by it.** `ref_kind` is still `z.string().min(1)`, the
+per-kind resolution sets are still unenforced, and `CandidateDetail.downstream_refs.trade` and
+`RiskSnapshot.initial_planned_risk_open[].trade_ref` are both still emitted as kind `source_fact` —
+the value C6 had to guess twice, because §4.3 supplied no `trade` row.
+Those corrections belong to **one bounded implementation cycle after acceptance**, and that cycle is
+**a separate authorization that has not been given**. The C6 choice recorded above is **ratified**
+by ADR-0030 R5 rather than reversed.
+
 ### Still not carried
 
 | | |

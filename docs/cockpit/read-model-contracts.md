@@ -19,6 +19,10 @@ and the corrections it makes here are proposed with it.
 §3.1 with new §3.1.1, §4.1.1 with new §4.1.2, and §7. ADR-0029 is **PROPOSED and carries no authority
 while the pull request introducing it, PR #73, is open**, and the two corrections it makes here are
 proposed with it.
+**Further amended by** [ADR-0030](../decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) —
+§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, and §5's
+error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
+it is open**, and the corrections it makes here are proposed with it.
 
 ---
 
@@ -504,6 +508,14 @@ DENOMINATOR_ZERO             the ratio is mathematically undefined for this subj
 NOT_DEFINED_FOR_SUBJECT      the question does not apply to this subject at all
 POLICY_REFERENCE_MISSING     a separately governed policy value has no versioned reference
 CLASSIFICATION_WITHHELD      the value exists and this caller's scope may not read it
+REFERENT_NOT_FOUND           a reference is well formed and its identifier names nothing in the
+                             producing read model. NEVER a producer that does not exist, never
+                             a scope the caller lacks, and never a target withheld by
+                             classification -- see §4.3.1. It is an ABSENCE of a target and
+                             never an INAPPLICABILITY, so it carries NOT_YET_AVAILABLE and
+                             never NOT_APPLICABLE. It is carried by the VALUE-BEARING field the
+                             target would have filled, never by a bare Ref, which has no
+                             availability field
 PROJECTION_ERROR             production failed, and the failure is reported
 ```
 
@@ -529,7 +541,7 @@ blank, an empty string or free text.
 | `STALE` | **present**, with the `as_of` it was true at | `UPSTREAM_INPUT_STALE` — and nothing else |
 | `PARTIAL` | **present**, and never read as complete: `coverage` states how much of the extent it covers | `EXTENT_PARTIALLY_COVERED`, `UPSTREAM_INPUT_MISSING`, `UPSTREAM_INPUT_STALE`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED` |
 | `EMPTY_VERIFIED` | **present and empty** — an empty list, or the count of an empty population. **The producer ran and the defined result population is empty**, which is a statement about the population and never about the number: see §4.1.2 | `EMPTY_RESULT_VERIFIED` — and nothing else |
-| `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING` |
+| `NOT_YET_AVAILABLE` | **absent** | `UPSTREAM_INPUT_MISSING`, `SOURCE_TIMESTAMP_MISSING`, `CLOCK_UNSYNCHRONIZED`, `PRICE_PATH_INCOMPLETE`, `CORPORATE_ACTION_UNRESOLVED`, `EXTENT_NOT_DETERMINABLE`, `POLICY_REFERENCE_MISSING`, `REFERENT_NOT_FOUND` |
 | `NOT_IMPLEMENTED` | **absent** | `PRODUCER_NOT_IMPLEMENTED` — and nothing else |
 | `NOT_AUTHORIZED` | **absent** | `PRODUCER_NOT_AUTHORIZED`, `CLASSIFICATION_WITHHELD` |
 | `UNEVALUATED` | **absent** | `NOT_YET_ASSESSED` — and nothing else |
@@ -655,10 +667,19 @@ RecordValue     object      { record: <the named record type, or ABSENT>,
 Ref             object      { ref_id: SafeId, ref_kind: <closed RefKind>,
                               resolution: <closed Resolution>, classification:
                               DataClassification }
+                            EVERY reference-valued field in §4.5 names its kind, and §4.3.1
+                            assigns one to each field whose contract line does not state it --
+                            RefList fields included. A Ref whose kind is outside RefKind, or
+                            whose resolution is outside the set its kind permits, is REFUSED at
+                            the boundary. A Ref carries NO availability and NO reason: an
+                            unresolvable target is stated by the value-bearing field it would
+                            have filled, or by a §5 error, and the reference stays VISIBLE
 RefList         object      { items: [Ref], cardinality: <closed Cardinality>,
                               total: CountValue, truncated: boolean }
                             A list of references states how many there are, so a truncated
-                            list is never read as a complete one
+                            list is never read as a complete one. Its `cardinality` RESTATES
+                            the relation cardinality of its kind's §4.3 row, and §4.3.1
+                            states what `items` and `total` must then satisfy
 VersionPins     object      { strategy_version, factor_definition_version,
                               risk_policy_version, entry_policy_version,
                               exit_policy_version, model_version, prompt_version,
@@ -691,19 +712,44 @@ Resolution      ENDPOINT      -- resolvable by a catalogued GET, named in §4.3
                                    availability state rather than to a payload
 Unit            USD  RATIO  PERCENT  BPS  SHARES  SECONDS  TRADING_DAYS  CALENDAR_DAYS
                 COUNT  R_MULTIPLE  DIMENSIONLESS
+RefKind         the TWENTY-SEVEN members that are the rows of the §4.3 table. A value
+                outside them is refused at the boundary, never rendered and never coerced
 ```
+
+**`Cardinality` describes the RELATION, not the count of reference objects**, and **the host field's
+own declaration is what a validator checks**. A required `Ref` field always carries exactly one
+reference object and resolves to at most one target; a `RefList`'s own `cardinality` constrains its
+`items` and `total`, with `truncated` kept apart from both, under §4.3.1.
+
+**`Resolution` is declared per reference, from the SET its kind permits.** §4.3's Resolution column
+is a permitted set rather than a single invariant — two accepted rows already carry two members —
+and `EMBEDDED` is **response-relative and permission-gated**: it may be declared exactly when §4.3.1
+authorizes that host field to embed that kind in a named carrier **and** the response carries it.
 
 ---
 
 ### 4.3 Resolving a reference — no dangling `_ref`
 
-**Every reference names how it resolves, and nothing resolves by convention.** A `_ref` whose
-resolution is not in this table is refused at the boundary.
+**Every reference names how it resolves, and nothing resolves by convention.** A `_ref` whose kind is
+not a row of this table, or whose resolution is outside the set its row permits, is refused at the
+boundary.
+
+**The Resolution column is a PERMITTED SET.** A reference declares **one** member of its row's set.
+`EMBEDDED` is additionally available to **every** row, and is constrained by **catalogue permission
+AND truth** rather than by enumeration: a response may declare it exactly when §4.3.1 authorizes that
+host field to embed that kind in a named carrier **and** the response actually carries it. **Presence
+alone is not permission**, and co-location neither compels `EMBEDDED` nor forbids `ENDPOINT`. The rows
+below name the members permitted **in addition to** a `4.3.1`-authorized `EMBEDDED`.
+
+**The Cardinality column describes the RELATION** — how many targets a subject may have — and not
+how many reference objects a field carries. §4.3.1 states what that requires of a `Ref` and of a
+`RefList`.
 
 | `ref_kind` | Resolves to | Resolution | Cardinality |
 |---|---|---|---|
-| `candidate` | `CandidateDetail` | `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}` | `ZERO_OR_ONE` |
-| `brain_decision` | the journaled decision status inside `CandidateDetail` | `EMBEDDED` | `EXACTLY_ONE` |
+| `candidate` | `CandidateDetail` | `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}`; `UNRESOLVABLE_V1` | `ZERO_OR_ONE` |
+| `brain_decision` | the journaled decision status inside `CandidateDetail` | `EMBEDDED`; `ENDPOINT` — `GET /api/v1/signals/candidates/{candidate_id}`; `UNRESOLVABLE_V1` | `EXACTLY_ONE` |
+| `trade` | `TradeDetail` | `ENDPOINT` — `GET /api/v1/portfolio/trades/{trade_id}`; `UNRESOLVABLE_V1` | `ZERO_OR_ONE` |
 | `risk_decision` | `RiskSnapshot.decisions[]` | `AUTHORIZED_READ` — `risk:read` | `ZERO_OR_ONE` |
 | `order` | `TradeLifecycle` order events | `ENDPOINT` — `GET /api/v1/portfolio/trades/{trade_id}/lifecycle` | `ZERO_OR_MORE` |
 | `fill` | `TradeLifecycle` fill events | `ENDPOINT` — the same lifecycle response | `ZERO_OR_MORE` |
@@ -727,11 +773,21 @@ resolution is not in this table is refused at the boundary.
 | `data_quality` | `DataQuality` | `ENDPOINT` — `GET /api/v1/system/data-quality` | `ZERO_OR_MORE` |
 | `incident` | `SystemIncident` | `ENDPOINT` — `GET /api/v1/system/incidents` | `ZERO_OR_MORE` |
 | `alert` | `Alert` | `ENDPOINT` — `GET /api/v1/system/alerts` | `ZERO_OR_MORE` |
-| `source_fact` | the recorded fact a projection was built from | `AUTHORIZED_READ` — the scope named on the reference | `ONE_OR_MORE` |
+| `source_fact` | the recorded fact a projection was built from | `AUTHORIZED_READ` — the scope named on the reference | `ZERO_OR_MORE` |
 
 **`UNRESOLVABLE_V1` is a stated resolution, not a gap.** It says the join is specified and the
 producer does not exist, so a caller receives an `AvailabilityState` and a reason code rather than a
-404 it has to interpret. **It is never used for a producer that exists.**
+404 it has to interpret. **It is never used for a producer that exists for the requested
+environment, provenance and read-model scope** — and **a producer implemented against
+repository-owned synthetic fixtures exists for `SYNTHETIC` provenance and for nothing else**, so a
+reference into one declares the resolution its kind and its response actually support. **An
+implemented producer that lacks one requested record is not producer nonexistence**; that is
+`REFERENT_NOT_FOUND` (§4.3.1).
+
+**`source_fact` is `ZERO_OR_MORE`, amended by ADR-0030.** An envelope whose producer references
+no source fact has zero, and that is a true and complete answer rather than an unenumerable one.
+**A field may narrow the relation**, and `AskAnswer.citations` does — *"ONE_OR_MORE, or the answer
+is not returned"* — which is the one place the stronger relation is meant (§4.3.1).
 
 **Resolving a reference is an authorized read, not a widening.** No producing contract gains a field
 because a view resolves a reference into it, and **no reference resolves to a payload the caller's
@@ -742,6 +798,181 @@ reader knows something exists that they may not see.
 separately owned read model, and resolving one is an authorized read, not a widening of any
 producing contract. **No sizing or execution field is added to `CandidateIntent` to make this view
 simpler**, and `CandidateDetail` continues to carry none.
+
+---
+
+#### 4.3.1 Every reference field names its kind, and every absence names itself
+
+**A reference whose kind was never assigned cannot be checked against anything.** §4.2 types
+`ref_kind` as closed and §4.3 refuses a reference outside its table; neither rule is reachable for a
+field whose kind the catalogue never states. **The twenty-five reference-valued fields of §4.5 whose
+contract line does not state a kind are assigned here** — **nineteen** scalar `Ref` fields and
+**six** `RefList` fields — and no §4.5 reference field is left unassigned.
+
+**A kind is a property of the FIELD, not of the field NAME.** This catalogue already gives one name
+more than one kind: `evidence_refs` is declared `source_fact` on three models, `evidence` on another,
+and *"evidence or source_fact"* on a fifth. A field therefore declares a kind, or a stated **set** of
+kinds, and **the field's own declaration governs**.
+
+| Field | `ref_kind` |
+|---|---|
+| `ExecutiveOverview.last_decision.ref` | `decision` |
+| `ExecutiveOverview.last_scout_run.ref` | `research_run` |
+| `TradeLifecycle.events[].correction_of` | the `RefKind` corresponding to the corrected event's `event_kind`, restricted to the lifecycle-event kinds §4.3 resolves into `TradeLifecycle` — `order`, `fill`, `protection`, `add` or `exit` |
+| `TradeLifecycle.events[].source_ref` | `source_fact` |
+| `ReconciliationStatus.position_diffs[].security_ref` | `evidence` |
+| `ReconciliationStatus.order_diffs[].local_ref` | `order` |
+| `CandidateDetail.downstream_refs.risk_decision` | `risk_decision` |
+| `CandidateDetail.downstream_refs.trade` | `trade` |
+| `RiskSnapshot.initial_planned_risk_open[].trade_ref` | `trade` |
+| `RiskSnapshot.decisions[].decision_ref` | `risk_decision` |
+| `ShortSideSnapshot.borrow[].security_ref` | `evidence` |
+| `ShortSideSnapshot.borrow[].record_ref` | `evidence` |
+| `ShortSideSnapshot.blocked_shorts[].candidate_ref` | `candidate` |
+| `HypothesisRegistration.lineage.parent_registration` | `registration` |
+| `HypothesisRegistration.lineage.superseded_by` | `registration` |
+| `HypothesisRegistration.lineage.related_registrations` | `registration` |
+| `HypothesisRegistration.lineage.amendment_chain` | `registration` |
+| `StrategyHealth.transitions[].input_refs` | `source_fact` |
+| `StrategyHealth.failure_clusters[].evidence_refs` | `evidence` |
+| `AiContribution.ai_provenance.source_refs` | `source_fact` |
+| `FeedbackPipeline.stages[].item_refs` | `queue_item` |
+| `QualificationStatus` — each of its three `source_ref` fields | `source_fact` |
+| `SearchResultPage.results[].ref` | any `RefKind` — a search result names whatever was found, and resolves as that kind |
+
+**`record_ref` is a field of `borrow[]`.** `deterioration` is a `MetricValue` **inside** each
+`borrow[]` entry, not an array of its own, and `record_ref` is a sibling field of that same entry.
+
+**`EMBEDDED` requires PERMISSION and TRUTH, and presence alone authorizes nothing.**
+
+```text
+PERMISSION   the catalogue authorizes THIS host field to embed THIS target kind, NAMES the
+             carrier field that holds it, and states whether that carrier holds the COMPLETE
+             target or a DECLARED PROJECTION of it
+TRUTH        the response actually carries that named field, its content validates against the
+             declared schema, its identity corresponds to the reference's ref_id, and its
+             classification, access scope, environment and provenance are ones this response is
+             already authorized to carry
+```
+
+A rule satisfied by *"the payload is there"* is satisfied by **putting it there**, so it would
+authorize any widening and then ratify it. **A carrier the catalogue does not authorize is a
+widening and is refused whether or not the payload is present** — which is why no brain-decision
+payload may be added to `TradeDetail` to make an `EMBEDDED` declaration true. **An absent target is
+never represented by a fabricated embedded payload**: a placeholder, an empty object or a
+zero-valued stand-in in a named carrier is a wrong answer wearing a correct one's shape.
+
+**Co-location does not compel `EMBEDDED`, and does not forbid `ENDPOINT`.** A response carrying the
+payload **may** declare `EMBEDDED`, and **may instead** declare any other resolution its kind's set
+permits. `EMBEDDED` says *you already have this*; `ENDPOINT` says *the authoritative record lives
+here, and this is the catalogued route to it*. Both can be true of one response, and forbidding the
+second would destroy the route information. `EMBEDDED` is refused **only** when it is not permitted
+or not true.
+
+**Cardinality: six quantities, kept apart, and the HOST FIELD's declaration governs.**
+
+```text
+1 relation cardinality      how many TARGETS a subject may have in this relation
+2 reference-object count    how many Ref objects the field carries
+3 resolvable targets        how many of those resolve for this caller
+4 total population          how many targets exist -- a CountValue, with its own state
+5 truncation                whether `items` is a page of the population
+6 unknown vs verified empty an unenumerable population is NOT an empty one
+```
+
+The §4.3 Cardinality column states the kind's **generic** relation; **the host field's own
+declaration is what a validator checks**. This catalogue already declares cardinality at the field —
+`AskAnswer.citations` reads *"required, kind `source_fact` — ONE_OR_MORE, or the answer is not
+returned"* — and a per-kind value cannot be the validation input, because one kind is carried by both
+shapes: `source_fact` is carried by four **required scalar `Ref`** fields, and `evidence` by required
+scalar `security_ref` fields, none of which can satisfy a list cardinality.
+
+```text
+a scalar Ref field      carries EXACTLY ONE reference OBJECT, always
+                        and resolves to AT MOST ONE target
+                        required    -> the target exists whenever the subject does
+                        conditional -> the target may be absent, and the reference STAYS
+a RefList field         carries zero or more reference objects, and its OWN `cardinality`
+                        governs; `items`, `total` and `truncated` are checked against it
+
+truncated = false, total AVAILABLE   items.length == total, and total satisfies the relation
+truncated = true,  total AVAILABLE   items.length <= total, and total satisfies the relation
+total NOT value-bearing              the relation is NOT asserted satisfied; the count's state
+                                     and reason are the whole answer, and no bound is inferred
+                                     from items.length, which is a page fact
+EXACTLY_ONE, complete, two items     REFUSED
+EXACTLY_ONE, complete, zero items    REFUSED
+ZERO_OR_MORE, complete, zero items   ADMITTED, and reported EMPTY_VERIFIED / AVAILABLE zero
+```
+
+**A verified-empty population is never relabelled unknown** to satisfy an inherited declaration.
+That would manufacture unknown data and contradict §4.1.2's `EMPTY_VERIFIED` semantics and its
+legitimate `AVAILABLE` zero. Where a relation was wrong, **the relation is amended** — which is why
+`source_fact` is `ZERO_OR_MORE` in the table above while `AskAnswer.citations` keeps its field-level
+`ONE_OR_MORE`, the one place the stronger relation is meant.
+
+**The envelope's `source_refs` is not a `RefList`.** §3 types it
+`[ { ref_id, ref_kind, classification } ]` — a plain list with no `cardinality`, no `total`, no
+`truncated` and no `resolution` — so nothing about it changes, and with `source_fact` at
+`ZERO_OR_MORE` an empty `source_refs` is conformant.
+
+**A reference resolves to its own target, and identity is compared like with like.** A resolved
+target is of the reference's kind and matches its `ref_id` exactly, where *the target* is **the
+target entity and not the container it was retrieved through** — `brain_decision` is retrieved by a
+candidate route, and the candidate's id is not the comparand. **Where a target is nested, the
+catalogue names the container route AND the in-container selector.** **No resolver falls back to a
+nearest match, a default or a first row when an identifier is unknown.**
+
+**Environment must match the resolving envelope, always.** **Provenance must match, except where the
+catalogue explicitly authorizes a cross-provenance reference and the reference or its result row
+carries the target's own provenance label** — as `QualificationStatus` does when it reads tracked
+repository authority, and as `SearchResultPage.results[]` does by carrying per-row `environment`,
+`provenance` and `classification`. **Silent provenance mixing stays prohibited**, and an unlabelled
+target of differing provenance is refused.
+
+**Producer existence is SCOPED.** `UNRESOLVABLE_V1` is permitted only where no producing subsystem
+exists **for the requested environment, provenance and read-model scope**. A producer implemented
+against repository-owned synthetic fixtures **exists for `SYNTHETIC` provenance and for nothing
+else**, and never establishes that the real subsystem exists. **An implemented producer that lacks
+one requested record is not producer nonexistence** — that is `REFERENT_NOT_FOUND`.
+
+**Five unavailable outcomes, and none is a synonym for another.**
+
+| Outcome | Where it lands | Value |
+|---|---|---|
+| the reference is well formed and names nothing | the resolution attempt, or the value-bearing field the target would fill | §5 `REFERENT_NOT_FOUND`; or `NOT_YET_AVAILABLE` + `REFERENT_NOT_FOUND` |
+| the producing subsystem does not exist for this scope | as above | `NOT_IMPLEMENTED` + `PRODUCER_NOT_IMPLEMENTED` |
+| the caller lacks the scope the read requires | the resolution attempt | §5 `SCOPE_MISSING` or `SCOPE_INSUFFICIENT` |
+| the caller has the scope and classification withholds the target | the value-bearing field | `NOT_AUTHORIZED` + `CLASSIFICATION_WITHHELD`, reference stays **VISIBLE** |
+| the reference is malformed, or its kind or resolution is outside its closed set | admission | **refused at admission** |
+
+**A `Ref` carries no `availability` and no `reason`.** §4.2 types it
+`{ ref_id, ref_kind, resolution, classification }`, so `REFERENT_NOT_FOUND` appears in exactly two
+places: as a **§5 error** on an attempt to follow the reference, and as a **`FieldReasonCode`** on
+the value-bearing wrapper whose value would have come from resolving it. **The reference object
+itself stays present and visible**, and is never replaced by a state.
+
+**Scope denial is not classification withholding**, and §5 already separates them. **A recorded
+tombstone is not an unknown target** — where `AuditEvent.tombstone_of` or `supersedes` records one,
+the reference resolves to it.
+
+**A malformed reference is a contract violation, not an availability answer.** The boundary rejects
+the response rather than rendering a state for it.
+
+**Navigation is an allowlisted internal ROUTE TEMPLATE, and never a free-form URL.** A destination
+comes from a **closed allowlist keyed by `RefKind`**; an unknown or unmapped kind yields **no link**.
+
+```text
+PERMITTED   an allowlisted INTERNAL route TEMPLATE selected by RefKind, into which a ref_id
+            already validated as SafeId is interpolated as a single ENCODED path segment,
+            and nothing else is interpolated
+REFUSED     a free-form or absolute URL, any external origin, any destination derived from
+            free text, a title, a label or other untrusted content
+REFUSED     a generic resolver, a proxy, an unrestricted fetcher, or a guess for an unmapped
+            kind -- which yields NO LINK
+```
+
+`Ref.classification` **labels** the reference and **is not access or publication authorization**.
 
 ---
 
@@ -2041,7 +2272,7 @@ rather than served under a default nobody approved.
 | **cursor** | opaque, and it encodes the projection `snapshot_version`, the sort key, the tiebreak key and the full filter set. **A cursor is never a row offset**, and a cursor from one filter set is refused against another |
 | **snapshot pinning** | a page continues against the snapshot its cursor names. If that snapshot has been superseded, the response is `PARTIAL` with `UPSTREAM_INPUT_STALE` and names the current snapshot — **it never silently continues across two snapshots** |
 | **stable ordering** | every sort has a declared deterministic tiebreak, so two identical requests return identical order |
-| **errors** | a closed error vocabulary, and **no free text**: `UNKNOWN_SCHEMA_VERSION`, `UNKNOWN_API_VERSION`, `UNKNOWN_FILTER`, `UNKNOWN_SORT`, `PAGE_SIZE_EXCEEDED`, `EXTENT_EXCEEDED`, `CURSOR_INVALID`, `CURSOR_SNAPSHOT_SUPERSEDED`, `SCOPE_MISSING`, `SCOPE_INSUFFICIENT`, `CLASSIFICATION_WITHHELD`, `POLICY_REFERENCE_MISSING`, `PROJECTION_ERROR` |
+| **errors** | a closed error vocabulary, and **no free text**: `UNKNOWN_SCHEMA_VERSION`, `UNKNOWN_API_VERSION`, `UNKNOWN_FILTER`, `UNKNOWN_SORT`, `PAGE_SIZE_EXCEEDED`, `EXTENT_EXCEEDED`, `CURSOR_INVALID`, `CURSOR_SNAPSHOT_SUPERSEDED`, `SCOPE_MISSING`, `SCOPE_INSUFFICIENT`, `CLASSIFICATION_WITHHELD`, `POLICY_REFERENCE_MISSING`, `REFERENT_NOT_FOUND`, `PROJECTION_ERROR`. **`REFERENT_NOT_FOUND` means a well-formed identifier named nothing, and is never a substitute for an unimplemented producer or a withheld target** (§4.3.1) |
 | **refusal, not truncation** | `PAGE_SIZE_EXCEEDED` and `EXTENT_EXCEEDED` are refusals. **A silently truncated result is a wrong answer wearing a correct one's shape** |
 | **no error carries data** | an error response carries the envelope and the closed code, and **never a partial payload, a bucket name, a key, an identifier or a backend message** |
 

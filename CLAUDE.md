@@ -4100,6 +4100,95 @@ live trading:                                     HARD-DISABLED
 **A corrected specification is still a specification.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
 
+### The reference-contract reconciliation, and ADR-0030 — PROPOSED, and nothing is implemented
+
+**The C6 review found the reference contract unenforced. Investigating it found the accepted
+contract unenforceable as written.** Those are two different findings, and the second is why this is
+a proposed amendment rather than a bug fix.
+
+[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) is
+**PROPOSED and carries no authority while the pull request introducing it is open**, and so are the
+corrections it makes to [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) in the
+same pull request. On independent review and merge it becomes **ACCEPTED / IN FORCE** as **corrected
+contracts and governance** — and nothing else. It **amends and supersedes no ADR document**;
+**ADR-0027, ADR-0028 and ADR-0029 each remain ACCEPTED / IN FORCE**.
+
+**Five findings, each parsed out of the accepted text and executed rather than read off by eye.**
+
+| | |
+|---|---|
+| **D1** | **twenty-five reference-valued fields in the accepted §4.5 catalogue carry no `kind` declaration** — **nineteen** scalar `Ref` fields and **six `RefList` fields**, the latter missed entirely by an earlier draft of the reconciliation and all six sitting in the research-and-feedback surface C7 consumes. §4.2 types `ref_kind` closed and §4.3 refuses a reference outside its table; neither rule is reachable for a field whose kind was never assigned. C6 had to guess, and **two guesses are visibly wrong** — `CandidateDetail.downstream_refs.trade` and `RiskSnapshot.initial_planned_risk_open[].trade_ref` are both emitted as kind `source_fact`, so *the trade a candidate became* and *the trade a planned-risk row belongs to* are each labelled *a fact the projection was built from* |
+| **D2** | **`brain_decision` is assigned `EMBEDDED`, and its only carrier cannot embed it.** The kind is declared exactly once, on `TradeDetail.brain_decision_ref`; `TradeDetail` carries no brain-decision field, and `CandidateDetail` — where the status lives — carries no such reference. The two accepted clauses are **jointly unsatisfiable** |
+| **D3** | **the Resolution column is already a set, and `EMBEDDED` is response-relative.** Two accepted rows carry two members. `TradeDetail` truthfully declares `EMBEDDED` for `add`, `exit`, `execution_quality`, `chart_series` and `benchmark_series`, because it really does carry those ADR-0028 additive payloads — so enforcing the column as an invariant would force a producer to **lie** |
+| **D4** | **the Cardinality column has three possible referents** — reference objects, available targets, or a collection — and the text never chooses. `candidate` is `ZERO_OR_ONE` on a **required** single `Ref`; `source_fact` is `ONE_OR_MORE` on an envelope list that is legitimately empty, **and is also carried by four required scalar `Ref` fields**, so no single per-kind value can describe both shapes |
+| **D5** | **no code distinguishes an unknown identifier from an unimplemented producer.** Neither the closed `FieldReasonCode` nor the closed §5 error vocabulary can say *this reference is well formed and names nothing* |
+
+**What it decides.** `RefKind` closed at **twenty-seven** members — the twenty-six accepted rows plus
+**`trade`**; a kind assigned to **every** catalogue reference field, **`RefList` fields included**;
+the Resolution column read as a **permitted set**; `EMBEDDED` gated on **catalogue PERMISSION and
+validated TRUTH**, because payload presence is something a producer controls and a presence-only rule
+would authorize any widening and then ratify it; **co-location neither compelling `EMBEDDED` nor
+forbidding `ENDPOINT`**, since *you already have this* and *the authoritative record lives here* do
+not compete; `brain_decision` permitted `EMBEDDED`, `ENDPOINT` and `UNRESOLVABLE_V1`, which
+**ratifies the C6 choice rather than reversing it**; producer existence **scoped to the requested
+environment, provenance and read-model scope**, so a synthetic fixture never stands in for the Brain
+and an implemented producer missing one record is **`REFERENT_NOT_FOUND`, not `UNRESOLVABLE_V1`**;
+cardinality split into **six quantities** with the **host field's own declaration governing**, the
+`source_fact` relation **amended to `ZERO_OR_MORE`** rather than requiring a producer to relabel a
+**verified-empty** population as unknown, and `items` never bounding a relation while `truncated` is
+true; a reference resolving to **its own target**, compared against the **target entity rather than
+its container**, with **environment always matching** and **provenance matching unless the catalogue
+authorizes a labelled cross-provenance link** — which `QualificationStatus` and `SearchResultPage`
+both need; **`REFERENT_NOT_FOUND`** added to both closed vocabularies and landing on the
+**value-bearing field or a §5 error**, never on a bare `Ref`, which carries **no availability field**;
+**scope denial kept distinct from classification withholding**; and navigation kept to an
+**allowlisted internal route template** — which permits the ordinary `SafeId`-validated, encoded
+`ref_id` path segment the application already uses, and forbids free-form URLs, external origins and
+any generic resolver.
+
+**One accepted guard refused an earlier draft, and the guard won.** The draft placed
+`REFERENT_NOT_FOUND` under `NOT_APPLICABLE`; ADR-0028 holds that `NOT_APPLICABLE` has **exactly two
+routes** and that inapplicability is *"not a synonym for 'we do not have it'"*. A missing referent is
+exactly that, so it carries **`NOT_YET_AVAILABLE`** and `NOT_APPLICABLE` keeps its two routes.
+**No accepted guard was relaxed to fit this proposal's prose.**
+
+```text
+ADR-0030:                                         PROPOSED / NOT IN FORCE
+ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
+reference-contract enforcement:                   NOT IMPLEMENTED / PENDING ACCEPTANCE
+ref_kind in the application:                      STILL AN OPEN STRING
+downstream_refs.trade in the application:         STILL EMITTED AS kind source_fact
+new src/ or apps/cockpit/src/ modules:            NONE
+fixtures changed:                                 NONE
+runtime behaviour changed:                        NONE
+schema_version bumped:                            NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+C7 research and feedback interfaces:              NOT STARTED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A proposed reconciliation is not an enforced contract.** The bounded implementation cycle that
+would close `ref_kind`, compile the per-kind resolution sets, enforce `EMBEDDED` and cardinality and
+re-label the trade reference is **a separate authorization that has not been given**.
+
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
 **One owner-approved human operator now holds the governed qualification access, both governed AWS
