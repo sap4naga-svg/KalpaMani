@@ -1,31 +1,33 @@
-# KalpaMani Cockpit — C5 portfolio, strategy, exposure and trade views
+# KalpaMani Cockpit — C6 signals, explainability and the complete trade lifecycle
 
-Portfolio performance, positions and exposure, strategy performance, market and regime, the risk
-dashboard, the short side, and trade history with a **basic** trade detail — built on the merged
-C3 foundation and C4 screens, under
+The signal and candidate funnel, candidate explainability, missed opportunities, and the complete
+synthetic trade lifecycle with its chart drill-down — built on the merged C3 foundation and the
+C4 and C5 screens, under
 [ADR-0027](../../docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md)
 and the corrected contracts of
 [ADR-0028](../../docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
 and
 [ADR-0029](../../docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
 
-**This is C5. It is not the Cockpit.** C3 delivered the design system, shell, navigation and
+**This is C6. It is not the Cockpit.** C3 delivered the design system, shell, navigation and
 contract layer; C4 added the Executive Overview, the performance overview, Attention Required,
-What Changed and two governance screens; C5 adds seven product areas and one deep destination —
-still running on a **local fixture adapter**, and still with no production read API, projection
-or metric engine behind it.
+What Changed and two governance screens; C5 added seven product areas and a **basic** trade
+detail; C6 adds three product areas and completes a fourth — still running on a **local fixture
+adapter**, and still with no production read API, projection or metric engine behind it.
 
-**Eleven of the thirty-six product areas are addressed, and ten of them are finished.** Areas 1,
-24, 25 and 28 from C4, and areas 2, 3, 4, 11, 12, 13 and 36 from C5 — the C5 row of the
-traceability matrix. **Area 36 is deliberately split and is delivered in part**: its ledger is
-complete and its trade detail is basic, so a count of areas touched is not a count of areas
-finished. The other twenty-five remain registered, reachable placeholders, and the C6-C10
-sequencing is unchanged.
+**Fourteen of the thirty-six product areas are addressed, and all fourteen are now finished.**
+Areas 1, 24, 25 and 28 from C4; areas 2, 3, 4, 11, 12, 13 and 36 from C5; and areas **6** (Signal
+and Candidate Funnel), **7** (Candidate Detail and Explainability) and **8** (Missed
+Opportunities) from C6 — the C6 row of the traceability matrix. **Area 36 was deliberately split
+across two cycles and is now complete**: C5 delivered its ledger and a basic detail, and C6
+delivers the Candidate → Brain → Risk → Order → Fill → Protection → Add → Exit → Reconciliation →
+Attribution reconstruction and the chart drill-down. The other twenty-two remain registered,
+reachable placeholders, and the C7-C10 sequencing is unchanged.
 
-**Two boundaries inside area 36 are worth naming up front.** The matrix splits it: **C5 owns the
-trade history and a BASIC trade detail, and C6 owns the complete lifecycle and the chart
-drill-down.** And **Area 5, Strategy Health, is C7's** — this cycle displays a recorded health
-state beside each strategy version's results and implements none of the transitions, drift
+**Two boundaries are worth naming up front.** **The Brain runtime does not exist**: no candidate
+here was produced by a scanner, a factor matrix, a decision compiler or a model, and nothing on
+these screens is a decision anything made. And **Area 5, Strategy Health, is C7's** — the strategy
+screens still display a recorded health state and implement none of the transitions, drift
 measures, failure clusters or research-queue behaviour that area is about.
 
 ---
@@ -149,8 +151,10 @@ src/contracts/     the closed vocabularies, the 4.1.1 validity matrix, the fresh
                    payload contracts -- transcribed from read-model-contracts.md
 src/data/client/   the typed READ-CLIENT BOUNDARY, the query keys and the query hooks.
                    default-client.ts is the ONE composition point that names the adapter
-src/data/fixtures/ the deterministic fixture adapter, the ONE synthetic book every C5
-                   screen is projected from, and the tracked governance facts
+src/data/fixtures/ the deterministic fixture adapter, the ONE synthetic book every C5 and
+                   C6 screen is projected from -- its trades, its declared execution
+                   evidence and its journaled candidate decisions -- and the tracked
+                   governance facts
 src/components/    ui/ primitives, cockpit/ contract-aware presentation, shell/ the
                    application shell, palette/ the command palette
 src/nav/           the typed route registry every navigation surface reads
@@ -277,15 +281,57 @@ readable. The metric dictionary gained its C5 rows, each marked either a **§12.
 or a **presentation definition proposed by this cycle** under §12.6. **An unregistered
 `metric_id` is still refused at admission.**
 
+### Completed by C5, and superseded in part by C6
+
+The four rows below record what C5 declared as **not carried** and what C6 has since done with
+each. **Two of them are now carried, two remain outstanding, and one is outstanding in a narrower
+form than C5 stated it** — see *The C5 coverage questions, answered* below for the full
+disposition.
+
+### Completed by C6
+
+Four catalogued read models were added with their per-field contracts, and one was completed:
+
+| | |
+|---|---|
+| `CandidateFunnel` | the four stages, the eight Brain states as a **closed set**, the nine downstream stages on a **separate axis that carries no count**, the conversions with **both** of their counts and **both** of their subjects, and a per-module view. Its refinement refuses a downstream count, a Brain axis that does not partition the consolidated stage, and a rate between two stages counting different subjects |
+| `CandidateSummary`, `CandidateDetail` | the candidate ledger and one decision's whole explanation: thesis, entry condition, ranking context, deterministic factor evidence, AI research and challenger evidence with per-reference provenance, contradictions, evidence gaps, the invalidation **reference**, the risk context and the downstream references. **The refinement refuses a `USD` or `SHARES` quantity anywhere in either payload**, refuses a blocked candidate with no reason, and refuses AI evidence recorded as having cleared a block |
+| `MissedOpportunity` | the recorded cause, the **registered** measurement window, detection and decision instants with the delay between them, both excursions, the counterfactual and its assumptions, the follow-up path, the recurring causes, the taken-versus-missed comparisons and the rates. **The refinement refuses a money counterfactual, refuses an `AVAILABLE` path-dependent value over an incomplete path, refuses a rate with no population and refuses a difference between two arms it has declared incomparable** |
+| `ExecutionQuality` | for **one trade**, embedded on its detail — not the Area 9 aggregate surface, which is a later cycle. Each fill against its named reference price, with the four order sides and the `side_sign` that makes an adverse buy and an adverse sell both read positive |
+| `TradeDetail`, `TradeLifecycle` | completed. Orders, fills, protective-order placement, amendment, correction and cancellation, reconciliation, a declared attribution and a benchmark aligned to exactly the trade's holding period — **for the six trades whose execution evidence a fixture actually records** |
+
+Six additions were made to the contract rather than invented at a call site, and each is labelled
+where it is defined: a `subject` on every funnel stage, because two stages counting different
+subjects must never subtract; `numerator`, `denominator`, both subjects and a `comparable` flag on
+every conversion, so a rate is checkable rather than asserted; an `overlapping` flag on every
+reason count, because one candidate may carry several blocking reasons; per-reference AI
+provenance beside `ai_evidence_refs`, because a `Ref` carries no model, prompt or publish time;
+`price` on the reference-price record, because slippage is not checkable without the third number;
+and `execution_quality`, `fill_quality`, `benchmark_series`, `benchmark_window` and
+`benchmark_label` on `TradeDetail`, each present exactly when its reference states it is embedded.
+The metric dictionary gained its C6 rows, each marked either a **§12.3 transcription** —
+`slippage`, `latency.signal_to_order`, `latency.order_to_fill` — or a **presentation definition
+proposed by this cycle** under §12.6. **An unregistered `metric_id` is still refused at
+admission.**
+
+**One resolution was chosen deliberately and is recorded here.** §4.3 assigns `brain_decision` an
+`EMBEDDED` resolution, because the journaled decision status lives **inside** `CandidateDetail`.
+From `TradeDetail` it is not inside that response, so calling it `EMBEDDED` would claim a payload
+this response does not carry. Where a candidate was journaled, it is one authorized read away and
+is carried as `ENDPOINT`; where none was, it resolves to an availability state like every other
+absent producer. `ENDPOINT` is an accepted member of the closed `Resolution` vocabulary, and no
+producing contract was widened.
+
 ### Still not carried
 
 | | |
 |---|---|
-| **read models** | the rest of the catalogue. `CandidateFunnel`, `CandidateDetail`, `MissedOpportunity`, `ExecutionQuality`, `ReconciliationStatus`, `StrategyHealth`, `StrategyVersion`, `ResearchRun`, `DataQuality`, `Alert`, `FeedbackPipeline`, `SearchResultPage` and `AskAnswer` are not implemented, and their screens remain placeholders |
-| **the complete `TradeLifecycle`** | order and fill mechanics, protective-order events, reconciliation and corrections. **C6 owns them**, and each is named as an absent event kind rather than left out |
-| **finalized attribution** | strategy, factor, regime, execution and cost attribution are all `NOT_IMPLEMENTED` on the trade detail. A provisional zero would be a decomposition nobody computed |
-| **rolling series and capacity** | no rolling-window series and no capacity figure is derived. Trailing performance is **five separate reads over five windows**, each with its own population; capacity needs a liquidity and market-impact model over qualified provider data, and **G1 is OPEN** |
-| **slippage and execution cost** | unavailable everywhere. It needs a named reference price with its own timestamp per fill, and an execution runtime to record them |
+| **read models** | the rest of the catalogue. `ReconciliationStatus`, `StrategyHealth`, `StrategyVersion`, `ResearchRun`, `DataQuality`, `Alert`, `FeedbackPipeline`, `SearchResultPage` and `AskAnswer` are not implemented, and their screens remain placeholders |
+| **the aggregate `ExecutionQuality` surface** | Area 9 aggregates every fill in a window across every trade. C6 carries **one trade's** record, embedded on its detail; the `/execution/quality` screen remains a placeholder |
+| **the risk decision** | still absent on every trade and every candidate. **No risk engine exists**, so nothing recorded why this size rather than another, and the reference resolves to an availability state on both screens |
+| **immutable audit events** | the Audit Trail is a separate screen and a separate read model, and neither exists. `audit_refs` is carried, empty, and states a total of zero |
+| **rolling series and capacity** | no rolling-window series and no capacity figure is derived. Trailing performance is **five separate reads over five windows**, each with its own population; capacity needs a liquidity and market-impact model over qualified provider data, and **G1 is OPEN**. **C6 did not close this**, and it is recorded as outstanding rather than quietly dropped |
+| **real benchmark price history** | the holding-period benchmark C6 added is an obviously synthetic index this repository owns. SPY, QQQ and IWM still resolve to nothing, because **no provider has been selected and G1 is OPEN** |
 | **cursor pagination** | the page contract carries its size, its total, its truncation flag, its sort key and its tiebreak. It carries **no cursor**: a cursor is meaningful only against a transport that can continue a page, and this local read client returns one page and continues none |
 | **`PerformanceSeries` classification** | §4.5 classifies a real one `PRIVATE_OPERATIONAL`, which the `PUBLIC_EDGE` boundary **refuses**. What this application can show is a repository-owned synthetic demonstration, labelled `PUBLIC_SAFE` and `SYNTHETIC` because that is what it is. A real recorded series would be refused here rather than relabelled to fit the host |
 | **`source_refs`** | carried, and empty on every response. The fixture adapter references no source fact, and states a total of zero rather than implying one |
@@ -293,6 +339,72 @@ or a **presentation definition proposed by this cycle** under §12.6. **An unreg
 
 **No claim is made that the catalogue is complete.** The remaining read models, payload fields
 and metrics arrive with the cycles that produce them.
+
+---
+
+## Implemented in C6
+
+| Route | Area | State |
+|---|---|---|
+| `/signals/funnel` | 6 | **implemented** — the four stages with the subject each counts, the eight Brain states as a closed set with their reason distributions, the downstream axis beside them carrying no count, the conversions with both counts and both subjects, a per-module funnel, and the candidate ledger with search and a state filter |
+| `/signals/candidates/[candidateId]` | 7 | **implemented** — the decision and its thesis, deterministic factor evidence, the ranking context, the risk, event, liquidity and short context, AI research and challenger evidence with per-reference provenance, contradictions, the evidence the decision did not have, and the lineage |
+| `/signals/missed` | 8 | **implemented** — recurring causes, taken-versus-missed comparisons including one that is **refused**, the two rates, and one row per recorded miss with a keyboard-reachable detail carrying the registered window, the counterfactual, its assumptions and the observed follow-up path |
+| `/portfolio/trades/[tradeId]` | 36 | **completed** — C5's identity, economics, risk records and price marks, plus the orders, fills, protective-order events, corrections, reconciliation, per-fill execution quality, attribution and holding-period benchmark C6 adds |
+
+### The C5 coverage questions, answered
+
+C5 recorded four omissions. **Each is dispositioned here rather than quietly carried forward**,
+and two of them remain open.
+
+| C5 omission | C6 disposition |
+|---|---|
+| **the complete `TradeLifecycle`** — order and fill mechanics, protective-order events, reconciliation and corrections | **implemented and demonstrated.** All four are carried, for the six trades whose execution evidence a fixture records. The other one hundred and ninety-four name each kind as absent, because a ledger row does not say how many fills it took |
+| **finalized attribution** | **implemented and demonstrated.** A declared decomposition whose five components sum to the trade's outcome exactly, labelled `PROVISIONAL` or `FINAL`. One trade in the book carries **no** attribution at all, and says so |
+| **slippage and execution cost** | **implemented and demonstrated, for one trade at a time.** Each fill against a named reference price with its own timestamp and side convention. The **aggregate** figure reports `INSUFFICIENT_OBSERVATIONS` against its declared twenty-fill minimum, which is the §12.3 rule working rather than a gap |
+| **rolling series and capacity** | **required and still outstanding.** Area 2 names rolling returns and Area 4 names rolling expectancy, drawdown and tail losses; neither is derived. **C6 did not attempt it**: it is a portfolio and strategy-performance concern rather than a signals or trade-lifecycle one, and widening this cycle into a portfolio-dashboard rebuild is exactly what its scope excludes. **It remains an open C5-assigned requirement**, and no cycle currently owns it |
+
+**The benchmark question is split, and only half of it was C6's.** A **holding-period benchmark on
+Trade Detail** is Area 36.2's own requirement and is **implemented and demonstrated**: one
+synthetic index, sliced to exactly the trade's entry and last session, stating `PRICE_RETURN`
+because the index and the demonstration securities both pay no dividend. The **portfolio-level
+comparison against SPY, QQQ and IWM** in Area 2 is a different requirement, it needs a qualified
+market-data provider, **G1 is OPEN and no provider is selected** — so it remains outstanding and
+is recorded as such rather than counted as delivered.
+
+### The synthetic book, extended
+
+The C5 book is unchanged in shape and gained exactly what C6 needed to demonstrate its cases.
+
+| | |
+|---|---|
+| **one more featured trade** | a CLOSED long reduced twice and then closed by its remaining balance — the case Area 36.4 is most explicit about, and the one no C5 row could show. `GENERATED_TRADES` dropped by one in exchange, so the ledger population is unchanged at exactly its declared page size and the generated ordinals below it are untouched |
+| **declared execution evidence for six trades** | orders, fills, protective-order events, reconciliation, corrections and attribution, **written down rather than derived**. A multi-fill order's quantity-weighted price must equal the price the ledger recorded, and the builder **refuses** a declaration where it does not |
+| **sixteen journaled candidate decisions** | every one of the eight Brain states is populated, so the funnel renders a closed set rather than the interesting half of one. Six became the six trades with execution evidence; ten record a cause for not being entered |
+| **one benchmark index** | a single series over the whole retained extent that every trade's window is a **slice** of — not a path generated per trade, which would measure two trades in the same month against two different markets |
+
+**The cases the fixture exists to demonstrate**, each on a named row:
+
+```text
+every Brain state                     sixteen candidates across all eight
+ready, then declined downstream       demo-candidate-0006, cause DOWNSTREAM_RISK_DECISION_DECLINED
+watchlist expiry                      demo-candidate-0007
+decision delay                        demo-candidate-0016, 9,180 seconds
+data / event / borrow / contradiction demo-candidate-0009 / -0010 / -0011 / -0012
+AI evidence unavailable               demo-candidate-0013
+AI evidence that removed a candidate  demo-candidate-0012
+AI evidence past its contract         demo-candidate-0015, STALE
+incomplete follow-up path             demo-candidate-0009, PARTIAL
+long completed lifecycle              demo-trade-sol-0006
+short completed lifecycle             the first closed short in the deterministic book
+pyramid with retained per-stage risk  demo-trade-nvl-0002
+fully filled order, partial exit      demo-trade-cir-0003
+partially filled order                demo-trade-arb-0001, two fills
+several partial exits, then close     demo-trade-sol-0006, three exits
+an appended correction                demo-trade-sol-0006, a protective level restated
+a late observation                    demo-trade-arb-0001, a fill observed three hours late
+a missing stage                       demo-trade-nvl-0002, never reconciled and never attributed
+no execution evidence at all          every other trade in the book
+```
 
 ---
 
@@ -447,6 +559,28 @@ destinations; C4 implements none of their workflows.
 
 ---
 
+## What C6 does not contain
+
+Everything in the C5 and C4 lists below, unchanged, and:
+
+```text
+no Brain runtime           no scanner or factor matrix   no decision compiler
+no AI agent or model call  no risk engine                no order router
+no aggregate execution     no audit trail                no rolling series
+no capacity model          no real benchmark price       no provider data
+```
+
+**No model is called from anywhere in this application.** The AI evidence records carry model,
+prompt and schema versions because §14.3 requires them **on evidence**; the versions are fictional
+strings identifying nothing, and no SDK, endpoint or key exists in the tree.
+
+**AI may remove a candidate and may never restore one**, and the contract refuses a payload
+claiming otherwise rather than leaving it to a screen. **No counterfactual becomes an amount of
+money**, because that needs a sizing basis somebody approved and none exists. **No false-negative
+rate is reported**, because a ledger of detected candidates contains no undetected one.
+
+---
+
 ## What C5 does not contain
 
 Everything in the C4 list below, unchanged, and:
@@ -499,21 +633,30 @@ action** for a person to take elsewhere.
 
 ## Governance
 
-**Implemented by this cycle, and pending independent review and merge.** Merging C5 authorizes
+**Implemented by this cycle, and pending independent review and merge.** Merging C6 authorizes
 no further cycle: **specification, implementation, deployment and execution stay separate
-gates**, and C6 is a separate written authorization that has not been given.
+gates**, and C7 is a separate written authorization that has not been given.
 
 ```text
 C3 application foundation                         MERGED (PR #74)
 C4 executive overview and governance              MERGED (PR #75)
-C5 portfolio, strategy, exposure and trades       IMPLEMENTED HERE / PENDING REVIEW
-trade detail                                      BASIC -- C6 owns the full lifecycle
+C5 portfolio, strategy, exposure and trades       MERGED (PR #76)
+C6 signals, explainability, trade lifecycle       IMPLEMENTED HERE / PENDING REVIEW
+trade detail                                      COMPLETE LIFECYCLE
 strategy health                                   RECORDED STATE ONLY -- C7 owns area 5
-full Cockpit V1                                   NOT COMPLETE -- 11 of 36 addressed,
-                                                  10 finished; area 36 is split
+aggregate execution quality (area 9)              NOT IMPLEMENTED -- later cycle
+audit trail (area 26)                             NOT IMPLEMENTED -- later cycle
+rolling series and capacity                       REQUIRED AND OUTSTANDING -- no cycle owns it
+portfolio benchmark vs SPY / QQQ / IWM            OUTSTANDING -- needs a qualified provider
+full Cockpit V1                                   NOT COMPLETE -- 14 of 36 addressed and
+                                                  finished; area 36 is now complete
+Strategy Brain runtime                            NOT IMPLEMENTED / NOT AUTHORIZED
+scanner, factor matrix, decision compiler         NOT IMPLEMENTED / NOT AUTHORIZED
+AI research and challenger agents                 NOT IMPLEMENTED / NOT AUTHORIZED
+model, SDK or endpoint calls of any kind          NONE
+risk engine and order router                      NOT IMPLEMENTED / NOT AUTHORIZED
 production read API, projections, metric engine   NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation           NOT IMPLEMENTED / NOT AUTHORIZED
-Strategy Brain runtime                            NOT IMPLEMENTED / NOT AUTHORIZED
 deployment and real-source integration            NOT AUTHORIZED
 Run A retry / Run B / combined assessment         NOT AUTHORIZED / NOT RUN
 P1-P9                                             UNEVALUATED
@@ -526,6 +669,12 @@ Phase 3                                           NOT COMPLETE
 CONTROL publication                               DEFERRED
 live trading                                      HARD-DISABLED
 ```
+
+**A synthetic evidence record is fixture data, and never evidence that a system ran.** The
+candidate decisions, orders, fills, protective-order events, reconciliations and attributions this
+cycle renders were typed into a repository-owned fixture. **No Brain has ever decided anything, no
+order has ever been sent, no fill has ever occurred, no model has ever been called and no
+benchmark price has ever been requested.**
 
 ### C3 — corrections made under independent review
 
@@ -859,6 +1008,25 @@ nothing and claims nothing.
 **Browser network traffic was checked and is empty.** Across every C5 route the browser issued
 **no request to any origin other than the local dev server**, and the console logged **no error
 and no hydration mismatch**.
+
+### C6 — the browser evidence, and what it does not claim
+
+The C6 review captures live in **`apps/cockpit/screenshots-c6/`**, at all three registered
+viewports, stamped with the exact commit and working-tree state they were taken at. They are
+**review evidence, not a visual-regression baseline**, and the C3, C4 and C5 captures are
+untouched.
+
+**No screen-reader claim and no performance claim is made.** The accessibility evidence is an
+automated `axe-core` scan at WCAG 2.1 A and AA over every C6 route in Operator mode, plus a
+keyboard test that opens a missed-opportunity detail with the keyboard and asserts that focus
+returns to the control that opened it. **An automated scan is not an audit**, and no screen reader
+was run.
+
+### Dependencies added by C6
+
+**None.** C6 adds no runtime dependency, no development dependency and no lockfile change. The
+price view is the same TradingView Lightweight Charts surface C5 introduced, still imported inside
+one effect in one component.
 
 ### Dependencies added by C5
 
