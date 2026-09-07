@@ -4234,17 +4234,51 @@ actually runs into it.
 | **absent metadata read as a passed check** | `TargetLabels` was optional, so a located target carrying none was `RESOLVED` without an environment or provenance check; a **tombstone returned `RESOLVED` before every check**, and was a bare boolean establishing no relationship to the entity it claimed to withdraw; and **neither the target's kind nor its identifier was ever compared** against the reference, so R8 was unenforced on the follow path. Labels, kind and identity are required now, a tombstone **names the entity it withdrew**, and a tombstone takes every check a located target takes |
 | **authorization came from a producer-controlled label** | the required scope was a **caller-supplied string**, so the authorization input came from the thing being authorized; and the read was authorized against **`Ref.classification`**, which §4.3.1 states *"labels the reference; it is not access or publication authorization"*. The scope now comes from the accepted §4.3 and §4.5 tables (§4.3.3), a contradicting declaration is refused, and the **located target's own classification** is what withholds it — a reference and a target that disagree are refused rather than resolved under the permissive one |
 
-**One finding is confirmed and is NOT correctable under accepted authority, so it is recorded
-rather than absorbed.** The attention evidence kinds were corrected — `AttentionItem.evidence_refs`
-is *"kind `evidence` or `source_fact`"* and was carrying `data_quality`, `health_transition` and
-`reconciliation` — and **that correction is right**. Its cost is real: the per-area drill-down and
-the per-area evidence filter collapse, because **only those two kinds may be carried and R10 keys
-the destination allowlist by `RefKind`**. Restoring a per-area destination needs a field the
-catalogue does not have, which is **a specification act reserved to an ADR**. What the review did
-instead is make the absence **visible**: a reference whose kind the allowlist maps to no route now
-says *no V1 destination* rather than rendering nothing, so a reader can tell an evidence reference
-they could have followed from one this version cannot resolve. **The narrowed drill-down is named
-as a limitation and a follow-up, and is not described as an unchanged capability.**
+**One finding is confirmed, PARTLY corrected, and its remainder is a CONTRACT CONFLICT rather
+than a defect.** The attention evidence kinds were corrected — `AttentionItem.evidence_refs` is
+*"kind `evidence` or `source_fact`"* and was carrying `data_quality`, `health_transition` and
+`reconciliation` — and **that correction is required and right**.
+
+**What the review restored.** The first implementation typed the borrow item's reference
+`evidence`, which left it the **only disclosed reference in the application with no destination
+at all** — and *"every reference is disclosed … with its kind, its **own** resolution, its
+classification **and a link to the owning area**"* is an accepted C4 behaviour. It is
+`source_fact` now, on the catalogue's own ground rather than to obtain a link: **Area 28 names
+`AttentionItem` a *"projection, derived from alerts, health, risk, data quality and
+governance"*, and §4.3 defines `source_fact` as *"the recorded fact a projection was built
+from"*** — which is exactly what a recorded borrow record, data-quality finding, health
+transition or reconciliation break is to the item projected from it. `ShortSideSnapshot.borrow[].record_ref`
+being `evidence` decides nothing here: **R2 is explicit that a kind is a property of the FIELD
+and not of the field NAME.** Every disclosed attention and What Changed reference has an
+owning-area link again, and a regression asserts it.
+
+**The filter is a property of the contract now, not of the sample.** Its chips were derived
+from the kinds present, so a category with no rows had no chip and a reader could not tell
+*none of these* from *no such category*. They come from §4.5's declared set for the field, so
+both `evidence` and `source_fact` remain selectable and a chip that selects zero rows is a true
+answer.
+
+**What the review could NOT restore, and why it is a contract conflict.** The **per-area**
+drill-down is gone: these disclosures reached `/system/data-quality`, `/strategy/health` and
+`/execution/reconciliation` **through `ref_kind` values §4.5 does not permit on this field**.
+Three accepted clauses meet here and cannot all hold:
+
+| Accepted clause | What it requires |
+|---|---|
+| the C4 acceptance record | every disclosed reference carries **a link to the owning area** |
+| **ADR-0030 R10** | a destination comes from a **closed allowlist keyed by `RefKind`**, and an unmapped kind yields **no link, never a guess** |
+| **§4.5 `AttentionItem.evidence_refs`** | may carry **only** `evidence` or `source_fact` |
+| **§4.3 + §5** | `evidence` resolves to *"a classified evidence artefact"* by `AUTHORIZED_READ — the scope named on the reference`, and **§5 catalogues no route and no owning area for it** |
+
+**The subject area is not a property of a reference, and no accepted field carries it.** All four
+conforming references are one kind, so one kind is one destination — `/governance/audit`, the area
+that owns a recorded fact. **Restoring per-area routing requires a contract decision**, and the
+smallest one is exactly one of: a closed subject-area field on `AttentionItem` that navigation may
+key on; an R10 amendment permitting an allowlist keyed by a second closed, contract-declared
+attribute; or an explicit ruling that the audit trail is the owning area for `source_fact` evidence
+and the per-area drill-down is withdrawn. **None of the three is an implementation act**, so the
+narrowing is recorded, asserted by a test that a later cycle must change, and **not described as an
+unchanged capability**.
 
 #### What it enforces
 
@@ -4331,13 +4365,15 @@ ADR-0030:                                         ACCEPTED / IN FORCE
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
 reference-contract implementation:                REVIEWED AND CORRECTED / PR #79
 independent review:                               PERFORMED -- 4 findings corrected, 1 recorded
-merge:                                            THE ACCEPTANCE EVENT FOR THIS SECTION
+merge:                                            WITHHELD -- per-area drill-down conflict OPEN
 ref_kind in the application:                      CLOSED AT TWENTY-SEVEN MEMBERS
 both trade references:                            RE-LABELLED kind trade
 authorized embed carriers:                        SEVEN, EACH NAMED IN 4.3.2
 withdrawn embed declarations:                     FOUR
 schema_version bumped:                            19 OF 19, BY CONTRACT CHANGE
-attention per-area drill-down and filter:         NARROWED -- recorded limitation, ADR-level fix
+attention owning-area link:                       RESTORED for every disclosed reference
+attention evidence filter:                        CONTRACT-DERIVED chips, both kinds selectable
+attention per-area drill-down:                    LOST -- contract conflict, ADR decision needed
 new src/kalpamani modules:                        NONE
 dependency or manifest changes:                   NONE
 Blueprint PDF changes:                            NONE

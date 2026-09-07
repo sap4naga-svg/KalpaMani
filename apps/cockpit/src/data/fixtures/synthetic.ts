@@ -324,15 +324,25 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
    * `reconciliation`, three kinds the field may not carry. **The producer is corrected
    * rather than the field widened to fit it** (ADR-0030 R2).
    *
-   * The default is `source_fact`, which is what most of these references ARE: the
-   * recorded fact each item was built from. The borrow item names a BORROW RECORD, which
-   * the catalogue types `evidence` on `ShortSideSnapshot.borrow[].record_ref`, so it is
-   * typed `evidence` here too rather than guessed a second time in the same place.
+   * The kind is `source_fact` on EVERY item, and the reason is what an `AttentionItem`
+   * IS. Area 28 names it a "projection, derived from alerts, health, risk, data quality
+   * and governance", and section 4.3 defines `source_fact` as "the recorded fact a
+   * projection was built from". Each of these references names exactly that: the recorded
+   * data-quality finding, health transition, borrow record or reconciliation break the
+   * item was projected from.
    *
-   * The drill-down narrows with the correction: the per-area destinations were reachable
-   * only through the kinds this field may not carry. The disclosure itself is unchanged —
-   * every reference is still carried, still shows its kind, resolution and classification,
-   * and is still counted from `total`.
+   * **The borrow item is `source_fact` too, and it was briefly `evidence`.** The
+   * catalogue types `evidence` on `ShortSideSnapshot.borrow[].record_ref`, which is a
+   * DIFFERENT host field -- and R2 is explicit that "a kind is a property of the FIELD,
+   * not of the field NAME". Read as an attention item's evidence, the borrow record is
+   * the fact the projection was built from, and typing it `evidence` here left it the
+   * one reference with NO owning-area destination, because section 5 catalogues no route
+   * and no owning area for a classified evidence artefact and R10 refuses a guess.
+   *
+   * The per-area drill-down still narrows, and that is NOT recovered here: the
+   * destinations were reachable only through kinds this field may not carry, and R10 keys
+   * the allowlist by `RefKind`. What is recovered is that every reference again has a
+   * link to the area that owns it, which is the accepted C4 behaviour.
    */
   const evidence = (id: string, kind: "evidence" | "source_fact" = "source_fact") =>
     refListOf([ref(id, kind, "AUTHORIZED_READ")], "EXACTLY_ONE", asOf);
@@ -419,7 +429,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           value: "0.00",
           asOf,
         }),
-        evidence_refs: evidence("demo-evidence-borrow", "evidence"),
+        evidence_refs: evidence("demo-evidence-borrow"),
         recommended_action: reason("REVIEW_SHORT_SIDE_BORROW_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 3,

@@ -12,13 +12,13 @@ import { isValueBearing } from "@/contracts/validity";
 import type { AttentionListPayload } from "@/data/client/read-client";
 import {
   SEVERITY_CODES,
-  evidenceKindsOf,
   isKnownSeverity,
   prepareAttention,
   type AttentionFilter,
 } from "@/lib/attention";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { withScope, type ViewScope } from "@/lib/scope";
+import { REFERENCE_FIELDS } from "@/contracts/references";
 import { referenceDestination } from "@/lib/reference-navigation";
 import { cn } from "@/lib/utils";
 
@@ -404,9 +404,20 @@ export function AttentionPanel({
     items,
     withFilters ? filter : { severities: [], evidenceKinds: [] },
   );
+  /*
+   * THE CHIPS ARE THE KINDS THE CONTRACT PERMITS, AND THEY USED TO BE THE KINDS PRESENT.
+   *
+   * Deriving them from `items` describes THIS SAMPLE: a category with no rows today has no
+   * chip, so a reader cannot tell "none of these" from "no such category", and the filter
+   * silently changes shape as the data does. section 4.5 declares what this field may carry --
+   * "kind evidence or source_fact" -- so the categories are a property of the CONTRACT, and
+   * a chip that selects zero rows is a true answer rather than a missing control.
+   *
+   * It is the same rule as everywhere else in this cycle: the contract, and not the sample.
+   */
   const kinds = React.useMemo(
-    () => [...new Set(items.flatMap(evidenceKindsOf))].sort(),
-    [items],
+    () => [...REFERENCE_FIELDS["AttentionItem.evidence_refs"].kinds].sort(),
+    [],
   );
   const shown = limit === undefined ? prepared.visible : prepared.visible.slice(0, limit);
   const filtersActive = filter.severities.length > 0 || filter.evidenceKinds.length > 0;

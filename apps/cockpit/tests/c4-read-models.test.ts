@@ -422,11 +422,23 @@ describe("attention ranking, deduplication and completeness", () => {
       severities: [],
       evidenceKinds: ["source_fact"],
     });
-    /* Three of the four are source facts; the borrow item names a borrow RECORD. */
-    expect(bySourceFact.visible.length).toBe(3);
+    /*
+     * ALL FOUR ARE SOURCE FACTS, AND THE BORROW ITEM WAS BRIEFLY `evidence`.
+     *
+     * An `AttentionItem` is a projection (Area 28), and section 4.3 defines `source_fact`
+     * as "the recorded fact a projection was built from" -- which each of these references
+     * is. Typing the borrow one `evidence` left it the only reference with no owning-area
+     * destination, because section 5 catalogues no route for a classified evidence artefact.
+     */
+    expect(bySourceFact.visible.length).toBe(4);
     expect(bySourceFact.rankedTotal).toBe(4);
+    /*
+     * `evidence` is the OTHER kind section 4.5 permits here, and no item carries one today.
+     * Selecting it is a true "none of these" rather than a missing control, which is why the
+     * chips come from the CONTRACT and not from the sample.
+     */
     const byEvidence = prepareAttention(items, { severities: [], evidenceKinds: ["evidence"] });
-    expect(byEvidence.visible.length).toBe(1);
+    expect(byEvidence.visible.length).toBe(0);
     expect(byEvidence.rankedTotal).toBe(4);
 
     /* A kind no item carries hides every row, and still reports the whole total. */

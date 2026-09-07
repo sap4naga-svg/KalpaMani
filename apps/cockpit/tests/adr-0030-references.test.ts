@@ -43,6 +43,7 @@ import type { DataClassification } from "@/contracts/vocabularies";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { referenceDestination, nestedDestination } from "@/lib/reference-navigation";
 import { READ_MODEL_IDENTITIES } from "@/data/client/read-model-identity";
+import { prepareAttention } from "@/lib/attention";
 import { fixedClock } from "@/lib/clock";
 import { DEFAULT_SCOPE } from "@/lib/scope";
 
@@ -958,6 +959,65 @@ describe("navigation is an allowlisted internal route template", () => {
     ]) {
       expect(referenceDestination({ ref_kind: "trade", ref_id: hostile }), hostile).toBeNull();
     }
+  });
+
+  /*
+   * EVERY DISCLOSED REFERENCE HAS A LINK TO THE AREA THAT OWNS IT.
+   *
+   * This is the accepted C4 behaviour recorded when "evidence was a count, not a drill-down"
+   * was corrected: every reference is disclosed "with its kind, its own resolution, its
+   * classification and a link to the owning area". Correcting the attention evidence KINDS
+   * broke it for one item -- `evidence` was carried, and section 5 catalogues no route and no
+   * owning area for a classified evidence artefact, so R10 yields no link and refuses a guess.
+   *
+   * The fixture was corrected, not the rule: an `AttentionItem` is a projection (Area 28) and
+   * every one of these references is "the recorded fact a projection was built from".
+   */
+  it("gives every disclosed attention and what-changed reference an owning-area link", async () => {
+    const read = client();
+    const attention = await read.attention(DEMO);
+    /*
+     * The RENDERED items, because an item missing any of the five presented things is
+     * withheld -- `demo-attention-incomplete` carries no evidence on purpose, and it is
+     * never disclosed, so it is not a reference this rule is about.
+     */
+    const items = prepareAttention(attention.payload?.items ?? []).visible;
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.evidence_refs.items.length, item.item_id).toBeGreaterThan(0);
+      for (const reference of item.evidence_refs.items) {
+        expect(referenceDestination(reference), `${item.item_id}/${reference.ref_id}`).not.toBeNull();
+      }
+    }
+
+    const changed = await read.whatChanged(DEMO);
+    for (const entry of changed.payload?.entries ?? []) {
+      for (const reference of entry.evidence_refs.items) {
+        expect(referenceDestination(reference), reference.ref_id).not.toBeNull();
+      }
+    }
+  });
+
+  /*
+   * AND THE PER-AREA DESTINATION IS GONE, WHICH IS RECORDED RATHER THAN PAPERED OVER.
+   *
+   * Before this cycle the same disclosures reached `/system/data-quality`,
+   * `/strategy/health` and `/execution/reconciliation` -- through `ref_kind` values
+   * section 4.5 does not permit on this field. R10 keys the allowlist by `RefKind`, the
+   * subject area is not a property of a reference, and no accepted field carries it, so
+   * every conforming attention reference now resolves to the one area its KIND owns.
+   *
+   * This asserts the narrowing deliberately: it is a real loss, and a later cycle that
+   * restores per-area routing under a contract decision should have to change this test.
+   */
+  it("resolves every conforming attention reference to the area its kind owns", async () => {
+    const attention = await client().attention(DEMO);
+    const destinations = new Set(
+      prepareAttention(attention.payload?.items ?? []).visible.flatMap((item) =>
+        item.evidence_refs.items.map((reference) => referenceDestination(reference)?.href),
+      ),
+    );
+    expect([...destinations]).toEqual(["/governance/audit"]);
   });
 
   it("never emits an absolute or external destination", () => {
