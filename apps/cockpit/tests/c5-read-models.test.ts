@@ -611,8 +611,18 @@ describe("trade identity, adds and partial exits", () => {
       (item) => item.trade_id === "demo-trade-nvl-0002",
     );
     const lifecycle = await client().tradeLifecycle(DEMO, "demo-trade-nvl-0002");
-    // Two recorded stages, and ONE row in the ledger.
-    expect(lifecycle.payload?.events.length).toBe(2);
+    /*
+     * TWO RECORDED STAGES, AND ONE ROW IN THE LEDGER.
+     *
+     * The count is taken over the STAGE kinds rather than over every event: C6 carries this
+     * trade's orders, fills and protective-order events too, and an order submission is not a
+     * stage. Counting the whole timeline would make this assertion a count of the lifecycle's
+     * richness rather than of how many times the trade entered.
+     */
+    const stages = (lifecycle.payload?.events ?? []).filter((event) =>
+      ["ENTRY_RECORDED", "PYRAMID_ADD_RECORDED"].includes(event.event_kind.code),
+    );
+    expect(stages.length).toBe(2);
     expect(pyramided).toBeDefined();
     expect(ids.filter((id) => id === "demo-trade-nvl-0002").length).toBe(1);
   });
@@ -721,14 +731,52 @@ describe("trade identity, adds and partial exits", () => {
     expect(exit?.quantity).toBeLessThan(events[0].quantity);
     /* The ORDER, however, filled. Its state is recorded, not derived from that comparison. */
     expect(exit?.downstream_stage).toBe("ORDER_FILLED");
-    for (const event of events) {
+    /*
+     * EVERY POSITION EVENT REPORTS A FILL, AND NONE OF THEM REPORTS A PARTIAL ONE.
+     *
+     * The loop is over the POSITION kinds. C6 adds order submissions, acknowledgements and
+     * protective-order events to this trade's timeline, and each of those correctly reports
+     * its own downstream stage — an acknowledged order is acknowledged, not filled. Asserting
+     * `ORDER_FILLED` over the whole timeline would now be asserting that a submission is a
+     * fill, which is the opposite of what this test exists to pin.
+     */
+    const positionKinds = [
+      "ENTRY_RECORDED",
+      "PYRAMID_ADD_RECORDED",
+      "PARTIAL_EXIT_RECORDED",
+      "EXIT_RECORDED",
+    ];
+    const positionEvents = events.filter((event) =>
+      positionKinds.includes(event.event_kind.code),
+    );
+    expect(positionEvents.length).toBeGreaterThan(0);
+    for (const event of positionEvents) {
       expect(event.downstream_stage).toBe("ORDER_FILLED");
     }
-    /* And per-fill evidence stays explicitly unavailable rather than being manufactured. */
-    const absent = lifecycle.payload?.absent_kinds ?? [];
+    /*
+     * THE NEGATIVE CONTROL: a smaller quantity does NOT produce a partial-fill state.
+     *
+     * Every position event on this trade is smaller than or equal to the entry, and the
+     * partial exit is strictly smaller. Under the retired rule at least one of them would
+     * report `ORDER_PARTIALLY_FILLED`, so this distinguishes the two rules rather than
+     * passing under both.
+     */
+    expect(positionEvents.some((event) => event.quantity < events[0].quantity)).toBe(true);
+    expect(
+      positionEvents.some((event) => event.downstream_stage === "ORDER_PARTIALLY_FILLED"),
+    ).toBe(false);
+    /*
+     * AND PER-FILL EVIDENCE STAYS UNAVAILABLE WHERE NONE WAS RECORDED.
+     *
+     * C6 records fills for six trades, so this is asserted on a trade that has none: its
+     * evidence was never written, which is `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`
+     * rather than a producer that does not exist.
+     */
+    const unrecorded = await client().tradeLifecycle(DEMO, MISSING_RISK_RECORD_TRADE);
+    const absent = unrecorded.payload?.absent_kinds ?? [];
     const fills = absent.find((entry) => entry.kind.code === "INDIVIDUAL_FILL");
-    expect(fills?.availability).toBe("NOT_IMPLEMENTED");
-    expect(fills?.reason).toBe("PRODUCER_NOT_IMPLEMENTED");
+    expect(fills?.availability).toBe("NOT_YET_AVAILABLE");
+    expect(fills?.reason).toBe("UPSTREAM_INPUT_MISSING");
   });
 
   /*

@@ -84,9 +84,29 @@ export function shares(metricId: string, value: number, asOf: string): MetricVal
   return available({ metricId, unit: "SHARES", value, asOf });
 }
 
+/**
+ * A whole number of seconds.
+ *
+ * §4.2 carries a `Duration` in WHOLE SECONDS, so a latency is an integer here rather than a
+ * decimal string. A fractional latency would be a precision this fixture's clock does not have.
+ */
+export function seconds(metricId: string, value: number, asOf: string): MetricValue {
+  return available({ metricId, unit: "SECONDS", value: Math.round(value), asOf });
+}
+
 /** A whole count of trading days. */
 export function tradingDays(metricId: string, value: number, asOf: string): MetricValue {
   return available({ metricId, unit: "TRADING_DAYS", value, asOf });
+}
+
+/**
+ * A DIMENSIONLESS ordinal or integer score.
+ *
+ * A rank counts nothing -- it is a position in a list -- so it carries no unit. The population
+ * it was taken over is a COUNT and is carried separately.
+ */
+export function ordinal(metricId: string, value: number, asOf: string): MetricValue {
+  return available({ metricId, unit: "DIMENSIONLESS", value, asOf });
 }
 
 /** A closed-vocabulary token carried as a metric's value. */

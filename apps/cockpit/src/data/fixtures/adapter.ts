@@ -47,6 +47,18 @@ import type {
   TradeLifecyclePayload,
   TradeSummaryPayload,
 } from "@/contracts/portfolio-models";
+import {
+  candidateDetailEnvelope,
+  candidateFunnelEnvelope,
+  candidateSummaryEnvelope,
+  missedOpportunityEnvelope,
+} from "@/contracts/signal-models";
+import type {
+  CandidateDetailPayload,
+  CandidateFunnelPayload,
+  CandidateSummaryPayload,
+  MissedOpportunityPayload,
+} from "@/contracts/signal-models";
 import { strategyPerformanceEnvelope } from "@/contracts/strategy-models";
 import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
 import {
@@ -82,7 +94,11 @@ import {
 } from "@/data/client/read-client";
 import {
   ATTENTION_IDENTITY,
+  CANDIDATE_DETAIL_IDENTITY,
+  CANDIDATE_FUNNEL_IDENTITY,
+  CANDIDATE_SUMMARY_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
+  MISSED_OPPORTUNITY_IDENTITY,
   EXPOSURE_AGGREGATE_IDENTITY,
   MARKET_REGIME_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
@@ -123,6 +139,13 @@ import {
   syntheticExecutiveOverview,
   syntheticWhatChanged,
 } from "./synthetic";
+import {
+  candidateRecord,
+  syntheticCandidateDetail,
+  syntheticCandidateFunnel,
+  syntheticCandidates,
+  syntheticMissedOpportunities,
+} from "./signals";
 import { READ_AT_COMMIT, SNAPSHOT_AS_OF, qualificationStatusFacts } from "./tracked-facts";
 
 /**
@@ -695,6 +718,97 @@ export class FixtureReadClient implements ReadClient {
    * governance facts, recorded under the project's actual runtime environment, which is
    * RESEARCH; under a Paper or Live selector there is no such record to show.
    */
+  /* ---------------------------------------------------------- added by C6 */
+
+  async candidateFunnel(scope: ViewScope): Promise<EnvelopeOf<CandidateFunnelPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<CandidateFunnelPayload>(scope, () =>
+      syntheticCandidateFunnel(asOf, this.sessions()),
+    );
+    return this.respond(
+      CANDIDATE_FUNNEL_IDENTITY,
+      "candidate-funnel",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      candidateFunnelEnvelope,
+    );
+  }
+
+  async candidates(scope: ViewScope): Promise<EnvelopeOf<CandidateSummaryPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<CandidateSummaryPayload>(scope, () =>
+      syntheticCandidates(asOf, this.sessions()),
+    );
+    return this.respond(
+      CANDIDATE_SUMMARY_IDENTITY,
+      "candidate-summary",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      candidateSummaryEnvelope,
+    );
+  }
+
+  /**
+   * One candidate's explanation.
+   *
+   * An unknown identity is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT` — the journal was
+   * searched and there is no such candidate, so the question does not apply to the subject.
+   * **It is never another candidate**, and never a default fixture: serving the nearest row
+   * under a requested identity is how a reader ends up reading one decision's evidence under
+   * another decision's name.
+   */
+  async candidateDetail(
+    scope: ViewScope,
+    candidateId: string,
+  ): Promise<EnvelopeOf<CandidateDetailPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const record = candidateRecord(candidateId);
+    const resolution: Resolution<CandidateDetailPayload> = !isPopulated(scope)
+      ? unpopulated()
+      : scope.scenario !== "demo"
+        ? {
+            availability: "NOT_IMPLEMENTED",
+            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
+          }
+        : record === undefined
+          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
+          : {
+              availability: "AVAILABLE",
+              availabilityReason: "NONE",
+              payload: syntheticCandidateDetail(record, this.sessions(), asOf),
+              maturityStage: POPULATED_MATURITY,
+              /** Every candidate names the evidence its decision did not have. */
+              completeness: "PARTIAL",
+            };
+    return this.respond(
+      CANDIDATE_DETAIL_IDENTITY,
+      `candidate-detail-${candidateId}`,
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      candidateDetailEnvelope,
+    );
+  }
+
+  async missedOpportunities(
+    scope: ViewScope,
+  ): Promise<EnvelopeOf<MissedOpportunityPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<MissedOpportunityPayload>(scope, () =>
+      syntheticMissedOpportunities(asOf, this.sessions()),
+    );
+    return this.respond(
+      MISSED_OPPORTUNITY_IDENTITY,
+      "missed-opportunity",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      missedOpportunityEnvelope,
+    );
+  }
+
   async qualificationStatus(scope: ViewScope): Promise<EnvelopeOf<QualificationStatusPayload>> {
     const asOf = instantOf(this.clock.now());
     const resolution: Resolution<QualificationStatusPayload> = !isPopulated(scope)

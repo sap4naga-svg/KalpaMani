@@ -16,6 +16,12 @@ import type {
   TradeLifecyclePayload,
   TradeSummaryPayload,
 } from "@/contracts/portfolio-models";
+import type {
+  CandidateDetailPayload,
+  CandidateFunnelPayload,
+  CandidateSummaryPayload,
+  MissedOpportunityPayload,
+} from "@/contracts/signal-models";
 import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
 import type {
   MarketRegimePayload,
@@ -28,7 +34,11 @@ import { PERFORMANCE_PERIODS, type PerformancePeriod, type ViewScope } from "@/l
 import { readModelKey } from "./query-keys";
 import {
   ATTENTION_IDENTITY,
+  CANDIDATE_DETAIL_IDENTITY,
+  CANDIDATE_FUNNEL_IDENTITY,
+  CANDIDATE_SUMMARY_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
+  MISSED_OPPORTUNITY_IDENTITY,
   EXPOSURE_AGGREGATE_IDENTITY,
   MARKET_REGIME_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
@@ -254,5 +264,49 @@ export function useMarketRegime(
   return useQuery({
     queryKey: readModelKey(MARKET_REGIME_IDENTITY, scope),
     queryFn: () => client.marketRegime(scope),
+  });
+}
+
+/* ------------------------------------------------------------------ added by C6 */
+
+export function useCandidateFunnel(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<CandidateFunnelPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(CANDIDATE_FUNNEL_IDENTITY, scope),
+    queryFn: () => client.candidateFunnel(scope),
+  });
+}
+
+export function useCandidates(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<CandidateSummaryPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(CANDIDATE_SUMMARY_IDENTITY, scope),
+    queryFn: () => client.candidates(scope),
+  });
+}
+
+/** The candidate identity joins the key, so two candidates are two entries. */
+export function useCandidateDetail(
+  scope: ViewScope,
+  candidateId: string,
+): UseQueryResult<EnvelopeOf<CandidateDetailPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(CANDIDATE_DETAIL_IDENTITY, scope, [candidateId]),
+    queryFn: () => client.candidateDetail(scope, candidateId),
+  });
+}
+
+export function useMissedOpportunities(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<MissedOpportunityPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(MISSED_OPPORTUNITY_IDENTITY, scope),
+    queryFn: () => client.missedOpportunities(scope),
   });
 }

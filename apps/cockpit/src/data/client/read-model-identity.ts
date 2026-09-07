@@ -31,6 +31,12 @@ import {
   TRADE_LIFECYCLE_SCHEMA,
   TRADE_SUMMARY_SCHEMA,
 } from "@/contracts/portfolio-models";
+import {
+  CANDIDATE_DETAIL_SCHEMA,
+  CANDIDATE_FUNNEL_SCHEMA,
+  CANDIDATE_SUMMARY_SCHEMA,
+  MISSED_OPPORTUNITY_SCHEMA,
+} from "@/contracts/signal-models";
 import { STRATEGY_PERFORMANCE_SCHEMA } from "@/contracts/strategy-models";
 import {
   MARKET_REGIME_SCHEMA,
@@ -231,6 +237,55 @@ export const MARKET_REGIME_IDENTITY: ReadModelIdentity = {
   accessScope: "market:read",
 };
 
+/* ------------------------------------------------------------------ added by C6 */
+
+/*
+ * THE FOUR SIGNALS READ MODELS, ALL UNDER `signals:read`.
+ *
+ * §5.1 gives `/signals/funnel`, `/signals/candidates`, `/signals/candidates/{id}` and
+ * `/signals/missed` the same access scope, and each is a different read model with its own
+ * schema version — so four cache entries, never one. The reasoning about classification is the
+ * one `PerformanceSeries` established: §4.5 classifies a real one `PRIVATE_OPERATIONAL`, the
+ * `PUBLIC_EDGE` boundary refuses that, and what this application can show is a repository-owned
+ * synthetic demonstration labelled `PUBLIC_SAFE` / `SYNTHETIC` because that is what it IS.
+ */
+
+export const CANDIDATE_FUNNEL_IDENTITY: ReadModelIdentity = {
+  readModel: "CandidateFunnel",
+  queryName: "candidate-funnel",
+  schemaVersion: CANDIDATE_FUNNEL_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "signals:read",
+};
+
+export const CANDIDATE_SUMMARY_IDENTITY: ReadModelIdentity = {
+  readModel: "CandidateSummary",
+  queryName: "candidate-summary",
+  schemaVersion: CANDIDATE_SUMMARY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "signals:read",
+};
+
+export const CANDIDATE_DETAIL_IDENTITY: ReadModelIdentity = {
+  readModel: "CandidateDetail",
+  queryName: "candidate-detail",
+  schemaVersion: CANDIDATE_DETAIL_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "signals:read",
+};
+
+export const MISSED_OPPORTUNITY_IDENTITY: ReadModelIdentity = {
+  readModel: "MissedOpportunity",
+  queryName: "missed-opportunity",
+  schemaVersion: MISSED_OPPORTUNITY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "signals:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
@@ -247,4 +302,8 @@ export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   RISK_SNAPSHOT_IDENTITY,
   SHORT_SIDE_IDENTITY,
   MARKET_REGIME_IDENTITY,
+  CANDIDATE_FUNNEL_IDENTITY,
+  CANDIDATE_SUMMARY_IDENTITY,
+  CANDIDATE_DETAIL_IDENTITY,
+  MISSED_OPPORTUNITY_IDENTITY,
 ];

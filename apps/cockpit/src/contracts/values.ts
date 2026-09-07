@@ -439,6 +439,155 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
   "governance.research_parameter_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
   /** 4.5 `PerformanceSummary.r_multiple_distribution[].count`. */
   "r_multiple.bucket_count": { unit: "COUNT", shape: "INTEGER" },
+
+  /* ---------------------------------------------------------------- added by C6 */
+
+  /*
+   * THE SAME TWO GROUPS THE C5 BLOCK ABOVE ESTABLISHED, AND THE SAME LABELLING RULE.
+   *
+   * The first group is transcribed from 12.3 -- the identifier, the unit and the rule are the
+   * dictionary's. The second is a PRESENTATION DEFINITION PROPOSED BY THIS CYCLE for a 4.5
+   * payload field 12.3 carries no row for; 12.6 asks for exactly that to be labelled, and each
+   * one names the payload field it serves. A presentation definition changes no strategy, risk
+   * or sizing rule, and adopting one for a screen adopts it nowhere else.
+   */
+
+  /* ---- 12.3 rows, transcribed */
+
+  /**
+   * `side_sign x (fill_price - reference_price) / reference_price x 10,000`.
+   *
+   * SIGNED, AND THE SIGN IS THE POINT (12.3.1): positive is ADVERSE for a buy AND for a sell,
+   * so an equally weighted book of adverse buys and adverse sells does not average to zero.
+   * The declared minimum scale is two decimal places of a basis point, so 8.42 survives.
+   */
+  slippage: { unit: "BPS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** `order_submitted_at - signal_at`. Whole seconds, with its clock source stated. */
+  "latency.signal_to_order": { unit: "SECONDS", shape: "INTEGER" },
+  /** `first_fill_at - order_submitted_at`. Whole seconds, with its clock source stated. */
+  "latency.order_to_fill": { unit: "SECONDS", shape: "INTEGER" },
+
+  /* ---- presentation definitions proposed by this cycle (12.6) */
+
+  /**
+   * 4.5 `CandidateFunnel` stage and axis counts.
+   *
+   * THREE IDENTIFIERS, BECAUSE THEY COUNT THREE DIFFERENT SUBJECTS. A funnel stage counts
+   * securities or candidate decisions depending on the stage; a Brain-axis entry counts
+   * CANDIDATES; a reason entry counts REASON OCCURRENCES, and one candidate may carry several.
+   * 12.2 forbids two values sharing a `metric_id` and meaning different things, so a screen
+   * that adds reason counts never reads them as a candidate population.
+   */
+  "funnel.stage_count": { unit: "COUNT", shape: "INTEGER" },
+  "funnel.state_count": { unit: "COUNT", shape: "INTEGER" },
+  "funnel.reason_count": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.5 `CandidateFunnel.conversion[].rate`, always carried with both of its counts. */
+  "funnel.conversion_rate": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** How many candidates a page or a slice was drawn over. */
+  "candidate.count": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * 4.5 `CandidateDetail` ranking context -- an ORDINAL and the POPULATION it was taken over.
+   *
+   * A rank with no population is a position in a list nobody can size. The ordinal is
+   * DIMENSIONLESS because it counts nothing; the population is a COUNT because it counts
+   * securities.
+   */
+  "candidate.rank": { unit: "DIMENSIONLESS", shape: "INTEGER" },
+  "candidate.rank_population": { unit: "COUNT", shape: "INTEGER" },
+  /** Closed-vocabulary tokens a candidate carries. */
+  "candidate.setup_quality": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  "candidate.conviction_band": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  "candidate.liquidity_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /**
+   * 4.5 `CandidateSummary.downstream_stage` -- "a DownstreamStage or its availability".
+   *
+   * A SEPARATE TYPED AXIS (2.7). It is carried as a token so a candidate with no downstream
+   * record reports an availability state instead of a stage, and the two vocabularies never
+   * merge into one.
+   */
+  "candidate.downstream_stage": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** Points in time, under the `DATE_ONLY` precedent 4.2's closed `Unit` list forces. */
+  "candidate.decided_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** 4.5 `CandidateDetail` expected holding period, on the named calendar. */
+  "candidate.expected_horizon": { unit: "TRADING_DAYS", shape: "INTEGER" },
+  /**
+   * The entry-to-invalidation distance a later risk decision would size AGAINST.
+   *
+   * CARRIED AS A PERCENTAGE OF THE ENTRY REFERENCE, DELIBERATELY. The Brain specification's
+   * 6.2 forbids `CandidateIntent` from carrying a share count, a dollar amount or a position
+   * size, and the exclusion is structural. A percentage distance is a property of the thesis;
+   * a dollar figure beside it invites a reader to multiply.
+   */
+  "candidate.invalidation_distance": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  /** 4.5 `CandidateDetail.deterministic_evidence[].value` -- a dimensionless factor score. */
+  "candidate.factor_score": {
+    unit: "DIMENSIONLESS",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  /** The Brain specification's 19 gap-risk estimate, as a dimensionless score. */
+  "candidate.gap_risk": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * AI evidence provenance -- the Brain specification's 14.3 requires source publish time,
+   * model and prompt versions, confidence and evidence quality on EVERY AI output.
+   *
+   * The publish time and the observation time are two identifiers because they are two facts:
+   * when the source said it, and when this system saw it.
+   */
+  "evidence.published_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "evidence.observed_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "evidence.confidence": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "evidence.quality": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** 4.5 `MissedOpportunity` populations and timing. */
+  "miss.count": { unit: "COUNT", shape: "INTEGER" },
+  "miss.detected_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "miss.decided_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "miss.expired_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** `decided_at - detected_at`, in whole seconds. A delay, never a duration of exposure. */
+  "miss.decision_delay": { unit: "SECONDS", shape: "INTEGER" },
+  /**
+   * OBSERVED PRICE MOVEMENT AFTER A DECISION. **NOT PROFIT THAT WAS AVAILABLE.**
+   *
+   * Two identifiers, because a favourable excursion and an adverse one are two measurements
+   * and a single signed number hides one of them behind the other.
+   */
+  "miss.favourable_movement": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "miss.adverse_movement": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * 4.5 `MissedOpportunity.counterfactual` -- HYPOTHETICAL, and never placed in a series with
+   * a realized result.
+   *
+   * TWO IDENTIFIERS AND ONE OF THEM IS NEVER SERVED. The percentage limb is a price movement
+   * over the registered window under stated assumptions. The money limb needs a permitted
+   * SIZING BASIS, which is a risk decision no producer here makes -- so it exists as a field
+   * that reports `POLICY_REFERENCE_MISSING` rather than as a number nobody approved.
+   */
+  "miss.counterfactual": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "miss.counterfactual_money": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** A rate over a DEFINED evaluable population. Refused where no population is defined. */
+  "miss.rate": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** The follow-up mark path a missed candidate was observed over. */
+  "miss.follow_up_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ExecutionQuality.reference_price` and the fill measured against it. */
+  "execution.reference_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "execution.fill_price": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ExecutionQuality.fill_rate` -- filled quantity over ordered quantity. */
+  "execution.fill_rate": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ExecutionQuality.clock_accuracy`. A latency without one is not a latency. */
+  "clock.accuracy": { unit: "SECONDS", shape: "INTEGER" },
+  /** Quantities carried by an order or a fill event, in whole shares. */
+  "execution.quantity": { unit: "SHARES", shape: "INTEGER" },
+  /**
+   * Fills an aggregate could not measure and therefore excluded.
+   *
+   * 12.3 requires them to be "excluded and counted", because "an average over a silently
+   * reduced population is a different metric". A measured zero here is a RESULT (ADR-0029 2.1).
+   */
+  "execution.excluded_fills": { unit: "COUNT", shape: "INTEGER" },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;

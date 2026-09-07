@@ -347,7 +347,7 @@ export interface BookTrade {
  * constants are the well-known Numerical Recipes ones; nothing about the choice is meaningful
  * beyond "the same input gives the same book".
  */
-function lcg(seed: number): () => number {
+export function lcg(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
     state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
@@ -412,7 +412,7 @@ function stopOutcomeFor(rHundredths: number | null): string {
  * it belongs to. Between them it wiggles by a bounded fraction of the security's own stop
  * distance, which is deterministic and means nothing.
  */
-function buildPath(
+export function buildPath(
   fromCents: number,
   toCents: number,
   sessions: number,
@@ -490,8 +490,16 @@ interface FeaturedSpec {
   readonly versionId: string;
   readonly stages: readonly Omit<BookStage, "kind">[];
   readonly exits: readonly { session: number; shares: number; priceCents: number; reason: string }[];
-  readonly markCents: number;
-  readonly currentStopCents: number;
+  /**
+   * The snapshot mark, for a trade that still holds something.
+   *
+   * `null` on a CLOSED trade, because a closed trade holds nothing to mark. An earlier
+   * revision had no closed featured trade and so had no `null` case at all; C6 needs one, and
+   * a closed trade carrying a current mark would be a position the ledger says does not exist.
+   */
+  readonly markCents: number | null;
+  /** The CURRENT protective level. `null` once the trade is closed and none is working. */
+  readonly currentStopCents: number | null;
 }
 
 /**
@@ -569,6 +577,37 @@ const FEATURED: readonly FeaturedSpec[] = [
   },
 ];
 
+/**
+ * The C6 addition: a CLOSED long that was reduced twice before it closed.
+ *
+ * Every other featured trade is open or partially exited, and every generated one has exactly
+ * one entry and one exit. Neither shape can demonstrate the case Area 36.4 is most explicit
+ * about -- **several partial exits, and then a final close** -- so one trade is added for it,
+ * by hand, with legible arithmetic.
+ *
+ * `GENERATED_TRADES` drops by one in exchange, so the ledger population stays at exactly its
+ * declared page size and the trade history's `truncated` flag keeps the value C5 established.
+ * The generated ordinals are unchanged; the highest one simply no longer exists.
+ */
+const MULTI_EXIT_TRADE_SPEC: FeaturedSpec = {
+  tradeId: "demo-trade-sol-0006",
+  symbol: "DEMO.SOL",
+  versionId: "breakout-long-v3",
+  stages: [
+    { session: SESSION_COUNT - 96, shares: 115, priceCents: 54_80, invalidationCents: 53_20 },
+  ],
+  exits: [
+    { session: SESSION_COUNT - 78, shares: 40, priceCents: 57_35, reason: "PARTIAL_TARGET_REACHED" },
+    { session: SESSION_COUNT - 61, shares: 30, priceCents: 59_10, reason: "PARTIAL_TARGET_REACHED" },
+    { session: SESSION_COUNT - 44, shares: 45, priceCents: 55_00, reason: "TRAILING_STOP_HIT" },
+  ],
+  markCents: null,
+  currentStopCents: null,
+};
+
+/** The one closed trade that was reduced twice and then closed by its remaining balance. */
+export const MULTI_EXIT_TRADE = MULTI_EXIT_TRADE_SPEC.tradeId;
+
 /** The one open position whose risk assessment is deliberately STALE. */
 export const STALE_ASSESSMENT_TRADE = "demo-trade-plm-0005";
 /** The one open position the gap and event model applies to. */
@@ -605,23 +644,48 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
   const exited = exits.reduce((total, exit) => total + exit.shares, 0);
   const sharesOpen = sharesAcquired - exited;
   const realizedCents = exits.reduce((total, exit) => total + exit.realizedCents, 0);
-  const unrealizedCents = sharesOpen * (spec.markCents - basisCents) * sign;
+  const closed = sharesOpen === 0;
+  if (closed !== (spec.markCents === null)) {
+    /*
+     * A closed trade holds nothing to mark, and an open one must be markable. Refusing the
+     * combination here is what keeps `markCents` from becoming a price for a position the
+     * ledger says does not exist.
+     */
+    throw new RangeError(`${spec.tradeId} must carry a mark exactly while it holds something`);
+  }
+  const unrealizedCents =
+    spec.markCents === null ? 0 : sharesOpen * (spec.markCents - basisCents) * sign;
 
   const initialRiskCents = stages.reduce(
     (total, stage) => total + stage.shares * Math.abs(stage.priceCents - stage.invalidationCents),
     0,
   );
+  /*
+   * A CLOSED TRADE HAS NO REMAINING EXPOSURE FOR THE QUESTION TO BE ABOUT (4.4).
+   *
+   * Its `CurrentOpenPlannedRisk` record is ABSENT with `NOT_APPLICABLE`, and its retained
+   * `InitialPlannedRisk` is unchanged. A zero here would be an assessment of nothing.
+   */
   const openPlannedRiskCents =
-    sharesOpen * Math.abs(spec.currentStopCents - spec.markCents);
+    spec.markCents === null || spec.currentStopCents === null
+      ? null
+      : sharesOpen * Math.abs(spec.currentStopCents - spec.markCents);
 
   const firstSession = stages[0].session;
+  /** A closed trade's path ends at its FINAL exit; an open one's ends at the snapshot. */
+  const lastSession = closed ? exits[exits.length - 1].session : SESSION_COUNT - 1;
+  const finalPriceCents = closed ? exits[exits.length - 1].priceCents : (spec.markCents as number);
   const path = buildPath(
     stages[0].priceCents,
-    spec.markCents,
-    SESSION_COUNT - 1 - firstSession,
+    finalPriceCents,
+    lastSession - firstSession,
     security.stopDistanceCents,
     firstSession * 7919 + spec.symbol.length,
   );
+  /** The outcome in hundredths of R, so the exit reason and the stop outcome agree (12.4). */
+  const rHundredths = closed
+    ? Math.round((realizedCents * 100) / initialRiskCents)
+    : null;
   const { mfeCents, maeCents } = excursions(
     stages,
     exits,
@@ -629,6 +693,20 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     firstSession,
     version.direction,
   );
+  /*
+   * THE EXIT REASON AND THE STOP OUTCOME DESCRIBE ONE EVENT AND MUST AGREE.
+   *
+   * `stopOutcomeFor` is derived from the outcome; a hand-written final exit reason is not, so
+   * the two can drift into a trade whose reason says a trailing stop triggered while its stop
+   * outcome says it exited before the stop was reached. That contradiction is exactly what
+   * `cockpit-v1-specification.md` 5 calls a demonstration teaching the wrong thing, so this
+   * refuses it rather than rendering it.
+   */
+  if (rHundredths !== null && exits[exits.length - 1].reason !== exitReasonFor(rHundredths)) {
+    throw new RangeError(
+      `${spec.tradeId} states a final exit reason its outcome does not produce`,
+    );
+  }
 
   return {
     tradeId: spec.tradeId,
@@ -637,13 +715,13 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     direction: version.direction,
     stages,
     exits,
-    status: sharesOpen === 0 ? "CLOSED" : exited > 0 ? "PARTIALLY_EXITED" : "OPEN",
+    status: closed ? "CLOSED" : exited > 0 ? "PARTIALLY_EXITED" : "OPEN",
     sharesAcquired,
     sharesOpen,
     basisCents,
     realizedCents,
     unrealizedCents,
-    lastSession: SESSION_COUNT - 1,
+    lastSession,
     markCents: spec.markCents,
     initialRiskCents,
     initialRiskRecorded: true,
@@ -652,10 +730,10 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
     mfeCents,
     maeCents,
     dataCompleteness: "COMPLETE",
-    stopOutcome: stopOutcomeFor(null),
-    exitReason: null,
+    stopOutcome: stopOutcomeFor(rHundredths),
+    exitReason: closed ? exits[exits.length - 1].reason : null,
     path,
-    holdingSessions: SESSION_COUNT - 1 - firstSession,
+    holdingSessions: lastSession - firstSession,
   };
 }
 
@@ -669,8 +747,12 @@ function buildFeatured(spec: FeaturedSpec): BookTrade {
  * Breakout version does not, and every narrow slice falls below them. A book too small to
  * clear any threshold would render one screen of `INSUFFICIENT_OBSERVATIONS` and demonstrate
  * only half the rule.
+ *
+ * C6 lowered it by one and added one featured trade in exchange, so the ledger population is
+ * unchanged at 200 -- exactly the declared page size -- and the generated ordinals below it
+ * are untouched.
  */
-const GENERATED_TRADES = 195;
+const GENERATED_TRADES = 194;
 
 function buildGenerated(ordinal: number): BookTrade {
   const next = lcg(0x4b_4d_43_35 + ordinal * 2_654_435_761);
@@ -867,7 +949,7 @@ function markAt(trade: BookTrade, session: number): number | null {
  * numbers and four projections of it.
  */
 export function buildBook(): Book {
-  const featured = FEATURED.map(buildFeatured);
+  const featured = [...FEATURED, MULTI_EXIT_TRADE_SPEC].map(buildFeatured);
   const generated = Array.from({ length: GENERATED_TRADES }, (_, index) =>
     buildGenerated(index + 1),
   );
@@ -955,6 +1037,34 @@ export function buildBook(): Book {
  * a constant, and two callers reading it are reading the same numbers.
  */
 export const BOOK: Book = buildBook();
+
+/* ------------------------------------------------------------ the benchmark index */
+
+/**
+ * ONE synthetic benchmark index, over the whole retained extent.
+ *
+ * It is a single series that every trade's holding window is a SLICE of, rather than a path
+ * generated per trade. A per-trade benchmark would be a different index for every comparison,
+ * and two trades in the same month would be measured against two different markets.
+ *
+ * **IT IS NOT A REAL BENCHMARK.** No provider is selected, **G1 is OPEN**, and no benchmark
+ * price history is requested from anywhere. It is a fixed step function between two endpoints
+ * chosen by hand, in index points scaled like cents, and it models nothing.
+ *
+ * Its basis is PRICE_RETURN: it pays no dividend and reinvests nothing, exactly like the
+ * demonstration securities it is compared against, so the two sides of every comparison are on
+ * the same basis (§12.4).
+ */
+const BENCHMARK_BASE_POINTS = 100_00;
+const BENCHMARK_END_POINTS = 118_40;
+
+export const BENCHMARK_INDEX: readonly number[] = buildPath(
+  BENCHMARK_BASE_POINTS,
+  BENCHMARK_END_POINTS,
+  SESSION_COUNT - 1,
+  240,
+  0x4b_4d_42_4e,
+);
 
 /* ---------------------------------------------------------------- session dates */
 
