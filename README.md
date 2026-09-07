@@ -3482,6 +3482,46 @@ live trading:                                     HARD-DISABLED
 **A corrected specification is still a specification.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
 
+### The reference-contract reconciliation, and ADR-0030 — PROPOSED, and nothing is implemented
+
+**The C6 review found the reference contract unenforced. Investigating it found the accepted
+contract unenforceable as written.** Those are two different findings, and the second is why this is
+a proposed amendment rather than a bug fix.
+
+[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) is
+**PROPOSED and carries no authority while the pull request introducing it is open**, and so are the
+corrections it makes to [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) in the
+same pull request. It **amends and supersedes no ADR document**; **ADR-0027, ADR-0028 and ADR-0029
+each remain ACCEPTED / IN FORCE**.
+
+**Five findings, each parsed out of the accepted text and executed.** Eighteen `Ref`-valued fields
+in the accepted catalogue carry **no kind at all**, so the closed vocabulary cannot be enumerated and
+an implementation had to guess — and one guess is visibly wrong, with the trade a candidate became
+labelled a provenance fact. `brain_decision` is assigned `EMBEDDED` and its **only carrier cannot
+embed it**. The Resolution column is **already a set** in two accepted rows, while `EMBEDDED` is
+defined relative to *this response* — so enforcing it as a per-kind invariant would force a producer
+to declare `ENDPOINT` beside a payload it is carrying. The Cardinality column is used for **both**
+reference objects and targets. And **no reason code says *this reference names nothing***.
+
+**What it decides.** `RefKind` closed at twenty-seven members, `trade` among them; a kind assigned to
+every catalogue reference field; the Resolution column read as a **permitted set**; `EMBEDDED`
+permitted everywhere and **constrained by truth**; `brain_decision` permitted `ENDPOINT`, which
+**ratifies the C6 choice rather than reversing it**; cardinality read as **the relation**; a
+reference resolving to **its own target or to nothing**; `REFERENT_NOT_FOUND` added to both closed
+vocabularies; and navigation kept to a closed allowlist with **no constructed URL**.
+
+**One accepted guard refused an earlier draft, and the guard won.** `REFERENT_NOT_FOUND` carries
+`NOT_YET_AVAILABLE`, because ADR-0028 holds `NOT_APPLICABLE` to **exactly two routes** and a missing
+referent is *we do not have it* rather than an inapplicability. **No accepted guard was relaxed to
+fit this proposal's prose.**
+
+**Nothing is implemented by it.** `ref_kind` is **still an open string**, the per-kind resolution
+sets are **still unenforced**, `downstream_refs.trade` is **still emitted as kind `source_fact`**, no
+module, fixture or `schema_version` changed, and the bounded implementation cycle that would close
+each of those is **a separate authorization that has not been given**. **C7 remains NOT STARTED**,
+the **C5 completion follow-up remains pending**, **G1 and G2 stay OPEN**, no provider is selected,
+Phase 3 is **NOT COMPLETE**, CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
+
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
 **One owner-approved human operator now holds the governed qualification access, both governed AWS
