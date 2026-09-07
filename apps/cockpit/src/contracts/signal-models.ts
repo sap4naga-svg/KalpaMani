@@ -434,7 +434,7 @@ export const candidateFunnelPayload = z
   });
 export type CandidateFunnelPayload = z.infer<typeof candidateFunnelPayload>;
 
-export const CANDIDATE_FUNNEL_SCHEMA = "cockpit.candidate_funnel.v1";
+export const CANDIDATE_FUNNEL_SCHEMA = "cockpit.candidate_funnel.v2";
 export const candidateFunnelEnvelope = envelope(
   candidateFunnelPayload,
   CANDIDATE_FUNNEL_SCHEMA,
@@ -965,7 +965,7 @@ export const missedOpportunityPayload = collectionPayload(missedOpportunity, {
 });
 export type MissedOpportunityPayload = z.infer<typeof missedOpportunityPayload>;
 
-export const MISSED_OPPORTUNITY_SCHEMA = "cockpit.missed_opportunity.v1";
+export const MISSED_OPPORTUNITY_SCHEMA = "cockpit.missed_opportunity.v2";
 export const missedOpportunityEnvelope = envelope(
   missedOpportunityPayload,
   MISSED_OPPORTUNITY_SCHEMA,

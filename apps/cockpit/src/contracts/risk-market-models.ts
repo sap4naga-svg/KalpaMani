@@ -239,5 +239,5 @@ export const marketRegimePayload = z.object({
 });
 export type MarketRegimePayload = z.infer<typeof marketRegimePayload>;
 
-export const MARKET_REGIME_SCHEMA = "cockpit.market_regime.v1";
+export const MARKET_REGIME_SCHEMA = "cockpit.market_regime.v2";
 export const marketRegimeEnvelope = envelope(marketRegimePayload, MARKET_REGIME_SCHEMA);

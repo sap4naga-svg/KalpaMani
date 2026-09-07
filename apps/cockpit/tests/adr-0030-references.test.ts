@@ -17,7 +17,11 @@ import { admit } from "@/data/client/read-client";
 import { ContractViolationError } from "@/data/client/read-client";
 import { candidateDetailEnvelope } from "@/contracts/signal-models";
 import { tradeDetailEnvelope, TRADE_DETAIL_SCHEMA } from "@/contracts/portfolio-models";
-import { riskSnapshotEnvelope } from "@/contracts/risk-market-models";
+import {
+  marketRegimeEnvelope,
+  riskSnapshotEnvelope,
+  MARKET_REGIME_SCHEMA,
+} from "@/contracts/risk-market-models";
 import { envelopeFields } from "@/contracts/envelope";
 import {
   KIND_RESOLUTIONS,
@@ -29,13 +33,16 @@ import {
 } from "@/contracts/references";
 import type { HostFieldKey } from "@/contracts/references";
 import { followReference, permitsCrossProvenance } from "@/contracts/reference-access";
+import { contractReadScope } from "@/contracts/references";
 import type { ResolvingContext } from "@/contracts/reference-access";
 import { refListOf } from "@/contracts/factories";
 import { available, absent } from "@/contracts/factories";
 import type { Ref } from "@/contracts/values";
 import { REF_KINDS, FIELD_REASON_CODES, ERROR_CODES } from "@/contracts/vocabularies";
+import type { DataClassification } from "@/contracts/vocabularies";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { referenceDestination, nestedDestination } from "@/lib/reference-navigation";
+import { READ_MODEL_IDENTITIES } from "@/data/client/read-model-identity";
 import { fixedClock } from "@/lib/clock";
 import { DEFAULT_SCOPE } from "@/lib/scope";
 
@@ -53,13 +60,32 @@ const client = () =>
 /** Deep-clone an admitted response so a mutation cannot leak between cases. */
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/**
+ * A caller, and NOT a caller that names its own required scope.
+ *
+ * `requiredScope` used to sit here and be handed to `followReference`, which authorized the
+ * read against it -- so the authorization input came from the thing being authorized. The
+ * scope now comes from the accepted section 4.3 table, and `declaredScope` is consulted only
+ * for the two kinds whose rows say "the scope named on the reference" and which a `Ref` has
+ * no field to carry.
+ */
 const CALLER: ResolvingContext = {
   environment: "RESEARCH",
   provenance: "SYNTHETIC",
-  heldScopes: ["portfolio:read", "risk:read", "signals:read"],
-  requiredScope: "risk:read",
+  heldScopes: ["portfolio:read", "risk:read", "signals:read", "audit:read", "governance:read"],
   readableClassifications: ["PUBLIC_SAFE"],
 };
+
+/** A located `trade` target that corresponds to `reference` below, with its own labels. */
+const LOCATED_TRADE = {
+  kind: "trade",
+  id: "missing-1",
+  labels: {
+    environment: "RESEARCH",
+    provenance: "SYNTHETIC",
+    classification: "PUBLIC_SAFE",
+  },
+} as const;
 
 /* ============================================================ the closed vocabularies */
 
@@ -379,11 +405,26 @@ describe("the five unavailable outcomes stay distinct", () => {
     classification: "PUBLIC_SAFE",
   };
 
+  /**
+   * A tombstone that RECORDS a relationship, and is not a boolean asserting one.
+   *
+   * `tombstoneOf` names the entity the reference names, which is what makes this tombstone
+   * that reference's rather than some other withdrawal that happened to be handed over.
+   */
+  const TOMBSTONE_OF_MISSING_1 = {
+    auditEventId: "audit-withdrawal-1",
+    tombstoneOf: "missing-1",
+    labels: {
+      environment: "RESEARCH",
+      provenance: "SYNTHETIC",
+      classification: "PUBLIC_SAFE",
+    },
+  } as const;
+
   it("calls an unknown record REFERENT_NOT_FOUND, never a missing producer", () => {
     expect(
       followReference("CandidateDetail.downstream_refs.trade", reference, CALLER, {
         producer: "IMPLEMENTED",
-        found: false,
       }),
     ).toEqual({
       status: "UNAVAILABLE",
@@ -396,7 +437,6 @@ describe("the five unavailable outcomes stay distinct", () => {
     expect(
       followReference("CandidateDetail.downstream_refs.trade", reference, CALLER, {
         producer: "NOT_IMPLEMENTED_FOR_SCOPE",
-        found: false,
       }),
     ).toEqual({
       status: "UNAVAILABLE",
@@ -410,15 +450,16 @@ describe("the five unavailable outcomes stay distinct", () => {
       "CandidateDetail.downstream_refs.trade",
       reference,
       { ...CALLER, heldScopes: [] },
-      { producer: "IMPLEMENTED", found: true },
+      { producer: "IMPLEMENTED", located: LOCATED_TRADE },
     );
     expect(noScope).toEqual({ status: "REFUSED", code: "SCOPE_MISSING" });
 
     const wrongScope = followReference(
       "CandidateDetail.downstream_refs.trade",
       reference,
+      /* `trade` requires `portfolio:read`, which the section 4.3 table names and this caller lacks. */
       { ...CALLER, heldScopes: ["market:read"] },
-      { producer: "IMPLEMENTED", found: true },
+      { producer: "IMPLEMENTED", located: LOCATED_TRADE },
     );
     expect(wrongScope).toEqual({ status: "REFUSED", code: "SCOPE_INSUFFICIENT" });
 
@@ -427,7 +468,7 @@ describe("the five unavailable outcomes stay distinct", () => {
       "CandidateDetail.downstream_refs.trade",
       { ...reference, classification: "PRIVATE_OPERATIONAL" },
       CALLER,
-      { producer: "IMPLEMENTED", found: true },
+      { producer: "IMPLEMENTED", located: LOCATED_TRADE },
     );
     expect(withheld).toEqual({
       status: "UNAVAILABLE",
@@ -436,12 +477,12 @@ describe("the five unavailable outcomes stay distinct", () => {
     });
   });
 
-  it("resolves a recorded tombstone rather than calling it REFERENT_NOT_FOUND", () => {
+  it("resolves a RECORDED tombstone rather than calling it REFERENT_NOT_FOUND", () => {
     const outcome = followReference(
       "AuditEvent.tombstone_of",
       { ...reference, ref_kind: "audit_event", resolution: "AUTHORIZED_READ" },
-      { ...CALLER, requiredScope: "risk:read" },
-      { producer: "IMPLEMENTED", found: false, tombstone: true },
+      CALLER,
+      { producer: "IMPLEMENTED", tombstone: TOMBSTONE_OF_MISSING_1 },
     );
     expect(outcome).toEqual({ status: "RESOLVED" });
   });
@@ -507,11 +548,18 @@ describe("environment always matches, and provenance only where the catalogue sa
     const outcome = followReference(
       "QualificationStatus.facts[].source_ref",
       reference,
-      { ...CALLER, requiredScope: "risk:read" },
+      { ...CALLER, declaredScope: "governance:read" },
       {
         producer: "IMPLEMENTED",
-        found: true,
-        labels: { environment: "RESEARCH", provenance: "REPOSITORY_TRACKED" },
+        located: {
+          kind: "source_fact",
+          id: "fact-1",
+          labels: {
+            environment: "RESEARCH",
+            provenance: "REPOSITORY_TRACKED",
+            classification: "PUBLIC_SAFE",
+          },
+        },
       },
     );
     expect(outcome).toEqual({ status: "RESOLVED" });
@@ -522,11 +570,18 @@ describe("environment always matches, and provenance only where the catalogue sa
     const outcome = followReference(
       "TradeDetail.audit_refs",
       { ...reference, ref_kind: "audit_event" },
-      { ...CALLER, requiredScope: "risk:read" },
+      CALLER,
       {
         producer: "IMPLEMENTED",
-        found: true,
-        labels: { environment: "RESEARCH", provenance: "BROKER_REPORTED" },
+        located: {
+          kind: "audit_event",
+          id: "fact-1",
+          labels: {
+            environment: "RESEARCH",
+            provenance: "BROKER_REPORTED",
+            classification: "PUBLIC_SAFE",
+          },
+        },
       },
     );
     expect(outcome).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
@@ -536,14 +591,333 @@ describe("environment always matches, and provenance only where the catalogue sa
     const outcome = followReference(
       "QualificationStatus.facts[].source_ref",
       reference,
-      { ...CALLER, requiredScope: "risk:read" },
+      { ...CALLER, declaredScope: "governance:read" },
       {
         producer: "IMPLEMENTED",
-        found: true,
-        labels: { environment: "PAPER", provenance: "REPOSITORY_TRACKED" },
+        located: {
+          kind: "source_fact",
+          id: "fact-1",
+          labels: {
+            environment: "PAPER",
+            provenance: "REPOSITORY_TRACKED",
+            classification: "PUBLIC_SAFE",
+          },
+        },
       },
     );
     expect(outcome).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+});
+
+/* ============ the target is validated, and absent metadata proves nothing (R6, R8, R9) */
+
+describe("a located target is validated, and an absence of metadata is not a pass", () => {
+  const reference: Ref = {
+    ref_id: "trade-1",
+    ref_kind: "trade",
+    resolution: "ENDPOINT",
+    classification: "PUBLIC_SAFE",
+  };
+  const labels = {
+    environment: "RESEARCH",
+    provenance: "SYNTHETIC",
+    classification: "PUBLIC_SAFE",
+  } as const;
+  const located = { kind: "trade", id: "trade-1", labels } as const;
+  const follow = (
+    target: Parameters<typeof followReference>[3],
+    context: ResolvingContext = CALLER,
+  ) => followReference("CandidateDetail.downstream_refs.trade", reference, context, target);
+
+  it("resolves a target whose kind, identity and labels all correspond", () => {
+    expect(follow({ producer: "IMPLEMENTED", located })).toEqual({ status: "RESOLVED" });
+  });
+
+  /*
+   * A FOUND TARGET USED TO NEED NO LABELS AT ALL.
+   *
+   * `labels` was optional and the environment and provenance rule ran only inside
+   * `if (labels !== undefined)`, so a target carrying none was RESOLVED without a single
+   * check -- an absence of metadata reading as conformance. The type requires them now, and
+   * these are the checks that absence used to skip.
+   */
+  it("refuses a located target from another environment", () => {
+    expect(
+      follow({
+        producer: "IMPLEMENTED",
+        located: { ...located, labels: { ...labels, environment: "PAPER" } },
+      }),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+
+  it("refuses a located target of another provenance on an unauthorized field", () => {
+    expect(
+      follow({
+        producer: "IMPLEMENTED",
+        located: { ...located, labels: { ...labels, provenance: "BROKER_REPORTED" } },
+      }),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+
+  it("refuses a target whose own identity is not the reference's (R8)", () => {
+    expect(follow({ producer: "IMPLEMENTED", located: { ...located, id: "trade-2" } })).toEqual({
+      status: "REFUSED",
+      code: "PROJECTION_ERROR",
+    });
+  });
+
+  it("refuses a target whose own kind is not the reference's (R8)", () => {
+    expect(
+      follow({ producer: "IMPLEMENTED", located: { ...located, kind: "candidate" } }),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+
+  /*
+   * A PRODUCER-CONTROLLED LABEL IS NOT AUTHORIZATION (R10).
+   *
+   * The reference says `PUBLIC_SAFE` and the target it names is `PRIVATE_OPERATIONAL`. The
+   * reference label was the only classification consulted, so this read went through; the
+   * target's own classification is consulted now, and a caller who may not read it is told so
+   * rather than shown it.
+   */
+  it("withholds on the TARGET's classification, not on the reference's label", () => {
+    expect(
+      follow({
+        producer: "IMPLEMENTED",
+        located: { ...located, labels: { ...labels, classification: "PRIVATE_OPERATIONAL" } },
+      }),
+    ).toEqual({
+      status: "UNAVAILABLE",
+      availability: "NOT_AUTHORIZED",
+      reason: "CLASSIFICATION_WITHHELD",
+    });
+  });
+
+  it("refuses a reference and a target that disagree about classification", () => {
+    /* The caller may read both, so this is the MISMATCH itself and not a withholding. */
+    expect(
+      follow(
+        {
+          producer: "IMPLEMENTED",
+          located: { ...located, labels: { ...labels, classification: "PRIVATE_OPERATIONAL" } },
+        },
+        { ...CALLER, readableClassifications: ["PUBLIC_SAFE", "PRIVATE_OPERATIONAL"] },
+      ),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+});
+
+describe("a tombstone is a RECORDED relationship, and not a boolean (R9)", () => {
+  const reference: Ref = {
+    ref_id: "withdrawn-1",
+    ref_kind: "audit_event",
+    resolution: "AUTHORIZED_READ",
+    classification: "PUBLIC_SAFE",
+  };
+  const labels = {
+    environment: "RESEARCH",
+    provenance: "SYNTHETIC",
+    classification: "PUBLIC_SAFE",
+  } as const;
+  const follow = (tombstone: {
+    auditEventId: string;
+    tombstoneOf: string;
+    labels: { environment: string; provenance: "SYNTHETIC"; classification: DataClassification };
+  }) =>
+    followReference("AuditEvent.tombstone_of", reference, CALLER, {
+      producer: "IMPLEMENTED",
+      tombstone,
+    });
+
+  it("resolves a tombstone that names the entity the reference names", () => {
+    expect(follow({ auditEventId: "audit-1", tombstoneOf: "withdrawn-1", labels })).toEqual({
+      status: "RESOLVED",
+    });
+  });
+
+  /*
+   * A TOMBSTONE FOR SOMETHING ELSE IS NOT THIS REFERENCE'S TOMBSTONE.
+   *
+   * `tombstone: true` established no relationship at all: any caller could assert it about
+   * any identifier and the reference resolved. The record has to NAME what it withdrew now.
+   */
+  it("refuses a tombstone recorded against a different entity", () => {
+    expect(follow({ auditEventId: "audit-1", tombstoneOf: "some-other-record", labels })).toEqual({
+      status: "REFUSED",
+      code: "PROJECTION_ERROR",
+    });
+  });
+
+  /*
+   * AND IT USED TO SHORT-CIRCUIT ABOVE EVERY LABEL CHECK.
+   *
+   * The tombstone branch returned RESOLVED immediately, above the environment and provenance
+   * rule, so one environment's withdrawal resolved inside another environment's response.
+   */
+  it("refuses a tombstone from another environment", () => {
+    expect(
+      follow({
+        auditEventId: "audit-1",
+        tombstoneOf: "withdrawn-1",
+        labels: { ...labels, environment: "PAPER" },
+      }),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+
+  it("withholds a tombstone the caller's classification bars", () => {
+    expect(
+      follow({
+        auditEventId: "audit-1",
+        tombstoneOf: "withdrawn-1",
+        labels: { ...labels, classification: "PRIVATE_OPERATIONAL" },
+      }),
+    ).toEqual({
+      status: "UNAVAILABLE",
+      availability: "NOT_AUTHORIZED",
+      reason: "CLASSIFICATION_WITHHELD",
+    });
+  });
+});
+
+describe("the required scope comes from the accepted table, and not from the caller", () => {
+  it("names the section 4.3 scope for every kind whose row states one", () => {
+    expect(contractReadScope("risk_decision")).toBe("risk:read");
+    expect(contractReadScope("audit_event")).toBe("audit:read");
+    expect(contractReadScope("chart_series")).toBe("market:read");
+    expect(contractReadScope("benchmark_series")).toBe("market:read");
+    /* And an ENDPOINT row takes the scope of the read model it resolves to. */
+    expect(contractReadScope("trade")).toBe("portfolio:read");
+    expect(contractReadScope("candidate")).toBe("signals:read");
+    expect(contractReadScope("order")).toBe("execution:read");
+  });
+
+  /*
+   * THE TWO ROWS THAT NAME NO SCOPE STAY HONEST ABOUT NAMING NONE.
+   *
+   * `evidence` and `source_fact` read "the scope named on the reference", and section 4.2
+   * gives `Ref` no field to name one in. Inventing a value here would be a specification act.
+   */
+  it("names none for the two kinds whose scope a reference cannot carry", () => {
+    expect(contractReadScope("evidence")).toBeNull();
+    expect(contractReadScope("source_fact")).toBeNull();
+  });
+
+  /*
+   * A CALLER CANNOT LOWER THE BAR IT IS BEING HELD TO.
+   *
+   * `requiredScope` was a caller-supplied string and was the only authorization input, so a
+   * caller holding `market:read` could declare a `trade` read to require `market:read` and be
+   * admitted. The table names `portfolio:read`, and a contradicting declaration is refused.
+   */
+  it("refuses a declared scope that contradicts the table", () => {
+    const reference: Ref = {
+      ref_id: "trade-1",
+      ref_kind: "trade",
+      resolution: "ENDPOINT",
+      classification: "PUBLIC_SAFE",
+    };
+    expect(
+      followReference(
+        "CandidateDetail.downstream_refs.trade",
+        reference,
+        { ...CALLER, heldScopes: ["market:read"], declaredScope: "market:read" },
+        {
+          producer: "IMPLEMENTED",
+          located: {
+            kind: "trade",
+            id: "trade-1",
+            labels: {
+              environment: "RESEARCH",
+              provenance: "SYNTHETIC",
+              classification: "PUBLIC_SAFE",
+            },
+          },
+        },
+      ),
+    ).toEqual({ status: "REFUSED", code: "PROJECTION_ERROR" });
+  });
+
+  it("refuses a read that nothing names a scope for", () => {
+    const reference: Ref = {
+      ref_id: "fact-1",
+      ref_kind: "source_fact",
+      resolution: "AUTHORIZED_READ",
+      classification: "PUBLIC_SAFE",
+    };
+    /* No table scope, and the caller declared none either. */
+    expect(
+      followReference("TradeDetail.audit_refs", reference, CALLER, {
+        producer: "IMPLEMENTED",
+      }),
+    ).toEqual({ status: "REFUSED", code: "SCOPE_MISSING" });
+  });
+});
+
+/* ===== the unknown identifier, through the REAL read path and not through a helper ===== */
+
+describe("an unknown identifier reaches REFERENT_NOT_FOUND through an ordinary read", () => {
+  /*
+   * THE RULE HAS TO SIT ON THE PATH AN ORDINARY READ TAKES.
+   *
+   * `followReference` had no runtime caller at all: it was reached only from tests, which
+   * supplied `found: false` and then asserted the answer they had just supplied. Meanwhile
+   * the read a reader actually performs -- follow `downstream_refs.trade` to
+   * `/portfolio/trades/{ref_id}`, which calls `tradeDetail` -- answered `NOT_APPLICABLE` with
+   * `NOT_DEFINED_FOR_SUBJECT`, which R9 refuses in exactly this case.
+   */
+  it("reports an unknown trade identity as NOT_YET_AVAILABLE and REFERENT_NOT_FOUND", async () => {
+    const read = client();
+    for (const response of [
+      await read.tradeDetail(DEMO, "demo-trade-does-not-exist"),
+      await read.tradeLifecycle(DEMO, "demo-trade-does-not-exist"),
+    ]) {
+      expect(response.availability).toBe("NOT_YET_AVAILABLE");
+      expect(response.availability_reason).toBe("REFERENT_NOT_FOUND");
+      expect(response.payload).toBeUndefined();
+    }
+  });
+
+  it("reports an unknown candidate identity the same way", async () => {
+    const response = await client().candidateDetail(DEMO, "demo-candidate-does-not-exist");
+    expect(response.availability).toBe("NOT_YET_AVAILABLE");
+    expect(response.availability_reason).toBe("REFERENT_NOT_FOUND");
+    expect(response.payload).toBeUndefined();
+  });
+
+  /*
+   * AND A REFERENCE THE APPLICATION REALLY EMITS LANDS THERE.
+   *
+   * Both `blocked_shorts[].candidate_ref` identifiers are absent from the candidate book, so
+   * following one is the unknown-record case arriving from emitted output rather than from a
+   * string a test made up.
+   */
+  it("lands there when a reference the fixtures emit is actually followed", async () => {
+    const read = client();
+    const shorts = await read.shortSide(DEMO);
+    const blocked = shorts.payload?.blocked_shorts ?? [];
+    expect(blocked.length).toBeGreaterThan(0);
+    for (const entry of blocked) {
+      expect(entry.candidate_ref.ref_kind).toBe("candidate");
+      const followed = await read.candidateDetail(DEMO, entry.candidate_ref.ref_id);
+      expect(followed.availability).toBe("NOT_YET_AVAILABLE");
+      expect(followed.availability_reason).toBe("REFERENT_NOT_FOUND");
+      /* And it is never some OTHER candidate served under this identity. */
+      expect(followed.payload).toBeUndefined();
+    }
+  });
+
+  /*
+   * A MISSING PRODUCER IS STILL A DIFFERENT ANSWER, AND STAYS ONE.
+   *
+   * The project scenario has no synthetic producer, so the same unknown identifier reports
+   * that the SUBSYSTEM does not exist -- a claim about the producer and not about the record,
+   * and the two must not collapse into one another.
+   */
+  it("keeps the absent producer distinct on the same path", async () => {
+    const project = { ...DEMO, scenario: "project" as const };
+    const response = await client().tradeDetail(project, "demo-trade-does-not-exist");
+    expect(response.availability).toBe("NOT_IMPLEMENTED");
+    expect(response.availability_reason).toBe("PRODUCER_NOT_IMPLEMENTED");
   });
 });
 
@@ -609,9 +983,62 @@ describe("the coordinated schema bump", () => {
     );
   });
 
-  it("leaves a read model whose payload did not change at v1", async () => {
-    const envelope = await client().marketRegime(DEMO);
-    expect(envelope.schema_version).toBe("cockpit.market_regime.v1");
+  /*
+   * THE CRITERION IS THE CONTRACT, AND IT USED TO BE THE EMITTED FIXTURE BYTES.
+   *
+   * Thirteen schemas were bumped because their emitted example changed and six were left at
+   * v1 because theirs did not. **An unchanged example does not mean an unchanged contract**:
+   * `Envelope.source_refs` moved from an open `refList` to `refListFieldOf`, which NARROWS
+   * `ref_kind` to `source_fact` and checks `items`, `total` and `truncated` against the
+   * list's own cardinality -- for EVERY read model, because every read model carries the
+   * envelope. A consumer pinned to one of the six would have accepted, before this cycle,
+   * envelopes it must now reject.
+   *
+   * So the affected set is all nineteen, and the version matrix says so.
+   */
+  it("carries the coordinated version on every read model, not only where a sample moved", () => {
+    for (const identity of READ_MODEL_IDENTITIES) {
+      expect(identity.schemaVersion, identity.readModel).toMatch(/\.v2$/);
+    }
+    expect(READ_MODEL_IDENTITIES.length).toBe(19);
+  });
+
+  it("narrows the envelope for a read model that was left at v1, which is why it bumped", async () => {
+    /*
+     * `MarketRegime` is one of the six whose emitted payload was byte-identical. Its CONTRACT
+     * changed anyway, and this is the change: an envelope source reference of a kind other
+     * than `source_fact` was admissible before and is refused now.
+     */
+    const response = clone(await client().marketRegime(DEMO));
+    expect(response.schema_version).toBe(MARKET_REGIME_SCHEMA);
+    expect(MARKET_REGIME_SCHEMA).toBe("cockpit.market_regime.v2");
+    const widened = clone(response);
+    widened.source_refs.items = [
+      {
+        ref_id: "not-a-source-fact",
+        ref_kind: "incident",
+        resolution: "ENDPOINT",
+        classification: "PUBLIC_SAFE",
+      },
+    ];
+    widened.source_refs.total = {
+      ...widened.source_refs.total,
+      availability: "AVAILABLE",
+      value: 1,
+    };
+    widened.source_refs.cardinality = "ZERO_OR_MORE";
+    widened.source_refs.truncated = false;
+    expect(() =>
+      admit("MarketRegime", marketRegimeEnvelope, widened, "PUBLIC_EDGE"),
+    ).toThrow(ContractViolationError);
+  });
+
+  it("rejects a payload carrying a version that was current one cycle ago", async () => {
+    const response = clone(await client().marketRegime(DEMO));
+    (response as { schema_version: string }).schema_version = "cockpit.market_regime.v1";
+    expect(() =>
+      admit("MarketRegime", marketRegimeEnvelope, response, "PUBLIC_EDGE"),
+    ).toThrow(ContractViolationError);
   });
 });
 

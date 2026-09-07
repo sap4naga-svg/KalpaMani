@@ -359,7 +359,7 @@ export const qualificationStatusPayload = z.object({
 });
 export type QualificationStatusPayload = z.infer<typeof qualificationStatusPayload>;
 
-export const QUALIFICATION_STATUS_SCHEMA = "cockpit.qualification_status.v1";
+export const QUALIFICATION_STATUS_SCHEMA = "cockpit.qualification_status.v2";
 export const qualificationStatusEnvelope = envelope(
   qualificationStatusPayload,
   QUALIFICATION_STATUS_SCHEMA,
@@ -527,7 +527,7 @@ export const performanceSeriesPayload = z
   });
 export type PerformanceSeriesPayload = z.infer<typeof performanceSeriesPayload>;
 
-export const PERFORMANCE_SERIES_SCHEMA = "cockpit.performance_series.v1";
+export const PERFORMANCE_SERIES_SCHEMA = "cockpit.performance_series.v2";
 export const performanceSeriesEnvelope = envelope(
   performanceSeriesPayload,
   PERFORMANCE_SERIES_SCHEMA,

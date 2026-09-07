@@ -79,6 +79,68 @@ export const KIND_RESOLUTIONS: Readonly<Record<RefKind, readonly Resolution[]>> 
 };
 
 /**
+ * The ACCESS SCOPE a read of each kind's target requires, transcribed from accepted text.
+ *
+ * **A required scope the caller may name is not a required scope.** `followReference` used to
+ * take one as a parameter, so the authorization input was supplied by the thing being
+ * authorized — and a caller free to name the requirement can name one it happens to hold.
+ * The accepted contract states it, so the accepted contract is where it comes from.
+ *
+ * Two sources, in order of directness:
+ *
+ * ```text
+ * §4.3's Resolution column   names the scope outright on the AUTHORIZED_READ rows --
+ *                           risk_decision risk:read, audit_event audit:read, and both
+ *                           chart_series and benchmark_series market:read
+ * §4.5's read-model lines    name the scope of the read model §4.3's "Resolves to" column
+ *                           points an ENDPOINT row at -- CandidateDetail signals:read,
+ *                           TradeDetail portfolio:read, TradeLifecycle execution:read,
+ *                           MarketRegime market:read, and so on for every row
+ * ```
+ *
+ * **`evidence` and `source_fact` are `null`, and that is a stated limitation rather than an
+ * omission.** Their rows read *"AUTHORIZED_READ — the scope named on the reference"*, and
+ * §4.2 types `Ref` as `{ ref_id, ref_kind, resolution, classification }` — there is **no
+ * scope field on a reference to name one in**. Adding one is a specification act reserved to
+ * an ADR, so for those two kinds the caller's declared scope is the only available input and
+ * is used as such, rather than a value invented here.
+ */
+export const KIND_READ_SCOPE: Readonly<Record<RefKind, string | null>> = {
+  candidate: "signals:read",
+  brain_decision: "signals:read",
+  trade: "portfolio:read",
+  risk_decision: "risk:read",
+  order: "execution:read",
+  fill: "execution:read",
+  protection: "execution:read",
+  add: "execution:read",
+  exit: "execution:read",
+  reconciliation: "execution:read",
+  execution_quality: "execution:read",
+  strategy_version: "strategy:read",
+  health_transition: "strategy:read",
+  research_run: "research:read",
+  registration: "research:read",
+  queue_item: "research:read",
+  packet: "governance:read",
+  decision: "governance:read",
+  audit_event: "audit:read",
+  evidence: null,
+  chart_series: "market:read",
+  benchmark_series: "market:read",
+  regime_context: "market:read",
+  data_quality: "system:read",
+  incident: "system:read",
+  alert: "system:read",
+  source_fact: null,
+};
+
+/** The scope the accepted contract names for this kind, or `null` where it names none. */
+export function contractReadScope(kind: RefKind): string | null {
+  return KIND_READ_SCOPE[kind];
+}
+
+/**
  * §4.3's Cardinality column — the kind's GENERIC relation, recorded for traceability.
  *
  * **It is not the validation input** (R7). One kind is carried by both shapes: `source_fact`

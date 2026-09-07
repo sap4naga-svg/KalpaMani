@@ -24,6 +24,8 @@
  * of Paper or Live operation out of a viewer's selection, and none exists: `AUTOMATED_PAPER`
  * has never been reached and live trading is HARD-DISABLED.
  */
+import { targetAvailability } from "@/contracts/reference-access";
+import type { ProducerState } from "@/contracts/reference-access";
 import {
   attentionListEnvelope,
   executiveOverviewEnvelope,
@@ -250,6 +252,29 @@ function unpopulated<T>(): Resolution<T> {
 
 function isPopulated(scope: ViewScope): boolean {
   return scope.environment === POPULATED_ENVIRONMENT;
+}
+
+/**
+ * What a read model reports when a REQUESTED TARGET IDENTITY could not be served.
+ *
+ * The rule lives once, in `contracts/reference-access.ts`, and this is the ordinary read path
+ * running into it -- not a helper only a test calls. `producer` is `IMPLEMENTED` exactly
+ * where this application has a synthetic producer for the requested scope, and `located` is
+ * whether that producer holds a record for the requested identity.
+ *
+ * **An implemented producer that lacks one record is `REFERENT_NOT_FOUND` (ADR-0030 R6, R9)**,
+ * and it used to be `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`. R9 refuses that reading
+ * outright: an identifier that names nothing is *we do not have it*, the question still
+ * applies to the subject, and `NOT_APPLICABLE` keeps its two ADR-0028 routes.
+ */
+function targetResolution<T>(producer: ProducerState, located: boolean): Resolution<T> {
+  const absence = targetAvailability(producer, located);
+  return { availability: absence.availability, availabilityReason: absence.reason };
+}
+
+/** Whether this application produces the operational read models for the requested scope. */
+function producerFor(scope: ViewScope): ProducerState {
+  return scope.scenario === "demo" ? "IMPLEMENTED" : "NOT_IMPLEMENTED_FOR_SCOPE";
 }
 
 export class FixtureReadClient implements ReadClient {
@@ -571,11 +596,13 @@ export class FixtureReadClient implements ReadClient {
   /**
    * One trade's story.
    *
-   * An unknown identity is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`: the ledger was
-   * searched and there is no such trade, so the question does not apply to the subject. It is
-   * **not `EMPTY_VERIFIED`** — that state is value-bearing and describes a collection that
-   * came back empty, and a single read model has no empty list to return. It is also not a
-   * 404 a caller has to interpret.
+   * An unknown identity is `NOT_YET_AVAILABLE` with `REFERENT_NOT_FOUND`, and it used to be
+   * `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`. The ledger was searched, the producer
+   * exists for this scope and there is no such trade — which ADR-0030 R9 states is exactly
+   * *we do not have it*, so the question still applies to the subject and `NOT_APPLICABLE`
+   * keeps its two ADR-0028 routes. It is **not `EMPTY_VERIFIED`** — that state is
+   * value-bearing and describes a collection that came back empty, and a single read model
+   * has no empty list to return. It is also not a 404 a caller has to interpret.
    */
   async tradeDetail(
     scope: ViewScope,
@@ -583,23 +610,19 @@ export class FixtureReadClient implements ReadClient {
   ): Promise<EnvelopeOf<TradeDetailPayload>> {
     const asOf = instantOf(this.clock.now());
     const trade = findBookTrade(tradeId);
+    const producer = producerFor(scope);
     const resolution: Resolution<TradeDetailPayload> = !isPopulated(scope)
       ? unpopulated()
-      : scope.scenario !== "demo"
-        ? {
-            availability: "NOT_IMPLEMENTED",
-            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
-          }
-        : trade === undefined
-          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
-          : {
-              availability: "AVAILABLE",
-              availabilityReason: "NONE",
-              payload: syntheticTradeDetail(trade, this.sessions(), asOf),
-              maturityStage: POPULATED_MATURITY,
-              /** Every trade's detail names the stages it does not carry. */
-              completeness: "PARTIAL",
-            };
+      : producer === "NOT_IMPLEMENTED_FOR_SCOPE" || trade === undefined
+        ? targetResolution(producer, false)
+        : {
+            availability: "AVAILABLE",
+            availabilityReason: "NONE",
+            payload: syntheticTradeDetail(trade, this.sessions(), asOf),
+            maturityStage: POPULATED_MATURITY,
+            /** Every trade's detail names the stages it does not carry. */
+            completeness: "PARTIAL",
+          };
     return this.respond(
       TRADE_DETAIL_IDENTITY,
       `trade-detail-${tradeId}`,
@@ -616,23 +639,19 @@ export class FixtureReadClient implements ReadClient {
   ): Promise<EnvelopeOf<TradeLifecyclePayload>> {
     const asOf = instantOf(this.clock.now());
     const trade = findBookTrade(tradeId);
+    const producer = producerFor(scope);
     const resolution: Resolution<TradeLifecyclePayload> = !isPopulated(scope)
       ? unpopulated()
-      : scope.scenario !== "demo"
-        ? {
-            availability: "NOT_IMPLEMENTED",
-            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
-          }
-        : trade === undefined
-          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
-          : {
-              availability: "AVAILABLE",
-              availabilityReason: "NONE",
-              payload: syntheticTradeLifecycle(trade, this.sessions(), asOf),
-              maturityStage: POPULATED_MATURITY,
-              /** The basic lifecycle carries the trade stages and names every absent kind. */
-              completeness: "PARTIAL",
-            };
+      : producer === "NOT_IMPLEMENTED_FOR_SCOPE" || trade === undefined
+        ? targetResolution(producer, false)
+        : {
+            availability: "AVAILABLE",
+            availabilityReason: "NONE",
+            payload: syntheticTradeLifecycle(trade, this.sessions(), asOf),
+            maturityStage: POPULATED_MATURITY,
+            /** The basic lifecycle carries the trade stages and names every absent kind. */
+            completeness: "PARTIAL",
+          };
     return this.respond(
       TRADE_LIFECYCLE_IDENTITY,
       `trade-lifecycle-${tradeId}`,
@@ -753,8 +772,11 @@ export class FixtureReadClient implements ReadClient {
   /**
    * One candidate's explanation.
    *
-   * An unknown identity is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT` — the journal was
-   * searched and there is no such candidate, so the question does not apply to the subject.
+   * An unknown identity is `NOT_YET_AVAILABLE` with `REFERENT_NOT_FOUND` (ADR-0030 R6, R9) —
+   * the journal was searched, the synthetic producer exists for this scope, and no such
+   * candidate was recorded. It is the state the blocked-short references reach: the two
+   * `blocked_shorts[].candidate_ref` identifiers are not in the book, and following one used
+   * to report that the question did not apply rather than that the record was not written.
    * **It is never another candidate**, and never a default fixture: serving the nearest row
    * under a requested identity is how a reader ends up reading one decision's evidence under
    * another decision's name.
@@ -765,23 +787,19 @@ export class FixtureReadClient implements ReadClient {
   ): Promise<EnvelopeOf<CandidateDetailPayload>> {
     const asOf = instantOf(this.clock.now());
     const record = candidateRecord(candidateId);
+    const producer = producerFor(scope);
     const resolution: Resolution<CandidateDetailPayload> = !isPopulated(scope)
       ? unpopulated()
-      : scope.scenario !== "demo"
-        ? {
-            availability: "NOT_IMPLEMENTED",
-            availabilityReason: "PRODUCER_NOT_IMPLEMENTED",
-          }
-        : record === undefined
-          ? { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" }
-          : {
-              availability: "AVAILABLE",
-              availabilityReason: "NONE",
-              payload: syntheticCandidateDetail(record, this.sessions(), asOf),
-              maturityStage: POPULATED_MATURITY,
-              /** Every candidate names the evidence its decision did not have. */
-              completeness: "PARTIAL",
-            };
+      : producer === "NOT_IMPLEMENTED_FOR_SCOPE" || record === undefined
+        ? targetResolution(producer, false)
+        : {
+            availability: "AVAILABLE",
+            availabilityReason: "NONE",
+            payload: syntheticCandidateDetail(record, this.sessions(), asOf),
+            maturityStage: POPULATED_MATURITY,
+            /** Every candidate names the evidence its decision did not have. */
+            completeness: "PARTIAL",
+          };
     return this.respond(
       CANDIDATE_DETAIL_IDENTITY,
       `candidate-detail-${candidateId}`,

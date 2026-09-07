@@ -561,9 +561,13 @@ describe("AI evidence removes candidates and never restores one", () => {
 
 describe("an unknown candidate", () => {
   it("returns an honest not-found state and never another candidate", async () => {
+    /*
+     * The journal was searched by a producer that exists for this scope and holds no such
+     * candidate, which ADR-0030 R9 states is `REFERENT_NOT_FOUND` and never inapplicability.
+     */
     const response = await client().candidateDetail(DEMO, "demo-candidate-does-not-exist");
-    expect(response.availability).toBe("NOT_APPLICABLE");
-    expect(response.availability_reason).toBe("NOT_DEFINED_FOR_SUBJECT");
+    expect(response.availability).toBe("NOT_YET_AVAILABLE");
+    expect(response.availability_reason).toBe("REFERENT_NOT_FOUND");
     expect(response.payload).toBeUndefined();
     expect(response.entity_id).toContain("does-not-exist");
   });

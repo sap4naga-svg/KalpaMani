@@ -319,7 +319,8 @@ test.describe("candidate explainability", () => {
     await waitForPanels(page);
     const bodies = page.getByTestId("unavailable-body");
     await expect(bodies.first()).toBeVisible();
-    await expect(bodies.first()).toContainText("NOT_DEFINED_FOR_SUBJECT");
+    /* ADR-0030 R9: the journal holds no such candidate, which is an ABSENT RECORD. */
+    await expect(bodies.first()).toContainText("REFERENT_NOT_FOUND");
     /* And it is not some OTHER candidate served under this identity. */
     await expect(page.getByTestId("candidate-decision")).toHaveCount(0);
   });

@@ -1065,6 +1065,62 @@ provenance silently.
 
 ---
 
+#### 4.3.3 The scope a resolution requires, and where it comes from
+
+**A required scope the caller may name is not a required scope.** An implementation that takes
+the required scope as a parameter has taken the authorization input from the thing being
+authorized: a caller holding `market:read` can declare that a trade read requires `market:read`
+and be admitted. The accepted contract states the scope, so the accepted contract is where it
+comes from, and a declaration that contradicts it is **refused rather than honoured**.
+
+Two sources, in order of directness:
+
+```text
+§4.3's Resolution column   names the scope outright on the AUTHORIZED_READ rows
+§4.5's read-model lines    name the scope of the read model §4.3's "Resolves to" column
+                           points an ENDPOINT row at
+```
+
+| `ref_kind` | Required scope | Named by |
+|---|---|---|
+| `candidate`, `brain_decision` | `signals:read` | §4.5 `CandidateDetail` |
+| `trade` | `portfolio:read` | §4.5 `TradeDetail` |
+| `risk_decision` | `risk:read` | §4.3 |
+| `order`, `fill`, `protection`, `add`, `exit` | `execution:read` | §4.5 `TradeLifecycle` |
+| `reconciliation` | `execution:read` | §4.5 `ReconciliationStatus` |
+| `execution_quality` | `execution:read` | §4.5 `ExecutionQuality` |
+| `strategy_version`, `health_transition` | `strategy:read` | §4.5 `StrategyVersion`, `StrategyHealth` |
+| `research_run`, `registration`, `queue_item` | `research:read` | §4.5 |
+| `packet`, `decision` | `governance:read` | §4.5 `GovernancePacket`, `DecisionRecord` |
+| `audit_event` | `audit:read` | §4.3 |
+| `chart_series`, `benchmark_series` | `market:read` | §4.3 |
+| `regime_context` | `market:read` | §4.5 `MarketRegime` |
+| `data_quality`, `incident`, `alert` | `system:read` | §4.5 |
+| **`evidence`, `source_fact`** | **none is expressible** | see below |
+
+**`evidence` and `source_fact` name no scope, and that is a stated limitation rather than an
+omission.** Their §4.3 rows read *"`AUTHORIZED_READ` — the scope named on the reference"*, and
+§4.2 types `Ref` as `{ ref_id, ref_kind, resolution, classification }` — **there is no scope
+field on a reference to name one in**. Adding one is a specification act reserved to an ADR, so
+for those two kinds a caller-declared scope is the only available input and is used as such. A
+read for which neither the table nor the caller names a scope is **refused**, because nothing
+authorizes it.
+
+**`Ref.classification` labels the reference and authorizes nothing** (§4.3.1, R10). It is a
+producer-controlled claim, so it may **withhold** a target and may never **admit** one: what a
+caller is permitted to read is decided from the **located target's own classification**, and a
+reference and a target that disagree about classification are **refused** rather than resolved
+under whichever of the two is the permissive one.
+
+**A located target carries its own kind, its own identifier and its own labels, or it is not
+located.** Environment, provenance, classification and identity are checked against what the
+target carries; there is no shape in which absent metadata reads as a passed check. **A recorded
+tombstone is a located target and takes every one of those checks** — it is an `AuditEvent` that
+**names the entity it withdrew**, and a flag asserting that one exists establishes no
+relationship at all.
+
+---
+
 ### 4.4 The four risk quantities, kept apart
 
 **"Planned risk" was one word doing four jobs**, and the four are different facts with different

@@ -32,11 +32,16 @@ const DEMO = { ...DEFAULT_SCOPE, scenario: "demo" as const };
 const SESSIONS = bookSessions(Date.parse(ORIGIN));
 
 /** The resolving caller: full scope, and a classification it may read. */
+/*
+ * `initial_risk_ref` is kind `evidence`, whose 4.3 row names no scope of its own -- it reads
+ * "the scope named on the reference", and a `Ref` has no field to name one in. So this is the
+ * one shape where a caller-DECLARED scope is the available input, and it is declared here.
+ */
 const RESOLVING = {
   environment: "RESEARCH",
   provenance: "SYNTHETIC",
   heldScopes: ["signals:read", "risk:read"],
-  requiredScope: "risk:read",
+  declaredScope: "risk:read",
   readableClassifications: ["PUBLIC_SAFE"],
 } as const;
 
@@ -213,7 +218,8 @@ describe("the risk decision explains the size, and never the opportunity", () =>
         "RiskDecision.initial_risk_ref",
         decision!.initial_risk_ref,
         RESOLVING,
-        { producer: "IMPLEMENTED", found: false },
+        /* The producer exists for this scope, and it holds no such record to LOCATE. */
+        { producer: "IMPLEMENTED" },
       ),
     ).toEqual({
       status: "UNAVAILABLE",

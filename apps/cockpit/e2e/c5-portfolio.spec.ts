@@ -320,13 +320,14 @@ test.describe("the trade ledger and one trade's story", () => {
     await expect(alternative).toContainText("Pyramid add recorded");
   });
 
-  test("reports an unknown trade identity as inapplicable rather than as an error", async ({
+  test("reports an unknown trade identity as an absent record rather than as an error", async ({
     page,
   }) => {
     await page.goto(`/portfolio/trades/demo-trade-does-not-exist${DEMO}`);
     await waitForHydration(page);
+    /* ADR-0030 R9: an identifier that names nothing is an ABSENCE, never an inapplicability. */
     await expect(page.getByTestId("unavailable-body").first()).toContainText(
-      "NOT_DEFINED_FOR_SUBJECT",
+      "REFERENT_NOT_FOUND",
     );
   });
 });

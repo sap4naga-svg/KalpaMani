@@ -762,3 +762,69 @@ def test_the_adr_names_the_follow_up_this_cycle_implemented() -> None:
 def test_the_follow_up_requires_the_compatibility_constraints_to_be_rechecked() -> None:
     assert "re-check the four §6.1 deployment constraints" in ADR_FLAT
     assert "land contract, fixture and consumer changes in a SINGLE commit" in ADR_FLAT
+
+
+# ------------------------------------------------- the scope a resolution requires (4.3.3)
+
+
+#: Section 4.3's Resolution column names a scope outright on these rows, and only these.
+SCOPES_NAMED_IN_THE_TABLE: Final = {
+    "risk_decision": "risk:read",
+    "audit_event": "audit:read",
+    "chart_series": "market:read",
+    "benchmark_series": "market:read",
+}
+
+SCOPE_SECTION: Final = section(
+    CONTRACTS_TEXT,
+    "#### 4.3.3 The scope a resolution requires",
+    "### 4.4 The four risk quantities",
+)
+
+
+def test_the_specification_states_where_a_required_scope_comes_from() -> None:
+    """A required scope the caller may name is not a required scope."""
+    assert SCOPE_SECTION, "section 4.3.3 is absent"
+    flat = flatten(SCOPE_SECTION)
+    assert "A required scope the caller may name is not a required scope." in flat
+    assert "refused rather than honoured" in flat
+
+
+def test_the_scope_section_agrees_with_the_row_it_is_derived_from() -> None:
+    """Every scope section 4.3 names outright is the scope section 4.3.3 assigns."""
+    rows = section(CONTRACTS_TEXT, "### 4.3 Resolving a reference", "#### 4.3.1")
+    assert rows, "the section 4.3 table is absent"
+    flat = flatten(SCOPE_SECTION)
+    for kind, scope in SCOPES_NAMED_IN_THE_TABLE.items():
+        assert f"`{kind}`" in rows, kind
+        assert f"`{scope}`" in flat, (kind, scope)
+
+
+def test_the_two_kinds_whose_scope_is_inexpressible_say_so() -> None:
+    """Their rows name a scope a `Ref` has no field to carry, and that is stated, not guessed."""
+    flat = flatten(SCOPE_SECTION)
+    assert "`evidence`, `source_fact`" in flat or "**`evidence`, `source_fact`**" in flat
+    assert "none is expressible" in flat
+    assert "there is no scope field on a reference to name one in" in flat.lower()
+    assert "reserved to an ADR" in flat
+
+
+def test_a_reference_label_is_not_authorization() -> None:
+    """R10, restated where the access rule is: the label may withhold and may never admit."""
+    flat = flatten(SCOPE_SECTION)
+    assert "labels the reference and authorizes nothing" in flat
+    assert "located target's own classification" in flat
+    assert "disagree about classification are **refused**" in flat
+
+
+def test_a_located_target_carries_its_own_identity_and_a_tombstone_is_recorded() -> None:
+    """Absent metadata is never a passed check, and a flag is never a relationship."""
+    flat = flatten(SCOPE_SECTION)
+    assert "or it is not located" in flat
+    assert "there is no shape in which absent metadata reads as a passed check" in flat
+    assert "names the entity it withdrew" in flat
+
+
+def test_the_scope_section_would_notice_its_own_removal() -> None:
+    """A scanner that sees nothing passes every document vacuously."""
+    assert section(CONTRACTS_TEXT, "#### 4.3.3 A heading that is not there", "### 4.4") == ""

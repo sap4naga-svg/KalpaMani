@@ -122,13 +122,29 @@ function EvidenceDisclosure({
                 <span className="font-mono text-text-tertiary">{reference.ref_id}</span>
                 <Badge tone="unavailable">{reference.resolution}</Badge>
                 <Badge tone="neutral">{reference.classification}</Badge>
-                {destination !== null && (
+                {destination !== null ? (
                   <Link
                     href={withScope(destination.href, scope)}
                     className="text-accent underline underline-offset-2"
                   >
                     {destination.label} →
                   </Link>
+                ) : (
+                  /*
+                   * NO DESTINATION IS STATED, AND NOT LEFT BLANK.
+                   *
+                   * The R10 allowlist maps no route for this kind, and R10 is explicit that an
+                   * unmapped kind yields NO LINK -- "never a guess". Rendering nothing at all
+                   * left a reader unable to tell an evidence reference they COULD have followed
+                   * from one this version cannot resolve, so the absence is said out loud.
+                   */
+                  <span
+                    className="text-text-tertiary"
+                    data-testid="evidence-no-destination"
+                    title="No V1 destination is catalogued for this reference kind."
+                  >
+                    no V1 destination
+                  </span>
                 )}
               </li>
             );

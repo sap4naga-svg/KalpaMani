@@ -4207,17 +4207,44 @@ The bounded implementation cycle that closes `ref_kind`, compiles the per-kind r
 enforces `EMBEDDED` and cardinality and re-labels both trade references was **a separate
 authorization**, and it has since been given and used — the section that follows records it.
 
-### The ADR-0030 reference-contract implementation — CANDIDATE, and not merged
+### The ADR-0030 reference-contract implementation — INDEPENDENTLY REVIEWED AND CORRECTED
 
-**The reference contract is enforced in an OPEN PULL REQUEST. It is not merged, and merging it is a
-separate decision.** This section records what the candidate does; **it is neither independently
-reviewed nor accepted**, and nothing in it is authority for anything beyond itself.
+**The reference contract is enforced, and the enforcement was independently reviewed rather than
+declared.** This section records what the implementation does and what the review changed about it.
+**Its acceptance event is the merge of PR #79 into `main`**; while that pull request is open the
+implementation is a reviewed candidate and nothing here is authority for anything beyond itself.
+**No merge SHA and no merge timestamp is predicted here.**
 
 **It implements the bounded follow-up ADR-0030 §7 assigns, and nothing wider.** No Brain, scanner,
 strategy, portfolio, risk or execution engine; no production API, projection, database, migration or
 scheduler; no research execution, backtest or feedback automation; no deployment, real-source
 integration or infrastructure mutation; **no AWS, Terraform, provider, brokerage, LEAN or model
 call**; and **no C7 screen** — C7 remains **NOT STARTED**.
+
+#### What the independent review found, and corrected
+
+**Four material findings, each reproduced on the author's head before it was corrected.** None of
+them is a redesign of ADR-0030: each is the accepted decision being enforced where an ordinary read
+actually runs into it.
+
+| | |
+|---|---|
+| **the version matrix was decided by fixture bytes** | thirteen schemas bumped because their emitted example moved and six stayed at `v1` because theirs did not. The **envelope** narrowed for **all nineteen**, and two of the six changed in the payload as well — so the criterion was the sample rather than the contract. **All nineteen are `v2`**, and the test that enshrined the old criterion is replaced by one that checks the contract |
+| **the resolution path had no runtime caller** | `followReference` and `producerStateFor` were reached only from tests, which supplied `found: false` and asserted the answer they had just supplied. Meanwhile **the read a reader actually performs** — follow `downstream_refs.trade` to `/portfolio/trades/{ref_id}`, which calls `tradeDetail` — answered **`NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`** for an unknown identifier, which **R9 refuses in exactly that case**. The rule now lives once, in `targetAvailability`, and `tradeDetail`, `tradeLifecycle`, `candidateDetail` and `followReference` all reach it |
+| **absent metadata read as a passed check** | `TargetLabels` was optional, so a located target carrying none was `RESOLVED` without an environment or provenance check; a **tombstone returned `RESOLVED` before every check**, and was a bare boolean establishing no relationship to the entity it claimed to withdraw; and **neither the target's kind nor its identifier was ever compared** against the reference, so R8 was unenforced on the follow path. Labels, kind and identity are required now, a tombstone **names the entity it withdrew**, and a tombstone takes every check a located target takes |
+| **authorization came from a producer-controlled label** | the required scope was a **caller-supplied string**, so the authorization input came from the thing being authorized; and the read was authorized against **`Ref.classification`**, which §4.3.1 states *"labels the reference; it is not access or publication authorization"*. The scope now comes from the accepted §4.3 and §4.5 tables (§4.3.3), a contradicting declaration is refused, and the **located target's own classification** is what withholds it — a reference and a target that disagree are refused rather than resolved under the permissive one |
+
+**One finding is confirmed and is NOT correctable under accepted authority, so it is recorded
+rather than absorbed.** The attention evidence kinds were corrected — `AttentionItem.evidence_refs`
+is *"kind `evidence` or `source_fact`"* and was carrying `data_quality`, `health_transition` and
+`reconciliation` — and **that correction is right**. Its cost is real: the per-area drill-down and
+the per-area evidence filter collapse, because **only those two kinds may be carried and R10 keys
+the destination allowlist by `RefKind`**. Restoring a per-area destination needs a field the
+catalogue does not have, which is **a specification act reserved to an ADR**. What the review did
+instead is make the absence **visible**: a reference whose kind the allowlist maps to no route now
+says *no V1 destination* rather than rendering nothing, so a reader can tell an evidence reference
+they could have followed from one this version cannot resolve. **The narrowed drill-down is named
+as a limitation and a follow-up, and is not described as an unchanged capability.**
 
 #### What it enforces
 
@@ -4262,37 +4289,55 @@ checked rather than assumed, and the fourth does not hold.**
 | 4 — no real producer; provenance `SYNTHETIC` throughout | **DOES NOT HOLD** | `QualificationStatus` carries **`REPOSITORY_TRACKED`** provenance over real tracked governance facts, transcribed at a named commit and documented as *"REAL FACTS … NEVER relabelled `SYNTHETIC`"* |
 
 **So the follow-up bumped rather than proceeded**, which is what the accepted rule requires and not
-an exception invented to avoid one. **The bump is bounded, and which read models it covers was
-established mechanically**: every emitted payload was built from the pre-change tree and from this
-one and the two were diffed, so the affected set is an observation rather than a judgement.
+an exception invented to avoid one.
+
+**Which read models the bump covers was decided by the CONTRACT, and the first attempt decided it
+by the emitted fixture bytes.** Thirteen schemas were bumped because their emitted example changed
+and six were left at `v1` because theirs did not. **An unchanged example is not an unchanged
+contract**, and the independent review established that the six were affected too:
+
+| | |
+|---|---|
+| **the envelope narrowed, for every read model** | `envelopeFields.source_refs` moved from an open `refList` to `refListFieldOf("Envelope.source_refs")`, which closes `ref_kind` to `source_fact` and checks `items`, `total` and `truncated` against the list's own cardinality. **Every read model carries the envelope**, so every one of the nineteen now rejects envelopes it accepted before |
+| **two of the six changed in the payload as well** | `PerformanceSeries.benchmark_refs` became `refListFieldOf(...)`, and `MissedOpportunity.candidate_ref` became `refOf(...)` beside a **new** optional `trade_ref`. Their emitted samples happened not to move; their contracts did |
+| **the widened reason vocabulary reaches all of them** | `REFERENT_NOT_FOUND` was added to `FieldReasonCode`, which §6.1 itself records as a widening *"an older validator compiled against the previous closed set REJECTS"* |
+
+**So the affected set is all nineteen, and the matrix says so.** A sample is evidence about a
+sample; the accepted/rejected value set is the contract.
 
 ```text
-bumped to v2, payload bytes changed   13   AttentionItem · CandidateDetail · CandidateSummary
-                                           ExecutiveOverview · ExposureAggregate · PositionSnapshot
-                                           RiskSnapshot · ShortSideSnapshot · StrategyPerformance
-                                           TradeDetail · TradeLifecycle · TradeSummary
-                                           WhatChangedEntry
-left at v1, payload byte-identical     6   CandidateFunnel · MarketRegime · MissedOpportunity
-                                           PerformanceSeries · PerformanceSummary
-                                           QualificationStatus
+bumped to v2, contract narrowed or widened   19   ALL read models
+  directly, in the payload                   15   AttentionItem · CandidateDetail
+                                                  CandidateSummary · ExecutiveOverview
+                                                  ExposureAggregate · MissedOpportunity
+                                                  PerformanceSeries · PositionSnapshot
+                                                  RiskSnapshot · ShortSideSnapshot
+                                                  StrategyPerformance · TradeDetail
+                                                  TradeLifecycle · TradeSummary
+                                                  WhatChangedEntry
+  through the shared envelope only            4   CandidateFunnel · MarketRegime
+                                                  PerformanceSummary · QualificationStatus
+left at v1                                    0
 ```
 
 **A payload carrying a superseded version is rejected rather than coerced**, which the suite
-asserts through the real admission path.
+asserts through the real admission path — including for `MarketRegime`, one of the six the first
+attempt would have left at `v1`.
 
 #### What it does not do
 
 ```text
 ADR-0030:                                         ACCEPTED / IN FORCE
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
-reference-contract implementation:                CANDIDATE / OPEN PULL REQUEST
-independent review:                               NOT PERFORMED
-merge:                                            NOT AUTHORIZED / NOT PERFORMED
+reference-contract implementation:                REVIEWED AND CORRECTED / PR #79
+independent review:                               PERFORMED -- 4 findings corrected, 1 recorded
+merge:                                            THE ACCEPTANCE EVENT FOR THIS SECTION
 ref_kind in the application:                      CLOSED AT TWENTY-SEVEN MEMBERS
 both trade references:                            RE-LABELLED kind trade
 authorized embed carriers:                        SEVEN, EACH NAMED IN 4.3.2
 withdrawn embed declarations:                     FOUR
-schema_version bumped:                            13 OF 19, BY MEASURED PAYLOAD CHANGE
+schema_version bumped:                            19 OF 19, BY CONTRACT CHANGE
+attention per-area drill-down and filter:         NARROWED -- recorded limitation, ADR-level fix
 new src/kalpamani modules:                        NONE
 dependency or manifest changes:                   NONE
 Blueprint PDF changes:                            NONE

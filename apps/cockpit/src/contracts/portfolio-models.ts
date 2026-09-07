@@ -221,7 +221,7 @@ export const performanceSummaryPayload = z
   });
 export type PerformanceSummaryPayload = z.infer<typeof performanceSummaryPayload>;
 
-export const PERFORMANCE_SUMMARY_SCHEMA = "cockpit.performance_summary.v1";
+export const PERFORMANCE_SUMMARY_SCHEMA = "cockpit.performance_summary.v2";
 export const performanceSummaryEnvelope = envelope(
   performanceSummaryPayload,
   PERFORMANCE_SUMMARY_SCHEMA,

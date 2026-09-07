@@ -121,14 +121,23 @@ describe("C5 admission", () => {
     }
   });
 
-  it("reports an unknown trade identity as inapplicable, never as an error", async () => {
+  /*
+   * AN UNKNOWN IDENTITY IS AN ABSENT RECORD, AND IT USED TO BE CALLED INAPPLICABLE.
+   *
+   * This asserted `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`. ADR-0030 R9 refuses that
+   * reading outright -- "a reference whose identifier names nothing is exactly we do not
+   * have it -- the question still applies, and the target is absent" -- and ADR-0028 reserves
+   * `NOT_APPLICABLE` for a property of the subject or of the arithmetic. The ledger was
+   * searched by a producer that exists for this scope and held no such trade.
+   */
+  it("reports an unknown trade identity as an absent record, never as an error", async () => {
     const read = client();
     for (const response of [
       await read.tradeDetail(DEMO, "demo-trade-does-not-exist"),
       await read.tradeLifecycle(DEMO, "demo-trade-does-not-exist"),
     ]) {
-      expect(response.availability).toBe("NOT_APPLICABLE");
-      expect(response.availability_reason).toBe("NOT_DEFINED_FOR_SUBJECT");
+      expect(response.availability).toBe("NOT_YET_AVAILABLE");
+      expect(response.availability_reason).toBe("REFERENT_NOT_FOUND");
       expect(response.payload).toBeUndefined();
     }
   });
