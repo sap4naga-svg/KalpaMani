@@ -13190,7 +13190,7 @@ ADR_0031_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "ADR-0030: ACCEPTED / IN FORCE, AMENDED AT R10 ONLY",
     "owning-area navigation: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "the reference-enforcement pull request: OPEN / UNMERGED / PR #79",
-    "independent review of the implementation: REQUIRED / NOT PERFORMED",
+    "independent review of the implementation: PERFORMED",
     "per-area attention links: RESTORED IN AN OPEN PULL REQUEST",
     "evidence kinds changed to obtain a link: NONE",
     "the section-numbering integration: 4.3.2 / 4.3.3 / 4.3.4 INTEGRATED",
@@ -13204,13 +13204,41 @@ ADR_0031_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
 )
 
-#: Claims no status document may make while the implementation is unmerged and unreviewed.
+#: Claims no status document may make. The implementation is unmerged, and the
+#: independent review its follow-up requires HAS been performed -- so both the
+#: over-claim (merged, complete) and the stale under-claim (not performed) are refused,
+#: because a status document that says a review is outstanding after one was carried out
+#: sends the next session to do it again.
 ADR_0031_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the reference-enforcement pull request: MERGED",
     "per-area attention links: MERGED",
+    "independent review of the implementation: REQUIRED / NOT PERFORMED",
     "independent review of the implementation: COMPLETE",
     "a general evidence retrieval endpoint: CREATED",
     "a reference-carried scope expression: CREATED",
+)
+
+#: ADR-0030 was ACCEPTED on the merge of PR #78, BEFORE ADR-0031 was. The guard below is the
+#: one this audit did not have when the two status documents drifted apart over it: CLAUDE.md
+#: was corrected to ACCEPTED / IN FORCE and README.md was left saying PROPOSED and "nothing is
+#: implemented by it" -- four statements this repository's own tree falsifies. A parity check
+#: exists for ADR-0031 and did not exist for ADR-0030, which is exactly why only one of the
+#: two divergences was caught.
+ADR_0030_HEADING: Final = (
+    "### The reference-contract reconciliation, and ADR-0030 — ACCEPTED / IN FORCE"
+)
+
+#: Read with ``**`` stripped, so emphasis is not part of the contract.
+ADR_0030_STATUS_REQUIRED: Final[tuple[str, ...]] = (
+    "ADR-0030: ACCEPTED / IN FORCE",
+    "PR #78 merged",
+)
+
+#: Claims no status document may make now that ADR-0030 is accepted and enforced.
+ADR_0030_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "ADR-0030 is PROPOSED and carries no authority",
+    "ref_kind is still an open string",
+    "the per-kind resolution sets are still unenforced",
 )
 
 #: The conditional-authority sentence every amended specification must carry.
@@ -24148,6 +24176,46 @@ def main() -> int:
             "every specification ADR-0031 amends carries its conditional authority",
             not unconditional,
             ", ".join(unconditional),
+        )
+
+        # -- ADR-0030: accepted, and both status documents must say so ---------
+        #
+        # The failure this guards has already happened once: one status document
+        # updated to ACCEPTED / IN FORCE and the other left reading PROPOSED with a
+        # "nothing is implemented by it" paragraph the tree falsifies. An accepted
+        # decision that one document still calls a proposal is worse than either
+        # answer alone, because a reader cannot tell which document is stale.
+        stale_30 = [label for label, text in status_documents if ADR_0030_HEADING not in text]
+        f.check(
+            "both status documents carry the ADR-0030 accepted status section",
+            not stale_30,
+            ", ".join(stale_30),
+        )
+        divergent_30 = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in ADR_0030_STATUS_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record ADR-0030 accepted on the merge of PR #78",
+            not divergent_30,
+            ", ".join(divergent_30),
+        )
+        underclaiming_30 = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in ADR_0030_STATUS_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document still calls ADR-0030 proposed or unenforced",
+            not underclaiming_30,
+            "; ".join(underclaiming_30),
         )
 
     # ---------------------------------------------------------------- verdict

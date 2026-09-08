@@ -3482,17 +3482,28 @@ live trading:                                     HARD-DISABLED
 **A corrected specification is still a specification.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
 
-### The reference-contract reconciliation, and ADR-0030 — PROPOSED, and nothing is implemented
+### The reference-contract reconciliation, and ADR-0030 — ACCEPTED / IN FORCE
 
 **The C6 review found the reference contract unenforced. Investigating it found the accepted
-contract unenforceable as written.** Those are two different findings, and the second is why this is
-a proposed amendment rather than a bug fix.
+contract unenforceable as written.** Those are two different findings, and the second is why this
+was an amendment rather than a bug fix.
 
-[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) is
-**PROPOSED and carries no authority while the pull request introducing it is open**, and so are the
-corrections it makes to [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) in the
-same pull request. It **amends and supersedes no ADR document**; **ADR-0027, ADR-0028 and ADR-0029
-each remain ACCEPTED / IN FORCE**.
+**[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md):
+ACCEPTED / IN FORCE** — **PR #78 merged**, merge commit
+**`77a59e3f90e24f8509fa3ec36aef255150f081c6`**, merged **2026-09-07T19:53:49Z**. Its conditional
+acceptance event has occurred, so it is **no longer proposed**, and the corrections it made to
+[`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) are in force with it.
+
+**While PR #78 was open, ADR-0030 was proposed and carried no authority** — a historical fact about
+those days that stays true and is **not** rewritten as though the decision had authority before it
+was accepted. **ADR-0030's own document is unedited** and still carries the conditional line it was
+authored with, which is this repository's convention for a decision's own text. It **amends and
+supersedes no ADR document**; **ADR-0027, ADR-0028 and ADR-0029 each remain ACCEPTED / IN FORCE**.
+
+**Its §7 bounded implementation follow-up has since been built and independently reviewed under a
+later, separate written authorization, and is carried by the open reference-enforcement pull
+request** — see *The accepted owning-area navigation, and its implementation* below, which governs
+the current state of both this decision's implementation and ADR-0031's.
 
 **Five findings, each parsed out of the accepted text and executed.** **Twenty-five**
 reference-valued fields in the accepted catalogue carry **no kind at all** — nineteen scalar `Ref`
@@ -3526,12 +3537,22 @@ the application already uses, and forbids free-form and external URLs.
 referent is *we do not have it* rather than an inapplicability. **No accepted guard was relaxed to
 fit this proposal's prose.**
 
-**Nothing is implemented by it.** `ref_kind` is **still an open string**, the per-kind resolution
-sets are **still unenforced**, `downstream_refs.trade` and `initial_planned_risk_open[].trade_ref` are
-**still emitted as kind `source_fact`**, no module, fixture or `schema_version` changed, and the bounded implementation cycle that would close
-each of those is **a separate authorization that has not been given**. **C7 remains NOT STARTED**,
-the **C5 completion follow-up remains pending**, **G1 and G2 stay OPEN**, no provider is selected,
-Phase 3 is **NOT COMPLETE**, CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
+**Accepting a decision implements nothing, and the implementation is a separate gate that was
+opened separately.** On the day ADR-0030 was accepted `ref_kind` was still an open string, the
+per-kind resolution sets were still unenforced, and both `downstream_refs.trade` and
+`initial_planned_risk_open[].trade_ref` were still emitted as kind `source_fact` — a true record of
+those days, and no longer the state of the tree. The bounded cycle that closes each of them has
+since been separately authorized, built and independently reviewed, and it is **carried by the open
+reference-enforcement pull request**: `ref_kind` is closed at the twenty-seven members, the per-kind
+resolution sets are compiled and enforced, both trade references are re-labelled kind `trade`,
+`EMBEDDED` is gated on catalogue permission **and** validated truth, `REFERENT_NOT_FOUND` lands on
+the value-bearing field an ordinary read actually reaches, and all nineteen read models carry one
+`v2` identity for the combined change. **Merging that pull request is a third gate again**, and the
+section below records it rather than this one.
+
+**C7 remains NOT STARTED**, the **C5 completion follow-up remains pending**, **full Cockpit V1
+remains INCOMPLETE**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is **NOT COMPLETE**,
+CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
 
 ### The owning-area navigation amendment, and ADR-0031 — PROPOSED, and nothing is implemented
 
@@ -3733,7 +3754,7 @@ ADR-0030:                                         ACCEPTED / IN FORCE, AMENDED A
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
 owning-area navigation:                           IMPLEMENTED IN AN OPEN PULL REQUEST
 the reference-enforcement pull request:           OPEN / UNMERGED / PR #79
-independent review of the implementation:         REQUIRED / NOT PERFORMED
+independent review of the implementation:         PERFORMED
 Ref.owning_area in the application:               EXISTS / OPTIONAL / CLOSED AT SEVEN
 per-area attention links:                         RESTORED IN AN OPEN PULL REQUEST
 evidence kinds changed to obtain a link:          NONE

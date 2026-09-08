@@ -4258,6 +4258,16 @@ from the kinds present, so a category with no rows had no chip and a reader coul
 both `evidence` and `source_fact` remain selectable and a chip that selects zero rows is a true
 answer.
 
+> **HISTORICAL — the state before ADR-0031 was accepted, superseded by *The accepted
+> owning-area navigation, and its implementation*.** The contract conflict recorded below was
+> real on the days it was written, and it is not rewritten as though it had never held.
+> **ADR-0031 has since resolved it by deciding exactly the second closed, contract-declared
+> attribute the second of its three options names**, so every per-area-drill-down and merge
+> line from here to the end of this section — the `attention per-area drill-down: LOST` and
+> `merge: WITHHELD` rows included — records those days and **no longer governs**. The
+> `4.3.2` this section cites for the carrier catalogue is **§4.3.3** after the integration.
+> Its forward authorization boundaries are unchanged.
+
 **What the review could NOT restore, and why it is a contract conflict.** The **per-area**
 drill-down is gone: these disclosures reached `/system/data-quality`, `/strategy/health` and
 `/execution/reconciliation` **through `ref_kind` values §4.5 does not permit on this field**.
@@ -4605,7 +4615,7 @@ ADR-0030:                                         ACCEPTED / IN FORCE, AMENDED A
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
 owning-area navigation:                           IMPLEMENTED IN AN OPEN PULL REQUEST
 the reference-enforcement pull request:           OPEN / UNMERGED / PR #79
-independent review of the implementation:         REQUIRED / NOT PERFORMED
+independent review of the implementation:         PERFORMED
 Ref.owning_area in the application:               EXISTS / OPTIONAL / CLOSED AT SEVEN
 per-area attention links:                         RESTORED IN AN OPEN PULL REQUEST
 evidence kinds changed to obtain a link:          NONE
