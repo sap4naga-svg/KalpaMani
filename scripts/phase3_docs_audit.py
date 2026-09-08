@@ -13166,6 +13166,46 @@ COCKPIT_FEEDBACK: Final = COCKPIT_DIR / "feedback-self-maturation-specification.
 COCKPIT_UIUX: Final = COCKPIT_DIR / "ui-ux-specification.md"
 COCKPIT_MATRIX: Final = COCKPIT_DIR / "traceability-matrix.md"
 
+#: ADR-0031 proposes the owning-area navigation attribute. It is PROPOSED, so the audit's
+#: job is to hold it there: the decision must not read as accepted, the status documents
+#: must agree with each other, and every specification delta must carry the same
+#: conditional authority the decision does.
+ADR_0031: Final = DECISIONS / "ADR-0031-reference-owning-area-navigation.md"
+
+#: The exact section heading both status documents must carry, byte for byte.
+ADR_0031_HEADING: Final = (
+    "### The owning-area navigation amendment, and ADR-0031 — PROPOSED, and nothing is implemented"
+)
+
+#: Statements both status documents must make, read with ``**`` stripped so emphasis is
+#: not part of the contract. They record the proposal's status AND the status of the
+#: accepted decision it amends, because a reader who sees only one of the two is misled.
+ADR_0031_STATUS_REQUIRED: Final[tuple[str, ...]] = (
+    "ADR-0031: PROPOSED / NOT IN FORCE",
+    "ADR-0030: ACCEPTED / IN FORCE, AMENDED AT R10 ONLY",
+    "owning-area navigation: NOT IMPLEMENTED / PENDING ACCEPTANCE",
+    "Ref.owning_area in the application: DOES NOT EXIST",
+    "the reference-enforcement pull request: OPEN / UNMERGED / NOT EDITED",
+    "full Cockpit V1: INCOMPLETE",
+    "C7 research and feedback interfaces: NOT STARTED",
+    "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
+    "frontend source or behaviour changed: NONE",
+    "schema_version bumped: NONE",
+)
+
+#: Claims no status document may make while the proposal is open.
+ADR_0031_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "ADR-0031: ACCEPTED",
+    "ADR-0031 is ACCEPTED / IN FORCE",
+    "owning-area navigation: IMPLEMENTED",
+    "per-area attention links: RESTORED",
+)
+
+#: The conditional-authority sentence every amended specification must carry.
+ADR_0031_CONDITIONAL: Final = (
+    "ADR-0031 is PROPOSED and carries no authority while the pull request introducing it is open"
+)
+
 #: ADR-0028 corrects four clauses of the accepted package: the field-level contracts, the
 #: out-of-sample reuse rule, the licensed-data admission boundary and the single "planned
 #: risk" phrase. It is a separate decision, and the documents it amends must name it.
@@ -24007,6 +24047,94 @@ def main() -> int:
                 not leaks,
                 "; ".join(leaks),
             )
+
+        # -- ADR-0031: owning-area navigation, PROPOSED ------------------------
+        #
+        # The failure this guards is one merged main has carried before: one status
+        # document updated and the other left stale, or a proposal read as accepted
+        # because a later editor read the heading and not the status line. Both status
+        # documents are checked for the same statements, and every specification the
+        # decision amends is checked for the SAME conditional authority the decision
+        # itself carries -- a delta in force ahead of its ADR is the defect.
+        f.check(
+            "ADR-0031 exists at its exact path",
+            ADR_0031.is_file(),
+            str(ADR_0031.relative_to(REPO_ROOT)),
+        )
+        if ADR_0031.is_file():
+            adr_31_raw = read(ADR_0031)
+            adr_31_flat = " ".join(adr_31_raw.replace("**", "").split())
+            f.check(
+                "ADR-0031 declares itself proposed and predicts no merge",
+                "Status: PROPOSED — NOT IN FORCE." in adr_31_flat
+                and "No merge SHA and no merge timestamp is predicted here" in adr_31_flat,
+                "a proposal that predicts its own acceptance has decided its own review",
+            )
+            f.check(
+                "ADR-0031 amends ADR-0030 at R10 only and edits no ADR document",
+                "It amends no other rule of ADR-0030" in adr_31_flat
+                and "does not amend, supersede or edit ADR-0026, ADR-0027, ADR-0028 or ADR-0029"
+                in adr_31_flat,
+                "a narrow amendment that quietly widens is not narrow",
+            )
+            f.check(
+                "ADR-0031 names the evidence-retrieval limitation it does NOT repair",
+                "no general destination at which an evidence artefact can be retrieved"
+                in adr_31_flat
+                and "a reference-carried scope is not expressible" in adr_31_flat
+                and "Working area links are not a repair of either" in adr_31_flat,
+                "working area links are not a repaired retrieval surface",
+            )
+            f.check(
+                "ADR-0031 asserts no schema_version value and predicts no bump",
+                re.search(r"cockpit\.[a-z_]+\.v\d", adr_31_raw) is None
+                and "no version value is predicted here" in adr_31_flat,
+                "the version decision is read from the tree, never from this document",
+            )
+
+        status_documents = (("README.md", readme_text), ("CLAUDE.md", claude_text))
+        stale = [label for label, text in status_documents if ADR_0031_HEADING not in text]
+        f.check(
+            "both status documents carry the ADR-0031 status section",
+            not stale,
+            ", ".join(stale),
+        )
+        divergent = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in ADR_0031_STATUS_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record ADR-0031 proposed and ADR-0030 accepted",
+            not divergent,
+            ", ".join(divergent),
+        )
+        overclaiming = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in ADR_0031_STATUS_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document records ADR-0031 as accepted or implemented",
+            not overclaiming,
+            "; ".join(overclaiming),
+        )
+        unconditional = sorted(
+            label
+            for label, flat in cockpit_flat.items()
+            if "ADR-0031" in flat and ADR_0031_CONDITIONAL not in flat
+        )
+        f.check(
+            "every specification ADR-0031 amends carries its conditional authority",
+            not unconditional,
+            ", ".join(unconditional),
+        )
 
     # ---------------------------------------------------------------- verdict
     print(f"\n{f.checks_run} checks run.")

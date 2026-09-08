@@ -14,6 +14,9 @@ file, route or screenshot exists because this document describes one.
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
 — §5 and a new §9.4. ADR-0028 is **PROPOSED and carries no authority while the pull request
 introducing it, PR #72, is open**.
+**Further amended by** [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) — §3's
+drill-down paths and §6. ADR-0031 is **PROPOSED and carries no authority while the pull request
+introducing it is open**.
 
 ---
 
@@ -129,6 +132,15 @@ Candidate             -> explainability -> evidence -> lineage -> audit events
 Trade                 -> Trade Detail -> lifecycle -> execution mechanics -> audit events
 Research run          -> its registration -> its trial budget -> its governance packet
 ```
+
+**Two navigation affordances on a reference, and they are never merged — ADR-0031.** *Open the
+referenced record* is keyed by the reference's kind. *Go to the area responsible for this item* is
+keyed by the reference's declared `owning_area` (`read-model-contracts.md` §4.3.2), and it is
+**contextual navigation, never a claim that the reference was resolved, opened or retrieved**. An
+area control **names the area** — *"Data quality area"* — and **may never be labelled "view
+evidence", or anything else that asserts retrieval**. A reference declaring no area gets **no area
+control**, and that absence is **not** a statement that no area owns the record. **A reference is
+never relabelled with a different kind to obtain a link.**
 
 ---
 
@@ -264,6 +276,17 @@ evidence           the recommended permitted governance action
 **Ranked by materiality and severity, and deduplicated against the alert feed.** A recommended
 action is always a **permitted governance action** and never an execution instruction — and the
 Cockpit performs none of them.
+
+**An item is a projection over several areas, so its evidence references may point at different
+areas, and each keeps its own — ADR-0031.** A data-quality finding, a health transition, a
+reconciliation break and a borrow record each reach **their own** area through the reference's
+declared `owning_area`; **none of them is routed to the Audit Trail because no better destination
+was catalogued.** A destination whose screen is not built yet renders **visibly not yet
+implemented**, and following it **asserts nothing about whether the producing subsystem exists**.
+**The evidence-kind filter is unchanged**, its categories come from the kinds the contract declares
+for the field rather than from the rows present, and a category selecting **zero rows is a true
+answer**. **Neither the area nor its link is evidence of completeness, freshness, materiality or
+authorization.**
 
 ---
 

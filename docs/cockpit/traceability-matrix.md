@@ -15,6 +15,9 @@ dependencies and its authorizations exist.
 **Amended by** [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — the acceptance criteria of Areas 1, 3, 12,
 15, 18, 24, 31, 33 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request
 introducing it, PR #72, is open**.
+**Further amended by** [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) — the
+acceptance criteria of Area 28. ADR-0031 is **PROPOSED and carries no authority while the pull
+request introducing it is open**.
 
 ---
 
@@ -95,7 +98,7 @@ introducing it, PR #72, is open**.
 | 25 | Environment / Deployment Maturity | **full** | strategy governance records — **NOT IMPLEMENTED** | **C4** | selecting an environment advances no maturity; the stage-to-lifecycle mapping matches the extension exactly; Shadow shows no order authority |
 | 26 | Audit Trail | **full** | platform events — **NOT IMPLEMENTED** | **C8** | the projection is rebuildable and separately identified from source events; no licensed content appears in an audit payload; deletion renders as a tombstone with governance intact |
 | 27 | Alerts / Exceptions | **full** | platform alerts — **NOT IMPLEMENTED** | **C8** | one condition produces one alert with an occurrence count; **no external notification integration exists** |
-| 28 | Executive Attention Required | **full**, governance items real | contributing subsystems | **C4** | every item shows what happened, why it matters, impact, evidence and a permitted governance action; ranked and deduplicated against alerts |
+| 28 | Executive Attention Required | **full**, governance items real | contributing subsystems | **C4** | every item shows what happened, why it matters, impact, evidence and a permitted governance action; ranked and deduplicated against alerts; **each evidence reference reaches the area that owns it through its own declared `owning_area`, never through a relabelled kind and never defaulted to the Audit Trail**; **an area control is contextual navigation and never claims the evidence was resolved or retrieved**; **an unbuilt destination renders visibly not yet implemented**; **a reference declaring no area gets no area control, and that absence claims nothing** |
 | 29 | Executive / Operator Modes | **full** | none — presentation | **C3** | both modes read the same read models; switching preserves filters, scoping and drill-down context |
 | 30 | Global Command Palette | **full** | entities follow their own areas | **C3** foundation, **C9** full | opens from every route; **no state-changing verb exists**; results respect environment and source scoping |
 | 31 | Ask KalpaMani | **demonstration only** | authorized read models — **NOT IMPLEMENTED** | **C9** | no arbitrary SQL or code; no mutation; no broker vocabulary; **no licensed-derived payload leaves for an external model**, while a licensed-derived read model stays legitimate inside the private boundary; every answer carries at least one citation; abstains when data is missing |

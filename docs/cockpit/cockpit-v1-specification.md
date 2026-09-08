@@ -26,6 +26,7 @@ figure, chart and statistic described below is a **shape a screen would take**, 
 | **Governed by** | Blueprint V3.0, then approved ADRs, then `CLAUDE.md`, then the approved task specification |
 | **Introduced by** | [ADR-0027](../decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) |
 | **Amended by** | [ADR-0028](../decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Areas 1, 3, 12, 24, 31 and 36. ADR-0028 is **PROPOSED and carries no authority while the pull request introducing it, PR #72, is open** |
+| **Further amended by** | [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) — Area 28. ADR-0031 is **PROPOSED and carries no authority while the pull request introducing it is open** |
 | **Architecture** | [`COCKPIT_FEEDBACK_EXTENSION.md`](../architecture/COCKPIT_FEEDBACK_EXTENSION.md) |
 | **Contracts** | [`read-model-contracts.md`](read-model-contracts.md) |
 | **Feedback** | [`feedback-self-maturation-specification.md`](feedback-self-maturation-specification.md) |
@@ -740,7 +741,12 @@ governance.
 **Boundaries.** **Ranked by materiality and severity, and deduplicated against the alert feed** — an
 attention list that repeats every alert is a second alert list. **A recommended action is always a
 permitted governance action**, never an execution instruction, and the Cockpit performs none of
-them.
+them. **The drill-down reaches the area that owns each reference through the reference's own
+declared `owning_area`** (`read-model-contracts.md` §4.3.2) — **never by relabelling the reference's
+kind, and never defaulted to the Audit Trail because nothing better was catalogued.** **An area
+control is contextual navigation and never a claim that the evidence was resolved, retrieved or
+authorized**; a destination whose screen is not built yet stays **visibly not yet implemented**; and
+a reference declaring no area gets **no area control**, which claims nothing either way.
 
 **V1 availability.** `SYNTHETIC` demonstration, with the governance-derived items `AVAILABLE` from
 tracked authority.

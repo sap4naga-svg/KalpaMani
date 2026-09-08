@@ -3533,6 +3533,108 @@ each of those is **a separate authorization that has not been given**. **C7 rema
 the **C5 completion follow-up remains pending**, **G1 and G2 stay OPEN**, no provider is selected,
 Phase 3 is **NOT COMPLETE**, CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
 
+### The owning-area navigation amendment, and ADR-0031 — PROPOSED, and nothing is implemented
+
+**Enforcing an accepted contract removed a user-visible affordance another accepted contract
+requires.** Both halves are correct, which is why this is a proposed amendment rather than a bug
+fix.
+
+**ADR-0030's conditional acceptance event has occurred**, on the merge of PR #78, so **ADR-0030 is
+ACCEPTED / IN FORCE for its existing contracts** and this line supersedes the `PROPOSED / NOT IN
+FORCE` status recorded in the section above, which is the pre-merge text merged with that pull
+request. **While PR #78 was open ADR-0030 was proposed and carried no authority** — a historical
+fact about those days that stays true and is not rewritten. **ADR-0031 amends ADR-0030 at R10 only**,
+and **no ADR document is edited by it**.
+
+[ADR-0031](docs/decisions/ADR-0031-reference-owning-area-navigation.md) is **PROPOSED and carries no
+authority while the pull request introducing it is open**, and so are the deltas it makes to
+[`read-model-contracts.md`](docs/cockpit/read-model-contracts.md),
+[`cockpit-v1-specification.md`](docs/cockpit/cockpit-v1-specification.md),
+[`ui-ux-specification.md`](docs/cockpit/ui-ux-specification.md) and
+[`traceability-matrix.md`](docs/cockpit/traceability-matrix.md) in the same pull request. On
+independent review and merge it becomes **ACCEPTED / IN FORCE** as **architecture, contracts and
+governance** — and nothing else.
+
+**The conflict, in four accepted clauses that cannot all hold at once.** §4.5 declares
+`AttentionItem.evidence_refs` *"kind `evidence` or `source_fact`"*, a set of exactly two. ADR-0030
+R10 keys navigation by `RefKind` and yields **no link** for an unmapped kind, *"never a guess"*. The
+matrix requires of area 28 that every item show its **evidence**, and the drill-down path is
+*"Attention item → its evidence → the record that produced it"*. And §4.3 gives `evidence` **no
+catalogued destination**: §5 catalogues no evidence endpoint, and a `Ref` has no field in which the
+*"scope named on the reference"* can be named.
+
+**Before enforcement the application obtained per-area links by mislabelling the kind** — emitting
+`data_quality`, `health_transition`, `reconciliation`, `incident` and `alert` on a field that
+permits neither — and correcting the producer is what costs the affordance. Every attention
+reference then has one route, `source_fact` → `/governance/audit`, so a data-quality finding, a
+health transition, a reconciliation break and a borrow record all offer one link, to the Audit
+Trail. **An Audit page does not own every fact**, and a screen that says so is worse than one that
+says nothing.
+
+**What it decides.** One optional field, **`Ref.owning_area`**, carried **inside** the reference, so
+association is by containment and never by array position, display text, an identifier prefix or a
+runtime route search; **at most one per reference**, none where authority determines none, and a
+same-`ref_id`-and-kind pair declaring different areas **refused at admission**; a **closed
+seven-member `OwningArea` vocabulary**, each member bound to exactly one internal **area landing
+route**, with `SHORT_SIDE` resolving the borrow case from the matrix's own area-13 ownership and
+**`AUDIT_TRAIL` never a default**; **ADR-0030 R10 narrowly amended** so the Cockpit has exactly two
+closed navigation attributes — target navigation keyed by `RefKind`, unchanged, and owning-area
+navigation keyed by `owning_area` — **kept apart, neither a fallback for the other, and labelled
+differently**, because a control that says *view evidence* and lands on an area page has claimed a
+retrieval it did not perform; **four availability states** where **absent is not a claim that no
+area owns the record**, **withheld is indistinguishable from absent** because a `Ref` carries no
+reason, and **invalid is refused at admission**; an unbuilt destination staying **visibly not yet
+implemented**; **evidence-kind filters unchanged** and computed from the contract rather than the
+sample, so a zero-result category is a true answer; and the metadata being **descriptive, never an
+access grant** — it authorizes no retrieval, reveals no withheld identifier and bypasses no
+destination scope check.
+
+**It repairs no evidence-retrieval gap, and says so.** **§5 still catalogues no evidence endpoint**
+and **a reference-carried scope is still not expressible**. Working area links are not a repair of
+either, and closing them is a separate decision.
+
+```text
+ADR-0031:                                         PROPOSED / NOT IN FORCE
+ADR-0030:                                         ACCEPTED / IN FORCE, AMENDED AT R10 ONLY
+ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
+owning-area navigation:                           NOT IMPLEMENTED / PENDING ACCEPTANCE
+Ref.owning_area in the application:               DOES NOT EXIST
+per-area attention links:                         STILL ABSENT / PENDING IMPLEMENTATION
+the reference-enforcement pull request:           OPEN / UNMERGED / NOT EDITED
+new src/ or apps/cockpit/src/ modules:            NONE
+routes, fixtures or dependencies added:           NONE
+runtime behaviour changed:                        NONE
+schema_version bumped:                            NONE
+frontend source or behaviour changed:             NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+C7 research and feedback interfaces:              NOT STARTED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A proposed amendment is not a restored affordance.** The bounded implementation cycle that would
+add the field, compile the route allowlist, restore the per-area links without changing any evidence
+kind, and replace the known-narrowing regression with positive and negative behavioural tests is **a
+separate authorization that has not been given**.
+
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 
 **One owner-approved human operator now holds the governed qualification access, both governed AWS

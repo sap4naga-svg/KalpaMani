@@ -476,7 +476,20 @@ def test_referent_not_found_is_in_the_closed_error_vocabulary() -> None:
 
 
 def test_a_bare_reference_carries_no_availability_so_the_state_lands_elsewhere() -> None:
-    """R9: ``Ref`` is ``{ref_id, ref_kind, resolution, classification}`` and has no state field."""
+    """R9: a ``Ref`` carries no state field, and the enumeration below stays EXACT.
+
+    THE SET GAINED ONE MEMBER, AND THE PROPERTY UNDER TEST DID NOT.
+
+    ``owning_area`` is the optional closed field ADR-0031 proposes (§4.3.2) — descriptive
+    navigation metadata, and **not** availability, **not** a reason and **not** an access
+    grant. **R9 is unchanged and is still asserted directly**: the two named state fields are
+    refused above, by name, and this enumeration stays an equality rather than a subset check,
+    so a *sixth* field still fails here. Relaxing it to ``>=`` would be weakening the guard;
+    admitting the one field an amendment adds is following the contract it guards.
+
+    ADR-0031 is PROPOSED, so this expectation carries exactly the authority that decision
+    does, and it is reverted with it if the decision is not accepted.
+    """
     flat = flatten(CONTRACTS_TEXT)
     assert "A `Ref` carries no `availability` and no `reason`" in flat
     landing = "carried by the VALUE-BEARING field the target would have filled"
@@ -490,6 +503,7 @@ def test_a_bare_reference_carries_no_availability_so_the_state_lands_elsewhere()
         "ref_kind",
         "resolution",
         "classification",
+        "owning_area",
     }, shape
 
 
