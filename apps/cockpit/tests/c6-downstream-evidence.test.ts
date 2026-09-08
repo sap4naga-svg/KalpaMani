@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { candidateDetailEnvelope } from "@/contracts/signal-models";
+import { followReference } from "@/contracts/reference-access";
 import { riskDecision } from "@/contracts/risk-decision";
 import { isValueBearing } from "@/contracts/validity";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
@@ -29,6 +30,20 @@ import { DEFAULT_SCOPE } from "@/lib/scope";
 const ORIGIN = "2026-09-06T13:00:00.000Z";
 const DEMO = { ...DEFAULT_SCOPE, scenario: "demo" as const };
 const SESSIONS = bookSessions(Date.parse(ORIGIN));
+
+/** The resolving caller: full scope, and a classification it may read. */
+/*
+ * `initial_risk_ref` is kind `evidence`, whose 4.3 row names no scope of its own -- it reads
+ * "the scope named on the reference", and a `Ref` has no field to name one in. So this is the
+ * one shape where a caller-DECLARED scope is the available input, and it is declared here.
+ */
+const RESOLVING = {
+  environment: "RESEARCH",
+  provenance: "SYNTHETIC",
+  heldScopes: ["signals:read", "risk:read"],
+  declaredScope: "risk:read",
+  readableClassifications: ["PUBLIC_SAFE"],
+} as const;
 
 function client() {
   return new FixtureReadClient({ clock: fixedClock(ORIGIN) });
@@ -84,8 +99,20 @@ describe("a trade reference is not order evidence", () => {
     let without = 0;
     for (const item of candidates.payload?.items ?? []) {
       const detail = await read.candidateDetail(DEMO, item.candidate_id);
-      const resolved =
-        detail.payload?.downstream_refs.risk_decision.resolution === "AUTHORIZED_READ";
+      /*
+       * THE DISCRIMINATOR IS THE RECORD, AND IT USED TO BE THE RESOLUTION.
+       *
+       * This read `resolution === "AUTHORIZED_READ"` as *a decision exists*. Under
+       * ADR-0030 R6 both cases declare AUTHORIZED_READ — `risk_decision`'s row lists
+       * nothing else — so the resolution can no longer answer it, and reading
+       * existence off it was the conflation that rule removes.
+       *
+       * The book's own record is the source of truth, which makes this a stronger
+       * check than before: the projection is compared against the fixture rather than
+       * against another projected field.
+       */
+      const record = candidateRecord(item.candidate_id);
+      const resolved = record?.downstream !== undefined;
       /*
        * The stage and the decision agree in BOTH directions: no stage without a decision, and
        * no decision without a stage.
@@ -93,6 +120,15 @@ describe("a trade reference is not order evidence", () => {
       expect(isValueBearing(item.downstream_stage.availability), item.candidate_id).toBe(
         resolved,
       );
+      /* The reference stays VISIBLE either way, and states the same resolution. */
+      expect(detail.payload?.downstream_refs.risk_decision.resolution).toBe(
+        "AUTHORIZED_READ",
+      );
+      /* An absent stage says REFERENT_NOT_FOUND, and never PRODUCER_NOT_IMPLEMENTED. */
+      if (!resolved) {
+        expect(item.downstream_stage.availability).toBe("NOT_YET_AVAILABLE");
+        expect(item.downstream_stage.reason).toBe("REFERENT_NOT_FOUND");
+      }
       if (resolved) {
         withDecision += 1;
       } else {
@@ -167,8 +203,29 @@ describe("the risk decision explains the size, and never the opportunity", () =>
     /* A refused position is not a position: nothing sized, nothing committed, nothing traced. */
     expect(isValueBearing(decision!.sizing.shares.availability)).toBe(false);
     expect(isValueBearing(decision!.assigned_risk.availability)).toBe(false);
-    expect(decision?.initial_risk_ref.resolution).toBe("UNRESOLVABLE_V1");
-    expect(decision?.trade_ref.resolution).toBe("UNRESOLVABLE_V1");
+    /*
+     * BOTH REFERENCES STAY VISIBLE, AND NEITHER RESOLUTION CARRIES THE ABSENCE.
+     *
+     * `evidence` permits AUTHORIZED_READ alone and `trade` permits ENDPOINT, so a
+     * declined decision declares exactly what an approved one does (R3). That it
+     * retained no record and opened no trade is established by FOLLOWING them, and
+     * the assertion below does precisely that.
+     */
+    expect(decision?.initial_risk_ref.resolution).toBe("AUTHORIZED_READ");
+    expect(decision?.trade_ref.resolution).toBe("ENDPOINT");
+    expect(
+      followReference(
+        "RiskDecision.initial_risk_ref",
+        decision!.initial_risk_ref,
+        RESOLVING,
+        /* The producer exists for this scope, and it holds no such record to LOCATE. */
+        { producer: "IMPLEMENTED" },
+      ),
+    ).toEqual({
+      status: "UNAVAILABLE",
+      availability: "NOT_YET_AVAILABLE",
+      reason: "REFERENT_NOT_FOUND",
+    });
   });
 
   it("refuses a decision whose two halves contradict each other", () => {
@@ -195,9 +252,31 @@ describe("the risk decision explains the size, and never the opportunity", () =>
     ).toBe(false);
     /* A decline naming no reason. */
     expect(riskDecision.safeParse({ ...declined, rejection_reasons: [] }).success).toBe(false);
-    /* A decline pointing at a retained initial-risk record that cannot exist. */
+    /*
+     * THE REMOVED CONTROL, AND WHAT REPLACES IT.
+     *
+     * This asserted that a declined decision carrying the APPROVED one's
+     * `initial_risk_ref` is refused — but the only thing distinguishing the two was
+     * the RESOLUTION, and ADR-0030 R3 gives `evidence` exactly one. The schema can no
+     * longer tell them apart, and pretending otherwise would be a check that passes
+     * for the wrong reason.
+     *
+     * The property is instead asserted where it is now true — at resolution time, in
+     * the test above — and the negative control that still bites is a decline whose
+     * reference names a kind its host field does not permit.
+     */
     expect(
-      riskDecision.safeParse({ ...declined, initial_risk_ref: approved!.initial_risk_ref }).success,
+      riskDecision.safeParse({
+        ...declined,
+        initial_risk_ref: { ...declined!.initial_risk_ref, ref_kind: "trade" },
+      }).success,
+    ).toBe(false);
+    /* ...and one whose resolution its kind does not list. */
+    expect(
+      riskDecision.safeParse({
+        ...declined,
+        initial_risk_ref: { ...declined!.initial_risk_ref, resolution: "UNRESOLVABLE_V1" },
+      }).success,
     ).toBe(false);
   });
 

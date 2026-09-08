@@ -20,8 +20,8 @@ and the corrections it makes here are proposed with it.
 while the pull request introducing it, PR #73, is open**, and the two corrections it makes here are
 proposed with it.
 **Further amended by** [ADR-0030](../decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) —
-§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, and §5's
-error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
+§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, the
+carrier and scope catalogues at §4.3.3 and §4.3.4, and §5's error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
 it is open**, and the corrections it makes here are proposed with it.
 **Further amended by** [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) —
 §4.2 `Ref` and the closed helper vocabularies, §4.3.1's navigation rule with new §4.3.2, and the
@@ -1121,6 +1121,151 @@ a caller denied the artefact may still see the area link, and is still denied
 so there is **no general destination at which an evidence artefact can be retrieved**; and §4.3 says
 the scope is *"named on the reference"* while §4.2 gives `Ref` **no field in which to name one**, so
 **a reference-carried scope is not expressible**. **Working area links are not a repair of either.**
+
+---
+
+#### 4.3.3 The authorized carriers, and what each one's identity is
+
+**§4.3.1 requires a carrier to be NAMED before an `EMBEDDED` declaration is admissible, and
+this is where they are named.** ADR-0030 §7 assigns the catalogue below to the implementation
+follow-up; until a host field appears here, **it may not declare `EMBEDDED` at all**, whether
+or not a payload sits beside it.
+
+Each row states four things, and a row missing any of them does not authorize an embed:
+
+```text
+HOST FIELD      the field carrying the reference -- permission is per FIELD, never per KIND
+TARGET KIND     the one kind this field may embed
+CARRIER         the NAMED field on the same object that holds it
+COMPLETENESS    COMPLETE TARGET, or a DECLARED PROJECTION of it
+IDENTITY        how the carrier's identity is compared with the reference's `ref_id`
+```
+
+| Host field | Target kind | Carrier | Completeness | Identity correspondence |
+|---|---|---|---|---|
+| `TradeSummary.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — `security-` + lowercased `symbol` |
+| `PositionSnapshot.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `CandidateSummary.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `CandidateDetail.security_ref` | `evidence` | `security` | declared projection | `CANONICAL_KEY` — as above |
+| `TradeDetail.execution_quality_ref` | `execution_quality` | `execution_quality` | declared projection — **this trade at `AGGREGATE` scope**, never the Area 9 aggregate over a window of fills | `HOST_SCOPED_SUFFIX` — `trade_id` + `-execution-quality` |
+| `TradeDetail.chart_series_ref` | `chart_series` | `chart_series` | declared projection — **a mark line, not OHLC** | `HOST_SCOPED_SUFFIX` — `trade_id` + `-marks` |
+| `TradeDetail.benchmark_series_ref` | `benchmark_series` | `benchmark_series` | declared projection — a synthetic demonstration index aligned to this trade's holding-period boundaries | `HOST_SCOPED_SUFFIX` — `trade_id` + `-benchmark` |
+
+**No other host field is an authorized carrier**, and four that used to declare `EMBEDDED` are
+deliberately absent:
+
+| Field | Why it is not a carrier |
+|---|---|
+| `TradeDetail.add_refs` | `add` resolves to `TradeLifecycle` add and pyramid **events**, and `TradeDetail` carries none. `summary.add_planned_risk[]` is each add's retained **risk record** — a different entity wearing an adjacent name, and **a field's name is not proof it contains the referenced entity** |
+| `TradeDetail.exit_ref` | the exit **event** likewise lives in the lifecycle |
+| `ShortSideSnapshot.borrow[].security_ref` | the only thing beside it is `security_label`, a **display string**: no `symbol`, no identifier, nothing to canonicalize, so **no identity correspondence can be stated**. An embed whose identity rests on a display name is not an embed |
+| `RiskDecision.initial_risk_ref` | `RiskDecision` carries **no initial-risk record at all**, so the declaration was not merely unpermitted — it was **untrue of the response** |
+
+**`TradeDetail.brain_decision_ref` is not a carrier either, and never becomes one.** Adding a
+brain-decision payload to `TradeDetail` would put a Brain payload inside a portfolio read
+model, which §4.3 forbids; the prohibition is structural rather than a special case, because
+an unauthorized carrier is refused whether or not the payload is present.
+
+**The identity-correspondence vocabulary is closed.** A carrier's identity is compared in
+exactly one of these ways, and the row above says which:
+
+```text
+TARGET_ID_FIELD      the carrier holds the target's own identifier; it must EQUAL ref_id
+TARGET_REF_FIELD     the carrier holds a reference to itself; its ref_id must EQUAL ref_id
+CANONICAL_KEY        the carrier holds a NATURAL KEY that a declared deterministic rule
+                     canonicalizes into the identifier -- for `security`, the SYMBOL, and
+                     NEVER the human-readable display_name
+HOST_SCOPED_SUFFIX   the projection carries NO identifier of its own, so the identifier is
+                     derived from the HOST entity's by a declared suffix. It establishes that
+                     the projection belongs to THIS host entity and NOTHING MORE -- which is
+                     why every carrier using it is a DECLARED PROJECTION and never a complete
+                     target. It still refuses one trade's detail carrying another's series
+```
+
+**A nested target names its container route and its in-container selector**, and the reference
+still carries the **target's** identifier (§4.3.1, R8). One field is nested today:
+
+| Field | Container route | In-container selector |
+|---|---|---|
+| `TradeDetail.brain_decision_ref` | `GET /api/v1/signals/candidates/{candidate_id}` | the journaled decision status inside `CandidateDetail` |
+
+**A nested kind therefore gets NO navigation destination from its `ref_id` alone.** The route
+needs the container's identifier and the reference carries the decision's, so a host that
+holds the container id passes it explicitly; interpolating the target's id into the container
+route would navigate to a record that does not exist.
+
+**Cross-provenance references are authorized per host field**, and nowhere else (§4.3.1, R8).
+Environment must always match the resolving envelope; provenance must match too, **except** on
+these fields, and even there the target's own provenance label must be carried and displayed:
+
+```text
+QualificationStatus.facts[].source_ref     each fact read INDEPENDENTLY from tracked
+QualificationStatus.gates[].source_ref     repository authority -- which is the whole
+QualificationStatus.runs[].source_ref      purpose of the view
+SearchResultPage.results[].ref             rows carry their OWN environment, provenance
+                                           and classification, and the per-row label IS
+                                           the contract
+```
+
+**An unlabelled target of differing provenance is refused**, on an authorized field as much as
+on any other: the authorization is to carry a **labelled** cross-provenance link, never to mix
+provenance silently.
+
+---
+
+#### 4.3.4 The scope a resolution requires, and where it comes from
+
+**A required scope the caller may name is not a required scope.** An implementation that takes
+the required scope as a parameter has taken the authorization input from the thing being
+authorized: a caller holding `market:read` can declare that a trade read requires `market:read`
+and be admitted. The accepted contract states the scope, so the accepted contract is where it
+comes from, and a declaration that contradicts it is **refused rather than honoured**.
+
+Two sources, in order of directness:
+
+```text
+§4.3's Resolution column   names the scope outright on the AUTHORIZED_READ rows
+§4.5's read-model lines    name the scope of the read model §4.3's "Resolves to" column
+                           points an ENDPOINT row at
+```
+
+| `ref_kind` | Required scope | Named by |
+|---|---|---|
+| `candidate`, `brain_decision` | `signals:read` | §4.5 `CandidateDetail` |
+| `trade` | `portfolio:read` | §4.5 `TradeDetail` |
+| `risk_decision` | `risk:read` | §4.3 |
+| `order`, `fill`, `protection`, `add`, `exit` | `execution:read` | §4.5 `TradeLifecycle` |
+| `reconciliation` | `execution:read` | §4.5 `ReconciliationStatus` |
+| `execution_quality` | `execution:read` | §4.5 `ExecutionQuality` |
+| `strategy_version`, `health_transition` | `strategy:read` | §4.5 `StrategyVersion`, `StrategyHealth` |
+| `research_run`, `registration`, `queue_item` | `research:read` | §4.5 |
+| `packet`, `decision` | `governance:read` | §4.5 `GovernancePacket`, `DecisionRecord` |
+| `audit_event` | `audit:read` | §4.3 |
+| `chart_series`, `benchmark_series` | `market:read` | §4.3 |
+| `regime_context` | `market:read` | §4.5 `MarketRegime` |
+| `data_quality`, `incident`, `alert` | `system:read` | §4.5 |
+| **`evidence`, `source_fact`** | **none is expressible** | see below |
+
+**`evidence` and `source_fact` name no scope, and that is a stated limitation rather than an
+omission.** Their §4.3 rows read *"`AUTHORIZED_READ` — the scope named on the reference"*, and
+§4.2 types `Ref` as `{ ref_id, ref_kind, resolution, classification }` — **there is no scope
+field on a reference to name one in**. Adding one is a specification act reserved to an ADR, so
+for those two kinds a caller-declared scope is the only available input and is used as such. A
+read for which neither the table nor the caller names a scope is **refused**, because nothing
+authorizes it.
+
+**`Ref.classification` labels the reference and authorizes nothing** (§4.3.1, R10). It is a
+producer-controlled claim, so it may **withhold** a target and may never **admit** one: what a
+caller is permitted to read is decided from the **located target's own classification**, and a
+reference and a target that disagree about classification are **refused** rather than resolved
+under whichever of the two is the permissive one.
+
+**A located target carries its own kind, its own identifier and its own labels, or it is not
+located.** Environment, provenance, classification and identity are checked against what the
+target carries; there is no shape in which absent metadata reads as a passed check. **A recorded
+tombstone is a located target and takes every one of those checks** — it is an `AuditEvent` that
+**names the entity it withdrew**, and a flag asserting that one exists establishes no
+relationship at all.
 
 ---
 

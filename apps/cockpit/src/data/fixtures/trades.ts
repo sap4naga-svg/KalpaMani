@@ -243,7 +243,7 @@ export function buildTradeSummary(
     /** From the envelope's environment. Every trade in this book is a RESEARCH-scope record. */
     environment: "RESEARCH",
     pins: demoPins(trade.versionId),
-    detail_ref: demoRef(`${trade.tradeId}-detail`, "source_fact", "ENDPOINT"),
+    detail_ref: demoRef(`${trade.tradeId}-detail`, "source_fact", "AUTHORIZED_READ"),
   };
 }
 
@@ -306,15 +306,28 @@ const RECORDED_DETAIL_GAPS = [
  * decision the book declares — while `/risk` listed those same decisions with an approved
  * outcome. Two screens over one fixture said opposite things about whether a producer had
  * ever written anything down.
+ *
+ * THESE THREE ARE `REFERENT_NOT_FOUND`, AND THEY USED TO CLAIM `PRODUCER_NOT_IMPLEMENTED`.
+ *
+ * That asserted something false about the subsystem (R6). In the demonstration scenario the
+ * candidate and risk-decision producers ARE implemented -- trades in this very book carry
+ * journaled candidates and the decisions they produced -- so the honest statement for a
+ * trade without one is **this trade has no such record**, and not *nothing can write one*.
+ *
+ * **It is not a claim that the Brain exists.** A producer implemented against
+ * repository-owned SYNTHETIC fixtures exists for `SYNTHETIC` provenance and for nothing
+ * else; the Brain runtime, the scanner and the risk engine stay NOT IMPLEMENTED and NOT
+ * AUTHORIZED, and the project scenario reports the whole read model NOT_IMPLEMENTED exactly
+ * as it always did.
  */
 const NO_RISK_DECISION_GAPS = [
-  ["RISK_ENGINE_DECISION", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+  ["RISK_ENGINE_DECISION", "NOT_YET_AVAILABLE", "REFERENT_NOT_FOUND"],
 ] as const;
 
 /** The one gap a trade with no journaled candidate carries, and one with a candidate does not. */
 const NO_CANDIDATE_GAPS = [
-  ["CANDIDATE_AND_THESIS", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
-  ["BRAIN_DECISION_RECORD", "NOT_IMPLEMENTED", "PRODUCER_NOT_IMPLEMENTED"],
+  ["CANDIDATE_AND_THESIS", "NOT_YET_AVAILABLE", "REFERENT_NOT_FOUND"],
+  ["BRAIN_DECISION_RECORD", "NOT_YET_AVAILABLE", "REFERENT_NOT_FOUND"],
 ] as const;
 
 /** The gaps a trade with no execution record carries, on top of the two above. */
@@ -427,24 +440,38 @@ export function syntheticTradeDetail(
      * THE CANDIDATE RESOLVES BY ENDPOINT WHERE ONE WAS JOURNALED.
      *
      * §4.3 assigns `candidate` an ENDPOINT resolution, and C6 implements that endpoint, so a
-     * trade with a journaled candidate carries a reference a reader can actually follow. Most
-     * trades have none, and theirs stays UNRESOLVABLE_V1.
+     * trade with a journaled candidate carries a reference a reader can actually follow.
+     *
+     * A TRADE WITHOUT ONE DECLARES THE SAME RESOLUTION, AND IT USED TO DECLARE
+     * `UNRESOLVABLE_V1`. That says the PRODUCER does not exist, which is false here and is
+     * refused by R6: the candidate producer is implemented for this scope and simply holds
+     * no record for this trade. The reference stays visible, the resolution stays honest,
+     * and the absence is stated by the `gaps` entry as REFERENT_NOT_FOUND.
      */
     candidate_ref:
       candidate === undefined
-        ? demoRef(`${trade.tradeId}-candidate`, "candidate")
+        ? demoRef(`${trade.tradeId}-candidate`, "candidate", "ENDPOINT")
         : demoRef(candidate.candidateId, "candidate", "ENDPOINT"),
     /*
-     * §4.3 assigns `brain_decision` an EMBEDDED resolution, because the journaled decision
-     * status lives INSIDE `CandidateDetail`. It is not inside THIS response, so calling it
-     * EMBEDDED here would claim a payload this response does not carry. Where a candidate was
-     * journaled it is one authorized read away and is carried as ENDPOINT; where none was, it
-     * resolves to an availability state like every other absent producer.
+     * `brain_decision` resolves by ENDPOINT from here, and ADR-0030 R5 RATIFIES that choice
+     * rather than reversing it: the journaled decision status lives INSIDE `CandidateDetail`,
+     * so calling it EMBEDDED here would claim a payload this response does not carry — and
+     * **no brain-decision payload is added to `TradeDetail` to make EMBEDDED true**, because
+     * that would put a Brain payload inside a portfolio read model.
+     *
+     * THE IDENTIFIER IS THE DECISION'S, AND IT USED TO BE THE CANDIDATE'S.
+     *
+     * R8 compares a reference against its own TARGET and never against the container it is
+     * retrieved through — "the candidate's id is not the comparand". Emitting the candidate's
+     * id here claimed the decision's identifier WAS the candidate's, which is exactly the
+     * container conflation that rule exists to refuse. The container route is recorded on the
+     * field's catalogue declaration, and the candidate id travels separately on
+     * `candidate_ref`, which is where a reader follows it from.
      */
     brain_decision_ref:
       candidate === undefined
-        ? demoRef(`${trade.tradeId}-brain-decision`, "brain_decision")
-        : demoRef(candidate.candidateId, "brain_decision", "ENDPOINT"),
+        ? demoRef(`${trade.tradeId}-brain-decision`, "brain_decision", "ENDPOINT")
+        : demoRef(`${candidate.candidateId}-brain-decision`, "brain_decision", "ENDPOINT"),
     /*
      * §4.3 resolves a `risk_decision` under an AUTHORIZED_READ on `risk:read`.
      *
@@ -455,7 +482,7 @@ export function syntheticTradeDetail(
      */
     risk_decision_ref:
       decision === undefined
-        ? demoRef(`${trade.tradeId}-risk-decision`, "risk_decision")
+        ? demoRef(`${trade.tradeId}-risk-decision`, "risk_decision", "AUTHORIZED_READ")
         : demoRef(decision.decision_id, "risk_decision", "AUTHORIZED_READ"),
     /** The joined downstream record — separately owned, and never a field of the candidate. */
     risk_decision: decision,
@@ -465,15 +492,32 @@ export function syntheticTradeDetail(
     add_refs: refListOf(
       trade.stages
         .filter((stage) => stage.kind === "ADD")
-        .map((stage, index) => demoRef(`${trade.tradeId}-add-${index}`, "add", "EMBEDDED")),
+        /*
+         * ENDPOINT, AND IT USED TO SAY EMBEDDED.
+         *
+         * `add` resolves to `TradeLifecycle` add and pyramid EVENTS, and this response
+         * carries none of them: `summary.add_planned_risk[]` is each add's retained RISK
+         * RECORD, a different entity wearing an adjacent name. A field's name is not proof
+         * it contains the referenced entity (R4), so the catalogue authorizes no carrier
+         * here and the reference resolves by the implemented lifecycle endpoint instead.
+         */
+        .map((stage, index) => demoRef(`${trade.tradeId}-add-${index}`, "add", "ENDPOINT")),
       "ZERO_OR_MORE",
       asOf,
     ),
-    exit_ref: closed ? demoRef(`${trade.tradeId}-exit`, "exit", "EMBEDDED") : undefined,
+    /** The exit EVENT lives in the lifecycle and not here — see `add_refs` above. */
+    exit_ref: closed ? demoRef(`${trade.tradeId}-exit`, "exit", "ENDPOINT") : undefined,
     reconciliation_refs: refs.reconciliation_refs,
+    /*
+     * The one embed this field IS authorized for. The catalogue names `execution_quality`
+     * as the carrier, declares it a DECLARED PROJECTION — this trade at AGGREGATE scope,
+     * and not the Area 9 aggregate over a window of fills — and fixes its identity as the
+     * trade id plus `-execution-quality`, because the record carries no identifier of its
+     * own. Where no record was written the reference resolves by the catalogued endpoint.
+     */
     execution_quality_ref:
       quality === undefined
-        ? demoRef(`${trade.tradeId}-execution-quality`, "execution_quality")
+        ? demoRef(`${trade.tradeId}-execution-quality`, "execution_quality", "ENDPOINT")
         : demoRef(`${trade.tradeId}-execution-quality`, "execution_quality", "EMBEDDED"),
     execution_quality: quality,
     fill_quality: [...fillQuality(trade, days, asOf)],
@@ -570,7 +614,11 @@ export function syntheticTradeLifecycle(
       quantity: stage.shares,
       price: usd("trade.mark_price", stage.priceCents, asOf),
       downstream_stage: "ORDER_FILLED" as const,
-      source_ref: demoRef(`${trade.tradeId}-stage-${index}-source`, "source_fact"),
+      source_ref: demoRef(
+        `${trade.tradeId}-stage-${index}-source`,
+        "source_fact",
+        "AUTHORIZED_READ",
+      ),
     })),
     ...trade.exits.map((exit, index) => {
       /*
@@ -606,7 +654,11 @@ export function syntheticTradeLifecycle(
          * comparison.
          */
         downstream_stage: "ORDER_FILLED" as const,
-        source_ref: demoRef(`${trade.tradeId}-exit-${index}-source`, "source_fact"),
+        source_ref: demoRef(
+          `${trade.tradeId}-exit-${index}-source`,
+          "source_fact",
+          "AUTHORIZED_READ",
+        ),
       };
     }),
     ...executionEvents(trade, days, asOf),

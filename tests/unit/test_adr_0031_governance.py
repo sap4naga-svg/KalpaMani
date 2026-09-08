@@ -1,22 +1,26 @@
 """ADR-0031 governance: the owning-area navigation contract, parsed and executed.
 
-ADR-0031 is a **proposal**. These are therefore **proposal tests**: they check that the
-proposed rules are present, internally consistent and satisfiable, and they check that the
-application's runtime has **not** been changed to implement them. Nothing here asserts that
-the Cockpit behaves this way today, because it does not and is not authorized to.
+**ADR-0031 has been ACCEPTED**, on the merge of the pull request that introduced it, and its
+bounded implementation cycle has since run. **The ADR's own document is not rewritten** -- it
+still reads as it was reviewed, which is why the governance half below still asserts the
+conditional status it was written with. Those assertions are about a document, and they are
+historical facts about the days it was open rather than claims about today.
 
 The suite has four parts.
 
-* **Governance** -- ADR-0031 declares itself proposed, predicts no merge, amends ADR-0030 at
-  R10 only, edits no ADR document, and authorizes no implementation.
+* **Governance** -- the ADR declares itself proposed, predicts no merge, amends ADR-0030 at
+  R10 only, edits no ADR document, and authorizes no implementation of its own.
 * **The contract, executed** -- the ``OwningArea`` table, the association rules, the
   availability states and the access boundary are parsed out of ``read-model-contracts.md``
   and run. There is no second copy of the route table in this file: it is read from the
   document at import time, so a document that loses a row fails here.
 * **The product surface** -- the specification, UI and traceability deltas that carry the
   same conditional authority, and the two limitations that stay open.
-* **The pending gap** -- the runtime is asserted to be **unchanged**, so a later reader can
-  tell that the proposal was documented and not silently implemented.
+* **The implemented contract** -- the guards that once asserted the runtime was **unchanged**
+  are **inverted**, exactly as they recorded they would be: the field exists, the route table
+  is declared once, and no absent area resolves to the Audit Trail. The behaviour itself is
+  exercised in ``apps/cockpit/tests/adr-0031-owning-area.test.ts``; these are the shape checks
+  that hold the application against the accepted document.
 
 Every parser carries a self-test proving it can still see what it exists to catch: a scanner
 that sees nothing passes every document vacuously.
@@ -422,7 +426,7 @@ def test_no_member_is_added_merely_because_a_route_exists() -> None:
 
 
 def test_the_association_is_a_field_inside_the_reference() -> None:
-    span = section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "### 4.4")
+    span = section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "#### 4.3.3 ")
     flat = flatten(span)
     assert "carried INSIDE the reference" in flat
     assert "The reference it describes is the object it is a field of" in flat
@@ -438,7 +442,7 @@ def test_the_association_is_a_field_inside_the_reference() -> None:
     ],
 )
 def test_the_forbidden_associations_are_each_refused_by_name(refused: str) -> None:
-    span = flatten(section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "### 4.4"))
+    span = flatten(section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "#### 4.3.3 "))
     assert refused in span, f"{refused!r} is not refused by name"
 
 
@@ -737,25 +741,62 @@ def test_the_ui_specification_keeps_the_two_affordances_apart() -> None:
 # ------------------------------------------------------------ the pending gap, guarded
 
 
-def test_the_runtime_carries_no_owning_area_and_the_gap_is_pending() -> None:
-    """ADR-0031 is a proposal. Implementing it here would be implementing an unaccepted rule.
+def test_the_runtime_carries_the_owning_area_field_the_decision_adds() -> None:
+    """THIS GUARD IS INVERTED, AND THAT IS WHAT IT WAS WRITTEN TO DO.
 
-    This is the guard that keeps the two apart. It asserts the field the proposal introduces is
-    **still absent** from the application, so a reader can tell that the proposal was documented
-    and not silently enacted. It is expected to be inverted by the bounded implementation cycle
-    that follows acceptance.
+    While ADR-0031 was a proposal, this asserted that ``owning_area`` was **absent** from the
+    application, so a reader could tell that the proposal had been documented and not silently
+    enacted -- and it recorded that it was "expected to be inverted by the bounded
+    implementation cycle that follows acceptance". ADR-0031 is accepted, that cycle has run,
+    and the same position now asserts the other half: the field EXISTS, on the reusable ``Ref``
+    type where A1 puts it, and it is OPTIONAL rather than required.
+
+    The behaviour is exercised in ``apps/cockpit/tests/adr-0031-owning-area.test.ts``; this is
+    the governance half, which checks the shape against the accepted document.
     """
-    assert "owning_area" not in VALUES.read_text(encoding="utf-8")
+    values = VALUES.read_text(encoding="utf-8")
+    span = values[values.index("export const ref = z.object(") :]
+    shape = span[: span.index("});") + 3]
+    assert "owning_area: owningArea.optional()" in shape, "the field is optional, on Ref"
+    # R9 is unchanged by the addition: a Ref still carries no availability and no reason.
+    assert "availability" not in shape
+    assert "reason" not in shape
 
 
-def test_no_application_module_declares_an_owning_area_route_table() -> None:
-    offenders = [
+def test_the_application_declares_the_route_table_once_and_closes_it() -> None:
+    """One authoritative table, in one module -- an allowlist in three copies is three."""
+    declaring = sorted(
         path.relative_to(PROJECT_ROOT).as_posix()
         for path in COCKPIT_APP.rglob("*.ts*")
-        if "owning_area" in path.read_text(encoding="utf-8")
-        or "OwningArea" in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == [], f"the proposal is implemented in {offenders}"
+        if "OWNING_AREA_ROUTES" in path.read_text(encoding="utf-8")
+    )
+    assert declaring == ["apps/cockpit/src/lib/reference-navigation.ts"], declaring
+
+    navigation = (COCKPIT_APP / "lib" / "reference-navigation.ts").read_text(encoding="utf-8")
+    table = navigation[navigation.index("const OWNING_AREA_ROUTES") :]
+    table = table[: table.index("};")]
+    for member, (area, route) in AREAS.items():
+        assert f'{member}: {{ path: "{route}"' in table, member
+        assert f"area: {area} }}" in table, member
+    # No route carries an entity segment, so nothing is interpolated into one.
+    assert "{id}" not in table
+    assert "https://" not in table
+
+    vocabulary = (COCKPIT_APP / "contracts" / "vocabularies.ts").read_text(encoding="utf-8")
+    declared = vocabulary[vocabulary.index("export const OWNING_AREAS") :]
+    declared = declared[: declared.index("] as const;")]
+    assert set(re.findall(r'"([A-Z_]+)"', declared)) == set(AREAS)
+
+
+def test_the_application_never_defaults_an_absent_area_to_the_audit_trail() -> None:
+    """`AUDIT_TRAIL` is a member and never a fallback, and that is checked in the source."""
+    navigation = (COCKPIT_APP / "lib" / "reference-navigation.ts").read_text(encoding="utf-8")
+    body = navigation[navigation.index("export function owningAreaDestination") :]
+    body = body[: body.index("\n}\n")]
+    # The only way to reach a route is through the declared member; no default, no fallback.
+    assert "AUDIT_TRAIL" not in body
+    assert "?? " not in body.replace('?? "placeholder"', "")
+    assert "return null;" in body
 
 
 def test_the_follow_up_names_the_regression_it_must_replace() -> None:

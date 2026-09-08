@@ -682,7 +682,7 @@ export function executionEvents(
   const events: TradeLifecycleEvent[] = [];
 
   for (const order of orders) {
-    const sourceRef = demoRef(`${order.orderId}-source`, "source_fact");
+    const sourceRef = demoRef(`${order.orderId}-source`, "source_fact", "AUTHORIZED_READ");
     events.push({
       event_id: `${order.orderId}-submitted`,
       event_kind: demoReason(KIND_ORDER_SUBMITTED),
@@ -722,7 +722,7 @@ export function executionEvents(
         quantity: fill.shares,
         price: usd("execution.fill_price", fill.priceCents, asOf),
         downstream_stage: fill.completesOrder ? "ORDER_FILLED" : "ORDER_PARTIALLY_FILLED",
-        source_ref: demoRef(`${fill.fillId}-source`, "source_fact"),
+        source_ref: demoRef(`${fill.fillId}-source`, "source_fact", "AUTHORIZED_READ"),
       });
     }
   }
@@ -753,7 +753,7 @@ export function executionEvents(
        * them ever reports one.
        */
       downstream_stage: event.kind === "CANCELLED" ? "ORDER_CANCELLED" : "ORDER_ACKNOWLEDGED",
-      source_ref: demoRef(`${eventId}-source`, "source_fact"),
+      source_ref: demoRef(`${eventId}-source`, "source_fact", "AUTHORIZED_READ"),
     });
     if (event.correctedByLevelCents !== undefined) {
       /*
@@ -773,7 +773,11 @@ export function executionEvents(
         price: usd("trade.mark_price", event.correctedByLevelCents, asOf),
         downstream_stage: "ORDER_ACKNOWLEDGED",
         correction_of: demoRef(eventId, "protection", "ENDPOINT"),
-        source_ref: demoRef(`${eventId}-correction-source`, "source_fact"),
+        source_ref: demoRef(
+          `${eventId}-correction-source`,
+          "source_fact",
+          "AUTHORIZED_READ",
+        ),
       });
     }
   }
@@ -799,7 +803,11 @@ export function executionEvents(
       ),
       /** It reconciles the position produced by orders that filled. */
       downstream_stage: "ORDER_FILLED",
-      source_ref: demoRef(`${trade.tradeId}-reconciliation-source`, "source_fact"),
+      source_ref: demoRef(
+        `${trade.tradeId}-reconciliation-source`,
+        "source_fact",
+        "AUTHORIZED_READ",
+      ),
     });
   }
 
@@ -927,7 +935,16 @@ export function aggregateQuality(
   const filled = fills.reduce((total, fill) => total + fill.shares, 0);
   return {
     scope: "AGGREGATE",
-    subject_ref: demoRef(`${trade.tradeId}-execution-quality`, "execution_quality", "EMBEDDED"),
+    /*
+     * THE SUBJECT OF AN AGGREGATE RECORD IS THE TRADE, AND IT USED TO BE ITSELF.
+     *
+     * `subject_ref` names what the quality was MEASURED OVER, so its kind follows
+     * `scope` exactly as `correction_of`'s follows `event_kind`: an ORDER record's
+     * subject is an order, a FILL record's is a fill, and this AGGREGATE record is
+     * measured over the trade. Declaring it an EMBEDDED `execution_quality` made the
+     * record its own subject and claimed an embed the catalogue authorizes nowhere.
+     */
+    subject_ref: demoRef(trade.tradeId, "trade", "ENDPOINT"),
     /** The aggregate names the side of the stage that opened the position. */
     side: fills[0].side,
     quantity: sharesMetric("execution.quantity", filled, asOf),
@@ -1041,7 +1058,7 @@ export function executionRefs(trade: BookTrade, days: readonly string[], asOf: s
   const reconciliationRefs: Ref[] =
     spec?.reconciliation == null
       ? []
-      : [demoRef(`${trade.tradeId}-reconciliation`, "reconciliation")];
+      : [demoRef(`${trade.tradeId}-reconciliation`, "reconciliation", "ENDPOINT")];
   return {
     order_refs: refListOf(orderRefs, "ZERO_OR_MORE", asOf),
     fill_refs: refListOf(fillRefs, "ZERO_OR_MORE", asOf),

@@ -715,11 +715,24 @@ function recordedDownstreamStages(record: CandidateRecord): readonly DownstreamS
 function downstreamStageOf(record: CandidateRecord, asOf: string) {
   const stages = recordedDownstreamStages(record);
   if (stages.length === 0) {
+    /*
+     * REFERENT_NOT_FOUND, AND IT USED TO CLAIM PRODUCER_NOT_IMPLEMENTED.
+     *
+     * This is the VALUE-BEARING FIELD the downstream reference would have filled, which is
+     * exactly where R9 puts the answer — a bare `Ref` carries no availability. Candidates in
+     * this book DO carry recorded downstream stages, so the synthetic producer exists for
+     * this scope and a candidate without one has NO SUCH RECORD; saying the subsystem does
+     * not exist asserted something false about it (R6).
+     *
+     * **It is not a claim that a real downstream pipeline exists.** The funnel's downstream
+     * axis is a statement about REAL downstream data and stays NOT_IMPLEMENTED, and the risk
+     * engine, order router and broker path remain unbuilt and unauthorized.
+     */
     return unavailable(
       "candidate.downstream_stage",
       "DIMENSIONLESS",
-      "NOT_IMPLEMENTED",
-      "PRODUCER_NOT_IMPLEMENTED",
+      "NOT_YET_AVAILABLE",
+      "REFERENT_NOT_FOUND",
     );
   }
   return token("candidate.downstream_stage", stages[stages.length - 1], asOf);
@@ -757,7 +770,7 @@ export function riskDecisionFor(
       decision_id: decisionId,
       candidate_ref: candidateRef,
       /* No trade was opened, so the reference resolves to nothing. */
-      trade_ref: demoRef(`${record.candidateId}-trade`, "trade"),
+      trade_ref: demoRef(`${record.candidateId}-trade`, "trade", "ENDPOINT"),
       decided_at: decidedAt,
       outcome: "REJECTED",
       outcome_reason: demoReason("RISK_DECLINED_AT_THE_RECORDED_SIZE"),
@@ -801,7 +814,11 @@ export function riskDecisionFor(
         ),
       },
       risk_policy_ref: demoPolicyRef(decidedAt),
-      initial_risk_ref: demoRef(`${record.candidateId}-initial-risk`, "evidence"),
+      initial_risk_ref: demoRef(
+        `${record.candidateId}-initial-risk`,
+        "evidence",
+        "AUTHORIZED_READ",
+      ),
       source: "RISK_ENGINE_DECISION_RECORD",
     };
   }
@@ -853,7 +870,18 @@ export function riskDecisionFor(
     },
     risk_policy_ref: demoPolicyRef(decidedAt),
     /* The retained entry-stage record this decision assigned the risk of. */
-    initial_risk_ref: demoRef(`${trade.tradeId}-initial-risk-0`, "evidence", "EMBEDDED"),
+    /*
+     * AUTHORIZED_READ, AND IT USED TO SAY EMBEDDED.
+     *
+     * `RiskDecision` carries no initial-risk record at all, so that EMBEDDED was not
+     * merely unpermitted by the catalogue — it was UNTRUE of the response, which is
+     * the half of R4 a producer can check for itself and this one did not.
+     */
+    initial_risk_ref: demoRef(
+      `${trade.tradeId}-initial-risk-0`,
+      "evidence",
+      "AUTHORIZED_READ",
+    ),
     source: "RISK_ENGINE_DECISION_RECORD",
   };
 }
@@ -1195,12 +1223,30 @@ export function syntheticCandidateDetail(
        */
       risk_decision:
         record.downstream === undefined
-          ? demoRef(`${record.candidateId}-risk-decision`, "risk_decision")
+          ? demoRef(
+              `${record.candidateId}-risk-decision`,
+              "risk_decision",
+              "AUTHORIZED_READ",
+            )
           : demoRef(`${record.candidateId}-risk-decision`, "risk_decision", "AUTHORIZED_READ"),
+      /*
+       * KIND `trade`, AND IT USED TO SAY `source_fact`.
+       *
+       * This is THE TRADE THIS CANDIDATE BECAME, emitted as the kind §4.3 defines as
+       * "the recorded fact a projection was built from" — so a reader could not tell
+       * the trade a candidate produced from a provenance record the projection was
+       * built out of. It also carried an ENDPOINT that `source_fact`'s own row does
+       * not list. ADR-0030 R1 added the `trade` row both defects needed.
+       *
+       * A candidate that became no trade declares the SAME resolution: the trade
+       * producer is implemented for this scope, so `UNRESOLVABLE_V1` would assert
+       * something false about it (R6). Following that reference yields the §5
+       * `REFERENT_NOT_FOUND`, which is what "names nothing" actually means.
+       */
       trade:
         record.tradeId === undefined
-          ? demoRef(`${record.candidateId}-trade`, "source_fact")
-          : demoRef(record.tradeId, "source_fact", "ENDPOINT"),
+          ? demoRef(`${record.candidateId}-trade`, "trade", "ENDPOINT")
+          : demoRef(record.tradeId, "trade", "ENDPOINT"),
     },
     pins: demoPins(record.versionId),
   };

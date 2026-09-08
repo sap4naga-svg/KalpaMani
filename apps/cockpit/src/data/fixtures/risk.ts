@@ -97,7 +97,11 @@ export function syntheticRiskSnapshot(
           snapshotAt,
         ),
         as_of: snapshotAt,
-        assessment_ref: demoRef("portfolio-risk-assessment", "risk_decision"),
+        assessment_ref: demoRef(
+          "portfolio-risk-assessment",
+          "risk_decision",
+          "AUTHORIZED_READ",
+        ),
         risk_policy_ref: demoPolicyRef(snapshotAt),
         protection_state: demoReason("PROTECTIVE_ORDERS_WORKING"),
         source: "RISK_ENGINE_ASSESSMENT",
@@ -119,7 +123,17 @@ export function syntheticRiskSnapshot(
      */
     initial_planned_risk_open: open.flatMap((trade) =>
       trade.stages.map((stage, ordinal) => ({
-        trade_ref: demoRef(trade.tradeId, "source_fact", "ENDPOINT"),
+        /*
+         * KIND `trade`, AND IT USED TO SAY `source_fact`.
+         *
+         * This is the trade a planned-risk row BELONGS TO, and not a provenance
+         * record the projection was built out of. §4.3 had no `trade` row to assign
+         * until ADR-0030 R1 added one, so the implementation guessed `source_fact`
+         * here and in `CandidateDetail.downstream_refs.trade` the same way twice.
+         * Its ENDPOINT is conformant now: the `trade` row lists it, and
+         * `source_fact`'s row never did.
+         */
+        trade_ref: demoRef(trade.tradeId, "trade", "ENDPOINT"),
         ...(trade.stages.length > 1 ? { stage_ordinal: ordinal } : {}),
         value: {
           record: stageRiskRecord(trade, ordinal, days),
@@ -146,7 +160,7 @@ export function syntheticRiskSnapshot(
           ),
     exposure_refs: refListOf(
       EXPOSURE_AXES.map((axis) =>
-        demoRef(`exposure-${axis.toLowerCase()}`, "source_fact", "ENDPOINT"),
+        demoRef(`exposure-${axis.toLowerCase()}`, "source_fact", "AUTHORIZED_READ"),
       ),
       "ONE_OR_MORE",
       asOf,
@@ -224,7 +238,7 @@ export function syntheticShortSide(
   return {
     as_of: snapshotAt,
     short_positions: refListOf(
-      shorts.map((trade) => demoRef(trade.tradeId, "source_fact", "ENDPOINT")),
+      shorts.map((trade) => demoRef(trade.tradeId, "source_fact", "AUTHORIZED_READ")),
       "ZERO_OR_MORE",
       asOf,
     ),
@@ -232,7 +246,21 @@ export function syntheticShortSide(
       const recorded = trade.tradeId === BORROW_RECORDED_TRADE;
       const security = securityOf(trade.symbol);
       return {
-        security_ref: demoRef(`security-${trade.symbol.toLowerCase()}`, "evidence", "EMBEDDED"),
+        /*
+         * AUTHORIZED_READ, AND IT USED TO SAY EMBEDDED.
+         *
+         * The only thing beside it here is `security_label`, a human-readable display
+         * string: there is no `symbol`, no identifier and nothing to canonicalize, so
+         * no identity correspondence can be stated for it. An embed whose identity
+         * rests on a display name is exactly the ambiguity R4 refuses, so the
+         * catalogue authorizes no carrier on this field and the reference resolves
+         * by authorized read instead.
+         */
+        security_ref: demoRef(
+          `security-${trade.symbol.toLowerCase()}`,
+          "evidence",
+          "AUTHORIZED_READ",
+        ),
         security_label: `${security.displayName} (${trade.symbol})`,
         /*
          * THE BORROW AVAILABILITY, FROM THE RECORD.
@@ -264,10 +292,18 @@ export function syntheticShortSide(
               "NOT_YET_AVAILABLE",
               "UPSTREAM_INPUT_MISSING",
             ),
+        /*
+         * ONE RESOLUTION, WHETHER OR NOT A RECORD WAS WRITTEN.
+         *
+         * `evidence` resolves by AUTHORIZED_READ alone, and the security with no
+         * borrow record used to declare `UNRESOLVABLE_V1` — a claim about the
+         * PRODUCER, made where only the RECORD is missing. The distinction is
+         * already carried honestly by `availability` beside it.
+         */
         record_ref: demoRef(
           `borrow-record-${trade.symbol.toLowerCase()}`,
           "evidence",
-          recorded ? "AUTHORIZED_READ" : "UNRESOLVABLE_V1",
+          "AUTHORIZED_READ",
         ),
       };
     }),
@@ -307,15 +343,19 @@ export function syntheticShortSide(
      */
     blocked_shorts: [
       {
-        candidate_ref: demoRef("demo-candidate-blocked-0001", "candidate"),
+        candidate_ref: demoRef("demo-candidate-blocked-0001", "candidate", "ENDPOINT"),
         reason: demoReason("BLOCKED_BORROW_NO_RECORD"),
       },
       {
-        candidate_ref: demoRef("demo-candidate-blocked-0002", "candidate"),
+        candidate_ref: demoRef("demo-candidate-blocked-0002", "candidate", "ENDPOINT"),
         reason: demoReason("BLOCKED_BORROW_FEE_ABOVE_RECORDED_THRESHOLD"),
       },
     ],
-    missed_opportunity_ref: demoRef("borrow-related-misses", "source_fact"),
+    missed_opportunity_ref: demoRef(
+      "borrow-related-misses",
+      "source_fact",
+      "AUTHORIZED_READ",
+    ),
   };
 }
 

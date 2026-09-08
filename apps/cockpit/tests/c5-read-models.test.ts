@@ -121,14 +121,23 @@ describe("C5 admission", () => {
     }
   });
 
-  it("reports an unknown trade identity as inapplicable, never as an error", async () => {
+  /*
+   * AN UNKNOWN IDENTITY IS AN ABSENT RECORD, AND IT USED TO BE CALLED INAPPLICABLE.
+   *
+   * This asserted `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`. ADR-0030 R9 refuses that
+   * reading outright -- "a reference whose identifier names nothing is exactly we do not
+   * have it -- the question still applies, and the target is absent" -- and ADR-0028 reserves
+   * `NOT_APPLICABLE` for a property of the subject or of the arithmetic. The ledger was
+   * searched by a producer that exists for this scope and held no such trade.
+   */
+  it("reports an unknown trade identity as an absent record, never as an error", async () => {
     const read = client();
     for (const response of [
       await read.tradeDetail(DEMO, "demo-trade-does-not-exist"),
       await read.tradeLifecycle(DEMO, "demo-trade-does-not-exist"),
     ]) {
-      expect(response.availability).toBe("NOT_APPLICABLE");
-      expect(response.availability_reason).toBe("NOT_DEFINED_FOR_SUBJECT");
+      expect(response.availability).toBe("NOT_YET_AVAILABLE");
+      expect(response.availability_reason).toBe("REFERENT_NOT_FOUND");
       expect(response.payload).toBeUndefined();
     }
   });
@@ -314,7 +323,8 @@ describe("malformed C5 payloads are refused at the boundary", () => {
 
   it("refuses an unknown schema version rather than coercing it", async () => {
     const response = await admitted(() => client().shortSide(DEMO));
-    response.schema_version = "cockpit.short_side_snapshot.v2";
+    /* A version no bump will reach — `.v2` is the CURRENT one after ADR-0030. */
+    response.schema_version = "cockpit.short_side_snapshot.v99";
     expect(shortSideSnapshotEnvelope.safeParse(response).success).toBe(false);
   });
 
@@ -1168,7 +1178,17 @@ describe("borrow and risk", () => {
         expect(metric.reason).toBe("UPSTREAM_INPUT_MISSING");
         expect(metric.value).toBeUndefined();
       }
-      expect(record.record_ref.resolution).toBe("UNRESOLVABLE_V1");
+      /*
+       * THE REFERENCE STAYS VISIBLE, AND ITS RESOLUTION NO LONGER CARRIES THE ABSENCE.
+       *
+       * `evidence` resolves by AUTHORIZED_READ and its row lists no other member, so
+       * the borrow record with nothing behind it declares the same resolution as the
+       * one with a record (ADR-0030 R3). That a record is missing is stated by the
+       * `availability` code and by every unavailable figure asserted just above —
+       * which is where R9 puts it, and which this loop already checks.
+       */
+      expect(record.record_ref.resolution).toBe("AUTHORIZED_READ");
+      expect(record.record_ref.ref_kind).toBe("evidence");
     }
 
     const positions = await read.positions(DEMO);

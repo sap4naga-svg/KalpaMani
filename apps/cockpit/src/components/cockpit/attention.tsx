@@ -12,13 +12,14 @@ import { isValueBearing } from "@/contracts/validity";
 import type { AttentionListPayload } from "@/data/client/read-client";
 import {
   SEVERITY_CODES,
-  evidenceKindsOf,
   isKnownSeverity,
   prepareAttention,
   type AttentionFilter,
 } from "@/lib/attention";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { withScope, type ViewScope } from "@/lib/scope";
+import { REFERENCE_FIELDS } from "@/contracts/references";
+import { ReferenceDestinations } from "@/components/cockpit/reference-links";
 import { cn } from "@/lib/utils";
 
 /**
@@ -47,16 +48,6 @@ const SEVERITY_GLYPH: Readonly<Record<string, string>> = {
   HIGH: "▲",
   MEDIUM: "◆",
   LOW: "▪",
-};
-
-/** The area that OWNS each evidence kind, so a drill-down goes somewhere real. */
-const EVIDENCE_DESTINATION: Readonly<Record<string, { href: string; label: string }>> = {
-  data_quality: { href: "/system/data-quality", label: "Data quality" },
-  health_transition: { href: "/strategy/health", label: "Strategy health" },
-  reconciliation: { href: "/execution/reconciliation", label: "Reconciliation" },
-  alert: { href: "/system/alerts", label: "Alerts" },
-  incident: { href: "/system/operations", label: "Operations" },
-  source_fact: { href: "/governance/audit", label: "Audit trail" },
 };
 
 function ImpactValue({ item }: { item: AttentionItemPayload }) {
@@ -120,25 +111,23 @@ function EvidenceDisclosure({
       <div className="space-y-2 px-3 pb-3 pt-1">
         <ul className="space-y-1.5">
           {item.evidence_refs.items.map((reference) => {
-            const destination = EVIDENCE_DESTINATION[reference.ref_kind];
             return (
               <li
                 key={reference.ref_id}
                 className="flex flex-wrap items-center gap-2 text-label-s"
                 data-testid="evidence-reference"
+                data-owning-area={reference.owning_area ?? ""}
               >
                 <Badge tone="neutral">{humanizeCode(reference.ref_kind.toUpperCase())}</Badge>
                 <span className="font-mono text-text-tertiary">{reference.ref_id}</span>
                 <Badge tone="unavailable">{reference.resolution}</Badge>
                 <Badge tone="neutral">{reference.classification}</Badge>
-                {destination !== undefined && (
-                  <Link
-                    href={withScope(destination.href, scope)}
-                    className="text-accent underline underline-offset-2"
-                  >
-                    {destination.label} →
-                  </Link>
-                )}
+                {/*
+                 * TWO AFFORDANCES, KEPT APART (§4.3.2). The target link names the RECORD; the
+                 * area link names the AREA responsible for it. An absent `owning_area` renders
+                 * no area control and is NOT a claim that no area owns the record.
+                 */}
+                <ReferenceDestinations reference={reference} scope={scope} />
               </li>
             );
           })}
@@ -397,9 +386,20 @@ export function AttentionPanel({
     items,
     withFilters ? filter : { severities: [], evidenceKinds: [] },
   );
+  /*
+   * THE CHIPS ARE THE KINDS THE CONTRACT PERMITS, AND THEY USED TO BE THE KINDS PRESENT.
+   *
+   * Deriving them from `items` describes THIS SAMPLE: a category with no rows today has no
+   * chip, so a reader cannot tell "none of these" from "no such category", and the filter
+   * silently changes shape as the data does. section 4.5 declares what this field may carry --
+   * "kind evidence or source_fact" -- so the categories are a property of the CONTRACT, and
+   * a chip that selects zero rows is a true answer rather than a missing control.
+   *
+   * It is the same rule as everywhere else in this cycle: the contract, and not the sample.
+   */
   const kinds = React.useMemo(
-    () => [...new Set(items.flatMap(evidenceKindsOf))].sort(),
-    [items],
+    () => [...REFERENCE_FIELDS["AttentionItem.evidence_refs"].kinds].sort(),
+    [],
   );
   const shown = limit === undefined ? prepared.visible : prepared.visible.slice(0, limit);
   const filtersActive = filter.severities.length > 0 || filter.evidenceKinds.length > 0;

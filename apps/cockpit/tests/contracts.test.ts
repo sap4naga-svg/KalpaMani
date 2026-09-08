@@ -281,7 +281,13 @@ describe("the envelope", () => {
   it("rejects an unknown schema_version rather than coercing it", async () => {
     const client = new FixtureReadClient({ clock: fixedClock(AS_OF) });
     const envelope = await client.executiveOverview(DEFAULT_SCOPE);
-    const drifted = { ...envelope, schema_version: "cockpit.executive_overview.v2" };
+    /*
+     * A version NO BUMP WILL REACH, and it used to be `.v2`.
+     *
+     * ADR-0030 bumped this read model to v2, so the old example had become a KNOWN
+     * version and this test was asserting that a valid response is rejected.
+     */
+    const drifted = { ...envelope, schema_version: "cockpit.executive_overview.v99" };
     const parsed = executiveOverviewEnvelope.safeParse(drifted);
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues.some((issue) => issue.message.includes("unknown schema_version"))).toBe(

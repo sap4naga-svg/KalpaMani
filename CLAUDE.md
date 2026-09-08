@@ -4100,18 +4100,30 @@ live trading:                                     HARD-DISABLED
 **A corrected specification is still a specification.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
 
-### The reference-contract reconciliation, and ADR-0030 — PROPOSED, and nothing is implemented
+### The reference-contract reconciliation, and ADR-0030 — ACCEPTED / IN FORCE
 
 **The C6 review found the reference contract unenforced. Investigating it found the accepted
-contract unenforceable as written.** Those are two different findings, and the second is why this is
-a proposed amendment rather than a bug fix.
+contract unenforceable as written.** Those are two different findings, and the second is why this was
+an amendment rather than a bug fix.
 
-[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) is
-**PROPOSED and carries no authority while the pull request introducing it is open**, and so are the
-corrections it makes to [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) in the
-same pull request. On independent review and merge it becomes **ACCEPTED / IN FORCE** as **corrected
-contracts and governance** — and nothing else. It **amends and supersedes no ADR document**;
+**[ADR-0030](docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md):
+ACCEPTED / IN FORCE** — **PR #78 merged**, merge commit
+**`77a59e3f90e24f8509fa3ec36aef255150f081c6`**, merged **2026-09-07T19:53:49Z**, with the
+reviewed PR #78 head as its second parent. Its conditional
+acceptance event has occurred, so it is **no longer proposed**, and the corrections it made to
+[`read-model-contracts.md`](docs/cockpit/read-model-contracts.md) are in force with it.
+
+**While PR #78 was open, ADR-0030 was proposed and carried no authority** — a historical fact about
+those days that stays true and is **not** rewritten as though the decision had authority before it
+was accepted. **ADR-0030's own document is unedited** and still carries the conditional line it was
+authored with, which is this repository's convention for a decision's own text: the acceptance is a
+fact about the merge, recorded here rather than by rewriting the file. **The merge accepted
+corrected contracts and governance and nothing else.** It **amends and supersedes no ADR document**;
 **ADR-0027, ADR-0028 and ADR-0029 each remain ACCEPTED / IN FORCE**.
+
+**The bounded implementation follow-up its §7 assigns has since been built under a later, separate
+written authorization, and is an OPEN PULL REQUEST that is neither reviewed nor merged** — see
+*The ADR-0030 reference-contract implementation* below, which governs the current state.
 
 **Five findings, each parsed out of the accepted text and executed rather than read off by eye.**
 
@@ -4152,6 +4164,11 @@ routes** and that inapplicability is *"not a synonym for 'we do not have it'"*. 
 exactly that, so it carries **`NOT_YET_AVAILABLE`** and `NOT_APPLICABLE` keeps its two routes.
 **No accepted guard was relaxed to fit this proposal's prose.**
 
+> **HISTORICAL — the state while PR #78 was open, superseded by *The ADR-0030
+> reference-contract implementation* below.** Every enforcement, implementation and
+> `schema_version` line in the block records those days and **no longer governs**. Its
+> standing gates are unchanged.
+
 ```text
 ADR-0030:                                         PROPOSED / NOT IN FORCE
 ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
@@ -4185,9 +4202,218 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**A proposed reconciliation is not an enforced contract.** The bounded implementation cycle that
-would close `ref_kind`, compile the per-kind resolution sets, enforce `EMBEDDED` and cardinality and
-re-label the trade reference is **a separate authorization that has not been given**.
+**A proposed reconciliation is not an enforced contract**, which was the whole of the state above.
+The bounded implementation cycle that closes `ref_kind`, compiles the per-kind resolution sets,
+enforces `EMBEDDED` and cardinality and re-labels both trade references was **a separate
+authorization**, and it has since been given and used — the section that follows records it.
+
+### The ADR-0030 reference-contract implementation — INDEPENDENTLY REVIEWED AND CORRECTED
+
+**The reference contract is enforced, and the enforcement was independently reviewed rather than
+declared.** This section records what the implementation does and what the review changed about it.
+**Its acceptance event is the merge of PR #79 into `main`**; while that pull request is open the
+implementation is a reviewed candidate and nothing here is authority for anything beyond itself.
+**No merge SHA and no merge timestamp is predicted here.**
+
+**It implements the bounded follow-up ADR-0030 §7 assigns, and nothing wider.** No Brain, scanner,
+strategy, portfolio, risk or execution engine; no production API, projection, database, migration or
+scheduler; no research execution, backtest or feedback automation; no deployment, real-source
+integration or infrastructure mutation; **no AWS, Terraform, provider, brokerage, LEAN or model
+call**; and **no C7 screen** — C7 remains **NOT STARTED**.
+
+#### What the independent review found, and corrected
+
+**Four material findings, each reproduced on the author's head before it was corrected.** None of
+them is a redesign of ADR-0030: each is the accepted decision being enforced where an ordinary read
+actually runs into it.
+
+| | |
+|---|---|
+| **the version matrix was decided by fixture bytes** | thirteen schemas bumped because their emitted example moved and six stayed at `v1` because theirs did not. The **envelope** narrowed for **all nineteen**, and two of the six changed in the payload as well — so the criterion was the sample rather than the contract. **All nineteen are `v2`**, and the test that enshrined the old criterion is replaced by one that checks the contract |
+| **the resolution path had no runtime caller** | `followReference` and `producerStateFor` were reached only from tests, which supplied `found: false` and asserted the answer they had just supplied. Meanwhile **the read a reader actually performs** — follow `downstream_refs.trade` to `/portfolio/trades/{ref_id}`, which calls `tradeDetail` — answered **`NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`** for an unknown identifier, which **R9 refuses in exactly that case**. The rule now lives once, in `targetAvailability`, and `tradeDetail`, `tradeLifecycle`, `candidateDetail` and `followReference` all reach it |
+| **absent metadata read as a passed check** | `TargetLabels` was optional, so a located target carrying none was `RESOLVED` without an environment or provenance check; a **tombstone returned `RESOLVED` before every check**, and was a bare boolean establishing no relationship to the entity it claimed to withdraw; and **neither the target's kind nor its identifier was ever compared** against the reference, so R8 was unenforced on the follow path. Labels, kind and identity are required now, a tombstone **names the entity it withdrew**, and a tombstone takes every check a located target takes |
+| **authorization came from a producer-controlled label** | the required scope was a **caller-supplied string**, so the authorization input came from the thing being authorized; and the read was authorized against **`Ref.classification`**, which §4.3.1 states *"labels the reference; it is not access or publication authorization"*. The scope now comes from the accepted §4.3 and §4.5 tables (§4.3.3), a contradicting declaration is refused, and the **located target's own classification** is what withholds it — a reference and a target that disagree are refused rather than resolved under the permissive one |
+
+**One finding is confirmed, PARTLY corrected, and its remainder is a CONTRACT CONFLICT rather
+than a defect.** The attention evidence kinds were corrected — `AttentionItem.evidence_refs` is
+*"kind `evidence` or `source_fact`"* and was carrying `data_quality`, `health_transition` and
+`reconciliation` — and **that correction is required and right**.
+
+**What the review restored.** The first implementation typed the borrow item's reference
+`evidence`, which left it the **only disclosed reference in the application with no destination
+at all** — and *"every reference is disclosed … with its kind, its **own** resolution, its
+classification **and a link to the owning area**"* is an accepted C4 behaviour. It is
+`source_fact` now, on the catalogue's own ground rather than to obtain a link: **Area 28 names
+`AttentionItem` a *"projection, derived from alerts, health, risk, data quality and
+governance"*, and §4.3 defines `source_fact` as *"the recorded fact a projection was built
+from"*** — which is exactly what a recorded borrow record, data-quality finding, health
+transition or reconciliation break is to the item projected from it. `ShortSideSnapshot.borrow[].record_ref`
+being `evidence` decides nothing here: **R2 is explicit that a kind is a property of the FIELD
+and not of the field NAME.** Every disclosed attention and What Changed reference has an
+owning-area link again, and a regression asserts it.
+
+**The filter is a property of the contract now, not of the sample.** Its chips were derived
+from the kinds present, so a category with no rows had no chip and a reader could not tell
+*none of these* from *no such category*. They come from §4.5's declared set for the field, so
+both `evidence` and `source_fact` remain selectable and a chip that selects zero rows is a true
+answer.
+
+> **HISTORICAL — the state before ADR-0031 was accepted, superseded by *The accepted
+> owning-area navigation, and its implementation*.** The contract conflict recorded below was
+> real on the days it was written, and it is not rewritten as though it had never held.
+> **ADR-0031 has since resolved it by deciding exactly the second closed, contract-declared
+> attribute the second of its three options names**, so every per-area-drill-down and merge
+> line from here to the end of this section — the `attention per-area drill-down: LOST` and
+> `merge: WITHHELD` rows included — records those days and **no longer governs**. The
+> `4.3.2` this section cites for the carrier catalogue is **§4.3.3** after the integration.
+> Its forward authorization boundaries are unchanged.
+
+**What the review could NOT restore, and why it is a contract conflict.** The **per-area**
+drill-down is gone: these disclosures reached `/system/data-quality`, `/strategy/health` and
+`/execution/reconciliation` **through `ref_kind` values §4.5 does not permit on this field**.
+Three accepted clauses meet here and cannot all hold:
+
+| Accepted clause | What it requires |
+|---|---|
+| the C4 acceptance record | every disclosed reference carries **a link to the owning area** |
+| **ADR-0030 R10** | a destination comes from a **closed allowlist keyed by `RefKind`**, and an unmapped kind yields **no link, never a guess** |
+| **§4.5 `AttentionItem.evidence_refs`** | may carry **only** `evidence` or `source_fact` |
+| **§4.3 + §5** | `evidence` resolves to *"a classified evidence artefact"* by `AUTHORIZED_READ — the scope named on the reference`, and **§5 catalogues no route and no owning area for it** |
+
+**The subject area is not a property of a reference, and no accepted field carries it.** All four
+conforming references are one kind, so one kind is one destination — `/governance/audit`, the area
+that owns a recorded fact. **Restoring per-area routing requires a contract decision**, and the
+smallest one is exactly one of: a closed subject-area field on `AttentionItem` that navigation may
+key on; an R10 amendment permitting an allowlist keyed by a second closed, contract-declared
+attribute; or an explicit ruling that the audit trail is the owning area for `source_fact` evidence
+and the per-area drill-down is withdrawn. **None of the three is an implementation act**, so the
+narrowing is recorded, asserted by a test that a later cycle must change, and **not described as an
+unchanged capability**.
+
+#### What it enforces
+
+| | |
+|---|---|
+| **closed `RefKind`** | the **twenty-seven** members, replacing `ref_kind: z.string().min(1)`. A value outside them is refused at admission |
+| **per-kind resolutions** | each row's permitted **set**, compiled and enforced. A kind whose row lists no `UNRESOLVABLE_V1` cannot declare one |
+| **host-field catalogue** | every reference-valued field names its kind — **implemented and specification-only alike**, `RefList` fields included — so the cycle that first emits a C7 payload inherits an enforced contract rather than an open one. **No C7 model, producer, screen, route or fixture is created by recording one** |
+| **`EMBEDDED`** | needs **catalogue permission** and **validated truth**. A new §4.3.2 names **seven** authorized carriers, states whether each holds the complete target or a **declared projection**, and fixes its identity correspondence from a **closed** four-member vocabulary |
+| **identity** | compared against the **target entity**, never its container. The identifier-less `security` projection is compared on its canonicalized **symbol**, and never on the display name |
+| **cardinality** | the **host field's** declaration governs; `items`, `total` and `truncated` stay apart, and no relation is asserted from a truncated page or from a total nobody took |
+| **absence** | **`REFERENT_NOT_FOUND`** added to both closed vocabularies, reachable from `NOT_YET_AVAILABLE` alone. `NOT_APPLICABLE` keeps its two ADR-0028 routes |
+| **access** | scope denial (`SCOPE_MISSING` / `SCOPE_INSUFFICIENT`) stays distinct from `CLASSIFICATION_WITHHELD`, and a denied reference stays **visible** |
+| **navigation** | **one** closed allowlist keyed by `RefKind`. Two duplicated destination maps and one hand-written link are gone; an unmapped kind or a non-`SafeId` identifier yields **no link**, never a guess |
+
+**Both mislabelled trade references are corrected.** `CandidateDetail.downstream_refs.trade` and
+`RiskSnapshot.initial_planned_risk_open[].trade_ref` are kind **`trade`** resolving by `ENDPOINT`.
+
+**Four `EMBEDDED` declarations were withdrawn, and one was untrue rather than merely unpermitted.**
+`TradeDetail.add_refs` and `exit_ref` resolve to lifecycle **events** the response does not carry;
+`ShortSideSnapshot.borrow[].security_ref` sat beside a **display string** with no identifier to
+compare; and `RiskDecision.initial_risk_ref` claimed an embed of a record `RiskDecision` carries
+**nowhere at all**.
+
+**A synthetic producer is still not the real subsystem.** Where a `PRODUCER_NOT_IMPLEMENTED` became
+`REFERENT_NOT_FOUND`, it says *this record was not written* about a producer implemented for
+**`SYNTHETIC` provenance and nothing else**. **The Brain runtime, the scanner and the risk engine
+stay NOT IMPLEMENTED and NOT AUTHORIZED**, and the project scenario reports every operational read
+model `NOT_IMPLEMENTED` exactly as before.
+
+#### The compatibility precheck, and the version decision
+
+**ADR-0030 §6.1 permits a coordinated replacement without a `schema_version` bump only while four
+deployment constraints hold, and §7 requires them re-checked before the follow-up lands. They were
+checked rather than assumed, and the fourth does not hold.**
+
+| Constraint | Verdict | Evidence |
+|---|---|---|
+| 1 — one local application, replaced atomically | **HOLDS** | one private package; producer, contracts and consumers in this tree, landed in a single commit |
+| 2 — no independent consumer or published schema | **HOLDS** | one `package.json`, `private: true`; no OpenAPI or JSON-Schema generator, no exported or vendored schema artifact |
+| 3 — no persisted cache, stored payload or golden file | **HOLDS** | no snapshot directory, no `toMatchSnapshot`, no committed payload JSON, no persisted query cache and no browser storage |
+| 4 — no real producer; provenance `SYNTHETIC` throughout | **DOES NOT HOLD** | `QualificationStatus` carries **`REPOSITORY_TRACKED`** provenance over real tracked governance facts, transcribed at a named commit and documented as *"REAL FACTS … NEVER relabelled `SYNTHETIC`"* |
+
+**So the follow-up bumped rather than proceeded**, which is what the accepted rule requires and not
+an exception invented to avoid one.
+
+**Which read models the bump covers was decided by the CONTRACT, and the first attempt decided it
+by the emitted fixture bytes.** Thirteen schemas were bumped because their emitted example changed
+and six were left at `v1` because theirs did not. **An unchanged example is not an unchanged
+contract**, and the independent review established that the six were affected too:
+
+| | |
+|---|---|
+| **the envelope narrowed, for every read model** | `envelopeFields.source_refs` moved from an open `refList` to `refListFieldOf("Envelope.source_refs")`, which closes `ref_kind` to `source_fact` and checks `items`, `total` and `truncated` against the list's own cardinality. **Every read model carries the envelope**, so every one of the nineteen now rejects envelopes it accepted before |
+| **two of the six changed in the payload as well** | `PerformanceSeries.benchmark_refs` became `refListFieldOf(...)`, and `MissedOpportunity.candidate_ref` became `refOf(...)` beside a **new** optional `trade_ref`. Their emitted samples happened not to move; their contracts did |
+| **the widened reason vocabulary reaches all of them** | `REFERENT_NOT_FOUND` was added to `FieldReasonCode`, which §6.1 itself records as a widening *"an older validator compiled against the previous closed set REJECTS"* |
+
+**So the affected set is all nineteen, and the matrix says so.** A sample is evidence about a
+sample; the accepted/rejected value set is the contract.
+
+```text
+bumped to v2, contract narrowed or widened   19   ALL read models
+  directly, in the payload                   15   AttentionItem · CandidateDetail
+                                                  CandidateSummary · ExecutiveOverview
+                                                  ExposureAggregate · MissedOpportunity
+                                                  PerformanceSeries · PositionSnapshot
+                                                  RiskSnapshot · ShortSideSnapshot
+                                                  StrategyPerformance · TradeDetail
+                                                  TradeLifecycle · TradeSummary
+                                                  WhatChangedEntry
+  through the shared envelope only            4   CandidateFunnel · MarketRegime
+                                                  PerformanceSummary · QualificationStatus
+left at v1                                    0
+```
+
+**A payload carrying a superseded version is rejected rather than coerced**, which the suite
+asserts through the real admission path — including for `MarketRegime`, one of the six the first
+attempt would have left at `v1`.
+
+#### What it does not do
+
+```text
+ADR-0030:                                         ACCEPTED / IN FORCE
+ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
+reference-contract implementation:                REVIEWED AND CORRECTED / PR #79
+independent review:                               PERFORMED -- 4 findings corrected, 1 recorded
+merge:                                            WITHHELD -- per-area drill-down conflict OPEN
+ref_kind in the application:                      CLOSED AT TWENTY-SEVEN MEMBERS
+both trade references:                            RE-LABELLED kind trade
+authorized embed carriers:                        SEVEN, EACH NAMED IN 4.3.2
+withdrawn embed declarations:                     FOUR
+schema_version bumped:                            19 OF 19, BY CONTRACT CHANGE
+attention owning-area link:                       RESTORED for every disclosed reference
+attention evidence filter:                        CONTRACT-DERIVED chips, both kinds selectable
+attention per-area drill-down:                    LOST -- contract conflict, ADR decision needed
+new src/kalpamani modules:                        NONE
+dependency or manifest changes:                   NONE
+Blueprint PDF changes:                            NONE
+CI or branch-protection changes:                  NONE
+C7 research and feedback interfaces:              NOT STARTED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+production API, projections, databases:           NOT IMPLEMENTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker, LEAN and IBKR activity:                   NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**An enforced contract is not a finished Cockpit.** Full Cockpit V1 remains **incomplete**, C7
+remains **NOT STARTED**, the **C5 completion follow-up remains pending**, and **specification,
+implementation, review, merge and deployment stay separate gates that are never collapsed into
+one**.
 
 ### The owning-area navigation amendment, and ADR-0031 — PROPOSED, and nothing is implemented
 
@@ -4259,6 +4485,12 @@ conflict**, and **the pending pull request is not edited by this one**.
 and **a reference-carried scope is still not expressible**. Working area links are not a repair of
 either, and closing them is a separate decision.
 
+> **HISTORICAL — the state while PR #80 was open, superseded by *The accepted owning-area
+> navigation, and its implementation*.** ADR-0031 has since been accepted on that merge and its
+> implementation is carried by open PR #79, so every status, existence and implementation line
+> below records those days and **no longer governs**. Its forward authorization boundaries are
+> unchanged.
+
 ```text
 ADR-0031:                                         PROPOSED / NOT IN FORCE
 ADR-0030:                                         ACCEPTED / IN FORCE, AMENDED AT R10 ONLY
@@ -4301,6 +4533,127 @@ live trading:                                     HARD-DISABLED
 add the field, compile the route allowlist, restore the per-area links without changing any evidence
 kind, and replace the known-narrowing regression with positive and negative behavioural tests is **a
 separate authorization that has not been given**.
+
+### The accepted owning-area navigation, and its implementation — ACCEPTED, and carried by an open pull request
+
+**ADR-0031's conditional acceptance event has occurred**, on the merge of **PR #80** into `main`, so
+**ADR-0031 is ACCEPTED / IN FORCE** as **architecture, contracts and governance**. That supersedes
+the `PROPOSED / NOT IN FORCE` status recorded in the section above, which is the pre-merge text
+merged with that pull request and is **not rewritten**. **While PR #80 was open ADR-0031 was proposed
+and carried no authority** — a historical fact about those days that stays true, and the deltas it
+made to the Cockpit specifications carried exactly the same conditional authority, which is why those
+documents still say so. **ADR-0031 amends ADR-0030 at R10 only**, **it amends and supersedes no other
+ADR**, and **no ADR document is edited by the implementation**.
+
+**Acceptance is not implementation, and merging an implementation is a third gate again.** The
+bounded implementation cycle ADR-0031 §5 assigns has been separately authorized and **is carried by
+the open reference-enforcement pull request, PR #79**. **While PR #79 is open it is a reviewed
+candidate**: nothing recorded here is authority for anything beyond itself, and **no merge SHA and no
+merge timestamp is predicted**.
+
+**Accepted `main` was integrated into that pull request rather than the other way round.** The
+section-numbering collision ADR-0031 A6 settled in advance was applied rather than discovered:
+accepted **§4.3.2** is *Owning-area navigation*, and the enforcement work's two sections became
+**§4.3.3** *The authorized carriers* and **§4.3.4** *The scope a resolution requires*. **Every clause
+of both rule sets is preserved**, neither is dropped, merged or abridged, and every cross-reference
+and parser anchor that names a moved section moved with it.
+
+#### What the implementation does
+
+| | |
+|---|---|
+| **the field** | `Ref` gains one **optional** `owning_area`, closed at the seven `OwningArea` members, validated at admission and **never coerced to a nearest member**. It is carried **inside** the reference, so association is by containment and survives filtering, truncation and reordering |
+| **the contradiction** | two references sharing a `ref_id` **and** a `ref_kind` anywhere in **one response** while **declaring different** areas are **refused at admission**, on the real `admit` path that every read passes through — not in a helper, and not per list. **An absence is not a conflicting value**, and a declared area beside an absent one is admitted with the absence left absent |
+| **the routes** | **one** closed table, beside the existing `RefKind` allowlist in the one navigation module. Seven members, seven internal **area landing pages**, no entity segment, nothing interpolated, and no producer-supplied template |
+| **`AUDIT_TRAIL`** | a member, reached **only** by a reference that declares it. It is **never a default**, and no code path substitutes it for an absent, unknown or undetermined area |
+| **the restoration** | the four attention destinations are back — data quality, strategy health, reconciliation and short-side borrow — and **not one `ref_kind` moved to obtain a link**. What Changed carries the same behaviour, and declares **no** area on the two risk-figure changes, because the closed vocabulary has no risk member |
+| **the labels** | the target control names the **record**; the area control names the **AREA** and says so. They render as **distinct controls that are never merged**, and the area label may never read as resolving, opening, retrieving, viewing or showing the evidence |
+| **the status** | six of the seven routes are placeholders, and the affordance carries the **destination's own** status rather than implying a built screen |
+| **the boundary** | reference resolution, reference status, scope enforcement, classification withholding and the `REFERENT_NOT_FOUND` handling are **unchanged**, and an area link **authorizes nothing**. A caller denied the target is still denied, and still sees the area link |
+
+**The evidence-kind filter is unchanged**, still computed from the contract rather than the sample,
+and a category selecting zero rows is still a true *none of these*. **`owning_area` is not folded
+into it and does not become a kind.**
+
+**The known-narrowing regression is replaced rather than deleted.** Its premise was that the subject
+area is not a property of a reference and that no accepted field carries it — true of the contract as
+it then stood, and no longer true of it. The target narrowing it asserted is **still asserted**,
+because R10's allowlist is unamended; the area restoration is asserted beside it, with positive and
+negative behavioural coverage of the new attribute.
+
+#### The combined version identity, read from the tree
+
+**All nineteen read models carry `v2` for the combined change, and `v3` is not adopted.** ADR-0031 A6
+refuses to name a version and states the rule instead: the implementation determines **from the tree
+it lands in** whether the shape change ships inside the pending coordinated replacement or after it.
+**It ships inside** — the nineteen-model change is in this same unmerged pull request, so the two are
+one atomic replacement and carry **one** version identity. Shipping one half as `v2` and the other as
+`v3` is refused outright, and `v2` cannot silently acquire a second meaning because **no `v2` has ever
+reached `main` or been deployed**.
+
+**The four ADR-0030 §6.1 deployment constraints were re-checked against this tree rather than
+inherited**, and **none of them has changed**: one local application with no second deployable and no
+workspace package; a private manifest publishing, exporting and vendoring no schema artifact; no
+snapshot, golden payload, stored wire example or persisted response cache anywhere in the tree; and
+the same one `REPOSITORY_TRACKED` read model beside eighteen `SYNTHETIC` ones that ADR-0030 was
+accepted against. A payload carrying a superseded version is **refused** through the real admission
+path rather than coerced.
+
+#### What it does not do
+
+**It repairs neither open limitation, and it does not claim to.** **§5 still catalogues no evidence
+endpoint**, so there is **no general destination at which an evidence artefact can be retrieved**;
+and **a reference-carried scope is still not expressible**, because §4.2 gives `Ref` no field to name
+one in. **A reader who reaches the Data Quality area has navigated, and has not retrieved the
+artefact.** Working area links are not a repair of either, and closing them is a separate decision
+that is not opened here.
+
+```text
+ADR-0031:                                         ACCEPTED / IN FORCE
+ADR-0031 acceptance event:                        MERGE OF PR #80 INTO MAIN
+ADR-0030:                                         ACCEPTED / IN FORCE, AMENDED AT R10 ONLY
+ADR-0029 / ADR-0028 / ADR-0027 / ADR-0026:        ACCEPTED / IN FORCE, UNAMENDED
+owning-area navigation:                           IMPLEMENTED IN AN OPEN PULL REQUEST
+the reference-enforcement pull request:           OPEN / UNMERGED / PR #79
+independent review of the implementation:         PERFORMED
+Ref.owning_area in the application:               EXISTS / OPTIONAL / CLOSED AT SEVEN
+per-area attention links:                         RESTORED IN AN OPEN PULL REQUEST
+evidence kinds changed to obtain a link:          NONE
+the section-numbering integration:                4.3.2 / 4.3.3 / 4.3.4 INTEGRATED
+every clause of both rule sets:                   PRESERVED
+combined schema_version identity:                 v2 FOR ALL NINETEEN READ MODELS
+schema_version values published to main:          NONE
+a general evidence retrieval endpoint:            NOT CREATED / STILL OPEN
+a reference-carried scope expression:             NOT CREATED / STILL OPEN
+new routes, pages or dependencies:                NONE
+Blueprint PDF changes:                            NONE
+C7 research and feedback interfaces:              NOT STARTED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**An accepted decision and a merged implementation are two different things, and neither is a third.**
+ADR-0031 is accepted; its implementation is written, validated and **open for a fresh independent
+review**; and **specification, implementation, research, deployment and execution stay five separate
+gates**.
+
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
 

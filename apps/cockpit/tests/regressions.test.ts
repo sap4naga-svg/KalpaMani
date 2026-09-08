@@ -6,6 +6,7 @@
  * the published schemas -- rather than an isolated helper, because a payload that a helper
  * would refuse still reaches a screen if the boundary it actually passes through does not.
  */
+import { ATTENTION_LIST_SCHEMA } from "@/contracts/read-models";
 import { describe, expect, it } from "vitest";
 
 import { effectiveComposite, freshUntil, isExpired } from "@/contracts/freshness";
@@ -233,7 +234,7 @@ describe("finding B -- freshness refuses contradictory and unreal input", () => 
 /** Drives a freshness report through the REAL envelope admission path. */
 function envelopeWith(freshness: FreshnessReport): () => unknown {
   const candidate = {
-    schema_version: "cockpit.attention_list.v1",
+    schema_version: ATTENTION_LIST_SCHEMA,
     api_version: "v1",
     entity_id: "attention-list",
     correlation_id: "attention-list-v1",

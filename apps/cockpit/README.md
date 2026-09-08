@@ -248,7 +248,7 @@ The C3 foundation named its omissions; the ones C4's surfaces consume are now ca
 
 | | |
 |---|---|
-| `ExecutiveOverview.regime_ref` | present, kind `regime_context`, resolving `UNRESOLVABLE_V1` — the producer does not exist, and §4.3 keeps the reference **visible** rather than dropping the join |
+| `ExecutiveOverview.regime_ref` | present, kind `regime_context`, resolving `ENDPOINT` — its row lists no other member. **It resolved `UNRESOLVABLE_V1` until ADR-0030 was implemented**, which said the PRODUCER does not exist; whether a producer exists is now a separate axis carried by the value-bearing field beside the reference, and §4.3 keeps the reference **visible** either way |
 | `ExecutiveOverview.last_decision`, `last_scout_run` | present, and both are **absences**. The Brain runtime is not implemented and not authorized, so there has never been a last decision or a last scout run — a plausible date here would be the one figure on the page implying otherwise |
 | `ExecutiveOverview.what_changed`, `attention` | present as `RefList`s, and the summary counts come from `total` rather than from `items.length` |
 | `RefList.total` | present on every list, as a `CountValue`. A truncated list must state a total **greater** than the items it carries, and a producer that cannot count says so with a state |
@@ -328,25 +328,96 @@ is carried as `ENDPOINT`; where none was, it resolves to an availability state l
 absent producer. `ENDPOINT` is an accepted member of the closed `Resolution` vocabulary, and no
 producing contract was widened.
 
-**That choice is now the subject of a proposed contract reconciliation, and the reference contract
-is NOT ENFORCED here yet.** The C6 review recorded that `ref_kind` is admitted as an open string and
-that no reference-kind-to-resolution table is enforced. Investigating it established that the
-accepted text **cannot** be enforced as written:
+**That reconciliation has since been accepted, and the reference contract is now ENFORCED.**
 [ADR-0030](../../docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md)
-records the five findings — twenty-five reference-valued fields in the accepted catalogue carry no
-kind at all, nineteen scalar `Ref` and six `RefList`, `brain_decision`'s only carrier cannot embed
-it, the Resolution column is already a set rather than an invariant, the Cardinality column has
-three possible referents, and no reason code distinguishes an unknown identifier from an
-unimplemented producer.
+recorded five findings the accepted text could not be enforced through — twenty-five
+reference-valued fields carried no kind at all, nineteen scalar `Ref` and six `RefList`;
+`brain_decision`'s only carrier could not embed it; the Resolution column was already a set rather
+than an invariant; the Cardinality column had three possible referents; and no reason code
+distinguished an unknown identifier from an unimplemented producer. The bounded implementation
+follow-up its §7 assigns is what this section now describes. **The C6 choice recorded above is
+RATIFIED by R5 rather than reversed.**
 
-**ADR-0030 is PROPOSED and carries no authority while its pull request is open**, and **no runtime
-behaviour in this application was changed by it.** `ref_kind` is still `z.string().min(1)`, the
-per-kind resolution sets are still unenforced, and `CandidateDetail.downstream_refs.trade` and
-`RiskSnapshot.initial_planned_risk_open[].trade_ref` are both still emitted as kind `source_fact` —
-the value C6 had to guess twice, because §4.3 supplied no `trade` row.
-Those corrections belong to **one bounded implementation cycle after acceptance**, and that cycle is
-**a separate authorization that has not been given**. The C6 choice recorded above is **ratified**
-by ADR-0030 R5 rather than reversed.
+### The reference boundary
+
+**Where it is enforced.** `contracts/references.ts` carries the closed `RefKind`, the per-kind
+permitted resolution sets and the host-field catalogue; every reference-valued field in every
+payload is declared through `refOf` or `refListFieldOf`, so the rules run inside the same
+`schema.safeParse` that `admit` already called. **A helper tested in isolation but bypassed by the
+client is not enforcement**, so the checks sit on the path the fixture adapter actually takes.
+
+| | |
+|---|---|
+| **`RefKind`** | closed at the **twenty-seven** rows of §4.3, replacing `z.string().min(1)`. `trade` is the member ADR-0030 R1 added |
+| **resolutions** | each kind's row is a **permitted set**, and a reference declares one member of it. A kind whose row lists no `UNRESOLVABLE_V1` cannot declare one |
+| **`EMBEDDED`** | needs catalogue **permission** *and* **truth**. §4.3.3 names seven authorized carriers, says whether each holds the complete target or a **declared projection**, and states its identity correspondence. **Presence is not permission** |
+| **identity** | compared against the **target entity**, never the container. The identifier-less `security` projection is compared on its canonicalized `symbol` and **never on the display name** |
+| **cardinality** | the host field's own declaration governs; `items`, `total` and `truncated` are kept apart, and no relation is asserted from a page or from a total nobody took |
+| **absence** | `REFERENT_NOT_FOUND` was added to both closed vocabularies. An implemented producer missing one record says so; only a producer that does not exist for the scope is `PRODUCER_NOT_IMPLEMENTED` |
+| **navigation** | one closed allowlist keyed by `RefKind`, in `lib/reference-navigation.ts`. Two duplicated destination maps in the components are gone; an unmapped kind yields **no link**, and a `ref_id` that is not a `SafeId` yields none either |
+| **owning area** | the SECOND closed attribute, §4.3.2 under ADR-0031. `Ref.owning_area` is optional, closed at seven members, carried INSIDE the reference and validated at admission; two references sharing a `ref_id` **and** a `ref_kind` anywhere in one response while **declaring different** areas are **refused**. Its route table lives beside the first one, and **neither is a fallback for the other** |
+
+**The per-area drill-down is restored, and not one `ref_kind` moved to restore it.** Correcting the
+producer left every attention and What-Changed reference a conformant `source_fact`, and R10 has one
+route for that kind — so a data-quality finding, a health transition, a reconciliation break and a
+borrow record all offered one link, to the Audit Trail. **An Audit page does not own every fact.**
+ADR-0031 answers it with a second attribute rather than a second meaning for the first one: each
+reference now also declares the area responsible for the record it names, and the four destinations
+are back at `/system/data-quality`, `/strategy/health`, `/execution/reconciliation` and
+`/risk/short-side`. The controls are **distinct and never merged** — the target link names the
+record, the area link names the AREA and says so, and **it may never read as retrieving the
+evidence**, because it does not. Six of the seven routes are placeholders, and the affordance
+carries the destination's own status rather than implying a built screen. **`AUDIT_TRAIL` is a
+member and never a default**, and a reference the contract does not assign an area to declares
+none — which is a stated absence and **not** a claim that no area owns the record.
+
+**The evidence-retrieval limitation is NOT repaired by any of that.** §4.3 resolves `evidence` by
+`AUTHORIZED_READ` to a classified evidence artefact and §5 catalogues no evidence endpoint, so there
+is no general destination at which one can be retrieved; and §4.3.4 names the scope as *"named on
+the reference"* while `Ref` has no field to name one in. **A reader who reaches the Data Quality area
+has navigated, and has not retrieved the artefact.** Both limitations stay open.
+
+**Four `EMBEDDED` declarations were withdrawn, and one of them was untrue rather than merely
+unpermitted.** `add_refs` and `exit_ref` resolve to lifecycle **events** this response does not
+carry; `ShortSideSnapshot.borrow[].security_ref` sat beside a display string with no identifier to
+compare; and `RiskDecision.initial_risk_ref` claimed an embed of a record `RiskDecision` carries
+nowhere at all.
+
+**Both mislabelled trade references are corrected.** `CandidateDetail.downstream_refs.trade` and
+`RiskSnapshot.initial_planned_risk_open[].trade_ref` are kind `trade` resolving by `ENDPOINT` —
+the value C6 had to guess twice, because §4.3 supplied no `trade` row until R1 added one.
+
+**All nineteen `schema_version`s moved to `v2`, and the criterion is the CONTRACT rather than the
+emitted bytes.** ADR-0030 §6.1 permits a coordinated replacement without a bump only while four
+deployment constraints hold, and **the fourth does not**: `QualificationStatus` carries
+`REPOSITORY_TRACKED` provenance over real tracked governance facts, so "provenance is `SYNTHETIC`
+throughout" is false of this boundary. The follow-up is required to bump rather than proceed, and
+it did.
+
+An earlier revision bumped **thirteen** — the ones whose emitted payload bytes changed — and left
+six at `v1`. **An unchanged example does not mean an unchanged contract.** `Envelope.source_refs`
+moved from an open `refList` to `refListFieldOf`, which narrows `ref_kind` to `source_fact` and
+checks `items`, `total` and `truncated` against the list's own cardinality — for **every** read
+model, because every read model carries the envelope. A consumer pinned to one of the six would
+have accepted, before this cycle, envelopes it must now reject. The affected set is all nineteen.
+
+**`Ref.owning_area` ships INSIDE the same replacement, so it carries the SAME identity and not a
+second one.** ADR-0031 A6 refuses to name a version and states the rule instead: an implementation
+determines from the tree it lands in whether the shape change ships inside the pending coordinated
+replacement or after it, and **inside means one version identity for the combined change**. That is
+the branch this tree is on — the nineteen-model change is in this same unmerged pull request, `v2`
+has never reached `main` and has never been deployed, so it cannot silently acquire a second
+meaning; it acquires its only meaning, which is the combined change. Shipping one half as `v2` and
+the other as `v3` inside a single atomic replacement is refused outright, and `v3` is not adopted:
+no `v2` was ever published for it to succeed.
+
+**The four §6.1 constraints were re-checked against this tree rather than inherited.** One local
+application with no second deployable and no workspace package; a `private` manifest that publishes,
+exports and vendors no schema artifact; no snapshot, golden payload, stored wire example or
+persisted response cache anywhere in the tree, and no browser or filesystem storage in the client;
+and the same one `REPOSITORY_TRACKED` read model beside eighteen `SYNTHETIC` ones that ADR-0030 was
+accepted against. **None of the four has changed**, so no further bump is forced, and the one bump
+this cycle makes is the coordinated one.
 
 ### Still not carried
 

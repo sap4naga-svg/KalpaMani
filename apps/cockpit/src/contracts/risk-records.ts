@@ -16,13 +16,14 @@
  */
 import { z } from "zod";
 
+import { refOf } from "./references";
+
 import {
   instant,
   metricOf,
   policyRef,
   ratioOf,
   reasonCoded,
-  ref,
   safeId,
 } from "./values";
 import { money } from "./values";
@@ -44,7 +45,7 @@ export const initialPlannedRisk = z.object({
   /** The entry reference the risk was set against. */
   reference_price: money,
   /** The invalidation level used AT ENTRY, carried as a reference and **never an order**. */
-  invalidation_ref: ref,
+  invalidation_ref: refOf("InitialPlannedRisk.invalidation_ref"),
   /** When the risk record was written. Never the response's own time (§4.4). */
   recorded_at: instant,
   risk_policy_ref: policyRef,
@@ -67,7 +68,7 @@ export const currentOpenPlannedRisk = z.object({
   risk_pct_of_capital: metricOf("risk.open_planned_pct"),
   /** The assessment instant, **always displayed**. */
   as_of: instant,
-  assessment_ref: ref,
+  assessment_ref: refOf("CurrentOpenPlannedRisk.assessment_ref"),
   risk_policy_ref: policyRef,
   /** From the protective-order record, never from a price. */
   protection_state: reasonCoded,
@@ -108,7 +109,7 @@ export type PermittedRisk = z.infer<typeof permittedRisk>;
  */
 export const gapEventRisk = z.object({
   modelled_loss: metricOf("gap_event.modelled_loss"),
-  scenario_ref: ref,
+  scenario_ref: refOf("GapEventRisk.scenario_ref"),
   model_version: safeId,
   as_of: instant,
 });

@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { Badge, Card, CardBody, CardHeader, Label } from "@/components/ui/primitives";
 import { formatDecimal, humanizeCode } from "@/lib/format";
+import { ReferenceDestinations } from "@/components/cockpit/reference-links";
 import { cn } from "@/lib/utils";
 import { AvailabilityBadge, UnavailableBody } from "@/components/cockpit/availability";
 import { ProvenanceBadge } from "@/components/cockpit/provenance";
@@ -125,15 +126,6 @@ function EndpointDetail({
   );
 }
 
-/** The area that OWNS each evidence kind, so a drill-down goes somewhere real. */
-const EVIDENCE_DESTINATION: Readonly<Record<string, { href: string; label: string }>> = {
-  source_fact: { href: "/governance/audit", label: "Audit trail" },
-  data_quality: { href: "/system/data-quality", label: "Data quality" },
-  health_transition: { href: "/strategy/health", label: "Strategy health" },
-  incident: { href: "/system/operations", label: "Operations" },
-  alert: { href: "/system/alerts", label: "Alerts" },
-};
-
 /**
  * The evidence drill-down for one change.
  *
@@ -167,27 +159,26 @@ function EvidenceDisclosure({
       <div className="space-y-2 px-3 pb-3 pt-1">
         <ul className="space-y-1.5">
           {references.map((reference) => {
-            const destination = EVIDENCE_DESTINATION[reference.ref_kind];
             return (
               <li
                 key={reference.ref_id}
                 data-testid="change-evidence-reference"
                 data-resolution={reference.resolution}
                 data-classification={reference.classification}
+                data-owning-area={reference.owning_area ?? ""}
                 className="flex flex-wrap items-center gap-2 text-label-s"
               >
                 <Badge tone="neutral">{humanizeCode(reference.ref_kind.toUpperCase())}</Badge>
                 <span className="font-mono text-text-tertiary">{reference.ref_id}</span>
                 <Badge tone="unavailable">{reference.resolution}</Badge>
                 <Badge tone="neutral">{reference.classification}</Badge>
-                {destination !== undefined && (
-                  <Link
-                    href={withScope(destination.href, scope)}
-                    className="text-accent underline underline-offset-2"
-                  >
-                    {destination.label} →
-                  </Link>
-                )}
+                {/*
+                 * THE SAME TWO AFFORDANCES AS THE ATTENTION DISCLOSURE, from the same closed
+                 * tables (§4.3.2). A change's evidence reference declares the area that owns
+                 * the recorded fact where one is catalogued, and declares none where none is --
+                 * an absence stays an absence and is never pushed to the nearest page.
+                 */}
+                <ReferenceDestinations reference={reference} scope={scope} />
               </li>
             );
           })}

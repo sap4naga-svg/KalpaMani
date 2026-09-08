@@ -177,7 +177,7 @@ function healthContext(versionId: string, asOf: string) {
   return {
     state: token("strategy.health_state", version.healthState, asOf),
     reason: demoReason(version.healthReason),
-    detail_ref: demoRef(`${versionId}-health`, "health_transition"),
+    detail_ref: demoRef(`${versionId}-health`, "health_transition", "ENDPOINT"),
     /** What this context deliberately does not carry, named rather than left blank. */
     omitted: (
       [

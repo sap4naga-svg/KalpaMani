@@ -15,6 +15,8 @@ import {
   completeness,
   dataClassification,
   fieldReasonCode,
+  owningArea,
+  refKind,
   resolution,
   unit,
 } from "./vocabularies";
@@ -98,11 +100,50 @@ export const magnitude = z.object({
 });
 export type Magnitude = z.infer<typeof magnitude>;
 
+/**
+ * `Ref` — §4.2, with `ref_kind` CLOSED at the twenty-seven §4.3 rows (ADR-0030 R1).
+ *
+ * It was `z.string().min(1)` — an OPEN string where the contract says closed, which is what
+ * admitted a trade reference labelled `source_fact` carrying a resolution `source_fact`'s
+ * own row does not list. Closing it was blocked until ADR-0030 fixed WHICH members the set
+ * has and WHICH resolutions each admits; both are now accepted, so it is closed here.
+ *
+ * **The kind is closed at this shape; the per-HOST-FIELD rules are not enforceable here.**
+ * Which kinds a given field may carry, and which resolutions each kind admits, depend on the
+ * field the reference sits in — so they are enforced by `refOf` and `refListFieldOf` in
+ * `references.ts`, which know the host field. This shape is the floor, never the whole rule.
+ *
+ * **A `Ref` carries NO `availability` and NO `reason`** (ADR-0030 R9). An unresolvable
+ * target is stated by the value-bearing field it would have filled, or by a §5 error, and
+ * the reference itself stays VISIBLE.
+ *
+ * **`owning_area` is OPTIONAL DESCRIPTIVE metadata** — §4.3.2, under ADR-0031 A1. It names
+ * the AREA responsible for the referenced record, and it is a SECOND axis from `ref_kind`
+ * rather than a second spelling of it.
+ *
+ * **Association is by containment and by nothing else.** The reference it describes is the
+ * object it is a field of, so it survives filtering, truncation and reordering — which a
+ * positional pairing against a parallel array would not. It is at most ONE per reference,
+ * and where accepted authority does not determine a single area the reference DECLARES NONE:
+ * never a list, never a first-of, never a nearest match.
+ *
+ * **It is closed here, and the rest of the rule is not enforceable at this shape.** A value
+ * outside `OwningArea` is refused by this enum. The contradiction rule — two references
+ * sharing a `ref_id` AND a `ref_kind` while DECLARING DIFFERENT areas — spans the whole
+ * ADMISSION UNIT, which a single reference cannot see, so it is enforced by
+ * `owningAreaContradiction` in `references.ts` and applied by `admit`.
+ *
+ * **It is never an access grant** (§4.3.2, A5), it never changes what the reference means or
+ * how it resolves, and it is not availability, freshness, completeness, materiality,
+ * severity, ranking input or authorization. It is deliberately NOT a scope field: §4.3.4's
+ * limitation stays open, and closing it is an ADR's act rather than an implementation's.
+ */
 export const ref = z.object({
   ref_id: safeId,
-  ref_kind: z.string().min(1),
+  ref_kind: refKind,
   resolution,
   classification: dataClassification,
+  owning_area: owningArea.optional(),
 });
 export type Ref = z.infer<typeof ref>;
 
@@ -152,6 +193,7 @@ export const refList = z
       });
     }
   });
+export type RefList = z.infer<typeof refList>;
 
 export const reasonCoded = z.object({
   code: z.string().min(1),

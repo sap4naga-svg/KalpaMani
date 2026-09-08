@@ -45,10 +45,47 @@ export const FIELD_REASON_CODES = [
   "NOT_DEFINED_FOR_SUBJECT",
   "POLICY_REFERENCE_MISSING",
   "CLASSIFICATION_WITHHELD",
+  /**
+   * ADR-0030 R9 — a reference is well formed and its identifier names NOTHING in the
+   * producing read model.
+   *
+   * It is an ABSENCE of a target and never an INAPPLICABILITY, so §4.1.1 reaches it from
+   * `NOT_YET_AVAILABLE` alone and `NOT_APPLICABLE` keeps its two ADR-0028 routes. It is
+   * never a producer that does not exist, never a scope the caller lacks, and never a
+   * target withheld by classification. It is carried by the VALUE-BEARING field the target
+   * would have filled — never by a bare `Ref`, which has no availability field.
+   */
+  "REFERENT_NOT_FOUND",
   "PROJECTION_ERROR",
 ] as const;
 export const fieldReasonCode = z.enum(FIELD_REASON_CODES);
 export type FieldReasonCode = z.infer<typeof fieldReasonCode>;
+
+/**
+ * read-model-contracts.md §5.2 — the closed error vocabulary, and NO FREE TEXT.
+ *
+ * `REFERENT_NOT_FOUND` is ADR-0030 R9's second landing place: the §5 error returned by an
+ * attempt to FOLLOW a reference. It is never a substitute for an unimplemented producer or
+ * a withheld target, and scope denial stays separate from classification withholding.
+ */
+export const ERROR_CODES = [
+  "UNKNOWN_SCHEMA_VERSION",
+  "UNKNOWN_API_VERSION",
+  "UNKNOWN_FILTER",
+  "UNKNOWN_SORT",
+  "PAGE_SIZE_EXCEEDED",
+  "EXTENT_EXCEEDED",
+  "CURSOR_INVALID",
+  "CURSOR_SNAPSHOT_SUPERSEDED",
+  "SCOPE_MISSING",
+  "SCOPE_INSUFFICIENT",
+  "CLASSIFICATION_WITHHELD",
+  "POLICY_REFERENCE_MISSING",
+  "REFERENT_NOT_FOUND",
+  "PROJECTION_ERROR",
+] as const;
+export const errorCode = z.enum(ERROR_CODES);
+export type ErrorCode = z.infer<typeof errorCode>;
 
 /** read-model-contracts.md §2.2. `REPOSITORY_TRACKED` is REAL and never relabelled SYNTHETIC. */
 export const DATA_PROVENANCES = [
@@ -129,6 +166,84 @@ export const RESOLUTIONS = [
   "UNRESOLVABLE_V1",
 ] as const;
 export const resolution = z.enum(RESOLUTIONS);
+export type Resolution = z.infer<typeof resolution>;
+export type Cardinality = z.infer<typeof cardinality>;
+
+/**
+ * `RefKind` — read-model-contracts.md §4.2, CLOSED at the TWENTY-SEVEN rows of the §4.3
+ * table (ADR-0030 R1).
+ *
+ * `trade` is the twenty-seventh, added by ADR-0030 R1 because
+ * `CandidateDetail.downstream_refs.trade` and
+ * `RiskSnapshot.initial_planned_risk_open[].trade_ref` each require a reference to a trade
+ * and no earlier row supplied one. Both were emitted as `source_fact` before this cycle,
+ * which made *the trade a candidate became* indistinguishable from *a provenance record a
+ * projection was built out of*.
+ *
+ * A value outside this set is REFUSED at the boundary, never rendered and never coerced.
+ * A new member is added by an ADR, never by an implementation (§2).
+ */
+export const REF_KINDS = [
+  "candidate",
+  "brain_decision",
+  "trade",
+  "risk_decision",
+  "order",
+  "fill",
+  "protection",
+  "add",
+  "exit",
+  "reconciliation",
+  "execution_quality",
+  "strategy_version",
+  "health_transition",
+  "research_run",
+  "registration",
+  "queue_item",
+  "packet",
+  "decision",
+  "audit_event",
+  "evidence",
+  "chart_series",
+  "benchmark_series",
+  "regime_context",
+  "data_quality",
+  "incident",
+  "alert",
+  "source_fact",
+] as const;
+export const refKind = z.enum(REF_KINDS);
+export type RefKind = z.infer<typeof refKind>;
+
+/**
+ * `OwningArea` — read-model-contracts.md §4.2 and §4.3.2, CLOSED at the SEVEN rows of the
+ * §4.3.2 table (ADR-0031 A2).
+ *
+ * **A SECOND, SEPARATE axis from `RefKind`, and never a substitute for one.** `ref_kind`
+ * answers *what is this a reference to*; `owning_area` answers *which area is responsible for
+ * the record it names*. Expressing the second through the first is what produced the
+ * non-conformant kinds ADR-0030 R2 corrected, and this vocabulary exists so that mislabelling
+ * is unnecessary rather than merely forbidden.
+ *
+ * **`AUDIT_TRAIL` is a member and is NEVER a default.** It is declared when the reference
+ * names a recorded `AuditEvent`. An absent, unknown or undetermined owning area never
+ * resolves to it, and no rule anywhere may use it as a fallback.
+ *
+ * **No member is added because a route exists.** The navigation registry carries far more
+ * routes than seven; a member is added by an accepted decision, never by an implementation
+ * noticing a spare page (§2).
+ */
+export const OWNING_AREAS = [
+  "DATA_QUALITY",
+  "STRATEGY_HEALTH",
+  "RECONCILIATION",
+  "SHORT_SIDE",
+  "ALERTS",
+  "SYSTEM_OPERATIONS",
+  "AUDIT_TRAIL",
+] as const;
+export const owningArea = z.enum(OWNING_AREAS);
+export type OwningArea = z.infer<typeof owningArea>;
 
 /** ADR-0026 Brain decision states — consumed, never extended (read-model-contracts.md §2.6). */
 export const BRAIN_DECISION_STATES = [

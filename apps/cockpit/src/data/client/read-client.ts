@@ -16,6 +16,7 @@
 import type { z } from "zod";
 
 import { admissionFailure } from "@/contracts/admission";
+import { owningAreaContradiction } from "@/contracts/references";
 import type { EnvelopeOf } from "@/contracts/envelope";
 import type {
   AttentionItemPayload,
@@ -159,6 +160,18 @@ export function admit<S extends z.ZodTypeAny>(
   const parsed = schema.safeParse(candidate);
   if (!parsed.success) {
     throw new ContractViolationError(readModel, parsed.error.issues[0]?.message ?? "invalid");
+  }
+  /*
+   * THE OWNING-AREA CONTRADICTION IS AN ADMISSION-UNIT RULE, SO IT IS CHECKED HERE.
+   *
+   * A reference cannot see the reference beside it, and a `RefList` cannot see the scalar
+   * `Ref` in another field of the same response -- so a per-reference or per-list refinement
+   * would state section 4.3.2's rule narrower than its own reason. This is the one place that
+   * holds the whole admission unit, which is exactly the scope the rule names.
+   */
+  const contradiction = owningAreaContradiction(parsed.data);
+  if (contradiction !== null) {
+    throw new ContractViolationError(readModel, contradiction);
   }
   const envelopeLike = parsed.data as { classification: never; provenance: never };
   const failure = admissionFailure({

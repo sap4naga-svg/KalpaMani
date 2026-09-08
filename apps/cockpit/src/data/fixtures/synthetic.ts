@@ -14,6 +14,7 @@ import type {
   WhatChangedEntryPayload,
 } from "@/contracts/read-models";
 import type { Ref } from "@/contracts/values";
+import type { OwningArea } from "@/contracts/vocabularies";
 import type { AttentionListPayload, WhatChangedPayload } from "@/data/client/read-client";
 import type { ChangeVariant } from "@/lib/scope";
 
@@ -29,16 +30,26 @@ import { equityWindow } from "./equity";
 
 const DEMO = "kalpamani.demo";
 
+/**
+ * A reference, optionally DECLARING the area that owns the record it names (§4.3.2).
+ *
+ * With no fourth argument the reference carries no `owning_area` key at all rather than an
+ * `undefined` one: an absence states nothing, and no area is ever invented to satisfy a link.
+ */
 const ref = (
   id: string,
-  kind: string,
+  kind: Ref["ref_kind"],
   resolution: Ref["resolution"] = "UNRESOLVABLE_V1",
-): Ref => ({
-  ref_id: id,
-  ref_kind: kind,
-  resolution,
-  classification: "PUBLIC_SAFE",
-});
+  owningArea?: OwningArea,
+): Ref => {
+  const reference: Ref = {
+    ref_id: id,
+    ref_kind: kind,
+    resolution,
+    classification: "PUBLIC_SAFE",
+  };
+  return owningArea === undefined ? reference : { ...reference, owning_area: owningArea };
+};
 
 /**
  * Realized profit and loss over the last `sessions` sessions of the retained extent.
@@ -169,7 +180,7 @@ export function syntheticExecutiveOverview(
           asOf,
         }),
         as_of: asOf,
-        assessment_ref: ref("demo-risk-assessment", "risk_decision"),
+        assessment_ref: ref("demo-risk-assessment", "risk_decision", "AUTHORIZED_READ"),
         risk_policy_ref: {
           policy_id: "risk-policy-demo",
           policy_version: "0.0.0-demo",
@@ -214,7 +225,7 @@ export function syntheticExecutiveOverview(
      * to an availability state rather than to a payload -- which is what `UNRESOLVABLE_V1`
      * MEANS (4.3), and why the reference stays VISIBLE instead of being omitted.
      */
-    regime_ref: ref("demo-regime-context", "regime_context"),
+    regime_ref: ref("demo-regime-context", "regime_context", "ENDPOINT"),
     system_health: reason("DEMONSTRATION_ONLY", DEMO),
     data_freshness: available({
       metricId: "freshness.source_age",
@@ -251,7 +262,7 @@ export function syntheticExecutiveOverview(
         "decision.last_at",
         "DIMENSIONLESS",
       ),
-      ref: ref("demo-last-decision", "decision"),
+      ref: ref("demo-last-decision", "decision", "ENDPOINT"),
     },
     last_scout_run: {
       at: absent(
@@ -260,20 +271,23 @@ export function syntheticExecutiveOverview(
         "scout.last_run_at",
         "DIMENSIONLESS",
       ),
-      ref: ref("demo-last-scout-run", "research_run"),
+      ref: ref("demo-last-scout-run", "research_run", "ENDPOINT"),
     },
     /** The reference lists a summary counts from -- `total`, and never `items.length`. */
     what_changed: refListOf(
-      [ref("demo-change-1", "source_fact"), ref("demo-change-2", "source_fact")],
+      [
+        ref("demo-change-1", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-change-2", "source_fact", "AUTHORIZED_READ"),
+      ],
       "ZERO_OR_MORE",
       asOf,
     ),
     attention: refListOf(
       [
-        ref("demo-attention-1", "source_fact"),
-        ref("demo-attention-2", "source_fact"),
-        ref("demo-attention-3", "source_fact"),
-        ref("demo-attention-4", "source_fact"),
+        ref("demo-attention-1", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-2", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-3", "source_fact", "AUTHORIZED_READ"),
+        ref("demo-attention-4", "source_fact", "AUTHORIZED_READ"),
       ],
       "ZERO_OR_MORE",
       asOf,
@@ -313,7 +327,46 @@ export function syntheticExecutiveOverview(
  * broken ranker pass its tests by doing nothing at all.
  */
 export function syntheticAttention(asOf: string, earlier: string): AttentionListPayload {
-  const evidence = (id: string, kind: string) => refListOf([ref(id, kind)], "EXACTLY_ONE", asOf);
+  /*
+   * THE TWO KINDS §4.5 PERMITS HERE, AND IT USED TO TAKE ANY KIND AT ALL.
+   *
+   * `AttentionItem.evidence_refs` is declared "kind `evidence` or `source_fact`" — a
+   * stated SET — and this helper was handing it `data_quality`, `health_transition` and
+   * `reconciliation`, three kinds the field may not carry. **The producer is corrected
+   * rather than the field widened to fit it** (ADR-0030 R2).
+   *
+   * The kind is `source_fact` on EVERY item, and the reason is what an `AttentionItem`
+   * IS. Area 28 names it a "projection, derived from alerts, health, risk, data quality
+   * and governance", and section 4.3 defines `source_fact` as "the recorded fact a
+   * projection was built from". Each of these references names exactly that: the recorded
+   * data-quality finding, health transition, borrow record or reconciliation break the
+   * item was projected from.
+   *
+   * **The borrow item is `source_fact` too, and it was briefly `evidence`.** The
+   * catalogue types `evidence` on `ShortSideSnapshot.borrow[].record_ref`, which is a
+   * DIFFERENT host field -- and R2 is explicit that "a kind is a property of the FIELD,
+   * not of the field NAME". Read as an attention item's evidence, the borrow record is
+   * the fact the projection was built from, and typing it `evidence` here left it the
+   * one reference with NO owning-area destination, because section 5 catalogues no route
+   * and no owning area for a classified evidence artefact and R10 refuses a guess.
+   *
+   * **THE PER-AREA DRILL-DOWN IS RESTORED, AND NOT BY TOUCHING A SINGLE KIND.** Every
+   * reference below is still `source_fact`, because that is what it IS. What each one now
+   * ALSO carries is `owning_area` -- the second closed attribute section 4.3.2 adds under
+   * ADR-0031, answering the different question *which area is responsible for this record*.
+   * The data-quality finding is owned by area 22, the health transition by area 5, the
+   * reconciliation break by area 10, and the borrow record by area 13, whose acceptance
+   * criterion is the one about borrow. **None of them is defaulted to the Audit Trail**,
+   * which owns `AuditEvent` and does not own these.
+   *
+   * The area is DECLARED from the record's own ownership and never guessed from the
+   * identifier, which is a fixture naming habit rather than a contract.
+   */
+  const evidence = (
+    id: string,
+    owningArea: OwningArea,
+    kind: "evidence" | "source_fact" = "source_fact",
+  ) => refListOf([ref(id, kind, "AUTHORIZED_READ", owningArea)], "EXACTLY_ONE", asOf);
   const occurrences = (value: number) =>
     available({ metricId: "attention.occurrence_count", unit: "COUNT", value, asOf });
 
@@ -333,7 +386,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-data-quality", "data_quality"),
+        evidence_refs: evidence("demo-evidence-data-quality", "DATA_QUALITY"),
         recommended_action: reason("REVIEW_DATA_QUALITY_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 2,
@@ -352,7 +405,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           value: "-0.42",
           asOf,
         }),
-        evidence_refs: evidence("demo-evidence-health", "health_transition"),
+        evidence_refs: evidence("demo-evidence-health", "STRATEGY_HEALTH"),
         /** A PERMITTED GOVERNANCE action, and never an execution instruction. */
         recommended_action: reason("REVIEW_STRATEGY_HEALTH_EVIDENCE", DEMO),
         severity: reason("HIGH", DEMO),
@@ -377,7 +430,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-data-quality-earlier", "data_quality"),
+        evidence_refs: evidence("demo-evidence-data-quality-earlier", "DATA_QUALITY"),
         recommended_action: reason("REVIEW_DATA_QUALITY_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 2,
@@ -397,7 +450,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           value: "0.00",
           asOf,
         }),
-        evidence_refs: evidence("demo-evidence-borrow", "source_fact"),
+        evidence_refs: evidence("demo-evidence-borrow", "SHORT_SIDE"),
         recommended_action: reason("REVIEW_SHORT_SIDE_BORROW_EVIDENCE", DEMO),
         severity: reason("MEDIUM", DEMO),
         materiality_rank: 3,
@@ -416,7 +469,7 @@ export function syntheticAttention(asOf: string, earlier: string): AttentionList
           "attention.impact",
           "DIMENSIONLESS",
         ),
-        evidence_refs: evidence("demo-evidence-reconciliation", "reconciliation"),
+        evidence_refs: evidence("demo-evidence-reconciliation", "RECONCILIATION"),
         recommended_action: reason("REVIEW_RECONCILIATION_EVIDENCE", DEMO),
         severity: reason("LOW", DEMO),
         materiality_rank: 4,
@@ -467,7 +520,17 @@ export function syntheticWhatChanged(
   asOf: string,
   baselineAsOf: string,
 ): WhatChangedPayload {
-  const evidence = (id: string) => refListOf([ref(id, "source_fact")], "EXACTLY_ONE", asOf);
+  /*
+   * THE AREA IS DECLARED WHERE A CATALOGUED AREA OWNS THE RECORD, AND ABSENT WHERE NONE DOES.
+   *
+   * A health transition is owned by area 5 and an incident by area 23, so those two say so.
+   * The two risk-figure changes name a recorded risk fact, and the section 4.3.2 vocabulary
+   * has NO risk member: the reference therefore DECLARES NONE rather than being pushed to the
+   * nearest catalogued page. An absence here is a stated absence -- it is not a claim that no
+   * area owns the record, and it is never resolved to `AUDIT_TRAIL` (A4, A2).
+   */
+  const evidence = (id: string, owningArea?: OwningArea) =>
+    refListOf([ref(id, "source_fact", "AUTHORIZED_READ", owningArea)], "EXACTLY_ONE", asOf);
 
   if (variant === "no-baseline") {
     /*
@@ -572,7 +635,7 @@ export function syntheticWhatChanged(
         asOf,
       }),
       materiality: reason("MATERIAL", DEMO),
-      evidence_refs: evidence("demo-evidence-2"),
+      evidence_refs: evidence("demo-evidence-2", "STRATEGY_HEALTH"),
     },
     {
       change_id: "demo-change-2",
@@ -593,7 +656,7 @@ export function syntheticWhatChanged(
         asOf,
       }),
       materiality: reason("INFORMATIONAL", DEMO),
-      evidence_refs: evidence("demo-evidence-3"),
+      evidence_refs: evidence("demo-evidence-3", "SYSTEM_OPERATIONS"),
     },
     {
       change_id: "demo-change-3",
