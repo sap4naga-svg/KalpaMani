@@ -784,6 +784,120 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
     shape: "DECIMAL_STRING",
     fractionDigits: 2,
   },
+
+  /* ---------------------------------------------------------------- added by C8 */
+
+  /**
+   * AREA 9 -- what an order asked for, beside what it received.
+   *
+   * `execution.quantity` already carries the FILLED amount, and the ordered amount is a
+   * different quantity: an order that filled 69 of 100 shares has two numbers, and one
+   * identifier cannot carry both without the partially filled state becoming invisible.
+   */
+  "execution.ordered_quantity": { unit: "SHARES", shape: "INTEGER" },
+  /**
+   * When a protective order was RECORDED AS CONFIRMED.
+   *
+   * It is an instant rather than a flag, because "a submitted protection order is not proof of
+   * active protection": a boolean would let a submission and a confirmation render identically.
+   */
+  "execution.protection_confirmed_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /**
+   * The MODELLED cost of a fill, and the cost actually RECORDED against it.
+   *
+   * Two identifiers on purpose (12.4, "costs already in the fill"): an actual fill price
+   * already incorporates the spread crossed and the slippage realized, so a modelled figure
+   * is never subtracted from it again. They are displayed side by side and are never summed.
+   */
+  "execution.modelled_cost": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "execution.recorded_cost": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** How many observations a named lifecycle outcome was recorded for, in the window. */
+  "execution.outcome_count": { unit: "COUNT", shape: "INTEGER" },
+
+  /**
+   * AREA 10 -- the two sides of a recorded comparison, and the difference between them.
+   *
+   * A quantity difference and a currency difference are different quantities, so they carry
+   * different identifiers rather than one `difference` that changes unit by row.
+   */
+  "reconciliation.expected_quantity": { unit: "SHARES", shape: "INTEGER" },
+  "reconciliation.observed_quantity": { unit: "SHARES", shape: "INTEGER" },
+  "reconciliation.quantity_difference": { unit: "SHARES", shape: "INTEGER" },
+  "reconciliation.internal_amount": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * BROKER-REPORTED EQUITY IS OBSERVED AND IS NEVER SIZING AUTHORITY (CLAUDE.md 6).
+   *
+   * It carries its own identifier so it can never be mistaken for strategy capital, and the
+   * payload labels its role explicitly beside it.
+   */
+  "reconciliation.broker_amount": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "reconciliation.amount_difference": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "reconciliation.orphans": { unit: "COUNT", shape: "INTEGER" },
+  /** The broker-side as-of a comparison was taken against, under the `DATE_ONLY` precedent. */
+  "reconciliation.broker_as_of": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** How long ago a recorded reconciliation ran. A past success is not present health. */
+  "reconciliation.age": { unit: "SECONDS", shape: "INTEGER" },
+
+  /**
+   * AREA 22 -- coverage, depth and the shape of what is missing.
+   *
+   * 12.3 defines `coverage` as `present / requested` over the requested extent, and the
+   * payload carries the two counts beside it so a ratio is never read without its
+   * denominator.
+   */
+  coverage: { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "data_quality.present": { unit: "COUNT", shape: "INTEGER" },
+  "data_quality.requested": { unit: "COUNT", shape: "INTEGER" },
+  "data_quality.history_depth": { unit: "CALENDAR_DAYS", shape: "INTEGER" },
+  /** The earliest record a subject holds. A DATE, and never a duration. */
+  "data_quality.earliest_record": { unit: "DIMENSIONLESS", shape: "DATE_ONLY" },
+  "data_quality.missing_sessions": { unit: "COUNT", shape: "INTEGER" },
+  "data_quality.revised_rows": { unit: "COUNT", shape: "INTEGER" },
+  "data_quality.check_population": { unit: "COUNT", shape: "INTEGER" },
+  "data_quality.borrow_records": { unit: "COUNT", shape: "INTEGER" },
+  /** A corporate action's announcement and effective dates, kept as DATES. */
+  "corporate_action.announced_on": { unit: "DIMENSIONLESS", shape: "DATE_ONLY" },
+  "corporate_action.effective_on": { unit: "DIMENSIONLESS", shape: "DATE_ONLY" },
+
+  /**
+   * AREA 23 -- a job's own measurements.
+   *
+   * `job.last_success_at` is an INSTANT and carries its own as-of, because 4.5 requires the
+   * last success to state when it was: a bare "succeeded" with no time is exactly the claim
+   * of current health this area refuses to make.
+   */
+  "job.last_success_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "job.next_scheduled_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "job.duration": { unit: "SECONDS", shape: "INTEGER" },
+  "job.queue_depth": { unit: "COUNT", shape: "INTEGER" },
+  "job.latency": { unit: "SECONDS", shape: "INTEGER" },
+  "job.availability": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "job.restarts": { unit: "COUNT", shape: "INTEGER" },
+  "incident.closed_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "incident.open_duration": { unit: "SECONDS", shape: "INTEGER" },
+
+  /**
+   * AREA 27 -- an alert's own counts.
+   *
+   * `alert.occurrence_count` is deliberately distinct from `attention.occurrence_count`: one
+   * condition produces one alert with an occurrence count, and the executive attention
+   * projection counts the same condition for a different audience. Two identifiers keep the
+   * two views comparable without either becoming the other.
+   */
+  "alert.occurrence_count": { unit: "COUNT", shape: "INTEGER" },
+  "alert.resolved_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "alert.deduplicated_away": { unit: "COUNT", shape: "INTEGER" },
+  "alert.impact_usd": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+
+  /**
+   * AREA 26 -- the projection's own identity, kept apart from the events it projects.
+   *
+   * A rebuild count is a fact about the PROJECTION. It is carried here so a reader can see
+   * that rebuilding a read model mutates no source event, and the two identities never merge.
+   */
+  "audit.projection_built_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "audit.rebuild_count": { unit: "COUNT", shape: "INTEGER" },
+  "audit.event_count": { unit: "COUNT", shape: "INTEGER" },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;
