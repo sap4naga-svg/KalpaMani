@@ -120,21 +120,27 @@ describe("the OwningArea vocabulary is closed at the seven accepted members", ()
 
   it("carries the destination route's own implemented or placeholder status", () => {
     /*
-     * FIVE PLACEHOLDERS AND TWO IMPLEMENTED SCREENS TODAY; the affordance says which.
+     * ALL SEVEN DESTINATIONS ARE BUILT SCREENS TODAY; the affordance says which.
      *
-     * C7 built the Strategy Health area, so its destination is no longer a placeholder. The
-     * count is the point of the assertion — the affordance carries the DESTINATION'S OWN
-     * status rather than a second copy of it, so it moves when a screen is built.
+     * C7 built the Strategy Health area and C8 built the remaining five, so the placeholder
+     * count has moved from five to zero. **That it moves at all is the assertion's point**:
+     * the affordance carries the DESTINATION'S OWN status rather than a second copy of it, so
+     * it follows the registry rather than a literal kept here.
+     *
+     * The enduring property is the loop below, and it is the one that cannot be satisfied by
+     * hard-coding a status: every destination's reported status must EQUAL the registry's own
+     * for that route. A component that stopped reading the registry, or a registry row that
+     * over-claimed, fails it.
      */
     const statuses = OWNING_AREAS.map(
       (area) => owningAreaDestination({ owning_area: area })!.status,
     );
-    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(5);
+    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(0);
     expect(owningAreaDestination({ owning_area: "SHORT_SIDE" })!.status).toBe("implemented");
     expect(owningAreaDestination({ owning_area: "STRATEGY_HEALTH" })!.status).toBe(
       "implemented",
     );
-    expect(owningAreaDestination({ owning_area: "AUDIT_TRAIL" })!.status).toBe("placeholder");
+    expect(owningAreaDestination({ owning_area: "AUDIT_TRAIL" })!.status).toBe("implemented");
     for (const area of OWNING_AREAS) {
       const destination = owningAreaDestination({ owning_area: area })!;
       expect(destination.status, area).toBe(ROUTES_BY_HREF.get(destination.href)!.status);

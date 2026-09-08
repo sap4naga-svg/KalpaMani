@@ -12,6 +12,8 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { ROUTES_BY_HREF } from "@/nav/registry";
+
 import { AttentionPanel } from "@/components/cockpit/attention";
 import { WhatChangedPanel } from "@/components/cockpit/what-changed";
 import { ClockProvider } from "@/components/shell/clock-provider";
@@ -101,13 +103,6 @@ describe("the attention disclosure renders both affordances, apart", () => {
       within(shortSide).getByTestId("reference-area-link").getAttribute("data-area-status"),
     ).toBe("implemented");
 
-    /*
-     * ...AND THE REMAINING PLACEHOLDERS EACH DO.
-     *
-     * C7 built the Strategy Health area, so the attention list now reaches TWO implemented
-     * destinations and two placeholders. The marker follows the destination's own status
-     * rather than a literal in this test, which is exactly why the count moved.
-     */
     const health = rows.find((row) =>
       within(row)
         .getByTestId("reference-area-link")
@@ -119,10 +114,33 @@ describe("the attention disclosure renders both affordances, apart", () => {
       within(health).getByTestId("reference-area-link").getAttribute("data-area-status"),
     ).toBe("implemented");
 
-    const placeholders = screen.getAllByTestId("reference-area-placeholder");
-    expect(placeholders).toHaveLength(2);
-    for (const note of placeholders) {
-      expect(note.textContent).toContain("not yet implemented");
+    /*
+     * ...AND THE MARKER IS DERIVED, NOT COUNTED.
+     *
+     * C7 built the Strategy Health area and C8 built the remaining five, so every destination
+     * the attention list reaches is now a built screen and the marker appears nowhere. **The
+     * expectation is computed from the registry rather than written as a number**, so it is
+     * the same assertion it always was: the marker is present exactly where the DESTINATION'S
+     * OWN status says the screen is not built, and it moves the moment that changes.
+     */
+    const expectedMarkers = rows.filter((row) => {
+      const href = within(row).getByTestId("reference-area-link").getAttribute("href")!;
+      const route = ROUTES_BY_HREF.get(href.split("?")[0]);
+      return route === undefined || route.status !== "implemented";
+    }).length;
+    expect(screen.queryAllByTestId("reference-area-placeholder")).toHaveLength(
+      expectedMarkers,
+    );
+    for (const row of rows) {
+      const link = within(row).getByTestId("reference-area-link");
+      const route = ROUTES_BY_HREF.get(link.getAttribute("href")!.split("?")[0])!;
+      expect(link.getAttribute("data-area-status"), link.getAttribute("href")!).toBe(
+        route.status,
+      );
+      expect(
+        within(row).queryByTestId("reference-area-placeholder") !== null,
+        link.getAttribute("href")!,
+      ).toBe(route.status !== "implemented");
     }
   });
 
