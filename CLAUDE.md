@@ -4608,6 +4608,12 @@ one in. **A reader who reaches the Data Quality area has navigated, and has not 
 artefact.** Working area links are not a repair of either, and closing them is a separate decision
 that is not opened here.
 
+> **HISTORICAL — the state while PR #79 was open, superseded by *The C7 research, feedback and
+> self-maturation interfaces*.** PR #79 has since merged, so every line below that records the
+> implementation as unmerged, the per-area links as restored-but-open, or no `schema_version`
+> reaching `main` describes those days and **no longer governs**. Its forward authorization
+> boundaries are unchanged.
+
 ```text
 ADR-0031:                                         ACCEPTED / IN FORCE
 ADR-0031 acceptance event:                        MERGE OF PR #80 INTO MAIN
@@ -4653,6 +4659,117 @@ live trading:                                     HARD-DISABLED
 ADR-0031 is accepted; its implementation is written, validated and **open for a fresh independent
 review**; and **specification, implementation, research, deployment and execution stay five separate
 gates**.
+
+
+### The C7 research, feedback and self-maturation interfaces — IMPLEMENTED, and carried by an open pull request
+
+**PR #79 is merged.** Merge commit **`4d1211cfef4157d0efbef1125846eb5abbaad440`**, ordered parents
+**`9dba135f8938a3c516a6f57870136751cc0651c3`** then
+**`2bf69c91ff7243b593de9825d31f10f1a19d99ee`**, merged **2026-09-08T09:02:56Z**, with a **merge tree
+identical to the reviewed pull-request head tree**. That merge is what closed the reference-enforcement
+and owning-area implementation gate the section above records as open; **while PR #79 was open it was
+a reviewed candidate and its `v2` schema versions had reached no branch but its own** — historical
+facts about those days that stay true and are **not** rewritten.
+
+**The nine C7 product areas are now implemented, and their implementation is carried by an open pull
+request of its own.** **While that pull request is open it is a candidate**: nothing recorded here is
+authority for anything beyond itself, and **no merge SHA and no merge timestamp is predicted**.
+
+| Area | Screen |
+|---|---|
+| **5** | Strategy Health |
+| **14** | Research and Backtesting |
+| **15** | Champion / Challenger |
+| **16** | Feedback / Self-Maturation Loop |
+| **17** | Research Queue |
+| **18** | Hypothesis Registry |
+| **19** | Governance Packets |
+| **20** | Strategy Version Registry |
+| **21** | AI Contribution Analytics |
+
+#### What it is, exactly
+
+**Nine read-only screens over deterministic repository-owned fixtures, and nothing else.** Ten new
+read models, their payload contracts, their reference declarations, one coherent synthetic research
+lineage and the nine routes that render it. **No research engine, learning engine, shadow runner,
+governance runtime or AI agent is created by it, and none is authorized.**
+
+| | |
+|---|---|
+| **the read models** | ten, each at its **own first schema version** — `StrategyHealth`, `StrategyVersion`, `ResearchRun`, `ResearchQueueItem`, `HypothesisRegistration`, `ChampionChallengerComparison`, `AiContribution`, `FeedbackPipeline`, `GovernancePacket`, `DecisionRecord`. **The nineteen coordinated models stay at `v2`**, because §5.2 versions a schema per read model and a first version is not a second one |
+| **the lineage** | one recorded health degradation, the research queue entry it created, the preregistration and its linked amendment, two immutable Challengers, six runs including a failed one, two abandoned ones and a deterministic reproduction, an exposure ledger spanning registrations, two Champion/Challenger comparisons, three matched-arm AI comparisons, four governance packets and two recorded human decisions |
+| **the boundary** | **no Server Action, no route handler, no API route, no mutation, no persistence write, no scheduler, no model SDK, no provider request and no broker operation.** Every screen states, on the screen, which controls it does not have |
+| **the book** | **unchanged.** The 200-trade demonstration book, its ledger economics, its risk denominators and its historical execution evidence are read and never rewritten; the health screen takes its expectancy, drawdown and observation count from the **same builder** the strategy performance screen reads |
+
+#### The four separations it exists to keep
+
+| | |
+|---|---|
+| **a queue entry is not an authorization** | every open item names at least one authorization it is waiting on, and the contract **refuses** an open item that names none |
+| **a rename resets nothing** | the trial budget and the exposure ledger are read **across the lineage**. A registration whose own trial count is one sits beside a lineage consumption of five, and a confirmatory declaration over an already-exposed or unmeasurably-overlapping locked set carries its **refusal** — `OUT_OF_SAMPLE_ALREADY_CONSUMED` and `EXPOSURE_HISTORY_UNKNOWN` — rather than being downgraded silently |
+| **readiness is not approval** | `READY_FOR_HUMAN_REVIEW` is displayed as the presence of required evidence, never as a decision. Recommendation, readiness, decision and execution are four separately labelled facts, and **no approve, reject, request-more-evidence or release control exists** |
+| **a Challenger is not a Champion** | a Challenger governs no open position, has no realized outcome and can have none, and **no promotion path exists from any of these screens** |
+
+#### What it does not claim
+
+**No alpha is claimed, no result is asserted and no threshold is established.** Every figure is a
+repository-owned deterministic fixture: **backtesting has NOT STARTED**, no run has ever been
+executed, no model has been called, no provider has been contacted, **no numerical value appearing in
+a synthetic example becomes a production rule**, and **no promotion, capital change, parameter
+replacement or release has been approved anywhere in this repository**. The decision fixture
+deliberately records **no `APPROVED` outcome**, and the screen says so rather than manufacturing one.
+
+**No gate is closed and no ADR is amended.** **G1 and G2 stay OPEN**, **G4 to G7 stay OPEN**, no
+provider is selected, **P1–P9 stay UNEVALUATED**, and this work amends and supersedes no accepted
+decision.
+
+```text
+PR #79:                                           MERGED
+PR #79 merge commit:                              4d1211cfef4157d0efbef1125846eb5abbaad440
+PR #79 merged at:                                 2026-09-08T09:02:56Z
+owning-area navigation:                           MERGED
+per-area attention links:                         MERGED
+schema_version values published to main:          v2 ON THE NINETEEN COORDINATED READ MODELS
+C7 research and feedback interfaces:              IMPLEMENTED IN AN OPEN PULL REQUEST
+C7 areas implemented:                             5, 14, 15, 16, 17, 18, 19, 20, 21
+C7 read models introduced:                        10, EACH AT ITS OWN FIRST VERSION
+the nineteen coordinated read models:             UNCHANGED AT v2
+independent review of the C7 implementation:      PERFORMED
+new API routes, handlers or server actions:       NONE
+research runtime:                                 NOT IMPLEMENTED / NOT AUTHORIZED
+learning engine:                                  NOT IMPLEMENTED / NOT AUTHORIZED
+shadow runner:                                    NOT IMPLEMENTED / NOT AUTHORIZED
+governance runtime:                               NOT IMPLEMENTED / NOT AUTHORIZED
+AI agents:                                        NOT IMPLEMENTED / NOT AUTHORIZED
+experiment E:                                     NOT RUN
+promotions, approvals or releases recorded:       NONE
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+C8 to C10:                                        NOT STARTED / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A merged cycle and an open one are two different things.** C7's screens are written, validated and
+**independently reviewed**, and the pull request carrying them is **still open** — a completed review
+is not a merge, and neither is recorded here as the other. The C5 completion follow-up is **still
+pending**; C8, C9 and C10 are **not started**; and **specification, implementation, research,
+deployment and execution stay five separate gates**.
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use

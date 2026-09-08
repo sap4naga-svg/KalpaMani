@@ -771,6 +771,102 @@ export const REFERENCE_FIELDS = {
     implemented: true,
   },
 
+  /* -------------------------------------------------------------------- C7 read models
+   *
+   * The reference-valued fields of the Areas 5, 14, 15, 16, 17, 18, 19, 20 and 21 read models
+   * this cycle actually serves. The §4.5 and §4.3.1 assignments already recorded below moved
+   * up here with their producers; the entries in THIS block are the ADDITIVE fields those
+   * payload contracts add under ADR-0028's additive rule, and each states the kind its own
+   * contract text describes.
+   *
+   * **`implemented` is `true` here because a synthetic producer exists for `SYNTHETIC`
+   * provenance and for nothing else** (R6). It is never a claim that a research engine, a
+   * learning engine, a shadow runner, an AI agent or a governance runtime exists — none does,
+   * and none is authorized.
+   */
+  /** The recorded position fact a pin is attached to. Not the trade, and not derived from it. */
+  "StrategyVersion.open_positions[].position_ref": {
+    shape: "REF",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /**
+   * The trade the pinned position belongs to.
+   *
+   * A DIFFERENT reference from `position_ref` beside it: one names a recorded position fact
+   * and the other names the `TradeDetail` read model that owns the trade's story. They carry
+   * different identifiers, and neither is derived from the other.
+   */
+  "StrategyVersion.open_positions[].trade_ref": {
+    shape: "REF",
+    kinds: ["trade"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** The registrations a version was produced by or evaluated under. */
+  "StrategyVersion.registration_refs": {
+    shape: "REF_LIST",
+    kinds: ["registration"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** The recorded human decision that carried a version event, where one did. */
+  "StrategyVersion.history[].decision_ref": {
+    shape: "REF",
+    kinds: ["decision"],
+    requiredness: "conditional",
+    implemented: true,
+  },
+  /** Area 17 presents supporting evidence beside the trigger. */
+  "ResearchQueueItem.evidence_refs": {
+    shape: "REF_LIST",
+    kinds: ["evidence"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** Area 17 presents the associated Challenger, where one exists. */
+  "ResearchQueueItem.challenger_ref": {
+    shape: "REF",
+    kinds: ["strategy_version"],
+    requiredness: "conditional",
+    implemented: true,
+  },
+  /** The registration a queue item became, once it reached `REGISTERED`. */
+  "ResearchQueueItem.registration_ref": {
+    shape: "REF",
+    kinds: ["registration"],
+    requiredness: "conditional",
+    implemented: true,
+  },
+  /**
+   * The registration that WROTE one exposure-ledger entry.
+   *
+   * The ledger is attached to the LOCKED SET rather than to a registration (§2.7.1), so most
+   * of the entries a registration reads were written by something else — which is exactly why
+   * each entry names its own author.
+   */
+  "HypothesisRegistration.exposure_ledger.entries[].registration_ref": {
+    shape: "REF",
+    kinds: ["registration"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** The authorized runs a Champion/Challenger comparison rests on. */
+  "ChampionChallengerComparison.evidence_refs": {
+    shape: "REF_LIST",
+    kinds: ["research_run"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** The SHADOW evidence, kept in its own field so it is never read as a backtest result. */
+  "ChampionChallengerComparison.shadow_refs": {
+    shape: "REF_LIST",
+    kinds: ["research_run"],
+    requiredness: "required",
+    implemented: true,
+  },
+
   /* ================================================================ specification-only ===
    * Assignments recorded so the cycle that FIRST emits one of these payloads inherits an
    * ENFORCED contract rather than an open one.
@@ -802,37 +898,37 @@ export const REFERENCE_FIELDS = {
     shape: "REF",
     kinds: ["queue_item"],
     requiredness: "conditional",
-    implemented: false,
+    implemented: true,
   },
   "StrategyHealth.transitions[].input_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "StrategyHealth.failure_clusters[].evidence_refs": {
     shape: "REF_LIST",
     kinds: ["evidence"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "StrategyVersion.lineage_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "StrategyVersion.open_position_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "StrategyVersion.rollback_of": {
     shape: "REF",
     kinds: ["strategy_version"],
     requiredness: "conditional",
-    implemented: false,
+    implemented: true,
   },
   "MaturityStatus.decision_refs": {
     shape: "REF_LIST",
@@ -844,157 +940,157 @@ export const REFERENCE_FIELDS = {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "ResearchRun.baseline_ref": {
     shape: "REF",
     kinds: ["strategy_version"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "ResearchRun.dataset_ref": {
     shape: "REF",
     kinds: ["evidence"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "ResearchQueueItem.trigger_ref": {
     shape: "REF",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "ResearchQueueItem.baseline_ref": {
     shape: "REF",
     kinds: ["strategy_version"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.trigger_ref": {
     shape: "REF",
     kinds: ["queue_item"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.baseline_ref": {
     shape: "REF",
     kinds: ["strategy_version"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.exposure_ledger_ref": {
     shape: "REF",
     kinds: ["evidence"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.linked_results": {
     shape: "REF_LIST",
     kinds: ["research_run"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.lineage.parent_registration": {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "conditional",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.lineage.superseded_by": {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "conditional",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.lineage.related_registrations": {
     shape: "REF_LIST",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "HypothesisRegistration.lineage.amendment_chain": {
     shape: "REF_LIST",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "ChampionChallengerComparison.registration_ref": {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "AiContribution.experiment_ref": {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "AiContribution.ai_provenance.source_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "FeedbackPipeline.stages[].item_refs": {
     shape: "REF_LIST",
     kinds: ["queue_item"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.registration_ref": {
     shape: "REF",
     kinds: ["registration"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.run_refs": {
     shape: "REF_LIST",
     kinds: ["research_run"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.shadow_refs": {
     shape: "REF_LIST",
     kinds: ["research_run"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.comparison_ref": {
     shape: "REF",
     kinds: ["source_fact"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.evidence_refs": {
     shape: "REF_LIST",
     kinds: ["evidence"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "GovernancePacket.decision_ref": {
     shape: "REF",
     kinds: ["decision"],
     requiredness: "conditional",
-    implemented: false,
+    implemented: true,
   },
   "DecisionRecord.packet_ref": {
     shape: "REF",
     kinds: ["packet"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "DecisionRecord.reasoning_ref": {
     shape: "REF",
     kinds: ["evidence"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   "DecisionRecord.affected_versions": {
     shape: "REF_LIST",
     kinds: ["strategy_version"],
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   /**
    * §4.3.1: three separate `source_ref` fields, each reading a fact INDEPENDENTLY from

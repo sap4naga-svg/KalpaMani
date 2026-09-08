@@ -37,7 +37,23 @@ import {
   CANDIDATE_SUMMARY_SCHEMA,
   MISSED_OPPORTUNITY_SCHEMA,
 } from "@/contracts/signal-models";
-import { STRATEGY_PERFORMANCE_SCHEMA } from "@/contracts/strategy-models";
+import {
+  STRATEGY_HEALTH_SCHEMA,
+  STRATEGY_PERFORMANCE_SCHEMA,
+  STRATEGY_VERSION_SCHEMA,
+} from "@/contracts/strategy-models";
+import {
+  AI_CONTRIBUTION_SCHEMA,
+  CHAMPION_CHALLENGER_SCHEMA,
+  FEEDBACK_PIPELINE_SCHEMA,
+  HYPOTHESIS_REGISTRATION_SCHEMA,
+  RESEARCH_QUEUE_SCHEMA,
+  RESEARCH_RUN_SCHEMA,
+} from "@/contracts/research-models";
+import {
+  DECISION_RECORD_SCHEMA,
+  GOVERNANCE_PACKET_SCHEMA,
+} from "@/contracts/governance-models";
 import {
   MARKET_REGIME_SCHEMA,
   RISK_SNAPSHOT_SCHEMA,
@@ -286,6 +302,119 @@ export const MISSED_OPPORTUNITY_IDENTITY: ReadModelIdentity = {
   accessScope: "signals:read",
 };
 
+/* ------------------------------------------------------------------ added by C7 */
+
+/*
+ * TEN MORE READ MODELS, AND THE SAME REASONING THE C5 BLOCK ESTABLISHED.
+ *
+ * §4.5 classifies every one of these `PRIVATE_OPERATIONAL` — a real health transition, a real
+ * research run, a real exposure ledger and a real governance packet are private operational
+ * state, and the `PUBLIC_EDGE` boundary REFUSES one. What this application can show is a
+ * repository-owned synthetic demonstration, labelled `PUBLIC_SAFE` / `SYNTHETIC` because that
+ * is what it IS.
+ *
+ * **THE ACCESS SCOPE IS THE CONTRACT'S**, and the split is load-bearing: §4.3.4 gives the
+ * strategy models `strategy:read`, the research models `research:read` and the two governance
+ * models `governance:read`. Two access scopes never share a cache entry (§7), so the research
+ * screens hold their own entries and the governance packets hold theirs.
+ *
+ * **THE SCHEMA VERSIONS ARE `v1`, AND THAT IS NOT AN OVERSIGHT.** §5.2 versions a schema PER
+ * READ MODEL: "one view can evolve without a global bump". These ten read models have never
+ * been served before, so each carries its own first version. The nineteen existing models keep
+ * `v2` — the identity of the coordinated replacement that produced them — and copying `v2` on
+ * to a model that has no `v1` would state a history it does not have.
+ */
+
+export const STRATEGY_HEALTH_IDENTITY: ReadModelIdentity = {
+  readModel: "StrategyHealth",
+  queryName: "strategy-health",
+  schemaVersion: STRATEGY_HEALTH_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "strategy:read",
+};
+
+export const STRATEGY_VERSION_IDENTITY: ReadModelIdentity = {
+  readModel: "StrategyVersion",
+  queryName: "strategy-version",
+  schemaVersion: STRATEGY_VERSION_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "strategy:read",
+};
+
+export const RESEARCH_RUN_IDENTITY: ReadModelIdentity = {
+  readModel: "ResearchRun",
+  queryName: "research-run",
+  schemaVersion: RESEARCH_RUN_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const RESEARCH_QUEUE_IDENTITY: ReadModelIdentity = {
+  readModel: "ResearchQueueItem",
+  queryName: "research-queue",
+  schemaVersion: RESEARCH_QUEUE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const HYPOTHESIS_REGISTRATION_IDENTITY: ReadModelIdentity = {
+  readModel: "HypothesisRegistration",
+  queryName: "hypothesis-registration",
+  schemaVersion: HYPOTHESIS_REGISTRATION_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const CHAMPION_CHALLENGER_IDENTITY: ReadModelIdentity = {
+  readModel: "ChampionChallengerComparison",
+  queryName: "champion-challenger",
+  schemaVersion: CHAMPION_CHALLENGER_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const AI_CONTRIBUTION_IDENTITY: ReadModelIdentity = {
+  readModel: "AiContribution",
+  queryName: "ai-contribution",
+  schemaVersion: AI_CONTRIBUTION_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const FEEDBACK_PIPELINE_IDENTITY: ReadModelIdentity = {
+  readModel: "FeedbackPipeline",
+  queryName: "feedback-pipeline",
+  schemaVersion: FEEDBACK_PIPELINE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "research:read",
+};
+
+export const GOVERNANCE_PACKET_IDENTITY: ReadModelIdentity = {
+  readModel: "GovernancePacket",
+  queryName: "governance-packet",
+  schemaVersion: GOVERNANCE_PACKET_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "governance:read",
+};
+
+export const DECISION_RECORD_IDENTITY: ReadModelIdentity = {
+  readModel: "DecisionRecord",
+  queryName: "decision-record",
+  schemaVersion: DECISION_RECORD_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "governance:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
@@ -306,4 +435,14 @@ export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   CANDIDATE_SUMMARY_IDENTITY,
   CANDIDATE_DETAIL_IDENTITY,
   MISSED_OPPORTUNITY_IDENTITY,
+  STRATEGY_HEALTH_IDENTITY,
+  STRATEGY_VERSION_IDENTITY,
+  RESEARCH_RUN_IDENTITY,
+  RESEARCH_QUEUE_IDENTITY,
+  HYPOTHESIS_REGISTRATION_IDENTITY,
+  CHAMPION_CHALLENGER_IDENTITY,
+  AI_CONTRIBUTION_IDENTITY,
+  FEEDBACK_PIPELINE_IDENTITY,
+  GOVERNANCE_PACKET_IDENTITY,
+  DECISION_RECORD_IDENTITY,
 ];

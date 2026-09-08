@@ -24,11 +24,6 @@ const DECLINED_CANDIDATE = "/signals/candidates/demo-candidate-0006";
 /** A trade whose sizing nobody recorded — no candidate was journaled for it. */
 const UNSIZED_TRADE = "/portfolio/trades/demo-trade-gen-0001";
 
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForLoadState("networkidle");
-  await expect(page.getByTestId("context-bar")).toBeVisible();
-}
-
 /**
  * Hydration, and then every panel's read resolved.
  *
@@ -38,6 +33,13 @@ async function waitForHydration(page: Page): Promise<void> {
  * condition than `networkidle` and a more direct one — so this deliberately does not wait on
  * the network at all. The development server keeps its own long-lived connections open, and
  * `networkidle` is a statement about those rather than about this page's data.
+ *
+ * **IT IS THE ONLY READINESS CONDITION IN THIS FILE.** A second helper waited on
+ * `networkidle` first, and a dev server that never goes idle is a wait that expires rather
+ * than a wait that resolves — the reported intermittent mobile timeout. Every call site it
+ * had now takes this condition, which is strictly stronger: the overflow, axe, external-request
+ * and console-error checks each need the panels SETTLED, and a network that happens to fall
+ * quiet never meant that.
  */
 async function waitForPanels(page: Page): Promise<void> {
   await expect(page.getByTestId("context-bar")).toBeVisible();
@@ -50,7 +52,7 @@ test.describe("the C6 signals screens render and stay honest", () => {
   }) => {
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE]) {
       await page.goto(`${route}${DEMO}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
       await expect(page.getByTestId("page-provenance-banner")).toContainText(
         "SYNTHETIC DEMONSTRATION DATA",
       );
@@ -65,7 +67,7 @@ test.describe("the C6 signals screens render and stay honest", () => {
   }) => {
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE]) {
       await page.goto(`${route}${PROJECT}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
       const bodies = page.getByTestId("unavailable-body");
       await expect(bodies.first()).toBeVisible();
       await expect(bodies.first()).toContainText("Waiting on:");
@@ -76,7 +78,7 @@ test.describe("the C6 signals screens render and stay honest", () => {
   test("scrolls no page body sideways at this viewport (U14)", async ({ page }) => {
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE, RECORDED_TRADE]) {
       await page.goto(`${route}${OPERATOR}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
@@ -573,7 +575,7 @@ test.describe("C6 accessibility and isolation", () => {
   test("has no automatically detectable accessibility violation", async ({ page }) => {
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE, RECORDED_TRADE]) {
       await page.goto(`${route}${OPERATOR}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
       const results = await new AxeBuilder({ page })
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
         .analyze();
@@ -586,7 +588,7 @@ test.describe("C6 accessibility and isolation", () => {
 
   test("opens a miss detail from the keyboard and restores focus", async ({ page }) => {
     await page.goto(`/signals/missed${OPERATOR}`);
-    await waitForHydration(page);
+    await waitForPanels(page);
     const toggle = page.getByTestId("missed-table").getByRole("button").first();
     await toggle.focus();
     await expect(toggle).toBeFocused();
@@ -608,7 +610,7 @@ test.describe("C6 accessibility and isolation", () => {
     });
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE, RECORDED_TRADE]) {
       await page.goto(`${route}${OPERATOR}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
     }
     expect(external).toEqual([]);
   });
@@ -623,7 +625,7 @@ test.describe("C6 accessibility and isolation", () => {
     page.on("pageerror", (error) => errors.push(error.message));
     for (const route of [...C6_ROUTES, DECLINED_CANDIDATE, RECORDED_TRADE]) {
       await page.goto(`${route}${OPERATOR}`);
-      await waitForHydration(page);
+      await waitForPanels(page);
     }
     expect(errors).toEqual([]);
   });

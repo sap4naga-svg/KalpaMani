@@ -22,7 +22,23 @@ import type {
   CandidateSummaryPayload,
   MissedOpportunityPayload,
 } from "@/contracts/signal-models";
-import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
+import type {
+  StrategyHealthPayload,
+  StrategyPerformancePayload,
+  StrategyVersionPayload,
+} from "@/contracts/strategy-models";
+import type {
+  AiContributionPayload,
+  ChampionChallengerPayload,
+  FeedbackPipelinePayload,
+  HypothesisRegistrationPayload,
+  ResearchQueuePayload,
+  ResearchRunPayload,
+} from "@/contracts/research-models";
+import type {
+  DecisionRecordPayload,
+  GovernancePacketPayload,
+} from "@/contracts/governance-models";
 import type {
   MarketRegimePayload,
   RiskSnapshotPayload,
@@ -39,6 +55,16 @@ import {
   CANDIDATE_SUMMARY_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
   MISSED_OPPORTUNITY_IDENTITY,
+  AI_CONTRIBUTION_IDENTITY,
+  CHAMPION_CHALLENGER_IDENTITY,
+  DECISION_RECORD_IDENTITY,
+  FEEDBACK_PIPELINE_IDENTITY,
+  GOVERNANCE_PACKET_IDENTITY,
+  HYPOTHESIS_REGISTRATION_IDENTITY,
+  RESEARCH_QUEUE_IDENTITY,
+  RESEARCH_RUN_IDENTITY,
+  STRATEGY_HEALTH_IDENTITY,
+  STRATEGY_VERSION_IDENTITY,
   EXPOSURE_AGGREGATE_IDENTITY,
   MARKET_REGIME_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
@@ -308,5 +334,119 @@ export function useMissedOpportunities(
   return useQuery({
     queryKey: readModelKey(MISSED_OPPORTUNITY_IDENTITY, scope),
     queryFn: () => client.missedOpportunities(scope),
+  });
+}
+
+/* ------------------------------------------------------------------ added by C7 */
+
+/**
+ * The research, feedback and governance reads.
+ *
+ * Every key carries the read model's own identity and the whole scope, exactly as the earlier
+ * hooks do, so a scope change is a different cache entry and the `research:read`,
+ * `strategy:read` and `governance:read` responses never share one.
+ *
+ * **THEY ARE `useQuery` AND NOTHING ELSE.** No mutation hook exists in this module, and one
+ * would have to exist before any screen could advance a stage, register a hypothesis or record
+ * a decision.
+ */
+
+export function useStrategyHealth(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<StrategyHealthPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(STRATEGY_HEALTH_IDENTITY, scope),
+    queryFn: () => client.strategyHealth(scope),
+  });
+}
+
+export function useStrategyVersions(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<StrategyVersionPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(STRATEGY_VERSION_IDENTITY, scope),
+    queryFn: () => client.strategyVersions(scope),
+  });
+}
+
+export function useResearchRuns(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<ResearchRunPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(RESEARCH_RUN_IDENTITY, scope),
+    queryFn: () => client.researchRuns(scope),
+  });
+}
+
+export function useResearchQueue(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<ResearchQueuePayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(RESEARCH_QUEUE_IDENTITY, scope),
+    queryFn: () => client.researchQueue(scope),
+  });
+}
+
+export function useHypotheses(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<HypothesisRegistrationPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(HYPOTHESIS_REGISTRATION_IDENTITY, scope),
+    queryFn: () => client.hypotheses(scope),
+  });
+}
+
+export function useChampionChallenger(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<ChampionChallengerPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(CHAMPION_CHALLENGER_IDENTITY, scope),
+    queryFn: () => client.championChallenger(scope),
+  });
+}
+
+export function useAiContribution(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<AiContributionPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(AI_CONTRIBUTION_IDENTITY, scope),
+    queryFn: () => client.aiContribution(scope),
+  });
+}
+
+export function useFeedbackPipeline(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<FeedbackPipelinePayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(FEEDBACK_PIPELINE_IDENTITY, scope),
+    queryFn: () => client.feedbackPipeline(scope),
+  });
+}
+
+export function useGovernancePackets(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<GovernancePacketPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(GOVERNANCE_PACKET_IDENTITY, scope),
+    queryFn: () => client.governancePackets(scope),
+  });
+}
+
+export function useDecisions(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<DecisionRecordPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(DECISION_RECORD_IDENTITY, scope),
+    queryFn: () => client.decisions(scope),
   });
 }
