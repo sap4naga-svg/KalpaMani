@@ -185,6 +185,8 @@ import {
   RECONCILIATION_IDENTITY,
   SYSTEM_INCIDENT_IDENTITY,
   SYSTEM_JOB_IDENTITY,
+  ASK_ANSWER_IDENTITY,
+  SEARCH_RESULT_PAGE_IDENTITY,
   type ReadModelIdentity,
 } from "@/data/client/read-model-identity";
 import type { Clock } from "@/lib/clock";
@@ -238,6 +240,28 @@ import {
   syntheticMissedOpportunities,
 } from "./signals";
 import { READ_AT_COMMIT, SNAPSHOT_AS_OF, qualificationStatusFacts } from "./tracked-facts";
+import { syntheticSearchPage, type SearchSources } from "./search";
+import {
+  attentionSummaryAnswer,
+  candidateProgressionAnswer,
+  dataQualityAnswer,
+  openAlertsAnswer,
+  portfolioDrawdownAnswer,
+  portfolioReturnAnswer,
+  recordedChangesAnswer,
+  reconciliationAnswer,
+  researchLineageAnswer,
+  strategyHealthAnswer,
+  tradeOutcomeAnswer,
+} from "./ask";
+import { ASK_INTENT_BY_CLASS } from "@/lib/ask/catalogue";
+import type { AskRequest } from "@/lib/ask/resolve";
+import {
+  askAnswerEnvelope,
+  searchResultPageEnvelope,
+  type AskAnswerPayload,
+  type SearchResultPagePayload,
+} from "@/contracts/ask-models";
 
 /**
  * The one environment this application holds facts for, and the maturity stage that
@@ -1232,6 +1256,194 @@ export class FixtureReadClient implements ReadClient {
       resolution,
       auditEventEnvelope,
     );
+  }
+
+  /* ------------------------------------------------------------- added by C9 */
+
+  /**
+   * The palette's index — Area 30.
+   *
+   * It is built from the payloads this client already serves, so an indexed row can only name
+   * something a screen already shows. **Nothing scans a filesystem, a module table or a route
+   * table** (§4.3), and the term never reaches the payload: `query_echo` carries the closed
+   * code for the parse that happened, never the raw string.
+   */
+  async search(scope: ViewScope, term: string): Promise<EnvelopeOf<SearchResultPagePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const sources: SearchSources =
+      !isPopulated(scope) || scope.scenario !== "demo"
+        ? {}
+        : {
+            trades: syntheticTrades(asOf, this.sessions()),
+            candidates: syntheticCandidates(asOf, this.sessions()),
+            strategyVersions: syntheticStrategyVersions(asOf, this.sessions()),
+            hypotheses: syntheticHypotheses(asOf, this.sessions()),
+            researchRuns: syntheticResearchRuns(asOf, this.sessions()),
+            incidents: syntheticIncidents(asOf, this.originMs),
+            alerts: syntheticAlerts(asOf, this.originMs),
+            dataQuality: syntheticDataQuality(asOf, this.originMs, this.clock.now()),
+            reconciliation: syntheticReconciliation(asOf, this.originMs, this.sessions()),
+          };
+    const resolution = this.syntheticResolution<SearchResultPagePayload>(scope, () =>
+      syntheticSearchPage(sources, scope.environment, term, asOf),
+    );
+    return this.respond(
+      SEARCH_RESULT_PAGE_IDENTITY,
+      "search-result-page",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      searchResultPageEnvelope,
+    );
+  }
+
+  /**
+   * One bounded, typed analytical answer — Area 31.
+   *
+   * **The answer is the owning read model's own figure.** Each class delegates to the read
+   * this client already serves and lifts the `MetricValue` that read produced, so an answer
+   * cannot be fresher, more certain or numerically different from the screen it summarizes.
+   *
+   * Three outcomes, kept apart:
+   *
+   *   the producer carries no payload   the ANSWER carries that availability and reason and
+   *                                     NO payload. It is not an abstention: an abstention
+   *                                     cites what it consulted, and nothing was consulted
+   *   the subject names nothing         `NOT_YET_AVAILABLE` + `REFERENT_NOT_FOUND`, payloadless
+   *                                     (ADR-0030 R9) -- never `NOT_IMPLEMENTED`, which would
+   *                                     assert the producer does not exist
+   *   the measurement is absent         an ABSTENTION inside the payload, carrying the
+   *                                     measurement's own state and citing the records read
+   */
+  async ask(scope: ViewScope, request: AskRequest): Promise<EnvelopeOf<AskAnswerPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = await this.askResolution(scope, request, asOf);
+    return this.respond(
+      ASK_ANSWER_IDENTITY,
+      `ask-answer-${request.questionClass.toLowerCase()}`,
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      askAnswerEnvelope,
+    );
+  }
+
+  /**
+   * What one question resolves to, before an envelope is built around it.
+   *
+   * A delegated read that carries no payload PROPAGATES: its availability and reason become
+   * this answer's, because "an answer must not become more certain than the evidence it
+   * summarizes" is a rule about the envelope as well as about the figure.
+   */
+  private async askResolution(
+    scope: ViewScope,
+    request: AskRequest,
+    asOf: string,
+  ): Promise<Resolution<AskAnswerPayload>> {
+    if (!isPopulated(scope)) {
+      return unpopulated();
+    }
+    if (!ASK_INTENT_BY_CLASS.has(request.questionClass)) {
+      /*
+       * A CLASS OUTSIDE THE CLOSED CATALOGUE IS NOT ANSWERED, AND NOT APPROXIMATED.
+       *
+       * `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT` is the 4.1.1 pairing for a question
+       * this read model does not define -- distinct from `NOT_IMPLEMENTED`, which would claim
+       * a producer is missing, and from an abstention, which would claim evidence was read.
+       */
+      return { availability: "NOT_APPLICABLE", availabilityReason: "NOT_DEFINED_FOR_SUBJECT" };
+    }
+    const answered = (payload: AskAnswerPayload): Resolution<AskAnswerPayload> => ({
+      availability: "AVAILABLE",
+      availabilityReason: "NONE",
+      payload,
+      maturityStage: POPULATED_MATURITY,
+    });
+    /** The delegated envelope carried nothing, so neither does the answer. */
+    const propagate = <T,>(source: EnvelopeOf<T>): Resolution<AskAnswerPayload> => ({
+      availability: source.availability,
+      availabilityReason: source.availability_reason,
+    });
+    /** A well-formed identifier that named nothing (ADR-0030 R9). */
+    const notFound = (): Resolution<AskAnswerPayload> =>
+      targetResolution<AskAnswerPayload>(producerFor(scope), false);
+
+    switch (request.questionClass) {
+      case "PORTFOLIO_RETURN":
+      case "PORTFOLIO_DRAWDOWN": {
+        const window = request.window;
+        if (window === undefined) {
+          return {
+            availability: "NOT_APPLICABLE",
+            availabilityReason: "NOT_DEFINED_FOR_SUBJECT",
+          };
+        }
+        const summary = await this.performanceSummary(scope, window);
+        if (summary.payload === undefined) return propagate(summary);
+        return answered(
+          request.questionClass === "PORTFOLIO_RETURN"
+            ? portfolioReturnAnswer(summary.payload, window, asOf)
+            : portfolioDrawdownAnswer(summary.payload, window, asOf),
+        );
+      }
+      case "STRATEGY_HEALTH": {
+        const subject = request.subjectId;
+        if (subject === undefined) return notFound();
+        const health = await this.strategyHealth(scope);
+        if (health.payload === undefined) return propagate(health);
+        const payload = strategyHealthAnswer(health.payload, subject, asOf);
+        return payload === null ? notFound() : answered(payload);
+      }
+      case "TRADE_OUTCOME": {
+        const subject = request.subjectId;
+        if (subject === undefined) return notFound();
+        const detail = await this.tradeDetail(scope, subject);
+        if (detail.payload === undefined) return propagate(detail);
+        const lifecycle = await this.tradeLifecycle(scope, subject);
+        return answered(tradeOutcomeAnswer(detail.payload, lifecycle.payload, asOf));
+      }
+      case "CANDIDATE_PROGRESSION": {
+        const subject = request.subjectId;
+        if (subject === undefined) return notFound();
+        const detail = await this.candidateDetail(scope, subject);
+        if (detail.payload === undefined) return propagate(detail);
+        return answered(candidateProgressionAnswer(detail.payload, asOf));
+      }
+      case "ATTENTION_SUMMARY": {
+        const attention = await this.attention(scope);
+        if (attention.payload === undefined) return propagate(attention);
+        return answered(attentionSummaryAnswer(attention.payload, asOf));
+      }
+      case "RECORDED_CHANGES": {
+        const changes = await this.whatChanged(scope);
+        if (changes.payload === undefined) return propagate(changes);
+        return answered(recordedChangesAnswer(changes.payload, asOf));
+      }
+      case "DATA_QUALITY_CONDITION": {
+        const quality = await this.dataQuality(scope);
+        if (quality.payload === undefined) return propagate(quality);
+        return answered(dataQualityAnswer(quality.payload, asOf));
+      }
+      case "RECONCILIATION_RESULT": {
+        const reconciliation = await this.reconciliation(scope);
+        if (reconciliation.payload === undefined) return propagate(reconciliation);
+        const payload = reconciliationAnswer(reconciliation.payload, asOf);
+        return payload === null ? notFound() : answered(payload);
+      }
+      case "OPEN_ALERTS": {
+        const alerts = await this.alerts(scope);
+        if (alerts.payload === undefined) return propagate(alerts);
+        return answered(openAlertsAnswer(alerts.payload, asOf));
+      }
+      case "RESEARCH_LINEAGE": {
+        const subject = request.subjectId;
+        if (subject === undefined) return notFound();
+        const hypotheses = await this.hypotheses(scope);
+        if (hypotheses.payload === undefined) return propagate(hypotheses);
+        const payload = researchLineageAnswer(hypotheses.payload, subject, asOf);
+        return payload === null ? notFound() : answered(payload);
+      }
+    }
   }
 
   async qualificationStatus(scope: ViewScope): Promise<EnvelopeOf<QualificationStatusPayload>> {

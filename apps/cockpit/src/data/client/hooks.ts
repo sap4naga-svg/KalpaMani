@@ -55,6 +55,11 @@ import type {
   SystemJobPayload,
 } from "@/contracts/operations-models";
 import type { AuditEventPayload } from "@/contracts/audit-models";
+import type {
+  AskAnswerPayload,
+  SearchResultPagePayload,
+} from "@/contracts/ask-models";
+import type { AskRequest } from "@/lib/ask/resolve";
 import { useReadClient } from "@/components/shell/providers";
 import { PERFORMANCE_PERIODS, type PerformancePeriod, type ViewScope } from "@/lib/scope";
 
@@ -96,6 +101,8 @@ import {
   RECONCILIATION_IDENTITY,
   SYSTEM_INCIDENT_IDENTITY,
   SYSTEM_JOB_IDENTITY,
+  ASK_ANSWER_IDENTITY,
+  SEARCH_RESULT_PAGE_IDENTITY,
 } from "./read-model-identity";
 import type { AttentionListPayload, WhatChangedPayload } from "./read-client";
 
@@ -548,5 +555,59 @@ export function useAuditEvents(
   return useQuery({
     queryKey: readModelKey(AUDIT_EVENT_IDENTITY, scope),
     queryFn: () => client.auditEvents(scope),
+  });
+}
+
+/* ------------------------------------------------------------------- added by C9 */
+
+/**
+ * The palette's index — Area 30.
+ *
+ * The term joins the cache key, so two terms are two entries and one term's rows can never be
+ * served under another's. The whole scope is in the key already, so a search captured under
+ * one environment cannot be replayed under a different badge.
+ */
+export function useSearch(
+  scope: ViewScope,
+  term: string,
+): UseQueryResult<EnvelopeOf<SearchResultPagePayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(SEARCH_RESULT_PAGE_IDENTITY, scope, [term]),
+    queryFn: () => client.search(scope, term),
+  });
+}
+
+/**
+ * One bounded, typed answer — Area 31.
+ *
+ * EVERY REQUEST PARAMETER JOINS THE KEY, which is what makes a stale answer structurally
+ * impossible rather than a thing a component has to remember: a different question, subject or
+ * window is a DIFFERENT CACHE ENTRY, and React Query returns no data for a key it has not
+ * seen. An answer to the previous question therefore cannot be returned for the current one,
+ * and a late response for an earlier key lands on that key rather than on this one.
+ *
+ * `request` is `null` while nothing has been asked, and the query is disabled — so opening the
+ * panel issues no read at all.
+ */
+export function useAsk(
+  scope: ViewScope,
+  request: AskRequest | null,
+): UseQueryResult<EnvelopeOf<AskAnswerPayload>> {
+  const client = useReadClient();
+  const parameters =
+    request === null
+      ? []
+      : [request.questionClass, request.subjectId ?? "-", request.window ?? "-"];
+  return useQuery({
+    queryKey: readModelKey(ASK_ANSWER_IDENTITY, scope, parameters),
+    queryFn: () => {
+      if (request === null) {
+        /* Unreachable while `enabled` is false, and a refusal rather than a fabricated read. */
+        throw new Error("no question has been asked");
+      }
+      return client.ask(scope, request);
+    },
+    enabled: request !== null,
   });
 }

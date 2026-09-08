@@ -66,6 +66,10 @@ import {
 } from "@/contracts/operations-models";
 import { AUDIT_EVENT_SCHEMA } from "@/contracts/audit-models";
 import {
+  ASK_ANSWER_SCHEMA,
+  SEARCH_RESULT_PAGE_SCHEMA,
+} from "@/contracts/ask-models";
+import {
   MARKET_REGIME_SCHEMA,
   RISK_SNAPSHOT_SCHEMA,
   SHORT_SIDE_SNAPSHOT_SCHEMA,
@@ -519,6 +523,52 @@ export const AUDIT_EVENT_IDENTITY: ReadModelIdentity = {
   accessScope: "audit:read",
 };
 
+/**
+ * The C9 search and assistant identities — Areas 30 and 31.
+ *
+ * **THE PROVENANCE IS THE INDEX'S OWN, AND NEVER THE SELECTOR'S.** `SearchResultPage` is a
+ * composite index built by this fixture adapter in BOTH scenarios, so its envelope is
+ * `SYNTHETIC` in both. That is a statement about the INDEX; each indexed ROW carries its own
+ * `environment`, `provenance` and `classification`, which is exactly the cross-provenance
+ * arrangement §4.3.1 authorizes for this read model and for almost nothing else. A tracked
+ * governance fact indexed here stays `REPOSITORY_TRACKED` on its own row and **is never
+ * relabelled `SYNTHETIC` to sit in one list** (§7.1).
+ *
+ * `AskAnswer` is `SYNTHETIC` because §2.6 catalogues it as `SYNTHETIC` with no governance
+ * blend, and because §7.1 does not admit `REPOSITORY_TRACKED` to `PUBLIC_EDGE` from it. That
+ * is what bounds the question catalogue: an answer over tracked governance facts would have
+ * to either mislabel them or be refused at admission, so the assistant produces none and the
+ * governance area keeps its own facts.
+ *
+ * **THE ACCESS SCOPES ARE THE CONTRACT'S.** §4.5 gives search "the union of the scopes the
+ * caller holds, and nothing outside them is listed", and an answer "the union of the caller's
+ * read scopes". A union is one value here, and it is its own — two access scopes never share
+ * a cache entry (§7), so neither of these borrows another read model's.
+ *
+ * **THE SCHEMA VERSIONS ARE `v1`, AND THAT IS NOT AN OVERSIGHT.** §5.2 versions a schema PER
+ * READ MODEL. These two have never been served before, so each carries its own first
+ * version; the nineteen coordinated models keep `v2`, and the ten C7 and seven C8 models keep
+ * `v1`, because copying a version on to a model with no history would state one it does not
+ * have.
+ */
+export const SEARCH_RESULT_PAGE_IDENTITY: ReadModelIdentity = {
+  readModel: "SearchResultPage",
+  queryName: "search-result-page",
+  schemaVersion: SEARCH_RESULT_PAGE_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "search:read",
+};
+
+export const ASK_ANSWER_IDENTITY: ReadModelIdentity = {
+  readModel: "AskAnswer",
+  queryName: "ask-answer",
+  schemaVersion: ASK_ANSWER_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "ask:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
@@ -556,4 +606,6 @@ export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   SYSTEM_INCIDENT_IDENTITY,
   ALERT_IDENTITY,
   AUDIT_EVENT_IDENTITY,
+  SEARCH_RESULT_PAGE_IDENTITY,
+  ASK_ANSWER_IDENTITY,
 ];
