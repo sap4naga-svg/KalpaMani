@@ -611,6 +611,22 @@ export const REFERENCE_FIELDS = {
     requiredness: "required",
     implemented: true,
   },
+  /**
+   * The risk decisions this snapshot lists, each naming the decision record it points at.
+   *
+   * **`implemented` is `true`, and it read `false`.** This application serves `RiskSnapshot`
+   * and its fixture emits this reference, so recording the producer as absent would make
+   * `producerStateFor` answer `PRODUCER_NOT_IMPLEMENTED` for a producer that exists for
+   * `SYNTHETIC` provenance — which R6 states asserts something false about the subsystem.
+   * It sat among the specification-only C6 entries, which is how the flag came to disagree
+   * with every other `RiskSnapshot.*` row, so it is recorded beside them instead.
+   */
+  "RiskSnapshot.decisions[].decision_ref": {
+    shape: "REF",
+    kinds: ["risk_decision"],
+    requiredness: "required",
+    implemented: true,
+  },
   "RiskSnapshot.exposure_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
@@ -779,12 +795,6 @@ export const REFERENCE_FIELDS = {
   "ReconciliationStatus.incident_refs": {
     shape: "REF_LIST",
     kinds: ["incident"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "RiskSnapshot.decisions[].decision_ref": {
-    shape: "REF",
-    kinds: ["risk_decision"],
     requiredness: "required",
     implemented: false,
   },

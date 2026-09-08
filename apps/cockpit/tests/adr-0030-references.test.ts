@@ -11,6 +11,9 @@
  * payload, break exactly one thing, and require the boundary to refuse it. A suite that only
  * ever showed conforming payloads would pass against a validator that does nothing.
  */
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { admit } from "@/data/client/read-client";
@@ -20,6 +23,7 @@ import { tradeDetailEnvelope, TRADE_DETAIL_SCHEMA } from "@/contracts/portfolio-
 import {
   marketRegimeEnvelope,
   riskSnapshotEnvelope,
+  shortSideSnapshotEnvelope,
   MARKET_REGIME_SCHEMA,
 } from "@/contracts/risk-market-models";
 import { envelopeFields } from "@/contracts/envelope";
@@ -1199,5 +1203,75 @@ describe("the candidate detail boundary enforces the same rules", () => {
     expect(() =>
       admit("CandidateDetail", candidateDetailEnvelope, response, "PUBLIC_EDGE"),
     ).toThrow(/is not the reference's/);
+  });
+});
+
+
+describe("every reference field a model schema carries is bound to its declaration", () => {
+  /*
+   * THE ASSIGNMENT AND THE ENFORCEMENT ARE TWO THINGS, AND THIS IS THE SECOND.
+   *
+   * `REFERENCE_FIELDS` records the kind §4.3.1 assigns each field; `refOf` and
+   * `refListFieldOf` are what make a schema check it. A field that imports the bare `ref`
+   * shape from `values.ts` gets the FLOOR -- a closed `ref_kind` and a closed `resolution`
+   * -- and nothing about the field it sits in, so its catalogue row is written down and
+   * never applied. Two implemented, emitted fields were in exactly that state.
+   *
+   * This is structural on purpose: the two behavioural cases below prove the consequence on
+   * the two fields that had it, and this one refuses the NEXT field to arrive unbound.
+   */
+  const CONTRACTS = join(__dirname, "..", "src", "contracts");
+  /** The two modules that legitimately name the unbound shapes: one defines them, one binds them. */
+  const DEFINING = new Set(["values.ts", "references.ts"]);
+
+  it("never uses the unbound `ref` or `refList` shape in a model schema", () => {
+    const offenders: string[] = [];
+    for (const name of readdirSync(CONTRACTS)) {
+      if (!name.endsWith(".ts") || DEFINING.has(name)) {
+        continue;
+      }
+      const text = readFileSync(join(CONTRACTS, name), "utf8");
+      text.split(/\r?\n/).forEach((line, index) => {
+        if (line.trimStart().startsWith("*") || line.trimStart().startsWith("//")) {
+          return;
+        }
+        if (/(?:[:(,[]|=>)\s*ref(?:List)?\s*(?:[,)}\]]|$)/.test(line)) {
+          offenders.push(`${name}:${index + 1} ${line.trim()}`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("refuses a risk snapshot whose decision reference names a forbidden kind", async () => {
+    const response = clone(await client().riskSnapshot(DEMO));
+    const decisions = (response.payload as { decisions: { decision_ref: Ref }[] }).decisions;
+    expect(decisions.length).toBeGreaterThan(0);
+    decisions[0].decision_ref.ref_kind = "alert";
+    decisions[0].decision_ref.resolution = "ENDPOINT";
+    expect(() => admit("RiskSnapshot", riskSnapshotEnvelope, response, "PUBLIC_EDGE")).toThrow(
+      /declares kind risk_decision/,
+    );
+  });
+
+  it("refuses a short-side snapshot whose blocked-short reference names a forbidden kind", async () => {
+    const response = clone(await client().shortSide(DEMO));
+    const blocked = (response.payload as { blocked_shorts: { candidate_ref: Ref }[] })
+      .blocked_shorts;
+    expect(blocked.length).toBeGreaterThan(0);
+    blocked[0].candidate_ref.ref_kind = "incident";
+    blocked[0].candidate_ref.resolution = "ENDPOINT";
+    expect(() =>
+      admit("ShortSideSnapshot", shortSideSnapshotEnvelope, response, "PUBLIC_EDGE"),
+    ).toThrow(/declares kind candidate/);
+  });
+
+  it("records the risk-decision producer as implemented, because this application serves it", () => {
+    /*
+     * R6: an implemented producer that lacks one record is REFERENT_NOT_FOUND, and calling
+     * it PRODUCER_NOT_IMPLEMENTED asserts something false about the subsystem. The flag read
+     * `false` for a field this application emits.
+     */
+    expect(declarationFor("RiskSnapshot.decisions[].decision_ref").implemented).toBe(true);
   });
 });

@@ -35,7 +35,6 @@ import {
   policyRef,
   reasonCoded,
   recordValue,
-  ref,
   safeId,
   series,
 } from "./values";
@@ -122,7 +121,20 @@ export const riskSnapshotPayload = z.object({
   circuit_breaker_state: reasonCoded,
   new_entry_state: reasonCoded,
   decisions: z.array(
-    z.object({ decision_ref: ref, at: instant, outcome: reasonCoded }),
+    z.object({
+      /*
+       * BOUND TO ITS CATALOGUE DECLARATION, and it used to be the bare `ref` shape.
+       *
+       * The bare shape is the FLOOR -- a closed `ref_kind` and a closed `resolution` --
+       * and it knows nothing about the field it sits in, so this emitted, implemented
+       * reference admitted any of the twenty-seven kinds with any resolution that kind
+       * permits. §4.3.1 assigns this field `risk_decision`, and an unbound field is that
+       * assignment written down and never checked.
+       */
+      decision_ref: refOf("RiskSnapshot.decisions[].decision_ref"),
+      at: instant,
+      outcome: reasonCoded,
+    }),
   ),
 });
 export type RiskSnapshotPayload = z.infer<typeof riskSnapshotPayload>;
@@ -183,7 +195,13 @@ export const shortSideSnapshotPayload = z.object({
    * no counterfactual outcome is carried here, because computing one needs a price path
    * nobody has and Missed Opportunities (Area 8, C6) owns that question.
    */
-  blocked_shorts: z.array(z.object({ candidate_ref: ref, reason: reasonCoded })),
+  blocked_shorts: z.array(
+    z.object({
+      /* Bound to its declaration, for the reason `RiskSnapshot.decisions[]` states. */
+      candidate_ref: refOf("ShortSideSnapshot.blocked_shorts[].candidate_ref"),
+      reason: reasonCoded,
+    }),
+  ),
   /** What a borrow-related miss summary would need, and does not have. Named, not blank. */
   missed_opportunity_ref: refOf("ShortSideSnapshot.missed_opportunity_ref"),
 });
