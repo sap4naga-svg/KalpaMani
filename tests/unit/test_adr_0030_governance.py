@@ -484,7 +484,20 @@ def test_referent_not_found_is_in_the_closed_error_vocabulary() -> None:
 
 
 def test_a_bare_reference_carries_no_availability_so_the_state_lands_elsewhere() -> None:
-    """R9: ``Ref`` is ``{ref_id, ref_kind, resolution, classification}`` and has no state field."""
+    """R9: a ``Ref`` carries no state field, and the enumeration below stays EXACT.
+
+    THE SET GAINED ONE MEMBER, AND THE PROPERTY UNDER TEST DID NOT.
+
+    ``owning_area`` is the optional closed field ADR-0031 proposes (§4.3.2) — descriptive
+    navigation metadata, and **not** availability, **not** a reason and **not** an access
+    grant. **R9 is unchanged and is still asserted directly**: the two named state fields are
+    refused above, by name, and this enumeration stays an equality rather than a subset check,
+    so a *sixth* field still fails here. Relaxing it to ``>=`` would be weakening the guard;
+    admitting the one field an amendment adds is following the contract it guards.
+
+    ADR-0031 is PROPOSED, so this expectation carries exactly the authority that decision
+    does, and it is reverted with it if the decision is not accepted.
+    """
     flat = flatten(CONTRACTS_TEXT)
     assert "A `Ref` carries no `availability` and no `reason`" in flat
     landing = "carried by the VALUE-BEARING field the target would have filled"
@@ -498,6 +511,7 @@ def test_a_bare_reference_carries_no_availability_so_the_state_lands_elsewhere()
         "ref_kind",
         "resolution",
         "classification",
+        "owning_area",
     }, shape
 
 
@@ -694,7 +708,7 @@ def test_the_implementation_carries_the_per_kind_resolution_sets_the_table_state
 
     ``EMBEDDED`` is excluded on both sides: the document makes it available to every row and
     gates it on catalogue permission instead of enumeration, so it is checked by the carrier
-    catalogue of section 4.3.2 and never by this table.
+    catalogue of section 4.3.3 and never by this table.
     """
     text = REFERENCES.read_text(encoding="utf-8")
     block = section(text, "export const KIND_RESOLUTIONS", "};")
@@ -712,9 +726,9 @@ def test_the_implementation_carries_the_per_kind_resolution_sets_the_table_state
 
 
 def test_the_carrier_catalogue_names_a_carrier_for_every_authorized_embed() -> None:
-    """Section 4.3.2 exists, and every row it carries states all four things R4 requires."""
-    span = section(CONTRACTS_TEXT, "#### 4.3.2 ", "### 4.4 ")
-    assert span, "section 4.3.2 names no carriers"
+    """Section 4.3.3 exists, and every row it carries states all four things R4 requires."""
+    span = section(CONTRACTS_TEXT, "#### 4.3.3 ", "#### 4.3.4 ")
+    assert span, "section 4.3.3 names no carriers"
     rows = [line for line in span.splitlines() if line.startswith("| `") and "|" in line[3:]]
     embeds = [row for row in rows if "projection" in row or "complete target" in row]
     assert len(embeds) == 7, "seven host fields are authorized carriers"
@@ -726,7 +740,7 @@ def test_the_carrier_catalogue_names_a_carrier_for_every_authorized_embed() -> N
 
 def test_the_carrier_catalogue_refuses_the_four_embeds_that_were_not_true() -> None:
     """Named, with the reason, rather than quietly dropped."""
-    flat = flatten(section(CONTRACTS_TEXT, "#### 4.3.2 ", "### 4.4 "))
+    flat = flatten(section(CONTRACTS_TEXT, "#### 4.3.3 ", "#### 4.3.4 "))
     for field in (
         "`TradeDetail.add_refs`",
         "`TradeDetail.exit_ref`",
@@ -764,7 +778,7 @@ def test_the_follow_up_requires_the_compatibility_constraints_to_be_rechecked() 
     assert "land contract, fixture and consumer changes in a SINGLE commit" in ADR_FLAT
 
 
-# ------------------------------------------------- the scope a resolution requires (4.3.3)
+# ------------------------------------------------- the scope a resolution requires (4.3.4)
 
 
 #: Section 4.3's Resolution column names a scope outright on these rows, and only these.
@@ -777,21 +791,21 @@ SCOPES_NAMED_IN_THE_TABLE: Final = {
 
 SCOPE_SECTION: Final = section(
     CONTRACTS_TEXT,
-    "#### 4.3.3 The scope a resolution requires",
+    "#### 4.3.4 The scope a resolution requires",
     "### 4.4 The four risk quantities",
 )
 
 
 def test_the_specification_states_where_a_required_scope_comes_from() -> None:
     """A required scope the caller may name is not a required scope."""
-    assert SCOPE_SECTION, "section 4.3.3 is absent"
+    assert SCOPE_SECTION, "section 4.3.4 is absent"
     flat = flatten(SCOPE_SECTION)
     assert "A required scope the caller may name is not a required scope." in flat
     assert "refused rather than honoured" in flat
 
 
 def test_the_scope_section_agrees_with_the_row_it_is_derived_from() -> None:
-    """Every scope section 4.3 names outright is the scope section 4.3.3 assigns."""
+    """Every scope section 4.3 names outright is the scope section 4.3.4 assigns."""
     rows = section(CONTRACTS_TEXT, "### 4.3 Resolving a reference", "#### 4.3.1")
     assert rows, "the section 4.3 table is absent"
     flat = flatten(SCOPE_SECTION)
@@ -827,4 +841,4 @@ def test_a_located_target_carries_its_own_identity_and_a_tombstone_is_recorded()
 
 def test_the_scope_section_would_notice_its_own_removal() -> None:
     """A scanner that sees nothing passes every document vacuously."""
-    assert section(CONTRACTS_TEXT, "#### 4.3.3 A heading that is not there", "### 4.4") == ""
+    assert section(CONTRACTS_TEXT, "#### 4.3.4 A heading that is not there", "### 4.4") == ""

@@ -350,7 +350,7 @@ client is not enforcement**, so the checks sit on the path the fixture adapter a
 |---|---|
 | **`RefKind`** | closed at the **twenty-seven** rows of §4.3, replacing `z.string().min(1)`. `trade` is the member ADR-0030 R1 added |
 | **resolutions** | each kind's row is a **permitted set**, and a reference declares one member of it. A kind whose row lists no `UNRESOLVABLE_V1` cannot declare one |
-| **`EMBEDDED`** | needs catalogue **permission** *and* **truth**. §4.3.2 names seven authorized carriers, says whether each holds the complete target or a **declared projection**, and states its identity correspondence. **Presence is not permission** |
+| **`EMBEDDED`** | needs catalogue **permission** *and* **truth**. §4.3.3 names seven authorized carriers, says whether each holds the complete target or a **declared projection**, and states its identity correspondence. **Presence is not permission** |
 | **identity** | compared against the **target entity**, never the container. The identifier-less `security` projection is compared on its canonicalized `symbol` and **never on the display name** |
 | **cardinality** | the host field's own declaration governs; `items`, `total` and `truncated` are kept apart, and no relation is asserted from a page or from a total nobody took |
 | **absence** | `REFERENT_NOT_FOUND` was added to both closed vocabularies. An implemented producer missing one record says so; only a producer that does not exist for the scope is `PRODUCER_NOT_IMPLEMENTED` |

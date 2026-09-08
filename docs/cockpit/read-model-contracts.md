@@ -20,9 +20,14 @@ and the corrections it makes here are proposed with it.
 while the pull request introducing it, PR #73, is open**, and the two corrections it makes here are
 proposed with it.
 **Further amended by** [ADR-0030](../decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md) —
-§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, and §5's
-error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
+§4.1 `FieldReasonCode`, §4.2 `Ref` and the closed helper vocabularies, §4.3 with new §4.3.1, the
+carrier and scope catalogues at §4.3.3 and §4.3.4, and §5's error vocabulary. ADR-0030 is **PROPOSED and carries no authority while the pull request introducing
 it is open**, and the corrections it makes here are proposed with it.
+**Further amended by** [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) —
+§4.2 `Ref` and the closed helper vocabularies, §4.3.1's navigation rule with new §4.3.2, and the
+§4.5 `WhatChangedEntry` and `AttentionItem` payload notes. ADR-0031 is **PROPOSED and carries no
+authority while the pull request introducing it is open**, and the deltas it makes here are proposed
+with it.
 
 ---
 
@@ -666,14 +671,19 @@ RecordValue     object      { record: <the named record type, or ABSENT>,
                             skeleton, never a placeholder, and never a zeroed record
 Ref             object      { ref_id: SafeId, ref_kind: <closed RefKind>,
                               resolution: <closed Resolution>, classification:
-                              DataClassification }
+                              DataClassification,
+                              owning_area: <closed OwningArea> or ABSENT }
                             EVERY reference-valued field in §4.5 names its kind, and §4.3.1
                             assigns one to each field whose contract line does not state it --
                             RefList fields included. A Ref whose kind is outside RefKind, or
                             whose resolution is outside the set its kind permits, is REFUSED at
                             the boundary. A Ref carries NO availability and NO reason: an
                             unresolvable target is stated by the value-bearing field it would
-                            have filled, or by a §5 error, and the reference stays VISIBLE
+                            have filled, or by a §5 error, and the reference stays VISIBLE.
+                            `owning_area` is OPTIONAL DESCRIPTIVE metadata under §4.3.2 --
+                            it names the AREA responsible for the referenced record, it is
+                            NEVER an access grant, and it NEVER changes what the reference
+                            means or how it resolves
 RefList         object      { items: [Ref], cardinality: <closed Cardinality>,
                               total: CountValue, truncated: boolean }
                             A list of references states how many there are, so a truncated
@@ -714,6 +724,9 @@ Unit            USD  RATIO  PERCENT  BPS  SHARES  SECONDS  TRADING_DAYS  CALENDA
                 COUNT  R_MULTIPLE  DIMENSIONLESS
 RefKind         the TWENTY-SEVEN members that are the rows of the §4.3 table. A value
                 outside them is refused at the boundary, never rendered and never coerced
+OwningArea      the SEVEN members that are the rows of the §4.3.2 table. A value outside
+                them is refused at the boundary, never rendered and never coerced. It is a
+                SECOND, SEPARATE axis from RefKind and is never a substitute for one
 ```
 
 **`Cardinality` describes the RELATION, not the count of reference objects**, and **the host field's
@@ -974,9 +987,144 @@ REFUSED     a generic resolver, a proxy, an unrestricted fetcher, or a guess for
 
 `Ref.classification` **labels** the reference and **is not access or publication authorization**.
 
+**This rule governs TARGET navigation, and it is not the only navigation attribute — amended by
+ADR-0031.** Keyed by `RefKind`, it answers *open the referenced record*. A **second** closed
+attribute, `Ref.owning_area`, answers the different question *go to the area responsible for this
+item*, and §4.3.2 states it. **The two are separate, and neither is a fallback for the other**: an
+unmapped `RefKind` still yields **no target link**, and an absent `owning_area` still yields **no
+area link**.
+
 ---
 
-#### 4.3.2 The authorized carriers, and what each one's identity is
+#### 4.3.2 Owning-area navigation — a second closed attribute, and never a resolution
+
+**A reference answers two questions, and one field cannot carry both.** `ref_kind` says *what this
+is a reference to*; `owning_area` says *which area is responsible for the record it names*. Before
+this section existed, the only way to reach a per-area destination was to write the area's name into
+`ref_kind` — which produced kinds the host field does not permit (§4.3.1), and is refused.
+
+**`owning_area` is optional, closed, and carried INSIDE the reference.** The reference it describes
+is the object it is a field of. **Association by array position, by display text, by an identifier
+prefix or naming convention, or by a runtime filesystem, module or route search is REFUSED** — an
+association a reader cannot see in the payload is one a producer can silently get wrong, and a
+positional pairing breaks the moment a list is filtered, truncated or reordered.
+
+```text
+MULTIPLICITY    at most ONE per Ref. A reference names one record, and one area owns it.
+                Where accepted authority does not determine a single owning area, the
+                reference declares NONE -- never a list, never a first-of, never a
+                nearest match
+DUPLICATES      two references in one list MAY declare the same area. They stay two
+                references, they are not collapsed, and the area is not deduplicated away
+CONTRADICTION   two references sharing a ref_id AND a ref_kind anywhere in one
+                ADMISSION UNIT -- one response payload, whether they sit in the same
+                RefList, in two different RefLists, or in a scalar Ref field beside
+                either -- while DECLARING DIFFERENT owning_area values are REFUSED AT
+                ADMISSION. One record is not owned by two areas, and admitting it lets a
+                renderer choose. The scope is the admission unit and no wider, because
+                that is exactly where the comparison is sound: R8 requires the
+                environment to match the resolving envelope ALWAYS, and 4.2 gives a Ref
+                NO provenance field, so within one response a matched ref_id and
+                ref_kind name one target
+ABSENCE         is NOT a conflicting value. A reference DECLARING an area beside one
+                declaring NONE is not a contradiction: ABSENT states nothing, so there
+                is nothing for it to disagree with, and the declared area stands. Only
+                two DECLARED and DIFFERENT members conflict -- reading absence as
+                conflict would refuse conformant payloads at admission
+VALIDATION      a value outside the closed set is REFUSED AT ADMISSION, exactly as an
+                out-of-set ref_kind or resolution is. Never rendered, never coerced, and
+                never mapped to a nearest member
+KIND UNCHANGED  a producer may NEVER change a reference's ref_kind to obtain a link. The
+                kinds §4.5 declares for a field govern, and this attribute exists so that
+                mislabelling is unnecessary
+```
+
+**The closed `OwningArea` vocabulary — seven members, each one internal area landing route.** Every
+route is an **area landing page with no entity segment**, so **nothing is interpolated into one**.
+A free-form or absolute URL, an external origin, a producer-supplied template and a destination
+derived from free text, a title or a label are each **REFUSED**, exactly as under §4.3.1.
+
+| `owning_area` | Area | Route | Authority for the ownership |
+|---|---|---|---|
+| `DATA_QUALITY` | 22 | `/system/data-quality` | area 22 owns `DataQuality`, `GET /api/v1/system/data-quality` |
+| `STRATEGY_HEALTH` | 5 | `/strategy/health` | area 5 owns `StrategyHealth` transitions, `GET /api/v1/strategy/health` |
+| `RECONCILIATION` | 10 | `/execution/reconciliation` | area 10 owns `ReconciliationStatus`, `GET /api/v1/execution/reconciliation` |
+| `SHORT_SIDE` | 13 | `/risk/short-side` | area 13 owns `ShortSideSnapshot` and its borrow records, `GET /api/v1/risk/short-side` |
+| `ALERTS` | 27 | `/system/alerts` | area 27 owns `Alert`, `GET /api/v1/system/alerts` |
+| `SYSTEM_OPERATIONS` | 23 | `/system/operations` | area 23 owns `SystemIncident` and job state, `GET /api/v1/system/incidents` |
+| `AUDIT_TRAIL` | 26 | `/governance/audit` | area 26 owns `AuditEvent`, `GET /api/v1/audit/events` |
+
+**`AUDIT_TRAIL` is a member and is NEVER a default.** It is declared when the reference names a
+recorded `AuditEvent` — the one read model Matrix A gives area 26. **An absent, unknown or
+undetermined owning area never resolves to it**, and no rule may use it as a fallback: *an Audit
+page owns every fact* is a false claim, and it is the one this section exists to stop being made.
+
+**A governance record is not an `AuditEvent`, and this member does not reach one.** Matrix A gives
+`GovernancePacket` and `DecisionRecord` to **area 19**, `QualificationStatus` to **area 24** and
+`MaturityStatus` to **area 25**. None of the three is owned by area 26, none of the three is a
+member of this vocabulary, and a reference naming one therefore **declares no owning area** under
+the multiplicity rule above — never `AUDIT_TRAIL` because it is the nearest catalogued page.
+
+**No member is added because a route exists.** The navigation registry carries far more routes than
+seven. A route is not evidence that an area owns a disclosed reference class, and a member is added
+by an accepted decision rather than by an implementer noticing a spare page.
+
+**Contextual entity navigation is deliberately not introduced.** No case here requires it, so the
+table carries landing pages only and there is no identifier to encode.
+
+**Four availability states, and each says exactly what it knows.**
+
+| State | What renders | What it does NOT claim |
+|---|---|---|
+| **DECLARED** | the area affordance, labelled as **area** navigation, carrying the destination route's own **implemented or placeholder** status | that the artefact was retrieved, or that the producer exists |
+| **ABSENT** | **no area affordance** | it is **NOT** a claim that no area owns the record |
+| **WITHHELD** | indistinguishable from **ABSENT**, because a `Ref` carries no availability and no reason | **no renderer may report "no owning area exists"** |
+| **INVALID** | nothing — **refused at admission** | — |
+
+**No owning area is ever invented to satisfy a link assertion.** Where the data does not say, the
+honest answer is a stated absence.
+
+**A known area whose screen is not yet built stays visibly not yet implemented.** The affordance
+carries the destination's status, and **navigating asserts nothing about whether the producing
+subsystem exists**.
+
+**The label distinguishes the two affordances, and that is a rule rather than a style.** Target
+navigation names the **record** and reads as opening it. **Owning-area navigation names the AREA and
+says so**, and **may never be phrased as resolving, opening, retrieving, viewing or showing the
+reference, the evidence or the artefact.** The two render as **distinct controls and are never
+merged**; a reference may offer both, one, or neither.
+
+**Reference status and area navigability are separate axes, displayed separately.** `resolution`,
+`classification` and every §4.3.1 unavailable outcome are unchanged. An `UNRESOLVABLE_V1` reference
+may carry a navigable area; a resolvable one may carry none. **Neither is evidence about the other.**
+
+**Evidence-kind filters are unchanged and come from the CONTRACT.** They are computed from the
+**declared** `ref_kind` vocabulary of the host field, and a category selecting zero rows is a **true
+"none of these"** rather than a missing control. **`owning_area` is not folded into that filter and
+does not become a kind.** An area facet may be offered beside it and is never conflated with it.
+
+**Navigation metadata is evidence about nothing else.** It is not completeness, not freshness, not
+materiality, not severity, not ranking input, and **not authorization**.
+
+**The access boundary, stated as refusals.**
+
+```text
+an area link does NOT authorize retrieval of the referenced artefact
+an area link does NOT reveal a withheld identifier, key, locator or vendor value
+an area link does NOT bypass the destination's own scope and classification checks
+an area link does NOT convert AUTHORIZED_READ into a read the caller may perform
+a caller denied the artefact may still see the area link, and is still denied
+```
+
+**Two limitations stay OPEN, and this section does not repair either.** §4.3 resolves `evidence` by
+`AUTHORIZED_READ` to *"a classified evidence artefact"* and **§5 catalogues no evidence endpoint**,
+so there is **no general destination at which an evidence artefact can be retrieved**; and §4.3 says
+the scope is *"named on the reference"* while §4.2 gives `Ref` **no field in which to name one**, so
+**a reference-carried scope is not expressible**. **Working area links are not a repair of either.**
+
+---
+
+#### 4.3.3 The authorized carriers, and what each one's identity is
 
 **§4.3.1 requires a carrier to be NAMED before an `EMBEDDED` declaration is admissible, and
 this is where they are named.** ADR-0030 §7 assigns the catalogue below to the implementation
@@ -1065,7 +1213,7 @@ provenance silently.
 
 ---
 
-#### 4.3.3 The scope a resolution requires, and where it comes from
+#### 4.3.4 The scope a resolution requires, and where it comes from
 
 **A required scope the caller may name is not a required scope.** An implementation that takes
 the required scope as a parameter has taken the authorization input from the thing being
@@ -1369,7 +1517,8 @@ WhatChangedEntry.payload {
 **Identity** `change_id` · **classification** follows the subject's own classification, and a
 governance change is `PUBLIC_SAFE` · **scope** `executive:read` · **invariants** a change with no
 resolvable evidence reference is **not rendered**, and a change is never synthesised from the
-absence of a value.
+absence of a value · **each evidence reference may declare its own `owning_area` (§4.3.2)**, its
+kind stays `source_fact`, and **an absent area is not a claim that no area owns the record**.
 
 ```text
 AttentionItem.payload {
@@ -1393,7 +1542,10 @@ AttentionItem.payload {
 contributing evidence · **scope** `executive:read` · **invariants** **an item missing any of the
 five presented things is not rendered** · `recommended_action` is drawn from a closed governance
 vocabulary containing **no order, stop, capital, risk, promotion or provider verb** · the Cockpit
-performs none of them.
+performs none of them · **an item is a projection over several areas, so its references may declare
+DIFFERENT `owning_area` values (§4.3.2) and each keeps its own** · the kinds stay `evidence` or
+`source_fact`, and **an area link is contextual navigation, never a claim that the evidence was
+resolved or retrieved**.
 
 #### Portfolio
 
