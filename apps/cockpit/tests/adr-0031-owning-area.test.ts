@@ -119,12 +119,22 @@ describe("the OwningArea vocabulary is closed at the seven accepted members", ()
   });
 
   it("carries the destination route's own implemented or placeholder status", () => {
-    // Six placeholders and one implemented screen today; the affordance says which.
+    /*
+     * FIVE PLACEHOLDERS AND TWO IMPLEMENTED SCREENS TODAY; the affordance says which.
+     *
+     * C7 built the Strategy Health area, so its destination is no longer a placeholder. The
+     * count is the point of the assertion — the affordance carries the DESTINATION'S OWN
+     * status rather than a second copy of it, so it moves when a screen is built.
+     */
     const statuses = OWNING_AREAS.map(
       (area) => owningAreaDestination({ owning_area: area })!.status,
     );
-    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(6);
+    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(5);
     expect(owningAreaDestination({ owning_area: "SHORT_SIDE" })!.status).toBe("implemented");
+    expect(owningAreaDestination({ owning_area: "STRATEGY_HEALTH" })!.status).toBe(
+      "implemented",
+    );
+    expect(owningAreaDestination({ owning_area: "AUDIT_TRAIL" })!.status).toBe("placeholder");
     for (const area of OWNING_AREAS) {
       const destination = owningAreaDestination({ owning_area: area })!;
       expect(destination.status, area).toBe(ROUTES_BY_HREF.get(destination.href)!.status);

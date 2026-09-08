@@ -241,11 +241,44 @@ describe("the navigation registry", () => {
     expect(candidate?.cycle).toBe("C6");
   });
 
-  /** Area 5 is C7's, and this cycle shows health CONTEXT rather than the health subsystem. */
-  it("keeps Strategy Health recorded as a later cycle", () => {
-    const health = ROUTES_BY_HREF.get("/strategy/health");
-    expect(health?.status).toBe("placeholder");
-    expect(health?.cycle).toBe("C7");
+  it("records the C7 areas as implemented, at the cycle the matrix assigns", () => {
+    const expected: Readonly<Record<string, number>> = {
+      "/strategy/health": 5,
+      "/strategy/champion-challenger": 15,
+      "/strategy/versions": 20,
+      "/research/runs": 14,
+      "/research/queue": 17,
+      "/research/hypotheses": 18,
+      "/research/feedback": 16,
+      "/research/ai-contribution": 21,
+      "/governance/packets": 19,
+    };
+    for (const [href, area] of Object.entries(expected)) {
+      const route = ROUTES_BY_HREF.get(href);
+      expect(route, href).toBeDefined();
+      expect(route?.status, href).toBe("implemented");
+      expect(route?.areas, href).toContain(area);
+      expect(route?.cycle, href).toBe("C7");
+      /* An implemented route still names the producing subsystem it does NOT have. */
+      expect(route?.dependency, href).not.toBe("the producing subsystem does not exist");
+      expect(route?.dependency.length, href).toBeGreaterThan(10);
+    }
+  });
+
+  /** The areas a later cycle owns are still recorded as later cycles, and still placeholders. */
+  it("leaves the C8 and later areas recorded as placeholders", () => {
+    for (const href of [
+      "/execution/quality",
+      "/execution/reconciliation",
+      "/governance/audit",
+      "/system/data-quality",
+      "/system/operations",
+      "/system/alerts",
+    ]) {
+      const route = ROUTES_BY_HREF.get(href);
+      expect(route?.status, href).toBe("placeholder");
+      expect(route?.cycle, href).toBe("C8");
+    }
   });
 
   it("keeps the settled route paths of the UI specification", () => {

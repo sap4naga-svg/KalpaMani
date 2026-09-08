@@ -61,8 +61,40 @@ import type {
   CandidateSummaryPayload,
   MissedOpportunityPayload,
 } from "@/contracts/signal-models";
-import { strategyPerformanceEnvelope } from "@/contracts/strategy-models";
-import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
+import {
+  strategyHealthEnvelope,
+  strategyPerformanceEnvelope,
+  strategyVersionEnvelope,
+} from "@/contracts/strategy-models";
+import type {
+  StrategyHealthPayload,
+  StrategyPerformancePayload,
+  StrategyVersionPayload,
+} from "@/contracts/strategy-models";
+import {
+  aiContributionEnvelope,
+  championChallengerEnvelope,
+  feedbackPipelineEnvelope,
+  hypothesisRegistrationEnvelope,
+  researchQueueEnvelope,
+  researchRunEnvelope,
+} from "@/contracts/research-models";
+import type {
+  AiContributionPayload,
+  ChampionChallengerPayload,
+  FeedbackPipelinePayload,
+  HypothesisRegistrationPayload,
+  ResearchQueuePayload,
+  ResearchRunPayload,
+} from "@/contracts/research-models";
+import {
+  decisionRecordEnvelope,
+  governancePacketEnvelope,
+} from "@/contracts/governance-models";
+import type {
+  DecisionRecordPayload,
+  GovernancePacketPayload,
+} from "@/contracts/governance-models";
 import {
   marketRegimeEnvelope,
   riskSnapshotEnvelope,
@@ -101,6 +133,16 @@ import {
   CANDIDATE_SUMMARY_IDENTITY,
   EXECUTIVE_OVERVIEW_IDENTITY,
   MISSED_OPPORTUNITY_IDENTITY,
+  AI_CONTRIBUTION_IDENTITY,
+  CHAMPION_CHALLENGER_IDENTITY,
+  DECISION_RECORD_IDENTITY,
+  FEEDBACK_PIPELINE_IDENTITY,
+  GOVERNANCE_PACKET_IDENTITY,
+  HYPOTHESIS_REGISTRATION_IDENTITY,
+  RESEARCH_QUEUE_IDENTITY,
+  RESEARCH_RUN_IDENTITY,
+  STRATEGY_HEALTH_IDENTITY,
+  STRATEGY_VERSION_IDENTITY,
   EXPOSURE_AGGREGATE_IDENTITY,
   MARKET_REGIME_IDENTITY,
   PERFORMANCE_SERIES_IDENTITY,
@@ -129,6 +171,16 @@ import { syntheticExposure, syntheticPositions } from "./positions";
 import { syntheticMarketRegime } from "./regime";
 import { syntheticRiskSnapshot, syntheticShortSide } from "./risk";
 import { syntheticStrategyPerformance } from "./strategy";
+import { syntheticStrategyHealth, syntheticStrategyVersions } from "./health";
+import {
+  syntheticAiContribution,
+  syntheticChampionChallenger,
+  syntheticFeedbackPipeline,
+  syntheticHypotheses,
+  syntheticResearchQueue,
+  syntheticResearchRuns,
+} from "./research";
+import { syntheticDecisions, syntheticGovernancePackets } from "./governance";
 import { buildPerformanceSummary } from "./summary";
 import {
   findBookTrade,
@@ -824,6 +876,190 @@ export class FixtureReadClient implements ReadClient {
       this.inputsFor(scope),
       resolution,
       missedOpportunityEnvelope,
+    );
+  }
+
+  /* ---------------------------------------------------------- added by C7 */
+
+  /**
+   * The research, feedback and governance reads.
+   *
+   * Each resolves through the same `syntheticResolution` every C5 and C6 read model uses: the
+   * producing runtime does not exist, so the honest project-scope answer is a PAYLOADLESS
+   * `NOT_IMPLEMENTED`, and the demonstration scenario carries the repository-owned fixture.
+   *
+   * **NOTHING HERE WRITES.** No method advances a stage, registers a hypothesis, launches a
+   * run, promotes a version, approves a packet or records a decision, and no such method
+   * exists anywhere behind this boundary.
+   */
+  async strategyHealth(scope: ViewScope): Promise<EnvelopeOf<StrategyHealthPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<StrategyHealthPayload>(
+      scope,
+      () => syntheticStrategyHealth(asOf, this.sessions()),
+      /** One version is below its declared minimum, so the page covers part of its subject. */
+      "PARTIAL",
+    );
+    return this.respond(
+      STRATEGY_HEALTH_IDENTITY,
+      "strategy-health",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      strategyHealthEnvelope,
+    );
+  }
+
+  async strategyVersions(scope: ViewScope): Promise<EnvelopeOf<StrategyVersionPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<StrategyVersionPayload>(scope, () =>
+      syntheticStrategyVersions(asOf, this.sessions()),
+    );
+    return this.respond(
+      STRATEGY_VERSION_IDENTITY,
+      "strategy-version",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      strategyVersionEnvelope,
+    );
+  }
+
+  async researchRuns(scope: ViewScope): Promise<EnvelopeOf<ResearchRunPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ResearchRunPayload>(
+      scope,
+      () => syntheticResearchRuns(asOf, this.sessions()),
+      /** Three of the six runs produced no result at all, so the registry is PARTIAL. */
+      "PARTIAL",
+    );
+    return this.respond(
+      RESEARCH_RUN_IDENTITY,
+      "research-run",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      researchRunEnvelope,
+    );
+  }
+
+  async researchQueue(scope: ViewScope): Promise<EnvelopeOf<ResearchQueuePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ResearchQueuePayload>(scope, () =>
+      syntheticResearchQueue(asOf, this.sessions()),
+    );
+    return this.respond(
+      RESEARCH_QUEUE_IDENTITY,
+      "research-queue",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      researchQueueEnvelope,
+    );
+  }
+
+  async hypotheses(scope: ViewScope): Promise<EnvelopeOf<HypothesisRegistrationPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<HypothesisRegistrationPayload>(
+      scope,
+      () => syntheticHypotheses(asOf, this.sessions()),
+      /** One registration's exposure ledger cannot be shown complete. */
+      "PARTIAL",
+    );
+    return this.respond(
+      HYPOTHESIS_REGISTRATION_IDENTITY,
+      "hypothesis-registration",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      hypothesisRegistrationEnvelope,
+    );
+  }
+
+  async championChallenger(scope: ViewScope): Promise<EnvelopeOf<ChampionChallengerPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ChampionChallengerPayload>(
+      scope,
+      () => syntheticChampionChallenger(asOf, this.sessions()),
+      /** One comparison has no comparable population at all. */
+      "PARTIAL",
+    );
+    return this.respond(
+      CHAMPION_CHALLENGER_IDENTITY,
+      "champion-challenger",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      championChallengerEnvelope,
+    );
+  }
+
+  async aiContribution(scope: ViewScope): Promise<EnvelopeOf<AiContributionPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<AiContributionPayload>(
+      scope,
+      () => syntheticAiContribution(asOf, this.sessions()),
+      /** Two of the three comparisons report no difference at all. */
+      "PARTIAL",
+    );
+    return this.respond(
+      AI_CONTRIBUTION_IDENTITY,
+      "ai-contribution",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      aiContributionEnvelope,
+    );
+  }
+
+  async feedbackPipeline(scope: ViewScope): Promise<EnvelopeOf<FeedbackPipelinePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<FeedbackPipelinePayload>(
+      scope,
+      () => syntheticFeedbackPipeline(asOf),
+      /** Every stage is blocked on something, so the loop covers part of its own extent. */
+      "PARTIAL",
+    );
+    return this.respond(
+      FEEDBACK_PIPELINE_IDENTITY,
+      "feedback-pipeline",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      feedbackPipelineEnvelope,
+    );
+  }
+
+  async governancePackets(scope: ViewScope): Promise<EnvelopeOf<GovernancePacketPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<GovernancePacketPayload>(
+      scope,
+      () => syntheticGovernancePackets(asOf, this.sessions()),
+      /** One packet is still assembling, and names what it is waiting for. */
+      "PARTIAL",
+    );
+    return this.respond(
+      GOVERNANCE_PACKET_IDENTITY,
+      "governance-packet",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      governancePacketEnvelope,
+    );
+  }
+
+  async decisions(scope: ViewScope): Promise<EnvelopeOf<DecisionRecordPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<DecisionRecordPayload>(scope, () =>
+      syntheticDecisions(asOf, this.sessions()),
+    );
+    return this.respond(
+      DECISION_RECORD_IDENTITY,
+      "decision-record",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      decisionRecordEnvelope,
     );
   }
 

@@ -134,7 +134,15 @@ describe("the closed vocabularies", () => {
     }
   });
 
-  it("assigns the six RefList fields C7 first emits, without implementing any of them", () => {
+  /*
+   * C7 IMPLEMENTED THESE SIX, AND THE KINDS DID NOT MOVE.
+   *
+   * They were recorded specification-only so the cycle that FIRST emitted them would inherit
+   * an enforced contract rather than an open one. C7 is that cycle, so the assertion that used
+   * to read `implemented === false` now reads `true` — and the part that mattered is unchanged
+   * and still checked: **not one kind was changed to obtain a link.**
+   */
+  it("implements the six RefList fields C7 emits, at the kinds the catalogue assigned", () => {
     const listFields: HostFieldKey[] = [
       "StrategyHealth.transitions[].input_refs",
       "StrategyHealth.failure_clusters[].evidence_refs",
@@ -145,13 +153,34 @@ describe("the closed vocabularies", () => {
     ];
     for (const key of listFields) {
       expect(REFERENCE_FIELDS[key].shape, key).toBe("REF_LIST");
-      /* Recorded as specification only: no model, producer, screen or fixture exists. */
-      expect(REFERENCE_FIELDS[key].implemented, key).toBe(false);
+      expect(REFERENCE_FIELDS[key].implemented, key).toBe(true);
     }
     expect(REFERENCE_FIELDS["StrategyHealth.transitions[].input_refs"].kinds).toEqual([
       "source_fact",
     ]);
     expect(REFERENCE_FIELDS["FeedbackPipeline.stages[].item_refs"].kinds).toEqual(["queue_item"]);
+    expect(
+      REFERENCE_FIELDS["HypothesisRegistration.lineage.amendment_chain"].kinds,
+    ).toEqual(["registration"]);
+  });
+
+  /*
+   * AND THE FIELDS NO CYCLE HAS EMITTED ARE STILL RECORDED AS ABSENT.
+   *
+   * `implemented` is a claim about whether a producer exists for the requested scope, and a
+   * catalogue that flipped every flag to `true` because C7 landed would make `producerStateFor`
+   * answer `IMPLEMENTED` for subsystems nobody has built.
+   */
+  it("leaves the fields no implemented read model emits recorded as absent", () => {
+    for (const key of [
+      "AuditEvent.subject_refs",
+      "Alert.evidence_refs",
+      "DataQuality.incident_refs",
+      "ReconciliationStatus.incident_refs",
+      "AskAnswer.citations",
+    ] as HostFieldKey[]) {
+      expect(REFERENCE_FIELDS[key].implemented, key).toBe(false);
+    }
   });
 });
 
@@ -1094,11 +1123,49 @@ describe("the coordinated schema bump", () => {
    *
    * So the affected set is all nineteen, and the version matrix says so.
    */
-  it("carries the coordinated version on every read model, not only where a sample moved", () => {
-    for (const identity of READ_MODEL_IDENTITIES) {
+  /*
+   * THE COORDINATED REPLACEMENT IS STILL v2, AND A FIRST VERSION IS STILL v1.
+   *
+   * §5.2 versions a schema PER READ MODEL, so "one view can evolve without a global bump". The
+   * nineteen models that took the coordinated ADR-0030/ADR-0031 replacement carry `v2` and are
+   * unchanged by C7; the ten read models C7 introduces have never been served before and carry
+   * their own first version. Copying `v2` on to a model with no `v1` would state a history it
+   * does not have, and bumping the nineteen to `v3` because ten new models appeared would be
+   * the global bump §5.2 exists to avoid.
+   */
+  const COORDINATED_V2 = 19;
+  const C7_FIRST_VERSION = [
+    "StrategyHealth",
+    "StrategyVersion",
+    "ResearchRun",
+    "ResearchQueueItem",
+    "HypothesisRegistration",
+    "ChampionChallengerComparison",
+    "AiContribution",
+    "FeedbackPipeline",
+    "GovernancePacket",
+    "DecisionRecord",
+  ];
+
+  it("keeps the coordinated nineteen at v2 and gives each new read model its own v1", () => {
+    const coordinated = READ_MODEL_IDENTITIES.filter(
+      (identity) => !C7_FIRST_VERSION.includes(identity.readModel),
+    );
+    for (const identity of coordinated) {
       expect(identity.schemaVersion, identity.readModel).toMatch(/\.v2$/);
     }
-    expect(READ_MODEL_IDENTITIES.length).toBe(19);
+    expect(coordinated.length).toBe(COORDINATED_V2);
+
+    const introduced = READ_MODEL_IDENTITIES.filter((identity) =>
+      C7_FIRST_VERSION.includes(identity.readModel),
+    );
+    for (const identity of introduced) {
+      expect(identity.schemaVersion, identity.readModel).toMatch(/\.v1$/);
+    }
+    expect(introduced.map((identity) => identity.readModel).sort()).toEqual(
+      [...C7_FIRST_VERSION].sort(),
+    );
+    expect(READ_MODEL_IDENTITIES.length).toBe(COORDINATED_V2 + C7_FIRST_VERSION.length);
   });
 
   it("narrows the envelope for a read model that was left at v1, which is why it bumped", async () => {

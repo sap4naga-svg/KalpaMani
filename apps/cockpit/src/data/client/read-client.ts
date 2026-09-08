@@ -39,7 +39,23 @@ import type {
   CandidateSummaryPayload,
   MissedOpportunityPayload,
 } from "@/contracts/signal-models";
-import type { StrategyPerformancePayload } from "@/contracts/strategy-models";
+import type {
+  StrategyHealthPayload,
+  StrategyPerformancePayload,
+  StrategyVersionPayload,
+} from "@/contracts/strategy-models";
+import type {
+  AiContributionPayload,
+  ChampionChallengerPayload,
+  FeedbackPipelinePayload,
+  HypothesisRegistrationPayload,
+  ResearchQueuePayload,
+  ResearchRunPayload,
+} from "@/contracts/research-models";
+import type {
+  DecisionRecordPayload,
+  GovernancePacketPayload,
+} from "@/contracts/governance-models";
 import type {
   MarketRegimePayload,
   RiskSnapshotPayload,
@@ -136,6 +152,27 @@ export interface ReadClient {
     candidateId: string,
   ): Promise<EnvelopeOf<CandidateDetailPayload>>;
   missedOpportunities(scope: ViewScope): Promise<EnvelopeOf<MissedOpportunityPayload>>;
+
+  /* ------------------------------------------------------------- added by C7 */
+
+  /**
+   * The research, feedback and governance read models — Areas 5, 14 to 21.
+   *
+   * **Ten reads, and not one write.** There is no method here that advances a stage, registers
+   * a hypothesis, launches a run, promotes a version, approves a packet or records a decision,
+   * and the interface is where such a method would have to appear first. The learning engine
+   * WRITES and the Cockpit READS; they are different systems, and **neither exists**.
+   */
+  strategyHealth(scope: ViewScope): Promise<EnvelopeOf<StrategyHealthPayload>>;
+  strategyVersions(scope: ViewScope): Promise<EnvelopeOf<StrategyVersionPayload>>;
+  researchRuns(scope: ViewScope): Promise<EnvelopeOf<ResearchRunPayload>>;
+  researchQueue(scope: ViewScope): Promise<EnvelopeOf<ResearchQueuePayload>>;
+  hypotheses(scope: ViewScope): Promise<EnvelopeOf<HypothesisRegistrationPayload>>;
+  championChallenger(scope: ViewScope): Promise<EnvelopeOf<ChampionChallengerPayload>>;
+  aiContribution(scope: ViewScope): Promise<EnvelopeOf<AiContributionPayload>>;
+  feedbackPipeline(scope: ViewScope): Promise<EnvelopeOf<FeedbackPipelinePayload>>;
+  governancePackets(scope: ViewScope): Promise<EnvelopeOf<GovernancePacketPayload>>;
+  decisions(scope: ViewScope): Promise<EnvelopeOf<DecisionRecordPayload>>;
 }
 
 export class ContractViolationError extends Error {

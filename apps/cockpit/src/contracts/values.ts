@@ -652,6 +652,138 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
    * reduced population is a different metric". A measured zero here is a RESULT (ADR-0029 2.1).
    */
   "execution.excluded_fills": { unit: "COUNT", shape: "INTEGER" },
+
+  /* ---------------------------------------------------------------- added by C7 */
+
+  /*
+   * THE SAME TWO GROUPS AND THE SAME LABELLING RULE THE C5 BLOCK ESTABLISHED.
+   *
+   * 12.3 carries no row for a health-drift score, a trial budget, a population overlap or an
+   * arm's uncertainty, so every identifier below is a PRESENTATION DEFINITION PROPOSED BY THIS
+   * CYCLE for a 4.5 payload field, and 12.6 asks for exactly that to be labelled. Each names
+   * the payload field it serves. A presentation definition changes no strategy, risk, research
+   * or safety rule, and adopting one for a screen adopts it nowhere else.
+   *
+   * WHERE 12.3 ALREADY HAS THE METRIC, IT IS REUSED RATHER THAN RESPELLED. A research run's
+   * results carry `expectancy.r`, `profit_factor`, `sharpe`, `win_rate` and `drawdown.max`;
+   * a health input carries `strategy.turnover`, `strategy.opportunity_count` and
+   * `slippage.aggregate`. A second identifier for one of those would be the drift 12.2 exists
+   * to prevent.
+   */
+
+  /** 4.5 `StrategyHealth.drift[]` -- a dimensionless drift score against the researched band. */
+  "strategy.factor_drift": { unit: "DIMENSIONLESS", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `StrategyHealth.drift[]` -- cross-strategy correlation, as a ratio. */
+  "strategy.correlation": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** A tail loss, in R against its own initial planned risk. Never a currency total. */
+  "strategy.tail_loss": { unit: "R_MULTIPLE", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `StrategyHealth.failure_clusters[].count` -- losses sharing a CAUSE, not a period. */
+  "strategy.failure_count": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.5 `StrategyVersion.created_at`, under the `DATE_ONLY` precedent 4.2's units force. */
+  "strategy.version_created_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** How many open positions a version still governs. A retirement does not unpin them. */
+  "strategy.open_position_count": { unit: "COUNT", shape: "INTEGER" },
+
+  /** 4.5 `ResearchRun` timing. Two identifiers, because starting and finishing are two facts. */
+  "research.run_started_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  "research.run_completed_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** 4.5 `ResearchQueueItem` -- when the trigger raised it. The declared sort key of 5.1. */
+  "research.queued_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /**
+   * 4.5 `ResearchQueueItem.withdrawal_reason` -- a closed-vocabulary token, carried as a
+   * metric so a withdrawn item's reason arrives with the same availability axis every other
+   * value on the row has, rather than as a bare string a producer could leave empty.
+   */
+  "research.withdrawal_reason": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /**
+   * 4.5 `ResearchRun.trial_ordinal` -- this run's position in the registry's own count.
+   *
+   * SEPARATE FROM EVERY BUDGET IDENTIFIER BELOW. An ordinal says WHICH trial this is; a budget
+   * says how many were granted, spent and remain. 12.2 forbids one identifier meaning two
+   * things, and "trial 3" and "3 trials consumed" are two things that frequently agree.
+   */
+  "research.trial_ordinal": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.5 `GovernancePacket.trial_count` -- READ FROM THE REGISTRY, never recounted by a view. */
+  "research.trial_count": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * 4.5 `HypothesisRegistration.trial_budget` -- three identifiers, because they are three
+   * quantities. Granted, consumed and remaining are read ACROSS THE LINEAGE, so a new
+   * registration identity resets none of them.
+   */
+  "research.trial_budget_granted": { unit: "COUNT", shape: "INTEGER" },
+  "research.trial_budget_consumed": { unit: "COUNT", shape: "INTEGER" },
+  "research.trial_budget_remaining": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * The trials THIS registration identity ran on its own.
+   *
+   * A SEPARATE IDENTIFIER FROM THE LINEAGE CONSUMPTION, and that separation is the point: a
+   * registration whose own count is one and whose lineage consumption is nine is exactly the
+   * case 2.7.1 exists for, and one identifier for both would hide it.
+   */
+  "research.trials_own": { unit: "COUNT", shape: "INTEGER" },
+  /** How many entries the locked set's exposure ledger holds, across every registration. */
+  "research.exposure_entries": { unit: "COUNT", shape: "INTEGER" },
+  /** MEASURED overlap with a prior locked set, as a ratio. Never assumed, never rounded to nil. */
+  "research.overlap_fraction": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ResearchRun.stress[]` -- a scenario's modelled impact, as a percentage. */
+  "research.stress_impact": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+
+  /**
+   * 4.5 `ChampionChallengerComparison.overlap[]` -- a ratio over ONE NAMED POPULATION.
+   *
+   * One identifier, on the `win_rate` precedent: the `measure` beside it names the population
+   * the ratio was taken over, and both limbs are the same quantity asked of two populations.
+   */
+  "comparison.overlap": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `ChampionChallengerComparison.divergence[]` -- two units, so two identifiers. */
+  "comparison.divergence_ratio": { unit: "RATIO", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "comparison.divergence_count": { unit: "COUNT", shape: "INTEGER" },
+  /** 4.5 `ChampionChallengerComparison.exposure_difference[]`, per declared factor axis. */
+  "comparison.exposure_difference": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+  /**
+   * HYPOTHETICAL SHADOW ECONOMICS, AND THE IDENTIFIER SAYS SO.
+   *
+   * A shadow result "is never presented in a series with realized results" (feedback
+   * specification 2.8), so it carries its own identifier and is deliberately NOT a currency
+   * amount: a dollar figure beside a Champion's realized profit invites exactly the comparison
+   * that rule forbids.
+   */
+  "comparison.shadow_hypothetical_return": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
+
+  /** 4.5 `AiContribution.arms[].population` -- the MATCHED population of one arm. */
+  "ai.arm_population": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * 4.5 `AiContribution.arms[].uncertainty` -- the half-width of the stated interval, in R.
+   *
+   * It shares the outcome's unit deliberately: an uncertainty in different units from the
+   * quantity it qualifies cannot be read against it.
+   */
+  "ai.outcome_uncertainty": { unit: "R_MULTIPLE", shape: "DECIMAL_STRING", fractionDigits: 2 },
+
+  /** 4.5 `FeedbackPipeline.stages[]` -- items at a stage, and items BLOCKED at that stage. */
+  "feedback.stage_items": { unit: "COUNT", shape: "INTEGER" },
+  "feedback.stage_blocked": { unit: "COUNT", shape: "INTEGER" },
+
+  /** 4.5 `GovernancePacket` assembly time, under the `DATE_ONLY` precedent. */
+  "packet.assembled_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
+  /** 4.5 `GovernancePacket.risk_impact[]` -- two units, so two identifiers. */
+  "packet.risk_impact_usd": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  "packet.risk_impact_pct": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /** 4.5 `GovernancePacket.operational_impact[]` -- likewise two units, two identifiers. */
+  "packet.operational_impact_count": { unit: "COUNT", shape: "INTEGER" },
+  "packet.operational_impact_pct": {
+    unit: "PERCENT",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;

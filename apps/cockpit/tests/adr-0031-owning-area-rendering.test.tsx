@@ -101,9 +101,26 @@ describe("the attention disclosure renders both affordances, apart", () => {
       within(shortSide).getByTestId("reference-area-link").getAttribute("data-area-status"),
     ).toBe("implemented");
 
-    // ...and the three placeholders each do.
+    /*
+     * ...AND THE REMAINING PLACEHOLDERS EACH DO.
+     *
+     * C7 built the Strategy Health area, so the attention list now reaches TWO implemented
+     * destinations and two placeholders. The marker follows the destination's own status
+     * rather than a literal in this test, which is exactly why the count moved.
+     */
+    const health = rows.find((row) =>
+      within(row)
+        .getByTestId("reference-area-link")
+        .getAttribute("href")!
+        .startsWith("/strategy/health"),
+    )!;
+    expect(within(health).queryByTestId("reference-area-placeholder")).toBeNull();
+    expect(
+      within(health).getByTestId("reference-area-link").getAttribute("data-area-status"),
+    ).toBe("implemented");
+
     const placeholders = screen.getAllByTestId("reference-area-placeholder");
-    expect(placeholders).toHaveLength(3);
+    expect(placeholders).toHaveLength(2);
     for (const note of placeholders) {
       expect(note.textContent).toContain("not yet implemented");
     }
