@@ -13221,14 +13221,19 @@ ADR_0031_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "a reference-carried scope expression: CREATED",
 )
 
-#: C7 implemented the nine research, feedback and governance areas, and its implementation is
-#: carried by a pull request that is OPEN. The guard holds the same three things apart the
-#: ADR-0031 guard does: what merged, what is implemented but unmerged, and what has not started.
-#: A status document that collapsed any two of them would tell a reader that a screen over
-#: deterministic fixtures is a research engine, or that a reviewed cycle still needs writing.
+#: C7 implemented the nine research, feedback and governance areas, and PR #81 MERGED them.
+#: The guard holds the same three things apart the ADR-0031 guard does: what merged, what is
+#: implemented but unmerged, and what has not started. A status document that collapsed any two
+#: of them would tell a reader that a screen over deterministic fixtures is a research engine,
+#: or that a merged cycle still needs writing.
+#:
+#: THE MERGE MOVED ONE CLAIM, ON THE ADR-0031 PRECEDENT. "C7 research and feedback interfaces:
+#: MERGED" was forbidden while PR #81 was open and is TRUE now, so it moves from the forbidden
+#: set to the required one -- forbidding it would refuse the very statement the merge made
+#: correct. What stays forbidden is the claim that C7 is COMPLETE, the stale under-claim about
+#: the review, and every over-claim about a producing subsystem, because none of those changed.
 COCKPIT_C7_HEADING: Final = (
-    "### The C7 research, feedback and self-maturation interfaces — IMPLEMENTED, and carried "
-    "by an open pull request"
+    "### The C7 research, feedback and self-maturation interfaces — MERGED, and synthetic only"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
@@ -13236,7 +13241,11 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "PR #79: MERGED",
     "PR #79 merge commit: 4d1211cfef4157d0efbef1125846eb5abbaad440",
     "PR #79 merged at: 2026-09-08T09:02:56Z",
-    "C7 research and feedback interfaces: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "PR #81: MERGED",
+    "PR #81 merge commit: e4c683fd8605d6898e421f550bb864a56a098257",
+    "PR #81 merged at: 2026-09-08T15:50:14Z",
+    "PR #81 final reviewed head: 5c1b79a8938ea7c21e597ebc882a2947df7b85ab",
+    "C7 research and feedback interfaces: MERGED / SYNTHETIC READ-ONLY SCREENS",
     "C7 areas implemented: 5, 14, 15, 16, 17, 18, 19, 20, 21",
     "C7 read models introduced: 10, EACH AT ITS OWN FIRST VERSION",
     "the nineteen coordinated read models: UNCHANGED AT v2",
@@ -13249,20 +13258,20 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "promotions, approvals or releases recorded: NONE",
     "backtesting: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
-    "C8 to C10: NOT STARTED / NOT AUTHORIZED",
+    "C9 to C10: NOT STARTED / NOT AUTHORIZED",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
 
 #: Claims no status document may make about C7. Implementing nine read-only screens over
 #: repository-owned fixtures is not a research engine, not a merge and not a completed Cockpit.
-#: THE REVIEW STATEMENT MOVED, ON THE ADR-0031 PRECEDENT. The independent review the cycle
-#: required HAS been performed, so requiring the stale under-claim would send the next session
-#: to do it again -- the exact failure the ADR-0031 guard above records. What is forbidden is
-#: now that under-claim and the over-claim that the review is COMPLETE; the merge claim is
-#: untouched, because the pull request carrying this implementation is still open.
+#: THE REVIEW STATEMENT MOVED FIRST, AND THE MERGE STATEMENT HAS NOW MOVED TOO, on the ADR-0031
+#: precedent. The independent review the cycle required HAS been performed and PR #81 HAS
+#: merged, so requiring either stale under-claim would send the next session to redo work that
+#: is done -- the exact failure the ADR-0031 guard above records. What is forbidden is the
+#: review under-claim, the over-claim that the review or the cycle is COMPLETE, and every
+#: over-claim about a producing subsystem, because none of those became true.
 COCKPIT_C7_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "C7 research and feedback interfaces: MERGED",
     "C7 research and feedback interfaces: COMPLETE",
     "independent review of the C7 implementation: REQUIRED / NOT PERFORMED",
     "independent review of the C7 implementation: COMPLETE",
@@ -13270,6 +13279,59 @@ COCKPIT_C7_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "learning engine: IMPLEMENTED",
     "AI agents: IMPLEMENTED",
     "experiment E: RUN",
+    "backtesting: STARTED",
+)
+
+#: C8 implements the six execution, operations, audit and alert areas, and its implementation is
+#: carried by a pull request that is OPEN. The guard holds the same three things apart every
+#: cycle guard above does: what merged, what is implemented but unmerged, and what has not
+#: started. The failure it exists to catch is specific and would be easy to make: six read-only
+#: screens over deterministic fixtures are NOT an execution runtime, a broker session, a
+#: scheduler, a provider feed, an alert pipeline or an audit store, and a status document that
+#: collapsed the two would report a subsystem this repository does not have.
+COCKPIT_C8_HEADING: Final = (
+    "### The C8 execution, operations, audit and alert screens — IMPLEMENTED, and carried by "
+    "an open pull request"
+)
+
+#: Read with ``**`` stripped, so emphasis is not part of the contract.
+COCKPIT_C8_STATUS_REQUIRED: Final[tuple[str, ...]] = (
+    "C8 execution, operations, audit and alert screens: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "C8 areas implemented: 9, 10, 22, 23, 26, 27",
+    "C8 read models introduced: 7, EACH AT ITS OWN FIRST VERSION",
+    "the nineteen coordinated read models: UNCHANGED AT v2",
+    "the ten C7 read models: UNCHANGED AT v1",
+    "new API routes, handlers or server actions: NONE",
+    "execution runtime: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "broker session: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "scheduler or service runtime: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "provider feed: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "alert pipeline or notification integration: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "authoritative audit store: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "orders placed by this cycle: NONE",
+    "broker contacted by this cycle: NONE",
+    "jobs run by this cycle: NONE",
+    "notifications sent by this cycle: NONE",
+    "backtesting: NOT STARTED",
+    "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
+    "C9 to C10: NOT STARTED / NOT AUTHORIZED",
+    "full Cockpit V1: INCOMPLETE",
+    "G1 / G2: OPEN / OPEN",
+)
+
+#: Claims no status document may make about C8. Implementing six read-only screens over
+#: repository-owned fixtures is not a merge, not a completed Cockpit and not one of the six
+#: subsystems they display.
+COCKPIT_C8_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "C8 execution, operations, audit and alert screens: MERGED",
+    "C8 execution, operations, audit and alert screens: COMPLETE",
+    "execution runtime: IMPLEMENTED",
+    "broker session: IMPLEMENTED",
+    "scheduler or service runtime: IMPLEMENTED",
+    "provider feed: IMPLEMENTED",
+    "alert pipeline or notification integration: IMPLEMENTED",
+    "authoritative audit store: IMPLEMENTED",
+    "full Cockpit V1: COMPLETE",
     "backtesting: STARTED",
 )
 
@@ -24233,13 +24295,13 @@ def main() -> int:
             ", ".join(unconditional),
         )
 
-        # -- C7: implemented, unmerged, and not a research engine ---------------
+        # -- C7: merged, synthetic only, and not a research engine ---------------
         #
-        # Three states, held apart: PR #79 MERGED, the C7 implementation IMPLEMENTED
-        # AND UNMERGED, and every producing subsystem still NOT IMPLEMENTED. A
-        # document that merged the first two would report a candidate as landed; one
-        # that merged the last two would report nine screens over fixtures as a
-        # research engine.
+        # Three states, held apart: PR #81 MERGED, the C7 screens MERGED AND SYNTHETIC
+        # ONLY, and every producing subsystem still NOT IMPLEMENTED. The middle state
+        # moved when PR #81 landed and the third did not, which is exactly the pair a
+        # document is most likely to collapse -- reporting nine screens over
+        # deterministic fixtures as a research engine.
         stale_c7 = [label for label, text in status_documents if COCKPIT_C7_HEADING not in text]
         f.check(
             "both status documents carry the C7 implementation status section",
@@ -24255,7 +24317,7 @@ def main() -> int:
             }
         )
         f.check(
-            "both status documents record C7 implemented, unmerged and unreviewed",
+            "both status documents record C7 merged, reviewed and synthetic only",
             not divergent_c7,
             ", ".join(divergent_c7),
         )
@@ -24268,9 +24330,49 @@ def main() -> int:
             }
         )
         f.check(
-            "no status document records C7 as merged, reviewed or as a research engine",
+            "no status document records C7 as complete or as a research engine",
             not overclaiming_c7,
             "; ".join(overclaiming_c7),
+        )
+
+        # -- C8: implemented, unmerged, and not six subsystems ------------------
+        #
+        # The same three states, held apart for the cycle that implements execution,
+        # reconciliation, data-quality, operations, audit and alert screens. Displaying
+        # execution is not executing; displaying reconciliation is not contacting a
+        # broker; displaying jobs is not running them; displaying audit records is not
+        # an audit store; and displaying alerts is not notifying anybody.
+        stale_c8 = [label for label, text in status_documents if COCKPIT_C8_HEADING not in text]
+        f.check(
+            "both status documents carry the C8 implementation status section",
+            not stale_c8,
+            ", ".join(stale_c8),
+        )
+        divergent_c8 = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in COCKPIT_C8_STATUS_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record C8 implemented, unmerged and synthetic only",
+            not divergent_c8,
+            ", ".join(divergent_c8),
+        )
+        overclaiming_c8 = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in COCKPIT_C8_STATUS_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document records C8 as merged or as a producing subsystem",
+            not overclaiming_c8,
+            "; ".join(overclaiming_c8),
         )
 
         # -- ADR-0030: accepted, and both status documents must say so ---------

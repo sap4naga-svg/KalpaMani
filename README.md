@@ -3753,6 +3753,12 @@ that is not opened here.
 > reaching `main` describes those days and **no longer governs**. Its forward authorization
 > boundaries are unchanged.
 
+> **HISTORICAL — the state as of that pull request, superseded by *The C7 research,
+> feedback and self-maturation interfaces* and by *The C8 execution, operations, audit and
+> alert screens*.** PR #79 and PR #81 have since merged, so the cycle, schema-version and
+> not-started lines below record those days and **no longer govern**. Its forward
+> authorization boundaries are unchanged.
+
 ```text
 ADR-0031:                                         ACCEPTED / IN FORCE
 ADR-0031 acceptance event:                        MERGE OF PR #80 INTO MAIN
@@ -3800,7 +3806,7 @@ review**; and **specification, implementation, research, deployment and executio
 gates**.
 
 
-### The C7 research, feedback and self-maturation interfaces — IMPLEMENTED, and carried by an open pull request
+### The C7 research, feedback and self-maturation interfaces — MERGED, and synthetic only
 
 **PR #79 is merged.** Merge commit **`4d1211cfef4157d0efbef1125846eb5abbaad440`**, ordered parents
 **`9dba135f8938a3c516a6f57870136751cc0651c3`** then
@@ -3810,9 +3816,21 @@ and owning-area implementation gate the section above records as open; **while P
 a reviewed candidate and its `v2` schema versions had reached no branch but its own** — historical
 facts about those days that stay true and are **not** rewritten.
 
-**The nine C7 product areas are now implemented, and their implementation is carried by an open pull
-request of its own.** **While that pull request is open it is a candidate**: nothing recorded here is
-authority for anything beyond itself, and **no merge SHA and no merge timestamp is predicted**.
+**PR #81 is merged, and the nine C7 product areas are implemented on `main`.** Merge commit
+**`e4c683fd8605d6898e421f550bb864a56a098257`**, merge tree
+**`430bdb4b2bf129ab2779edb64e9e262a626c1eb6`**, ordered parents
+**`4d1211cfef4157d0efbef1125846eb5abbaad440`** then
+**`5c1b79a8938ea7c21e597ebc882a2947df7b85ab`**, merged **2026-09-08T15:50:14Z**, with the final
+reviewed pull-request head at **`5c1b79a8938ea7c21e597ebc882a2947df7b85ab`**. Each of those facts was
+**independently verified against the live repository** before this record was written.
+
+**While PR #81 was open it was a reviewed candidate carrying no authority beyond itself** — a
+historical fact about those days that stays true and is **not** rewritten as though the interfaces had
+always been on `main`.
+
+**C7 is complete as SYNTHETIC READ-ONLY SCREENS, and complete as nothing else.** The merge implements
+nine views over repository-owned fixtures. **No research engine, learning engine, shadow runner,
+governance runtime or AI agent was created by it, none exists, and none is authorized.**
 
 | Area | Screen |
 |---|---|
@@ -3869,7 +3887,11 @@ PR #79 merged at:                                 2026-09-08T09:02:56Z
 owning-area navigation:                           MERGED
 per-area attention links:                         MERGED
 schema_version values published to main:          v2 ON THE NINETEEN COORDINATED READ MODELS
-C7 research and feedback interfaces:              IMPLEMENTED IN AN OPEN PULL REQUEST
+PR #81:                                           MERGED
+PR #81 merge commit:                              e4c683fd8605d6898e421f550bb864a56a098257
+PR #81 merged at:                                 2026-09-08T15:50:14Z
+PR #81 final reviewed head:                       5c1b79a8938ea7c21e597ebc882a2947df7b85ab
+C7 research and feedback interfaces:              MERGED / SYNTHETIC READ-ONLY SCREENS
 C7 areas implemented:                             5, 14, 15, 16, 17, 18, 19, 20, 21
 C7 read models introduced:                        10, EACH AT ITS OWN FIRST VERSION
 the nineteen coordinated read models:             UNCHANGED AT v2
@@ -3889,7 +3911,8 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-C8 to C10:                                        NOT STARTED / NOT AUTHORIZED
+C8:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
+C9 to C10:                                        NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -3904,11 +3927,10 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**A merged cycle and an open one are two different things.** C7's screens are written, validated and
-**independently reviewed**, and the pull request carrying them is **still open** — a completed review
-is not a merge, and neither is recorded here as the other. The C5 completion follow-up is **still
-pending**; C8, C9 and C10 are **not started**; and **specification, implementation, research,
-deployment and execution stay five separate gates**.
+**A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
+validated, independently reviewed and **merged**; the C5 completion follow-up is **still pending**;
+C9 and C10 are **not started**; **full Cockpit V1 is incomplete**; and **specification,
+implementation, research, deployment and execution stay five separate gates**.
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
@@ -5000,3 +5022,122 @@ longer in the authority order. **Neither Blueprint PDF is ever edited** — corr
 recorded in an ADR and indexed beside the document.
 
 **License:** Proprietary. All rights reserved.
+
+
+### The C8 execution, operations, audit and alert screens — IMPLEMENTED, and carried by an open pull request
+
+**Six read-only screens over the existing recorded book and deterministic repository-owned
+fixtures, and nothing else.** They are carried by an open pull request of its own. **While that
+pull request is open it is a candidate**: nothing recorded here is authority for anything beyond
+itself, and **no merge SHA and no merge timestamp is predicted**.
+
+| Area | Screen |
+|---|---|
+| **9** | Execution Quality |
+| **10** | Broker & Reconciliation |
+| **22** | Data Quality & Point-in-Time |
+| **23** | System Operations |
+| **26** | Audit Trail |
+| **27** | Alerts & Exceptions |
+
+#### What it is, exactly
+
+**Observational frontend work.** **Displaying execution does not execute orders. Displaying
+reconciliation does not contact a broker. Displaying jobs does not run jobs. Displaying audit
+records does not implement an authoritative audit store. Displaying alerts does not send
+notifications.**
+
+| | |
+|---|---|
+| **the read models** | seven, each at its **own first schema version** — `ExecutionQuality`, `ReconciliationStatus`, `DataQuality`, `SystemJob`, `SystemIncident`, `Alert`, `AuditEvent`. **The nineteen coordinated models stay at `v2`** and the ten C7 models stay at `v1`, because §5.2 versions a schema per read model and a first version is not a second one |
+| **the narrative** | one coherent operational story over identities the earlier cycles already established: a mark-data condition older than its freshness contract, the exact strategy version it affects, the refresh job whose last run failed, the incident opened against the feed, the deduplicated alert carrying the **same condition identity the executive attention list already uses**, the audit timeline that records all of it, and the reconciliation sweep that found an orphan |
+| **the boundary** | **no Server Action, no route handler, no API route, no mutation, no persistence write, no scheduler, no broker session, no provider request and no notification integration.** Every screen states, on the screen, which controls it does not have |
+| **the book** | **unchanged.** The 200-trade demonstration book, its ledger economics, its risk denominators and its C6 execution evidence are read and never rewritten; every fill, order, reference price, latency and protective event on Area 9 is projected from the evidence C6 recorded |
+
+#### The separations it exists to keep
+
+| | |
+|---|---|
+| **an order row is not a trade** | a fill is never counted as a trade, **a cancellation is not an exit** — the lifecycle vocabulary contains no exit member at all — and **a submitted protective order is not proof of active protection**: a claim of confirmed cover requires a recorded confirmation, and the contract refuses one without it |
+| **a sample below its minimum is a state** | the window aggregate reports `INSUFFICIENT_OBSERVATIONS` rather than a quantity-weighted average over a population its own §12.3 rule calls too small, and the observed count, the declared minimum and the excluded observations are all on the screen beside it |
+| **a modelled cost is never subtracted** | an actual fill already incorporates the spread crossed and the slippage realized (§12.4), so the modelled and recorded costs sit side by side under stated treatments and **there is no field in which they could be combined** |
+| **a past reconciliation is not present health** | every run shows its own as-of, the two compared as-of times are separate fields whose declared alignment is checked against them, and **a missing comparison input is neither zero nor a match** |
+| **broker equity is informational** | it is observed for reconciliation and is **never sizing authority**. Strategy capital stays **USD 80,000** and authoritative |
+| **a profile is declared, never inferred** | exactly the three accepted members render, and **provider-derived information never renders as `PUBLIC_PIT`** — the rule is stated over the information ORIGIN rather than over a vendor name, so it holds for every provider and the boundary refuses the pairing at admission |
+| **a last success is not current health** | two separate fields. A claim of present health requires a **present observation**, every row declares that **no runtime service exists**, and so **no row claims present health** |
+| **the projection is not the source** | the audit projection carries its own identity and its own rebuild count, and **a projection identifier may never equal an event identifier**. A correction **appends** and the corrected event stays; a deletion is a **tombstone** naming its authority, and the withdrawn record stays addressable |
+| **one condition is one alert** | deduplication is enforced at admission, what was folded is stated at the row and at the page, and severity is ordered by the accepted vocabulary's **declared rank** rather than by comparing three words |
+| **an alert is not an attention item** | they are separate records over the **same condition identity**, which is what lets the executive and operator views reconcile instead of counting one condition twice |
+
+#### What it changed elsewhere, and why
+
+| | |
+|---|---|
+| **the navigation registry** | the six routes move from `placeholder` to `implemented` and each names the producing subsystem it still does **not** have. Every owning-area affordance now carries that status, so the ADR-0031 *not yet implemented* marker correctly appears nowhere; the tests that counted it are **derived from the registry** rather than from a literal, so the count moves again the moment a destination does |
+| **the reference catalogue** | ten specification-only assignments become implemented **for the SYNTHETIC scope those producers exist for and for nothing else**, and twelve new fields are catalogued with their kinds. **No kind was invented, none was relabelled to obtain a link**, and `RefKind` is unchanged at twenty-seven members |
+| **two old references, now bound** | `TradeDetail.reconciliation_refs` has named `<trade-id>-reconciliation` since C6 with an `ENDPOINT` resolution and nothing to resolve to; Area 10 now records those runs. `TradeDetail.audit_refs` was an empty list because no audit producer existed; it is now bound to the events that name the trade, and a trade the timeline never mentions still carries an empty list |
+| **one retained unavailable target** | a trade with no recorded execution evidence still carries `execution_quality_ref` to a per-trade record Area 9 does not enumerate. That is `REFERENT_NOT_FOUND` under ADR-0030 R6 — an implemented producer that lacks one record — and the reference stays visible rather than being manufactured |
+| **one rendering defect, corrected** | `MetricText` humanized every non-decimal value, which lowercased an instant into `2026-09-07t10:00:00.000z`. A closed-vocabulary `TOKEN` is still humanized; a `DATE_ONLY` or `INSTANT` value is now shown exactly as recorded, which is what `MetricTile` already did |
+
+#### What it does not claim
+
+**No alpha is claimed, no result is asserted and no threshold is established.** Every figure is a
+repository-owned deterministic fixture. **No automated execution runtime, broker session,
+scheduler, service runtime, provider feed, alert pipeline or audit store exists**, none has ever
+run, **no order has been placed beyond the certified Phase 2 scope**, the broker is **flat**, no
+provider has been contacted, and **no numerical value appearing in a synthetic example becomes a
+production rule**.
+
+**Three rows on Area 9 are illustrative rather than projected**, because the recorded evidence
+contains no rejected order, no cancelled order and no fill whose reference price went unrecorded.
+They are **named by identifier on the screen and in the payload**, and **the window aggregate is
+computed over the recorded fills only**, so an illustrative row cannot move a headline.
+
+**No gate is closed and no ADR is amended.** **G1 and G2 stay OPEN**, **G4 to G7 stay OPEN**, no
+provider is selected, **P1–P9 stay UNEVALUATED**, **data correctness and quality stay NOT
+ESTABLISHED**, and this work amends and supersedes no accepted decision.
+
+```text
+C8 execution, operations, audit and alert screens:  IMPLEMENTED IN AN OPEN PULL REQUEST
+C8 areas implemented:                             9, 10, 22, 23, 26, 27
+C8 read models introduced:                        7, EACH AT ITS OWN FIRST VERSION
+the nineteen coordinated read models:             UNCHANGED AT v2
+the ten C7 read models:                           UNCHANGED AT v1
+new API routes, handlers or server actions:       NONE
+new runtime dependencies:                         NONE
+execution runtime:                                NOT IMPLEMENTED / NOT AUTHORIZED
+broker session:                                   NOT IMPLEMENTED / NOT AUTHORIZED
+scheduler or service runtime:                     NOT IMPLEMENTED / NOT AUTHORIZED
+provider feed:                                    NOT IMPLEMENTED / NOT AUTHORIZED
+alert pipeline or notification integration:       NOT IMPLEMENTED / NOT AUTHORIZED
+authoritative audit store:                        NOT IMPLEMENTED / NOT AUTHORIZED
+orders placed by this cycle:                      NONE
+broker contacted by this cycle:                   NONE
+jobs run by this cycle:                           NONE
+notifications sent by this cycle:                 NONE
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+C9 to C10:                                        NOT STARTED / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**An implemented view of a subsystem is not the subsystem.** Six screens now render execution,
+reconciliation, data-quality, operations, audit and alert records; **every producing subsystem
+behind them is still absent and still unauthorized**, and **specification, implementation,
+research, deployment and execution stay five separate gates**.
