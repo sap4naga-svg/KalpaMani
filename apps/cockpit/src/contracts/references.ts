@@ -1305,24 +1305,54 @@ export const REFERENCE_FIELDS = {
    * §4.3.1: a search result names WHATEVER was found, so its kind is any `RefKind` and its
    * resolution is that kind's. Its rows carry their own environment, provenance and
    * classification, which is why it is cross-provenance authorized (R8).
+   *
+   * IMPLEMENTED BY C9, FOR THE SCOPES ITS PRODUCERS ACTUALLY EXIST FOR AND FOR NOTHING ELSE
+   * (R6). The index is served from repository-owned fixtures under `SYNTHETIC` provenance and
+   * from tracked repository authority under `REPOSITORY_TRACKED`; no real subsystem exists
+   * behind either, and recording the flag asserts none.
    */
   "SearchResultPage.results[].ref": {
     shape: "REF",
     kinds: REF_KINDS,
     requiredness: "required",
-    implemented: false,
+    implemented: true,
   },
   /**
    * The ONE place the stronger relation is meant: "ONE_OR_MORE, or the answer is not
    * returned". The host field NARROWS the kind's `ZERO_OR_MORE` relation, which is exactly
    * what R7 makes the host declaration authoritative for.
+   *
+   * IMPLEMENTED BY C9, on the same scoped reading: the bounded assistant cites the source
+   * facts the read models it consulted were built from, and a citation is never manufactured
+   * to satisfy the relation -- an answer with no supporting record ABSTAINS and cites what it
+   * consulted, and a question the catalogue does not define never becomes an `AskAnswer`.
    */
   "AskAnswer.citations": {
     shape: "REF_LIST",
     kinds: ["source_fact"],
     requiredness: "required",
     relation: "ONE_OR_MORE",
-    implemented: false,
+    implemented: true,
+  },
+  /**
+   * ADDITIVE (C9): the RECORD an answer is ABOUT, where the class takes a subject.
+   *
+   * It has no §4.5 line, so its kind is assigned here from the field's own contract text,
+   * exactly as this catalogue does for every other additive reference field. **It is not a
+   * citation and never substitutes for one**: a citation names a source fact the figure came
+   * FROM, and this names the entity the question was ABOUT. Keeping them apart is what lets
+   * the answer offer a working destination to its subject while `citations` stays the
+   * `source_fact` list the accepted contract fixes.
+   *
+   * Four kinds, one per subject the question catalogue accepts, and each already carries a
+   * catalogued destination under R10 — so a subject link opens the record rather than landing
+   * on the nearest area that might hold it.
+   */
+  "AskAnswer.subject_ref": {
+    shape: "REF",
+    kinds: ["trade", "candidate", "strategy_version", "registration"],
+    requiredness: "conditional",
+    implemented: true,
   },
 } as const satisfies Record<string, HostFieldDeclaration>;
 
