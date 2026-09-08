@@ -262,7 +262,7 @@ export function syntheticAuditEvents(asOf: string, originMs: number): AuditEvent
       kind: "RECORD_TOMBSTONED",
       offsetMs: 30 * MINUTE_MS,
       actor: "GOVERNANCE_OWNER_ROLE",
-      summary: "RECORD_WITHDRAWN_UNDER_A_RECORDED_AUTHORITY",
+      summary: "RECORD_WITHDRAWN_UNDER_RECORDED_AUTHORITY",
       subjectIds: ["demo-source-risk-journal"],
       relatedRefs: [],
       tombstoneOf: WITHDRAWN_EVENT,

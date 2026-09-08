@@ -13,11 +13,13 @@ import {
   Timeline,
   WindowStatement,
 } from "@/components/cockpit/operations";
+import { MetricTile } from "@/components/cockpit/metric-tile";
 import { ComparisonChart } from "@/components/cockpit/research";
 import { SEVERITY_RANK } from "@/contracts/operations-models";
 import type { ReasonCoded } from "@/contracts/values";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { fixedClock } from "@/lib/clock";
+import { humanizeCode } from "@/lib/format";
 import { DEFAULT_SCOPE, type ViewScope } from "@/lib/scope";
 
 /**
@@ -66,6 +68,63 @@ describe("a C8 chart states an unmeasured count rather than drawing it as zero",
      */
     expect(screen.getByText(/missed fills/i)).toBeInTheDocument();
     expect(screen.getAllByText("Unevaluated").length).toBeGreaterThan(0);
+  });
+});
+
+/* ============================================= a magnitude carries no direction claim */
+
+describe("a tile signs a direction and never a magnitude", () => {
+  it("gives a fill rate no leading plus, and a signed return one", async () => {
+    const page = (await client().executionQuality(demo)).payload!;
+    render(
+      <MetricTile
+        label="Fill rate"
+        metric={page.aggregate.fill_rate}
+        provenance="SYNTHETIC"
+        neutral
+      />,
+    );
+    const tile = screen.getByTestId("tile-execution.fill_rate");
+    /*
+     * A FILL RATE IS NEITHER A GAIN NOR A LOSS.
+     *
+     * `+100.00 %` beside a fill rate reads as a rise of a hundred percent. The unit says a
+     * value COULD be directional; `neutral` says this particular field is not.
+     */
+    expect(tile.textContent).not.toContain("+");
+    expect(tile.textContent).toContain("100.00");
+  });
+
+  it("still signs a directional value on the same component", () => {
+    render(
+      <MetricTile
+        label="Slippage"
+        metric={{
+          value: "8.42",
+          unit: "PERCENT",
+          availability: "AVAILABLE",
+          reason: "NONE",
+          as_of: "2026-09-08T12:00:00.000Z",
+          metric_id: "return.period",
+          metric_definition_version: "metrics.v1",
+        }}
+        provenance="SYNTHETIC"
+      />,
+    );
+    expect(screen.getByTestId("tile-return.period").textContent).toContain("+8.42");
+  });
+});
+
+/* ================================================= an acronym keeps its own casing */
+
+describe("a closed code renders acronyms as acronyms", () => {
+  it("preserves the acronyms the format module declares", () => {
+    expect(humanizeCode("US_EQUITY_DAILY_MARKS")).toBe("US equity daily marks");
+    expect(humanizeCode("SMS")).toBe("SMS");
+    /* And an ordinary word is still lowercased after the first. */
+    expect(humanizeCode("MARK_DATA_OLDER_THAN_CONTRACT")).toBe(
+      "Mark data older than contract",
+    );
   });
 });
 

@@ -41,7 +41,7 @@ const SIGNED_UNITS: readonly Unit[] = ["USD", "PERCENT", "R_MULTIPLE"];
  * (`contracts/values.ts`); this returns `null` so that even a value which somehow reached a
  * tile is shown as a failure rather than as a number.
  */
-function formatValue(value: unknown, unit: Unit): string | null {
+function formatValue(value: unknown, unit: Unit, directional: boolean): string | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value.toLocaleString("en-US") : null;
   }
@@ -50,7 +50,7 @@ function formatValue(value: unknown, unit: Unit): string | null {
   }
   const decimal = formatDecimal(value, {
     minimumFractionDigits: unit === "USD" ? 2 : 0,
-    signed: SIGNED_UNITS.includes(unit),
+    signed: directional && SIGNED_UNITS.includes(unit),
   });
   // A closed-vocabulary token is displayed as itself; only digits are formatted as digits.
   return decimal ?? value;
@@ -62,8 +62,8 @@ function formatValue(value: unknown, unit: Unit): string | null {
  * A positive value shows its sign where sign is meaningful, and COLOUR IS NEVER THE ONLY
  * CARRIER OF DIRECTION (U11) -- the sign character carries it too.
  */
-function toneFor(value: unknown, unit: Unit): string {
-  if (!SIGNED_UNITS.includes(unit)) {
+function toneFor(value: unknown, unit: Unit, directional: boolean): string {
+  if (!directional || !SIGNED_UNITS.includes(unit)) {
     return "text-text-primary";
   }
   const sign =
@@ -88,6 +88,15 @@ export interface MetricTileProps {
   readonly className?: string;
   /** A ratio states its denominator, or its NOT_APPLICABLE state (U19). */
   readonly denominator?: string;
+  /**
+   * The value is a MAGNITUDE rather than a direction.
+   *
+   * `MetricText` has made this distinction since C5 and this tile did not, so a fill rate of
+   * 100% rendered as `+100.00 %` — a leading plus is a claim about DIRECTION, and a fill rate
+   * is neither a gain nor a loss. Marking a tile neutral drops the profit colouring and the
+   * leading plus, and keeps a minus where one belongs.
+   */
+  readonly neutral?: boolean;
 }
 
 /**
@@ -105,9 +114,10 @@ export function MetricTile({
   size = "l",
   className,
   denominator,
+  neutral = false,
 }: MetricTileProps) {
   const bearing = isValueBearing(metric.availability);
-  const rendered = bearing ? formatValue(metric.value, metric.unit) : null;
+  const rendered = bearing ? formatValue(metric.value, metric.unit, !neutral) : null;
   /*
    * A value-bearing metric whose value has no honest rendering is a FAILURE, not a blank
    * numeral. Admission refuses such a payload before it reaches here; this is the second
@@ -132,7 +142,7 @@ export function MetricTile({
         {bearing && !unrenderable ? (
           <>
             <div className="flex items-baseline gap-1.5">
-              <Numeric size={size} className={toneFor(metric.value, metric.unit)}>
+              <Numeric size={size} className={toneFor(metric.value, metric.unit, !neutral)}>
                 {rendered}
               </Numeric>
               {UNIT_SUFFIX[metric.unit] !== "" && (

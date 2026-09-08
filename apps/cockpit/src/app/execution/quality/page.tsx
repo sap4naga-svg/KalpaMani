@@ -167,6 +167,8 @@ export default function Page() {
                   provenance="SYNTHETIC"
                   operator={operator}
                   denominator="ordered quantity"
+                  /* A fill rate is a MAGNITUDE: it is neither a gain nor a loss. */
+                  neutral
                 />
                 <MetricTile
                   label="Signal to order"
