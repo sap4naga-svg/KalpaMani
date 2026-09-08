@@ -4245,6 +4245,16 @@ sample, so a zero-result category is a true answer; and the metadata being **des
 access grant** — it authorizes no retrieval, reveals no withheld identifier and bypasses no
 destination scope check.
 
+**Two integration decisions are recorded here rather than discovered during a merge.** The pending
+reference-enforcement pull request moves nineteen `schema_version` constants **and** inserts its own
+subsections at the same anchor in the same file. The **version identity is read from the tree the
+implementation lands in**, never from the decision, and the four §6.1 deployment constraints are
+**re-checked rather than inherited**. The **numbering is settled**: this decision takes **§4.3.2**,
+contiguous with the accepted §4.3.1 and at the same heading level, and on integration the pending
+sections become **§4.3.3** and **§4.3.4**, with **every clause of both rule sets preserved verbatim**
+and every cross-reference updated. **Neither rule set may be dropped to resolve a mechanical
+conflict**, and **the pending pull request is not edited by this one**.
+
 **It repairs no evidence-retrieval gap, and says so.** **§5 still catalogues no evidence endpoint**
 and **a reference-carried scope is still not expressible**. Working area links are not a repair of
 either, and closing them is a separate decision.
@@ -4257,6 +4267,7 @@ owning-area navigation:                           NOT IMPLEMENTED / PENDING ACCE
 Ref.owning_area in the application:               DOES NOT EXIST
 per-area attention links:                         STILL ABSENT / PENDING IMPLEMENTATION
 the reference-enforcement pull request:           OPEN / UNMERGED / NOT EDITED
+the pending section-numbering integration:        4.3.3 / 4.3.4 ON INTEGRATION
 new src/ or apps/cockpit/src/ modules:            NONE
 routes, fixtures or dependencies added:           NONE
 runtime behaviour changed:                        NONE

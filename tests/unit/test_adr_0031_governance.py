@@ -284,6 +284,133 @@ def test_audit_trail_is_a_member_and_is_never_a_default() -> None:
     assert "no rule may use it as a fallback" in CONTRACTS_FLAT
 
 
+def route_map_bindings() -> dict[str, str]:
+    """``route -> area number``, parsed from the ui-ux specification's accepted route map.
+
+    This is the authority the §4.3.2 table's Route and Area columns must agree with. It is
+    read from the accepted document rather than restated here, so a table that renames a
+    route or renumbers an area disagrees with the specification and fails.
+    """
+    span = section(
+        UI_SPEC.read_text(encoding="utf-8"),
+        "## 3. Information architecture and route map",
+        "## 4. Design tokens",
+    )
+    bindings: dict[str, str] = {}
+    for line in span.splitlines():
+        match = re.match(r"^(/\S*)\s+\S.*\(area (\d+)(?:, \d+)*\)\s*$", line.strip())
+        if match:
+            bindings[match.group(1)] = match.group(2)
+    return bindings
+
+
+ROUTE_MAP: Final = route_map_bindings()
+
+
+def test_the_route_map_parser_sees_the_accepted_map() -> None:
+    """A parser that sees nothing would bind every wrong route vacuously."""
+    assert len(ROUTE_MAP) >= 25, f"the route map parser saw only {sorted(ROUTE_MAP)}"
+    assert ROUTE_MAP["/governance/audit"] == "26"
+
+
+def test_the_route_map_parser_would_notice_a_moved_route() -> None:
+    """The self-test: the same parser is run over a map whose area number was changed."""
+    mutated = UI_SPEC.read_text(encoding="utf-8").replace(
+        "/system/data-quality                    Data Quality & PIT                      (area 22)",
+        "/system/data-quality                    Data Quality & PIT                      (area 99)",
+    )
+    span = section(mutated, "## 3. Information architecture and route map", "## 4. Design tokens")
+    seen = {
+        m.group(1): m.group(2)
+        for line in span.splitlines()
+        if (m := re.match(r"^(/\S*)\s+\S.*\(area (\d+)(?:, \d+)*\)\s*$", line.strip()))
+    }
+    assert seen["/system/data-quality"] == "99", "the parser did not read the mutated area"
+
+
+def test_every_member_route_and_area_match_the_accepted_route_map() -> None:
+    """The route is READ from the accepted map, never guessed and never merely well shaped.
+
+    Shape alone admits a wrong destination: ``/system/operations`` is a perfectly shaped
+    internal landing path and it is the wrong page for a data-quality finding. Each member's
+    route must exist in the accepted map, and the area number beside it must be the area the
+    map binds to that route.
+    """
+    for member, (area, route) in sorted(AREAS.items()):
+        assert route in ROUTE_MAP, f"{member} names {route}, which the accepted route map has not"
+        assert ROUTE_MAP[route] == area, (
+            f"{member} claims area {area} for {route}, the accepted map binds area "
+            f"{ROUTE_MAP[route]}"
+        )
+
+
+def test_the_audit_trail_row_claims_no_more_than_area_26_owns() -> None:
+    """The one member that could become a catch-all is held to the matrix's own wording.
+
+    Matrix A gives area 26 exactly ``AuditEvent``. It gives ``GovernancePacket`` and
+    ``DecisionRecord`` to area 19, ``QualificationStatus`` to area 24 and ``MaturityStatus``
+    to area 25. An authority cell reading "and the governance record" would route all four
+    to ``/governance/audit`` -- the false claim this whole section exists to stop.
+    """
+    row = next(line for line in CONTRACTS_TEXT.splitlines() if line.startswith("| `AUDIT_TRAIL` |"))
+    assert "`AuditEvent`" in row
+    assert "governance record" not in row, row
+    matrix = MATRIX.read_text(encoding="utf-8")
+    assert "| 26 | Audit Trail |" in matrix and "`AuditEvent` — immutable audit events" in matrix
+    for text in (ADR_FLAT, CONTRACTS_FLAT):
+        assert "A governance record is not " in text or "**A governance record is not " in text
+        for area in ("area 19", "area 24", "area 25"):
+            assert area in text, f"the governance-record disclaimer does not name {area}"
+        assert "declares no owning area" in text
+
+
+def test_the_contradiction_scope_is_the_admission_unit_and_absence_is_not_a_conflict() -> None:
+    """Two references for one record must not disagree, and an absence is not a disagreement.
+
+    Scoping the check to one RefList would state a rule narrower than its own reason: the
+    same record can appear in two lists, or in a scalar Ref beside a list. And treating an
+    ABSENT area as a conflicting value would refuse conformant payloads at admission.
+    """
+    span = flatten(section(CONTRACTS_TEXT, "CONTRADICTION   two references", "VALIDATION"))
+    assert "anywhere in one ADMISSION UNIT" in span
+    assert "one response payload" in span
+    assert "in two different RefLists, or in a scalar Ref field beside either" in span
+    assert "ABSENCE is NOT a conflicting value" in span
+    assert "Only two DECLARED and DIFFERENT members conflict" in span
+    assert "R8 requires the environment to match the resolving envelope ALWAYS" in span
+    assert "gives a Ref NO provenance field" in span
+    assert "The comparison scope is the ADMISSION UNIT" in ADR_FLAT
+    assert "no new identity model is introduced" in ADR_FLAT
+    assert "Absence is not a conflicting value" in ADR_FLAT
+
+
+def test_the_pending_section_numbering_collision_is_resolved_rather_than_discovered() -> None:
+    """Both changes insert at the same anchor, so the numbering is decided here.
+
+    This decision takes §4.3.2 contiguously, so accepted ``main`` never carries a gap if the
+    pending work does not land, and the integration rule states where the pending sections go
+    and that neither rule set may be dropped to resolve a mechanical conflict.
+    """
+    span = flatten(section(ADR_TEXT, "**The section numbering collides", "## 3. Alternatives"))
+    assert "THIS DECISION 4.3.2 Owning-area navigation" in span
+    assert "ON INTEGRATION 4.3.3 The authorized carriers" in span
+    assert "4.3.4 The scope a resolution requires" in span
+    assert "every clause of BOTH rule sets is preserved verbatim" in span
+    assert "cross-reference to a renumbered section is updated with it" in span
+    assert "never permission to discard a rule" in span
+    assert "it is open, unmerged and NOT EDITED here" in span
+    assert "A5's two open limitations survive the integration unchanged" in span
+
+
+def test_the_new_section_is_a_subsection_of_four_three() -> None:
+    """§4.3.1 is a ``####``; a ``###`` sibling would place §4.3.2 outside §4.3 entirely."""
+    lines = CONTRACTS_TEXT.splitlines()
+    assert any(line.startswith("### 4.3 Resolving a reference") for line in lines)
+    assert any(line.startswith("#### 4.3.1 Every reference field names its kind") for line in lines)
+    assert any(line.startswith("#### 4.3.2 Owning-area navigation") for line in lines)
+    assert not any(line.startswith("### 4.3.2 ") for line in lines), "4.3.2 must nest inside 4.3"
+
+
 def test_no_member_is_added_merely_because_a_route_exists() -> None:
     assert "No member is added because a route exists" in CONTRACTS_FLAT
     assert "A route is not evidence that an area owns a disclosed reference class" in (
@@ -295,7 +422,7 @@ def test_no_member_is_added_merely_because_a_route_exists() -> None:
 
 
 def test_the_association_is_a_field_inside_the_reference() -> None:
-    span = section(CONTRACTS_TEXT, "### 4.3.2 Owning-area navigation", "### 4.4")
+    span = section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "### 4.4")
     flat = flatten(span)
     assert "carried INSIDE the reference" in flat
     assert "The reference it describes is the object it is a field of" in flat
@@ -311,7 +438,7 @@ def test_the_association_is_a_field_inside_the_reference() -> None:
     ],
 )
 def test_the_forbidden_associations_are_each_refused_by_name(refused: str) -> None:
-    span = flatten(section(CONTRACTS_TEXT, "### 4.3.2 Owning-area navigation", "### 4.4"))
+    span = flatten(section(CONTRACTS_TEXT, "#### 4.3.2 Owning-area navigation", "### 4.4"))
     assert refused in span, f"{refused!r} is not refused by name"
 
 

@@ -13186,6 +13186,8 @@ ADR_0031_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "owning-area navigation: NOT IMPLEMENTED / PENDING ACCEPTANCE",
     "Ref.owning_area in the application: DOES NOT EXIST",
     "the reference-enforcement pull request: OPEN / UNMERGED / NOT EDITED",
+    "the pending section-numbering integration: 4.3.3 / 4.3.4 ON INTEGRATION",
+    "every clause of both rule sets preserved verbatim",
     "full Cockpit V1: INCOMPLETE",
     "C7 research and feedback interfaces: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",

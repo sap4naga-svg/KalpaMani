@@ -996,7 +996,7 @@ area link**.
 
 ---
 
-### 4.3.2 Owning-area navigation — a second closed attribute, and never a resolution
+#### 4.3.2 Owning-area navigation — a second closed attribute, and never a resolution
 
 **A reference answers two questions, and one field cannot carry both.** `ref_kind` says *what this
 is a reference to*; `owning_area` says *which area is responsible for the record it names*. Before
@@ -1016,9 +1016,21 @@ MULTIPLICITY    at most ONE per Ref. A reference names one record, and one area 
                 nearest match
 DUPLICATES      two references in one list MAY declare the same area. They stay two
                 references, they are not collapsed, and the area is not deduplicated away
-CONTRADICTION   two references sharing a ref_id AND a ref_kind in one RefList while
-                declaring DIFFERENT owning_area values are REFUSED AT ADMISSION -- one
-                record is not owned by two areas, and admitting it lets a renderer choose
+CONTRADICTION   two references sharing a ref_id AND a ref_kind anywhere in one
+                ADMISSION UNIT -- one response payload, whether they sit in the same
+                RefList, in two different RefLists, or in a scalar Ref field beside
+                either -- while DECLARING DIFFERENT owning_area values are REFUSED AT
+                ADMISSION. One record is not owned by two areas, and admitting it lets a
+                renderer choose. The scope is the admission unit and no wider, because
+                that is exactly where the comparison is sound: R8 requires the
+                environment to match the resolving envelope ALWAYS, and 4.2 gives a Ref
+                NO provenance field, so within one response a matched ref_id and
+                ref_kind name one target
+ABSENCE         is NOT a conflicting value. A reference DECLARING an area beside one
+                declaring NONE is not a contradiction: ABSENT states nothing, so there
+                is nothing for it to disagree with, and the declared area stands. Only
+                two DECLARED and DIFFERENT members conflict -- reading absence as
+                conflict would refuse conformant payloads at admission
 VALIDATION      a value outside the closed set is REFUSED AT ADMISSION, exactly as an
                 out-of-set ref_kind or resolution is. Never rendered, never coerced, and
                 never mapped to a nearest member
@@ -1040,12 +1052,18 @@ derived from free text, a title or a label are each **REFUSED**, exactly as unde
 | `SHORT_SIDE` | 13 | `/risk/short-side` | area 13 owns `ShortSideSnapshot` and its borrow records, `GET /api/v1/risk/short-side` |
 | `ALERTS` | 27 | `/system/alerts` | area 27 owns `Alert`, `GET /api/v1/system/alerts` |
 | `SYSTEM_OPERATIONS` | 23 | `/system/operations` | area 23 owns `SystemIncident` and job state, `GET /api/v1/system/incidents` |
-| `AUDIT_TRAIL` | 26 | `/governance/audit` | area 26 owns `AuditEvent` and the governance record, `GET /api/v1/audit/events` |
+| `AUDIT_TRAIL` | 26 | `/governance/audit` | area 26 owns `AuditEvent`, `GET /api/v1/audit/events` |
 
 **`AUDIT_TRAIL` is a member and is NEVER a default.** It is declared when the reference names a
-recorded audit or governance record area 26 owns. **An absent, unknown or undetermined owning area
-never resolves to it**, and no rule may use it as a fallback: *an Audit page owns every fact* is a
-false claim, and it is the one this section exists to stop being made.
+recorded `AuditEvent` — the one read model Matrix A gives area 26. **An absent, unknown or
+undetermined owning area never resolves to it**, and no rule may use it as a fallback: *an Audit
+page owns every fact* is a false claim, and it is the one this section exists to stop being made.
+
+**A governance record is not an `AuditEvent`, and this member does not reach one.** Matrix A gives
+`GovernancePacket` and `DecisionRecord` to **area 19**, `QualificationStatus` to **area 24** and
+`MaturityStatus` to **area 25**. None of the three is owned by area 26, none of the three is a
+member of this vocabulary, and a reference naming one therefore **declares no owning area** under
+the multiplicity rule above — never `AUDIT_TRAIL` because it is the nearest catalogued page.
 
 **No member is added because a route exists.** The navigation registry carries far more routes than
 seven. A route is not evidence that an area owns a disclosed reference class, and a member is added

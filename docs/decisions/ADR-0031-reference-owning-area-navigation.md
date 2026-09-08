@@ -117,9 +117,29 @@ property the lost affordance needed and the one a per-item or per-list attribute
 
 **Duplicate handling.** Two references in one list may declare the same `owning_area`; they are two
 references, they are not collapsed, and the shared area is not deduplicated away. Two references
-that share a `ref_id` **and** a `ref_kind` within one `RefList` while declaring **different**
-`owning_area` values are a producer contradiction and are **refused at admission** — one record
-cannot be owned by two areas at once, and admitting it would leave a renderer to choose.
+that share a `ref_id` **and** a `ref_kind` while **declaring different** `owning_area` values are a
+producer contradiction and are **refused at admission** — one record cannot be owned by two areas at
+once, and admitting it would leave a renderer to choose.
+
+**The comparison scope is the ADMISSION UNIT — one response payload — and not one `RefList`.** The
+harm the rule names is a renderer choosing between two areas for one record, and that harm does not
+arrive only inside a single list: the same record can appear in two different `RefList` fields, or
+in a scalar `Ref` beside a list, and one response would then draw two different area controls for
+one record. **Scoping the check to a list would state a rule narrower than its own reason.**
+
+**That scope is also exactly as wide as the comparison is sound.** ADR-0030 R8 requires the
+**environment to match the resolving envelope always**, and §4.2 gives `Ref` **no provenance
+field**, so a reference cannot itself label a differing provenance and an unlabelled
+differing-provenance target is refused under R8. Within one response, therefore, a matched `ref_id`
+**and** `ref_kind` name **one target**. Nothing here widens that to a cross-response or global
+identity claim, and **no new identity model is introduced** — the comparison is R8's, read at the
+scope R8 already fixes.
+
+**Absence is not a conflicting value.** A reference declaring an area beside one declaring none is
+**not** a contradiction: `ABSENT` states nothing (A4), so there is nothing for it to disagree with,
+and the declared area stands. **Only two declared and different members conflict** — reading an
+absence as a conflict would refuse conformant payloads at admission, which is the opposite of the
+failure this rule exists to catch.
 
 **Validation.** `owning_area` is validated exactly as `ref_kind` and `resolution` already are: a
 value outside the closed set is **refused at admission**, never rendered, never coerced and never
@@ -149,7 +169,10 @@ at the route `/risk/short-side`. **`SHORT_SIDE` is therefore its owning area**, 
 `AUDIT_TRAIL`, which is where the corrected producer's only available link points today.
 
 **`AUDIT_TRAIL` is a member and is never a default.** It is declared when the reference names a
-recorded audit or governance record that area 26 owns. **An absent, unknown or undetermined owning
+recorded `AuditEvent` — the one read model the traceability matrix gives area 26. **A governance
+record is not one**: the matrix gives `GovernancePacket` and `DecisionRecord` to area 19,
+`QualificationStatus` to area 24 and `MaturityStatus` to area 25, so a reference naming one
+**declares no owning area** rather than this member. **An absent, unknown or undetermined owning
 area never resolves to it**, and no rule anywhere may use it as a fallback. *An Audit page owns
 every fact* is precisely the false claim the corrected producer currently makes on five items out of
 five.
@@ -310,6 +333,33 @@ AFTER    the pending change has landed and been deployed, so the coordinated rep
 REFUSED  deciding the version by reading this document instead of the tree, and
          REFUSED asserting a version number in this decision at all
 ```
+
+**The section numbering collides with the same pending pull request, and the collision is resolved
+here rather than discovered during a merge.** Both changes insert a subsection at the same anchor —
+immediately after §4.3.1's navigation rule. This decision takes **§4.3.2**, contiguous with the
+accepted §4.3.1 and at the **same `####` heading level**, so accepted `main` never carries a gap or
+a dangling number if the pending work does not land.
+
+```text
+THIS DECISION      4.3.2  Owning-area navigation
+ON INTEGRATION     4.3.3  The authorized carriers, and what each one's identity is
+                   4.3.4  The scope a resolution requires, and where it comes from
+REQUIRED           every clause of BOTH rule sets is preserved verbatim, and every
+                   cross-reference to a renumbered section is updated with it
+REFUSED            dropping, merging, abridging or deferring either rule set to resolve
+                   the collision. A mechanical numbering conflict is an INTEGRATION TASK,
+                   and it is never permission to discard a rule
+REFUSED            renumbering the pending work in THIS pull request -- it is open,
+                   unmerged and NOT EDITED here
+```
+
+**The two rule sets do not compete on substance, and that is checkable rather than assumed.** The
+pending sections govern **which host fields may carry an `EMBEDDED` target and how a carrier's
+identity is compared**, and **which scope a resolution requires and where that scope is read from**.
+Neither names a navigation destination, and neither adds a field to `Ref` — so **A5's two open
+limitations survive the integration unchanged**: the pending scope section derives the **caller's**
+required scope from the accepted contract, and does **not** give `Ref` a field in which a
+reference-carried scope could be named.
 
 ---
 
