@@ -4734,7 +4734,7 @@ C7 research and feedback interfaces:              IMPLEMENTED IN AN OPEN PULL RE
 C7 areas implemented:                             5, 14, 15, 16, 17, 18, 19, 20, 21
 C7 read models introduced:                        10, EACH AT ITS OWN FIRST VERSION
 the nineteen coordinated read models:             UNCHANGED AT v2
-independent review of the C7 implementation:      REQUIRED / NOT PERFORMED
+independent review of the C7 implementation:      PERFORMED
 new API routes, handlers or server actions:       NONE
 research runtime:                                 NOT IMPLEMENTED / NOT AUTHORIZED
 learning engine:                                  NOT IMPLEMENTED / NOT AUTHORIZED
@@ -4766,9 +4766,10 @@ live trading:                                     HARD-DISABLED
 ```
 
 **A merged cycle and an open one are two different things.** C7's screens are written, validated and
-**open for a fresh independent review**; the C5 completion follow-up is **still pending**; C8, C9 and
-C10 are **not started**; and **specification, implementation, research, deployment and execution stay
-five separate gates**.
+**independently reviewed**, and the pull request carrying them is **still open** — a completed review
+is not a merge, and neither is recorded here as the other. The C5 completion follow-up is **still
+pending**; C8, C9 and C10 are **not started**; and **specification, implementation, research,
+deployment and execution stay five separate gates**.
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use

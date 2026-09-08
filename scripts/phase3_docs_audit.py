@@ -13240,7 +13240,7 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "C7 areas implemented: 5, 14, 15, 16, 17, 18, 19, 20, 21",
     "C7 read models introduced: 10, EACH AT ITS OWN FIRST VERSION",
     "the nineteen coordinated read models: UNCHANGED AT v2",
-    "independent review of the C7 implementation: REQUIRED / NOT PERFORMED",
+    "independent review of the C7 implementation: PERFORMED",
     "new API routes, handlers or server actions: NONE",
     "research runtime: NOT IMPLEMENTED / NOT AUTHORIZED",
     "learning engine: NOT IMPLEMENTED / NOT AUTHORIZED",
@@ -13255,12 +13255,17 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
 )
 
 #: Claims no status document may make about C7. Implementing nine read-only screens over
-#: repository-owned fixtures is not a research engine, not a merge, not a review and not a
-#: completed Cockpit.
+#: repository-owned fixtures is not a research engine, not a merge and not a completed Cockpit.
+#: THE REVIEW STATEMENT MOVED, ON THE ADR-0031 PRECEDENT. The independent review the cycle
+#: required HAS been performed, so requiring the stale under-claim would send the next session
+#: to do it again -- the exact failure the ADR-0031 guard above records. What is forbidden is
+#: now that under-claim and the over-claim that the review is COMPLETE; the merge claim is
+#: untouched, because the pull request carrying this implementation is still open.
 COCKPIT_C7_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C7 research and feedback interfaces: MERGED",
     "C7 research and feedback interfaces: COMPLETE",
-    "independent review of the C7 implementation: PERFORMED",
+    "independent review of the C7 implementation: REQUIRED / NOT PERFORMED",
+    "independent review of the C7 implementation: COMPLETE",
     "research runtime: IMPLEMENTED",
     "learning engine: IMPLEMENTED",
     "AI agents: IMPLEMENTED",
