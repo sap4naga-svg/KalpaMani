@@ -152,16 +152,26 @@ function formatAge(seconds: number): string {
 export function FreshnessIndicator({
   report,
   showDetail = false,
+  testId = "freshness-indicator",
 }: {
   report: FreshnessReport;
   showDetail?: boolean;
+  /**
+   * The identity this indicator answers to.
+   *
+   * The shell carries ONE `freshness-indicator` for the whole view, and a screen that reports
+   * freshness PER SUBJECT carries one per row. They are different statements — the view's
+   * oldest required input, and one subject's own — so a row-level indicator takes its own
+   * identity rather than making the page-level one ambiguous.
+   */
+  testId?: string;
 }) {
   const live = useLiveFreshness(report);
   const stale = live.state !== "AVAILABLE";
   return (
     <span
       className="inline-flex items-center gap-2"
-      data-testid="freshness-indicator"
+      data-testid={testId}
       data-freshness-state={live.state}
     >
       <Badge tone={stale ? "warning" : "neutral"}>

@@ -172,15 +172,37 @@ describe("the closed vocabularies", () => {
    * answer `IMPLEMENTED` for subsystems nobody has built.
    */
   it("leaves the fields no implemented read model emits recorded as absent", () => {
+    /*
+     * THE LIST MOVED BECAUSE THE PRODUCERS MOVED, AND THE RULE DID NOT.
+     *
+     * C8 emits `AuditEvent`, `Alert`, `DataQuality` and `ReconciliationStatus`, so those four
+     * fields are now recorded as implemented — for the SYNTHETIC scope those producers exist
+     * for, and for nothing else. The fields below still have no producer at any scope, and the
+     * property this test protects is unchanged: a catalogue that flipped every flag to `true`
+     * because a cycle landed would make `producerStateFor` answer `IMPLEMENTED` for subsystems
+     * nobody has built.
+     */
     for (const key of [
-      "AuditEvent.subject_refs",
-      "Alert.evidence_refs",
-      "DataQuality.incident_refs",
-      "ReconciliationStatus.incident_refs",
+      "MaturityStatus.decision_refs",
+      "QualificationStatus.facts[].source_ref",
+      "QualificationStatus.gates[].source_ref",
+      "QualificationStatus.runs[].source_ref",
+      "SearchResultPage.results[].ref",
       "AskAnswer.citations",
     ] as HostFieldKey[]) {
       expect(REFERENCE_FIELDS[key].implemented, key).toBe(false);
     }
+    /*
+     * AND THE FLAG IS STILL A CLAIM SOMETHING HAS TO EARN.
+     *
+     * At least one field remains recorded as absent, so `producerStateFor` still has a case
+     * that answers `NOT_IMPLEMENTED_FOR_SCOPE` — the branch every unresolvable-target rule
+     * depends on. A catalogue with no absent field left would pass a per-key list of nothing.
+     */
+    const absent = Object.values(REFERENCE_FIELDS).filter(
+      (declaration) => !declaration.implemented,
+    );
+    expect(absent.length).toBeGreaterThan(0);
   });
 });
 
@@ -1134,6 +1156,22 @@ describe("the coordinated schema bump", () => {
    * the global bump §5.2 exists to avoid.
    */
   const COORDINATED_V2 = 19;
+  /**
+   * The read models C8 introduced, each at its own first version.
+   *
+   * The same reasoning the C7 list rests on: these seven have never been served before, so
+   * copying `v2` on to one would state a history it does not have, and bumping the nineteen
+   * to `v3` because seven new models appeared would be the global bump §5.2 exists to avoid.
+   */
+  const C8_FIRST_VERSION = [
+    "ExecutionQuality",
+    "ReconciliationStatus",
+    "DataQuality",
+    "SystemJob",
+    "SystemIncident",
+    "Alert",
+    "AuditEvent",
+  ];
   const C7_FIRST_VERSION = [
     "StrategyHealth",
     "StrategyVersion",
@@ -1148,8 +1186,9 @@ describe("the coordinated schema bump", () => {
   ];
 
   it("keeps the coordinated nineteen at v2 and gives each new read model its own v1", () => {
+    const firstVersion = [...C7_FIRST_VERSION, ...C8_FIRST_VERSION];
     const coordinated = READ_MODEL_IDENTITIES.filter(
-      (identity) => !C7_FIRST_VERSION.includes(identity.readModel),
+      (identity) => !firstVersion.includes(identity.readModel),
     );
     for (const identity of coordinated) {
       expect(identity.schemaVersion, identity.readModel).toMatch(/\.v2$/);
@@ -1157,15 +1196,19 @@ describe("the coordinated schema bump", () => {
     expect(coordinated.length).toBe(COORDINATED_V2);
 
     const introduced = READ_MODEL_IDENTITIES.filter((identity) =>
-      C7_FIRST_VERSION.includes(identity.readModel),
+      firstVersion.includes(identity.readModel),
     );
     for (const identity of introduced) {
       expect(identity.schemaVersion, identity.readModel).toMatch(/\.v1$/);
     }
     expect(introduced.map((identity) => identity.readModel).sort()).toEqual(
-      [...C7_FIRST_VERSION].sort(),
+      [...firstVersion].sort(),
     );
-    expect(READ_MODEL_IDENTITIES.length).toBe(COORDINATED_V2 + C7_FIRST_VERSION.length);
+    expect(READ_MODEL_IDENTITIES.length).toBe(COORDINATED_V2 + firstVersion.length);
+    /* Every read model is registered exactly once, under exactly one identity. */
+    expect(new Set(READ_MODEL_IDENTITIES.map((identity) => identity.readModel)).size).toBe(
+      READ_MODEL_IDENTITIES.length,
+    );
   });
 
   it("narrows the envelope for a read model that was left at v1, which is why it bumped", async () => {

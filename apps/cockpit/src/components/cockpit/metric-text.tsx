@@ -57,9 +57,26 @@ function renderValue(value: unknown, unit: Unit, directional: boolean): string |
     minimumFractionDigits: unit === "USD" ? 2 : 0,
     signed: directional && SIGNED_UNITS.includes(unit),
   });
-  /* A closed-vocabulary token is prose, not digits, and is humanized rather than formatted. */
-  return decimal ?? humanizeCode(value);
+  if (decimal !== null) {
+    return decimal;
+  }
+  /*
+   * A CLOSED-VOCABULARY TOKEN IS PROSE. AN INSTANT IS NOT A TOKEN.
+   *
+   * `humanizeCode` lowercases every word it does not recognise, which is right for
+   * `MARK_DATA_OLDER_THAN_CONTRACT` and wrong for `2026-09-07T10:00:00.000Z` — it rendered
+   * as `2026-09-07t10:00:00.000z`, an instant with a lowercased designator that is no longer
+   * the value the record carries. `values.ts` already distinguishes the two: a `TOKEN` is
+   * `/^[A-Z][A-Z0-9_]*$/`, and `DATE_ONLY` and `INSTANT` are their own shapes. The same
+   * distinction is made here, so a date or an instant is shown exactly as it was recorded.
+   *
+   * `MetricTile` already returned such a value unchanged; this is the two agreeing.
+   */
+  return TOKEN_VALUE.test(value) ? humanizeCode(value) : value;
 }
+
+/** The `TOKEN` shape `values.ts` validates a closed-vocabulary metric value against. */
+const TOKEN_VALUE = /^[A-Z][A-Z0-9_]*$/;
 
 function toneOf(value: unknown, unit: Unit): string {
   if (!SIGNED_UNITS.includes(unit)) {

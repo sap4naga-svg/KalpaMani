@@ -26,6 +26,9 @@ const PRESERVED: Readonly<Record<string, string>> = {
   SSR: "SSR",
   XNYS: "XNYS",
   OHLC: "OHLC",
+  /* Added by C8: a market and a notification channel, on the same rule as USD and PIT. */
+  US: "US",
+  SMS: "SMS",
 };
 
 export function humanizeCode(code: string): string {

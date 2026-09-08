@@ -55,6 +55,17 @@ import {
   GOVERNANCE_PACKET_SCHEMA,
 } from "@/contracts/governance-models";
 import {
+  EXECUTION_QUALITY_SCHEMA,
+  RECONCILIATION_SCHEMA,
+} from "@/contracts/execution-quality-page";
+import {
+  ALERT_SCHEMA,
+  DATA_QUALITY_SCHEMA,
+  SYSTEM_INCIDENT_SCHEMA,
+  SYSTEM_JOB_SCHEMA,
+} from "@/contracts/operations-models";
+import { AUDIT_EVENT_SCHEMA } from "@/contracts/audit-models";
+import {
   MARKET_REGIME_SCHEMA,
   RISK_SNAPSHOT_SCHEMA,
   SHORT_SIDE_SNAPSHOT_SCHEMA,
@@ -415,6 +426,99 @@ export const DECISION_RECORD_IDENTITY: ReadModelIdentity = {
   accessScope: "governance:read",
 };
 
+/* ------------------------------------------------------------------ added by C8 */
+
+/*
+ * SEVEN MORE READ MODELS, AND THE SAME REASONING THE C5 BLOCK ESTABLISHED.
+ *
+ * §4.5 classifies every one of these `PRIVATE_OPERATIONAL` — a real fill, a real broker
+ * comparison, a real provider-quality record, a real job run and a real audit event are
+ * private operational state, and the `PUBLIC_EDGE` boundary REFUSES one. What this application
+ * can show is a repository-owned synthetic demonstration, labelled `PUBLIC_SAFE` / `SYNTHETIC`
+ * because that is what it IS.
+ *
+ * **THE ACCESS SCOPES ARE THE CONTRACT'S**, and the split is load-bearing: §5.1 gives
+ * `/execution/quality` and `/execution/reconciliation` `execution:read`, the three system reads
+ * `system:read`, and `/audit/events` its own `audit:read` — the one scope §4.3 marks
+ * `AUTHORIZED_READ` for the `audit_event` kind. Two access scopes never share a cache entry
+ * (§7), so the audit page holds its own.
+ *
+ * **THE SCHEMA VERSIONS ARE `v1`, AND THAT IS NOT AN OVERSIGHT.** §5.2 versions a schema PER
+ * READ MODEL. These seven have never been served before, so each carries its own first
+ * version; the nineteen coordinated models keep `v2` and the ten C7 models keep `v1`, because
+ * copying a version on to a model that has no history would state one it does not have.
+ */
+
+export const EXECUTION_QUALITY_IDENTITY: ReadModelIdentity = {
+  readModel: "ExecutionQuality",
+  queryName: "execution-quality",
+  schemaVersion: EXECUTION_QUALITY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "execution:read",
+};
+
+export const RECONCILIATION_IDENTITY: ReadModelIdentity = {
+  readModel: "ReconciliationStatus",
+  queryName: "reconciliation-status",
+  schemaVersion: RECONCILIATION_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "execution:read",
+};
+
+export const DATA_QUALITY_IDENTITY: ReadModelIdentity = {
+  readModel: "DataQuality",
+  queryName: "data-quality",
+  schemaVersion: DATA_QUALITY_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "system:read",
+};
+
+export const SYSTEM_JOB_IDENTITY: ReadModelIdentity = {
+  readModel: "SystemJob",
+  queryName: "system-job",
+  schemaVersion: SYSTEM_JOB_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "system:read",
+};
+
+export const SYSTEM_INCIDENT_IDENTITY: ReadModelIdentity = {
+  readModel: "SystemIncident",
+  queryName: "system-incident",
+  schemaVersion: SYSTEM_INCIDENT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "system:read",
+};
+
+export const ALERT_IDENTITY: ReadModelIdentity = {
+  readModel: "Alert",
+  queryName: "alert",
+  schemaVersion: ALERT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "system:read",
+};
+
+/**
+ * The audit projection, under its own scope.
+ *
+ * §4.3 resolves an `audit_event` under `AUTHORIZED_READ` on `audit:read`, and this is the only
+ * read model in the application that carries it. A separate scope is a separate cache entry,
+ * which is exactly what §7 requires.
+ */
+export const AUDIT_EVENT_IDENTITY: ReadModelIdentity = {
+  readModel: "AuditEvent",
+  queryName: "audit-event",
+  schemaVersion: AUDIT_EVENT_SCHEMA,
+  provenance: "SYNTHETIC",
+  classification: "PUBLIC_SAFE",
+  accessScope: "audit:read",
+};
+
 export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   EXECUTIVE_OVERVIEW_IDENTITY,
   ATTENTION_IDENTITY,
@@ -445,4 +549,11 @@ export const READ_MODEL_IDENTITIES: readonly ReadModelIdentity[] = [
   FEEDBACK_PIPELINE_IDENTITY,
   GOVERNANCE_PACKET_IDENTITY,
   DECISION_RECORD_IDENTITY,
+  EXECUTION_QUALITY_IDENTITY,
+  RECONCILIATION_IDENTITY,
+  DATA_QUALITY_IDENTITY,
+  SYSTEM_JOB_IDENTITY,
+  SYSTEM_INCIDENT_IDENTITY,
+  ALERT_IDENTITY,
+  AUDIT_EVENT_IDENTITY,
 ];

@@ -33,6 +33,7 @@ import type {
 } from "@/contracts/portfolio-models";
 import type { Series } from "@/contracts/values";
 
+import { AUDIT_EVENTS_BY_TRADE } from "./audit";
 import type { BookTrade } from "./book";
 import {
   BENCHMARK_INDEX,
@@ -568,8 +569,21 @@ export function syntheticTradeDetail(
     },
     benchmark_label: demoReason("DEMONSTRATION_BROAD_MARKET_INDEX"),
     lineage: demoPins(trade.versionId),
-    /** The audit trail is a separate screen and a separate read model, and neither exists. */
-    audit_refs: refListOf([], "ZERO_OR_MORE", asOf),
+    /**
+     * THE AUDIT TRAIL IS A SEPARATE SCREEN AND A SEPARATE READ MODEL, AND IT NOW EXISTS.
+     *
+     * C6 carried an empty list here because no audit producer existed for any scope. C8
+     * implements one, so the join is bound to the events that actually name this trade — and a
+     * trade the timeline never mentions still carries an empty list, which is a true answer
+     * about the population rather than a manufactured reference.
+     */
+    audit_refs: refListOf(
+      (AUDIT_EVENTS_BY_TRADE[trade.tradeId] ?? []).map((eventId) =>
+        demoRef(eventId, "audit_event", "AUTHORIZED_READ", "AUDIT_TRAIL"),
+      ),
+      "ZERO_OR_MORE",
+      asOf,
+    ),
     chart_series_ref: demoRef(`${trade.tradeId}-marks`, "chart_series", "EMBEDDED"),
     chart_series: tradeChartSeries(trade, days, asOf),
     gaps: gaps.map(([expected, availability, reason]) => ({

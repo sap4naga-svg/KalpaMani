@@ -116,14 +116,16 @@ test.describe("the restored owning-area affordance", () => {
     await openEveryDisclosure(page);
 
     /*
-     * TWO OF THE FOUR DESTINATIONS ARE PLACEHOLDERS; THE OTHER TWO ARE BUILT SCREENS.
+     * EVERY DESTINATION THE ATTENTION LIST REACHES IS NOW A BUILT SCREEN.
      *
-     * C7 built the Strategy Health area, so the count moved from three to two. That it moves
-     * at all is the assertion's point: the marker follows the DESTINATION'S OWN registry
-     * status rather than a literal kept in this file.
+     * C7 built the Strategy Health area and C8 built Data Quality, Reconciliation, Operations,
+     * Alerts and the Audit Trail, so the count has moved from three to two to zero. **That it
+     * moves at all is the assertion's point**: the marker follows the DESTINATION'S OWN
+     * registry status rather than a literal kept in this file, and the per-area check below is
+     * what would catch an affordance that stopped reading that status.
      */
-    await expect(page.getByTestId("reference-area-placeholder")).toHaveCount(2);
-    for (const area of ["SHORT_SIDE", "STRATEGY_HEALTH"]) {
+    await expect(page.getByTestId("reference-area-placeholder")).toHaveCount(0);
+    for (const area of ["SHORT_SIDE", "STRATEGY_HEALTH", "DATA_QUALITY", "RECONCILIATION"]) {
       const built = page
         .getByTestId("evidence-reference")
         .filter({ has: page.locator(`[data-owning-area="${area}"]`) })
@@ -151,7 +153,14 @@ test.describe("the restored owning-area affordance", () => {
     await link.click();
     await expect(page).toHaveURL(/\/system\/data-quality/);
     await waitForHydration(page);
-    // A placeholder area page says what it is; it does not present the evidence artefact.
+    /*
+     * THE AREA PAGE IS THE AREA, AND NOT THE ARTEFACT.
+     *
+     * C8 built this screen, so it now renders the Data Quality area's own read model. It still
+     * does NOT present the evidence artefact the reference named — an area control is
+     * contextual navigation, never a claim that the reference was resolved or retrieved.
+     */
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Data Quality");
     await expect(page.locator("body")).not.toContainText("demo-evidence-data-quality");
   });
 

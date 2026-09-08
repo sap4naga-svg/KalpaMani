@@ -100,6 +100,28 @@ import {
   riskSnapshotEnvelope,
   shortSideSnapshotEnvelope,
 } from "@/contracts/risk-market-models";
+import {
+  executionQualityEnvelope,
+  reconciliationEnvelope,
+} from "@/contracts/execution-quality-page";
+import type {
+  ExecutionQualityPagePayload,
+  ReconciliationPayload,
+} from "@/contracts/execution-quality-page";
+import {
+  alertEnvelope,
+  dataQualityEnvelope,
+  systemIncidentEnvelope,
+  systemJobEnvelope,
+} from "@/contracts/operations-models";
+import type {
+  AlertPayload,
+  DataQualityPayload,
+  SystemIncidentPayload,
+  SystemJobPayload,
+} from "@/contracts/operations-models";
+import { auditEventEnvelope } from "@/contracts/audit-models";
+import type { AuditEventPayload } from "@/contracts/audit-models";
 import type {
   MarketRegimePayload,
   RiskSnapshotPayload,
@@ -156,6 +178,13 @@ import {
   TRADE_LIFECYCLE_IDENTITY,
   TRADE_SUMMARY_IDENTITY,
   WHAT_CHANGED_IDENTITY,
+  ALERT_IDENTITY,
+  AUDIT_EVENT_IDENTITY,
+  DATA_QUALITY_IDENTITY,
+  EXECUTION_QUALITY_IDENTITY,
+  RECONCILIATION_IDENTITY,
+  SYSTEM_INCIDENT_IDENTITY,
+  SYSTEM_JOB_IDENTITY,
   type ReadModelIdentity,
 } from "@/data/client/read-model-identity";
 import type { Clock } from "@/lib/clock";
@@ -181,6 +210,14 @@ import {
   syntheticResearchRuns,
 } from "./research";
 import { syntheticDecisions, syntheticGovernancePackets } from "./governance";
+import { syntheticExecutionQuality, syntheticReconciliation } from "./quality";
+import {
+  syntheticAlerts,
+  syntheticDataQuality,
+  syntheticIncidents,
+  syntheticSystemJobs,
+} from "./operations";
+import { syntheticAuditEvents } from "./audit";
 import { buildPerformanceSummary } from "./summary";
 import {
   findBookTrade,
@@ -1060,6 +1097,140 @@ export class FixtureReadClient implements ReadClient {
       this.inputsFor(scope),
       resolution,
       decisionRecordEnvelope,
+    );
+  }
+
+  /* ---------------------------------------------------------- added by C8 */
+
+  /**
+   * The execution, reconciliation, data-quality, operations, alert and audit reads.
+   *
+   * Each resolves through the same `syntheticResolution` every earlier read model uses: the
+   * producing runtime does not exist, so the honest project-scope answer is a PAYLOADLESS
+   * `NOT_IMPLEMENTED`, and the demonstration scenario carries the repository-owned fixture.
+   *
+   * **NOTHING HERE WRITES, AND NOTHING HERE REACHES ANYTHING.** No method submits an order,
+   * opens a broker session, runs a job, sends a notification or appends an audit event, and no
+   * such method exists anywhere behind this boundary.
+   */
+  async executionQuality(scope: ViewScope): Promise<EnvelopeOf<ExecutionQualityPagePayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ExecutionQualityPagePayload>(
+      scope,
+      () => syntheticExecutionQuality(asOf, this.sessions(), this.originMs),
+      /** One fill's reference price is unrecorded, so the window is partly uncovered. */
+      "PARTIAL",
+    );
+    return this.respond(
+      EXECUTION_QUALITY_IDENTITY,
+      "execution-quality",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      executionQualityEnvelope,
+    );
+  }
+
+  async reconciliation(scope: ViewScope): Promise<EnvelopeOf<ReconciliationPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<ReconciliationPayload>(
+      scope,
+      () => syntheticReconciliation(asOf, this.originMs, this.sessions()),
+      /** Two of the four recorded runs compared less than they were asked to. */
+      "PARTIAL",
+    );
+    return this.respond(
+      RECONCILIATION_IDENTITY,
+      "reconciliation-status",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      reconciliationEnvelope,
+    );
+  }
+
+  async dataQuality(scope: ViewScope): Promise<EnvelopeOf<DataQualityPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const evaluationMs = this.clock.now();
+    const resolution = this.syntheticResolution<DataQualityPayload>(
+      scope,
+      () => syntheticDataQuality(asOf, this.originMs, evaluationMs),
+      /** Two subjects cover less than their requested extent, and one has no feed at all. */
+      "PARTIAL",
+    );
+    return this.respond(
+      DATA_QUALITY_IDENTITY,
+      "data-quality",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      dataQualityEnvelope,
+    );
+  }
+
+  async systemJobs(scope: ViewScope): Promise<EnvelopeOf<SystemJobPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<SystemJobPayload>(
+      scope,
+      () => syntheticSystemJobs(asOf, this.originMs),
+      /** No job carries a present observation, so present health is uncovered throughout. */
+      "PARTIAL",
+    );
+    return this.respond(
+      SYSTEM_JOB_IDENTITY,
+      "system-job",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      systemJobEnvelope,
+    );
+  }
+
+  async systemIncidents(scope: ViewScope): Promise<EnvelopeOf<SystemIncidentPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<SystemIncidentPayload>(scope, () =>
+      syntheticIncidents(asOf, this.originMs),
+    );
+    return this.respond(
+      SYSTEM_INCIDENT_IDENTITY,
+      "system-incident",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      systemIncidentEnvelope,
+    );
+  }
+
+  async alerts(scope: ViewScope): Promise<EnvelopeOf<AlertPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<AlertPayload>(scope, () =>
+      syntheticAlerts(asOf, this.originMs),
+    );
+    return this.respond(
+      ALERT_IDENTITY,
+      "alert",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      alertEnvelope,
+    );
+  }
+
+  async auditEvents(scope: ViewScope): Promise<EnvelopeOf<AuditEventPayload>> {
+    const asOf = instantOf(this.clock.now());
+    const resolution = this.syntheticResolution<AuditEventPayload>(
+      scope,
+      () => syntheticAuditEvents(asOf, this.originMs),
+      /** The projection consumed no source events over one stated window. */
+      "PARTIAL",
+    );
+    return this.respond(
+      AUDIT_EVENT_IDENTITY,
+      "audit-event",
+      scope,
+      this.inputsFor(scope),
+      resolution,
+      auditEventEnvelope,
     );
   }
 

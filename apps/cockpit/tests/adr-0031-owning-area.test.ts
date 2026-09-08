@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { attentionListEnvelope, ATTENTION_LIST_SCHEMA } from "@/contracts/read-models";
 import { positionSnapshotEnvelope } from "@/contracts/portfolio-models";
-import { owningAreaContradiction } from "@/contracts/references";
+import { owningAreaContradiction, referenceFailure } from "@/contracts/references";
 import { followReference } from "@/contracts/reference-access";
 import type { ResolvingContext } from "@/contracts/reference-access";
 import { refListOf } from "@/contracts/factories";
@@ -120,21 +120,27 @@ describe("the OwningArea vocabulary is closed at the seven accepted members", ()
 
   it("carries the destination route's own implemented or placeholder status", () => {
     /*
-     * FIVE PLACEHOLDERS AND TWO IMPLEMENTED SCREENS TODAY; the affordance says which.
+     * ALL SEVEN DESTINATIONS ARE BUILT SCREENS TODAY; the affordance says which.
      *
-     * C7 built the Strategy Health area, so its destination is no longer a placeholder. The
-     * count is the point of the assertion — the affordance carries the DESTINATION'S OWN
-     * status rather than a second copy of it, so it moves when a screen is built.
+     * C7 built the Strategy Health area and C8 built the remaining five, so the placeholder
+     * count has moved from five to zero. **That it moves at all is the assertion's point**:
+     * the affordance carries the DESTINATION'S OWN status rather than a second copy of it, so
+     * it follows the registry rather than a literal kept here.
+     *
+     * The enduring property is the loop below, and it is the one that cannot be satisfied by
+     * hard-coding a status: every destination's reported status must EQUAL the registry's own
+     * for that route. A component that stopped reading the registry, or a registry row that
+     * over-claimed, fails it.
      */
     const statuses = OWNING_AREAS.map(
       (area) => owningAreaDestination({ owning_area: area })!.status,
     );
-    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(5);
+    expect(statuses.filter((status) => status === "placeholder")).toHaveLength(0);
     expect(owningAreaDestination({ owning_area: "SHORT_SIDE" })!.status).toBe("implemented");
     expect(owningAreaDestination({ owning_area: "STRATEGY_HEALTH" })!.status).toBe(
       "implemented",
     );
-    expect(owningAreaDestination({ owning_area: "AUDIT_TRAIL" })!.status).toBe("placeholder");
+    expect(owningAreaDestination({ owning_area: "AUDIT_TRAIL" })!.status).toBe("implemented");
     for (const area of OWNING_AREAS) {
       const destination = owningAreaDestination({ owning_area: area })!;
       expect(destination.status, area).toBe(ROUTES_BY_HREF.get(destination.href)!.status);
@@ -180,6 +186,56 @@ describe("an owning_area outside the closed set is refused at admission", () => 
       const candidate = { ...reference("evidence-1"), owning_area: value };
       expect(refSchema.safeParse(candidate).success, value).toBe(false);
     }
+  });
+
+  /**
+   * §4.3.2 — `AUDIT_TRAIL` names a recorded `AuditEvent`, refused at admission otherwise.
+   *
+   * The vocabulary check above admits the member on any reference, because the closed SET is
+   * all a shape can see. This is the rest of the rule, checked where the kind and the area sit
+   * on one object: "an absent, unknown or undetermined owning area never resolves to it, and no
+   * rule may use it as a fallback".
+   *
+   * Both directions, on a REAL admitted response: breaking exactly one reference must be
+   * refused, and the member must still be reachable by a reference that names an audit event —
+   * a rule that refused both would be a rule that deleted the member.
+   */
+  it("refuses AUDIT_TRAIL on a reference that does not name a recorded audit event", async () => {
+    const response = clone(await client().attention(DEMO));
+    const reference = response.payload!.items[0]!.evidence_refs.items[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(reference.ref_kind).not.toBe("audit_event");
+    reference.owning_area = "AUDIT_TRAIL";
+    expect(() =>
+      admit("AttentionList", attentionListEnvelope, response, "PUBLIC_EDGE"),
+    ).toThrow(ContractViolationError);
+  });
+
+  it("states which reference and which kind it refused, and names the owning read model", () => {
+    const failure = referenceFailure("AttentionItem.evidence_refs", {
+      ref_id: "demo-source-marks-manifest",
+      ref_kind: "source_fact",
+      resolution: "AUTHORIZED_READ",
+      classification: "PUBLIC_SAFE",
+      owning_area: "AUDIT_TRAIL",
+    } as Ref);
+    expect(failure).toContain("AUDIT_TRAIL");
+    expect(failure).toContain("source_fact");
+    expect(failure).toContain("AuditEvent");
+  });
+
+  it("admits AUDIT_TRAIL on a reference that does name a recorded audit event", () => {
+    expect(
+      referenceFailure("TradeDetail.audit_refs", {
+        ref_id: "demo-audit-0001",
+        ref_kind: "audit_event",
+        resolution: "AUTHORIZED_READ",
+        classification: "PUBLIC_SAFE",
+        owning_area: "AUDIT_TRAIL",
+      } as Ref),
+    ).toBeNull();
   });
 
   it("admits the seven members, and only those", () => {

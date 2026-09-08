@@ -30,6 +30,7 @@ import {
   BOOK,
   MISSING_RISK_RECORD_TRADE,
   MULTI_EXIT_TRADE,
+  PARTIAL_PATH_TRADE,
   bookSessions,
   centsToDecimal,
 } from "@/data/fixtures/book";
@@ -1334,7 +1335,26 @@ describe("the four concepts stay on separate screens", () => {
   it("carries the audit and reconciliation joins without pretending they resolve", async () => {
     const detail = await client().tradeDetail(DEMO, MULTI_EXIT_TRADE);
     const payload = detail.payload as NonNullable<typeof detail.payload>;
-    expect(payload.audit_refs.items).toHaveLength(0);
+    /*
+     * THE AUDIT JOIN NOW RESOLVES, AND THE PROPERTY THIS TEST PROTECTS IS UNCHANGED.
+     *
+     * C6 asserted an empty list because no audit producer existed for any scope. C8 implements
+     * one, so this trade's references are bound to the events that actually name it — and the
+     * enduring rule is the one below: a reference is carried with the resolution its kind's
+     * §4.3 row permits, and the audit trail stays a SEPARATE read model on a SEPARATE screen
+     * rather than being folded into this payload.
+     */
+    expect(payload.audit_refs.items.length).toBeGreaterThan(0);
+    for (const reference of payload.audit_refs.items) {
+      expect(reference.ref_kind).toBe("audit_event");
+      /* §4.3 resolves an `audit_event` under an AUTHORIZED_READ on `audit:read`. */
+      expect(reference.resolution).toBe("AUTHORIZED_READ");
+      /* The join is a REFERENCE: no audit payload is embedded in this trade's detail. */
+      expect(Object.keys(payload)).not.toContain("audit_events");
+    }
+    /* A trade the timeline never mentions carries an empty list, and that is a true answer. */
+    const unmentioned = await client().tradeDetail(DEMO, PARTIAL_PATH_TRADE);
+    expect(unmentioned.payload?.audit_refs.items).toHaveLength(0);
     /*
      * THE RISK DECISION RESOLVES, BECAUSE THE BOOK RECORDS ONE FOR THIS TRADE.
      *

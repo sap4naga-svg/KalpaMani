@@ -867,6 +867,210 @@ export const REFERENCE_FIELDS = {
     implemented: true,
   },
 
+  /* ========================================================================= added by C8 ===
+   * The six C8 areas emit these payloads now, so their assignments move out of the
+   * specification-only section below and are marked implemented.
+   *
+   * **`implemented` is scoped to what this application actually produces** — a read model
+   * projected from repository-owned SYNTHETIC fixtures. It "exists for `SYNTHETIC` provenance
+   * and for nothing else" (§4.3.1), and marking one true establishes nothing about an
+   * execution runtime, a broker session, a provider feed, a scheduler, an alert pipeline or an
+   * authoritative audit store. **None of those exists, and none is authorized.**
+   */
+
+  /* ---------------------------------------------------------------- Area 10 (§4.3.1) */
+  "ReconciliationStatus.position_diffs[].security_ref": {
+    shape: "REF",
+    kinds: ["evidence"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "ReconciliationStatus.order_diffs[].local_ref": {
+    shape: "REF",
+    kinds: ["order"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "ReconciliationStatus.incident_refs": {
+    shape: "REF_LIST",
+    kinds: ["incident"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /**
+   * ADDITIVE: the ownership finding's own local order reference.
+   *
+   * §4.5 gives `order_diffs[]` a `local_ref` and says nothing about ownership, which Area 10
+   * "presents" as a separate fact. An ownership finding is about ONE local order, so it
+   * carries its own reference rather than being positioned beside a diff — an association a
+   * reader cannot see in the payload is one a producer can silently get wrong (§4.3.2).
+   */
+  "ReconciliationStatus.ownership_findings[].local_ref": {
+    shape: "REF",
+    kinds: ["order"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** ADDITIVE: the trades a recorded comparison covered, so its scope is visible. */
+  "ReconciliationStatus.trade_refs": {
+    shape: "REF_LIST",
+    kinds: ["trade"],
+    requiredness: "required",
+    implemented: true,
+  },
+
+  /* ----------------------------------------------------------------------- Area 9 */
+  /**
+   * ADDITIVE: the trade and the order one execution-quality row belongs to.
+   *
+   * `ExecutionQuality.subject_ref` already names what the measurement was taken OVER, and its
+   * kind follows `scope`. These two answer a different question — which trade, and which
+   * order, this row sits under — and a screen that inferred either from the subject would be
+   * guessing at an `AGGREGATE` row.
+   */
+  "ExecutionQualityRecord.trade_ref": {
+    shape: "REF",
+    kinds: ["trade"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "ExecutionQualityRecord.order_ref": {
+    shape: "REF",
+    kinds: ["order"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /**
+   * ADDITIVE: the protective orders recorded against this order's position.
+   *
+   * **A submitted protective order is not proof of active protection**, so the list is carried
+   * beside a state that says what the record shows, and never in place of it.
+   */
+  "ExecutionQualityRecord.protective_order_refs": {
+    shape: "REF_LIST",
+    kinds: ["protection"],
+    requiredness: "required",
+    implemented: true,
+  },
+
+  /* ---------------------------------------------------------------- Area 22 (§4.5) */
+  "DataQuality.lineage_refs": {
+    shape: "REF_LIST",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "DataQuality.incident_refs": {
+    shape: "REF_LIST",
+    kinds: ["incident"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** ADDITIVE: the alerts a recorded data condition raised, so the two views reconcile. */
+  "DataQuality.alert_refs": {
+    shape: "REF_LIST",
+    kinds: ["alert"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /**
+   * ADDITIVE: the exact version a recorded data condition affects.
+   *
+   * Area 22 presents "strategies blocked by a data condition". A strategy MODULE is a closed
+   * code and a strategy VERSION is a record, so the affected row names the version it is about
+   * rather than leaving a reader to match a label.
+   */
+  "DataQuality.affected_strategies[].version_ref": {
+    shape: "REF",
+    kinds: ["strategy_version"],
+    requiredness: "required",
+    implemented: true,
+  },
+
+  /* ---------------------------------------------------------------- Area 23 (§4.5) */
+  "SystemIncident.evidence_refs": {
+    shape: "REF_LIST",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** ADDITIVE: the alerts a recorded incident is linked to. */
+  "SystemIncident.alert_refs": {
+    shape: "REF_LIST",
+    kinds: ["alert"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /**
+   * ADDITIVE: a job's recorded evidence and the incidents raised against it.
+   *
+   * `RefKind` is closed at twenty-seven members and holds no `job`, so a job's own recorded
+   * facts are `source_fact` references — the kind §4.3 gives "the recorded fact a projection
+   * was built from". **No kind is invented to obtain a link**, and none is relabelled.
+   */
+  "SystemJob.evidence_refs": {
+    shape: "REF_LIST",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "SystemJob.incident_refs": {
+    shape: "REF_LIST",
+    kinds: ["incident"],
+    requiredness: "required",
+    implemented: true,
+  },
+
+  /* ---------------------------------------------------------------- Area 27 (§4.5) */
+  "Alert.evidence_refs": {
+    shape: "REF_LIST",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  /** ADDITIVE: the incidents a recorded condition was linked to. */
+  "Alert.incident_refs": {
+    shape: "REF_LIST",
+    kinds: ["incident"],
+    requiredness: "required",
+    implemented: true,
+  },
+
+  /* ---------------------------------------------------------------- Area 26 (§4.5) */
+  "AuditEvent.subject_refs": {
+    shape: "REF_LIST",
+    kinds: ["source_fact"],
+    requiredness: "required",
+    implemented: true,
+  },
+  "AuditEvent.supersedes": {
+    shape: "REF",
+    kinds: ["audit_event"],
+    requiredness: "conditional",
+    implemented: true,
+  },
+  "AuditEvent.tombstone_of": {
+    shape: "REF",
+    kinds: ["audit_event"],
+    requiredness: "conditional",
+    implemented: true,
+  },
+  /**
+   * ADDITIVE: the linked context Area 26 presents, as a STATED SET of kinds.
+   *
+   * "Linked candidate, trade, research, health and incident context" is five kinds on one
+   * field, and §4.3.1 permits a field to declare "a stated SET of kinds" with the field's own
+   * declaration governing. It is kept SEPARATE from `subject_refs`, which §4.3.1 assigns
+   * `source_fact`: widening that field would have relabelled a subject to obtain a link, and
+   * "a producer may NEVER change a reference's ref_kind to obtain a link" (§4.3.2).
+   */
+  "AuditEvent.related_refs": {
+    shape: "REF_LIST",
+    kinds: ["candidate", "trade", "research_run", "health_transition", "incident"],
+    requiredness: "required",
+    implemented: true,
+  },
+
   /* ================================================================ specification-only ===
    * Assignments recorded so the cycle that FIRST emits one of these payloads inherits an
    * ENFORCED contract rather than an open one.
@@ -876,24 +1080,6 @@ export const REFERENCE_FIELDS = {
    * kind cannot be checked against anything — which is precisely how two trade references
    * came to be labelled `source_fact`.
    */
-  "ReconciliationStatus.position_diffs[].security_ref": {
-    shape: "REF",
-    kinds: ["evidence"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "ReconciliationStatus.order_diffs[].local_ref": {
-    shape: "REF",
-    kinds: ["order"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "ReconciliationStatus.incident_refs": {
-    shape: "REF_LIST",
-    kinds: ["incident"],
-    requiredness: "required",
-    implemented: false,
-  },
   "StrategyHealth.queue_item_ref": {
     shape: "REF",
     kinds: ["queue_item"],
@@ -1115,48 +1301,6 @@ export const REFERENCE_FIELDS = {
     requiredness: "required",
     implemented: false,
   },
-  "DataQuality.lineage_refs": {
-    shape: "REF_LIST",
-    kinds: ["source_fact"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "DataQuality.incident_refs": {
-    shape: "REF_LIST",
-    kinds: ["incident"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "SystemIncident.evidence_refs": {
-    shape: "REF_LIST",
-    kinds: ["source_fact"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "Alert.evidence_refs": {
-    shape: "REF_LIST",
-    kinds: ["source_fact"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "AuditEvent.subject_refs": {
-    shape: "REF_LIST",
-    kinds: ["source_fact"],
-    requiredness: "required",
-    implemented: false,
-  },
-  "AuditEvent.supersedes": {
-    shape: "REF",
-    kinds: ["audit_event"],
-    requiredness: "conditional",
-    implemented: false,
-  },
-  "AuditEvent.tombstone_of": {
-    shape: "REF",
-    kinds: ["audit_event"],
-    requiredness: "conditional",
-    implemented: false,
-  },
   /**
    * §4.3.1: a search result names WHATEVER was found, so its kind is any `RefKind` and its
    * resolution is that kind's. Its rows carry their own environment, provenance and
@@ -1211,6 +1355,28 @@ export function referenceFailure(key: HostFieldKey, candidate: Ref): string | nu
   const declaration: HostFieldDeclaration = REFERENCE_FIELDS[key];
   if (!(declaration.kinds as readonly string[]).includes(candidate.ref_kind)) {
     return `${key} declares kind ${declaration.kinds.join(" or ")}, and carries ${candidate.ref_kind}`;
+  }
+  /*
+   * `AUDIT_TRAIL` IS DECLARED WHEN THE REFERENCE NAMES A RECORDED `AuditEvent` (§4.3.2).
+   *
+   * "An absent, unknown or undetermined owning area never resolves to it, and no rule may use
+   * it as a fallback: *an Audit page owns every fact* is a false claim, and it is the one this
+   * section exists to stop being made." Matrix A gives area 26 exactly one read model, and
+   * §4.3 gives that read model exactly one kind -- so a reference naming anything else
+   * declares the area that owns it, or, where accepted authority determines none, NONE.
+   *
+   * IT IS CHECKED HERE BECAUSE IT IS A PROPERTY OF ONE REFERENCE. The kind it carries and the
+   * area it declares sit on the same object, which is the tightest boundary that can see both,
+   * and this function is the one every declared reference field already passes through.
+   * `owningAreaContradiction` answers a different question at a different scope -- two records
+   * disagreeing inside one response -- and neither rule substitutes for the other: a single
+   * mislabelled reference contradicts nothing and would pass it.
+   */
+  if (candidate.owning_area === "AUDIT_TRAIL" && candidate.ref_kind !== "audit_event") {
+    return (
+      `${key} declares owning_area AUDIT_TRAIL on a ${candidate.ref_kind} reference, and ` +
+      `area 26 owns AuditEvent`
+    );
   }
   if (candidate.resolution === "EMBEDDED") {
     const permitted = declaration.embeds?.some((entry) => entry.kind === candidate.ref_kind);

@@ -265,19 +265,44 @@ describe("the navigation registry", () => {
     }
   });
 
-  /** The areas a later cycle owns are still recorded as later cycles, and still placeholders. */
-  it("leaves the C8 and later areas recorded as placeholders", () => {
-    for (const href of [
-      "/execution/quality",
-      "/execution/reconciliation",
-      "/governance/audit",
-      "/system/data-quality",
-      "/system/operations",
-      "/system/alerts",
-    ]) {
+  it("records the C8 areas as implemented, at the cycle the matrix assigns", () => {
+    const expected: Readonly<Record<string, number>> = {
+      "/execution/quality": 9,
+      "/execution/reconciliation": 10,
+      "/system/data-quality": 22,
+      "/system/operations": 23,
+      "/governance/audit": 26,
+      "/system/alerts": 27,
+    };
+    for (const [href, area] of Object.entries(expected)) {
       const route = ROUTES_BY_HREF.get(href);
-      expect(route?.status, href).toBe("placeholder");
+      expect(route, href).toBeDefined();
+      expect(route?.status, href).toBe("implemented");
+      expect(route?.areas, href).toContain(area);
       expect(route?.cycle, href).toBe("C8");
+      /* An implemented route still names the producing subsystem it does NOT have. */
+      expect(route?.dependency, href).not.toBe("the producing subsystem does not exist");
+      expect(route?.dependency.length, href).toBeGreaterThan(10);
+    }
+  });
+
+  /**
+   * THE REGISTRY STATES WHAT IS BUILT, AND NOTHING IS RECORDED AS BUILT BY MISTAKE.
+   *
+   * The original assertion here read the six C8 routes as placeholders, and its premise
+   * genuinely changed when they were implemented. The BEHAVIOURAL property it protected — the
+   * registry never over-claims — is kept, and stated over the whole registry rather than over
+   * a list that has to be edited every cycle: a route claiming `implemented` resolves to a
+   * page that is not the shared placeholder.
+   */
+  it("never records a route as implemented while it renders the shared placeholder", () => {
+    for (const route of NAV_ROUTES) {
+      if (route.status !== "implemented") {
+        continue;
+      }
+      const segments = route.href === "/" ? [] : route.href.slice(1).split("/");
+      const source = readFileSync(join(APP, ...segments, "page.tsx"), "utf8");
+      expect(source.includes("NotImplementedPage"), route.href).toBe(false);
     }
   });
 
