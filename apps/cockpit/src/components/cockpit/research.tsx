@@ -26,7 +26,15 @@ import type { ViewScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 
 /**
- * The presentation pieces every C7 screen shares.
+ * The presentation pieces the C7 screens share — and, where the question is the same one, the
+ * C8 screens too.
+ *
+ * `ReasonList`, `ReferenceRow`, `ReferenceListPanel`, `ComparisonChart` and `SectionState` ask
+ * nothing about research: they render a closed code, a reference with its two destinations, a
+ * chart beside the table that carries the same numbers, and a section's availability. **A
+ * closed allowlist that exists in three copies is three allowlists**, and the same is true of
+ * a reference renderer — so the C8 screens import these rather than restating them, and
+ * `components/cockpit/operations.tsx` holds only what is genuinely C8's.
  *
  * They exist once because the same four things happen on nine screens, and nine copies is
  * nine chances for one of them to drift:
