@@ -40,7 +40,12 @@ import type {
 import type { CandidateDetailPayload } from "@/contracts/signal-models";
 import type { StrategyHealthPayload } from "@/contracts/strategy-models";
 import type { HypothesisRegistrationPayload } from "@/contracts/research-models";
-import type { AlertPayload, DataQualityPayload } from "@/contracts/operations-models";
+import { SEVERITY_RANK } from "@/contracts/operations-models";
+import type {
+  AlertPayload,
+  AlertSeverity,
+  DataQualityPayload,
+} from "@/contracts/operations-models";
 import type { ReconciliationPayload } from "@/contracts/execution-quality-page";
 import type { AttentionListPayload, WhatChangedPayload } from "@/data/client/read-client";
 import { PERIOD_LABEL, type PerformancePeriod } from "@/lib/scope";
@@ -418,15 +423,56 @@ export function recordedChangesAnswer(
 
 /* ============================================================ data quality conditions */
 
+/**
+ * The two states a data-quality subject can be in that are NOT the same fact, and must not
+ * be counted as one.
+ *
+ * A RECORDED DEGRADATION is a subject whose state WAS assessed and came back qualified --
+ * `STALE` marks, `PARTIAL` coverage. An UNASSESSED subject is one whose state carries no
+ * value at all, because its producer is absent, unauthorized or has not yet run.
+ *
+ * Counting the second as the first is the exact confusion the section 4.6 unavailable
+ * template exists to stop: "EMPTY_VERIFIED and NOT_YET_AVAILABLE look identical on a naive
+ * screen and mean opposite things". It would report a subject nobody measured as a subject
+ * measured badly, and -- worse -- would EXCLUDE the stale and partial subjects a reader
+ * asking about data quality is actually asking about, because those states ARE value-bearing
+ * (section 4.1.1).
+ */
+const DEGRADED_SUBJECT_STATES = ["STALE", "PARTIAL"] as const;
+
+function subjectIsDegraded(item: {
+  readonly subject_state: { readonly availability: string };
+}): boolean {
+  return (DEGRADED_SUBJECT_STATES as readonly string[]).includes(
+    item.subject_state.availability,
+  );
+}
+
 export function dataQualityAnswer(
   quality: DataQualityPayload,
   asOf: string,
 ): AskAnswerPayload {
-  const degraded = quality.items.filter(
+  const degraded = quality.items.filter(subjectIsDegraded);
+  /*
+   * A SUBJECT NOBODY ASSESSED IS ITS OWN COUNT, reported beside the degradation count rather
+   * than folded into it. Both are facts a reader needs, and they are different ones.
+   */
+  const unassessed = quality.items.filter(
     (item) => !isValueBearing(item.subject_state.availability),
   );
-  const focus = degraded[0] ?? quality.items[0];
+  /*
+   * THE FOCUS IS A DEGRADED SUBJECT OR THERE IS NONE.
+   *
+   * There is no fallback to the first indexed row: describing an arbitrary subject's coverage
+   * as "the affected one" when nothing is degraded states an affectedness the record does not
+   * carry, and a measured zero needs no example to stand beside it.
+   */
+  const focus = degraded[0];
   const lineage = focus === undefined ? [] : sourceFacts(focus.lineage_refs.items);
+  const unassessedFigure = {
+    label: "SUBJECTS_WITHOUT_A_RECORDED_STATE",
+    value: count("data_quality.unassessed_subjects", unassessed.length, asOf),
+  };
   return assemble(
     {
       questionClass: "DATA_QUALITY_CONDITION",
@@ -434,8 +480,9 @@ export function dataQualityAnswer(
       answerLabel: "DEGRADED_DATA_QUALITY_SUBJECTS",
       supporting:
         focus === undefined
-          ? []
+          ? [unassessedFigure]
           : [
+              unassessedFigure,
               { label: "COVERAGE_RATIO", value: focus.coverage.ratio },
               { label: "HISTORY_DEPTH", value: focus.history_depth },
             ],
@@ -506,7 +553,31 @@ export function reconciliationAnswer(
 
 export function openAlertsAnswer(alerts: AlertPayload, asOf: string): AskAnswerPayload {
   const open = alerts.items.filter((alert) => alert.state === "OPEN");
-  const top = open[0] ?? alerts.items[0];
+  /*
+   * "HIGHEST SEVERITY" IS ESTABLISHED BY THE DECLARED RANK, NOT BY DELIVERY ORDER.
+   *
+   * `SEVERITY_RANK` is the contract's own mapping, and the alerts screen already re-ranks by
+   * it rather than trusting the order a page arrives in. Reading `open[0]` would make the
+   * label true only for as long as the fixture happened to deliver the most severe row first,
+   * which is a claim resting on an accident rather than on a record.
+   *
+   * A severity the mapping does not know sorts LAST rather than first, so an unrecognised one
+   * can never be promoted into the highest-severity slot; the tiebreak is the identifier, so
+   * two equally severe rows resolve deterministically.
+   */
+  const ranked = [...open].sort((left, right) => {
+    const l = SEVERITY_RANK[left.severity.code as AlertSeverity] ?? Number.MAX_SAFE_INTEGER;
+    const r = SEVERITY_RANK[right.severity.code as AlertSeverity] ?? Number.MAX_SAFE_INTEGER;
+    return l === r ? left.alert_id.localeCompare(right.alert_id) : l - r;
+  });
+  /*
+   * NO FALLBACK TO A ROW THAT IS NOT OPEN.
+   *
+   * `open[0] ?? alerts.items[0]` reported a RESOLVED alert's severity and occurrence count
+   * beside an open count of zero -- a qualifying figure for a row the answer is not about.
+   * Where nothing is open, the measured zero stands alone.
+   */
+  const top = ranked[0];
   const evidence = top === undefined ? [] : sourceFacts(top.evidence_refs.items);
   return assemble(
     {

@@ -41,11 +41,33 @@ import {
  * an action is TOLD it is not available rather than handed the nearest read. A verb absent
  * from this list still cannot act — it simply resolves to a catalogued question or to
  * nothing.
+ *
+ * **EVERY ENTRY IS MATCHED AS A WHOLE WORD OR WHOLE PHRASE**, and that is a correctness rule
+ * rather than a nicety. A prefix test made this list fire on words that merely BEGIN with a
+ * refused verb, and because the refusal runs FIRST it then spoke for questions that are not
+ * requests at all: *"is anything shortable"* and *"where is the kill switch"* were answered
+ * with **Ask cannot place, change or cancel anything**, which is a false description of what
+ * the reader asked — and it stranded the catalogued short-side and control-plane referrals
+ * behind a refusal they could never get past.
+ *
+ * **A COMPARATIVE IS NOT AN IMPERATIVE**, which is why `increase the`, `reduce the`,
+ * `raise the` and `lower the` carry their object. *"Did the drawdown increase over 3
+ * months"* is a catalogued question about a recorded measurement; *"increase the risk"* is a
+ * request to change one, and only the second is refused.
+ *
+ * **NOTHING BECAME REACHABLE BY NARROWING THIS LIST.** No entry here has ever been able to
+ * perform anything: the read client exposes no method that writes, so what a term controls is
+ * WHICH TRUE SENTENCE a reader is shown — a stated boundary, a referral to the owning area,
+ * or *not in the catalogue*. Each of those is inert, and the narrowing exchanges a wrong one
+ * for a right one.
  */
 export const REFUSED_ACTION_TERMS = [
   "buy",
   "sell",
-  "short",
+  "short the",
+  "go short",
+  "sell short",
+  "short sell",
   "place",
   "submit",
   "execute",
@@ -70,7 +92,7 @@ export const REFUSED_ACTION_TERMS = [
   "disable",
   "turn on",
   "turn off",
-  "kill",
+  "kill the",
   "halt",
   "resume",
   "retry",
@@ -80,7 +102,7 @@ export const REFUSED_ACTION_TERMS = [
   "trigger",
   "schedule",
   "acknowledge",
-  "ack ",
+  "ack",
   "snooze",
   "dismiss",
   "silence",
@@ -89,15 +111,15 @@ export const REFUSED_ACTION_TERMS = [
   "start run b",
   "authorise run b",
   "authorize run b",
-  "increase",
-  "reduce",
-  "raise",
-  "lower",
+  "increase the",
+  "reduce the",
+  "raise the",
+  "lower the",
   "set the",
   "change the",
   "update the",
   "delete",
-  "override",
+  "override the",
   "backfill",
   "ingest",
 ] as const;
@@ -230,8 +252,12 @@ export function resolveQuestion(raw: string): AskResolution {
     return { kind: "EMPTY" };
   }
   for (const term of REFUSED_ACTION_TERMS) {
-    if (normalized.includes(` ${term}`)) {
-      return { kind: "ACTION_REFUSED", term: term.trim() };
+    /*
+     * A WHOLE word or phrase. `normalized` is padded at both ends, so a term at either end of
+     * the question still matches, and a longer word merely STARTING with one does not.
+     */
+    if (normalized.includes(` ${term} `)) {
+      return { kind: "ACTION_REFUSED", term };
     }
   }
 

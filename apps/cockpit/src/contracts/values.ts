@@ -922,8 +922,14 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
   "attention.item_count": { unit: "COUNT", shape: "INTEGER" },
   /** How many verified changes a comparison found. A zero here is a MEASURED zero. */
   "change.entry_count": { unit: "COUNT", shape: "INTEGER" },
-  /** How many data-quality subjects are recorded in a state that is not value-bearing. */
+  /**
+   * How many data-quality subjects carry a RECORDED state that is qualified -- `STALE` or
+   * `PARTIAL`. A subject whose state carries no value at all is counted by the metric below
+   * instead, because an ABSENT assessment is not a measured degradation.
+   */
   "data_quality.degraded_subjects": { unit: "COUNT", shape: "INTEGER" },
+  /** How many data-quality subjects have no recorded state to read. Never a degradation. */
+  "data_quality.unassessed_subjects": { unit: "COUNT", shape: "INTEGER" },
   /** How many alert ROWS are recorded OPEN. Deduplicated rows, never raw occurrences. */
   "alert.open_count": { unit: "COUNT", shape: "INTEGER" },
   /** A reconciliation run's own recorded result token, carried as the record states it. */

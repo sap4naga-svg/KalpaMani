@@ -21,7 +21,9 @@ import {
 import { ContractViolationError, admit } from "@/data/client/read-client";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { INDEXED_READ_MODELS } from "@/data/fixtures/search";
-import { ASK_INTENTS, EXAMPLE_SUBJECTS } from "@/lib/ask/catalogue";
+import { ASK_INTENTS, ASK_REFERRALS, EXAMPLE_SUBJECTS } from "@/lib/ask/catalogue";
+import { SEVERITY_RANK, type AlertSeverity } from "@/contracts/operations-models";
+import { dataQualityAnswer, openAlertsAnswer } from "@/data/fixtures/ask";
 import {
   REFUSED_ACTION_TERMS,
   identifierTokens,
@@ -552,6 +554,200 @@ describe("the resolver chooses nothing silently and obeys no instruction", () =>
     expect(response.payload).toBeUndefined();
     expect(response.availability).toBe("NOT_APPLICABLE");
     expect(response.availability_reason).toBe("NOT_DEFINED_FOR_SUBJECT");
+  });
+});
+
+/* ============================================ a count answers the question it is labelled */
+
+describe("a population count names the population it actually counted", () => {
+  /**
+   * The defect this pins: the degraded-subject count was taken over subjects whose state is
+   * NOT VALUE-BEARING, which counted the subject whose PRODUCER IS ABSENT and excluded the
+   * `STALE` and `PARTIAL` subjects a data-quality question is about — because those two
+   * states ARE value-bearing (§4.1.1). It reported "1 degraded subject" over a fixture whose
+   * degraded subjects are the two it left out.
+   */
+  it("counts subjects whose RECORDED state is degraded, not subjects nobody assessed", async () => {
+    const quality = (await client().dataQuality(DEMO)).payload!;
+    const recordedDegraded = quality.items.filter((item) =>
+      ["STALE", "PARTIAL"].includes(item.subject_state.availability),
+    );
+    const unassessed = quality.items.filter(
+      (item) => !isValueBearing(item.subject_state.availability),
+    );
+    /* The fixture must actually contain both kinds, or this test proves nothing. */
+    expect(recordedDegraded.length).toBeGreaterThan(0);
+    expect(unassessed.length).toBeGreaterThan(0);
+    expect(recordedDegraded.length).not.toBe(unassessed.length);
+
+    const payload = (await answer(DEMO, { questionClass: "DATA_QUALITY_CONDITION" })).payload!;
+    expect(payload.answer.value).toBe(recordedDegraded.length);
+    expect(payload.answer.metric_id).toBe("data_quality.degraded_subjects");
+
+    const separate = payload.supporting.find(
+      (figure) => figure.label.code === "SUBJECTS_WITHOUT_A_RECORDED_STATE",
+    );
+    expect(separate?.value.value).toBe(unassessed.length);
+    expect(separate?.value.metric_id).toBe("data_quality.unassessed_subjects");
+  });
+
+  it("describes a subject that IS degraded, and never one that merely sorts first", async () => {
+    const quality = (await client().dataQuality(DEMO)).payload!;
+    const degradedSubjects = quality.items
+      .filter((item) => ["STALE", "PARTIAL"].includes(item.subject_state.availability))
+      .map((item) => item.subject.code);
+    const payload = (await answer(DEMO, { questionClass: "DATA_QUALITY_CONDITION" })).payload!;
+    const named = payload.notes.map((note) => note.code);
+    expect(degradedSubjects.some((code) => named.includes(code))).toBe(true);
+  });
+
+  it("offers no example subject at all where nothing is recorded degraded", async () => {
+    /*
+     * A VALID ALTERNATIVE FIXTURE, not a mutated assertion: every subject is healthy or
+     * unassessed. The measured zero must stand alone — the previous behaviour fell back to
+     * the first indexed row and reported its coverage as "the affected one".
+     */
+    const quality = clone((await client().dataQuality(DEMO)).payload!);
+    for (const item of quality.items) {
+      if (["STALE", "PARTIAL"].includes(item.subject_state.availability)) {
+        item.subject_state = { availability: "AVAILABLE", reason: "NONE" };
+      }
+    }
+    const payload = dataQualityAnswer(quality, "2026-09-08T12:00:00.000Z");
+    expect(payload.answer.value).toBe(0);
+    expect(payload.abstained).toBe(false);
+    expect(payload.supporting.map((figure) => figure.label.code)).toEqual([
+      "SUBJECTS_WITHOUT_A_RECORDED_STATE",
+    ]);
+    expect(payload.notes).toEqual([]);
+  });
+
+  /**
+   * The defect this pins: the qualifying occurrence count was read from `open[0]`, so the
+   * `HIGHEST_SEVERITY_OCCURRENCES` label was true only while the fixture happened to deliver
+   * the most severe open row first. The ranking is the contract's own `SEVERITY_RANK`, which
+   * the alerts screen already applies rather than trusting delivery order.
+   */
+  it("reads the highest-severity OPEN alert by declared rank, not by delivery order", async () => {
+    const alerts = (await client().alerts(DEMO)).payload!;
+    const open = alerts.items.filter((row) => row.state === "OPEN");
+    expect(open.length).toBeGreaterThan(1);
+    const mostSevere = [...open].sort(
+      (left, right) =>
+        SEVERITY_RANK[left.severity.code as AlertSeverity]! -
+        SEVERITY_RANK[right.severity.code as AlertSeverity]!,
+    )[0]!;
+
+    /* Delivered LEAST severe first, which is a legitimate ordering this answer must survive. */
+    const reversed = clone(alerts);
+    reversed.items = [...reversed.items].reverse();
+    const payload = openAlertsAnswer(reversed, "2026-09-08T12:00:00.000Z");
+    expect(payload.answer.value).toBe(open.length);
+    const occurrences = payload.supporting.find(
+      (figure) => figure.label.code === "HIGHEST_SEVERITY_OCCURRENCES",
+    );
+    expect(occurrences?.value.value).toBe(mostSevere.occurrence_count.value);
+    expect(payload.notes.map((note) => note.code)).toContain(mostSevere.severity.code);
+  });
+
+  it("offers no severity figure where no alert is open, and never one from a resolved row", async () => {
+    const alerts = clone((await client().alerts(DEMO)).payload!);
+    for (const row of alerts.items) {
+      row.state = "RESOLVED";
+    }
+    const payload = openAlertsAnswer(alerts, "2026-09-08T12:00:00.000Z");
+    expect(payload.answer.value).toBe(0);
+    expect(payload.abstained).toBe(false);
+    expect(
+      payload.supporting.some((figure) => figure.label.code === "HIGHEST_SEVERITY_OCCURRENCES"),
+    ).toBe(false);
+  });
+});
+
+/* ================================== the refusal speaks only for requests that ARE actions */
+
+describe("the action refusal describes the request it refused", () => {
+  it("still refuses an action-shaped request before any class is considered", () => {
+    for (const question of [
+      "buy 100 shares of the top candidate",
+      "please cancel the open order",
+      "promote breakout-long-v3 to production",
+      "acknowledge the open alerts",
+      "authorize Run B",
+      "retry the failed refresh job",
+      "increase the planned risk per trade",
+      "reduce the gross short exposure",
+      "go short the weakest name",
+      "override the borrow block",
+      "kill the breakout module",
+    ]) {
+      expect(resolveQuestion(question).kind, question).toBe("ACTION_REFUSED");
+    }
+  });
+
+  /**
+   * The defect this pins: matching was a PREFIX test, so `short` spoke for *shortable* and
+   * *short side*, `kill` for *kill switch*, `override` for *override switch*, and the bare
+   * comparatives spoke for questions about a recorded measurement. Because the refusal runs
+   * first, each of those read questions was told Ask cannot place, change or cancel anything.
+   */
+  it("does not refuse a read question that merely contains a refused verb's stem", () => {
+    for (const question of [
+      "did the portfolio drawdown increase over 3 months",
+      "is anything shortable",
+      "what is the short side exposure",
+      "where is the kill switch",
+      "is there an override switch",
+    ]) {
+      expect(resolveQuestion(question).kind, question).not.toBe("ACTION_REFUSED");
+    }
+  });
+
+  it("resolves a catalogued question phrased with a comparative", () => {
+    const resolved = resolveQuestion("did the portfolio drawdown increase over 3 months");
+    expect(resolved.kind).toBe("RESOLVED");
+    if (resolved.kind === "RESOLVED") {
+      expect(resolved.request.questionClass).toBe("PORTFOLIO_DRAWDOWN");
+      expect(resolved.request.window).toBe("3M");
+    }
+  });
+
+  /**
+   * Every catalogued referral must be REACHABLE. A referral term stranded behind an earlier
+   * stage is a catalogue entry that can never be shown, and the reader is sent nowhere.
+   *
+   * A term may legitimately resolve to a catalogued ANSWER instead — the referral runs only
+   * where no class matched, by design — but it may never be refused as an action.
+   */
+  it("reaches every catalogued referral through every one of its own terms", () => {
+    for (const referral of ASK_REFERRALS) {
+      for (const term of referral.terms) {
+        const resolved = resolveQuestion(`what about ${term} here`);
+        expect(
+          resolved.kind === "REFERRED" || resolved.kind === "RESOLVED",
+          `${referral.code} :: ${term} -> ${resolved.kind}`,
+        ).toBe(true);
+        if (resolved.kind === "REFERRED") {
+          expect(resolved.referral.code, term).toBe(referral.code);
+        }
+      }
+    }
+  });
+
+  it("keeps every refused term a whole word or phrase, never a bare stem match", () => {
+    for (const term of REFUSED_ACTION_TERMS) {
+      /* No entry carries padding of its own; the matcher supplies the boundaries. */
+      expect(term.trim(), term).toBe(term);
+      /*
+       * The property, stated over the matcher rather than over a sentence: a longer word that
+       * merely STARTS with this term does not contain it as a whole word. Asserting on the
+       * resolution kind instead would be confounded, because a multi-word term such as
+       * `sell short` legitimately contains the separate whole term `sell`.
+       */
+      expect(normalizeQuestion(`is the ${term}x recorded`).includes(` ${term} `), term).toBe(
+        false,
+      );
+    }
   });
 });
 

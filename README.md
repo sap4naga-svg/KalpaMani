@@ -3930,8 +3930,9 @@ live trading:                                     HARD-DISABLED
 
 **A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
 validated, independently reviewed and **merged**; the C5 completion follow-up is **still pending**;
-C9 and C10 are **not started**; **full Cockpit V1 is incomplete**; and **specification,
-implementation, research, deployment and execution stay five separate gates**.
+C9 is **implemented in an open pull request** and C10 is **not started**; **full Cockpit V1 is
+incomplete**; and **specification, implementation, research, deployment and execution stay five
+separate gates**.
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
@@ -5214,6 +5215,29 @@ identifier and an optional window, and nothing else. **No dependency was added.*
 | **text is data** | an instruction written inside a question reaches a closed term list as ordinary words. It can change **no authorization, no scope, no vocabulary and no behaviour**, and the only thing a question determines is which catalogued class, identifier and window a typed request carries |
 | **the palette gained no verb** | an entity result **is** a navigation, opened through the ADR-0030 R10 allowlist keyed by the reference's own kind, with the whole scope carried into the destination. The command vocabulary is still `navigate` and `filter`, and results are **grouped by environment** with no combined list |
 
+#### What the independent review of this implementation corrected
+
+**The review was performed against this pull request's head before any merge**, and it reproduced
+every defect below on the author's tree before correcting it. Each correction carries a regression
+at the boundary that owns the rule, and each of those regressions was proved to FAIL when the
+defect was temporarily reintroduced.
+
+| | |
+|---|---|
+| **a degraded-subject count that counted the opposite population** | the data-quality answer counted subjects whose state is **not value-bearing** — which counts the subject whose **producer is absent** and EXCLUDES the `STALE` and `PARTIAL` subjects a data-quality question is about, because those two states *are* value-bearing. It now counts **recorded** degradation, reports **subjects with no recorded state as a separate figure**, and **describes no example subject at all where nothing is degraded** rather than presenting the first indexed row as *the affected one* |
+| **a highest-severity claim that rested on delivery order** | the open-alerts answer read its qualifying figure from the first delivered open row, so `HIGHEST_SEVERITY_OCCURRENCES` was true only while the fixture happened to deliver the most severe row first. It now ranks by the contract's own `SEVERITY_RANK`, exactly as the alerts screen already does, and **offers no severity figure at all where nothing is open** rather than borrowing a resolved row's |
+| **a refusal that spoke for questions that were not requests** | the action vocabulary matched as a **prefix**, so *shortable*, *short side*, *kill switch*, *override switch* and *did the drawdown increase* were each answered with **Ask cannot place, change or cancel anything** — a false description of a read question, and one that stranded the catalogued short-side and control-plane referrals behind a refusal they could never reach. Terms are now matched as **whole words or phrases**, and the comparatives carry their object. **Nothing became reachable by narrowing it**: no term here has ever been able to perform anything, so what changed is which true sentence a reader is shown |
+| **a page presented as a population** | the palette rendered one page of matching records and stated **neither the total nor that the list was truncated**, so a reader saw twenty-five rows with nothing to say there were more. It now names both, and says nothing when the result fits on one page |
+
+**Two non-blocking observations are recorded rather than resolved.** The two carried forward from
+the C8 review are **unchanged and still open** — C9 deliberately builds no answer on the
+fill-scoped figure. To them this review adds one: **`SearchResultPage` is authorized to carry
+governance-derived entries and carries none**, which is a permission left unexercised rather than
+an unmet criterion, because **no `RefKind` in the R10 allowlist and no member of the ADR-0031 A2
+`OwningArea` vocabulary reaches the Project and Qualification Governance area**, and adding one is
+an ADR's act. **The palette's navigation group reaches that area directly**, so the reader is not
+stranded.
+
 #### What it does not claim, and what it deliberately does not answer
 
 **No alpha is claimed, no result is asserted and no threshold is established.** Every figure is a
@@ -5239,6 +5263,7 @@ ESTABLISHED**, and this work amends and supersedes no accepted decision.
 
 ```text
 C9 Ask KalpaMani and record search:               IMPLEMENTED IN AN OPEN PULL REQUEST
+independent review of the C9 implementation:      PERFORMED
 C9 areas implemented:                             30, 31
 C9 read models introduced:                        2, EACH AT ITS OWN FIRST VERSION
 the nineteen coordinated read models:             UNCHANGED AT v2

@@ -13362,6 +13362,7 @@ COCKPIT_C9_HEADING: Final = (
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "C9 Ask KalpaMani and record search: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "independent review of the C9 implementation: PERFORMED",
     "C9 areas implemented: 30, 31",
     "C9 read models introduced: 2, EACH AT ITS OWN FIRST VERSION",
     "the nineteen coordinated read models: UNCHANGED AT v2",
@@ -13388,6 +13389,15 @@ COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
 COCKPIT_C9_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C9 Ask KalpaMani and record search: MERGED",
     "C9 Ask KalpaMani and record search: COMPLETE",
+    # THE PROSE FORM OF THE SAME DRIFT, AND THE ONE THAT ACTUALLY SLIPPED THROUGH.
+    #
+    # The machine-readable "C9 to C10: NOT STARTED / NOT AUTHORIZED" line was corrected when
+    # C9 landed, and the SENTENCE saying the same thing three paragraphs above it was not --
+    # so both status documents went on asserting that a cycle carried by an open pull request
+    # had not been started. A forbidden claim is only as good as the spellings it covers.
+    "C9 and C10 are not started",
+    "C9 and C10 are **not started**",
+    "C9 to C10 are not started",
     "model, inference or embedding runtime: IMPLEMENTED",
     "external model or search service: IMPLEMENTED",
     "full Cockpit V1: COMPLETE",

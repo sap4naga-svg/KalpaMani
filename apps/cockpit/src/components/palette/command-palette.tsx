@@ -120,8 +120,30 @@ export function CommandPalette({ controller }: { controller: PaletteController }
    * under a different badge.
    */
   const results = useSearch(scope, search);
-  const entities = results.data?.payload?.results ?? [];
+  const page = results.data?.payload;
+  const entities = page?.results ?? [];
   const environments = [...new Set(entities.map((row) => row.environment))];
+  /*
+   * A DELIVERED PAGE IS NOT THE POPULATION, AND THE PALETTE SAYS SO.
+   *
+   * `/search` delivers one page of a canonical ordering and states `total` and `truncated`
+   * beside it precisely so a partial list is never read as a complete one. Rendering the rows
+   * and dropping those two facts would put the reader in front of twenty-five records with no
+   * way to know there are two hundred more -- which is the *shorter answer that looks
+   * complete* the paging contract exists to prevent.
+   *
+   * The total is read only where it is value-bearing: a count that carries no value states no
+   * number here rather than a substituted zero.
+   */
+  const matchedTotal = page?.page.total;
+  const truncatedNotice =
+    page !== undefined && page.page.truncated
+      ? typeof matchedTotal?.value === "number"
+        ? `Showing the first ${entities.length} of ${matchedTotal.value} matching records. ` +
+          `Narrow the search to reach the rest.`
+        : `Showing the first ${entities.length} matching records. The full count is not ` +
+          `available, and this list is not all of them.`
+      : null;
 
   const commands = React.useMemo<PaletteCommand[]>(() => {
     // Environment and provenance context is preserved in every destination URL.
@@ -283,6 +305,14 @@ export function CommandPalette({ controller }: { controller: PaletteController }
                     })}
                 </Command.Group>
               ))}
+              {truncatedNotice !== null && (
+                <p
+                  data-testid="palette-truncated"
+                  className="px-3 pb-2 pt-0.5 text-label-s text-text-tertiary"
+                >
+                  {truncatedNotice}
+                </p>
+              )}
               {COMMAND_KINDS.map((kind) => (
                 <Command.Group
                   key={kind}

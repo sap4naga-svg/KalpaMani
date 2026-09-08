@@ -172,8 +172,8 @@ export const ASK_INTENTS: readonly AskIntent[] = [
     questionClass: "DATA_QUALITY_CONDITION",
     label: "Data quality and point-in-time conditions",
     summary:
-      "How many data-quality subjects are recorded in a degraded state, and the coverage " +
-      "and information profile of the affected one.",
+      "How many data-quality subjects carry a recorded degraded state, how many carry no " +
+      "recorded state at all, and the coverage and profile of the degraded one.",
     takesWindow: false,
     requires: [["data"], ["quality", "coverage", "stale", "point", "pit", "problem", "issue"]],
     prefers: ["feed", "profile", "missing", "degraded"],

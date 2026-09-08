@@ -265,6 +265,38 @@ test.describe("the command palette reaches records, and never a verb", () => {
     await expect(page.getByTestId("palette-entities-LIVE")).toHaveCount(0);
   });
 
+  /**
+   * A DELIVERED PAGE IS NOT THE POPULATION.
+   *
+   * The index holds far more records than one page carries, and `/search` states `total` and
+   * `truncated` beside the rows for exactly that reason. Rendering twenty-five rows and
+   * dropping both facts leaves a reader looking at a partial list with nothing to tell them
+   * so — which is a shorter answer that looks complete.
+   */
+  test("says the record list is a page, and how many records matched", async ({ page }) => {
+    await page.goto(`/${DEMO}`);
+    await waitForHydration(page);
+    await page.getByRole("button", { name: "Search" }).click();
+    await expect(page.getByTestId("palette-entities-RESEARCH")).toBeVisible({
+      timeout: 20_000,
+    });
+    const notice = page.getByTestId("palette-truncated");
+    await expect(notice).toBeVisible();
+    /* It names BOTH numbers: what was delivered, and how many exist. */
+    await expect(notice).toHaveText(/Showing the first \d+ of \d+ matching records/);
+  });
+
+  test("drops the truncation notice once the search reaches one page", async ({ page }) => {
+    await page.goto(`/${DEMO}`);
+    await waitForHydration(page);
+    await page.getByRole("button", { name: "Search" }).click();
+    await page.getByPlaceholder(/search records/i).fill(TRADE);
+    await expect(page.getByTestId(`palette-entity-${TRADE}`)).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByTestId("palette-truncated")).toHaveCount(0);
+  });
+
   test("exposes no state-changing command anywhere in the palette", async ({ page }) => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
