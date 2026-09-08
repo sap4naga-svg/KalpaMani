@@ -355,6 +355,27 @@ client is not enforcement**, so the checks sit on the path the fixture adapter a
 | **cardinality** | the host field's own declaration governs; `items`, `total` and `truncated` are kept apart, and no relation is asserted from a page or from a total nobody took |
 | **absence** | `REFERENT_NOT_FOUND` was added to both closed vocabularies. An implemented producer missing one record says so; only a producer that does not exist for the scope is `PRODUCER_NOT_IMPLEMENTED` |
 | **navigation** | one closed allowlist keyed by `RefKind`, in `lib/reference-navigation.ts`. Two duplicated destination maps in the components are gone; an unmapped kind yields **no link**, and a `ref_id` that is not a `SafeId` yields none either |
+| **owning area** | the SECOND closed attribute, §4.3.2 under ADR-0031. `Ref.owning_area` is optional, closed at seven members, carried INSIDE the reference and validated at admission; two references sharing a `ref_id` **and** a `ref_kind` anywhere in one response while **declaring different** areas are **refused**. Its route table lives beside the first one, and **neither is a fallback for the other** |
+
+**The per-area drill-down is restored, and not one `ref_kind` moved to restore it.** Correcting the
+producer left every attention and What-Changed reference a conformant `source_fact`, and R10 has one
+route for that kind — so a data-quality finding, a health transition, a reconciliation break and a
+borrow record all offered one link, to the Audit Trail. **An Audit page does not own every fact.**
+ADR-0031 answers it with a second attribute rather than a second meaning for the first one: each
+reference now also declares the area responsible for the record it names, and the four destinations
+are back at `/system/data-quality`, `/strategy/health`, `/execution/reconciliation` and
+`/risk/short-side`. The controls are **distinct and never merged** — the target link names the
+record, the area link names the AREA and says so, and **it may never read as retrieving the
+evidence**, because it does not. Six of the seven routes are placeholders, and the affordance
+carries the destination's own status rather than implying a built screen. **`AUDIT_TRAIL` is a
+member and never a default**, and a reference the contract does not assign an area to declares
+none — which is a stated absence and **not** a claim that no area owns the record.
+
+**The evidence-retrieval limitation is NOT repaired by any of that.** §4.3 resolves `evidence` by
+`AUTHORIZED_READ` to a classified evidence artefact and §5 catalogues no evidence endpoint, so there
+is no general destination at which one can be retrieved; and §4.3.4 names the scope as *"named on
+the reference"* while `Ref` has no field to name one in. **A reader who reaches the Data Quality area
+has navigated, and has not retrieved the artefact.** Both limitations stay open.
 
 **Four `EMBEDDED` declarations were withdrawn, and one of them was untrue rather than merely
 unpermitted.** `add_refs` and `exit_ref` resolve to lifecycle **events** this response does not
@@ -366,15 +387,37 @@ nowhere at all.
 `RiskSnapshot.initial_planned_risk_open[].trade_ref` are kind `trade` resolving by `ENDPOINT` —
 the value C6 had to guess twice, because §4.3 supplied no `trade` row until R1 added one.
 
-**Thirteen `schema_version`s moved to `v2`, and six did not.** ADR-0030 §6.1 permits a coordinated
-replacement without a bump only while four deployment constraints hold, and **the fourth does
-not**: `QualificationStatus` carries `REPOSITORY_TRACKED` provenance over real tracked governance
-facts, so "provenance is `SYNTHETIC` throughout" is false of this boundary. The follow-up is
-required to bump rather than proceed, and it did. Which read models moved was established by
-**diffing every emitted payload against the same payload built from the pre-change tree** rather
-than by judgement: the thirteen whose bytes changed are `v2`, and `CandidateFunnel`,
-`MarketRegime`, `MissedOpportunity`, `PerformanceSeries`, `PerformanceSummary` and
-`QualificationStatus` are byte-identical and stay `v1`.
+**All nineteen `schema_version`s moved to `v2`, and the criterion is the CONTRACT rather than the
+emitted bytes.** ADR-0030 §6.1 permits a coordinated replacement without a bump only while four
+deployment constraints hold, and **the fourth does not**: `QualificationStatus` carries
+`REPOSITORY_TRACKED` provenance over real tracked governance facts, so "provenance is `SYNTHETIC`
+throughout" is false of this boundary. The follow-up is required to bump rather than proceed, and
+it did.
+
+An earlier revision bumped **thirteen** — the ones whose emitted payload bytes changed — and left
+six at `v1`. **An unchanged example does not mean an unchanged contract.** `Envelope.source_refs`
+moved from an open `refList` to `refListFieldOf`, which narrows `ref_kind` to `source_fact` and
+checks `items`, `total` and `truncated` against the list's own cardinality — for **every** read
+model, because every read model carries the envelope. A consumer pinned to one of the six would
+have accepted, before this cycle, envelopes it must now reject. The affected set is all nineteen.
+
+**`Ref.owning_area` ships INSIDE the same replacement, so it carries the SAME identity and not a
+second one.** ADR-0031 A6 refuses to name a version and states the rule instead: an implementation
+determines from the tree it lands in whether the shape change ships inside the pending coordinated
+replacement or after it, and **inside means one version identity for the combined change**. That is
+the branch this tree is on — the nineteen-model change is in this same unmerged pull request, `v2`
+has never reached `main` and has never been deployed, so it cannot silently acquire a second
+meaning; it acquires its only meaning, which is the combined change. Shipping one half as `v2` and
+the other as `v3` inside a single atomic replacement is refused outright, and `v3` is not adopted:
+no `v2` was ever published for it to succeed.
+
+**The four §6.1 constraints were re-checked against this tree rather than inherited.** One local
+application with no second deployable and no workspace package; a `private` manifest that publishes,
+exports and vendors no schema artifact; no snapshot, golden payload, stored wire example or
+persisted response cache anywhere in the tree, and no browser or filesystem storage in the client;
+and the same one `REPOSITORY_TRACKED` read model beside eighteen `SYNTHETIC` ones that ADR-0030 was
+accepted against. **None of the four has changed**, so no further bump is forced, and the one bump
+this cycle makes is the coordinated one.
 
 ### Still not carried
 

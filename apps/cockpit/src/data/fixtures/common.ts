@@ -13,6 +13,7 @@ import type { MetricValue, Ref } from "@/contracts/values";
 import type {
   AvailabilityState,
   FieldReasonCode,
+  OwningArea,
   RefKind,
   Unit,
 } from "@/contracts/vocabularies";
@@ -40,8 +41,22 @@ export function demoRef(
   refId: string,
   refKind: RefKind,
   resolution: Ref["resolution"] = "UNRESOLVABLE_V1",
+  owningArea?: OwningArea,
 ): Ref {
-  return { ref_id: refId, ref_kind: refKind, resolution, classification: "PUBLIC_SAFE" };
+  const reference: Ref = {
+    ref_id: refId,
+    ref_kind: refKind,
+    resolution,
+    classification: "PUBLIC_SAFE",
+  };
+  /*
+   * DECLARED ONLY WHERE THE RECORD'S OWNERSHIP IS DECLARED, and ABSENT otherwise (§4.3.2).
+   *
+   * A reference with no argument here carries no `owning_area` key at all, rather than an
+   * `undefined` one -- an absence states nothing, and the honest way to say nothing is to say
+   * nothing. No area is ever invented to satisfy a link assertion, and no default is applied.
+   */
+  return owningArea === undefined ? reference : { ...reference, owning_area: owningArea };
 }
 
 export { refListOf };

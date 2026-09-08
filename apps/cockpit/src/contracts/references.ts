@@ -1330,3 +1330,74 @@ export function checkEmbeddedTruth(
     }
   }
 }
+
+/* ============================================ owning area, across the admission unit */
+
+/**
+ * The `owning_area` contradiction rule — §4.3.2, under ADR-0031 A1.
+ *
+ * **The comparison scope is the ADMISSION UNIT — one response payload — and not one
+ * `RefList`.** The harm named is a renderer drawing two different area controls for one
+ * record, and that harm does not arrive only inside a single list: the same record can appear
+ * in two different `RefList` fields, or in a scalar `Ref` beside a list. Scoping the check to
+ * a list would state a rule narrower than its own reason, so this walks the WHOLE parsed
+ * response and compares every reference it finds against every other.
+ *
+ * **The scope is also exactly as wide as the comparison is sound.** ADR-0030 R8 requires the
+ * environment to match the resolving envelope always, and §4.2 gives a `Ref` no provenance
+ * field, so within one response a matched `ref_id` AND `ref_kind` name ONE target. Nothing
+ * here widens that to a cross-response or global identity claim, and **no new identity model
+ * is introduced** — this is R8's comparison, read at the scope R8 already fixes.
+ *
+ * **Absence is not a conflicting value.** A reference declaring an area beside one declaring
+ * none is admitted and the declared area stands: an absence states nothing, so there is
+ * nothing for it to disagree with. Only two DECLARED and DIFFERENT members conflict. Reading
+ * an absence as a conflict would refuse conformant payloads at admission, which is the
+ * opposite of the failure this rule exists to catch — and it would also quietly fill the
+ * absence in, which A4 refuses.
+ *
+ * **Same-identity duplicates that AGREE are two references and stay two.** They are not
+ * collapsed, and the shared area is not deduplicated away; this function only refuses, and it
+ * never rewrites, merges or reorders anything.
+ */
+export function owningAreaContradiction(admissionUnit: unknown): string | null {
+  const declared = new Map<string, string>();
+  const seen = new Set<object>();
+  const pending: unknown[] = [admissionUnit];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!isRecord(node) || seen.has(node)) {
+      continue;
+    }
+    seen.add(node);
+    /*
+     * A REFERENCE IS RECOGNISED BY ITS OWN FOUR REQUIRED FIELDS, and never by the name of the
+     * property holding it. `evidence_refs`, `source_refs`, `security_ref` and every later host
+     * field carry the same shape, and a rule keyed by field name would miss the next one.
+     */
+    const area = node.owning_area;
+    if (
+      typeof node.ref_id === "string" &&
+      typeof node.ref_kind === "string" &&
+      typeof node.resolution === "string" &&
+      typeof node.classification === "string" &&
+      typeof area === "string"
+    ) {
+      const identity = `${node.ref_kind} ${node.ref_id}`;
+      const already = declared.get(identity);
+      if (already !== undefined && already !== area) {
+        return (
+          `reference ${node.ref_kind} ${node.ref_id} declares owning_area ${already} and ` +
+          `${area} in one response, and one record is not owned by two areas`
+        );
+      }
+      declared.set(identity, area);
+    }
+    for (const value of Object.values(node)) {
+      if (isRecord(value)) {
+        pending.push(value);
+      }
+    }
+  }
+  return null;
+}

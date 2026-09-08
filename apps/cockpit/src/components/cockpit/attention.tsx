@@ -19,7 +19,7 @@ import {
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { withScope, type ViewScope } from "@/lib/scope";
 import { REFERENCE_FIELDS } from "@/contracts/references";
-import { referenceDestination } from "@/lib/reference-navigation";
+import { ReferenceDestinations } from "@/components/cockpit/reference-links";
 import { cn } from "@/lib/utils";
 
 /**
@@ -111,41 +111,23 @@ function EvidenceDisclosure({
       <div className="space-y-2 px-3 pb-3 pt-1">
         <ul className="space-y-1.5">
           {item.evidence_refs.items.map((reference) => {
-            const destination = referenceDestination(reference);
             return (
               <li
                 key={reference.ref_id}
                 className="flex flex-wrap items-center gap-2 text-label-s"
                 data-testid="evidence-reference"
+                data-owning-area={reference.owning_area ?? ""}
               >
                 <Badge tone="neutral">{humanizeCode(reference.ref_kind.toUpperCase())}</Badge>
                 <span className="font-mono text-text-tertiary">{reference.ref_id}</span>
                 <Badge tone="unavailable">{reference.resolution}</Badge>
                 <Badge tone="neutral">{reference.classification}</Badge>
-                {destination !== null ? (
-                  <Link
-                    href={withScope(destination.href, scope)}
-                    className="text-accent underline underline-offset-2"
-                  >
-                    {destination.label} →
-                  </Link>
-                ) : (
-                  /*
-                   * NO DESTINATION IS STATED, AND NOT LEFT BLANK.
-                   *
-                   * The R10 allowlist maps no route for this kind, and R10 is explicit that an
-                   * unmapped kind yields NO LINK -- "never a guess". Rendering nothing at all
-                   * left a reader unable to tell an evidence reference they COULD have followed
-                   * from one this version cannot resolve, so the absence is said out loud.
-                   */
-                  <span
-                    className="text-text-tertiary"
-                    data-testid="evidence-no-destination"
-                    title="No V1 destination is catalogued for this reference kind."
-                  >
-                    no V1 destination
-                  </span>
-                )}
+                {/*
+                 * TWO AFFORDANCES, KEPT APART (§4.3.2). The target link names the RECORD; the
+                 * area link names the AREA responsible for it. An absent `owning_area` renders
+                 * no area control and is NOT a claim that no area owns the record.
+                 */}
+                <ReferenceDestinations reference={reference} scope={scope} />
               </li>
             );
           })}

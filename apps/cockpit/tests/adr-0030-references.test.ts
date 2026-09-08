@@ -41,7 +41,11 @@ import type { Ref } from "@/contracts/values";
 import { REF_KINDS, FIELD_REASON_CODES, ERROR_CODES } from "@/contracts/vocabularies";
 import type { DataClassification } from "@/contracts/vocabularies";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
-import { referenceDestination, nestedDestination } from "@/lib/reference-navigation";
+import {
+  referenceDestination,
+  nestedDestination,
+  owningAreaDestination,
+} from "@/lib/reference-navigation";
 import { READ_MODEL_IDENTITIES } from "@/data/client/read-model-identity";
 import { prepareAttention } from "@/lib/attention";
 import { fixedClock } from "@/lib/clock";
@@ -999,18 +1003,23 @@ describe("navigation is an allowlisted internal route template", () => {
   });
 
   /*
-   * AND THE PER-AREA DESTINATION IS GONE, WHICH IS RECORDED RATHER THAN PAPERED OVER.
+   * THE KNOWN NARROWING IS OVER, AND THE TEST THAT ASSERTED IT IS REPLACED RATHER THAN DELETED.
    *
-   * Before this cycle the same disclosures reached `/system/data-quality`,
-   * `/strategy/health` and `/execution/reconciliation` -- through `ref_kind` values
-   * section 4.5 does not permit on this field. R10 keys the allowlist by `RefKind`, the
-   * subject area is not a property of a reference, and no accepted field carries it, so
-   * every conforming attention reference now resolves to the one area its KIND owns.
+   * This position held a regression asserting that every conforming attention reference
+   * resolved to `/governance/audit` and nowhere else. **Its premise was that the subject area
+   * is not a property of a reference and that no accepted field carries it** -- which was true
+   * of the contract as it then stood, and is no longer true of the contract now. ADR-0031 is
+   * accepted, section 4.3.2 adds `Ref.owning_area` as a SECOND closed attribute, and the
+   * per-area affordance is back without a single `ref_kind` moving.
    *
-   * This asserts the narrowing deliberately: it is a real loss, and a later cycle that
-   * restores per-area routing under a contract decision should have to change this test.
+   * What replaces it is BOTH halves rather than a softened version of one. The TARGET
+   * narrowing is real and is still asserted here, because R10's allowlist is unamended and
+   * every attention reference is still a `source_fact`. The AREA restoration is asserted
+   * beside it, and the two are asserted to be DIFFERENT destinations -- which is the whole
+   * point of there being two attributes. The positive and negative behaviour over owning-area
+   * navigation lives in `adr-0031-owning-area.test.ts`.
    */
-  it("resolves every conforming attention reference to the area its kind owns", async () => {
+  it("still resolves every attention reference's TARGET to the one area its kind owns", async () => {
     const attention = await client().attention(DEMO);
     const destinations = new Set(
       prepareAttention(attention.payload?.items ?? []).visible.flatMap((item) =>
@@ -1018,6 +1027,31 @@ describe("navigation is an allowlisted internal route template", () => {
       ),
     );
     expect([...destinations]).toEqual(["/governance/audit"]);
+  });
+
+  it("recovers the per-area destination through owning_area, not through a kind", async () => {
+    const attention = await client().attention(DEMO);
+    const visible = prepareAttention(attention.payload?.items ?? []).visible;
+    const references = visible.flatMap((item) => item.evidence_refs.items);
+
+    // Not one kind moved to obtain a link: that is the defect ADR-0031 exists to prevent.
+    expect(new Set(references.map((reference) => reference.ref_kind))).toEqual(
+      new Set(["source_fact"]),
+    );
+
+    const areas = new Set(
+      references.map((reference) => owningAreaDestination(reference)?.href),
+    );
+    expect(areas).toEqual(
+      new Set([
+        "/system/data-quality",
+        "/strategy/health",
+        "/risk/short-side",
+        "/execution/reconciliation",
+      ]),
+    );
+    // And no area link is the Audit Trail, which owns AuditEvent and owns none of these.
+    expect(areas.has("/governance/audit")).toBe(false);
   });
 
   it("never emits an absolute or external destination", () => {

@@ -215,6 +215,36 @@ export const REF_KINDS = [
 export const refKind = z.enum(REF_KINDS);
 export type RefKind = z.infer<typeof refKind>;
 
+/**
+ * `OwningArea` — read-model-contracts.md §4.2 and §4.3.2, CLOSED at the SEVEN rows of the
+ * §4.3.2 table (ADR-0031 A2).
+ *
+ * **A SECOND, SEPARATE axis from `RefKind`, and never a substitute for one.** `ref_kind`
+ * answers *what is this a reference to*; `owning_area` answers *which area is responsible for
+ * the record it names*. Expressing the second through the first is what produced the
+ * non-conformant kinds ADR-0030 R2 corrected, and this vocabulary exists so that mislabelling
+ * is unnecessary rather than merely forbidden.
+ *
+ * **`AUDIT_TRAIL` is a member and is NEVER a default.** It is declared when the reference
+ * names a recorded `AuditEvent`. An absent, unknown or undetermined owning area never
+ * resolves to it, and no rule anywhere may use it as a fallback.
+ *
+ * **No member is added because a route exists.** The navigation registry carries far more
+ * routes than seven; a member is added by an accepted decision, never by an implementation
+ * noticing a spare page (§2).
+ */
+export const OWNING_AREAS = [
+  "DATA_QUALITY",
+  "STRATEGY_HEALTH",
+  "RECONCILIATION",
+  "SHORT_SIDE",
+  "ALERTS",
+  "SYSTEM_OPERATIONS",
+  "AUDIT_TRAIL",
+] as const;
+export const owningArea = z.enum(OWNING_AREAS);
+export type OwningArea = z.infer<typeof owningArea>;
+
 /** ADR-0026 Brain decision states — consumed, never extended (read-model-contracts.md §2.6). */
 export const BRAIN_DECISION_STATES = [
   "READY_FOR_RISK_REVIEW",

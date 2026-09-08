@@ -15,6 +15,7 @@ import {
   completeness,
   dataClassification,
   fieldReasonCode,
+  owningArea,
   refKind,
   resolution,
   unit,
@@ -115,12 +116,34 @@ export type Magnitude = z.infer<typeof magnitude>;
  * **A `Ref` carries NO `availability` and NO `reason`** (ADR-0030 R9). An unresolvable
  * target is stated by the value-bearing field it would have filled, or by a §5 error, and
  * the reference itself stays VISIBLE.
+ *
+ * **`owning_area` is OPTIONAL DESCRIPTIVE metadata** — §4.3.2, under ADR-0031 A1. It names
+ * the AREA responsible for the referenced record, and it is a SECOND axis from `ref_kind`
+ * rather than a second spelling of it.
+ *
+ * **Association is by containment and by nothing else.** The reference it describes is the
+ * object it is a field of, so it survives filtering, truncation and reordering — which a
+ * positional pairing against a parallel array would not. It is at most ONE per reference,
+ * and where accepted authority does not determine a single area the reference DECLARES NONE:
+ * never a list, never a first-of, never a nearest match.
+ *
+ * **It is closed here, and the rest of the rule is not enforceable at this shape.** A value
+ * outside `OwningArea` is refused by this enum. The contradiction rule — two references
+ * sharing a `ref_id` AND a `ref_kind` while DECLARING DIFFERENT areas — spans the whole
+ * ADMISSION UNIT, which a single reference cannot see, so it is enforced by
+ * `owningAreaContradiction` in `references.ts` and applied by `admit`.
+ *
+ * **It is never an access grant** (§4.3.2, A5), it never changes what the reference means or
+ * how it resolves, and it is not availability, freshness, completeness, materiality,
+ * severity, ranking input or authorization. It is deliberately NOT a scope field: §4.3.4's
+ * limitation stays open, and closing it is an ADR's act rather than an implementation's.
  */
 export const ref = z.object({
   ref_id: safeId,
   ref_kind: refKind,
   resolution,
   classification: dataClassification,
+  owning_area: owningArea.optional(),
 });
 export type Ref = z.infer<typeof ref>;
 

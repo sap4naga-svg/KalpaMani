@@ -22,8 +22,26 @@
  * Three route maps used to live in three files — two duplicated `EVIDENCE_DESTINATION`
  * literals and one hand-written link. **A closed allowlist that exists in three copies is
  * three allowlists**, so they are one here.
+ *
+ * **There are TWO closed navigation attributes, and this module holds both — apart.**
+ * §4.3.2, under ADR-0031 A3, keeps them separate rather than merging them:
+ *
+ * ```text
+ * TARGET navigation        keyed by RefKind          open the referenced record
+ * OWNING-AREA navigation   keyed by Ref.owning_area  go to the area responsible for this item
+ * ```
+ *
+ * **Neither is a fallback for the other.** An unmapped `RefKind` yields no target link and an
+ * owning area does not substitute for it; an absent `owning_area` yields no area link and the
+ * R10 allowlist does not supply one. A reference may offer both, one, or neither, and the two
+ * render as distinct controls that are never merged. They live in one module because they are
+ * one subject — a destination for a reference — and in two tables because they answer two
+ * different questions.
  */
-import type { RefKind } from "@/contracts/vocabularies";
+import { OWNING_AREAS } from "@/contracts/vocabularies";
+import type { OwningArea, RefKind } from "@/contracts/vocabularies";
+import { ROUTES_BY_HREF } from "@/nav/registry";
+import type { RouteStatus } from "@/nav/registry";
 import { REFERENCE_FIELDS } from "@/contracts/references";
 import type { HostFieldDeclaration, HostFieldKey } from "@/contracts/references";
 
@@ -146,3 +164,99 @@ export function nestedDestination(
 
 /** Every kind the allowlist maps, for the tests that assert it is closed. */
 export const NAVIGABLE_KINDS: readonly RefKind[] = Object.keys(ROUTES) as RefKind[];
+
+/* ==================================================== owning-area navigation (ADR-0031) */
+
+/**
+ * An AREA destination, and never a target one.
+ *
+ * `label` names the AREA and says so. It may never be phrased as resolving, opening,
+ * retrieving, viewing or showing the reference, the evidence or the artefact (§4.3.2): a
+ * control labelled *"View evidence"* that lands on an area page has told the reader it
+ * retrieved something it did not.
+ *
+ * `status` is the DESTINATION ROUTE'S OWN status, read from the navigation registry rather
+ * than restated here. Six of the seven are placeholders today, and the affordance carries
+ * that honestly -- navigating asserts nothing about whether the producing subsystem exists.
+ */
+export interface OwningAreaDestination {
+  readonly href: string;
+  readonly label: string;
+  readonly area: number;
+  readonly status: RouteStatus;
+}
+
+/**
+ * The SECOND closed allowlist -- `read-model-contracts.md` §4.3.2, under ADR-0031 A2.
+ *
+ * Seven members, each naming one Cockpit V1 area and each mapped to exactly ONE internal area
+ * landing route. **Every route is a landing page with no entity segment**, so nothing is
+ * interpolated into one and there is no identifier to encode. A free-form or absolute URL, an
+ * external origin, a producer-supplied template and a destination derived from free text, a
+ * title or a label are each refused, exactly as under R10.
+ *
+ * **This is a different question from `ROUTES` above, and the two are never merged.** `ROUTES`
+ * is keyed by `RefKind` and answers *open the referenced record*; this is keyed by
+ * `Ref.owning_area` and answers *go to the area responsible for this item*. **Neither is a
+ * fallback for the other**: an unmapped `RefKind` still yields no target link, and an absent
+ * `owning_area` still yields no area link.
+ *
+ * **`AUDIT_TRAIL` is a row and is never a default.** It is reached only by a reference that
+ * DECLARES it, and no code path here substitutes it for an absent, unknown or undetermined
+ * area. *An Audit page owns every fact* is the false claim this table exists to stop being
+ * made, and a `Partial` record with a lookup miss would have re-introduced it as a shrug.
+ *
+ * The `area` column is the Cockpit V1 area number the §4.3.2 table states, kept beside the
+ * route so a governance test can compare both against the accepted document.
+ */
+const OWNING_AREA_ROUTES: Readonly<
+  Record<OwningArea, { readonly path: string; readonly label: string; readonly area: number }>
+> = {
+  DATA_QUALITY: { path: "/system/data-quality", label: "Data quality area", area: 22 },
+  STRATEGY_HEALTH: { path: "/strategy/health", label: "Strategy health area", area: 5 },
+  RECONCILIATION: { path: "/execution/reconciliation", label: "Reconciliation area", area: 10 },
+  SHORT_SIDE: { path: "/risk/short-side", label: "Short-side area", area: 13 },
+  ALERTS: { path: "/system/alerts", label: "Alerts area", area: 27 },
+  SYSTEM_OPERATIONS: { path: "/system/operations", label: "Operations area", area: 23 },
+  AUDIT_TRAIL: { path: "/governance/audit", label: "Audit trail area", area: 26 },
+};
+
+/**
+ * The area destination a reference DECLARES, or `null` where it declares none.
+ *
+ * `null` is a stated absence and never a fallback. **It is NOT a claim that no area owns the
+ * record** (§4.3.2): a `Ref` carries no availability and no reason, so a withheld area is
+ * indistinguishable from an absent one here, and no caller may report "no owning area
+ * exists". An out-of-set value never reaches this function -- it is refused at admission by
+ * the closed `owningArea` enum -- and if one somehow did, it maps to no route rather than to
+ * a nearest member.
+ */
+export function owningAreaDestination(reference: {
+  readonly owning_area?: string | undefined;
+}): OwningAreaDestination | null {
+  const declared = reference.owning_area;
+  if (declared === undefined) {
+    return null;
+  }
+  if (!(OWNING_AREAS as readonly string[]).includes(declared)) {
+    return null;
+  }
+  const route = OWNING_AREA_ROUTES[declared as OwningArea];
+  return {
+    href: route.path,
+    label: route.label,
+    area: route.area,
+    /*
+     * THE DESTINATION'S OWN STATUS, AND NOT A SECOND COPY OF IT.
+     *
+     * A route absent from the registry is a defect the registry's own walk-test catches; here
+     * it degrades to "placeholder", which under-claims rather than over-claims.
+     */
+    status: ROUTES_BY_HREF.get(route.path)?.status ?? "placeholder",
+  };
+}
+
+/** Every area the allowlist maps, for the tests that assert it is closed. */
+export const NAVIGABLE_OWNING_AREAS: readonly OwningArea[] = Object.keys(
+  OWNING_AREA_ROUTES,
+) as OwningArea[];
