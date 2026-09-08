@@ -115,13 +115,25 @@ test.describe("the restored owning-area affordance", () => {
     await waitForHydration(page);
     await openEveryDisclosure(page);
 
-    // Three of the four destinations are placeholders; the fourth is a built screen.
-    await expect(page.getByTestId("reference-area-placeholder")).toHaveCount(3);
-    const shortSide = page
-      .getByTestId("evidence-reference")
-      .filter({ has: page.locator('[data-owning-area="SHORT_SIDE"]') })
-      .first();
-    await expect(shortSide.getByTestId("reference-area-placeholder")).toHaveCount(0);
+    /*
+     * TWO OF THE FOUR DESTINATIONS ARE PLACEHOLDERS; THE OTHER TWO ARE BUILT SCREENS.
+     *
+     * C7 built the Strategy Health area, so the count moved from three to two. That it moves
+     * at all is the assertion's point: the marker follows the DESTINATION'S OWN registry
+     * status rather than a literal kept in this file.
+     */
+    await expect(page.getByTestId("reference-area-placeholder")).toHaveCount(2);
+    for (const area of ["SHORT_SIDE", "STRATEGY_HEALTH"]) {
+      const built = page
+        .getByTestId("evidence-reference")
+        .filter({ has: page.locator(`[data-owning-area="${area}"]`) })
+        .first();
+      await expect(built.getByTestId("reference-area-placeholder")).toHaveCount(0);
+      await expect(built.getByTestId("reference-area-link")).toHaveAttribute(
+        "data-area-status",
+        "implemented",
+      );
+    }
   });
 
   test("reaches a real page from the area link, and does not claim a retrieval", async ({
