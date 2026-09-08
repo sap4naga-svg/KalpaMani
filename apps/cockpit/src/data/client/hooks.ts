@@ -44,6 +44,17 @@ import type {
   RiskSnapshotPayload,
   ShortSideSnapshotPayload,
 } from "@/contracts/risk-market-models";
+import type {
+  ExecutionQualityPagePayload,
+  ReconciliationPayload,
+} from "@/contracts/execution-quality-page";
+import type {
+  AlertPayload,
+  DataQualityPayload,
+  SystemIncidentPayload,
+  SystemJobPayload,
+} from "@/contracts/operations-models";
+import type { AuditEventPayload } from "@/contracts/audit-models";
 import { useReadClient } from "@/components/shell/providers";
 import { PERFORMANCE_PERIODS, type PerformancePeriod, type ViewScope } from "@/lib/scope";
 
@@ -78,6 +89,13 @@ import {
   TRADE_LIFECYCLE_IDENTITY,
   TRADE_SUMMARY_IDENTITY,
   WHAT_CHANGED_IDENTITY,
+  ALERT_IDENTITY,
+  AUDIT_EVENT_IDENTITY,
+  DATA_QUALITY_IDENTITY,
+  EXECUTION_QUALITY_IDENTITY,
+  RECONCILIATION_IDENTITY,
+  SYSTEM_INCIDENT_IDENTITY,
+  SYSTEM_JOB_IDENTITY,
 } from "./read-model-identity";
 import type { AttentionListPayload, WhatChangedPayload } from "./read-client";
 
@@ -448,5 +466,87 @@ export function useDecisions(
   return useQuery({
     queryKey: readModelKey(DECISION_RECORD_IDENTITY, scope),
     queryFn: () => client.decisions(scope),
+  });
+}
+
+/* ------------------------------------------------------------------ added by C8 */
+
+/**
+ * The execution, operations, alert and audit reads.
+ *
+ * Every key carries the read model's own identity and the whole scope, exactly as the earlier
+ * hooks do, so the `execution:read`, `system:read` and `audit:read` responses never share a
+ * cache entry.
+ *
+ * **THEY ARE `useQuery` AND NOTHING ELSE.** No mutation hook exists in this module, and one
+ * would have to exist before any screen could submit an order, refresh a broker session, run a
+ * job, acknowledge an alert or append an audit event.
+ */
+
+export function useExecutionQuality(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<ExecutionQualityPagePayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(EXECUTION_QUALITY_IDENTITY, scope),
+    queryFn: () => client.executionQuality(scope),
+  });
+}
+
+export function useReconciliation(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<ReconciliationPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(RECONCILIATION_IDENTITY, scope),
+    queryFn: () => client.reconciliation(scope),
+  });
+}
+
+export function useDataQuality(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<DataQualityPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(DATA_QUALITY_IDENTITY, scope),
+    queryFn: () => client.dataQuality(scope),
+  });
+}
+
+export function useSystemJobs(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<SystemJobPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(SYSTEM_JOB_IDENTITY, scope),
+    queryFn: () => client.systemJobs(scope),
+  });
+}
+
+export function useSystemIncidents(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<SystemIncidentPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(SYSTEM_INCIDENT_IDENTITY, scope),
+    queryFn: () => client.systemIncidents(scope),
+  });
+}
+
+export function useAlerts(scope: ViewScope): UseQueryResult<EnvelopeOf<AlertPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(ALERT_IDENTITY, scope),
+    queryFn: () => client.alerts(scope),
+  });
+}
+
+export function useAuditEvents(
+  scope: ViewScope,
+): UseQueryResult<EnvelopeOf<AuditEventPayload>> {
+  const client = useReadClient();
+  return useQuery({
+    queryKey: readModelKey(AUDIT_EVENT_IDENTITY, scope),
+    queryFn: () => client.auditEvents(scope),
   });
 }

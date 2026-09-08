@@ -61,6 +61,17 @@ import type {
   RiskSnapshotPayload,
   ShortSideSnapshotPayload,
 } from "@/contracts/risk-market-models";
+import type {
+  ExecutionQualityPagePayload,
+  ReconciliationPayload,
+} from "@/contracts/execution-quality-page";
+import type {
+  AlertPayload,
+  DataQualityPayload,
+  SystemIncidentPayload,
+  SystemJobPayload,
+} from "@/contracts/operations-models";
+import type { AuditEventPayload } from "@/contracts/audit-models";
 import type { HostingBoundary } from "@/contracts/vocabularies";
 import type { PerformancePeriod, ViewScope } from "@/lib/scope";
 
@@ -173,6 +184,26 @@ export interface ReadClient {
   feedbackPipeline(scope: ViewScope): Promise<EnvelopeOf<FeedbackPipelinePayload>>;
   governancePackets(scope: ViewScope): Promise<EnvelopeOf<GovernancePacketPayload>>;
   decisions(scope: ViewScope): Promise<EnvelopeOf<DecisionRecordPayload>>;
+
+  /* ------------------------------------------------------------- added by C8 */
+
+  /**
+   * The execution, reconciliation, data-quality, operations, alert and audit reads.
+   *
+   * **Seven reads, and not one write.** There is no method here that submits, cancels, amends
+   * or retries an order, opens or refreshes a broker session, runs, retries or schedules a
+   * job, acknowledges, resolves, snoozes or dismisses an alert, appends an audit event, or
+   * sends a notification of any kind — and this interface is where such a method would have to
+   * appear first. **Displaying execution does not execute; displaying reconciliation does not
+   * contact a broker; displaying jobs does not run them; displaying alerts does not notify.**
+   */
+  executionQuality(scope: ViewScope): Promise<EnvelopeOf<ExecutionQualityPagePayload>>;
+  reconciliation(scope: ViewScope): Promise<EnvelopeOf<ReconciliationPayload>>;
+  dataQuality(scope: ViewScope): Promise<EnvelopeOf<DataQualityPayload>>;
+  systemJobs(scope: ViewScope): Promise<EnvelopeOf<SystemJobPayload>>;
+  systemIncidents(scope: ViewScope): Promise<EnvelopeOf<SystemIncidentPayload>>;
+  alerts(scope: ViewScope): Promise<EnvelopeOf<AlertPayload>>;
+  auditEvents(scope: ViewScope): Promise<EnvelopeOf<AuditEventPayload>>;
 }
 
 export class ContractViolationError extends Error {
