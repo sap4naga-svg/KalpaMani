@@ -1356,6 +1356,28 @@ export function referenceFailure(key: HostFieldKey, candidate: Ref): string | nu
   if (!(declaration.kinds as readonly string[]).includes(candidate.ref_kind)) {
     return `${key} declares kind ${declaration.kinds.join(" or ")}, and carries ${candidate.ref_kind}`;
   }
+  /*
+   * `AUDIT_TRAIL` IS DECLARED WHEN THE REFERENCE NAMES A RECORDED `AuditEvent` (§4.3.2).
+   *
+   * "An absent, unknown or undetermined owning area never resolves to it, and no rule may use
+   * it as a fallback: *an Audit page owns every fact* is a false claim, and it is the one this
+   * section exists to stop being made." Matrix A gives area 26 exactly one read model, and
+   * §4.3 gives that read model exactly one kind -- so a reference naming anything else
+   * declares the area that owns it, or, where accepted authority determines none, NONE.
+   *
+   * IT IS CHECKED HERE BECAUSE IT IS A PROPERTY OF ONE REFERENCE. The kind it carries and the
+   * area it declares sit on the same object, which is the tightest boundary that can see both,
+   * and this function is the one every declared reference field already passes through.
+   * `owningAreaContradiction` answers a different question at a different scope -- two records
+   * disagreeing inside one response -- and neither rule substitutes for the other: a single
+   * mislabelled reference contradicts nothing and would pass it.
+   */
+  if (candidate.owning_area === "AUDIT_TRAIL" && candidate.ref_kind !== "audit_event") {
+    return (
+      `${key} declares owning_area AUDIT_TRAIL on a ${candidate.ref_kind} reference, and ` +
+      `area 26 owns AuditEvent`
+    );
+  }
   if (candidate.resolution === "EMBEDDED") {
     const permitted = declaration.embeds?.some((entry) => entry.kind === candidate.ref_kind);
     if (permitted !== true) {

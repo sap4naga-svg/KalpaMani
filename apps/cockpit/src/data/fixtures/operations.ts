@@ -115,8 +115,15 @@ function calendarDays(metricId: string, value: number, asOf: string) {
   return available({ metricId, unit: "CALENDAR_DAYS", value, asOf });
 }
 
+/**
+ * A subject's lineage manifests, DECLARING NO OWNING AREA.
+ *
+ * §4.3.2 permits `AUDIT_TRAIL` only where the reference names a recorded `AuditEvent`; a
+ * lineage manifest is not one, and accepted authority assigns it no other member either. An
+ * undetermined owner declares NONE — "never a list, never a first-of, never a nearest match".
+ */
 function lineage(ids: readonly string[], asOf: string) {
-  const refs: Ref[] = ids.map((id) => demoRef(id, "source_fact", "AUTHORIZED_READ", "AUDIT_TRAIL"));
+  const refs: Ref[] = ids.map((id) => demoRef(id, "source_fact", "AUTHORIZED_READ"));
   return refListOf(refs, "ZERO_OR_MORE", asOf);
 }
 
@@ -496,8 +503,14 @@ export function syntheticDataQuality(
 
 /* ==================================================== Area 23 — jobs and incidents === */
 
+/**
+ * A job's or an incident's recorded evidence, DECLARING NO OWNING AREA.
+ *
+ * The same §4.3.2 rule: a refresh log is not a recorded `AuditEvent`, so it does not declare
+ * area 26, and no nearest catalogued page is substituted for the area nobody assigned.
+ */
 function evidenceRefs(ids: readonly string[], asOf: string) {
-  const refs: Ref[] = ids.map((id) => demoRef(id, "source_fact", "AUTHORIZED_READ", "AUDIT_TRAIL"));
+  const refs: Ref[] = ids.map((id) => demoRef(id, "source_fact", "AUTHORIZED_READ"));
   return refListOf(refs, "ZERO_OR_MORE", asOf);
 }
 

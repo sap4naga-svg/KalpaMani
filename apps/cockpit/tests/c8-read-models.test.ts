@@ -792,6 +792,66 @@ describe("the C8 screens reconcile against the records they came from", () => {
     expect(markStaleness.occurrence_count.value).toBe(attentionItem.occurrence_count.value);
   });
 
+  /**
+   * §4.3.2 — `AUDIT_TRAIL` names a recorded `AuditEvent`, and nothing else.
+   *
+   * "An absent, unknown or undetermined owning area never resolves to it, and no rule may use
+   * it as a fallback: *an Audit page owns every fact* is a false claim." The check is stated
+   * over EVERY reference in EVERY C8 payload rather than over an allowlist of the members one
+   * screen happens to use, because an allowlist admits the next producer that reaches for the
+   * nearest catalogued page. It walks the parsed payloads, so it fails on what the application
+   * actually serves rather than on what a fixture literal says.
+   */
+  it("declares AUDIT_TRAIL only on a reference that names a recorded audit event", async () => {
+    const read = client();
+    const payloads = await Promise.all([
+      read.dataQuality(DEMO),
+      read.systemJobs(DEMO),
+      read.systemIncidents(DEMO),
+      read.auditEvents(DEMO),
+      read.alerts(DEMO),
+      read.executionQuality(DEMO),
+      read.reconciliation(DEMO),
+    ]);
+    const collect = (
+      node: unknown,
+      found: { kind: string; id: string; area: string }[],
+    ): { kind: string; id: string; area: string }[] => {
+      if (node === null || typeof node !== "object") {
+        return found;
+      }
+      const record = node as Record<string, unknown>;
+      if (
+        typeof record.ref_id === "string" &&
+        typeof record.ref_kind === "string" &&
+        typeof record.owning_area === "string"
+      ) {
+        found.push({ kind: record.ref_kind, id: record.ref_id, area: record.owning_area });
+      }
+      for (const value of Object.values(record)) {
+        collect(value, found);
+      }
+      return found;
+    };
+    const declared = payloads.flatMap((envelope) => collect(envelope.payload, []));
+    /* The rule is only meaningful if some reference declares an area at all. */
+    expect(declared.length).toBeGreaterThan(0);
+    const misdeclared = [
+      ...new Set(
+        declared
+          .filter((entry) => entry.area === "AUDIT_TRAIL" && entry.kind !== "audit_event")
+          .map((entry) => `${entry.kind} ${entry.id}`),
+      ),
+    ].sort();
+    expect(misdeclared).toEqual([]);
+    /* And the member is still REACHED, by the references that do name an audit event. */
+    const audit = declared.filter((entry) => entry.area === "AUDIT_TRAIL");
+    expect(audit.length).toBeGreaterThan(0);
+    for (const entry of audit) {
+      expect(entry.kind, entry.id).toBe("audit_event");
+    }
+  });
+
   it("binds the trade detail's reconciliation references to actual recorded runs", async () => {
     const read = client();
     const detail = (await read.tradeDetail(DEMO, MULTI_EXIT_TRADE)).payload!;
@@ -859,7 +919,6 @@ describe("the C8 screens reconcile against the records they came from", () => {
       expect([
         "SYSTEM_OPERATIONS",
         "ALERTS",
-        "AUDIT_TRAIL",
         "DATA_QUALITY",
         "RECONCILIATION",
       ]).toContain(area);

@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { attentionListEnvelope, ATTENTION_LIST_SCHEMA } from "@/contracts/read-models";
 import { positionSnapshotEnvelope } from "@/contracts/portfolio-models";
-import { owningAreaContradiction } from "@/contracts/references";
+import { owningAreaContradiction, referenceFailure } from "@/contracts/references";
 import { followReference } from "@/contracts/reference-access";
 import type { ResolvingContext } from "@/contracts/reference-access";
 import { refListOf } from "@/contracts/factories";
@@ -186,6 +186,56 @@ describe("an owning_area outside the closed set is refused at admission", () => 
       const candidate = { ...reference("evidence-1"), owning_area: value };
       expect(refSchema.safeParse(candidate).success, value).toBe(false);
     }
+  });
+
+  /**
+   * §4.3.2 — `AUDIT_TRAIL` names a recorded `AuditEvent`, refused at admission otherwise.
+   *
+   * The vocabulary check above admits the member on any reference, because the closed SET is
+   * all a shape can see. This is the rest of the rule, checked where the kind and the area sit
+   * on one object: "an absent, unknown or undetermined owning area never resolves to it, and no
+   * rule may use it as a fallback".
+   *
+   * Both directions, on a REAL admitted response: breaking exactly one reference must be
+   * refused, and the member must still be reachable by a reference that names an audit event —
+   * a rule that refused both would be a rule that deleted the member.
+   */
+  it("refuses AUDIT_TRAIL on a reference that does not name a recorded audit event", async () => {
+    const response = clone(await client().attention(DEMO));
+    const reference = response.payload!.items[0]!.evidence_refs.items[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(reference.ref_kind).not.toBe("audit_event");
+    reference.owning_area = "AUDIT_TRAIL";
+    expect(() =>
+      admit("AttentionList", attentionListEnvelope, response, "PUBLIC_EDGE"),
+    ).toThrow(ContractViolationError);
+  });
+
+  it("states which reference and which kind it refused, and names the owning read model", () => {
+    const failure = referenceFailure("AttentionItem.evidence_refs", {
+      ref_id: "demo-source-marks-manifest",
+      ref_kind: "source_fact",
+      resolution: "AUTHORIZED_READ",
+      classification: "PUBLIC_SAFE",
+      owning_area: "AUDIT_TRAIL",
+    } as Ref);
+    expect(failure).toContain("AUDIT_TRAIL");
+    expect(failure).toContain("source_fact");
+    expect(failure).toContain("AuditEvent");
+  });
+
+  it("admits AUDIT_TRAIL on a reference that does name a recorded audit event", () => {
+    expect(
+      referenceFailure("TradeDetail.audit_refs", {
+        ref_id: "demo-audit-0001",
+        ref_kind: "audit_event",
+        resolution: "AUTHORIZED_READ",
+        classification: "PUBLIC_SAFE",
+        owning_area: "AUDIT_TRAIL",
+      } as Ref),
+    ).toBeNull();
   });
 
   it("admits the seven members, and only those", () => {

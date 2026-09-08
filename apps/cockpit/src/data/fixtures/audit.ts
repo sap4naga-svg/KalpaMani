@@ -50,10 +50,21 @@ const AUDIT_WINDOW_DAYS = 90;
 export const CORRECTED_EVENT = "demo-audit-0003";
 export const WITHDRAWN_EVENT = "demo-audit-0002";
 
+/**
+ * The subjects an audit event is ABOUT, and they DECLARE NO OWNING AREA.
+ *
+ * §4.3.2 declares `AUDIT_TRAIL` "when the reference names a recorded `AuditEvent`", and these
+ * name journals, manifests and logs. `owning_area` says which area is responsible for the
+ * record the reference NAMES — never which record carries the reference — so declaring it here
+ * would say area 26 owns a candidate journal, which is the *an Audit page owns every fact*
+ * claim that section exists to stop being made.
+ *
+ * Accepted authority assigns no single area to a source journal, so the honest answer is the
+ * one §4.3.2 prescribes for an undetermined owner: NONE. The record link is unaffected, and an
+ * absence claims nothing.
+ */
 function subjects(ids: readonly string[], asOf: string) {
-  const refs: Ref[] = ids.map((id) =>
-    demoRef(id, "source_fact", "AUTHORIZED_READ", "AUDIT_TRAIL"),
-  );
+  const refs: Ref[] = ids.map((id) => demoRef(id, "source_fact", "AUTHORIZED_READ"));
   return refListOf(refs, "ZERO_OR_MORE", asOf);
 }
 
