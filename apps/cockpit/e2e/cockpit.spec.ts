@@ -195,7 +195,7 @@ test.describe("the command palette", () => {
     await page.goto("/?env=PAPER&scenario=demo");
     await waitForHydration(page);
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByPlaceholder("Search areas and view filters…").fill("qualification");
+    await page.getByPlaceholder("Search records, areas and view filters…").fill("qualification");
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/governance\/qualification/);
     await expect(page).toHaveURL(/env=PAPER/);
@@ -205,15 +205,26 @@ test.describe("the command palette", () => {
     await page.goto("/");
     await waitForHydration(page);
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByPlaceholder("Search areas and view filters…").fill("zzzqqqxxx");
-    await expect(page.getByText("No area or view filter matches that search")).toBeVisible();
+    await page.getByPlaceholder("Search records, areas and view filters…").fill("zzzqqqxxx");
+    /*
+     * THE COPY MOVED BECAUSE THE PALETTE DID, AND THE ASSERTION IS UNCHANGED IN STRENGTH.
+     *
+     * C9 completed Area 30: the palette now searches RECORDS as well as areas and view
+     * filters, so "No area or view filter matches that search" described a narrower search
+     * than the one that ran. The empty state still names what was searched and still states
+     * that the palette has no state-changing command, which is what this test is about.
+     */
+    await expect(page.getByText("Nothing matches that search")).toBeVisible();
+    await expect(
+      page.getByText("it has no state-changing command", { exact: false }),
+    ).toBeVisible();
   });
 
   test("exposes no state-changing command, whatever is searched (U9)", async ({ page }) => {
     await page.goto("/");
     await waitForHydration(page);
     await page.keyboard.press("ControlOrMeta+k");
-    const input = page.getByPlaceholder("Search areas and view filters…");
+    const input = page.getByPlaceholder("Search records, areas and view filters…");
 
     /*
      * The palette's matcher is fuzzy, so an execution word can still SURFACE a legitimate

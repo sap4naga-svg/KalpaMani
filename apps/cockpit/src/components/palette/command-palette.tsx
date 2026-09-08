@@ -214,7 +214,7 @@ export function CommandPalette({ controller }: { controller: PaletteController }
                 autoFocus
                 value={search}
                 onValueChange={setSearch}
-                placeholder="Search areas and view filters…"
+                placeholder="Search records, areas and view filters…"
                 className={cn(
                   "h-12 w-full bg-transparent text-numeric-s text-text-primary outline-none",
                   "placeholder:text-text-tertiary",

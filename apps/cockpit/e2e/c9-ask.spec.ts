@@ -245,7 +245,7 @@ test.describe("the command palette reaches records, and never a verb", () => {
     await waitForHydration(page);
     await page.getByRole("button", { name: "Search" }).click();
     await expect(page.getByTestId("command-palette")).toBeVisible();
-    await page.getByPlaceholder(/search areas/i).fill(TRADE);
+    await page.getByPlaceholder(/search records/i).fill(TRADE);
     const row = page.getByTestId(`palette-entity-${TRADE}`);
     await expect(row).toBeVisible({ timeout: 20_000 });
     await row.click();
@@ -257,7 +257,7 @@ test.describe("the command palette reaches records, and never a verb", () => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
     await page.getByRole("button", { name: "Search" }).click();
-    await page.getByPlaceholder(/search areas/i).fill("demo-trade");
+    await page.getByPlaceholder(/search records/i).fill("demo-trade");
     await expect(page.getByTestId("palette-entities-RESEARCH")).toBeVisible({
       timeout: 20_000,
     });
