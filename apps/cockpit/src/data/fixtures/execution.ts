@@ -845,7 +845,15 @@ const CLOCK_SOURCE = "FIXTURE_MONOTONIC_SESSION_CLOCK";
 const CLOCK_ACCURACY_SECONDS = 1;
 const REFERENCE_NAME = "DECISION_INSTANT_CONSOLIDATED_MARK";
 const SIDE_CONVENTION = "BUY_POSITIVE_SELL_NEGATIVE_ADVERSE_IS_POSITIVE";
-const AGGREGATION_METHOD = "QUANTITY_WEIGHTED_OVER_FILLS_WITH_A_RESOLVABLE_REFERENCE";
+/**
+ * The one aggregation-method code, exported so C8's window aggregate names the same method.
+ *
+ * TWO SPELLINGS OF ONE METHOD IS TWO METHODS, and a reader comparing a trade-level aggregate
+ * with a window-level one has to be able to see that they were aggregated the same way. The
+ * standalone `A` is gone from the code because `humanizeCode` preserves `A` so `RUN_A` reads
+ * "Run A", which made this render as "with A resolvable reference" mid sentence.
+ */
+export const AGGREGATION_METHOD = "QUANTITY_WEIGHTED_OVER_FILLS_WITH_RESOLVABLE_REFERENCE";
 
 function qualityFor(
   fill: ResolvedFill,
