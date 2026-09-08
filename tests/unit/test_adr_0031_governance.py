@@ -84,10 +84,31 @@ def test_the_adr_predicts_no_merge_sha_and_no_timestamp() -> None:
     assert re.search(r"\b[0-9a-f]{40}\b", ADR_TEXT) is None, "a forty-character SHA appears"
 
 
-def test_the_adr_states_an_exact_acceptance_event() -> None:
+def test_the_adr_binds_its_acceptance_event_to_one_actual_pull_request() -> None:
+    """Bound to the pull request that actually introduces it, and to exactly one number.
+
+    An acceptance event naming no pull request is not checkable, and one naming two is not an
+    event. The number is bound by an ordinary commit once the pull request exists, so no
+    placeholder survives; the merge SHA and timestamp are still not predicted.
+    """
     assert "**The acceptance event is exact:**" in ADR_TEXT
-    span = section(ADR_TEXT, "**The acceptance event is exact:**", "**Date:**")
-    assert "independent review and merge of the pull request" in flatten(span)
+    span = flatten(section(ADR_TEXT, "**The acceptance event is exact:**", "**Date:**"))
+    assert "independent review and merge of **pull request #" in span
+    numbers = set(re.findall(r"pull request #(\d+)", ADR_TEXT))
+    assert len(numbers) == 1, f"exactly one pull-request number is bound, found {numbers}"
+
+
+def test_both_status_documents_bind_the_same_pull_request_number() -> None:
+    """A status document naming a different number would send a reader to another review."""
+    (bound,) = set(re.findall(r"pull request #(\d+)", ADR_TEXT))
+    for name in ("CLAUDE.md", "README.md"):
+        status = flatten((PROJECT_ROOT / name).read_text(encoding="utf-8"))
+        span = section(
+            status,
+            "[ADR-0031](docs/decisions/ADR-0031-reference-owning-area-navigation.md)",
+            "On independent review and merge",
+        )
+        assert f"PR #{bound}" in span, f"{name} does not bind ADR-0031 to PR #{bound}"
 
 
 def test_the_adr_amends_adr_0030_at_r10_only_and_edits_no_adr_document() -> None:

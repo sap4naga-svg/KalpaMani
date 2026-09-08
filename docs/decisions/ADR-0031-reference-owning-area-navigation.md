@@ -9,8 +9,8 @@ statement about the present, it will remain true of these days after any later m
 to be rewritten as though this decision had authority before it was accepted. On merge, this ADR
 becomes **ACCEPTED / IN FORCE** as **architecture, contracts and governance** — and nothing else.
 
-**The acceptance event is exact:** the independent review and merge of the pull request introducing
-this ADR into `main`. No merge SHA and no merge timestamp is predicted here; those are repository
+**The acceptance event is exact:** the independent review and merge of **pull request #80**,
+the pull request introducing this ADR, into `main`. No merge SHA and no merge timestamp is predicted here; those are repository
 state, recorded after the fact if they are recorded at all.
 
 **Date:** 2026-09-07

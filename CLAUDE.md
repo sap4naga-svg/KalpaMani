@@ -4203,7 +4203,7 @@ fact about those days that stays true and is not rewritten. **ADR-0031 amends AD
 and **no ADR document is edited by it**.
 
 [ADR-0031](docs/decisions/ADR-0031-reference-owning-area-navigation.md) is **PROPOSED and carries no
-authority while the pull request introducing it is open**, and so are the deltas it makes to
+authority while the pull request introducing it, PR #80, is open**, and so are the deltas it makes to
 [`read-model-contracts.md`](docs/cockpit/read-model-contracts.md),
 [`cockpit-v1-specification.md`](docs/cockpit/cockpit-v1-specification.md),
 [`ui-ux-specification.md`](docs/cockpit/ui-ux-specification.md) and
