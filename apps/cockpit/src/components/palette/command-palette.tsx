@@ -248,6 +248,16 @@ export function CommandPalette({ controller }: { controller: PaletteController }
                 Nothing matches that search. The palette navigates, searches records and
                 filters the view — it has no state-changing command.
               </Command.Empty>
+              {/* ABOVE THE ROWS, because a reader who has to scroll past twenty-five
+                  results to learn the list is partial has already read it as complete. */}
+              {truncatedNotice !== null && (
+                <p
+                  data-testid="palette-truncated"
+                  className="px-3 pb-1 pt-2 text-label-s text-text-tertiary"
+                >
+                  {truncatedNotice}
+                </p>
+              )}
               {environments.map((environment) => (
                 <Command.Group
                   key={`entities-${environment}`}
@@ -305,14 +315,6 @@ export function CommandPalette({ controller }: { controller: PaletteController }
                     })}
                 </Command.Group>
               ))}
-              {truncatedNotice !== null && (
-                <p
-                  data-testid="palette-truncated"
-                  className="px-3 pb-2 pt-0.5 text-label-s text-text-tertiary"
-                >
-                  {truncatedNotice}
-                </p>
-              )}
               {COMMAND_KINDS.map((kind) => (
                 <Command.Group
                   key={kind}
