@@ -2973,7 +2973,7 @@ or before `P`**.
 | Quantity | Value | The question it answers |
 |---|---|---|
 | the three most adverse observations | `−3.10 R`, `−2.40 R`, `−2.00 R` | which observations form the tail |
-| `strategy.tail_loss` | **−2.50 R**, from `−7.50 / 3` | when this version went wrong, how wrong |
+| the tail loss, `strategy.tail_loss` | **−2.50 R**, from `−7.50 / 3` | when this version went wrong, how wrong |
 | the worst single observation | `−3.10 R` | what is the single worst thing that happened |
 | `expectancy.r` over all thirty, totalling `+9.00 R` | `+0.30 R` | what does an average trade return |
 
