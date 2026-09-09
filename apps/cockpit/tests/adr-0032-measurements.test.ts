@@ -25,7 +25,7 @@ import {
 import { METRIC_DEFINITION_VERSION, metricValue } from "@/contracts/values";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
-import { BOOK } from "@/data/fixtures/book";
+import { BOOK, centsToDecimal } from "@/data/fixtures/book";
 import { rMultipleHundredths } from "@/data/fixtures/summary";
 import { fixedClock } from "@/lib/clock";
 import { DEFAULT_SCOPE } from "@/lib/scope";
@@ -433,29 +433,87 @@ describe("the tail loss as projected from the demonstration book", () => {
     /*
      * The four hand-written values the fixture used to carry were -1.40, -2.10, -3.20 and
      * -1.80 R. None may appear as a tail loss unless the accepted formula actually produced it
-     * from the book, and none does.
+     * from the book.
+     *
+     * THE REGRESSION THIS GUARDS IS A LITERAL COMING BACK, so it is asserted in both
+     * directions: no retired literal appears on ANY tail-loss-bearing value, and every value
+     * that IS rendered equals the statistic re-derived here from the accepted rule. The
+     * derivation below does not call `computeRollingTailLoss`: it sorts this version's closed
+     * trades into the declared recency order, walks back collecting eligible observations
+     * until the window is full, takes the three most adverse and averages them.
      */
     const read = client();
     const payload = (await read.strategyHealth(DEMO)).payload;
     expect(payload).toBeDefined();
     if (payload === undefined) return;
-    const rendered = payload.items
-      .map((entry) => entry.tail_loss.value.value)
-      .filter((value): value is string => typeof value === "string");
+
+    /* Every place a tail loss is rendered: the field, its points, and the drift entry. */
+    const everyTailValue: string[] = [];
     for (const entry of payload.items) {
-      const closed = BOOK.trades.filter(
-        (trade) => trade.versionId === entry.strategy_version && trade.status === "CLOSED",
-      );
-      const eligible = closed
-        .map((trade) => rMultipleHundredths(trade))
-        .filter((r): r is number => r !== null);
-      if (eligible.length < 30) continue;
-      const derived = Math.round(
-        [...eligible.slice(-30)].sort((a, b) => a - b).slice(0, 3).reduce((a, b) => a + b, 0) / 3,
-      );
-      expect(typeof derived).toBe("number");
+      const headline = entry.tail_loss.value.value;
+      if (typeof headline === "string") everyTailValue.push(headline);
+      for (const point of entry.tail_loss.points) {
+        if (typeof point.value.value === "string") everyTailValue.push(point.value.value);
+      }
+      for (const measure of entry.drift) {
+        if (measure.value.metric_id === "strategy.tail_loss" && typeof measure.value.value === "string") {
+          everyTailValue.push(measure.value.value);
+        }
+      }
     }
-    expect(rendered.length).toBeGreaterThan(0);
+    expect(everyTailValue.length).toBeGreaterThan(0);
+    for (const retired of ["-1.40", "-2.10", "-3.20", "-1.80"]) {
+      expect(everyTailValue, `the retired literal ${retired} must not reappear`).not.toContain(
+        retired,
+      );
+    }
+
+    /* And each rendered headline equals the independently re-derived statistic. */
+    const closeSession = (trade: (typeof BOOK.trades)[number]) =>
+      trade.exits[trade.exits.length - 1].session;
+    let compared = 0;
+    let insufficient = 0;
+    for (const entry of payload.items) {
+      const closed = BOOK.trades
+        .filter(
+          (trade) => trade.versionId === entry.strategy_version && trade.status === "CLOSED",
+        )
+        .slice()
+        .sort((left, right) =>
+          closeSession(left) !== closeSession(right)
+            ? closeSession(left) - closeSession(right)
+            : left.tradeId < right.tradeId
+              ? -1
+              : left.tradeId > right.tradeId
+                ? 1
+                : 0,
+        );
+      const eligible: number[] = [];
+      for (let index = closed.length - 1; index >= 0; index -= 1) {
+        if (eligible.length >= 30) break;
+        const r = rMultipleHundredths(closed[index]);
+        if (r === null) continue;
+        eligible.push(r);
+      }
+      if (eligible.length < 30) {
+        expect(entry.tail_loss.value.availability, entry.strategy_version).toBe(
+          "INSUFFICIENT_OBSERVATIONS",
+        );
+        expect(entry.tail_loss.value.value, entry.strategy_version).toBeUndefined();
+        insufficient += 1;
+        continue;
+      }
+      const derived = Math.round(
+        [...eligible].sort((a, b) => a - b).slice(0, 3).reduce((a, b) => a + b, 0) / 3,
+      );
+      expect(entry.tail_loss.value.value, entry.strategy_version).toBe(centsToDecimal(derived));
+      compared += 1;
+    }
+    /* A COMPARISON THAT NEVER RAN WOULD PASS VACUOUSLY. Both branches must be exercised. */
+    expect(compared, "no version reached a full window, so nothing was compared").toBeGreaterThan(
+      0,
+    );
+    expect(insufficient, "no version exercised the short-population branch").toBeGreaterThan(0);
   });
 
   it("leaves the book economics, entry facts and risk denominators untouched", async () => {
@@ -631,6 +689,60 @@ describe("the capacity admission gate answers today's actual facts", () => {
     const missing = capacityGate(satisfiedRequest({ inputs: [], evidence: undefined }));
     expect(missing.availability).toBe("NOT_YET_AVAILABLE");
     expect(missing.stage).toBe("REQUIRED_INPUTS");
+
+    /*
+     * AN INPUT-STAGE REFUSAL STILL BEATS AN UNQUALIFIED MODEL WHEN THE UNMET INPUT IS A
+     * DECLARATION CARRIED ON THE EVIDENCE.
+     *
+     * §D2.11 puts every applicable input BEFORE model qualification, and a `PUBLIC_PIT`
+     * profile and an incomparable cost basis each refuse AT the required-input stage. With
+     * two conditions unmet at once the earlier stage is the answer — the ordering property
+     * the whole gate rests on, tested where it is easiest to get wrong.
+     */
+    const refusedQualification = {
+      modelIdentity: "impact-model-synthetic-1",
+      calibrationIdentity: "calibration-synthetic-1",
+      evaluationSet: "locked-set-1",
+      windowScope: "2026-01-01/2026-06-30",
+      assessedOnMs: Date.parse("2026-07-01T00:00:00.000Z"),
+      validUntilMs: Date.parse("2027-01-01T00:00:00.000Z"),
+      decision: "REFUSED" as const,
+    };
+    const forbiddenProfileAndUnassessed = capacityGate(
+      satisfiedRequest({
+        evidence: satisfiedEvidence({
+          informationProfile: "PUBLIC_PIT",
+          qualification: undefined,
+        }),
+      }),
+    );
+    expect(forbiddenProfileAndUnassessed.availability).toBe("NOT_YET_AVAILABLE");
+    expect(forbiddenProfileAndUnassessed.stage).toBe("REQUIRED_INPUTS");
+    const incomparableAndRefused = capacityGate(
+      satisfiedRequest({
+        evidence: satisfiedEvidence({
+          modelledExecutionCostBasis: { ...BASIS, weighting: "EQUAL_WEIGHTED" },
+          qualification: refusedQualification,
+        }),
+      }),
+    );
+    expect(incomparableAndRefused.availability).toBe("NOT_YET_AVAILABLE");
+    expect(incomparableAndRefused.stage).toBe("REQUIRED_INPUTS");
+
+    /*
+     * NEGATIVE CONTROLS: with the input-stage condition met, the LATER stage answers. Without
+     * these, an implementation that answered `REQUIRED_INPUTS` for everything would pass.
+     */
+    const unassessedOnly = capacityGate(
+      satisfiedRequest({ evidence: satisfiedEvidence({ qualification: undefined }) }),
+    );
+    expect(unassessedOnly.availability).toBe("UNEVALUATED");
+    expect(unassessedOnly.stage).toBe("MODEL_QUALIFICATION");
+    const refusedOnly = capacityGate(
+      satisfiedRequest({ evidence: satisfiedEvidence({ qualification: refusedQualification }) }),
+    );
+    expect(refusedOnly.availability).toBe("NOT_AUTHORIZED");
+    expect(refusedOnly.stage).toBe("MODEL_QUALIFICATION");
   });
 
   it("treats an input nobody stated as missing rather than as satisfied", () => {

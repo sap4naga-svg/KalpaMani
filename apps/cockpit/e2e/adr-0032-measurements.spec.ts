@@ -126,11 +126,19 @@ test.describe("the rolling tail loss on strategy health", () => {
     }
     const rows = table.locator("tbody tr");
     expect(await rows.count()).toBeGreaterThan(0);
-    /* The last point of the series is the value the panel headlines. */
-    const headline = (await panel.getByTestId("tail-loss-value").textContent()) ?? "";
-    const last = (await rows.last().textContent()) ?? "";
-    expect(headline.trim().length).toBeGreaterThan(0);
-    expect(last.length).toBeGreaterThan(0);
+    /*
+     * THE LAST POINT OF THE SERIES IS THE VALUE THE PANEL HEADLINES, AND THEY ARE COMPARED.
+     *
+     * Both are rendered from one `computeRollingTailLoss` answer over the same population at
+     * the same cutoff, so a difference between them means the headline and the series were
+     * computed two ways — the drift §12.2 exists to prevent. Asserting only that each is
+     * non-empty would pass under exactly that defect.
+     */
+    const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+    const headline = collapse((await panel.getByTestId("tail-loss-value").textContent()) ?? "");
+    const lastCell = collapse((await rows.last().locator("td").last().textContent()) ?? "");
+    expect(headline.length).toBeGreaterThan(0);
+    expect(lastCell, "the last series point must be the headlined value").toBe(headline);
   });
 
   test("offers no control that could change a health state", async ({ page }) => {
