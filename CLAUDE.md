@@ -4790,10 +4790,15 @@ live trading:                                     HARD-DISABLED
 ```
 
 **A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
-validated, independently reviewed and **merged**; the C5 completion follow-up is **still pending**;
-C9 is **implemented in an open pull request** and C10 is **not started**; **full Cockpit V1 is
-incomplete**; and **specification, implementation, research, deployment and execution stay five
-separate gates**.
+validated, independently reviewed and **merged**; **C9 has since merged too**, and the C5
+completion follow-up is **carried by an open pull request**; C10 is **not started**; **full Cockpit
+V1 is incomplete**; and **specification, implementation, research, deployment and execution stay
+five separate gates**.
+
+**The two clauses above were written on the day C7 merged, and two of them have moved since.** On
+that day C9 was an unmerged candidate and the C5 completion follow-up was unowned work nobody had
+started — historical facts about those days that stay true of them, recorded here rather than
+left reading as current.
 
 
 ### The C8 execution, operations, audit and alert screens — MERGED, and synthetic only
@@ -4944,12 +4949,23 @@ acts on:
 
 **Neither observation is marked resolved, and neither is expanded into C9.**
 
-### The C9 Ask KalpaMani and record search — IMPLEMENTED, and carried by an open pull request
+### The C9 Ask KalpaMani and record search — MERGED, and synthetic only
 
 **Two read-only surfaces over the read models this Cockpit already serves, and nothing else.**
-They are carried by an open pull request of its own. **While that pull request is open it is a
-candidate**: nothing recorded here is authority for anything beyond itself, and **no merge SHA and
-no merge timestamp is predicted**.
+**PR #83 is merged** — merge commit **`cbf419876f758090fb5409b2ef636a6540568c9f`**, final reviewed
+head **`6390ef2e0889351d388db3318a9b9520849004cd`**, merged **2026-09-09T01:37:28Z**, with exactly
+two ordered parents — **`65a60c2b02a5004e688dfba89a3198aee448442a`** then that reviewed head — and
+a **merge tree identical to the reviewed head's tree**, `cb98574a4c964434e1a29b6a2a2ffd124703b73d`.
+Each of those was **read from the live repository and from the fetched objects**, not predicted.
+
+**While PR #83 was open C9 was a candidate and this section said so** — *IMPLEMENTED, and carried
+by an open pull request*, with no merge SHA and no merge timestamp predicted. That was true on
+those days, it stays true of them, and it is **not** rewritten as though the surfaces had been
+merged before they were.
+
+**A merge is not a completion.** C9 delivers two areas over repository-owned fixtures; **full
+Cockpit V1 stays INCOMPLETE**, **C10 is not begun**, and the merge authorized no cycle beyond
+itself.
 
 | Area | Surface |
 |---|---|
@@ -5032,7 +5048,12 @@ provider is selected, **P1–P9 stay UNEVALUATED**, **data correctness and quali
 ESTABLISHED**, and this work amends and supersedes no accepted decision.
 
 ```text
-C9 Ask KalpaMani and record search:               IMPLEMENTED IN AN OPEN PULL REQUEST
+C9 Ask KalpaMani and record search:               MERGED / SYNTHETIC READ-ONLY SURFACES
+PR #83:                                           MERGED
+PR #83 merge commit:                              cbf419876f758090fb5409b2ef636a6540568c9f
+PR #83 merged at:                                 2026-09-09T01:37:28Z
+PR #83 final reviewed head:                       6390ef2e0889351d388db3318a9b9520849004cd
+PR #83 merge tree:                                IDENTICAL TO THE REVIEWED HEAD TREE
 independent review of the C9 implementation:      PERFORMED
 C9 areas implemented:                             30, 31
 C9 read models introduced:                        2, EACH AT ITS OWN FIRST VERSION
@@ -5055,7 +5076,7 @@ private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
-C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+C5 completion follow-up:                          IMPLEMENTED IN AN OPEN PULL REQUEST
 C10:                                              NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
@@ -5075,6 +5096,124 @@ live trading:                                     HARD-DISABLED
 Cockpit already renders; **every producing subsystem behind it is still absent and still
 unauthorized**, and **specification, implementation, research, deployment and execution stay five
 separate gates**.
+
+
+### The C5 completion follow-up — IMPLEMENTED IN PART, and C5 is still not complete
+
+**The rolling series and the portfolio benchmark comparison are built. Capacity and the named
+benchmarks are not, and this section says exactly why.** Those are four facts, and collapsing any
+of them into *the follow-up is done* is the thing this section exists to prevent.
+
+**It is carried by an open pull request of its own. While that pull request is open it is a
+candidate**: nothing recorded here is authority for anything beyond itself, and **no merge SHA and
+no merge timestamp is predicted**.
+
+**The residue this cycle owns was recorded by the C6 independent review**, which named it and gave
+it an owner rather than leaving it unassigned:
+
+> **Rolling-window series and capacity remain outstanding** … **Independent review assigned it to
+> a named C5 COMPLETION FOLLOW-UP** … A **rolling-window series** and a **portfolio-level benchmark
+> comparison against a repository-owned synthetic index** need **no provider at all** … so both are
+> outstanding **implementation**. Only **capacity**, which needs a liquidity and market-impact
+> model, and **real SPY, QQQ and IWM price history** are blocked on provider selection while **G1
+> is OPEN**.
+
+#### The disposition, requirement by requirement
+
+**Four outcomes, and they are not interchangeable.** *Implemented at synthetic scope* is work that
+was done; *unavailable pending qualified inputs* is a dependency that does not exist; *blocked by a
+contract decision* is a question accepted authority has not answered. **Labelling something
+unavailable is not implementing it**, and this table never treats the two as equivalent.
+
+| Requirement | Authority | Disposition |
+|---|---|---|
+| **portfolio rolling returns** | Area 2 — "daily, weekly, monthly and **rolling** returns"; Matrix A row 2 — "**rolling windows**" | **IMPLEMENTED AT SYNTHETIC SCOPE** — `return.rolling`, three declared lookbacks, produced by the read model rather than derived on a screen |
+| **portfolio rolling drawdown** | Area 2 and Matrix A as above; §12.3 `drawdown.max` supplies the rule to window | **IMPLEMENTED AT SYNTHETIC SCOPE** — `drawdown.rolling_max`, measured against the peak **inside** the window, which is why it carries its own identifier |
+| **rolling expectancy** | the recorded C6 omission; §12.3 `expectancy.currency` supplies the definition **and its thirty-trade minimum** | **IMPLEMENTED AT SYNTHETIC SCOPE** — `expectancy.rolling`, per exact strategy version, over trailing **closed trades** |
+| **portfolio benchmark comparison** | Area 2 — "a comparison shows separately labelled series with their comparability limits stated **on the chart**"; §12.4 benchmark alignment | **IMPLEMENTED AT SYNTHETIC SCOPE** — common-extent alignment, rebasing, matched movements, limits on the chart, and a **refused** difference |
+| **named benchmarks SPY, QQQ and IWM** | Area 2 — "benchmark comparison against SPY, QQQ and IWM" | **UNAVAILABLE PENDING QUALIFIED INPUTS** — the three references still resolve to nothing, **G1 is OPEN**, and the screen states the requirement is **not** satisfied by the synthetic comparison |
+| **strategy capacity** | Area 4 — "…turnover, **capacity**, MFE, MAE…" | **UNAVAILABLE PENDING QUALIFIED INPUTS AND A RUNTIME**, and **BLOCKED BY A CONTRACT DECISION** — the metric stays unavailable and its four missing dependencies are now named on the screen |
+| **rolling tail losses** | named **once**, in **Area 5**, which is **C7**-owned | **BLOCKED BY A CONTRACT DECISION** — §12.3 carries no tail-loss row at all |
+
+#### What was implemented, and the separations it holds
+
+| | |
+|---|---|
+| **a lookback is not a period** | the requested extent and the rolling lookback are printed **side by side**, in every heading and in the read model. A one-month extent under a 63-period lookback is a well-formed request whose every point is `INSUFFICIENT_OBSERVATIONS`, and the screen says so rather than drawing something shorter |
+| **no number was invented** | the three lookbacks are the trading-day counts `PERIOD_TRADING_DAYS` **already carries**, and the rolling-expectancy window is §12.3's **own** thirty-trade minimum. Nothing here picks a threshold |
+| **the lookback counts periods, not calendar time** | of the granularity actually served, stated as such — twenty-one periods of a monthly series are twenty-one months, and the interface never calls that "one month" |
+| **three outcomes, never one** | a computed value; `INSUFFICIENT_OBSERVATIONS` where the extent has not reached back far enough; and `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` where the window spans a session nobody observed. **The last is not computed from the surviving points**, and **none of the three is a zero** |
+| **no point looks forward** | each window reads only observations up to its own point. Appending a later observation changes no earlier one, and **replacing every later reading changes nothing at or before a point** — the stronger statement, and the one that is tested |
+| **one economic source** | every figure is the same chain-linked, cash-flow-adjusted index and the same closed-trade population the existing screens read. **No ledger economics, entry fact, add-stage fact, risk denominator or strategy version was altered**, and no second portfolio or strategy engine exists |
+| **the comparison is a comparison** | both arms aligned to the instants **both** observed, rebased to 100 at the first of them, each arm's own movement measured over **exactly** those boundaries, and every comparability limit rendered **above** the chart rather than under a disclosure |
+| **the difference is refused, and that is the correct answer** | the portfolio arm is `NET_ALL_COSTS` and the invented index is `GROSS`, and §12.3 holds that "two values with different cost treatments are never compared, summed or placed in one series". The refusal is shown with its reason, on the merged `MissedOpportunity` precedent. **Nothing is called alpha** |
+| **capacity is named, not estimated** | the metric is **unchanged and still unavailable**. What is new is the disclosure beside it: **no liquidity or market-impact model**, **no volume history** (**G1 OPEN**), **no borrow history** (**G5 OPEN**) and **no accepted definition to compute one against**. It also states that capacity is **not** strategy capital, available cash, buying power or a position limit |
+| **two schema versions moved, and only two** | `PerformanceSeries` and `StrategyPerformance` are at **`v3`** because their payload contracts changed; §5.2 versions a schema per read model, so **every other read model stays exactly where it was** and the coordinated guard now names the two exceptions rather than losing its force |
+
+#### What it does not claim
+
+**No alpha is claimed, no result is asserted and no threshold is established.** Every figure is a
+repository-owned deterministic fixture, the benchmark is an **invented curve with no market behind
+it**, and **comparing against it establishes nothing about any strategy**.
+
+**C5 is not complete.** Three of the seven requirements above remain outstanding — two need
+qualified data and a producing runtime, and two need a decision accepted authority has not taken.
+**Naming a gap precisely is not closing it.**
+
+**Two contract gaps are reported and neither is filled.** A **tail-loss measure has no definition
+anywhere** — no formula, unit, denominator, sample convention or minimum-observation rule — and
+choosing a percentile here would be inventing a policy on a screen. **Capacity has a registered
+unit and no computable rule**, and is additionally blocked on data. Both need a §12.6 presentation
+definition or an ADR, and **this cycle takes neither decision**.
+
+**The three carried-forward observations are unchanged and still open** — the C8 fill-scoped count
+under an order-labelled code, the C8 contract comment that overstates its body, and
+`SearchResultPage`'s unexercised governance-provenance permission. **None is resolved by omission**,
+and **no ADR is opened and no navigation authority is widened here.**
+
+```text
+C5 completion follow-up:                          IMPLEMENTED IN AN OPEN PULL REQUEST
+portfolio rolling return and drawdown:            IMPLEMENTED AT SYNTHETIC SCOPE
+rolling expectancy:                               IMPLEMENTED AT SYNTHETIC SCOPE
+portfolio benchmark comparison:                   IMPLEMENTED AT SYNTHETIC SCOPE
+named benchmarks SPY / QQQ / IWM:                 UNAVAILABLE - NO PROVIDER IS SELECTED
+strategy capacity:                                UNAVAILABLE - DEPENDENCIES NAMED, DEFINITION ABSENT
+rolling tail losses:                              BLOCKED - NO ACCEPTED DEFINITION EXISTS
+C5 overall:                                       NOT COMPLETE
+read models whose schema version moved:           2, EACH TO ITS OWN v3
+every other read model:                           UNCHANGED
+new API routes, handlers or server actions:       NONE
+new routes added to the accepted registry:        NONE
+new runtime dependencies:                         NONE
+ledger economics, entry facts or risk records:    UNCHANGED
+a second portfolio or strategy engine:            NONE
+mutation, execution or broker vocabulary:         NONE
+provider data used:                               NONE
+market data downloaded or requested:              NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+orders placed by this cycle:                      NONE
+backtesting:                                      NOT STARTED
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+C10:                                              NOT STARTED / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**Completing part of a cycle completes the cycle no more than merging one completes the product.**
+**Specification, implementation, research, deployment and execution stay five separate gates.**
+
 
 
 
