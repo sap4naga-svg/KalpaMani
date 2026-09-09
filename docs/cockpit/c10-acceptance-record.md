@@ -118,10 +118,14 @@ no value exists and the state is rendered instead.
 | 35 | Future Human Control Plane | C3 | `/governance/controls` | — | n/a | `e2e/cockpit.spec.ts`, `e2e/c10-acceptance.spec.ts` | `IMPLEMENTED` | a separate control architecture — **NOT AUTHORIZED** |
 | 36 | Trade History & Trade Detail | C5 + C6 | `/portfolio/trades`, `/portfolio/trades/[tradeId]` | `TradeSummary`, `TradeDetail`, `TradeLifecycle` | SYNTHETIC | `e2e/c5-portfolio.spec.ts`, `e2e/c6-signals.spec.ts` | `IMPLEMENTED` | the portfolio and execution runtimes |
 
-**Counts, with their denominator stated.** Of **36** areas: **31 `IMPLEMENTED`**, **5 `PARTIAL`**
-(areas 2, 3, 4, 5, 14 and 32 — six rows, of which area 32 is the cross-cutting presentation row
-assessed in §5, so **five product areas** are partial), **0 `BLOCKED_CONTRACT`**, **0
+**Counts, with their denominator and counting rule stated.** The denominator is the **36 areas the
+matrix traces**, and the rule is **one row per area**. Of those 36: **30 `IMPLEMENTED`**, **6
+`PARTIAL`** — areas **2, 3, 4, 5, 14** and **32** — **0 `BLOCKED_CONTRACT`** and **0
 `NOT_ASSESSED`**. **Every one of the 36 was assessed.**
+
+**Five of the six partial rows are product areas; the sixth, area 32, is the cross-cutting
+presentation row**, and it is partial for the two §15 criteria §7 records as unmet rather than for
+anything a screen fails to render.
 
 **A count of areas is not a measure of project completion.** Thirty-one implemented areas are
 thirty-one screens over fixtures. **Phase 3 is NOT COMPLETE, no provider is selected, backtesting has
@@ -362,8 +366,8 @@ C10 polish and acceptance cycle:                  IMPLEMENTED IN AN OPEN PULL RE
 independent review of the C10 implementation:     REQUIRED / NOT PERFORMED
 areas in V1 scope:                                36
 areas assessed by the acceptance record:          36 OF 36
-areas IMPLEMENTED within accepted scope:          31
-areas PARTIAL:                                    5
+areas IMPLEMENTED within accepted scope:          30
+areas PARTIAL:                                    6
 areas BLOCKED by a contract decision:             0
 areas NOT ASSESSED:                               0
 U1-U20 assessed:                                  20

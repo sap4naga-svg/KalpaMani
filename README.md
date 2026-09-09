@@ -5382,7 +5382,7 @@ both remain NOT COMPLETE.**
 
 **Rendering an unavailable state correctly is finished work; producing a value nobody can obtain is
 not.** That distinction is what the record's five dispositions exist to hold, and it is why
-thirty-one areas read as implemented while five read as partial.
+thirty areas read as implemented while six read as partial.
 
 #### What it does not claim
 
@@ -5409,8 +5409,8 @@ independent review of the C10 implementation:     REQUIRED / NOT PERFORMED
 acceptance record:                                docs/cockpit/c10-acceptance-record.md
 areas in V1 scope:                                36
 areas assessed by the acceptance record:          36 OF 36
-areas IMPLEMENTED within accepted scope:          31
-areas PARTIAL:                                    5
+areas IMPLEMENTED within accepted scope:          30
+areas PARTIAL:                                    6
 areas BLOCKED by a contract decision:             0
 areas NOT ASSESSED:                               0
 U1-U20 assessed:                                  20

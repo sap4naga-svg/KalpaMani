@@ -18,9 +18,10 @@ assessment that says exactly why is
 [`docs/cockpit/c10-acceptance-record.md`](../../docs/cockpit/c10-acceptance-record.md). Read that
 record before quoting a count from this file.
 
-**Thirty registered sidebar routes and two deep destinations, and every one of them renders.** Thirty-one of the thirty-six
-product areas are implemented within their accepted observational scope and **five are partial** —
-areas 2, 3, 4, 5 and 14, each waiting on provider data or the capacity model. **A count of areas is
+**Thirty registered sidebar routes and two deep destinations, and every one of them renders.** Thirty of the thirty-six product
+areas are implemented within their accepted observational scope and **six are partial** — areas 2,
+3, 4, 5 and 14, each waiting on provider data or the capacity model, and area 32, for the two
+section 15 criteria the acceptance record records as unmet. **A count of areas is
 not a measure of project completion**: every screen runs on a **local fixture adapter**, and no
 production read API, projection, metric engine, research runtime, learning engine, execution
 runtime, broker session, scheduler, alert pipeline or audit store exists behind any of them.
