@@ -81,9 +81,9 @@ CAPACITY_SPAN: Final = section(
 DICTIONARY_SPAN: Final = section(
     CONTRACTS_TEXT, "### 12.3 The metrics", "#### 12.3.1 Slippage, worked through"
 )
-PARAMETER_SPAN: Final = section(
-    ADR_TEXT, "**D1.12 PROPOSED MEASUREMENT DECISIONS.**", "### D2 —"
-)
+#: The contracts document sets its worked values with a typographic MINUS SIGN.
+MINUS_SIGN: Final = "\u2212"
+PARAMETER_SPAN: Final = section(ADR_TEXT, "**D1.12 PROPOSED MEASUREMENT DECISIONS.**", "### D2 —")
 
 
 # --------------------------------------------------------------------- governance
@@ -227,9 +227,7 @@ def test_the_tail_count_is_derived_from_the_other_two_and_not_chosen() -> None:
 def test_the_window_reuses_the_declared_expectancy_minimum_rather_than_inventing_one() -> None:
     """The claim that no number was invented is checkable against 12.3's own row."""
     expectancy_row = [
-        line
-        for line in CONTRACTS_TEXT.splitlines()
-        if line.startswith("| `expectancy.currency` |")
+        line for line in CONTRACTS_TEXT.splitlines() if line.startswith("| `expectancy.currency` |")
     ]
     assert len(expectancy_row) == 1
     assert f"| {PARAMS.window} trades |" in expectancy_row[0]
@@ -291,7 +289,9 @@ def tail_loss(
     return Result("AVAILABLE", "NONE", value)
 
 
-def population(tail: list[str], rest_total: str = "0", size: int | None = None) -> list[Observation]:
+def population(
+    tail: list[str], rest_total: str = "0", size: int | None = None
+) -> list[Observation]:
     """A window whose most adverse members are exactly `tail`, padded to `size`."""
     size = PARAMS.window if size is None else size
     pad_count = size - len(tail)
@@ -299,9 +299,7 @@ def population(tail: list[str], rest_total: str = "0", size: int | None = None) 
     worst = max(Decimal(v) for v in tail)
     # Every padded observation must sit above the tail, or it would join the tail.
     pad_value = pad_each if pad_each > worst else worst + Decimal("1.00")
-    observations = [
-        Observation(i, f"t{i:03d}", Decimal(v)) for i, v in enumerate(tail)
-    ]
+    observations = [Observation(i, f"t{i:03d}", Decimal(v)) for i, v in enumerate(tail)]
     observations += [
         Observation(len(tail) + i, f"t{len(tail) + i:03d}", pad_value) for i in range(pad_count)
     ]
@@ -313,7 +311,8 @@ def test_the_worked_example_in_the_document_reproduces_by_hand() -> None:
     assert result.availability == "AVAILABLE"
     assert result.reason == "NONE"
     assert result.value == Decimal("-2.50")
-    assert "**−2.50 R**" in TAIL_SPAN, "the document's worked value must be the computed one"
+    worked = f"**{MINUS_SIGN}2.50 R**"
+    assert worked in TAIL_SPAN, "the document's worked value must be the computed one"
 
 
 def test_the_tail_loss_the_worst_trade_and_the_expectancy_are_three_numbers() -> None:
@@ -379,7 +378,7 @@ def test_the_window_excludes_every_observation_after_the_cutoff() -> None:
     observations = population(["-3.10", "-2.40", "-2.00"])
     point = max(o.closed_at for o in observations)
     later = Observation(point + 1, "t999", Decimal("-9.99"))
-    assert later not in window_at(observations + [later], point, PARAMS.window)
+    assert later not in window_at([*observations, later], point, PARAMS.window)
 
 
 def test_replacing_every_later_observation_changes_nothing_at_or_before_a_point() -> None:
@@ -388,9 +387,7 @@ def test_replacing_every_later_observation_changes_nothing_at_or_before_a_point(
     point = max(o.closed_at for o in observations)
     before = tail_loss(window_at(observations, point, PARAMS.window))
     for replacement in (Decimal("-99.00"), Decimal("0.00"), Decimal("99.00")):
-        future = [
-            Observation(point + 1 + i, f"f{i:03d}", replacement) for i in range(5)
-        ]
+        future = [Observation(point + 1 + i, f"f{i:03d}", replacement) for i in range(5)]
         after = tail_loss(window_at(observations + future, point, PARAMS.window))
         assert after == before, replacement
     assert "changes nothing at or before" in flatten(TAIL_SPAN)
@@ -414,7 +411,9 @@ def test_the_statistic_is_a_mean_of_ratios_and_not_a_ratio_of_sums() -> None:
 
 
 def test_the_sign_convention_is_12_1_s_and_a_loss_stays_negative() -> None:
-    assert tail_loss(population(["-3.10", "-2.40", "-2.00"])).value < 0
+    value = tail_loss(population(["-3.10", "-2.40", "-2.00"])).value
+    assert value is not None
+    assert value < 0
     assert "profit positive, loss negative" in flatten(TAIL_SPAN)
     assert "profit positive, loss negative" in CONTRACTS_FLAT
 
@@ -614,11 +613,11 @@ def test_the_two_metric_rows_exist_and_are_labelled_proposed() -> None:
 
 
 def test_the_tail_loss_row_declares_the_window_the_minimum_and_the_unit() -> None:
-    row = [
+    rows = [
         line for line in DICTIONARY_SPAN.splitlines() if line.startswith("| `strategy.tail_loss` |")
     ]
-    assert len(row) == 1, "the dictionary table must carry exactly one tail-loss row"
-    row = row[0]
+    assert len(rows) == 1, "the dictionary table must carry exactly one tail-loss row"
+    row = rows[0]
     assert "R_MULTIPLE" in row
     assert f"trailing {PARAMS.window} eligible observations" in row
     assert f"| {PARAMS.minimum_observations} closed trades |" in row
@@ -628,7 +627,9 @@ def test_the_tail_loss_row_declares_the_window_the_minimum_and_the_unit() -> Non
 def test_area_ownership_is_recorded_and_the_tail_loss_stays_a_c7_surface() -> None:
     """The prior finding, held: Area 5 owns it, and it is not quietly moved into C5."""
     assert "With rolling expectancy, drawdown and tail losses" in flatten(V1_TEXT)
-    area_five = [line for line in MATRIX_TEXT.splitlines() if line.startswith("| 5 | Strategy Health |")]
+    area_five = [
+        line for line in MATRIX_TEXT.splitlines() if line.startswith("| 5 | Strategy Health |")
+    ]
     area_four = [
         line for line in MATRIX_TEXT.splitlines() if line.startswith("| 4 | Strategy Performance |")
     ]
@@ -643,16 +644,16 @@ def test_area_ownership_is_recorded_and_the_tail_loss_stays_a_c7_surface() -> No
 
 
 def test_the_area_criteria_are_checkable_rather_than_restatements() -> None:
-    five = [
+    five = next(
         line
         for line in MATRIX_TEXT.splitlines()
         if line.startswith("| 5 | Strategy Health |") and "rolling tail loss" in line
-    ][0]
-    four = [
+    )
+    four = next(
         line
         for line in MATRIX_TEXT.splitlines()
         if line.startswith("| 4 | Strategy Performance |") and "strategy.capacity" in line
-    ][0]
+    )
     for needed in ("tail fraction", "observation count", "INSUFFICIENT_OBSERVATIONS", "negative"):
         assert needed in five, needed
     for needed in ("qualified-model interface", "buying power", "never summed", "zero"):
