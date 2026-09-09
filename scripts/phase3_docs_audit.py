@@ -13454,14 +13454,29 @@ COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
     # different platform did not re-run the gates that failed, so it cannot retire the
     # fact that the merge proceeded with reported failures.
     "pre-merge process deviation: RECORDED - MERGED WITH REPORTED FAILED GATES",
-    # A PROPOSED CONTRACT IS NOT AN IMPLEMENTATION, AND THE TWO LINES SAY DIFFERENT
-    # THINGS. ADR-0032 proposes a measurement contract for each quantity; neither
-    # measure is built, and neither definition is accepted while its pull request
-    # is open.
-    "strategy capacity - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
-    "rolling tail losses - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
-    "strategy capacity - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED",
-    "rolling tail losses - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED",
+    # AN ACCEPTED CONTRACT IS NOT AN IMPLEMENTATION, AND THE TWO LINES STILL SAY
+    # DIFFERENT THINGS. ADR-0032 is ACCEPTED / IN FORCE -- PR #85 merged -- so the
+    # contract lines moved. The implementation lines moved SEPARATELY and they did
+    # not move together: the tail loss is computed from the synthetic book, and
+    # capacity has an ENFORCED GATE AND NO OBTAINABLE VALUE. Collapsing the two into
+    # one "implemented" would report a capacity estimate that does not exist.
+    "strategy capacity - MEASUREMENT CONTRACT: ACCEPTED BY ADR-0032 / IN FORCE",
+    "rolling tail losses - MEASUREMENT CONTRACT: ACCEPTED BY ADR-0032 / IN FORCE",
+    "strategy capacity - IMPLEMENTATION: CONTRACT ENFORCED / NO VALUE OBTAINABLE",
+    "rolling tail losses - IMPLEMENTATION: IMPLEMENTED AT SYNTHETIC SCOPE",
+    # THE MERGE THAT ACCEPTED THE CONTRACT, RECORDED LIKE EVERY OTHER ONE.
+    "PR #85: MERGED",
+    "PR #85 merge commit: d8cb12729abf89e17ba4466e5e8b9af333cf7ea9",
+    "PR #85 merged at: 2026-09-09T14:18:52Z",
+    "PR #85 final reviewed head: 8d1eaa9c1b89285e58da74c0953e10b7ffcfb31c",
+    # AND WHAT ENFORCING A GATE LEFT EXACTLY WHERE IT WAS.
+    "strategy capacity - VALUE: NOT OBTAINABLE / NOT PRODUCED",
+    "capacity calibration: DOES NOT EXIST",
+    "capacity search executor: DOES NOT EXIST",
+    "capacity inputs acquired: NONE",
+    "metric_definition_version: ADVANCED - metrics.v2",
+    "PerformanceSeries: UNCHANGED AT v3",
+    "research runs or backtests executed: NONE",
     # THE REVIEW IS A FACT ABOUT THE WORK, AND IT IS RECORDED LIKE ONE. Every recent cycle
     # carries this line -- C4, C7, C8 and C9 each do -- so a cycle that carried none would be
     # the only one whose status could not say whether anybody had read it. It says a review
@@ -13472,8 +13487,8 @@ COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
     "rolling expectancy: IMPLEMENTED AT SYNTHETIC SCOPE",
     "portfolio benchmark comparison: IMPLEMENTED AT SYNTHETIC SCOPE",
     "named benchmarks SPY / QQQ / IWM: UNAVAILABLE - NO PROVIDER IS SELECTED",
-    "strategy capacity: UNAVAILABLE - DEPENDENCIES NAMED, DEFINITION ABSENT",
-    "rolling tail losses: BLOCKED - NO ACCEPTED DEFINITION EXISTS",
+    "strategy capacity: UNAVAILABLE - DEFINITION ACCEPTED, GATE ENFORCED, REQUIRED INPUTS ABSENT",
+    "rolling tail losses: IMPLEMENTED AT SYNTHETIC SCOPE",
     "C5 overall: NOT COMPLETE",
     "read models whose schema version moved: 2, EACH TO ITS OWN v3",
     "every other read model: UNCHANGED",
@@ -13514,16 +13529,32 @@ COCKPIT_C5_FOLLOWUP_FORBIDDEN: Final[tuple[str, ...]] = (
     "original Linux review evidence: PRESERVED",
     "pre-merge process deviation: RESOLVED",
     "pre-merge process deviation: RETIRED",
-    # A PROPOSED CONTRACT IS NOT AN ACCEPTED ONE, AND NEITHER IS AN IMPLEMENTATION.
-    "ADR-0032: ACCEPTED / IN FORCE",
-    "tail-loss measurement contract: ACCEPTED",
-    "capacity measurement contract: ACCEPTED",
+    # THE STALE UNDER-CLAIMS ARE NOW FORBIDDEN, on the precedent above. ADR-0032 is
+    # ACCEPTED / IN FORCE and PR #85 merged, so a status document still calling the
+    # contracts proposed is stale rather than cautious -- and a reader could not tell
+    # which of two documents to believe.
+    "ADR-0032: PROPOSED / NOT IN FORCE",
+    "tail-loss measurement contract: PROPOSED / NOT IN FORCE",
+    "capacity measurement contract: PROPOSED / NOT IN FORCE",
+    "strategy capacity - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
+    "rolling tail losses - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
+    "rolling tail losses: BLOCKED - NO ACCEPTED DEFINITION EXISTS",
+    # AND THE OVER-CLAIMS AN IMPLEMENTATION INVITES. Enforcing an admission gate is
+    # not obtaining the nine inputs it requires, computing a tail loss over a
+    # synthetic book is not a result about any strategy, and neither completes a
+    # cycle. "AT SYNTHETIC SCOPE" is load-bearing and may not be dropped.
     "strategy capacity - IMPLEMENTATION: IMPLEMENTED",
-    "rolling tail losses - IMPLEMENTATION: IMPLEMENTED",
-    "strategy capacity: IMPLEMENTED",
+    "strategy capacity - VALUE: PRODUCED",
+    "strategy capacity - VALUE: AVAILABLE",
+    "strategy capacity: IMPLEMENTED AT SYNTHETIC SCOPE",
+    "strategy capacity: IMPLEMENTED,",
+    "strategy capacity: AVAILABLE",
+    "capacity model: EXISTS",
+    "capacity model qualification: RECORDED",
+    "capacity inputs acquired: SOME",
+    "rolling tail losses - IMPLEMENTATION: IMPLEMENTED AT PRODUCTION SCOPE",
     "named benchmarks SPY / QQQ / IWM: IMPLEMENTED",
     "named benchmarks SPY / QQQ / IWM: AVAILABLE",
-    "rolling tail losses: IMPLEMENTED",
     "market data downloaded or requested: SOME",
     "provider selected: SHARADAR",
 )

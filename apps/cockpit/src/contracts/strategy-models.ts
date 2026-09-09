@@ -12,6 +12,7 @@
  */
 import { z } from "zod";
 
+import { capacityDeclaration } from "./capacity";
 import { collectionPayload } from "./pagination";
 import { refListFieldOf, refOf } from "./references";
 import { envelope } from "./envelope";
@@ -73,8 +74,15 @@ export const strategyModuleMetrics = z.object({
   average_holding_period: metricOf("holding_period"),
   opportunity_count: metricOf("strategy.opportunity_count"),
   turnover: metricOf("strategy.turnover"),
-  /** Displayed from a record. Nothing here computes a capacity or authorizes one. */
+  /**
+   * ADR-0032 §D2. Nothing here computes a capacity, calibrates a model or authorizes one.
+   *
+   * The value is whatever the §12.3.3 ADMISSION GATE answered for this exact version, and
+   * `capacity_declaration` beside it carries which gate stage decided and what is missing.
+   */
   capacity: metricOf("strategy.capacity"),
+  /** ADDED BY ADR-0032 — carried in every state, refusals included. */
+  capacity_declaration: capacityDeclaration,
   mfe: metricOf("mfe"),
   mae: metricOf("mae"),
   capture_ratio: metricOf("capture_ratio"),
@@ -214,8 +222,17 @@ export const strategyPerformancePayload = collectionPayload(strategyPerformance,
 });
 export type StrategyPerformancePayload = z.infer<typeof strategyPerformancePayload>;
 
-/** v3: each row gained `rolling_expectancy`, so a v2 consumer reads a different contract. */
-export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v3";
+/**
+ * v4: each row gained `module_metrics.capacity_declaration`, so a v3 consumer reads a
+ * different contract.
+ *
+ * THE CAPACITY VALUE ITSELF IS UNCHANGED — it was `NOT_YET_AVAILABLE` with
+ * `UPSTREAM_INPUT_MISSING` before ADR-0032 and it still is, because the accepted gate
+ * evaluates today's actual facts and reaches exactly that. What changed is that the answer is
+ * now PRODUCED BY THE RULE rather than written as a literal, and the declaration that says
+ * which gate stage decided it is a required field a v3 reader does not know.
+ */
+export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v4";
 export const strategyPerformanceEnvelope = envelope(
   strategyPerformancePayload,
   STRATEGY_PERFORMANCE_SCHEMA,
@@ -285,6 +302,147 @@ export const failureCluster = z.object({
   evidence_refs: refListFieldOf("StrategyHealth.failure_clusters[].evidence_refs"),
 });
 
+/**
+ * `strategy.tail_loss` and everything the value must be read with — ADR-0032 §D1.
+ *
+ * **THE DISCLOSURE IS PART OF THE CONTRACT, NOT DECORATION.** §D1's acceptance criterion 9
+ * requires the window, the population, the tail fraction and the observation count beside the
+ * value, and §D1.10 requires the exclusion count to be disclosed **whether or not** it changed
+ * the availability — so a reader is never told a window was merely short when part of it was
+ * also unusable.
+ *
+ * A DIFFERENT QUANTITY FROM THE THREE IT IS CONFUSED WITH. It is not `expectancy.r`, which is
+ * the mean over the WHOLE population; not `drawdown.max`, which is path-dependent over an
+ * equity series against a running peak; and not the worst single observation, which is one
+ * order statistic. **The values may coincide** — three tied worst trades make the mean of the
+ * tail equal the minimum — and **coincidence of two values is not identity of two
+ * definitions** (§D1.11).
+ *
+ * **NOTHING HERE CAUSES A TRANSITION.** Area 5's seven states and every transition rule are
+ * ADR-0026 §13's and are unchanged by carrying this field.
+ */
+export const rollingTailLoss = z
+  .object({
+    /** `N` — the trailing eligible CLOSED-TRADE window. Never a calendar window. */
+    window: countValue,
+    minimum_observations: countValue,
+    /** Displayed, never assumed. `30` can never be read as thirty sessions. */
+    observation_unit: z.enum(ROLLING_OBSERVATION_UNITS),
+    population: reasonCoded,
+    /** Each observation's OWN denominator — a mean of ratios, never a ratio of sums. */
+    r_basis: reasonCoded,
+    /** `q`, in hundredths. A DECLARED PARAMETER of the contract, not a measurement. */
+    tail_fraction_hundredths: z.number().int().positive(),
+    /** `n` — eligible observations in the window at the evaluation point. */
+    eligible_observations: countValue,
+    /** `k` — the contributing tail count, and zero where no value was produced. */
+    tail_observations: countValue,
+    /** Closed trades the walk-back excluded. Disclosed either way, and never the value. */
+    excluded_observations: countValue,
+    exclusions: z.array(z.object({ reason: reasonCoded, count: countValue })),
+    value: metricOf("strategy.tail_loss"),
+    /** Which observations formed the tail, most adverse first. Empty without a value. */
+    tail_members: z.array(
+      z.object({
+        trade_ref: refOf("StrategyHealth.tail_loss.tail_members[].trade_ref"),
+        at: metricValue,
+        r_multiple: metricOf("r_multiple"),
+      }),
+    ),
+    /** One point per closed trade, in the declared recency order. */
+    points: z.array(
+      z.object({
+        ordinal: countValue,
+        at: metricValue,
+        value: metricOf("strategy.tail_loss"),
+      }),
+    ),
+    /** The accepted support limitation, carried rather than left to a reader. */
+    support_limitation: reasonCoded,
+  })
+  .superRefine((candidate, ctx) => {
+    if (candidate.observation_unit !== "CLOSED_TRADE") {
+      ctx.addIssue({
+        code: "custom",
+        message: "a rolling tail loss counts CLOSED_TRADE observations",
+      });
+    }
+    if (candidate.window.value !== candidate.minimum_observations.value) {
+      ctx.addIssue({
+        code: "custom",
+        message: "the declared window is the metric's own declared minimum",
+      });
+    }
+    const eligible = candidate.eligible_observations.value;
+    const tail = candidate.tail_observations.value;
+    const minimum = candidate.minimum_observations.value;
+    if (
+      typeof eligible !== "number" ||
+      typeof tail !== "number" ||
+      typeof minimum !== "number"
+    ) {
+      return;
+    }
+    /*
+     * THE DISCLOSURE MUST DESCRIBE THE VALUE IT SITS BESIDE.
+     *
+     * `k = ceil(q * n)` is the whole selection rule, so a payload whose stated tail count is
+     * not derivable from its own stated fraction and eligible count is describing a different
+     * computation from the one that produced its number.
+     */
+    const valueBearing = candidate.value.value !== undefined;
+    if (valueBearing) {
+      const derived = Math.ceil((eligible * candidate.tail_fraction_hundredths) / 100);
+      if (tail !== derived) {
+        ctx.addIssue({
+          code: "custom",
+          message: "the tail count is ceil(q * n) over the stated fraction and eligible count",
+        });
+      }
+      if (candidate.tail_members.length !== tail) {
+        ctx.addIssue({
+          code: "custom",
+          message: "one listed tail member per contributing observation",
+        });
+      }
+      if (eligible < minimum) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a value is carried only once the declared minimum is met",
+        });
+      }
+    } else if (tail !== 0 || candidate.tail_members.length !== 0) {
+      /*
+       * AN ABSENCE HAS NO TAIL. Listing members beside a value that was never produced would
+       * show a reader the observations of a statistic that does not exist.
+       */
+      ctx.addIssue({
+        code: "custom",
+        message: "an absent tail loss carries no contributing observations",
+      });
+    }
+    /*
+     * `PARTIAL` IS REACHABLE ONLY WITH AN EXCLUSION, and an exclusion count of zero can never
+     * qualify a value. §D1.10: sufficiency is decided before exclusion, and the two answers
+     * are never both returned.
+     */
+    const excluded = candidate.excluded_observations.value;
+    if (candidate.value.availability === "PARTIAL" && excluded === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a PARTIAL tail loss names the closed trades its walk-back excluded",
+      });
+    }
+    if (candidate.value.availability === "INSUFFICIENT_OBSERVATIONS" && eligible >= minimum) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "an insufficient tail loss reports fewer eligible observations than its minimum",
+      });
+    }
+  });
+export type RollingTailLoss = z.infer<typeof rollingTailLoss>;
+
 export const strategyHealth = z
   .object({
     strategy_version: safeId,
@@ -298,6 +456,17 @@ export const strategyHealth = z
     since: instant,
     transitions: z.array(healthTransition),
     drift: z.array(z.object({ measure: reasonCoded, value: metricValue })),
+    /**
+     * ADDED BY ADR-0032 — the rolling tail loss, computed rather than recorded.
+     *
+     * REQUIRED, not optional, and that is the difference from `rolling_expectancy`. That
+     * field is optional because a producer which cannot derive it must be able to omit it
+     * rather than serve an empty shell; this one is derivable for **every** version from the
+     * closed-trade population the row already carries, and its `INSUFFICIENT_OBSERVATIONS`
+     * answer IS the honest result for a short population. An omission would hide a version
+     * whose window is short behind the same silence as one nobody measured.
+     */
+    tail_loss: rollingTailLoss,
     failure_clusters: z.array(failureCluster),
     minimum_observations_met: z.boolean(),
     /**
@@ -399,7 +568,16 @@ export const strategyHealthPayload = collectionPayload(strategyHealth, {
 });
 export type StrategyHealthPayload = z.infer<typeof strategyHealthPayload>;
 
-export const STRATEGY_HEALTH_SCHEMA = "cockpit.strategy_health.v1";
+/**
+ * v2: every row gained `tail_loss`, so a v1 consumer reads a different contract.
+ *
+ * IT IS A SEMANTIC CHANGE AS WELL AS AN ADDITIVE ONE. §5.2 makes "a removal, a rename or a
+ * semantic change" a new version, and both halves apply here: a required field appeared, and
+ * `strategy.tail_loss` inside `drift[]` stopped being a recorded literal and became the
+ * ADR-0032 §D1 statistic computed over the closed-trade population. A v1 reader would carry
+ * the new number under the old meaning.
+ */
+export const STRATEGY_HEALTH_SCHEMA = "cockpit.strategy_health.v2";
 export const strategyHealthEnvelope = envelope(strategyHealthPayload, STRATEGY_HEALTH_SCHEMA);
 
 /* ============================================================ added by C7: Area 20 */

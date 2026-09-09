@@ -1203,10 +1203,32 @@ describe("the coordinated schema bump", () => {
    * `PerformanceSeries` gained `rolling_windows` and `benchmark_comparison`;
    * `StrategyPerformance` gained `rolling_expectancy`. A consumer compiled against either
    * `v2` knows none of those fields.
+   *
+   * ADR-0032 MOVED ONE OF THE TWO AGAIN, AND DELIBERATELY LEFT THE OTHER. `StrategyPerformance`
+   * gained a required `module_metrics.capacity_declaration` and is at `v4`; `PerformanceSeries`
+   * gained no field and changed no meaning, so it stays at `v3`. A model is not bumped
+   * mechanically, and a changed one is not exempted because nothing was removed.
    */
   const FOLLOW_UP_V3: Readonly<Record<string, string>> = {
     PerformanceSeries: "cockpit.performance_series.v3",
-    StrategyPerformance: "cockpit.strategy_performance.v3",
+    StrategyPerformance: "cockpit.strategy_performance.v4",
+  };
+
+  /**
+   * The two C7 models ADR-0032 moved past their own first version, and why.
+   *
+   * The same rule as `FOLLOW_UP_V3`, applied to the other group: a later, independent contract
+   * change moves ONE model without touching any other. Naming them keeps the guard exact — a
+   * third first-version model drifting off `v1` still fails.
+   *
+   * `StrategyHealth` gained a required `tail_loss` field AND the meaning of
+   * `strategy.tail_loss` changed from a recorded literal to a computed statistic;
+   * `ResearchRun` gained a required `capacity_declaration`. A consumer compiled against either
+   * `v1` knows neither field, and would read the health value under the old meaning.
+   */
+  const ADR_0032_MOVED: Readonly<Record<string, string>> = {
+    StrategyHealth: "cockpit.strategy_health.v2",
+    ResearchRun: "cockpit.research_run.v2",
   };
 
   it("keeps the coordinated nineteen at v2 and gives each new read model its own v1", () => {
@@ -1233,7 +1255,17 @@ describe("the coordinated schema bump", () => {
       firstVersion.includes(identity.readModel),
     );
     for (const identity of introduced) {
+      const moved = ADR_0032_MOVED[identity.readModel];
+      if (moved !== undefined) {
+        /* Exactly the later version ADR-0032 gave it, and no other. */
+        expect(identity.schemaVersion, identity.readModel).toBe(moved);
+        continue;
+      }
       expect(identity.schemaVersion, identity.readModel).toMatch(/\.v1$/);
+    }
+    /* Every model ADR-0032 names is one that was introduced, not one of the nineteen. */
+    for (const readModel of Object.keys(ADR_0032_MOVED)) {
+      expect(introduced.map((identity) => identity.readModel)).toContain(readModel);
     }
     expect(introduced.map((identity) => identity.readModel).sort()).toEqual(
       [...firstVersion].sort(),

@@ -18,7 +18,7 @@ import {
   qualificationStatusEnvelope,
   whatChangedEnvelope,
 } from "@/contracts/read-models";
-import { metricValue, refList, series } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION, metricValue, refList, series } from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
@@ -583,7 +583,7 @@ describe("what changed, and its comparison baselines", () => {
               availability: "NOT_YET_AVAILABLE",
               reason: "UPSTREAM_INPUT_MISSING",
               metric_id: "strategy.health_state",
-              metric_definition_version: "metrics.v1",
+              metric_definition_version: METRIC_DEFINITION_VERSION,
             },
           },
         ],

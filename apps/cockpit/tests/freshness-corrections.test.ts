@@ -27,6 +27,7 @@ import { absent, available, emptyRefList, pinsOf } from "@/contracts/factories";
 import { ATTENTION_LIST_SCHEMA, attentionListEnvelope } from "@/contracts/read-models";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { buildFreshness, type InputSpec } from "@/data/fixtures/envelopes";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 
 const ORIGIN = Date.parse("2026-09-05T12:00:00.000Z");
 const AS_OF = "2026-09-05T12:00:00.000Z";
@@ -107,7 +108,7 @@ function admitting(freshness: FreshnessReport): () => unknown {
     snapshot_version: "fixture",
     classification: "PUBLIC_SAFE",
     access_scope: "executive:read",
-    metric_definition_version: "metrics.v1",
+    metric_definition_version: METRIC_DEFINITION_VERSION,
     watermark: AS_OF,
     pins: pinsOf(),
     payload: { items: [] },

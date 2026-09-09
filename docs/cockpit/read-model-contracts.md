@@ -30,9 +30,13 @@ authority while the pull request introducing it is open**, and the deltas it mak
 with it.
 **Further amended by** [ADR-0032](../decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) —
 §12.3 with two new metric rows and the new §12.3.2 and §12.3.3, a §12.6 note, and the §4.5
-`StrategyPerformance` and `StrategyHealth` payload notes. ADR-0032 is **PROPOSED and carries no
-authority while the pull request introducing it is open**, and the deltas it makes here are proposed
-with it.
+`StrategyPerformance` and `StrategyHealth` payload notes. **ADR-0032 is ACCEPTED / IN FORCE — the
+pull request introducing it was independently reviewed and merged** — and the deltas it makes here
+are accepted with it.
+
+> **HISTORICAL.** While that pull request was open, ADR-0032 was **PROPOSED and carried no
+> authority**, and so did these deltas. That was true of those days, it stays true of them, and it
+> is **not** rewritten as though the decision had authority before it was accepted.
 
 ---
 
@@ -233,7 +237,7 @@ ReadModelEnvelope {
     watermark                   source position consumed
     classification              <DataClassification>
     access_scope                <closed scope>
-    metric_definition_version   "metrics.v1"
+    metric_definition_version   "metrics.v2"
     pins                        { strategy_version, factor_definition_version, ... }
     payload                     <view-specific>
 }
@@ -1923,11 +1927,14 @@ StrategyPerformance.payload {
 modules keep separate attribution and share family context · **no diversification or alpha claim is
 carried in this payload**, and none is derivable from it.
 
-**Area 4's `capacity` figure is defined by §12.3 and §12.3.3, proposed with ADR-0032.** It is
+**Area 4's `capacity` figure is defined by §12.3 and §12.3.3, accepted with ADR-0032.** It is
 **admissible only through that qualified-model interface**, it is **never filled from strategy
 capital, buying power, available cash, gross exposure or any limit**, it is **never filled with
 zero**, and **per-version capacities are never summed into a portfolio capacity**. Every required
-input is absent today, so the value is `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`.
+input is absent today, so the value is `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` — and that
+is now the **answer of the admission gate applied on the read path**, not a literal a producer
+wrote. The accompanying `capacity_declaration` carries the gate stage that decided and every
+unsatisfied input, in every state.
 
 ```text
 StrategyHealth.payload {
@@ -1955,8 +1962,12 @@ StrategyHealth.payload {
 transition** · a degradation shows the research queue entry it created · `recovery_authority` is
 displayed unchanged and **is neither strengthened nor widened by this contract**.
 
-**Area 5's rolling tail loss is carried in `drift[]` as `strategy.tail_loss`, defined by §12.3 and
-§12.3.2 and proposed with ADR-0032.** It is measured over **closed trades of this exact version**
+**Area 5's rolling tail loss is carried in `drift[]` as `strategy.tail_loss` and in the required
+`tail_loss` field beside it, defined by §12.3 and §12.3.2 and accepted with ADR-0032.** The two are
+**one computed value read twice, never two computations of one name**, and `tail_loss` carries the
+window, the population, the R basis, the tail fraction, the eligible and contributing counts, the
+exclusion count, the observations that formed the tail and one point per closed trade. It is
+measured over **closed trades of this exact version**
 across a **closed-trade count window**, its population is **every eligible observation and never
 losses only**, its sign follows §12.1 so a loss is negative, and a **positive value is a measured
 result**. **Defining it creates no health-state transition rule**: the seven states and every
@@ -2926,9 +2937,15 @@ against a reference and is **never subtracted from the same fill's economics aga
 
 #### 12.3.2 The rolling tail loss, worked through
 
-**PROPOSED by ADR-0032, and proposed with it.** Until that ADR is independently reviewed and
-merged, this subsection carries no authority, and nothing in the application computes the quantity
-it describes.
+**PROPOSED by ADR-0032, and ACCEPTED with it.** That ADR has been independently reviewed and
+merged, so this subsection is **IN FORCE**, and the application **now computes the quantity it
+describes** over its repository-owned synthetic trade book.
+
+> **HISTORICAL.** Until that merge this subsection carried no authority and nothing in the
+> application computed the quantity. That was true of those days and is not rewritten.
+
+**Computing it establishes nothing about any strategy.** The book is a deterministic fixture, no
+strategy module exists, none has ever run, and **no figure produced under this row is a result**.
 
 **The question it answers is *when this strategy version goes wrong, how wrong*** — which is not
 the question `expectancy.r` answers, not the question `drawdown.max` answers, and not the question
@@ -3045,9 +3062,14 @@ threshold at which anything happens**.
 
 #### 12.3.3 Strategy capacity — the qualified-model interface and its admission gate
 
-**PROPOSED by ADR-0032, and proposed with it.** Until that ADR is independently reviewed and
-merged, this subsection carries no authority. **No capacity model exists, no required input exists,
-and no capacity value has ever been produced.**
+**PROPOSED by ADR-0032, and ACCEPTED with it.** That ADR has been independently reviewed and
+merged, so this subsection is **IN FORCE**, and the admission gate below is **enforced by the
+application on the read path** rather than described. **No capacity model exists, no required input
+exists, and no capacity value has ever been produced** — enforcing an admission gate is not
+obtaining the evidence it requires, and the gate refuses at its required-input stage today.
+
+> **HISTORICAL.** Until that merge this subsection carried no authority. That was true of those
+> days and is not rewritten.
 
 **Capacity is how much this strategy version could have deployed before its own execution moved the
 price against it.** It is **not** strategy capital, **not** available cash, **not** buying power,
@@ -3280,11 +3302,13 @@ changed here**.
 explicit proposal and is labelled as one.** A presentation definition **never silently changes a
 strategy or risk policy**, and adopting one for a screen does not adopt it for the risk engine.
 
-**Two definitions are proposed by ADR-0032 and labelled as proposals, exactly as this section
+**Two definitions were proposed by ADR-0032 and are now accepted, exactly as this section
 requires.** `strategy.tail_loss` and `strategy.capacity` each had a **registered unit and no
 definition**, and a registered unit fixes how a number renders while fixing nothing about what was
-measured. Their §12.3 rows, §12.3.2 and §12.3.3 are **proposed with ADR-0032 and carry no authority
-while the pull request introducing it is open**.
+measured. Their §12.3 rows, §12.3.2 and §12.3.3 are **accepted with ADR-0032 and are IN FORCE**.
+
+> **HISTORICAL.** While the pull request introducing ADR-0032 was open, those rows and subsections
+> were proposed and carried no authority. That was true of those days and is not rewritten.
 
 **Their parameters are proposed measurement decisions and nothing more.** The tail fraction, the
 thirty-observation window, the reused minimum, and every capacity parameter a qualified model must

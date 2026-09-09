@@ -200,8 +200,22 @@ test.describe("rolling expectancy and capacity on the strategy screen", () => {
     await expect(capacity).toBeVisible();
     await expect(capacity).toContainText("No liquidity or market-impact model exists");
     await expect(capacity).toContainText("G1 is OPEN");
-    await expect(capacity).toContainText("No accepted definition exists");
     await expect(capacity).toContainText("The requirement stays");
+    /*
+     * ADR-0032 CLOSED THE DEFINITION GAP, SO THE SCREEN NO LONGER CLAIMS IT IS OPEN.
+     *
+     * The original property this test guards is unchanged and is asserted more strongly than
+     * before: capacity NAMES WHAT IT WAITS ON rather than being merely unavailable. What
+     * changed is that "no accepted definition exists" became FALSE -- the definition is
+     * accepted and the admission gate is applied on the read path -- so the assertion now
+     * holds the screen to the gate stage it refused at and the inputs it named, which the
+     * earlier copy could not do because it named its dependencies from a literal.
+     */
+    await expect(capacity).not.toContainText("No accepted definition exists");
+    await expect(capacity.getByTestId("capacity-gate-stage")).toHaveText("Required inputs");
+    const missing = capacity.getByTestId("capacity-missing-inputs");
+    await expect(missing).toBeVisible();
+    expect(await missing.getByRole("listitem").count()).toBeGreaterThan(0);
   });
 
   test("says capacity is not capital, cash, buying power or a limit", async ({ page }) => {
@@ -210,6 +224,9 @@ test.describe("rolling expectancy and capacity on the strategy screen", () => {
     const capacity = page.getByTestId("capacity-dependencies").first();
     await expect(capacity).toContainText("not strategy capital");
     await expect(capacity).toContainText("not buying power");
+    /* And the accepted meaning, named plainly beside the four it is not. */
+    await expect(capacity).toContainText("cost-degradation tolerance");
+    await expect(capacity).toContainText("not permission to scale");
   });
 });
 

@@ -371,7 +371,13 @@ describe("rolling expectancy over closed trades", () => {
     const envelope = await client().strategyPerformance(DEMO);
     expect(() => strategyPerformanceEnvelope.parse(envelope)).not.toThrow();
     expect(envelope.schema_version).toBe(STRATEGY_PERFORMANCE_SCHEMA);
-    expect(STRATEGY_PERFORMANCE_SCHEMA).toBe("cockpit.strategy_performance.v3");
+    /*
+     * v4 SINCE ADR-0032, and the original property this test guards is unchanged: the payload
+     * this cycle extended still carries ITS OWN schema version rather than a shared one. The
+     * later bump came from `capacity_declaration`, not from `rolling_expectancy`, and asserting
+     * the current version keeps the guard exact rather than weakening it to a prefix.
+     */
+    expect(STRATEGY_PERFORMANCE_SCHEMA).toBe("cockpit.strategy_performance.v4");
   });
 
   it("uses the dictionary's own thirty-trade minimum as its lookback", async () => {

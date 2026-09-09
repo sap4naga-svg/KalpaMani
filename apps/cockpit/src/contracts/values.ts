@@ -34,8 +34,28 @@ export const safeId = z
  *
  * Defined here rather than beside the factories, because the boundary that VALIDATES a
  * `MetricValue` needs it and a validator that imported the factory would be a cycle.
+ *
+ * `metrics.v2` — ADVANCED BY ADR-0032, at the first production of a `strategy.tail_loss`
+ * value under the accepted §12.3 row.
+ *
+ * §5.3 of that decision places the obligation exactly here: synthetic values already existed
+ * for `strategy.tail_loss` under `metrics.v1` that were **not** computed under any declared
+ * rule, and §12.2 forbids comparing two values sharing a `metric_id` across dictionary
+ * versions without both displayed. Leaving the version at `metrics.v1` would claim the old
+ * fixture numbers had obeyed a rule that did not exist when they were written.
+ *
+ * **THE DICTIONARY IS VERSIONED AS A WHOLE**, so every value in this application now carries
+ * `metrics.v2`. That is the §12 identity — one dictionary, one version — and it is **not** a
+ * claim that any other row's formula changed: every definition except `strategy.tail_loss`
+ * and `strategy.capacity` is unchanged in substance, and none was rewritten to justify the
+ * advance. What advancing does is refuse a cross-version comparison that would otherwise
+ * pass silently.
+ *
+ * `metrics.v1` is now a STALE version, and the `metricValue` boundary below refuses it
+ * rather than coercing it — the same fail-closed treatment §5.2 gives an unknown
+ * `schema_version`.
  */
-export const METRIC_DEFINITION_VERSION = "metrics.v1";
+export const METRIC_DEFINITION_VERSION = "metrics.v2";
 
 /**
  * Parses an instant, or refuses it. Returns milliseconds, or `null`.

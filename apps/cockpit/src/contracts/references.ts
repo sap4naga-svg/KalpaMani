@@ -1098,6 +1098,19 @@ export const REFERENCE_FIELDS = {
     requiredness: "required",
     implemented: true,
   },
+  /*
+   * ADDED BY ADR-0032 — which CLOSED TRADES formed the tail, so the value is reproducible.
+   *
+   * Kind `trade`, because that is exactly what each member is: one closed trade of this exact
+   * version. A listing that named them without a typed reference would be a set of opaque
+   * strings a reader could not follow to the trade that produced the number.
+   */
+  "StrategyHealth.tail_loss.tail_members[].trade_ref": {
+    shape: "REF",
+    kinds: ["trade"],
+    requiredness: "required",
+    implemented: true,
+  },
   "StrategyVersion.lineage_refs": {
     shape: "REF_LIST",
     kinds: ["source_fact"],

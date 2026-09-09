@@ -19,6 +19,7 @@ import type {
   RollingExpectancy,
   StrategyPerformance,
 } from "@/contracts/strategy-models";
+import type { CapacityDeclaration } from "@/contracts/capacity";
 import type { MetricValue } from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 import { humanizeCode } from "@/lib/format";
@@ -324,7 +325,10 @@ function VersionDetail({
             Counting the second needs a candidate stream, the Brain runtime does not exist, and
             Missed Opportunities owns that question.
           </p>
-          <CapacityDependencies metric={entry.module_metrics.capacity} />
+          <CapacityDependencies
+            metric={entry.module_metrics.capacity}
+            declaration={entry.module_metrics.capacity_declaration}
+          />
         </PanelSection>
 
         <PanelSection
@@ -604,25 +608,28 @@ function RollingExpectancyView({
 }
 
 /**
- * What capacity is waiting on, named exactly.
+ * What capacity means, what the admission gate answered, and what it is waiting on.
  *
- * AREA 4 NAMES CAPACITY, AND THIS APPLICATION DOES NOT COMPUTE ONE. The metric beside it
+ * AREA 4 NAMES CAPACITY, AND THIS APPLICATION PRODUCES NO NUMBER FOR IT. The metric beside it
  * renders unavailable; this states WHY, because "unavailable" on its own sends a reader to
- * look for a broken producer rather than at a dependency that does not exist.
+ * look for a broken producer rather than at nine dependencies that do not exist.
+ *
+ * THE ANSWER IS THE GATE'S, NOT THIS COMPONENT'S. Everything below is read from
+ * `capacity_declaration`, which the §12.3.3 admission gate produced by evaluating producer
+ * existence, authorization and every applicable required input in the declared order. This
+ * screen names no dependency of its own and decides nothing.
  *
  * NOTHING HERE IS AN ESTIMATE. No participation rate, no average daily volume, no impact
  * model, no borrow constraint and no recommended allocation appears — inventing any one of
  * them is how a demonstration becomes a number somebody sizes a position from.
- *
- * AND CAPACITY IS NOT ANY OF THE THINGS IT IS ROUTINELY CONFUSED WITH. Strategy capital,
- * available cash, buying power and a position or risk limit are four other quantities, three
- * of which this application already displays elsewhere; none of them is how much this
- * strategy could deploy before its own execution moved the price against it.
  */
-function CapacityDependencies({ metric }: { metric: MetricValue }) {
-  if (isValueBearing(metric.availability)) {
-    return null;
-  }
+function CapacityDependencies({
+  metric,
+  declaration,
+}: {
+  metric: MetricValue;
+  declaration: CapacityDeclaration;
+}) {
   return (
     <div
       className="mt-3 space-y-1.5 rounded-sm border border-border-subtle bg-surface-sunken px-3 py-2"
@@ -631,57 +638,109 @@ function CapacityDependencies({ metric }: { metric: MetricValue }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-label-m font-semibold text-text-primary">Capacity</span>
         <AvailabilityBadge state={metric.availability} reason={metric.reason} />
+        <span
+          className="font-mono text-label-s text-text-tertiary"
+          data-testid="capacity-gate-stage"
+        >
+          {humanizeCode(declaration.stage.code)}
+        </span>
       </div>
       <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
-        Capacity is <strong>how much this strategy could deploy before its own execution
-        moved the price against it</strong>. It is not strategy capital, not available cash,
-        not buying power and not a position or risk limit — those are four other quantities,
-        and substituting any of them would answer a different question under this name.
+        Capacity here is a <strong>cost-degradation tolerance measured against this
+        version&rsquo;s own observed execution</strong> — how much more capital it could have
+        deployed before its <em>modelled</em> execution cost degraded past its own realized
+        cost by more than a declared tolerance. Because the ceiling is the version&rsquo;s own
+        realized cost, <strong>poor observed execution mechanically raises the number</strong>,
+        so it is <strong>not comparable across versions of differing execution quality</strong>.
       </p>
-      <ul className="space-y-1 text-label-s text-text-secondary">
-        <li className="flex gap-2">
-          <span aria-hidden="true" className="text-text-tertiary">
-            ·
-          </span>
-          <span>
-            <strong>No liquidity or market-impact model exists</strong> in this repository.
-            There is no participation assumption, no impact function and no execution
-            simulator to run one through.
-          </span>
-        </li>
-        <li className="flex gap-2">
-          <span aria-hidden="true" className="text-text-tertiary">
-            ·
-          </span>
-          <span>
-            <strong>No volume or liquidity history is held.</strong> A capacity figure needs
-            per-security traded volume over the evaluated window, and this application holds
-            none — <strong>G1 is OPEN</strong> and no market-data provider is selected.
-          </span>
-        </li>
-        <li className="flex gap-2">
-          <span aria-hidden="true" className="text-text-tertiary">
-            ·
-          </span>
-          <span>
-            <strong>No borrow or short-availability history is held</strong> for the
-            short-side limb — <strong>G5 is OPEN</strong>.
-          </span>
-        </li>
-        <li className="flex gap-2">
-          <span aria-hidden="true" className="text-text-tertiary">
-            ·
-          </span>
-          <span>
-            <strong>No accepted definition exists</strong> to compute one against. The metric
-            dictionary registers <span className="font-mono">strategy.capacity</span> with its
-            unit and carries <strong>no formula, denominator, participation assumption or
-            minimum-observation rule</strong> for it, so the quantity is not yet specified
-            well enough to compute — and choosing those here would be inventing a policy on a
-            screen.
-          </span>
-        </li>
-      </ul>
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        It is <strong>not</strong> a profitability capacity, not the capital at which the
+        strategy stops making money, not a liquidity ceiling, and not a risk, allocation or
+        position limit. It is not strategy capital, available cash, buying power or gross
+        exposure — those are four other quantities this application already displays under
+        their own names, and substituting any of them would answer a different question here.
+        It is <strong>not permission to scale</strong>: capital scaling is a human governance
+        decision. <strong>Per-version capacities are never summed into a portfolio capacity</strong>,
+        because overlapping holdings mean the sum overstates what the market would absorb.
+      </p>
+      {isValueBearing(metric.availability) ? (
+        <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+          {declaration.computed_zero ? (
+            <>
+              <strong className="text-text-secondary">This zero was measured, not missing.</strong>{" "}
+              No positive capital level the model evaluated stayed within tolerance, read at
+              the declared grid resolution.
+            </>
+          ) : declaration.lower_bound_only ? (
+            <>
+              <strong className="text-text-secondary">
+                This is a lower bound, not a maximum.
+              </strong>{" "}
+              The highest evaluated point was still feasible, so the search resolved no upper
+              boundary and the value means <em>at least this much</em>.
+            </>
+          ) : (
+            <>
+              The value is a <strong>maximum among the points the model actually evaluated</strong>,
+              resolved no more finely than the declared grid granularity. Nothing is claimed
+              between evaluated points or beyond the declared endpoints.
+            </>
+          )}
+          {declaration.synthetic_inputs ? (
+            <>
+              {" "}
+              <strong className="text-text-secondary">
+                It rests on synthetic inputs and is an illustration
+              </strong>
+              , never a measured capacity.
+            </>
+          ) : null}
+        </p>
+      ) : (
+        <>
+          <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+            <strong className="text-text-secondary">
+              No capacity value is produced, and no absence is filled with a zero.
+            </strong>{" "}
+            An accepted definition now exists for this row and the admission gate is applied
+            here; what does not exist is the evidence the gate requires.{" "}
+            <strong>No liquidity or market-impact model exists</strong> in this repository —
+            there is no participation assumption, no impact function, no calibration and no
+            execution simulator to run one through. <strong>No volume or price history is
+            held</strong>, because <strong>G1 is OPEN</strong> and no market-data provider is
+            selected, and <strong>no borrow history is held</strong> because{" "}
+            <strong>G5 is OPEN</strong>. The gate stopped at the first unmet condition, and
+            these are the required inputs it found missing:
+          </p>
+          <ul className="space-y-1 text-label-s text-text-secondary" data-testid="capacity-missing-inputs">
+            {declaration.missing_inputs.map((entry) => (
+              <li key={entry.input.code} className="flex gap-2" data-capacity-input={entry.input.code}>
+                <span aria-hidden="true" className="text-text-tertiary">
+                  ·
+                </span>
+                <span>
+                  <strong>{humanizeCode(entry.input.code)}</strong> —{" "}
+                  {humanizeCode(entry.absence.code)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {declaration.not_applicable_inputs.length === 0 ? null : (
+            <p
+              className="max-w-3xl text-label-s leading-relaxed text-text-tertiary"
+              data-testid="capacity-not-applicable-inputs"
+            >
+              Not applicable to this version, and therefore not blocking:{" "}
+              {declaration.not_applicable_inputs
+                .map((entry) => humanizeCode(entry.input.code))
+                .join(", ")}
+              . This population carries no short exposure, so borrow history is not a
+              requirement it fails — requiring it would make capacity permanently unobtainable
+              for a long-only version for a reason that has nothing to do with capacity.
+            </p>
+          )}
+        </>
+      )}
       <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
         The requirement stays <strong>open</strong>. It is not satisfied by this disclosure,
         and it is not deferred out of scope — it is named, with what it waits on.

@@ -26,6 +26,7 @@ import {
 import { useScope } from "@/components/shell/use-scope";
 import { usePageFilters } from "@/components/shell/use-page-filters";
 import type { DataQuality } from "@/contracts/operations-models";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 import { INFORMATION_PROFILES, type InformationProfile } from "@/contracts/vocabularies";
 import { useDataQuality } from "@/data/client/hooks";
 import { humanizeCode } from "@/lib/format";
@@ -88,7 +89,9 @@ function ProfileCount({ count, asOf }: { count: number; asOf: string }) {
           reason: "NONE",
           as_of: asOf,
           metric_id: "reference.total",
-          metric_definition_version: "metrics.v1",
+          /* THE DICTIONARY VERSION, IMPORTED. Two spellings of one version is how a screen and
+           * its boundary come to disagree, and ADR-0032 advanced it. */
+          metric_definition_version: METRIC_DEFINITION_VERSION,
         }}
         neutral
       />{" "}

@@ -18,7 +18,8 @@ import {
 } from "@/components/cockpit/research";
 import { usePageFilters } from "@/components/shell/use-page-filters";
 import { useScope } from "@/components/shell/use-scope";
-import type { StrategyHealth } from "@/contracts/strategy-models";
+import type { RollingTailLoss, StrategyHealth } from "@/contracts/strategy-models";
+import { isValueBearing } from "@/contracts/validity";
 import type { StrategyHealthState } from "@/contracts/vocabularies";
 import { useStrategyHealth } from "@/data/client/hooks";
 import { humanizeCode } from "@/lib/format";
@@ -445,7 +446,7 @@ function HealthDetail({
 
         <PanelSection
           title="Drift"
-          note="Recorded drift measures. A version below its declared minimum observations reports its rule rather than a number."
+          note="Recorded drift measures, and one computed one. A version below its declared minimum observations reports its rule rather than a number."
           testId="health-drift"
         >
           <MeasureList
@@ -454,6 +455,18 @@ function HealthDetail({
               value: measure.value,
             }))}
             operator={operator}
+          />
+        </PanelSection>
+
+        <PanelSection
+          title="Rolling tail loss"
+          note="When this version went wrong, how wrong — the mean of the most adverse eligible closed trades in the window. Not expectancy, not drawdown, and not the single worst trade."
+          testId="health-tail-loss"
+        >
+          <TailLossView
+            tailLoss={entry.tail_loss}
+            operator={operator}
+            versionId={entry.strategy_version}
           />
         </PanelSection>
 
@@ -567,5 +580,221 @@ function HealthDetail({
         </PanelSection>
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * The rolling tail loss, with everything the number has to be read with — ADR-0032 §D1.
+ *
+ * THE DISCLOSURE IS NOT DECORATION. Acceptance criterion 9 requires the window, the
+ * population, the tail fraction and the observation count beside the value, and §D1.10
+ * requires the exclusion count **whether or not** it changed the availability — so a reader
+ * is never told a window was merely short when part of it was also unusable.
+ *
+ * THE AXIS IS THE TRADE, NOT THE SESSION. Two trades of one version routinely close on the
+ * same day, so a time axis would have to drop one; the ordinal is what an observation unit of
+ * `CLOSED_TRADE` means, and each point carries the close it was taken at beside its ordinal.
+ *
+ * INSUFFICIENT HISTORY STAYS VISIBLE. A point with fewer than thirty eligible observations
+ * behind it renders `INSUFFICIENT_OBSERVATIONS` — no early point is fabricated, and **no
+ * absence is drawn as a zero**, which would be indistinguishable from a measured zero.
+ *
+ * **NOTHING HERE CAUSES A TRANSITION.** There is no threshold on this panel, no band, no
+ * promotion, no reduction and no control. Area 5's seven states and their transition rules
+ * are ADR-0026 §13's and are untouched by displaying this number.
+ */
+function TailLossView({
+  tailLoss,
+  operator,
+  versionId,
+}: {
+  tailLoss: RollingTailLoss;
+  operator: boolean;
+  versionId: string;
+}) {
+  const computed = tailLoss.points.filter((point) =>
+    isValueBearing(point.value.availability),
+  ).length;
+  const excluded = Number(tailLoss.excluded_observations.value ?? 0);
+  const eligible = Number(tailLoss.eligible_observations.value ?? 0);
+  return (
+    <div className="space-y-2" data-testid={`tail-loss-${versionId}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-label-m font-semibold text-text-primary">
+          Tail loss (R multiple)
+        </span>
+        <span data-testid="tail-loss-value">
+          <MetricText metric={tailLoss.value} operator={operator} />
+        </span>
+        <AvailabilityBadge
+          state={tailLoss.value.availability}
+          reason={tailLoss.value.reason}
+        />
+      </div>
+      <dl className="flex flex-wrap gap-x-5 gap-y-1 text-label-s text-text-tertiary">
+        <div className="flex gap-1.5">
+          <dt>Strategy version</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-version">
+            {versionId}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Window</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-window">
+            {String(tailLoss.window.value)} {humanizeCode(tailLoss.observation_unit)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Minimum observations</dt>
+          <dd className="font-mono text-text-secondary">
+            {String(tailLoss.minimum_observations.value)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Eligible observations</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-eligible">
+            {String(tailLoss.eligible_observations.value)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Tail fraction</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-fraction">
+            {(tailLoss.tail_fraction_hundredths / 100).toFixed(2)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Contributing observations</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-tail-count">
+            {String(tailLoss.tail_observations.value)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Excluded closed trades</dt>
+          <dd className="font-mono text-text-secondary" data-testid="tail-loss-excluded">
+            {String(tailLoss.excluded_observations.value)}
+          </dd>
+        </div>
+      </dl>
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        Population: {humanizeCode(tailLoss.population.code)}. R basis:{" "}
+        {humanizeCode(tailLoss.r_basis.code)} — each observation carries{" "}
+        <strong>its own</strong> denominator, so this is a mean of ratios and never total tail
+        dollars over total tail risk. Profit is positive and loss is negative, so a{" "}
+        <strong>more severe tail is more negative</strong>, and a positive value means even
+        the worst observations in the window made money.
+      </p>
+      {excluded > 0 ? (
+        <p
+          className="max-w-3xl text-label-s leading-relaxed text-text-tertiary"
+          data-testid="tail-loss-exclusions"
+        >
+          <strong className="text-text-secondary">
+            {excluded} closed {excluded === 1 ? "trade was" : "trades were"} excluded
+          </strong>{" "}
+          during the walk-back for a missing or zero entry-time planned-risk record
+          {tailLoss.exclusions.length === 0
+            ? ""
+            : ` (${tailLoss.exclusions
+                .map((reason) => humanizeCode(reason.reason.code))
+                .join(", ")})`}
+          . The count is disclosed whether or not it changed the availability, and disclosing
+          it never turns an absent value into a qualified one.
+        </p>
+      ) : null}
+      {tailLoss.tail_members.length === 0 ? null : (
+        <div data-testid="tail-loss-members">
+          <Label>Observations forming the tail</Label>
+          <ul className="mt-1 space-y-1">
+            {tailLoss.tail_members.map((member) => (
+              <li
+                key={member.trade_ref.ref_id}
+                className="flex flex-wrap items-center gap-2 text-label-s"
+              >
+                <span className="font-mono text-text-tertiary">{member.trade_ref.ref_id}</span>
+                <span className="font-mono text-text-tertiary">
+                  {String(member.at.value).slice(0, 10)}
+                </span>
+                <MetricText metric={member.r_multiple} operator={operator} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        <strong className="text-text-secondary">
+          A three-observation tail is a descriptive estimate with limited support.
+        </strong>{" "}
+        Thirty is the count the dictionary declares sufficient for a mean over a whole
+        population; this averages the most adverse tenth of the window, so one observation is
+        roughly a third of the estimate. It describes the window it measured and carries{" "}
+        <strong>
+          no predictive reliability, no qualification and no threshold at which anything
+          happens
+        </strong>
+        . It is not expectancy, not drawdown and not the worst single trade — and where the
+        worst observations are tied its value may coincide with the worst single trade without
+        being the same definition.
+      </p>
+      {computed === 0 ? (
+        <p
+          className="max-w-3xl text-label-m leading-relaxed text-text-tertiary"
+          data-testid="tail-loss-none-computed"
+        >
+          <strong className="text-text-secondary">
+            No point on this version has a complete window behind it.
+          </strong>{" "}
+          It carries {eligible} eligible closed {eligible === 1 ? "trade" : "trades"} and the
+          window needs {String(tailLoss.window.value)}. That is the answer, and neither a
+          shorter window nor a zero is substituted for it.
+        </p>
+      ) : (
+        <ScrollRegion
+          label={`Rolling tail loss by closed trade for ${versionId}`}
+          className="max-h-64 overflow-y-auto"
+        >
+          <table className="w-full min-w-[26rem] border-collapse text-label-m">
+            <caption className="sr-only">
+              Tail loss over the trailing {String(tailLoss.window.value)} eligible closed
+              trades of {versionId}, in R multiples, indexed by the trade&rsquo;s position in
+              close order.
+            </caption>
+            <thead>
+              <tr className="border-b border-border-subtle text-left">
+                <th scope="col" className="py-1.5 pr-3 font-medium text-text-tertiary">
+                  Trade
+                </th>
+                <th scope="col" className="py-1.5 pr-3 font-medium text-text-tertiary">
+                  Close
+                </th>
+                <th scope="col" className="py-1.5 font-medium text-text-tertiary">
+                  Tail loss (R)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {tailLoss.points.map((point) => (
+                <tr
+                  key={String(point.ordinal.value)}
+                  className="border-b border-border-subtle last:border-0"
+                >
+                  <th
+                    scope="row"
+                    className="py-1 pr-3 text-left font-mono font-normal text-text-tertiary"
+                  >
+                    #{String(point.ordinal.value)}
+                  </th>
+                  <td className="py-1 pr-3 font-mono text-text-tertiary">
+                    {String(point.at.value).slice(0, 10)}
+                  </td>
+                  <td className="py-1">
+                    <MetricText metric={point.value} operator={operator} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollRegion>
+      )}
+    </div>
   );
 }

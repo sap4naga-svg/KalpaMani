@@ -15,7 +15,7 @@ import {
   type AlertSeverity,
 } from "@/contracts/operations-models";
 import { REFERENCE_FIELDS } from "@/contracts/references";
-import { C3_METRIC_DICTIONARY } from "@/contracts/values";
+import { C3_METRIC_DICTIONARY, METRIC_DEFINITION_VERSION } from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 import { INFORMATION_PROFILES } from "@/contracts/vocabularies";
 import { readModelKey } from "@/data/client/query-keys";
@@ -1057,7 +1057,7 @@ describe("the boundary refuses a payload that breaks a stated rule", () => {
       reason: "NONE",
       as_of: open.opened_at,
       metric_id: "incident.closed_at",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(() =>
       admit("SystemIncident", systemIncidentEnvelope, response, "PUBLIC_EDGE"),
@@ -1194,7 +1194,7 @@ describe("the boundary refuses a payload that breaks a stated rule", () => {
       availability: "NOT_YET_AVAILABLE",
       reason: "UPSTREAM_INPUT_MISSING",
       metric_id: "execution.protection_confirmed_at",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(() =>
       admit("ExecutionQuality", executionQualityEnvelope, response, "PUBLIC_EDGE"),
@@ -1214,7 +1214,7 @@ describe("the boundary refuses a payload that breaks a stated rule", () => {
       reason: "NONE",
       as_of: payload.window.to,
       metric_id: "slippage.aggregate",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(() =>
       admit("ExecutionQuality", executionQualityEnvelope, response, "PUBLIC_EDGE"),

@@ -29,6 +29,8 @@
  */
 import { z } from "zod";
 
+import { capacityDeclaration } from "./capacity";
+
 import { envelope } from "./envelope";
 import { collectionPayload } from "./pagination";
 import { analysisWindow } from "./portfolio-models";
@@ -129,7 +131,18 @@ export const researchRun = z
     decomposition: z.array(
       z.object({ axis: reasonCoded, bucket: reasonCoded, value: metricValue }),
     ),
+    /**
+     * ADR-0032 §D2, and the SAME definition the strategy screen reads.
+     *
+     * §D2.7 permits a `ResearchRun` consumer to satisfy required input 3 from an authorized
+     * research run, whose fills are `BACKTEST_SIMULATED` — hypothetical, never realized and
+     * never broker fills. **The provenance travels with the value**, so a capacity resting on
+     * simulated fills is labelled as resting on them and is never presented as measured from
+     * real executions. No research run has produced one: backtesting is NOT STARTED.
+     */
     capacity: metricOf("strategy.capacity"),
+    /** ADDED BY ADR-0032 — which gate stage decided, and what is missing. */
+    capacity_declaration: capacityDeclaration,
     stress: z.array(z.object({ scenario: reasonCoded, value: metricValue })),
     reproducibility: runReproducibility,
     /**
@@ -224,7 +237,14 @@ export const researchRunPayload = collectionPayload(researchRun, {
 });
 export type ResearchRunPayload = z.infer<typeof researchRunPayload>;
 
-export const RESEARCH_RUN_SCHEMA = "cockpit.research_run.v1";
+/**
+ * v2: each run gained `capacity_declaration`, so a v1 consumer reads a different contract.
+ *
+ * The capacity VALUE is unchanged — `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` before
+ * and after — but it is now the answer of the §12.3.3 admission gate rather than a literal,
+ * and the declaration beside it is a required field a v1 reader does not know.
+ */
+export const RESEARCH_RUN_SCHEMA = "cockpit.research_run.v2";
 export const researchRunEnvelope = envelope(researchRunPayload, RESEARCH_RUN_SCHEMA);
 
 /* =================================================================== Area 17 — queue */
