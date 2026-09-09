@@ -26,6 +26,7 @@ sees nothing passes every document vacuously.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -558,7 +559,11 @@ def test_the_contract_names_every_forbidden_substitution_and_the_zero() -> None:
         "not** gross exposure",
     ):
         assert phrase in flat, phrase
-    assert "Nothing on this row is ever zero" in flat
+    assert "No absence on this row is ever rendered as zero" in flat
+    assert "the forbidden zero is a substituted one, never an arithmetic one" in flat
+    assert "Nothing on this row is ever zero" not in flat, (
+        "the blanket claim contradicts the computed-zero outcome the contract now states"
+    )
 
 
 def test_capacity_is_a_level_with_no_denominator_and_a_stated_cost_treatment() -> None:
@@ -677,6 +682,341 @@ def test_the_metric_definition_version_obligation_is_placed_not_performed() -> N
 def test_no_closed_vocabulary_is_extended() -> None:
     assert "No closed vocabulary is extended" in ADR_FLAT
     assert "no new member is proposed" in ADR_FLAT
+
+
+# ------------------------------------- the review corrections, executed
+
+#: The 4.1.1 matrix, parsed once so a local rule can be checked against accepted authority
+#: rather than against a restatement of itself.
+MATRIX_SPAN: Final = section(
+    CONTRACTS_TEXT,
+    "#### 4.1.1 The validity matrix",
+    "#### 4.1.2 A zero is a measurement",
+)
+
+
+def validity_matrix() -> dict[str, tuple[str, set[str]]]:
+    """`state -> (value disposition, permitted reasons)`, read off 4.1.1."""
+    parsed: dict[str, tuple[str, set[str]]] = {}
+    for line in MATRIX_SPAN.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3:
+            continue
+        states = re.findall(r"`([A-Z_]+)`", cells[0])
+        if len(states) != 1:
+            continue
+        parsed[states[0]] = (flatten(cells[1]), set(re.findall(r"`([A-Z_]+)`", cells[2])))
+    return parsed
+
+
+VALIDITY: Final = validity_matrix()
+
+
+def test_the_validity_matrix_parser_sees_the_accepted_states() -> None:
+    """A scanner that saw nothing would make every check below vacuous."""
+    assert {"AVAILABLE", "PARTIAL", "INSUFFICIENT_OBSERVATIONS", "NOT_APPLICABLE"} <= set(VALIDITY)
+
+
+def test_partial_requires_a_present_value_which_is_why_insufficiency_decides_first() -> None:
+    """The local ordering is derived from 4.1.1, not asserted against itself."""
+    assert "present" in VALIDITY["PARTIAL"][0]
+    assert "absent" in VALIDITY["INSUFFICIENT_OBSERVATIONS"][0]
+    flat = flatten(TAIL_SPAN)
+    assert "eligible count decides the metric value first" in flat
+    assert "`PARTIAL` is reachable only when the minimum is met" in flat
+    assert "not a precedence policy over availability states" in flat
+
+
+def test_insufficiency_and_exclusion_together_yield_no_valued_partial() -> None:
+    """The overlapping-state case: below the minimum AND a trade excluded."""
+    short = population(["-3.10", "-2.40", "-2.00"])[: PARAMS.minimum_observations - 1]
+    assert len(short) == 29
+    result = tail_loss(short, excluded=1)
+    assert result.availability == "INSUFFICIENT_OBSERVATIONS"
+    assert result.reason == "BELOW_MINIMUM_OBSERVATIONS"
+    assert result.value is None, "a valued PARTIAL was manufactured from too few observations"
+    assert "whether or not" in flatten(TAIL_SPAN)
+
+
+def test_a_met_minimum_with_exclusions_is_the_only_route_to_a_valued_partial() -> None:
+    at_minimum = population(["-3.10", "-2.40", "-2.00"])
+    assert len(at_minimum) == PARAMS.minimum_observations
+    valued = tail_loss(at_minimum, excluded=2)
+    assert (valued.availability, valued.reason) == ("PARTIAL", "UPSTREAM_INPUT_MISSING")
+    assert valued.value is not None
+    assert valued.reason in VALIDITY["PARTIAL"][1]
+
+
+def test_the_tail_and_the_worst_observation_coincide_when_the_tail_is_tied() -> None:
+    """The claim that they never coincide is false, and the document no longer makes it."""
+    tied = population(["-3.10", "-3.10", "-3.10"])
+    value = tail_loss(tied).value
+    worst = min(o.r_multiple for o in tied)
+    assert value == worst == Decimal("-3.10")
+    assert "so they never coincide in the declared configuration" not in ADR_FLAT
+    assert "their values can still coincide" in ADR_FLAT
+    assert "Coincidence of two values is not identity of two definitions" in flatten(TAIL_SPAN)
+
+
+def test_the_untied_case_still_separates_the_two_definitions() -> None:
+    untied = population(["-3.10", "-2.40", "-2.00"])
+    assert tail_loss(untied).value != min(o.r_multiple for o in untied)
+
+
+def test_no_shared_expectancy_window_is_claimed_and_the_support_is_stated() -> None:
+    """A reused minimum is not a shared window, and it is not evidence of adequacy."""
+    assert "share one window and one population" not in ADR_FLAT
+    assert "share one window and one population" not in CONTRACTS_FLAT
+    assert "a reused count and not a shared window" in flatten(PARAMETER_SPAN)
+    assert "no rolling window for either" in flatten(TAIL_SPAN)
+    for claim in ("One observation is a third of the estimate", "no predictive reliability"):
+        assert claim in ADR_FLAT, claim
+    assert "no rolling expectancy row" in ADR_FLAT
+
+
+def test_the_quantile_rejection_no_longer_rests_on_non_determinism() -> None:
+    """A quantile with a declared convention is deterministic; the reason had to change."""
+    assert "rejected — and not for being non-deterministic" in ADR_FLAT
+    assert "is perfectly deterministic and yields one number under one `metric_id`" in ADR_FLAT
+
+
+# ------------------------------------- the bounded capacity search, executed
+
+
+class Grid(NamedTuple):
+    lower: Decimal
+    upper: Decimal
+    step: Decimal
+
+    def points(self) -> list[Decimal]:
+        out: list[Decimal] = []
+        c = self.lower
+        while c <= self.upper:
+            out.append(c)
+            c += self.step
+        return out
+
+
+def capacity_search(
+    modelled: Callable[[Decimal], Decimal],
+    *,
+    observed: Decimal,
+    tolerance: Decimal,
+    grid: Grid,
+) -> Result:
+    """12.3.3's search, executed over a declared grid with `C = 0` as the lower endpoint."""
+    ceiling = observed + tolerance
+    feasible = [c for c in grid.points() if modelled(c) <= ceiling]
+    if not feasible:
+        return Result("NOT_APPLICABLE", "NOT_DEFINED_FOR_SUBJECT", None)
+    best = max(feasible)
+    if best == grid.upper:
+        return Result("PARTIAL", "EXTENT_PARTIALLY_COVERED", best)
+    return Result("AVAILABLE", "NONE", best)
+
+
+GRID: Final = Grid(Decimal(0), Decimal(400_000), Decimal(50_000))
+
+
+def test_a_capacity_inside_the_grid_is_a_grid_maximum() -> None:
+    result = capacity_search(
+        lambda c: c / Decimal(25_000),
+        observed=Decimal("8.00"),
+        tolerance=Decimal("4.00"),
+        grid=GRID,
+    )
+    assert (result.availability, result.reason) == ("AVAILABLE", "NONE")
+    assert result.value == Decimal(300_000)
+    assert result.value < GRID.upper, "an interior maximum must not sit on the upper endpoint"
+    assert result.value in GRID.points(), "a reported maximum must be a point actually evaluated"
+
+
+def test_no_positive_feasible_point_is_a_computed_zero_and_not_an_absence() -> None:
+    """A qualified calculation whose feasible capital is genuinely zero is a measurement."""
+    result = capacity_search(
+        lambda c: Decimal(0) if c == 0 else Decimal(999),
+        observed=Decimal("8.00"),
+        tolerance=Decimal("4.00"),
+        grid=GRID,
+    )
+    assert (result.availability, result.reason) == ("AVAILABLE", "NONE")
+    assert result.value == Decimal(0), "the computed zero must be carried, not suppressed"
+    assert "computed zero" in flatten(CAPACITY_SPAN)
+
+
+def test_an_empty_feasible_set_is_absent_and_is_never_rendered_as_zero() -> None:
+    """Even `C = 0` fails when the version's own fills beat the reference by more than the
+    tolerance, so the maximand is over an empty set and names nothing."""
+    result = capacity_search(
+        lambda c: c / Decimal(50_000),
+        observed=Decimal("-5.00"),
+        tolerance=Decimal("4.00"),
+        grid=GRID,
+    )
+    assert (result.availability, result.reason) == ("NOT_APPLICABLE", "NOT_DEFINED_FOR_SUBJECT")
+    assert result.value is None, "an empty feasible set was rendered as a capacity"
+    assert result.value != Decimal(0)
+    assert "the feasible set is empty" in flatten(CAPACITY_SPAN)
+
+
+def test_a_feasible_upper_endpoint_is_a_lower_bound_and_not_a_maximum() -> None:
+    result = capacity_search(
+        lambda c: Decimal("1.00"),
+        observed=Decimal("8.00"),
+        tolerance=Decimal("4.00"),
+        grid=GRID,
+    )
+    assert (result.availability, result.reason) == ("PARTIAL", "EXTENT_PARTIALLY_COVERED")
+    assert result.value == GRID.upper
+    assert "lower bound, not a maximum" in flatten(CAPACITY_SPAN)
+
+
+def test_a_non_monotone_cost_function_is_swept_rather_than_stopped_at() -> None:
+    """Early stopping and a full sweep disagree, which is why the rule must be declared."""
+
+    def dip(c: Decimal) -> Decimal:
+        return Decimal("99") if c == Decimal(100_000) else c / Decimal(50_000)
+
+    ceiling = Decimal("12.00")
+    points = GRID.points()
+    swept = max(c for c in points if dip(c) <= ceiling)
+    stopped = Decimal(0)
+    for c in points:
+        if dip(c) > ceiling:
+            break
+        stopped = c
+    assert swept == Decimal(400_000)
+    assert stopped == Decimal(50_000)
+    assert swept != stopped, "early stopping and a full sweep must be shown to disagree"
+    assert "evaluates the whole declared domain" in flatten(CAPACITY_SPAN)
+
+
+SEARCH_OUTCOME_ROW: Final = re.compile(
+    r"^\| (.+?) \| (.+?) \| `([A-Z_]+)` \| `([A-Z_]+)` \|$", re.M
+)
+
+
+def search_outcomes() -> dict[str, tuple[str, str]]:
+    span = section(CAPACITY_SPAN, "**The search outcomes,", "**A returned maximum is")
+    return {
+        flatten(a.replace("**", "")): (c, d) for a, _b, c, d in SEARCH_OUTCOME_ROW.findall(span)
+    }
+
+
+OUTCOMES: Final = search_outcomes()
+
+
+def test_the_search_outcome_parser_sees_all_four_outcomes() -> None:
+    assert len(OUTCOMES) == 4, sorted(OUTCOMES)
+
+
+def test_every_search_outcome_pairing_is_one_the_validity_matrix_permits() -> None:
+    for outcome, (state, reason) in OUTCOMES.items():
+        assert state in VALIDITY, (outcome, state)
+        assert reason in VALIDITY[state][1], (outcome, state, reason)
+
+
+def test_the_search_outcomes_are_not_read_as_admission_gate_rows() -> None:
+    """They are four columns wide, so the gate parser cannot mistake them for gate rows."""
+    assert set(OUTCOMES) & set(GATE) == set()
+    available = [s for s, pair in GATE.items() if pair[0] == "AVAILABLE"]
+    assert available == ["every input present and the model qualified"], available
+
+
+def test_the_declared_search_domain_is_required_with_the_value() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    for declared in ("lower endpoint", "upper endpoint", "granularity", "stopping rule"):
+        assert declared in flat, declared
+    assert "No interpolation between evaluated points" in flat
+    assert "no extrapolation beyond the upper endpoint is evaluated evidence" in flat
+
+
+def test_the_capital_to_schedule_mapping_is_declared_or_the_value_is_refused() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    assert "order and trade schedule" in flat
+    assert "is not a function of `C`" in flat
+
+
+def test_both_cost_legs_must_share_a_basis_or_the_value_is_refused() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    assert "all BPS" in flat
+    assert "refused rather than computed across an incomparable basis" in flat
+
+
+def test_the_capacity_is_labelled_relative_to_this_version_s_own_execution() -> None:
+    """Poor observed execution mechanically raises the ceiling, so the number is narrower."""
+    tolerance = Decimal("4.00")
+    good = capacity_search(
+        lambda c: c / Decimal(50_000),
+        observed=Decimal("2.00"),
+        tolerance=tolerance,
+        grid=GRID,
+    )
+    poor = capacity_search(
+        lambda c: c / Decimal(50_000),
+        observed=Decimal("8.00"),
+        tolerance=tolerance,
+        grid=GRID,
+    )
+    assert good.value is not None and poor.value is not None
+    assert poor.value > good.value, "worse observed execution must be shown to raise the number"
+    flat = flatten(CAPACITY_SPAN)
+    assert "mechanically increases the reported number" in flat
+    assert "not comparable across versions of differing execution quality" in flat
+    assert "not a profitability capacity" in flat
+
+
+def test_the_borrow_input_is_conditional_on_short_exposure() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    conditional = "Input 8 is required only where the evaluated trade population carries short"
+    assert conditional in flat
+    assert "its absence does not block admission" in flat
+    assert "every applicable input" in ADR_FLAT
+
+
+def test_a_determined_overlap_set_may_be_empty() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    assert "a determined set may be empty" in flat
+    assert "An undetermined overlap set is a missing input; an empty determined one is not" in flat
+
+
+def test_research_fills_satisfy_the_interface_without_implying_broker_fills() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    assert "`BACKTEST_SIMULATED`" in flat
+    assert "never broker fills" in flat
+    assert "without implying a broker execution" in flat
+    assert "BACKTEST_SIMULATED" in CONTRACTS_TEXT
+
+
+def test_a_refused_or_expired_qualification_is_not_a_qualification() -> None:
+    refused = GATE["a qualification record that refuses the model"]
+    expired = GATE[
+        "a qualification that has expired, or was granted for a different model, "
+        "calibration, evaluation set or window scope"
+    ]
+    assert refused == ("NOT_AUTHORIZED", "PRODUCER_NOT_AUTHORIZED")
+    assert expired == ("UNEVALUATED", "NOT_YET_ASSESSED")
+    assert refused != expired, "a refused model and an unassessed one are two different answers"
+    assert "Nothing is qualified by having been looked at" in flatten(CAPACITY_SPAN)
+
+
+def test_the_gate_declares_an_evaluation_order_for_coexisting_conditions() -> None:
+    flat = flatten(CAPACITY_SPAN)
+    assert "the first unmet condition is the answer" in flat
+    assert "not a precedence rule over availability states generally" in flat
+    order = [
+        "producer existence",
+        "then authorization",
+        "then every **applicable** input",
+        "then model qualification",
+        "then freshness",
+        "then extent",
+    ]
+    positions = [flat.find(step) for step in order]
+    assert all(pos != -1 for pos in positions), positions
+    assert positions == sorted(positions), "the declared order must read in order"
 
 
 # -------------------------------------------------------------- the status surface

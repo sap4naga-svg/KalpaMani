@@ -5526,11 +5526,11 @@ missing table row alone is not the proof** — the gap is established from §12.
 | **its population** | **every eligible observation, and never losses only.** The tail is selected by **ordering**, so a **positive value is a measured result** rather than a failure. A losses-only population would move with the win rate and be undefined for a version that never lost |
 | **its sign** | §12.1's, unchanged — **profit positive, loss negative**, for long and short alike. This **matches the values the merged implementation already produces**, so no fixture is contradicted |
 | **its boundaries** | an observation enters at its **close instant**; **no observation after a point's cutoff contributes to that point**; and in the strong form, **replacing every later observation changes nothing at or before a point** |
-| **its degenerate cases** | below the minimum — **an empty population included** — `INSUFFICIENT_OBSERVATIONS` with **no value**; a computed **zero is `AVAILABLE`**; excluded trades are **counted** and the result is `PARTIAL` naming how many, on the accepted `slippage.aggregate` precedent |
-| **capacity** | **the greatest deployable strategy capital whose modelled execution cost stays within a declared tolerance of the version's own realized execution cost** — specified as a **qualified-model interface with an admission gate**, because it is **not computable from any record this repository holds** |
+| **its degenerate cases** | below the minimum — **an empty population included** — `INSUFFICIENT_OBSERVATIONS` with **no value**, **whether or not trades were also excluded**; a computed **zero is `AVAILABLE`**; excluded trades are **counted** and the result is `PARTIAL` naming how many, on the accepted `slippage.aggregate` precedent, **only once the minimum is met** — the exclusion count is disclosed either way and **never turns an absent value into a valued `PARTIAL`** |
+| **capacity** | **the greatest deployable strategy capital whose modelled execution cost stays within a declared tolerance of the version's own realized execution cost** — specified as a **qualified-model interface with an admission gate**, because it is **not computable from any record this repository holds**. It is a **maximum among the points a declared search grid actually evaluated**, never over the continuum |
 | **capacity's nine required inputs** | volume history · price history · the order and fill record · a declared participation limit · a declared execution horizon · a market-impact function with a declared calibration identity · a declared cost tolerance · borrow history from a record · the portfolio-overlap set |
-| **what capacity is not** | **not strategy capital, not buying power, not available cash, not gross exposure and not any limit.** Each is already displayed under its own name, and none would move when liquidity moved. **A capacity field is never filled from one of them, and never filled with zero** |
-| **capacity when it cannot be produced** | **`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` today**; `NOT_IMPLEMENTED` with no model; **`UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded** — a missing assessment is not a missing input |
+| **what capacity is not** | **not strategy capital, not buying power, not available cash, not gross exposure and not any limit.** Each is already displayed under its own name, and none would move when liquidity moved. **A capacity field is never filled from one of them, and no absent capacity is ever filled with zero** — a **computed** zero, meaning no positive evaluated capital level stayed within tolerance, is a **measurement** and renders `AVAILABLE`. Because the ceiling is the version's **own** realized cost plus the tolerance, **poor observed execution mechanically raises the reported number**, so it is a **cost-degradation-tolerance capacity relative to that version's own execution** — **not a profitability capacity, not a liquidity ceiling, not a risk or allocation limit, and not comparable across versions of differing execution quality** |
+| **capacity when it cannot be produced** | **`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` today**; `NOT_IMPLEMENTED` with no model; **`UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded, has expired or was granted for a different model, calibration, evaluation set or window scope** — a missing assessment is not a missing input, and **an assessment that refused the model is `NOT_AUTHORIZED`, not an unassessed one**. A still-feasible upper grid endpoint is **`PARTIAL` — a lower bound, not a maximum** — and an **empty feasible set is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`, never zero** |
 | **capacity per version** | **per-version capacities are never summed into a portfolio capacity** — overlapping holdings mean the sum overstates |
 
 #### Proposed parameters, distinguished from accepted requirements
@@ -5543,7 +5543,10 @@ authorization.**
 ```text
 tail fraction q                    0.10                          PROPOSED
 tail-loss window N                 30 eligible closed trades     PROPOSED - REUSES THE DECLARED
-                                                                 12.3 EXPECTANCY MINIMUM
+                                                                 12.3 EXPECTANCY MINIMUM. A REUSED
+                                                                 COUNT, NOT A SHARED WINDOW, AND NO
+                                                                 EVIDENCE OF ADEQUACY FOR A
+                                                                 THREE-OBSERVATION TAIL
 tail-loss minimum observations     30                            PROPOSED - THE SAME REUSED VALUE
 derived tail count k               ceil(0.10 * 30), which is 3   DERIVED, NOT SEPARATELY CHOSEN
 capacity model parameters          DECLARED BY THE QUALIFIED MODEL AND DISPLAYED WITH THE VALUE
@@ -5552,6 +5555,12 @@ capacity model parameters          DECLARED BY THE QUALIFIED MODEL AND DISPLAYED
 
 **Area 5's seven health states and every transition rule remain ADR-0026 §13's and are unchanged.**
 Defining a tail loss creates **no** threshold at which a transition occurs.
+
+**The tail statistic averages three observations, and its support is thin.** **One observation is a
+third of the estimate**, so the value is **descriptive of the window it measured** and carries **no
+predictive reliability, no production qualification and no threshold behind it**. **The mean of the
+three worst is not prevented from equalling the single worst** — when the three are tied the two
+values coincide — and **coincidence of values is not identity of definitions**.
 
 #### The synthetic and production boundary
 
