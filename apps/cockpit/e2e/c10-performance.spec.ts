@@ -17,12 +17,34 @@ import { mkdirSync, writeFileSync } from "node:fs";
  * duration, and that each interaction it timed actually happened; the durations themselves are
  * WRITTEN TO THE EVIDENCE FILE with the conditions they were taken under.
  *
- * THE CONDITIONS ARE PART OF THE MEASUREMENT. This suite drives `next dev`, on one worker, on
- * whatever machine ran it, against the local fixture adapter. A development server compiles on
- * demand and ships an unminified bundle, so these numbers are an UPPER BOUND on a production
- * build's and are not comparable to one. They are recorded so a later cycle has a starting
- * point, not so anybody can quote them as the Cockpit's performance.
+ * THE CONDITIONS ARE PART OF THE MEASUREMENT, AND THEY ARE RECORDED RATHER THAN REASONED FROM.
+ * By default this suite drives `next dev`: a development server, compiled on demand, shipping
+ * an unminified bundle, on one worker, on whatever machine ran it, against the local fixture
+ * adapter. Those numbers describe THAT server and nothing else. They are NOT an upper bound on
+ * a production build's — a development and a production server differ in compilation, bundling,
+ * caching and rendering, in more than one direction, and no measurement here establishes an
+ * ordering between them. A production figure is obtained by MEASURING A PRODUCTION BUILD, which
+ * is what `KM_COCKPIT_SERVER` exists for: run `next build`, start `next start` on the suite's
+ * port, and set the variable to describe the server, and the evidence file records that server
+ * and is written under its own name. Nothing is quoted as the Cockpit's performance either way.
  */
+
+/**
+ * How the server under test is described in the evidence, and in the evidence file's name.
+ *
+ * It DESCRIBES rather than configures: Playwright reuses a server already listening on the
+ * suite's port, so the variable's job is to make the evidence say which one that was instead of
+ * assuming the default. An unset variable means the default `next dev` server.
+ */
+const SERVER =
+  process.env.KM_COCKPIT_SERVER ??
+  "next dev - a development server, compiled on demand and unminified";
+
+/** A file-name-safe slug for the server description, so two runs cannot overwrite each other. */
+const SERVER_SLUG = SERVER.toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "")
+  .slice(0, 40);
 
 const EVIDENCE = "screenshots-c10";
 
@@ -143,17 +165,19 @@ test.afterAll(async ({}, testInfo) => {
     capturedAt: new Date().toISOString(),
     project,
     viewport: testInfo.project.use.viewport ?? null,
+    server: SERVER,
     conditions: [
-      "next dev — a development server, compiled on demand and unminified",
+      `server under test: ${SERVER}`,
       "one Playwright worker, local loopback, local fixture adapter, no network",
-      "an UPPER BOUND on a production build, and not comparable to one",
+      "these figures describe THIS server on THIS machine and nothing else",
+      "no ordering against any other build is claimed, in either direction",
       "no accepted numeric performance budget exists; none is asserted or implied",
     ],
     routes: measurements,
     interactions,
   };
   writeFileSync(
-    `${EVIDENCE}/performance-${project}.json`,
+    `${EVIDENCE}/performance-${project}-${SERVER_SLUG}.json`,
     `${JSON.stringify(report, null, 2)}\n`,
     "utf8",
   );

@@ -98,6 +98,60 @@ async function horizontalOverflow(page: Page): Promise<number> {
   );
 }
 
+/**
+ * CONTENT THAT ESCAPES THE VIEWPORT WITHOUT A SCROLL CONTAINER TO ESCAPE INTO.
+ *
+ * MEASURING `documentElement.scrollWidth - clientWidth` ALONE CANNOT FAIL HERE, and that was
+ * established by experiment rather than by reading: `globals.css` sets `overflow-x: hidden` on
+ * both `html` and `body`, so the root's scroll width is CLAMPED to its client width. Injecting a
+ * 2400-pixel-wide element into the page left that measurement reading zero, and every U14
+ * assertion in this repository built on it stayed green. The page genuinely never scrolls
+ * sideways -- it cannot -- so the number is true, and it is not evidence.
+ *
+ * WHAT SECTION 12 ACTUALLY FORBIDS IS THE CLIPPING. "no horizontal page scroll * no clipped
+ * critical control * no truncated number without a full value available", and U14 asks wide
+ * content to scroll "within its own container". So the question is whether any rendered element
+ * extends past the viewport WITHOUT sitting inside a real scroll container: content inside an
+ * `overflow-x: auto` or `scroll` region is reachable and is exactly what the specification asks
+ * for, and content outside one is clipped and unreachable.
+ *
+ * Only the innermost offenders are reported, so one wide element is one finding rather than a
+ * chain of its ancestors, and elements with no box at all are skipped.
+ */
+async function clippedBeyondViewport(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const limit = document.documentElement.clientWidth;
+    const found: string[] = [];
+    for (const element of Array.from(document.querySelectorAll("header *, main *"))) {
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      if (rect.right <= limit + 1) continue;
+
+      let ancestor: Element | null = element.parentElement;
+      let insideScrollContainer = false;
+      while (ancestor !== null && ancestor !== document.body) {
+        const overflowX = getComputedStyle(ancestor).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") {
+          insideScrollContainer = true;
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+      if (insideScrollContainer) continue;
+
+      /* Report the innermost offender only: an ancestor is wide because its child is. */
+      const childOverflows = Array.from(element.children).some(
+        (child) => child.getBoundingClientRect().right > limit + 1,
+      );
+      if (childOverflows) continue;
+
+      const text = (element.textContent ?? "").trim().slice(0, 40);
+      found.push(`<${element.tagName.toLowerCase()}> right=${Math.round(rect.right)} "${text}"`);
+    }
+    return found.slice(0, 5);
+  });
+}
+
 test.describe("C10 — every route, at this viewport", () => {
   for (const route of ROUTES) {
     test(`${route} renders, reads and scrolls correctly`, async ({ page }) => {
@@ -113,6 +167,16 @@ test.describe("C10 — every route, at this viewport", () => {
         await horizontalOverflow(page),
         `${route} must not scroll horizontally`,
       ).toBeLessThanOrEqual(1);
+
+      /*
+       * And the half the root measurement cannot see: nothing is clipped OFF the page.
+       * This found real defects -- eleven routes carried a badge whose sentence ran past a
+       * 390-pixel viewport, and the attention metadata pairs ran past it on the landing page.
+       */
+      expect(
+        await clippedBeyondViewport(page),
+        `${route} must clip no content outside a scroll container`,
+      ).toEqual([]);
 
       /*
        * U2 and U3 — the persistent context, and the page-level synthetic label, on EVERY route.
@@ -140,12 +204,14 @@ test.describe("C10 — every route, at this viewport", () => {
       /*
        * The route is a registered one, and the registry knows what to call it.
        *
-       * The NAME is checked here rather than the document title: every route still shares one
-       * `<title>`, because a Next.js client component cannot export route metadata and this
-       * cycle did not restructure thirty screens to give each a segment layout. The gap is
-       * recorded in the acceptance record rather than half-fixed here — a title set from an
-       * effect is overwritten by the framework on the next client navigation, which is worse
-       * than one honest generic title.
+       * The NAME is checked here rather than the document title, and the reason is that NO
+       * ACCEPTED REQUIREMENT ASKS FOR A PER-ROUTE DOCUMENT TITLE. Neither the UI
+       * specification's acceptance criteria U1-U20, nor its section 11 accessibility targets,
+       * nor the traceability matrix's criteria for any area mention the document title at all.
+       * Every route therefore still shares one `<title>`, which is recorded in the acceptance
+       * record as an unrequired improvement rather than as an unmet criterion. It is NOT
+       * blocked: a per-route segment layout is ordinary framework-supported work, and a later
+       * cycle that wants it can add one.
        */
       const registered = resolveRoute(route);
       expect(registered, `${route} must be registered`).not.toBeNull();

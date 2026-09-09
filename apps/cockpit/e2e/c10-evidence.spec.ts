@@ -8,11 +8,15 @@ import { execFileSync } from "node:child_process";
  * A FOCUSED, INDEXED SET — not a screenshot of everything. `ui-ux-specification.md` section 15
  * describes visual regression as "a fixed synthetic fixture set, a fixed viewport list,
  * deterministic rendering, and a stable baseline per route and per state", where "a diff is a
- * review item, not an auto-accept". This file supplies the fixed fixture set, the fixed viewport
- * list and the per-route, per-state captures. It does NOT commit a baseline image: this
- * repository keeps screenshots out of the tracked tree, so an image baseline would have to live
- * outside it, and a baseline nobody can diff against in review is not a baseline. That half of
- * the criterion is recorded as outstanding in the acceptance record rather than claimed here.
+ * review item, not an auto-accept". This file supplies the REVIEW EVIDENCE half: the fixed
+ * fixture set, the fixed viewport list and the per-route, per-state captures, written for a
+ * person to look at. It commits nothing, and it gates nothing.
+ *
+ * THE COMMITTED BASELINE IS A DIFFERENT ARTIFACT AND LIVES ELSEWHERE.
+ * `e2e/c10-visual-regression.spec.ts` owns it: a small, deterministic, tracked set under
+ * `e2e/visual-baseline/`, compared on every run. These two are deliberately not the same thing
+ * — a directory of full-page captures regenerated on every run is evidence, and a tracked image
+ * a later change is compared against is a baseline.
  *
  * Every capture is written to a DISTINCT directory, so the C3 to C9 sets are untouched, and is
  * stamped with the exact commit it was taken at — a screenshot whose revision is unknown is a
@@ -47,9 +51,10 @@ test.beforeAll(() => {
       `working tree:       ${dirty}`,
       `captured on:        ${new Date().toISOString()}`,
       "",
-      "Review evidence. NOT a committed visual-regression baseline: this repository",
-      "keeps screenshots outside the tracked tree, so no image baseline is committed",
-      "and no image diff gates anything.",
+      "Review evidence, for a person to look at. It is NOT the committed",
+      "visual-regression baseline: that is the tracked set under",
+      "e2e/visual-baseline/, compared by e2e/c10-visual-regression.spec.ts.",
+      "Nothing in this directory is tracked, and nothing in it gates anything.",
       "",
       "Every populated figure in a `scenario=demo` capture is a repository-owned",
       "deterministic fixture. It is not a result, not a measurement, and not evidence",
