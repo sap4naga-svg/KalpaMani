@@ -13348,24 +13348,35 @@ COCKPIT_C8_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "backtesting: STARTED",
 )
 
-#: C9 implements the two search-and-assistant areas, and its implementation is carried by a
-#: pull request that is OPEN. The guard holds the same three states apart. The failure it exists
-#: to catch is the one this cycle is most exposed to: a deterministic matcher over a CLOSED
-#: catalogue of eleven questions is NOT a model, an inference runtime, an embedding store, a
-#: search service or a query engine, and a status document that collapsed the two would report a
-#: capability this repository does not have -- and would imply an external model had been handed
-#: read-model content, which CLAUDE.md 4.22 forbids outright.
+#: C9 implements the two search-and-assistant areas, and PR #83 MERGED them. The guard holds the
+#: same three states apart. The failure it exists to catch is the one this cycle is most exposed
+#: to: a deterministic matcher over a CLOSED catalogue of eleven questions is NOT a model, an
+#: inference runtime, an embedding store, a search service or a query engine, and a status
+#: document that collapsed the two would report a capability this repository does not have -- and
+#: would imply an external model had been handed read-model content, which CLAUDE.md 4.22 forbids
+#: outright.
+#:
+#: THE MERGE MOVED ONE CLAIM, ON THE ADR-0031 AND C7 PRECEDENT. "C9 Ask KalpaMani and record
+#: search: MERGED" was forbidden while PR #83 was open and is TRUE now, so it moves from the
+#: forbidden set to the required one -- forbidding it would refuse the very statement the merge
+#: made correct. The stale UNDER-claim moves the other way, because a status document that still
+#: calls a merged cycle an open pull request sends the next session to merge it again. What stays
+#: forbidden is the claim that C9 is COMPLETE, every over-claim about a model or a search service,
+#: and the two product-level over-claims, because none of those changed.
 COCKPIT_C9_HEADING: Final = (
-    "### The C9 Ask KalpaMani and record search — IMPLEMENTED, and carried by an open pull request"
+    "### The C9 Ask KalpaMani and record search — MERGED, and synthetic only"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
-    "C9 Ask KalpaMani and record search: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "C9 Ask KalpaMani and record search: MERGED / SYNTHETIC READ-ONLY SURFACES",
+    "PR #83: MERGED",
+    "PR #83 merge commit: cbf419876f758090fb5409b2ef636a6540568c9f",
+    "PR #83 merged at: 2026-09-09T01:37:28Z",
+    "PR #83 final reviewed head: 6390ef2e0889351d388db3318a9b9520849004cd",
     "independent review of the C9 implementation: PERFORMED",
     "C9 areas implemented: 30, 31",
     "C9 read models introduced: 2, EACH AT ITS OWN FIRST VERSION",
-    "the nineteen coordinated read models: UNCHANGED AT v2",
     "the seventeen C7 and C8 read models: UNCHANGED AT v1",
     "new API routes, handlers or server actions: NONE",
     "new routes added to the accepted registry: NONE",
@@ -13377,17 +13388,19 @@ COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "provider data used: NONE",
     "private artifacts read: NONE",
     "backtesting: NOT STARTED",
-    "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
     "C10: NOT STARTED / NOT AUTHORIZED",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
 
 #: Claims no status document may make about C9. Matching a question against a closed catalogue
-#: is not a model; answering a question about a subsystem is not the subsystem; and an interface
-#: that reads is not a merge and not a completed Cockpit.
+#: is not a model; answering a question about a subsystem is not the subsystem; and a merge is
+#: not a completed Cockpit.
+#:
+#: THE STALE UNDER-CLAIM IS NOW FORBIDDEN, on the same precedent that moved the merge claim.
+#: "IMPLEMENTED IN AN OPEN PULL REQUEST" was required while PR #83 was open and is FALSE now.
 COCKPIT_C9_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "C9 Ask KalpaMani and record search: MERGED",
+    "C9 Ask KalpaMani and record search: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "C9 Ask KalpaMani and record search: COMPLETE",
     # THE PROSE FORM OF THE SAME DRIFT, AND THE ONE THAT ACTUALLY SLIPPED THROUGH.
     #
@@ -13398,10 +13411,70 @@ COCKPIT_C9_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C9 and C10 are not started",
     "C9 and C10 are **not started**",
     "C9 to C10 are not started",
+    "C9 is implemented in an open pull request",
     "model, inference or embedding runtime: IMPLEMENTED",
     "external model or search service: IMPLEMENTED",
     "full Cockpit V1: COMPLETE",
     "backtesting: STARTED",
+)
+
+#: The C5 completion follow-up implements the rolling series and the portfolio benchmark
+#: comparison, and its implementation is carried by a pull request that is OPEN.
+#:
+#: THE FAILURE THIS GUARD EXISTS TO CATCH IS THE ONE THIS CYCLE IS MOST EXPOSED TO: a follow-up
+#: named "C5 completion" that delivers four of seven requirements and is then reported as having
+#: completed C5. Three requirements remain -- the named benchmarks need a provider nobody has
+#: selected, capacity needs both data and a definition, and a tail-loss measure has no definition
+#: anywhere -- so every one of them is required to READ as outstanding, and the completion claim
+#: is forbidden by name. Labelling an absence is not implementing the capability behind it.
+COCKPIT_C5_FOLLOWUP_HEADING: Final = (
+    "### The C5 completion follow-up — IMPLEMENTED IN PART, and C5 is still not complete"
+)
+
+#: Read with ``**`` stripped, so emphasis is not part of the contract.
+COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
+    "C5 completion follow-up: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    # THE REVIEW IS A FACT ABOUT THE WORK, AND IT IS RECORDED LIKE ONE. Every recent cycle
+    # carries this line -- C4, C7, C8 and C9 each do -- so a cycle that carried none would be
+    # the only one whose status could not say whether anybody had read it. It says a review
+    # HAPPENED and nothing more: not that the cycle is complete, not that its outstanding
+    # requirements moved, and not that it merged.
+    "independent review of the follow-up: PERFORMED",
+    "portfolio rolling return and drawdown: IMPLEMENTED AT SYNTHETIC SCOPE",
+    "rolling expectancy: IMPLEMENTED AT SYNTHETIC SCOPE",
+    "portfolio benchmark comparison: IMPLEMENTED AT SYNTHETIC SCOPE",
+    "named benchmarks SPY / QQQ / IWM: UNAVAILABLE - NO PROVIDER IS SELECTED",
+    "strategy capacity: UNAVAILABLE - DEPENDENCIES NAMED, DEFINITION ABSENT",
+    "rolling tail losses: BLOCKED - NO ACCEPTED DEFINITION EXISTS",
+    "C5 overall: NOT COMPLETE",
+    "read models whose schema version moved: 2, EACH TO ITS OWN v3",
+    "every other read model: UNCHANGED",
+    "ledger economics, entry facts or risk records: UNCHANGED",
+    "a second portfolio or strategy engine: NONE",
+    "market data downloaded or requested: NONE",
+    "new API routes, handlers or server actions: NONE",
+    "new runtime dependencies: NONE",
+    "provider data used: NONE",
+    "backtesting: NOT STARTED",
+    "C10: NOT STARTED / NOT AUTHORIZED",
+    "full Cockpit V1: INCOMPLETE",
+    "G1 / G2: OPEN / OPEN",
+)
+
+#: Claims no status document may make about the C5 completion follow-up. Delivering the rolling
+#: series and the comparison is not delivering capacity, is not delivering the named benchmarks,
+#: and is not completing C5 -- and a synthetic comparison against an invented curve establishes
+#: nothing about any strategy.
+COCKPIT_C5_FOLLOWUP_FORBIDDEN: Final[tuple[str, ...]] = (
+    "C5 completion follow-up: COMPLETE",
+    "C5 completion follow-up: MERGED",
+    "C5 overall: COMPLETE",
+    "strategy capacity: IMPLEMENTED",
+    "named benchmarks SPY / QQQ / IWM: IMPLEMENTED",
+    "named benchmarks SPY / QQQ / IWM: AVAILABLE",
+    "rolling tail losses: IMPLEMENTED",
+    "market data downloaded or requested: SOME",
+    "provider selected: SHARADAR",
 )
 
 #: ADR-0030 was ACCEPTED on the merge of PR #78, BEFORE ADR-0031 was. The guard below is the
@@ -24465,7 +24538,7 @@ def main() -> int:
             }
         )
         f.check(
-            "both status documents record C9 implemented, unmerged and deterministic only",
+            "both status documents record C9 merged, reviewed and deterministic only",
             not divergent_c9,
             ", ".join(divergent_c9),
         )
@@ -24478,9 +24551,53 @@ def main() -> int:
             }
         )
         f.check(
-            "no status document records C9 as merged or as a running model",
+            "no status document records C9 as unmerged, complete or as a running model",
             not overclaiming_c9,
             "; ".join(overclaiming_c9),
+        )
+
+        # -- the C5 completion follow-up: partly implemented, and C5 is not done ---
+        #
+        # The distinction this cycle is most exposed to losing. It delivers the rolling
+        # series, the rolling expectancy and the portfolio benchmark comparison; it
+        # delivers NEITHER capacity NOR the named benchmarks, and a tail-loss measure has
+        # no definition anywhere to deliver. A status document that read "C5 completion
+        # follow-up: COMPLETE" would tell the next session three outstanding requirements
+        # had been met, and RENDERING AN UNAVAILABLE STATE IS NOT IMPLEMENTING THE
+        # CAPABILITY BEHIND IT.
+        stale_followup = [
+            label for label, text in status_documents if COCKPIT_C5_FOLLOWUP_HEADING not in text
+        ]
+        f.check(
+            "both status documents carry the C5 completion follow-up status section",
+            not stale_followup,
+            ", ".join(stale_followup),
+        )
+        divergent_followup = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in COCKPIT_C5_FOLLOWUP_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record which follow-up requirements are still outstanding",
+            not divergent_followup,
+            ", ".join(divergent_followup),
+        )
+        overclaiming_followup = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in COCKPIT_C5_FOLLOWUP_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document records C5 or its follow-up as complete",
+            not overclaiming_followup,
+            "; ".join(overclaiming_followup),
         )
 
         # -- ADR-0030: accepted, and both status documents must say so ---------

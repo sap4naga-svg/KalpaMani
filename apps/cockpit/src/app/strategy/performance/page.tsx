@@ -14,7 +14,13 @@ import {
 import { PanelSection, ReadModelPanel, ReferenceChip } from "@/components/cockpit/read-model-panel";
 import { useScope } from "@/components/shell/use-scope";
 import { useStrategyPerformance } from "@/data/client/hooks";
-import type { AlphaFamilyRollup, StrategyPerformance } from "@/contracts/strategy-models";
+import type {
+  AlphaFamilyRollup,
+  RollingExpectancy,
+  StrategyPerformance,
+} from "@/contracts/strategy-models";
+import type { MetricValue } from "@/contracts/values";
+import { isValueBearing } from "@/contracts/validity";
 import { humanizeCode } from "@/lib/format";
 import { withScope } from "@/lib/scope";
 
@@ -318,6 +324,22 @@ function VersionDetail({
             Counting the second needs a candidate stream, the Brain runtime does not exist, and
             Missed Opportunities owns that question.
           </p>
+          <CapacityDependencies metric={entry.module_metrics.capacity} />
+        </PanelSection>
+
+        <PanelSection
+          title="Rolling expectancy"
+          note="Expectancy over the trailing thirty closed trades of this exact version, one point per closed trade."
+        >
+          {entry.rolling_expectancy === undefined ? (
+            <AvailabilityBadge state="NOT_YET_AVAILABLE" reason="UPSTREAM_INPUT_MISSING" />
+          ) : (
+            <RollingExpectancyView
+              rolling={entry.rolling_expectancy}
+              operator={operator}
+              versionId={entry.strategy_version}
+            />
+          )}
         </PanelSection>
 
         <PanelSection
@@ -454,6 +476,220 @@ function VersionDetail({
  * roll-up carries no diversification figure at all: reporting one would be exactly the claim
  * G7 exists to withhold.
  */
+
+/**
+ * Rolling expectancy over one version's trailing closed trades.
+ *
+ * THE AXIS IS THE TRADE, NOT THE SESSION, and the table says so in its own header. Two
+ * trades of one version routinely close on the same day, so a time axis would have to drop
+ * one of them; the ordinal is what an observation unit of `CLOSED_TRADE` actually means, and
+ * each point carries the exit it was taken at beside its ordinal rather than instead of it.
+ *
+ * A POINT BELOW THE MINIMUM IS NOT A SMALLER SAMPLE. §12.3 declares thirty trades for
+ * `expectancy.currency`; a point with twenty-nine behind it reports
+ * `INSUFFICIENT_OBSERVATIONS` rather than an expectancy over twenty-nine wearing a
+ * thirty-trade label.
+ */
+function RollingExpectancyView({
+  rolling,
+  operator,
+  versionId,
+}: {
+  rolling: RollingExpectancy;
+  operator: boolean;
+  versionId: string;
+}) {
+  const computed = rolling.points.filter((point) =>
+    isValueBearing(point.value.availability),
+  ).length;
+  return (
+    <div className="space-y-2" data-testid={`rolling-expectancy-${versionId}`}>
+      <dl className="flex flex-wrap gap-x-5 gap-y-1 text-label-s text-text-tertiary">
+        <div className="flex gap-1.5">
+          <dt>Lookback</dt>
+          <dd className="font-mono text-text-secondary" data-testid="expectancy-lookback">
+            {String(rolling.lookback.value)} closed trades
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Minimum observations</dt>
+          <dd className="font-mono text-text-secondary">
+            {String(rolling.minimum_observations.value)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Observation unit</dt>
+          <dd className="text-text-secondary">{humanizeCode(rolling.observation_unit)}</dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Closed trades</dt>
+          <dd className="font-mono text-text-secondary" data-testid="expectancy-observed">
+            {String(rolling.observed.value)}
+          </dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>Points computed</dt>
+          <dd className="font-mono text-text-secondary" data-testid="expectancy-computed">
+            {computed}
+          </dd>
+        </div>
+      </dl>
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        Population: {humanizeCode(rolling.population.code)}. A trade with no retained
+        entry-time risk record is <strong>excluded</strong> here exactly as the summary above
+        excludes it, and the window is then short by that many rather than averaged over
+        fewer.
+      </p>
+      {computed === 0 ? (
+        <p
+          className="max-w-3xl text-label-m leading-relaxed text-text-tertiary"
+          data-testid="expectancy-none-computed"
+        >
+          <strong className="text-text-secondary">
+            No point on this version has a complete window behind it.
+          </strong>{" "}
+          It carries {String(rolling.observed.value)} closed trades and the window needs{" "}
+          {String(rolling.lookback.value)}. That is the answer, and a shorter window is not
+          substituted for it.
+        </p>
+      ) : (
+        <ScrollRegion
+          label={`Rolling expectancy by closed trade for ${versionId}`}
+          className="max-h-64 overflow-y-auto"
+        >
+          <table className="w-full min-w-[26rem] border-collapse text-label-m">
+            <caption className="sr-only">
+              Expectancy over the trailing {String(rolling.lookback.value)} closed trades of{" "}
+              {versionId}, in USD, indexed by the trade&rsquo;s position in exit order.
+            </caption>
+            <thead>
+              <tr className="border-b border-border-subtle text-left">
+                <th scope="col" className="py-1.5 pr-3 font-medium text-text-tertiary">
+                  Trade
+                </th>
+                <th scope="col" className="py-1.5 pr-3 font-medium text-text-tertiary">
+                  Exit
+                </th>
+                <th scope="col" className="py-1.5 font-medium text-text-tertiary">
+                  Rolling expectancy (USD)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rolling.points.map((point) => (
+                <tr
+                  key={String(point.ordinal.value)}
+                  className="border-b border-border-subtle last:border-0"
+                >
+                  <th
+                    scope="row"
+                    className="py-1 pr-3 text-left font-mono font-normal text-text-tertiary"
+                  >
+                    #{String(point.ordinal.value)}
+                  </th>
+                  <td className="py-1 pr-3 font-mono text-text-tertiary">
+                    {String(point.at.value).slice(0, 10)}
+                  </td>
+                  <td className="py-1">
+                    <MetricText metric={point.value} operator={operator} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollRegion>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What capacity is waiting on, named exactly.
+ *
+ * AREA 4 NAMES CAPACITY, AND THIS APPLICATION DOES NOT COMPUTE ONE. The metric beside it
+ * renders unavailable; this states WHY, because "unavailable" on its own sends a reader to
+ * look for a broken producer rather than at a dependency that does not exist.
+ *
+ * NOTHING HERE IS AN ESTIMATE. No participation rate, no average daily volume, no impact
+ * model, no borrow constraint and no recommended allocation appears — inventing any one of
+ * them is how a demonstration becomes a number somebody sizes a position from.
+ *
+ * AND CAPACITY IS NOT ANY OF THE THINGS IT IS ROUTINELY CONFUSED WITH. Strategy capital,
+ * available cash, buying power and a position or risk limit are four other quantities, three
+ * of which this application already displays elsewhere; none of them is how much this
+ * strategy could deploy before its own execution moved the price against it.
+ */
+function CapacityDependencies({ metric }: { metric: MetricValue }) {
+  if (isValueBearing(metric.availability)) {
+    return null;
+  }
+  return (
+    <div
+      className="mt-3 space-y-1.5 rounded-sm border border-border-subtle bg-surface-sunken px-3 py-2"
+      data-testid="capacity-dependencies"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-label-m font-semibold text-text-primary">Capacity</span>
+        <AvailabilityBadge state={metric.availability} reason={metric.reason} />
+      </div>
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        Capacity is <strong>how much this strategy could deploy before its own execution
+        moved the price against it</strong>. It is not strategy capital, not available cash,
+        not buying power and not a position or risk limit — those are four other quantities,
+        and substituting any of them would answer a different question under this name.
+      </p>
+      <ul className="space-y-1 text-label-s text-text-secondary">
+        <li className="flex gap-2">
+          <span aria-hidden="true" className="text-text-tertiary">
+            ·
+          </span>
+          <span>
+            <strong>No liquidity or market-impact model exists</strong> in this repository.
+            There is no participation assumption, no impact function and no execution
+            simulator to run one through.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span aria-hidden="true" className="text-text-tertiary">
+            ·
+          </span>
+          <span>
+            <strong>No volume or liquidity history is held.</strong> A capacity figure needs
+            per-security traded volume over the evaluated window, and this application holds
+            none — <strong>G1 is OPEN</strong> and no market-data provider is selected.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span aria-hidden="true" className="text-text-tertiary">
+            ·
+          </span>
+          <span>
+            <strong>No borrow or short-availability history is held</strong> for the
+            short-side limb — <strong>G5 is OPEN</strong>.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span aria-hidden="true" className="text-text-tertiary">
+            ·
+          </span>
+          <span>
+            <strong>No accepted definition exists</strong> to compute one against. The metric
+            dictionary registers <span className="font-mono">strategy.capacity</span> with its
+            unit and carries <strong>no formula, denominator, participation assumption or
+            minimum-observation rule</strong> for it, so the quantity is not yet specified
+            well enough to compute — and choosing those here would be inventing a policy on a
+            screen.
+          </span>
+        </li>
+      </ul>
+      <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+        The requirement stays <strong>open</strong>. It is not satisfied by this disclosure,
+        and it is not deferred out of scope — it is named, with what it waits on.
+      </p>
+    </div>
+  );
+}
+
 function FamilyPanel({ family }: { family: AlphaFamilyRollup }) {
   return (
     <div

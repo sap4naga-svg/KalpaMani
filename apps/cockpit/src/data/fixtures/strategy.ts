@@ -19,6 +19,7 @@
  */
 import type {
   AlphaFamilyRollup,
+  RollingExpectancy,
   StrategyPerformance,
   StrategyPerformancePayload,
 } from "@/contracts/strategy-models";
@@ -31,6 +32,7 @@ import {
   demoReason,
   denominatorZero,
   insufficient,
+  instantValue,
   partialPath,
   scaled,
   sessionInstant,
@@ -40,7 +42,7 @@ import {
   usd,
   windowOf,
 } from "./common";
-import { buildPerformanceSummary } from "./summary";
+import { buildPerformanceSummary, OBSERVATION_MINIMUMS } from "./summary";
 
 /** The slice axes Area 4 names. Each is a VIEW of one module's trades, never a new one. */
 const SLICE_AXES = [
@@ -195,6 +197,72 @@ function healthContext(versionId: string, asOf: string) {
   };
 }
 
+/* ------------------------------------------- added by the C5 completion follow-up */
+
+/**
+ * Rolling expectancy over one version's trailing closed trades.
+ *
+ * THE WINDOW IS §12.3'S OWN MINIMUM, NOT A NUMBER CHOSEN HERE. `expectancy.currency`
+ * declares thirty trades, `OBSERVATION_MINIMUMS` already transcribes it, and the rolling
+ * window IS that minimum — a shorter one would refuse at every point and a longer one would
+ * be an invented threshold.
+ *
+ * THE POPULATION IS THE SUMMARY'S OWN. `buildPerformanceSummary` computes expectancy as
+ * `Σ realized / n` over closed trades that carry a recorded initial planned risk record, and
+ * this applies the same rule to a trailing slice of the same list. A trade with no record is
+ * excluded here exactly as it is excluded there, so the last rolling point and the
+ * whole-window figure cannot disagree about who was counted.
+ *
+ * NO POINT LOOKS FORWARD. The point at trade `i` reads trades `i - 29` through `i`, ordered
+ * by exit, and nothing later. Appending a trade adds a point and changes none before it.
+ */
+function rollingExpectancyOf(
+  closed: readonly BookTrade[],
+  days: readonly string[],
+  asOf: string,
+): RollingExpectancy {
+  const lookback = OBSERVATION_MINIMUMS["expectancy.currency"];
+  /*
+   * ORDERED BY EXIT, because that is when the outcome became known. A ledger ordered by
+   * entry would let a trade that closed later contribute to an earlier point.
+   */
+  const ordered = [...closed].sort((left, right) => {
+    const bySession = left.exits[left.exits.length - 1].session -
+      right.exits[right.exits.length - 1].session;
+    return bySession !== 0 ? bySession : left.tradeId.localeCompare(right.tradeId);
+  });
+
+  const points = ordered.map((trade, position) => {
+    const exitSession = trade.exits[trade.exits.length - 1].session;
+    const window = ordered.slice(Math.max(0, position + 1 - lookback), position + 1);
+    /*
+     * A TRADE WITH NO RETAINED RISK RECORD IS EXCLUDED, exactly as the whole-window summary
+     * excludes it — and the window is then SHORT by that many rather than quietly averaged
+     * over fewer. Averaging the survivors would report a thirty-trade expectancy computed
+     * over twenty-nine.
+     */
+    const population = window.filter((entry) => entry.initialRiskRecorded);
+    const net = population.reduce((total, entry) => total + entry.realizedCents, 0);
+    return {
+      ordinal: count("performance.observation_ordinal", position + 1, asOf),
+      at: instantValue("trade.exit_time", sessionInstant(days[exitSession]), asOf),
+      value:
+        window.length < lookback || population.length < lookback
+          ? insufficient("expectancy.rolling", "USD")
+          : usd("expectancy.rolling", Math.round(net / population.length), asOf),
+    };
+  });
+
+  return {
+    lookback: count("performance.rolling_lookback", lookback, asOf),
+    minimum_observations: count("performance.minimum_observations", lookback, asOf),
+    observation_unit: "CLOSED_TRADE" as const,
+    population: demoReason("TRAILING_CLOSED_TRADES_OF_THIS_EXACT_VERSION_WITH_A_RISK_RECORD"),
+    observed: count("performance.observation_count", ordered.length, asOf),
+    points,
+  };
+}
+
 export function syntheticStrategyPerformance(
   asOf: string,
   days: readonly string[],
@@ -248,6 +316,7 @@ export function syntheticStrategyPerformance(
       trade_population: demoReason("CLOSED_TRADES_OF_THIS_EXACT_VERSION"),
       module_metrics: moduleMetrics(trades, asOf),
       health_context: healthContext(version.versionId, asOf),
+      rolling_expectancy: rollingExpectancyOf(closed, days, asOf),
     };
   });
 
