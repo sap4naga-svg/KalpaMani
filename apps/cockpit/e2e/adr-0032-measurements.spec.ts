@@ -116,14 +116,45 @@ test.describe("the rolling tail loss on strategy health", () => {
   test("agrees between the chart table and the headline value", async ({ page }) => {
     await page.goto(`/strategy/health${OPERATOR}`);
     await ready(page);
+
+    /*
+     * SELECT A VERSION THAT ACTUALLY HAS A SERIES, rather than whichever row is shown first.
+     *
+     * The first row of the demonstration book carries fewer than thirty eligible closed
+     * trades, so its panel renders the stated sentence and NO table — and a test that simply
+     * accepted that would never reach the comparison it is named for. It walks the rows until
+     * a value-bearing version is selected, and fails if the book contains none.
+     */
+    const healthRows = page.getByTestId("health-rows").locator("tbody tr");
+    await expect(healthRows.first()).toBeVisible();
+    const rowCount = await healthRows.count();
+    expect(rowCount).toBeGreaterThan(0);
     const panel = page.getByTestId("health-tail-loss");
-    await panel.scrollIntoViewIfNeeded();
-    const table = panel.locator("table");
-    if ((await table.count()) === 0) {
+    let selected = false;
+    for (let index = 0; index < rowCount; index += 1) {
+      const version = await healthRows.nth(index).getAttribute("data-health-version");
+      await healthRows.nth(index).getByRole("button", { name: "History" }).click();
+      await expect(page.getByTestId("health-detail")).toHaveAttribute(
+        "data-health-version",
+        version ?? "",
+      );
+      await expect(panel).toBeVisible();
+      const state = await panel
+        .locator("[data-tail-loss-availability]")
+        .first()
+        .getAttribute("data-tail-loss-availability");
+      if (state !== "INSUFFICIENT_OBSERVATIONS") {
+        selected = true;
+        break;
+      }
       /* A version with no computed point renders the stated sentence instead of a table. */
       await expect(panel.getByTestId("tail-loss-none-computed")).toBeVisible();
-      return;
     }
+    expect(selected, "no version in the book renders a tail-loss series").toBe(true);
+
+    await panel.scrollIntoViewIfNeeded();
+    const table = panel.locator("table");
+    await expect(table).toBeVisible();
     const rows = table.locator("tbody tr");
     expect(await rows.count()).toBeGreaterThan(0);
     /*
