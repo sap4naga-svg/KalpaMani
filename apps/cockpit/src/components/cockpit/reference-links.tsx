@@ -24,9 +24,11 @@ import { withScope, type ViewScope } from "@/lib/scope";
  * control labelled *"View evidence"* that lands on an area page has told the reader it
  * retrieved something it did not. The labels come from the closed table and end in *area*.
  *
- * **An area link asserts nothing about the destination.** Six of the seven routes are
- * placeholders, so the affordance carries the destination's own status rather than implying a
- * built screen, and navigating asserts nothing about whether the producing subsystem exists.
+ * **An area link asserts nothing about the destination.** The affordance carries the
+ * destination's OWN registry status rather than implying a built screen -- six of the seven area
+ * routes were placeholders when this was written and all seven are built now, which is why the
+ * status is read rather than described here. Navigating asserts nothing about whether the
+ * producing subsystem exists, and none of the seven has one.
  *
  * This component decides nothing. Both destinations are resolved by the closed allowlists in
  * `reference-navigation.ts`; a second copy of either table living in a component is how the

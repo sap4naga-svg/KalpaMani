@@ -117,7 +117,7 @@ export default function QualificationGovernancePage() {
       {/* THE NEXT GOVERNANCE EVENT. What must happen, never when it will. */}
       <Card className="mb-4" data-testid="next-required-event">
         <CardHeader>
-          <Label>Next required governance event</Label>
+          <Label as="h2">Next required governance event</Label>
         </CardHeader>
         <CardBody className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -147,7 +147,7 @@ export default function QualificationGovernancePage() {
         {/* RUN AUTHORIZATION AND DATE ELIGIBILITY -- two separate facts, side by side. */}
         <Card className="xl:col-span-2">
           <CardHeader>
-            <Label>Run authorization and date eligibility</Label>
+            <Label as="h2">Run authorization and date eligibility</Label>
             <p className="mt-1 max-w-3xl text-label-m text-text-secondary">
               Two separate facts, evaluated separately and displayed separately.{" "}
               <strong>Passing a date authorizes nothing.</strong> {DATE_STANDING_NOTE}
@@ -265,7 +265,7 @@ export default function QualificationGovernancePage() {
 
         <Card>
           <CardHeader>
-            <Label>Decision gates</Label>
+            <Label as="h2">Decision gates</Label>
             <p className="mt-1 text-label-m text-text-secondary">
               <span className="font-mono">{openGates}</span> of{" "}
               <span className="font-mono">{payload.gates.length}</span> open. Each gate is read
@@ -328,7 +328,7 @@ export default function QualificationGovernancePage() {
 
         <Card>
           <CardHeader>
-            <Label>Provider qualification tests P1–P9</Label>
+            <Label as="h2">Provider qualification tests P1–P9</Label>
           </CardHeader>
           <CardBody>
             <ul className="flex flex-wrap gap-2">
@@ -359,7 +359,7 @@ export default function QualificationGovernancePage() {
         {/* THE CHAIN, NOT A SCORE. */}
         <Card data-testid="blockers">
           <CardHeader>
-            <Label>What stands in front of the next gate</Label>
+            <Label as="h2">What stands in front of the next gate</Label>
             <p className="mt-1 text-label-m text-text-secondary">
               A chain of recorded states. <strong>Not a score, and not a percentage</strong> —
               gates of unequal scope do not average.
@@ -394,7 +394,7 @@ export default function QualificationGovernancePage() {
 
         <Card>
           <CardHeader>
-            <Label>Architecture decision records</Label>
+            <Label as="h2">Architecture decision records</Label>
           </CardHeader>
           <CardBody>
             <ul className="space-y-2">
@@ -417,7 +417,7 @@ export default function QualificationGovernancePage() {
 
         <Card className="xl:col-span-2">
           <CardHeader>
-            <Label>Recorded project facts</Label>
+            <Label as="h2">Recorded project facts</Label>
           </CardHeader>
           <CardBody>
             <ScrollRegion label="Recorded project facts table">
@@ -474,7 +474,7 @@ export default function QualificationGovernancePage() {
       {/* SNAPSHOT PROVENANCE -- source as-of and extraction date, kept apart. */}
       <Card className="mt-4" data-testid="snapshot-provenance">
         <CardHeader>
-          <Label>Snapshot provenance</Label>
+          <Label as="h2">Snapshot provenance</Label>
         </CardHeader>
         <CardBody className="space-y-3">
           <dl className="grid grid-cols-1 gap-x-8 gap-y-2 font-mono text-label-s sm:grid-cols-3">

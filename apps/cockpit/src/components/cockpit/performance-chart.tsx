@@ -326,7 +326,7 @@ export function PerformanceOverview({
     <Card data-testid={testId}>
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label>{heading}</Label>
+          <Label as="h2">{heading}</Label>
           <p className="mt-0.5 max-w-xl text-label-m text-text-secondary">{summary}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

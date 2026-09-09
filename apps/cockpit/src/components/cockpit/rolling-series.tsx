@@ -177,7 +177,7 @@ export function RollingSeriesPanel({ envelope, scope, operator }: RollingSeriesP
     <Card data-testid="rolling-windows">
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label>Rolling-window performance</Label>
+          <Label as="h2">Rolling-window performance</Label>
           <p className="mt-0.5 max-w-3xl text-label-m leading-relaxed text-text-secondary">
             Each point measures the trailing lookback ending at <strong>that</strong> point,
             using only observations up to it. A point with too little history behind it, and a

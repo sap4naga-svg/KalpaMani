@@ -44,11 +44,21 @@ export function PerformanceSummaryPanel({
   operator = false,
   testId,
   compact = false,
+  subject,
 }: {
   summary: PerformanceSummaryPayload;
   operator?: boolean;
   testId?: string;
   compact?: boolean;
+  /**
+   * WHOSE summary this is, so its landmark can be told apart from the next one's.
+   *
+   * A page that renders this panel once per strategy version rendered one landmark per
+   * version, every one of them named "Minimum observation rules" — so a screen-reader
+   * landmark list offered eight identical destinations. The name is the caller's, because
+   * only the caller knows which subject it is showing.
+   */
+  subject?: string;
 }) {
   return (
     <div className="space-y-3" data-testid={testId}>
@@ -111,7 +121,7 @@ export function PerformanceSummaryPanel({
         </div>
       </dl>
 
-      <ObservationRules summary={summary} />
+      <ObservationRules summary={summary} subject={subject} />
 
       {summary.exclusions.length > 0 && (
         <div
@@ -151,11 +161,21 @@ export function PerformanceSummaryPanel({
 /** The declared minimum-observation rules, shown rather than trusted (§12.1). */
 export function ObservationRules({
   summary,
+  subject,
 }: {
   summary: PerformanceSummaryPayload;
+  /** Named where a page carries more than one of these, so the landmarks stay distinct. */
+  subject?: string;
 }) {
   return (
-    <ScrollRegion label="Minimum observation rules" data-testid="observation-rules">
+    <ScrollRegion
+      label={
+        subject === undefined
+          ? "Minimum observation rules"
+          : `Minimum observation rules for ${subject}`
+      }
+      data-testid="observation-rules"
+    >
       <table className="w-full min-w-[26rem] border-collapse text-label-s">
         <caption className="mb-1 text-left text-label-s text-text-tertiary">
           Every ratio declares a minimum and returns{" "}

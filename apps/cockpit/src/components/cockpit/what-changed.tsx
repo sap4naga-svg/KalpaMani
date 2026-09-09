@@ -437,7 +437,7 @@ export function WhatChangedPanel({
     <Card data-testid="what-changed-panel">
       <CardHeader className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <Label>What changed</Label>
+          <Label as="h2">What changed</Label>
           {payload !== undefined && (
             <p className="mt-0.5 text-label-m text-text-secondary">{payload.baseline_label}</p>
           )}

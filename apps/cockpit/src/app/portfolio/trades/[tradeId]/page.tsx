@@ -1013,7 +1013,7 @@ function Gaps({ payload }: { payload: TradeDetailPayload }) {
   return (
     <Card className="border-0 shadow-none">
       <CardHeader className="px-0 pt-0">
-        <Label>Missing stages</Label>
+        <Label as="h3">Missing stages</Label>
       </CardHeader>
       <CardBody className="px-0 pb-0">
         <ScrollRegion label="Stages this trade detail does not carry">

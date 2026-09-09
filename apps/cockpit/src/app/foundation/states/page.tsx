@@ -118,7 +118,7 @@ function FreshnessDemonstration() {
   return (
     <Card data-testid="freshness-demo">
       <CardHeader>
-        <Label>Freshness deadline, live</Label>
+        <Label as="h2">Freshness deadline, live</Label>
         <p className="mt-1 max-w-2xl text-label-m leading-relaxed text-text-secondary">
           One required input with a {REFERENCE_BUDGET_SECONDS}-second contract. The deadline is
           absolute — <span className="font-mono">source_effective_time + contract_max_age</span>{" "}

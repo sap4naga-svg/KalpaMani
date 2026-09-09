@@ -48,7 +48,7 @@ export default function AttentionPage() {
       {attention.data === undefined ? (
         <Card>
           <CardHeader>
-            <Label>Attention required</Label>
+            <Label as="h2">Attention required</Label>
           </CardHeader>
           <CardBody>
             <div className="skeleton-shape h-40 w-full" data-testid="skeleton" />
@@ -66,7 +66,7 @@ export default function AttentionPage() {
 
       <Card className="mt-6">
         <CardHeader>
-          <Label>What this page cannot do</Label>
+          <Label as="h2">What this page cannot do</Label>
         </CardHeader>
         <CardBody className="space-y-3">
           <div className="flex flex-wrap gap-2">

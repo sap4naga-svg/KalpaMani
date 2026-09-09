@@ -315,7 +315,7 @@ function ResearchParameters({
     <Card data-testid="research-parameters">
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label>Governed research parameters</Label>
+          <Label as="h2">Governed research parameters</Label>
           <p className="mt-0.5 max-w-3xl text-label-m leading-relaxed text-text-secondary">
             Read from tracked repository authority at a recorded commit.{" "}
             <strong className="text-text-primary">

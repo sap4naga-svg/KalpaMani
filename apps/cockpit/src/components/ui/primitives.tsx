@@ -36,10 +36,30 @@ export function CardBody({ className, ...props }: React.ComponentPropsWithoutRef
   return <div className={cn("px-5 pb-5", className)} {...props} />;
 }
 
-/** A section label. Uppercase, tertiary, and never competing with the number it labels. */
-export function Label({ className, ...props }: React.ComponentPropsWithoutRef<"span">) {
+/**
+ * A section label. Uppercase, tertiary, and never competing with the number it labels.
+ *
+ * `as` CHOOSES THE ELEMENT, AND IT EXISTS FOR THE HEADING STRUCTURE RATHER THAN FOR STYLE.
+ *
+ * A panel title rendered as a `<span>` is invisible to the heading structure, so a page whose
+ * sections were all panels offered a screen reader exactly one heading -- its `h1` -- and the
+ * `h3` inside a panel section then skipped a level from it. `ui-ux-specification.md` section 11
+ * asks for "landmarks, one `h1` per page, ordered headings", and both halves of that failed.
+ *
+ * The visual treatment is IDENTICAL whichever element is chosen: the same class string is
+ * applied, so making a title a heading changes the accessibility tree and changes nothing a
+ * reader sees.
+ */
+export type LabelElement = "span" | "h2" | "h3";
+
+export function Label({
+  className,
+  as: element = "span",
+  ...props
+}: React.ComponentPropsWithoutRef<"span"> & { as?: LabelElement }) {
+  const Component = element;
   return (
-    <span
+    <Component
       className={cn(
         "text-label-s font-medium uppercase tracking-[0.09em] text-text-tertiary",
         className,

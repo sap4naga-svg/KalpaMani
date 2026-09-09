@@ -276,7 +276,11 @@ function VersionDetail({
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
-        <PerformanceSummaryPanel summary={entry.summary} operator={operator} />
+        <PerformanceSummaryPanel
+          summary={entry.summary}
+          operator={operator}
+          subject={`${humanizeCode(entry.strategy_module.code)} ${entry.strategy_version}`}
+        />
 
         <PanelSection
           title="Module measures"
@@ -767,7 +771,11 @@ function FamilyPanel({ family }: { family: AlphaFamilyRollup }) {
           </Badge>
         ))}
       </div>
-      <PerformanceSummaryPanel summary={family.summary} compact />
+      <PerformanceSummaryPanel
+        summary={family.summary}
+        compact
+        subject={`the ${humanizeCode(family.alpha_family.code)} family`}
+      />
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-2.5">
         <span className="text-label-s uppercase tracking-[0.09em] text-text-tertiary">
           Diversification benefit

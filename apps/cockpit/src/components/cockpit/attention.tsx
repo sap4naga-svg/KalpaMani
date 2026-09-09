@@ -419,7 +419,7 @@ export function AttentionPanel({
         )}
       >
         <div>
-          <Label>Attention required</Label>
+          <Label as="h2">Attention required</Label>
           {payload !== undefined && (
             <p className="mt-0.5 text-label-m text-text-secondary">
               {prepared.rankedTotal === 0

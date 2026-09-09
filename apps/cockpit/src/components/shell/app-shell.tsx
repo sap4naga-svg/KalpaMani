@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Menu, Search, X } from "lucide-react";
 
@@ -179,24 +180,92 @@ function ScenarioBanner() {
   );
 }
 
+/** One class string for every skip link, so a second one cannot drift from the first. */
+const SKIP_LINK = cn(
+  "sr-only focus:not-sr-only focus:absolute focus:top-3 focus:z-50 focus:left-3",
+  "focus:rounded-sm focus:bg-accent focus:px-3 focus:py-2 focus:text-text-inverse",
+);
+
+/** The id the primary-table skip link targets. */
+const PRIMARY_TABLE_ID = "primary-table";
+
+/**
+ * The primary table's skip target, assigned to the first table region inside `main`.
+ *
+ * Section 10 asks for skip links that reach "the main content and the primary table", and only
+ * the first existed — so reaching a ledger by keyboard meant tabbing past the header controls
+ * and thirty sidebar links, on every route that has one. The table a page serves is the
+ * content most worth skipping to.
+ *
+ * IT IS OBSERVED RATHER THAN DECLARED because tables arrive with their data: a page renders its
+ * shell first and its rows when the read resolves, so an id assigned once on navigation would
+ * land on nothing. The observer watches `main`, marks the first table region it sees, and the
+ * link appears only once a target exists — a skip link pointing at an absent anchor is worse
+ * than no skip link, because it silently does nothing.
+ *
+ * Returns whether a target is present, so the caller renders the link and nothing else.
+ *
+ * The effect body itself sets no state: it subscribes, and every update comes from the
+ * subscription — the first from an animation frame, the rest from the observer. That is the
+ * shape `react-hooks/set-state-in-effect` asks for, and it is also the correct one here,
+ * because the answer genuinely arrives from outside React.
+ */
+function usePrimaryTableTarget(pathname: string): boolean {
+  const [present, setPresent] = React.useState(false);
+  React.useEffect(() => {
+    const main = document.getElementById("main-content");
+    if (main === null) return;
+
+    let marked: Element | null = null;
+    const mark = () => {
+      if (marked !== null && marked.isConnected) return;
+      const region = main.querySelector("[data-table-region]");
+      if (region === null) {
+        marked = null;
+        setPresent(false);
+        return;
+      }
+      if (marked !== null) marked.removeAttribute("id");
+      region.id = PRIMARY_TABLE_ID;
+      marked = region;
+      setPresent(true);
+    };
+
+    const initial = requestAnimationFrame(mark);
+    const observer = new MutationObserver(mark);
+    observer.observe(main, { childList: true, subtree: true });
+    return () => {
+      cancelAnimationFrame(initial);
+      observer.disconnect();
+      if (marked !== null && marked.id === PRIMARY_TABLE_ID) marked.removeAttribute("id");
+    };
+  }, [pathname]);
+  return present;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { scope } = useScope();
   const palette = useCommandPalette();
   /* Area 31 is a GLOBAL SURFACE, present on every route, exactly as the palette is. */
   const ask = useAskPanel();
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const pathname = usePathname();
+  const hasPrimaryTable = usePrimaryTableTarget(pathname);
 
   return (
     <div className="min-h-dvh bg-surface-base">
-      <a
-        href="#main-content"
-        className={cn(
-          "sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50",
-          "focus:rounded-sm focus:bg-accent focus:px-3 focus:py-2 focus:text-text-inverse",
-        )}
-      >
+      <a href="#main-content" className={SKIP_LINK} data-testid="skip-to-main">
         Skip to main content
       </a>
+      {hasPrimaryTable && (
+        <a
+          href={`#${PRIMARY_TABLE_ID}`}
+          className={cn(SKIP_LINK, "focus:left-48")}
+          data-testid="skip-to-table"
+        >
+          Skip to the primary table
+        </a>
+      )}
 
       <header className="sticky top-0 z-30 border-b border-border-subtle bg-surface-raised">
         <div className="flex items-center gap-3 px-4 py-2.5">

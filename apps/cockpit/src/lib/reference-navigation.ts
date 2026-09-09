@@ -175,9 +175,12 @@ export const NAVIGABLE_KINDS: readonly RefKind[] = Object.keys(ROUTES) as RefKin
  * control labelled *"View evidence"* that lands on an area page has told the reader it
  * retrieved something it did not.
  *
- * `status` is the DESTINATION ROUTE'S OWN status, read from the navigation registry rather
- * than restated here. Six of the seven are placeholders today, and the affordance carries
- * that honestly -- navigating asserts nothing about whether the producing subsystem exists.
+ * `status` is the DESTINATION ROUTE'S OWN status, READ FROM THE NAVIGATION REGISTRY rather
+ * than restated here, and it is read for exactly that reason: when this was written six of the
+ * seven area routes were placeholders, C8 built the last of them, and a count written into a
+ * comment would now be wrong while the code was right. The affordance carries whatever the
+ * registry says today -- navigating asserts nothing about whether the producing subsystem
+ * exists, whatever the destination's status.
  */
 export interface OwningAreaDestination {
   readonly href: string;

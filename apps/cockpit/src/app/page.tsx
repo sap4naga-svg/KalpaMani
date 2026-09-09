@@ -100,7 +100,20 @@ function AnswerTile({
           <div className="text-label-s leading-relaxed text-text-tertiary">{footer}</div>
         )}
         {href !== undefined && (
-          <Link href={href} className="text-label-s text-accent underline underline-offset-2">
+          /*
+           * THE ACCESSIBLE NAME NAMES THE DESTINATION, AND THE VISIBLE ONE DOES NOT REPEAT IT.
+           *
+           * Six tiles carried the identical link text, so a reader listing this page's links by
+           * screen reader heard "Open the area that owns this" six times with nothing to tell
+           * them apart. The visible text stays as it is — in context, beside its own question,
+           * it reads correctly — and the tile's subject is appended to the ACCESSIBLE name, so
+           * the link is distinguishable out of context as well as in it.
+           */
+          <Link
+            href={href}
+            aria-label={`Open the area that owns this: ${subject}`}
+            className="text-label-s text-accent underline underline-offset-2"
+          >
             Open the area that owns this →
           </Link>
         )}
@@ -512,7 +525,7 @@ export default function ExecutiveOverviewPage() {
         {attention.data === undefined ? (
           <Card>
             <CardHeader>
-              <Label>Attention required</Label>
+              <Label as="h2">Attention required</Label>
             </CardHeader>
             <CardBody>
               <div className="skeleton-shape h-16 w-full" data-testid="skeleton" />
@@ -530,7 +543,7 @@ export default function ExecutiveOverviewPage() {
         {whatChanged.data === undefined ? (
           <Card>
             <CardHeader>
-              <Label>What changed</Label>
+              <Label as="h2">What changed</Label>
             </CardHeader>
             <CardBody>
               <div className="skeleton-shape h-16 w-full" data-testid="skeleton" />
@@ -650,7 +663,7 @@ export default function ExecutiveOverviewPage() {
         <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
           <Card data-testid="tile-exposure">
             <CardHeader className="flex items-center justify-between gap-2">
-              <Label>Exposure</Label>
+              <Label as="h3">Exposure</Label>
               {payload !== undefined && envelope !== undefined && (
                 <ProvenanceBadge provenance={envelope.provenance} />
               )}
@@ -691,7 +704,7 @@ export default function ExecutiveOverviewPage() {
 
           <Card data-testid="tile-last-runs">
             <CardHeader>
-              <Label>Regime, last decision and last scout run</Label>
+              <Label as="h3">Regime, last decision and last scout run</Label>
             </CardHeader>
             <CardBody className="space-y-3">
               {payload === undefined ? (

@@ -90,7 +90,7 @@ export default function MaturityPage() {
 
       <Card>
         <CardHeader>
-          <Label>Stage to runtime environment</Label>
+          <Label as="h2">Stage to runtime environment</Label>
           <p className="mt-1 max-w-3xl text-label-m text-text-secondary">
             Transcribed from the accepted mapping. The runtime{" "}
             <code className="font-mono">Environment</code> enum is unchanged, and the envelope
@@ -179,7 +179,7 @@ export default function MaturityPage() {
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>
-            <Label>Why selecting an environment changes nothing</Label>
+            <Label as="h2">Why selecting an environment changes nothing</Label>
           </CardHeader>
           <CardBody className="space-y-3 text-label-m leading-relaxed text-text-secondary">
             <p>
@@ -205,7 +205,7 @@ export default function MaturityPage() {
 
         <Card data-testid="live-trading">
           <CardHeader>
-            <Label>Order production and live trading</Label>
+            <Label as="h2">Order production and live trading</Label>
           </CardHeader>
           <CardBody className="space-y-3">
             {/*

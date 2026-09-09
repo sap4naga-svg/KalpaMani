@@ -130,7 +130,11 @@ export default function Page() {
         >
           {(payload) => (
             <div className="space-y-4">
-              <PerformanceSummaryPanel summary={payload} operator={operator} />
+              <PerformanceSummaryPanel
+                summary={payload}
+                operator={operator}
+                subject="the portfolio"
+              />
               <div className="space-y-2 border-t border-border-subtle pt-3">
                 <h3 className="text-label-m font-semibold text-text-primary">
                   R-multiple distribution
@@ -259,7 +263,7 @@ function TrailingWindows({
     <Card data-testid="trailing-windows">
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label>Trailing-window performance</Label>
+          <Label as="h2">Trailing-window performance</Label>
           <p className="mt-0.5 max-w-3xl text-label-m leading-relaxed text-text-secondary">
             One read per window. A shorter window is a smaller population, so a ratio that is
             computable over the full extent may be below its declared minimum over a month —
