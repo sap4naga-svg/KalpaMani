@@ -4772,8 +4772,9 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-C8:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
-C9 to C10:                                        NOT STARTED / NOT AUTHORIZED
+C8:                                               MERGED
+C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
+C10:                                              NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -4790,16 +4791,29 @@ live trading:                                     HARD-DISABLED
 
 **A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
 validated, independently reviewed and **merged**; the C5 completion follow-up is **still pending**;
-C9 and C10 are **not started**; **full Cockpit V1 is incomplete**; and **specification,
-implementation, research, deployment and execution stay five separate gates**.
+C9 is **implemented in an open pull request** and C10 is **not started**; **full Cockpit V1 is
+incomplete**; and **specification, implementation, research, deployment and execution stay five
+separate gates**.
 
 
-### The C8 execution, operations, audit and alert screens — IMPLEMENTED, and carried by an open pull request
+### The C8 execution, operations, audit and alert screens — MERGED, and synthetic only
+
+**PR #82 is merged, and the six C8 product areas are implemented on `main`.** Merge commit
+**`65a60c2b02a5004e688dfba89a3198aee448442a`**, merge tree
+**`69498297d9ea23251f8302ac706be0c2e76512fb`**, ordered parents
+**`e4c683fd8605d6898e421f550bb864a56a098257`** then
+**`5352c77a5bbf962d52fa0ad4b2a435ca4eea82f0`**, merged **2026-09-08T20:21:26Z**, with the final
+reviewed pull-request head at **`5352c77a5bbf962d52fa0ad4b2a435ca4eea82f0`**. Each of those facts
+was **independently verified against the live repository** before this record was written.
+
+**While PR #82 was open it was a reviewed candidate carrying no authority beyond itself**, and this
+section then read *IMPLEMENTED, and carried by an open pull request* — historical facts about those
+days that stay true and are **not** rewritten as though the screens had always been on `main`.
 
 **Six read-only screens over the existing recorded book and deterministic repository-owned
-fixtures, and nothing else.** They are carried by an open pull request of its own. **While that
-pull request is open it is a candidate**: nothing recorded here is authority for anything beyond
-itself, and **no merge SHA and no merge timestamp is predicted**.
+fixtures, and nothing else.** The merge implements six views; **no execution runtime, broker
+session, scheduler, service runtime, provider feed, alert pipeline or audit store was created by
+it, none exists, and none is authorized.**
 
 | Area | Screen |
 |---|---|
@@ -4869,7 +4883,12 @@ provider is selected, **P1–P9 stay UNEVALUATED**, **data correctness and quali
 ESTABLISHED**, and this work amends and supersedes no accepted decision.
 
 ```text
-C8 execution, operations, audit and alert screens:  IMPLEMENTED IN AN OPEN PULL REQUEST
+PR #82:                                           MERGED
+PR #82 merge commit:                              65a60c2b02a5004e688dfba89a3198aee448442a
+PR #82 merged at:                                 2026-09-08T20:21:26Z
+PR #82 final reviewed head:                       5352c77a5bbf962d52fa0ad4b2a435ca4eea82f0
+C8 execution, operations, audit and alert screens:  MERGED / SYNTHETIC READ-ONLY SCREENS
+independent review of the C8 implementation:      PERFORMED
 C8 areas implemented:                             9, 10, 22, 23, 26, 27
 C8 read models introduced:                        7, EACH AT ITS OWN FIRST VERSION
 the nineteen coordinated read models:             UNCHANGED AT v2
@@ -4893,7 +4912,8 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-C9 to C10:                                        NOT STARTED / NOT AUTHORIZED
+C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
+C10:                                              NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -4908,10 +4928,154 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**An implemented view of a subsystem is not the subsystem.** Six screens now render execution,
-reconciliation, data-quality, operations, audit and alert records; **every producing subsystem
-behind them is still absent and still unauthorized**, and **specification, implementation,
-research, deployment and execution stay five separate gates**.
+**A merged cycle is a merged cycle, and it is not a finished product.** Six screens now render
+execution, reconciliation, data-quality, operations, audit and alert records; **every producing
+subsystem behind them is still absent and still unauthorized**, and **specification,
+implementation, research, deployment and execution stay five separate gates**.
+
+**Two non-blocking observations from the C8 review are carried forward, and neither is resolved
+here.** They are recorded because an observation nobody writes down is an observation nobody
+acts on:
+
+| | |
+|---|---|
+| **`ORDERS_PARTIALLY_FILLED` counts fill-scoped rows under an order-labelled code** | Area 9's outcome counts are computed over `ExecutionQualityRecord` rows, which are FILL-scoped, while four of the outcome codes are named for ORDERS. The figure is what the rows say; the label reads as a distinct-order count and the population is not one. **It is not corrected here**, and C9 deliberately builds no answer on it — a distinct-order question would need a validated order population, which no read model delivers |
+| **one contract comment overstates its body** | a comment claims more of its own implementation than the code beneath it carries. **It is not corrected here**, because a comment correction inside a merged contract is its own reviewable change rather than a side effect of an unrelated cycle |
+
+**Neither observation is marked resolved, and neither is expanded into C9.**
+
+### The C9 Ask KalpaMani and record search — IMPLEMENTED, and carried by an open pull request
+
+**Two read-only surfaces over the read models this Cockpit already serves, and nothing else.**
+They are carried by an open pull request of its own. **While that pull request is open it is a
+candidate**: nothing recorded here is authority for anything beyond itself, and **no merge SHA and
+no merge timestamp is predicted**.
+
+| Area | Surface |
+|---|---|
+| **30** | Global Command Palette — completed, and now searching records |
+| **31** | Ask KalpaMani |
+
+#### What it is, exactly
+
+**A bounded reader, and not an assistant.** **There is no model, no inference, no embedding, no
+vector store, no external service and no network call anywhere in it.** A question is matched
+against a **CLOSED catalogue** of eleven question classes by a deterministic local resolver; what
+crosses the read boundary is a **typed request** carrying a class, an optional validated
+identifier and an optional window, and nothing else. **No dependency was added.**
+
+| | |
+|---|---|
+| **the read models** | two, each at its **own first schema version** — `SearchResultPage` and `AskAnswer`. **The nineteen coordinated models stay at `v2`** and the seventeen C7 and C8 models stay at `v1`, because §5.2 versions a schema per read model and a first version is not a second one |
+| **the answers** | each one is the **owning read model's own `MetricValue`**, lifted unchanged — its unit, availability, reason, `as_of` and metric definition intact. **Nothing recomputes a figure a screen already reports**, because two spellings of one measurement are two values that can disagree |
+| **the boundary** | **no Server Action, no route handler, no API route, no mutation, no persistence write and no execution vocabulary of any kind.** The read client has no method that writes, and that is where such a method would have to appear first |
+| **the surfaces** | Ask is a **global surface present on every route**, exactly as the accepted UX specification describes it. **No route was added to the accepted registry** |
+
+#### The separations it exists to keep
+
+| | |
+|---|---|
+| **nothing is chosen silently** | a class that takes a subject and was asked without one **asks which**; a windowed class asked without a window **asks which period**; two classes that match equally are reported as **ambiguous, with both named**. A default in any of those places answers a question the reader did not ask |
+| **an action is refused before a class is considered** | a request shaped like an order, a promotion, an approval, a retry, an acknowledgement or an authorization receives a stated boundary and **renders no control at all** — not a disabled one, and not a pending one |
+| **an answer is never more certain than its evidence** | where the producing read model carries no payload, the **answer carries that same availability and reason and no payload**. That is not an abstention: an abstention names the records it consulted, and there were none to consult |
+| **a measured zero is an answer; a missing baseline is not** | a verified zero renders as a value (ADR-0029 §2.1); a comparison with no baseline **abstains**, carrying the baseline endpoint's own state, and substitutes no zero |
+| **an unknown subject is `REFERENT_NOT_FOUND`** | a well-formed identifier that names nothing is ADR-0030 R9's absence — never `NOT_IMPLEMENTED`, which would claim the producer is missing, and never an abstention, which would claim evidence was read |
+| **a recorded reason is not an inferred cause** | the codes an answer carries are the record's own — a recorded exit reason, a journaled blocking reason, a safety action, an alignment finding. **There is no free-text field anywhere in the payload**, so there is nothing a cause could be written into |
+| **four things stay apart** | the **supporting record** a citation names; **target navigation** to that record's kind; **owning-area navigation**; and **authorization to retrieve an artefact**. Following a citation navigates to the area that browses records of its kind and **does not retrieve the record** — the general evidence-retrieval limitation ADR-0031 A5 leaves OPEN is stated on the screen rather than quietly repaired |
+| **text is data** | an instruction written inside a question reaches a closed term list as ordinary words. It can change **no authorization, no scope, no vocabulary and no behaviour**, and the only thing a question determines is which catalogued class, identifier and window a typed request carries |
+| **the palette gained no verb** | an entity result **is** a navigation, opened through the ADR-0030 R10 allowlist keyed by the reference's own kind, with the whole scope carried into the destination. The command vocabulary is still `navigate` and `filter`, and results are **grouped by environment** with no combined list |
+
+#### What the independent review of this implementation corrected
+
+**The review was performed against this pull request's head before any merge**, and it reproduced
+every defect below on the author's tree before correcting it. Each correction carries a regression
+at the boundary that owns the rule, and each of those regressions was proved to FAIL when the
+defect was temporarily reintroduced.
+
+| | |
+|---|---|
+| **a degraded-subject count that counted the opposite population** | the data-quality answer counted subjects whose state is **not value-bearing** — which counts the subject whose **producer is absent** and EXCLUDES the `STALE` and `PARTIAL` subjects a data-quality question is about, because those two states *are* value-bearing. It now counts **recorded** degradation, reports **subjects with no recorded state as a separate figure**, and **describes no example subject at all where nothing is degraded** rather than presenting the first indexed row as *the affected one* |
+| **a highest-severity claim that rested on delivery order** | the open-alerts answer read its qualifying figure from the first delivered open row, so `HIGHEST_SEVERITY_OCCURRENCES` was true only while the fixture happened to deliver the most severe row first. It now ranks by the contract's own `SEVERITY_RANK`, exactly as the alerts screen already does, and **offers no severity figure at all where nothing is open** rather than borrowing a resolved row's |
+| **a refusal that spoke for questions that were not requests** | the action vocabulary matched as a **prefix**, so *shortable*, *short side*, *kill switch*, *override switch* and *did the drawdown increase* were each answered with **Ask cannot place, change or cancel anything** — a false description of a read question, and one that stranded the catalogued short-side and control-plane referrals behind a refusal they could never reach. Terms are now matched as **whole words or phrases**, and the comparatives carry their object. **Nothing became reachable by narrowing it**: no term here has ever been able to perform anything, so what changed is which true sentence a reader is shown |
+| **a page presented as a population** | the palette rendered one page of matching records and stated **neither the total nor that the list was truncated**, so a reader saw twenty-five rows with nothing to say there were more. It now names both, and says nothing when the result fits on one page |
+
+**Two non-blocking observations are recorded rather than resolved.** The two carried forward from
+the C8 review are **unchanged and still open** — C9 deliberately builds no answer on the
+fill-scoped figure. To them this review adds one: **`SearchResultPage` is authorized to carry
+governance-derived entries and carries none**, which is a permission left unexercised rather than
+an unmet criterion, because **no `RefKind` in the R10 allowlist and no member of the ADR-0031 A2
+`OwningArea` vocabulary reaches the Project and Qualification Governance area**, and adding one is
+an ADR's act. **The palette's navigation group reaches that area directly**, so the reader is not
+stranded.
+
+#### What it does not claim, and what it deliberately does not answer
+
+**No alpha is claimed, no result is asserted and no threshold is established.** Every figure is a
+repository-owned deterministic fixture.
+
+**Ask answers no governance or qualification question, and that is a contract consequence rather
+than an oversight.** §2.6 catalogues `AskAnswer` as `SYNTHETIC`, and §7.1 does not admit
+`REPOSITORY_TRACKED` to `PUBLIC_EDGE` from it — so an answer over tracked governance facts would
+have to either mislabel them `SYNTHETIC` or be refused at admission. **The facts stay on the area
+that owns them**, and a governance question is **referred** there by name, with the reason stated.
+**No ADR is amended to widen this**, and the referral reads nothing and cites nothing.
+
+**The governance-derived search entries §7.1 authorizes are also not produced**, for a narrower
+reason: **no `RefKind` in the R10 allowlist and no member of the ADR-0031 A2 `OwningArea`
+vocabulary lands on the Project and Qualification Governance area**, so such a row could be
+indexed and not opened — and mapping one onto the Audit Trail is exactly the *an Audit page owns
+every fact* claim §4.3.2 exists to stop. Adding a member is an ADR's act, not an
+implementation's. The palette's navigation group reaches that area directly.
+
+**No gate is closed and no ADR is amended.** **G1 and G2 stay OPEN**, **G4 to G7 stay OPEN**, no
+provider is selected, **P1–P9 stay UNEVALUATED**, **data correctness and quality stay NOT
+ESTABLISHED**, and this work amends and supersedes no accepted decision.
+
+```text
+C9 Ask KalpaMani and record search:               IMPLEMENTED IN AN OPEN PULL REQUEST
+independent review of the C9 implementation:      PERFORMED
+C9 areas implemented:                             30, 31
+C9 read models introduced:                        2, EACH AT ITS OWN FIRST VERSION
+the nineteen coordinated read models:             UNCHANGED AT v2
+the seventeen C7 and C8 read models:              UNCHANGED AT v1
+new API routes, handlers or server actions:       NONE
+new routes added to the accepted registry:        NONE
+new runtime dependencies:                         NONE
+model, inference or embedding runtime:            NOT IMPLEMENTED / NOT AUTHORIZED
+external model or search service:                 NOT IMPLEMENTED / NOT AUTHORIZED
+arbitrary query, SQL or code execution:           NONE
+mutation, execution or broker vocabulary:         NONE
+orders placed by this cycle:                      NONE
+broker contacted by this cycle:                   NONE
+jobs run by this cycle:                           NONE
+notifications sent by this cycle:                 NONE
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
+C10:                                              NOT STARTED / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**An interface that answers questions about a subsystem is not the subsystem.** Ask reads what the
+Cockpit already renders; **every producing subsystem behind it is still absent and still
+unauthorized**, and **specification, implementation, research, deployment and execution stay five
+separate gates**.
+
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use

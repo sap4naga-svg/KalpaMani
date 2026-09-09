@@ -9,6 +9,7 @@ import { Badge, Button } from "@/components/ui/primitives";
 import { FreshnessIndicator } from "@/components/cockpit/freshness";
 import { ProvenanceBadge } from "@/components/cockpit/provenance";
 import { CommandPalette, useCommandPalette } from "@/components/palette/command-palette";
+import { AskLauncher, AskPanel, useAskPanel } from "@/components/ask/ask-panel";
 import { useExecutiveOverview } from "@/data/client/hooks";
 import { DATA_SCENARIOS, VIEW_MODES, withScope, type ViewMode } from "@/lib/scope";
 import { ENVIRONMENTS } from "@/contracts/vocabularies";
@@ -181,6 +182,8 @@ function ScenarioBanner() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { scope } = useScope();
   const palette = useCommandPalette();
+  /* Area 31 is a GLOBAL SURFACE, present on every route, exactly as the palette is. */
+  const ask = useAskPanel();
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   return (
@@ -255,6 +258,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               ⌘K
             </kbd>
           </Button>
+
+          <AskLauncher controller={ask} />
         </div>
         <ContextBar />
       </header>
@@ -273,6 +278,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <CommandPalette controller={palette} />
+      <AskPanel controller={ask} />
     </div>
   );
 }

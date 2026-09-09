@@ -175,20 +175,18 @@ describe("the closed vocabularies", () => {
     /*
      * THE LIST MOVED BECAUSE THE PRODUCERS MOVED, AND THE RULE DID NOT.
      *
-     * C8 emits `AuditEvent`, `Alert`, `DataQuality` and `ReconciliationStatus`, so those four
-     * fields are now recorded as implemented — for the SYNTHETIC scope those producers exist
-     * for, and for nothing else. The fields below still have no producer at any scope, and the
-     * property this test protects is unchanged: a catalogue that flipped every flag to `true`
-     * because a cycle landed would make `producerStateFor` answer `IMPLEMENTED` for subsystems
-     * nobody has built.
+     * C8 emitted `AuditEvent`, `Alert`, `DataQuality` and `ReconciliationStatus`, and C9 now
+     * emits `SearchResultPage` and `AskAnswer` — so those fields are recorded as implemented,
+     * for the SYNTHETIC scope those producers exist for and for nothing else. The fields below
+     * still have no producer at any scope, and the property this test protects is unchanged: a
+     * catalogue that flipped every flag to `true` because a cycle landed would make
+     * `producerStateFor` answer `IMPLEMENTED` for subsystems nobody has built.
      */
     for (const key of [
       "MaturityStatus.decision_refs",
       "QualificationStatus.facts[].source_ref",
       "QualificationStatus.gates[].source_ref",
       "QualificationStatus.runs[].source_ref",
-      "SearchResultPage.results[].ref",
-      "AskAnswer.citations",
     ] as HostFieldKey[]) {
       expect(REFERENCE_FIELDS[key].implemented, key).toBe(false);
     }
@@ -1172,6 +1170,14 @@ describe("the coordinated schema bump", () => {
     "Alert",
     "AuditEvent",
   ];
+  /**
+   * The read models C9 introduced, each at its own first version.
+   *
+   * The same reasoning again: `SearchResultPage` and `AskAnswer` have never been served before,
+   * so each carries its own `v1` while the nineteen coordinated models stay at `v2` and the
+   * seventeen C7 and C8 models stay at `v1`.
+   */
+  const C9_FIRST_VERSION = ["SearchResultPage", "AskAnswer"];
   const C7_FIRST_VERSION = [
     "StrategyHealth",
     "StrategyVersion",
@@ -1186,7 +1192,7 @@ describe("the coordinated schema bump", () => {
   ];
 
   it("keeps the coordinated nineteen at v2 and gives each new read model its own v1", () => {
-    const firstVersion = [...C7_FIRST_VERSION, ...C8_FIRST_VERSION];
+    const firstVersion = [...C7_FIRST_VERSION, ...C8_FIRST_VERSION, ...C9_FIRST_VERSION];
     const coordinated = READ_MODEL_IDENTITIES.filter(
       (identity) => !firstVersion.includes(identity.readModel),
     );

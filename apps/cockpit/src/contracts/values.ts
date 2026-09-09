@@ -898,6 +898,44 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
   "audit.projection_built_at": { unit: "DIMENSIONLESS", shape: "INSTANT" },
   "audit.rebuild_count": { unit: "COUNT", shape: "INTEGER" },
   "audit.event_count": { unit: "COUNT", shape: "INTEGER" },
+
+  /* ---------------------------------------------------------------- added by C9 */
+
+  /**
+   * AREAS 30 AND 31 -- the bounded assistant's own accounting, and the population counts
+   * and closed state tokens an answer reports.
+   *
+   * NONE OF THESE IS A SECOND OPINION OF A FIGURE A SCREEN ALREADY REPORTS. Every measured
+   * quantity an answer carries is the `MetricValue` its owning read model produced,
+   * unchanged; the metrics registered here are the ones the assistant is itself the
+   * producer of -- how far a bounded query scanned, how large a population was, and the
+   * closed token a record already carries as its own state.
+   */
+  "ask.scanned_rows": { unit: "COUNT", shape: "INTEGER" },
+  /** How many read models the palette index drew from, and the declared bound on that. */
+  "search.read_models_indexed": { unit: "COUNT", shape: "INTEGER" },
+  "search.read_models_maximum": { unit: "COUNT", shape: "INTEGER" },
+  "ask.scanned_maximum": { unit: "COUNT", shape: "INTEGER" },
+  /** Why an answer abstained, as one member of the closed `ask.abstention.v1` vocabulary. */
+  "ask.abstention_reason": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** How many attention items the projection carries. Never one item's occurrence count. */
+  "attention.item_count": { unit: "COUNT", shape: "INTEGER" },
+  /** How many verified changes a comparison found. A zero here is a MEASURED zero. */
+  "change.entry_count": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * How many data-quality subjects carry a RECORDED state that is qualified -- `STALE` or
+   * `PARTIAL`. A subject whose state carries no value at all is counted by the metric below
+   * instead, because an ABSENT assessment is not a measured degradation.
+   */
+  "data_quality.degraded_subjects": { unit: "COUNT", shape: "INTEGER" },
+  /** How many data-quality subjects have no recorded state to read. Never a degradation. */
+  "data_quality.unassessed_subjects": { unit: "COUNT", shape: "INTEGER" },
+  /** How many alert ROWS are recorded OPEN. Deduplicated rows, never raw occurrences. */
+  "alert.open_count": { unit: "COUNT", shape: "INTEGER" },
+  /** A reconciliation run's own recorded result token, carried as the record states it. */
+  "reconciliation.result": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+  /** A candidate's journaled Brain decision state, carried as the record states it. */
+  "candidate.brain_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;

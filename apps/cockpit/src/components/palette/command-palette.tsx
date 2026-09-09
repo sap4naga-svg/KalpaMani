@@ -6,7 +6,11 @@ import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 
 import { Badge } from "@/components/ui/primitives";
+import { ProvenanceBadge } from "@/components/cockpit/provenance";
 import { NAV_GROUPS, NAV_ROUTES, type NavRoute } from "@/nav/registry";
+import { useSearch } from "@/data/client/hooks";
+import { referenceDestination } from "@/lib/reference-navigation";
+import { humanizeCode } from "@/lib/format";
 import { withScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +23,15 @@ import { useScope } from "@/components/shell/use-scope";
  * order, risk, provider, approval, execution, promotion, capital or strategy mutation verb
  * exists here, and a later author cannot add one casually because the kinds below are the
  * whole vocabulary.
+ *
+ * C9 COMPLETES AREA 30 BY MAKING IT SEARCH ENTITIES, and it adds no verb to do it. An entity
+ * result IS a navigation: it opens a record through the ADR-0030 R10 allowlist keyed by the
+ * reference's own kind, with the whole scope carried into the destination. The two kinds below
+ * are still the whole vocabulary.
+ *
+ * **Results respect environment and source scoping**, and an all-environments result is never
+ * presented as one combined list (U18): rows arrive already scoped by the read boundary, they
+ * carry their own environment and provenance, and they are GROUPED BY ENVIRONMENT here.
  */
 export const COMMAND_KINDS = ["navigate", "filter"] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
@@ -99,6 +112,38 @@ export function CommandPalette({ controller }: { controller: PaletteController }
   const router = useRouter();
   const { scope, setScope } = useScope();
   const [search, setSearch] = React.useState("");
+  /*
+   * THE INDEX IS READ THROUGH THE READ BOUNDARY, like everything else.
+   *
+   * The term joins the cache key, so one term's rows can never be served under another's, and
+   * the whole scope is in the key already -- a row found under one environment cannot be shown
+   * under a different badge.
+   */
+  const results = useSearch(scope, search);
+  const page = results.data?.payload;
+  const entities = page?.results ?? [];
+  const environments = [...new Set(entities.map((row) => row.environment))];
+  /*
+   * A DELIVERED PAGE IS NOT THE POPULATION, AND THE PALETTE SAYS SO.
+   *
+   * `/search` delivers one page of a canonical ordering and states `total` and `truncated`
+   * beside it precisely so a partial list is never read as a complete one. Rendering the rows
+   * and dropping those two facts would put the reader in front of twenty-five records with no
+   * way to know there are two hundred more -- which is the *shorter answer that looks
+   * complete* the paging contract exists to prevent.
+   *
+   * The total is read only where it is value-bearing: a count that carries no value states no
+   * number here rather than a substituted zero.
+   */
+  const matchedTotal = page?.page.total;
+  const truncatedNotice =
+    page !== undefined && page.page.truncated
+      ? typeof matchedTotal?.value === "number"
+        ? `Showing the first ${entities.length} of ${matchedTotal.value} matching records. ` +
+          `Narrow the search to reach the rest.`
+        : `Showing the first ${entities.length} matching records. The full count is not ` +
+          `available, and this list is not all of them.`
+      : null;
 
   const commands = React.useMemo<PaletteCommand[]>(() => {
     // Environment and provenance context is preserved in every destination URL.
@@ -191,7 +236,7 @@ export function CommandPalette({ controller }: { controller: PaletteController }
                 autoFocus
                 value={search}
                 onValueChange={setSearch}
-                placeholder="Search areas and view filters…"
+                placeholder="Search records, areas and view filters…"
                 className={cn(
                   "h-12 w-full bg-transparent text-numeric-s text-text-primary outline-none",
                   "placeholder:text-text-tertiary",
@@ -200,9 +245,76 @@ export function CommandPalette({ controller }: { controller: PaletteController }
             </div>
             <Command.List className="max-h-[52vh] overflow-y-auto p-2">
               <Command.Empty className="px-3 py-6 text-center text-label-m text-text-tertiary">
-                No area or view filter matches that search. The palette navigates and filters
-                only — it has no state-changing command.
+                Nothing matches that search. The palette navigates, searches records and
+                filters the view — it has no state-changing command.
               </Command.Empty>
+              {/* ABOVE THE ROWS, because a reader who has to scroll past twenty-five
+                  results to learn the list is partial has already read it as complete. */}
+              {truncatedNotice !== null && (
+                <p
+                  data-testid="palette-truncated"
+                  className="px-3 pb-1 pt-2 text-label-s text-text-tertiary"
+                >
+                  {truncatedNotice}
+                </p>
+              )}
+              {environments.map((environment) => (
+                <Command.Group
+                  key={`entities-${environment}`}
+                  heading={`Records — ${environment}`}
+                  data-testid={`palette-entities-${environment}`}
+                  className={cn(
+                    "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5",
+                    "[&_[cmdk-group-heading]]:text-label-s",
+                    "[&_[cmdk-group-heading]]:uppercase",
+                    "[&_[cmdk-group-heading]]:tracking-[0.09em]",
+                    "[&_[cmdk-group-heading]]:text-text-tertiary",
+                  )}
+                >
+                  {entities
+                    .filter((row) => row.environment === environment)
+                    .map((row) => {
+                      /*
+                       * THE DESTINATION COMES FROM THE CLOSED ALLOWLIST (ADR-0030 R10), keyed
+                       * by the reference's own kind. A kind the allowlist does not map yields
+                       * NO destination, and the row is not rendered as an opener -- never a
+                       * guess and never a nearest match.
+                       */
+                      const destination = referenceDestination(row.ref);
+                      if (destination === null) {
+                        return null;
+                      }
+                      return (
+                        <Command.Item
+                          key={row.result_id}
+                          value={`${row.result_id} ${row.title.code} ${row.subject.code}`}
+                          data-testid={`palette-entity-${row.result_id}`}
+                          onSelect={() => {
+                            controller.close();
+                            router.push(withScope(destination.href, scope));
+                          }}
+                          className={cn(
+                            "flex cursor-pointer items-center gap-2 rounded-sm px-3 py-2",
+                            "text-label-m text-text-secondary",
+                            "data-[selected=true]:bg-surface-sunken",
+                            "data-[selected=true]:text-text-primary",
+                          )}
+                        >
+                          <span className="truncate font-mono text-label-s">
+                            {row.result_id}
+                          </span>
+                          <span className="truncate text-text-tertiary">
+                            {humanizeCode(row.subject.code)} · {row.title.code}
+                          </span>
+                          <ProvenanceBadge
+                            provenance={row.provenance}
+                            className="ml-auto shrink-0"
+                          />
+                        </Command.Item>
+                      );
+                    })}
+                </Command.Group>
+              ))}
               {COMMAND_KINDS.map((kind) => (
                 <Command.Group
                   key={kind}

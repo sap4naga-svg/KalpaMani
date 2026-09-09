@@ -13258,7 +13258,7 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "promotions, approvals or releases recorded: NONE",
     "backtesting: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
-    "C9 to C10: NOT STARTED / NOT AUTHORIZED",
+    "C10: NOT STARTED / NOT AUTHORIZED",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13282,21 +13282,32 @@ COCKPIT_C7_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "backtesting: STARTED",
 )
 
-#: C8 implements the six execution, operations, audit and alert areas, and its implementation is
-#: carried by a pull request that is OPEN. The guard holds the same three things apart every
-#: cycle guard above does: what merged, what is implemented but unmerged, and what has not
-#: started. The failure it exists to catch is specific and would be easy to make: six read-only
-#: screens over deterministic fixtures are NOT an execution runtime, a broker session, a
-#: scheduler, a provider feed, an alert pipeline or an audit store, and a status document that
-#: collapsed the two would report a subsystem this repository does not have.
+#: C8 implements the six execution, operations, audit and alert areas, and PR #82 has MERGED.
+#: The guard holds the same three things apart every cycle guard above does: what merged, what
+#: is implemented but unmerged, and what has not started. The failure it exists to catch is
+#: specific and would be easy to make: six read-only screens over deterministic fixtures are
+#: NOT an execution runtime, a broker session, a scheduler, a provider feed, an alert pipeline
+#: or an audit store, and a status document that collapsed the two would report a subsystem
+#: this repository does not have.
+#:
+#: THE MERGE MOVED ONE CLAIM, ON THE ADR-0031 AND C7 PRECEDENT. "C8 execution, operations,
+#: audit and alert screens: MERGED" was forbidden while PR #82 was open and is TRUE now, so it
+#: moves from the forbidden set to the required one -- forbidding it would refuse the very
+#: statement the merge made correct. What stays forbidden is the claim that C8 is COMPLETE, the
+#: stale open-PR under-claim, and every over-claim about a producing subsystem, because none of
+#: those changed.
 COCKPIT_C8_HEADING: Final = (
-    "### The C8 execution, operations, audit and alert screens — IMPLEMENTED, and carried by "
-    "an open pull request"
+    "### The C8 execution, operations, audit and alert screens — MERGED, and synthetic only"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C8_STATUS_REQUIRED: Final[tuple[str, ...]] = (
-    "C8 execution, operations, audit and alert screens: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "PR #82: MERGED",
+    "PR #82 merge commit: 65a60c2b02a5004e688dfba89a3198aee448442a",
+    "PR #82 merged at: 2026-09-08T20:21:26Z",
+    "PR #82 final reviewed head: 5352c77a5bbf962d52fa0ad4b2a435ca4eea82f0",
+    "C8 execution, operations, audit and alert screens: MERGED / SYNTHETIC READ-ONLY SCREENS",
+    "independent review of the C8 implementation: PERFORMED",
     "C8 areas implemented: 9, 10, 22, 23, 26, 27",
     "C8 read models introduced: 7, EACH AT ITS OWN FIRST VERSION",
     "the nineteen coordinated read models: UNCHANGED AT v2",
@@ -13314,7 +13325,8 @@ COCKPIT_C8_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "notifications sent by this cycle: NONE",
     "backtesting: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
-    "C9 to C10: NOT STARTED / NOT AUTHORIZED",
+    "C9: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "C10: NOT STARTED / NOT AUTHORIZED",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13323,14 +13335,71 @@ COCKPIT_C8_STATUS_REQUIRED: Final[tuple[str, ...]] = (
 #: repository-owned fixtures is not a merge, not a completed Cockpit and not one of the six
 #: subsystems they display.
 COCKPIT_C8_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
-    "C8 execution, operations, audit and alert screens: MERGED",
+    "C8 execution, operations, audit and alert screens: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "C8 execution, operations, audit and alert screens: COMPLETE",
+    "C9 to C10: NOT STARTED / NOT AUTHORIZED",
     "execution runtime: IMPLEMENTED",
     "broker session: IMPLEMENTED",
     "scheduler or service runtime: IMPLEMENTED",
     "provider feed: IMPLEMENTED",
     "alert pipeline or notification integration: IMPLEMENTED",
     "authoritative audit store: IMPLEMENTED",
+    "full Cockpit V1: COMPLETE",
+    "backtesting: STARTED",
+)
+
+#: C9 implements the two search-and-assistant areas, and its implementation is carried by a
+#: pull request that is OPEN. The guard holds the same three states apart. The failure it exists
+#: to catch is the one this cycle is most exposed to: a deterministic matcher over a CLOSED
+#: catalogue of eleven questions is NOT a model, an inference runtime, an embedding store, a
+#: search service or a query engine, and a status document that collapsed the two would report a
+#: capability this repository does not have -- and would imply an external model had been handed
+#: read-model content, which CLAUDE.md 4.22 forbids outright.
+COCKPIT_C9_HEADING: Final = (
+    "### The C9 Ask KalpaMani and record search — IMPLEMENTED, and carried by an open pull request"
+)
+
+#: Read with ``**`` stripped, so emphasis is not part of the contract.
+COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
+    "C9 Ask KalpaMani and record search: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "independent review of the C9 implementation: PERFORMED",
+    "C9 areas implemented: 30, 31",
+    "C9 read models introduced: 2, EACH AT ITS OWN FIRST VERSION",
+    "the nineteen coordinated read models: UNCHANGED AT v2",
+    "the seventeen C7 and C8 read models: UNCHANGED AT v1",
+    "new API routes, handlers or server actions: NONE",
+    "new routes added to the accepted registry: NONE",
+    "new runtime dependencies: NONE",
+    "model, inference or embedding runtime: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "external model or search service: NOT IMPLEMENTED / NOT AUTHORIZED",
+    "arbitrary query, SQL or code execution: NONE",
+    "mutation, execution or broker vocabulary: NONE",
+    "provider data used: NONE",
+    "private artifacts read: NONE",
+    "backtesting: NOT STARTED",
+    "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
+    "C10: NOT STARTED / NOT AUTHORIZED",
+    "full Cockpit V1: INCOMPLETE",
+    "G1 / G2: OPEN / OPEN",
+)
+
+#: Claims no status document may make about C9. Matching a question against a closed catalogue
+#: is not a model; answering a question about a subsystem is not the subsystem; and an interface
+#: that reads is not a merge and not a completed Cockpit.
+COCKPIT_C9_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "C9 Ask KalpaMani and record search: MERGED",
+    "C9 Ask KalpaMani and record search: COMPLETE",
+    # THE PROSE FORM OF THE SAME DRIFT, AND THE ONE THAT ACTUALLY SLIPPED THROUGH.
+    #
+    # The machine-readable "C9 to C10: NOT STARTED / NOT AUTHORIZED" line was corrected when
+    # C9 landed, and the SENTENCE saying the same thing three paragraphs above it was not --
+    # so both status documents went on asserting that a cycle carried by an open pull request
+    # had not been started. A forbidden claim is only as good as the spellings it covers.
+    "C9 and C10 are not started",
+    "C9 and C10 are **not started**",
+    "C9 to C10 are not started",
+    "model, inference or embedding runtime: IMPLEMENTED",
+    "external model or search service: IMPLEMENTED",
     "full Cockpit V1: COMPLETE",
     "backtesting: STARTED",
 )
@@ -24357,7 +24426,7 @@ def main() -> int:
             }
         )
         f.check(
-            "both status documents record C8 implemented, unmerged and synthetic only",
+            "both status documents record C8 merged, reviewed and synthetic only",
             not divergent_c8,
             ", ".join(divergent_c8),
         )
@@ -24370,9 +24439,48 @@ def main() -> int:
             }
         )
         f.check(
-            "no status document records C8 as merged or as a producing subsystem",
+            "no status document records C8 as unmerged or as a producing subsystem",
             not overclaiming_c8,
             "; ".join(overclaiming_c8),
+        )
+
+        # -- C9: implemented, unmerged, and not a model ------------------------
+        #
+        # The same three states again, for the cycle that implements Ask KalpaMani and
+        # completes the command palette. Matching a question against a closed catalogue
+        # of eleven classes is not inference, and an answer assembled from read models
+        # this application already serves is not a query engine.
+        stale_c9 = [label for label, text in status_documents if COCKPIT_C9_HEADING not in text]
+        f.check(
+            "both status documents carry the C9 implementation status section",
+            not stale_c9,
+            ", ".join(stale_c9),
+        )
+        divergent_c9 = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in COCKPIT_C9_STATUS_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record C9 implemented, unmerged and deterministic only",
+            not divergent_c9,
+            ", ".join(divergent_c9),
+        )
+        overclaiming_c9 = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in COCKPIT_C9_STATUS_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document records C9 as merged or as a running model",
+            not overclaiming_c9,
+            "; ".join(overclaiming_c9),
         )
 
         # -- ADR-0030: accepted, and both status documents must say so ---------

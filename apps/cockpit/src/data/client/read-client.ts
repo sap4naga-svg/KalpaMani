@@ -72,7 +72,12 @@ import type {
   SystemJobPayload,
 } from "@/contracts/operations-models";
 import type { AuditEventPayload } from "@/contracts/audit-models";
+import type {
+  AskAnswerPayload,
+  SearchResultPagePayload,
+} from "@/contracts/ask-models";
 import type { HostingBoundary } from "@/contracts/vocabularies";
+import type { AskRequest } from "@/lib/ask/resolve";
 import type { PerformancePeriod, ViewScope } from "@/lib/scope";
 
 /**
@@ -204,6 +209,33 @@ export interface ReadClient {
   systemIncidents(scope: ViewScope): Promise<EnvelopeOf<SystemIncidentPayload>>;
   alerts(scope: ViewScope): Promise<EnvelopeOf<AlertPayload>>;
   auditEvents(scope: ViewScope): Promise<EnvelopeOf<AuditEventPayload>>;
+
+  /* ------------------------------------------------------------- added by C9 */
+
+  /**
+   * The index behind the command palette — Area 30.
+   *
+   * The term is a FILTER over an index of safe identifiers and titles, and it is never a
+   * query language, never a scan of repository files and never a path. Rows carry their own
+   * environment, provenance and classification, and **the scope is never widened here**: a
+   * search under one environment returns no row belonging to another.
+   */
+  search(scope: ViewScope, term: string): Promise<EnvelopeOf<SearchResultPagePayload>>;
+
+  /**
+   * One bounded, typed analytical answer — Area 31.
+   *
+   * **Two reads, and not one write.** There is no method here that places an order, changes
+   * risk, promotes a strategy, runs research, retries a job, acknowledges an alert or
+   * authorizes anything, and this interface is where such a method would have to appear
+   * first. **Answering a question about execution does not execute, and answering one about
+   * a job does not run it.**
+   *
+   * The request is a CLOSED question class plus typed parameters. It carries no expression,
+   * no predicate, no field list, no sort and no free text, so there is no shape in which an
+   * arbitrary query could arrive.
+   */
+  ask(scope: ViewScope, request: AskRequest): Promise<EnvelopeOf<AskAnswerPayload>>;
 }
 
 export class ContractViolationError extends Error {
