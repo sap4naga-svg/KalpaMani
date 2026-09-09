@@ -1124,6 +1124,12 @@ def test_the_two_measures_are_reported_apart_and_neither_is_overclaimed(name: st
     )
     for over_claim in (
         "strategy capacity - IMPLEMENTATION: IMPLEMENTED,",
+        # THE BARE OVER-CLAIM, RESTORED. This is a SUBSTRING test, so this one entry subsumes
+        # every longer spelling beside it. The tail-loss line genuinely had to go -- "rolling
+        # tail losses: IMPLEMENTED" is a prefix of the now-REQUIRED "... IMPLEMENTED AT
+        # SYNTHETIC SCOPE" -- but this one is a prefix of nothing required, and dropping it
+        # left the plainest over-claim of all permitted.
+        "strategy capacity: IMPLEMENTED",
         "strategy capacity: IMPLEMENTED,",
         "strategy capacity: AVAILABLE",
         "capacity model: EXISTS",

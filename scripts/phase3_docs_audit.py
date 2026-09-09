@@ -13544,6 +13544,13 @@ COCKPIT_C5_FOLLOWUP_FORBIDDEN: Final[tuple[str, ...]] = (
     # synthetic book is not a result about any strategy, and neither completes a
     # cycle. "AT SYNTHETIC SCOPE" is load-bearing and may not be dropped.
     "strategy capacity - IMPLEMENTATION: IMPLEMENTED",
+    # THE BARE OVER-CLAIM, RESTORED. Forbidding is a SUBSTRING test, so this one entry
+    # subsumes every longer spelling below it -- and dropping it, as this cycle briefly
+    # did, left the plainest over-claim of all permitted while three longer variants were
+    # forbidden. The tail-loss line genuinely had to go, because "rolling tail losses:
+    # IMPLEMENTED" is a prefix of the REQUIRED "... IMPLEMENTED AT SYNTHETIC SCOPE"; this
+    # one is a prefix of nothing required, and no status document contains it.
+    "strategy capacity: IMPLEMENTED",
     "strategy capacity - VALUE: PRODUCED",
     "strategy capacity - VALUE: AVAILABLE",
     "strategy capacity: IMPLEMENTED AT SYNTHETIC SCOPE",
