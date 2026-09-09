@@ -14,6 +14,11 @@ import {
 import { ProvenanceBadge } from "@/components/cockpit/provenance";
 import { ReadModelPanel, ReferenceChip } from "@/components/cockpit/read-model-panel";
 import { ReturnHeatmap } from "@/components/cockpit/return-heatmap";
+import { RollingSeriesPanel } from "@/components/cockpit/rolling-series";
+import {
+  BenchmarkComparisonUnavailable,
+  BenchmarkComparisonView,
+} from "@/components/cockpit/benchmark-comparison";
 import { useScope } from "@/components/shell/use-scope";
 import {
   useExecutiveOverview,
@@ -48,6 +53,10 @@ import {
  *                                       an obviously invented demonstration index
  *   A WINDOW IS NOT AN EXPERIMENT       the trailing windows overlap, they are five views of
  *                                       one book, and comparing them establishes nothing
+ *   A LOOKBACK IS NOT A PERIOD          added by the C5 completion follow-up: the period is
+ *                                       the extent the series is requested over, the rolling
+ *                                       lookback is how far each point inside it looks back,
+ *                                       and both are printed side by side
  */
 export default function Page() {
   const { scope, setScope } = useScope();
@@ -139,7 +148,9 @@ export default function Page() {
 
         <TrailingWindows trailing={trailing} operator={operator} />
 
-        <BenchmarkPanel envelope={series.data} />
+        <RollingSeriesPanel envelope={series.data} scope={scope} operator={operator} />
+
+        <BenchmarkPanel envelope={series.data} operator={operator} />
       </div>
     </>
   );
@@ -232,6 +243,10 @@ function RealizedAndUnrealised({
  * short window reports `INSUFFICIENT_OBSERVATIONS` where a long one reports a ratio. **No
  * rolling series is derived here**, because deriving one would be a screen computing a metric
  * the producer did not.
+ *
+ * THE ROLLING SERIES IS A SEPARATE PANEL AND A SEPARATE READ. It arrives on the payload,
+ * produced, under its own metric identifiers, and this table is still five discrete windows
+ * rather than a rolling one — they answer different questions and neither replaces the other.
  */
 function TrailingWindows({
   trailing,
@@ -379,8 +394,10 @@ function TrailingWindows({
  */
 function BenchmarkPanel({
   envelope,
+  operator,
 }: {
   envelope: ReturnType<typeof usePerformanceSeries>["data"];
+  operator: boolean;
 }) {
   return (
     <ReadModelPanel
@@ -435,6 +452,41 @@ function BenchmarkPanel({
               </p>
             </div>
           )}
+          {/*
+            * THE COMPARISON ITSELF, at the only scope this application can honestly reach.
+            *
+            * Area 2 asks for a comparison against SPY, QQQ and IWM. Those three resolve to
+            * nothing above and stay outstanding; what IS deliverable without a provider is
+            * the comparison behaviour — common-date alignment, rebasing, matched boundaries,
+            * two separately labelled arms and the limits stated on the chart — against the
+            * repository-owned curve. The named-benchmark requirement is disclosed as still
+            * open rather than treated as satisfied by a synthetic stand-in.
+            */}
+          <div className="space-y-1.5 border-t border-border-subtle pt-3">
+            <h3 className="text-label-m font-semibold text-text-primary">
+              The comparison, against the one drawable curve
+            </h3>
+            {payload.benchmark_comparison === undefined ? (
+              <BenchmarkComparisonUnavailable />
+            ) : (
+              <BenchmarkComparisonView
+                comparison={payload.benchmark_comparison}
+                operator={operator}
+              />
+            )}
+          </div>
+          <p
+            className="max-w-3xl text-label-s leading-relaxed text-text-tertiary"
+            data-testid="named-benchmark-outstanding"
+          >
+            <strong className="text-text-secondary">
+              The named-benchmark requirement is not satisfied by this.
+            </strong>{" "}
+            Area 2 names SPY, QQQ and IWM; a comparison against a repository-owned curve is
+            not a comparison against any of them, and calling it one would be the claim the
+            unresolvable references above exist to withhold. Real price history for the three
+            stays blocked while <strong>G1 is OPEN</strong> and no provider is selected.
+          </p>
         </div>
       )}
     </ReadModelPanel>
