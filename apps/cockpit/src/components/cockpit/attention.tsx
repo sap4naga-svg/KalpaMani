@@ -142,15 +142,15 @@ function EvidenceDisclosure({
           </p>
         )}
         <dl className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-label-s text-text-tertiary">
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             <dt>first seen</dt>
             <dd className="text-text-secondary">{item.first_seen}</dd>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             <dt>last seen</dt>
             <dd className="text-text-secondary">{item.last_seen}</dd>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             <dt>occurrences</dt>
             <dd className="text-text-secondary">
               {isValueBearing(item.occurrence_count.availability)

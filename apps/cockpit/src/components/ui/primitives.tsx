@@ -69,9 +69,25 @@ export function Label({
   );
 }
 
+/*
+ * `max-w-full` REPLACED `whitespace-nowrap`, AND THE REASON IS A MEASURED DEFECT.
+ *
+ * Several screens use a badge to carry a whole sentence -- a failure mode, a criterion, an
+ * authorization note. With `whitespace-nowrap` such a badge could not wrap, so at the 390 x 844
+ * reference viewport it ran past the page and was CLIPPED by the `overflow-x: hidden` on `html`
+ * and `body`: "The evidence rests on one confirmatory evaluation" reached x = 608 in a 390-pixel
+ * viewport, and the rest of the sentence was unreachable. `ui-ux-specification.md` section 12
+ * forbids exactly that -- "no clipped critical control * no truncated number without a full value
+ * available" -- and U14 asks wide content to scroll inside its own container rather than off the
+ * page.
+ *
+ * A SHORT BADGE IS UNAFFECTED. `max-w-full` caps a badge at its container and lets text wrap only
+ * when it would otherwise exceed it; a two-word status badge is narrower than its container, so
+ * its intrinsic width still puts it on one line. What changes is only the case that was broken.
+ */
 const badgeVariants = cva(
   "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-label-s " +
-    "font-medium whitespace-nowrap",
+    "font-medium max-w-full",
   {
     variants: {
       tone: {
