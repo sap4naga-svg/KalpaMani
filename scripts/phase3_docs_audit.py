@@ -13434,6 +13434,12 @@ COCKPIT_C5_FOLLOWUP_HEADING: Final = (
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
     "C5 completion follow-up: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    # THE REVIEW IS A FACT ABOUT THE WORK, AND IT IS RECORDED LIKE ONE. Every recent cycle
+    # carries this line -- C4, C7, C8 and C9 each do -- so a cycle that carried none would be
+    # the only one whose status could not say whether anybody had read it. It says a review
+    # HAPPENED and nothing more: not that the cycle is complete, not that its outstanding
+    # requirements moved, and not that it merged.
+    "independent review of the follow-up: PERFORMED",
     "portfolio rolling return and drawdown: IMPLEMENTED AT SYNTHETIC SCOPE",
     "rolling expectancy: IMPLEMENTED AT SYNTHETIC SCOPE",
     "portfolio benchmark comparison: IMPLEMENTED AT SYNTHETIC SCOPE",

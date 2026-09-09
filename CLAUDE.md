@@ -5171,8 +5171,18 @@ under an order-labelled code, the C8 contract comment that overstates its body, 
 `SearchResultPage`'s unexercised governance-provenance permission. **None is resolved by omission**,
 and **no ADR is opened and no navigation authority is widened here.**
 
+**An independent review has since been performed on this pull request**, and it found one
+material defect: the rolling expectancy had **no value-level regression coverage at all**. The
+cross-check this cycle described as a comparison against an already-accepted figure guarded on a
+version carrying exactly thirty closed trades, and no version in the book does — so the comparison
+never ran, and two semantically wrong implementations of the rolling expectancy passed the complete
+suite. **The cross-check now runs against the accepted summary builder over the same thirty trades,
+and refuses to go quiet.** No production behaviour, contract, fixture or accepted document was
+changed by that correction.
+
 ```text
 C5 completion follow-up:                          IMPLEMENTED IN AN OPEN PULL REQUEST
+independent review of the follow-up:              PERFORMED
 portfolio rolling return and drawdown:            IMPLEMENTED AT SYNTHETIC SCOPE
 rolling expectancy:                               IMPLEMENTED AT SYNTHETIC SCOPE
 portfolio benchmark comparison:                   IMPLEMENTED AT SYNTHETIC SCOPE
