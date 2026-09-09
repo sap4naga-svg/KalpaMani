@@ -1156,11 +1156,22 @@ def test_the_dictionary_and_schema_versions_are_recorded(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
 def test_the_outstanding_requirements_and_standing_gates_are_unchanged(name: str) -> None:
+    """The gates this cycle did not close, and the one cycle line that has since moved.
+
+    ``C10: NOT STARTED / NOT AUTHORIZED`` was required here while nothing had been written,
+    and it is FALSE now: the C10 polish and acceptance cycle is implemented and carried by an
+    open pull request. The line moves to the open-pull-request spelling on the precedent C9
+    set when it landed, and the stale under-claim is refused below -- a status document that
+    still calls a written cycle unstarted sends the next session to write it again.
+
+    **Nothing else in this list moves.** C10 audited C5 and C7 rather than closing them, it
+    obtained no capacity input, and it left every standing gate exactly where it was.
+    """
     text = STATUS_DOCUMENTS[name]
     for statement in (
         "C5 overall: NOT COMPLETE",
         "full Cockpit V1: INCOMPLETE",
-        "C10: NOT STARTED / NOT AUTHORIZED",
+        "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
         "strategy capacity - REQUIRED INPUTS: DO NOT EXIST",
         "capacity model: DOES NOT EXIST",
         "capacity model qualification: DOES NOT EXIST",
@@ -1175,6 +1186,8 @@ def test_the_outstanding_requirements_and_standing_gates_are_unchanged(name: str
         "live trading: HARD-DISABLED",
     ):
         assert statement in text, statement
+    # The stale under-claim, refused by name. It was true, and it is not any more.
+    assert "C10: NOT STARTED / NOT AUTHORIZED" not in text
 
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
