@@ -406,6 +406,22 @@ export function capacityGate(request: CapacityRequest): CapacityGateResult {
     return refuse("NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING", "REQUIRED_INPUTS");
   }
 
+  /*
+   * `PUBLIC_PIT` IS NOT REACHABLE FROM PROVIDER-DERIVED PRICE DATA (§D2.8).
+   *
+   * The profile is declared rather than inferred, and a declaration the contract forbids is
+   * refused rather than quietly downgraded to the profile it should have carried.
+   *
+   * IT IS CHECKED WITH THE OTHER DECLARATIONS, AND NOT AFTER THE QUALIFICATION STAGE. This
+   * refusal is a `REQUIRED_INPUTS` one, and §D2.11's declared order puts every applicable
+   * input BEFORE model qualification -- so evaluating it later reported an unqualified model
+   * over an input-stage refusal that the same order says answers first, and contradicted both
+   * `CAPACITY_GATE_STAGES` and this function's own documented order.
+   */
+  if (evidence.informationProfile === "PUBLIC_PIT") {
+    return refuse("NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING", "REQUIRED_INPUTS");
+  }
+
   const verdict = qualificationVerdict(evidence.qualification, evidence, request);
   if (verdict === "REFUSED") {
     return refuse("NOT_AUTHORIZED", "PRODUCER_NOT_AUTHORIZED", "MODEL_QUALIFICATION");
@@ -426,16 +442,6 @@ export function capacityGate(request: CapacityRequest): CapacityGateResult {
     }
     return request.evaluationMs - fact.asOfMs > fact.maxAgeSeconds * 1000;
   });
-
-  /*
-   * `PUBLIC_PIT` IS NOT REACHABLE FROM PROVIDER-DERIVED PRICE DATA (§D2.8).
-   *
-   * The profile is declared rather than inferred, and a declaration the contract forbids is
-   * refused rather than quietly downgraded to the profile it should have carried.
-   */
-  if (evidence.informationProfile === "PUBLIC_PIT") {
-    return refuse("NOT_YET_AVAILABLE", "UPSTREAM_INPUT_MISSING", "REQUIRED_INPUTS");
-  }
 
   /*
    * THE EMPTY FEASIBLE SET IS DECIDED BEFORE EXTENT, because it is not an extent question.
