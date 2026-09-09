@@ -28,6 +28,11 @@ it is open**, and the corrections it makes here are proposed with it.
 §4.5 `WhatChangedEntry` and `AttentionItem` payload notes. ADR-0031 is **PROPOSED and carries no
 authority while the pull request introducing it is open**, and the deltas it makes here are proposed
 with it.
+**Further amended by** [ADR-0032](../decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) —
+§12.3 with two new metric rows and the new §12.3.2 and §12.3.3, a §12.6 note, and the §4.5
+`StrategyPerformance` and `StrategyHealth` payload notes. ADR-0032 is **PROPOSED and carries no
+authority while the pull request introducing it is open**, and the deltas it makes here are proposed
+with it.
 
 ---
 
@@ -1918,6 +1923,12 @@ StrategyPerformance.payload {
 modules keep separate attribution and share family context · **no diversification or alpha claim is
 carried in this payload**, and none is derivable from it.
 
+**Area 4's `capacity` figure is defined by §12.3 and §12.3.3, proposed with ADR-0032.** It is
+**admissible only through that qualified-model interface**, it is **never filled from strategy
+capital, buying power, available cash, gross exposure or any limit**, it is **never filled with
+zero**, and **per-version capacities are never summed into a portfolio capacity**. Every required
+input is absent today, so the value is `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`.
+
 ```text
 StrategyHealth.payload {
     strategy_version          SafeId        required
@@ -1943,6 +1954,13 @@ StrategyHealth.payload {
 `strategy:read` · **invariants** **only the seven health states render** · **the view causes no
 transition** · a degradation shows the research queue entry it created · `recovery_authority` is
 displayed unchanged and **is neither strengthened nor widened by this contract**.
+
+**Area 5's rolling tail loss is carried in `drift[]` as `strategy.tail_loss`, defined by §12.3 and
+§12.3.2 and proposed with ADR-0032.** It is measured over **closed trades of this exact version**
+across a **closed-trade count window**, its population is **every eligible observation and never
+losses only**, its sign follows §12.1 so a loss is negative, and a **positive value is a measured
+result**. **Defining it creates no health-state transition rule**: the seven states and every
+transition remain ADR-0026 §13's, and the view still causes no transition.
 
 ```text
 StrategyVersion.payload {
@@ -2832,6 +2850,7 @@ dimension that genuinely does not apply to it — that is a statement, not an om
 | `risk.permitted` | a separately governed policy value, carried with its `PolicyRef` | USD and PERCENT · the policy's own base | policy version and as-of | 0 | `NOT_YET_AVAILABLE` with `POLICY_REFERENCE_MISSING` |
 | `expectancy.currency` | `Σ outcome / n` over the **defined** closed-trade population | USD · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` |
 | `expectancy.r` | `Σ r_multiple / n` over the same population | R_MULTIPLE · trade count | trade dates | 30 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`; refused for any trade lacking `risk.initial_planned` |
+| `strategy.tail_loss` | **PROPOSED by ADR-0032.** The mean of the `k` most adverse eligible observations in the window: with the eligible `r_multiple` values sorted ascending as `r(1) <= ... <= r(n)`, the value is `(r(1) + ... + r(k)) / k`, where `k = ceil(q * n)` is an **integer count of order statistics** and **no quantile interpolation rule is used**. The population is **every** eligible observation and **never losses only** — the tail is selected by ordering, so a **positive** value is a measured result. §12.3.2 works it through | R_MULTIPLE · `k`, the tail observation count — **each observation's own denominator is that trade's retained `risk.initial_planned`**, so this is a **mean of ratios and never a ratio of sums** | a **closed-trade count window** of the trailing 30 eligible observations, never a calendar window; close instants on the named calendar, UTC storage; **no observation after a point's cutoff contributes to that point** | 30 closed trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` below the minimum, **an empty population included**, and **whether or not trades were also excluded** — the exclusion count is disclosed beside it and **never converts an absent value into a valued `PARTIAL`**; `PARTIAL` with `UPSTREAM_INPUT_MISSING`, **only when the minimum is met**, naming how many closed trades were excluded for a missing or zero initial planned risk; `NOT_IMPLEMENTED` with `PRODUCER_NOT_IMPLEMENTED` where no producer exists. `NOT_APPLICABLE` with `DENOMINATOR_ZERO` is **unreachable** — `k` is at least one whenever the minimum is met |
 | `profit_factor` | `gross_profit / gross_loss`, both from closed trades, both under one stated cost treatment | RATIO · gross loss | trade dates | 20 trades | `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when gross loss is zero — **never infinity, never a sentinel, never a large number** |
 | `win_rate` | `winners / population`, where the population is defined and **break-even trades are counted in a stated bucket** | RATIO · defined population | trade dates | 20 trades | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS` |
 | `sharpe` | `(mean(r) − rf) / stdev(r) × √A`, with `r` at the stated frequency, `rf` the stated risk-free assumption, `A` the stated annualization factor and `stdev` the stated **sample** convention | DIMENSIONLESS · standard deviation of `r` | frequency, calendar and timezone named | 60 periods | `INSUFFICIENT_OBSERVATIONS` — **a Sharpe from twelve observations is decoration** |
@@ -2842,6 +2861,7 @@ dimension that genuinely does not apply to it — that is a statement, not an om
 | `capture_ratio` | `realized_outcome / mfe`, **both in the same unit and on the same bar frequency and basis** | RATIO · MFE | as `mfe` | 1 bar | `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when MFE is zero or negative |
 | `slippage` | `side_sign × (fill_price − reference_price) / reference_price × 10,000`, against a **named** reference price carrying its own timestamp. `side_sign` is **+1 for every buy** — buy-to-open and buy-to-cover — and **−1 for every sell** — sell-to-close and sell-to-open. **Positive is adverse cost; negative is a favourable fill.** §12.3.1 works the arithmetic through | BPS · reference price | fill timestamps, clock source named | 1 fill | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when the reference is absent; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when the reference price is zero |
 | `slippage.aggregate` | the per-fill values combined by a **named** aggregation method, **quantity-weighted by default**: `Σ(bps_i × qty_i) / Σ qty_i` over fills that each have a resolvable reference. **Fills with no reference are excluded and counted**, and the result is `PARTIAL` naming how many — an average over a silently reduced population is a different metric | BPS · reference price | as above | 20 fills | `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`; `NOT_APPLICABLE` with `DENOMINATOR_ZERO` when total weight is zero |
+| `strategy.capacity` | **PROPOSED by ADR-0032, and not computable from any record this repository holds.** The greatest deployable strategy capital `C` on a qualified model's **declared search grid** for which `modelled_execution_cost(C) - observed_execution_cost` is within the **declared cost tolerance**, over this exact strategy version's recorded trade population and the evaluated window, under the declared participation limit, execution horizon and market-impact function. `observed_execution_cost` is the version's realized `slippage.aggregate` over the same window. **Admissible only through the §12.3.3 qualified-model interface**, which names all nine required inputs | USD · n/a — **a level, not a ratio** | the evaluated window and named calendar of the `PerformanceSummary` beside it, with **every input aligned to exactly those boundaries**; information-set profile **declared**, `PROVIDER_REALISTIC_PIT` wherever an input is provider-derived and **`PUBLIC_PIT` not reachable** from provider-derived prices; cost treatment `NET_ALL_COSTS` | the full evaluated window of session volume history for **every** security in the population — derived from the request, not a fixed number | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` when any required input is absent, **which is the state today**; `NOT_IMPLEMENTED` with `PRODUCER_NOT_IMPLEMENTED` when no model exists; `UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded; `NOT_AUTHORIZED` with `PRODUCER_NOT_AUTHORIZED` when it may not run; `STALE` with `UPSTREAM_INPUT_STALE`; `PARTIAL` with `EXTENT_PARTIALLY_COVERED`; `INSUFFICIENT_OBSERVATIONS` with `BELOW_MINIMUM_OBSERVATIONS`; `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT` when the feasible set is **empty**. **No absence is ever rendered as zero, and none is ever strategy capital, buying power, available cash, gross exposure or a limit** — a **computed** zero, meaning no positive evaluated capital level within tolerance, is a **measurement** and renders `AVAILABLE`. The value is a **maximum among the evaluated grid points**, it is **relative to this version's own observed execution cost**, and a still-feasible upper endpoint renders `PARTIAL` as a **lower bound rather than a maximum** |
 | `latency.signal_to_order` | `order_submitted_at − signal_at`, from recorded timestamps | SECONDS · n/a | clock source and accuracy stated | 1 | `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`, or with `CLOCK_UNSYNCHRONIZED` across unsynchronized clocks |
 | `latency.order_to_fill` | `first_fill_at − order_submitted_at` | SECONDS · n/a | as above | 1 | as `latency.signal_to_order` |
 | `benchmark.movement` | benchmark return over **exactly** the trade or period boundaries used, stating `PRICE_RETURN` or `TOTAL_RETURN` | RATIO · benchmark beginning value | same calendar and boundaries as the subject | 2 points | `PARTIAL` on a gapped benchmark |
@@ -2904,6 +2924,313 @@ that cannot be placed in time is not a reference.
 governs: an actual fill price already incorporates what was crossed, so this metric **reports** that
 against a reference and is **never subtracted from the same fill's economics again**.
 
+#### 12.3.2 The rolling tail loss, worked through
+
+**PROPOSED by ADR-0032, and proposed with it.** Until that ADR is independently reviewed and
+merged, this subsection carries no authority, and nothing in the application computes the quantity
+it describes.
+
+**The question it answers is *when this strategy version goes wrong, how wrong*** — which is not
+the question `expectancy.r` answers, not the question `drawdown.max` answers, and not the question
+the single worst trade answers.
+
+```text
+population     CLOSED trades of ONE EXACT strategy version carrying a recorded
+               risk.initial_planned. One trade contributes exactly ONE observation,
+               at its close. Open trades and partially exited trades contribute NONE
+window         the trailing 30 eligible observations -- a CLOSED-TRADE COUNT window,
+               never a calendar window, and never series periods
+ordering       severity: r_multiple ascending, most adverse first
+               recency:  close instant ascending, ties by trade identifier ascending
+tail count     k = ceil(q * n), an integer count of order statistics
+value          ( r(1) + r(2) + ... + r(k) ) / k
+sign           12.1 unchanged -- profit positive, loss negative, long and short alike
+```
+
+**The population is every eligible observation and never losses only, so it is not filtered by
+sign.** A losses-only population would move with the win rate:
+a version that stopped losing would shrink its own denominator to the few remaining losses and
+report a worse tail on better behaviour, and a version with no losing trade would have no value at
+all. **The tail is chosen by ordering**, so a **positive** tail loss is a legitimate measured
+result meaning even the worst observations made money.
+
+**It is a mean of ratios and never a ratio of sums.** Each observation carries its own denominator — that
+trade's retained `risk.initial_planned`, summed across stages under §12.4's adds-and-pyramids rule,
+fixed at entry and unmoved by a trailing stop. Dividing total tail dollars by total tail risk
+dollars would weight the tail by position size and report a different quantity under this name.
+
+**Ties need no tie-break for the value.** Tied observations carry the same `r_multiple`, so the mean
+over any `k`-subset of a tie is identical. The declared ordering exists so a listing of which
+observations formed the tail is reproducible, not because the value depends on it.
+
+**No point looks forward.** At an evaluation point `P`, only observations whose close instant is at
+or before `P` are eligible. Appending a later observation changes no earlier value, and — the
+stronger statement, and the one to test — **replacing every observation after `P` changes nothing at
+or before `P`**.
+
+**Worked, by hand.** Thirty eligible observations at `P`, with `q` at `0.10`, so `k` is `3`:
+
+| Quantity | Value | The question it answers |
+|---|---|---|
+| the three most adverse observations | `−3.10 R`, `−2.40 R`, `−2.00 R` | which observations form the tail |
+| the tail loss, `strategy.tail_loss` | **−2.50 R**, from `−7.50 / 3` | when this version went wrong, how wrong |
+| the worst single observation | `−3.10 R` | what is the single worst thing that happened |
+| `expectancy.r` over all thirty, totalling `+9.00 R` | `+0.30 R` | what does an average trade return |
+
+**Three numbers, one population, three questions.** A version can carry a healthy expectancy and a
+severe tail at the same time, which is why none of the three substitutes for another.
+
+**A tail loss is not the worst single trade, and the two are not prevented from agreeing.** The
+minimum `r_multiple` is one order statistic moved entirely by one outlier; this averages `k` of them.
+**When the `k` most adverse observations are all equal the two values coincide** — three tied worst
+trades under the proposed parameters produce a tail loss equal to the minimum — and **`k` being three
+prevents nothing**. **Coincidence of two values is not identity of two definitions**, and the two
+diverge as soon as the tail is not flat.
+
+**A tail loss is not a drawdown.** Drawdown is path-dependent over an equity series measured against
+a running peak, compounds across overlapping trades and includes open marks. This is cross-sectional
+over discrete closed outcomes: no path, no peak, no compounding.
+
+**Insufficiency, a measured zero and a partial result are three answers.**
+
+| Situation | `availability` | `reason` | value |
+|---|---|---|---|
+| thirty eligible observations, statistic computed | `AVAILABLE` | `NONE` | present |
+| a computed statistic of exactly `0.00` R | `AVAILABLE` | `NONE` | present — **a measurement** |
+| twenty-nine eligible observations | `INSUFFICIENT_OBSERVATIONS` | `BELOW_MINIMUM_OBSERVATIONS` | **absent** |
+| zero eligible observations | `INSUFFICIENT_OBSERVATIONS` | `BELOW_MINIMUM_OBSERVATIONS` | **absent** |
+| a closed trade excluded for a missing or zero initial planned risk, **with the minimum met** | `PARTIAL` | `UPSTREAM_INPUT_MISSING` | present, **naming how many were excluded** |
+| fewer than the minimum **and** closed trades also excluded | `INSUFFICIENT_OBSERVATIONS` | `BELOW_MINIMUM_OBSERVATIONS` | **absent** — the exclusion count is still disclosed |
+| no producer exists | `NOT_IMPLEMENTED` | `PRODUCER_NOT_IMPLEMENTED` | **absent** |
+
+**An empty population is `INSUFFICIENT_OBSERVATIONS`, not `EMPTY_VERIFIED`.** §4.1.2 reserves
+`EMPTY_VERIFIED` for the **count of a defined population**; this is a statistic rather than a count,
+and §4.1.1 gives `INSUFFICIENT_OBSERVATIONS` no value at all, which is the right answer when there
+is nothing to average. **One situation gets one state.**
+
+**The exclusion rule is `slippage.aggregate`'s, reused rather than reinvented**: excluded members
+are counted and the result is `PARTIAL` naming how many, because an average over a silently reduced
+population is a different metric.
+
+**Sufficiency is decided before exclusion, and the two answers are never both returned.** A walk-back
+can satisfy neither condition, one of them, or both at once. **The eligible count decides the metric
+value first**: below the minimum the value is `INSUFFICIENT_OBSERVATIONS` with
+`BELOW_MINIMUM_OBSERVATIONS` and **carries no value at all**, *whether or not* closed trades were
+also excluded. **`PARTIAL` is reachable only when the minimum is met**, because §4.1.1 requires a
+`PARTIAL` value to be **present** and an insufficient population has none to qualify. **This is this
+metric's own rule, read off the validity matrix, and not a precedence policy over availability states
+generally.**
+
+**The exclusion count is disclosed either way, and it is not the metric value.** How many closed
+trades were excluded is a **population disclosure carried beside the metric** — the same count the
+`PARTIAL` row names — and it is stated in the insufficient case too, so a reader is never told a
+window was merely short when part of it was also unusable. **Disclosing it never converts an absent
+value into a valued `PARTIAL`.**
+
+**The parameters are proposed measurement decisions, and none of them is a rule about trading.**
+`q = 0.10` and a thirty-observation window are choices offered for review; the window and the
+minimum **reuse §12.3's own declared minimum for `expectancy.currency`** rather than inventing a
+number. **That is a reused count and not a shared window** — §12.3 declares a **minimum** for the
+expectancy rows and **no rolling window for either** — and what the two do share is the eligibility
+rule `expectancy.r` already carries.
+**No health-state transition, promotion criterion, risk limit or entry rule is created by any of
+them** — Area 5's seven states and their transition rules are ADR-0026 §13's and are unchanged.
+
+**A reused minimum establishes no statistical adequacy, and none is claimed here.** Thirty is the
+count §12.3 declares sufficient for a **mean over a whole population**; this statistic averages
+**three**, so **one observation is a third of the estimate** and a tail one observation away from
+being flat can move sharply on a single trade. **The value is descriptive of the window it measured
+and nothing more** — **no predictive reliability**, **no production qualification** and **no
+threshold at which anything happens**.
+
+#### 12.3.3 Strategy capacity — the qualified-model interface and its admission gate
+
+**PROPOSED by ADR-0032, and proposed with it.** Until that ADR is independently reviewed and
+merged, this subsection carries no authority. **No capacity model exists, no required input exists,
+and no capacity value has ever been produced.**
+
+**Capacity is how much this strategy version could have deployed before its own execution moved the
+price against it.** It is **not** strategy capital, **not** available cash, **not** buying power,
+**not** gross exposure and **not** a position, allocation or risk limit. Those are five other
+quantities, each already displayed under its own name, and substituting one would render one number
+twice under two meanings while never moving when liquidity moved.
+
+**It is measured against this version's own realized execution, which makes it narrower than its
+name.** The admissible ceiling is `observed_execution_cost + cost_tolerance`, so a version whose own
+fills executed **badly** carries a **higher** ceiling and reports a **larger** capacity than an
+otherwise identical version that executed well. **Poor observed execution mechanically increases the
+reported number.** The quantity is therefore a **cost-degradation-tolerance capacity relative to the
+version's own observed execution**, it is **not comparable across versions of differing execution
+quality**, and it is **not a profitability capacity, not the capital at which the strategy stops
+making money, not a liquidity ceiling and not a risk or allocation limit**. **It is displayed with
+that limitation.**
+
+**It is not computable from any record this repository holds.** No ledger, fill record or risk
+record contains what the market would have absorbed, so capacity is specified as an **interface a
+qualified model must satisfy**, together with a gate that refuses a value until it does.
+
+```text
+C*  =  the greatest deployable strategy capital C on the model's DECLARED SEARCH GRID
+       for which
+
+           modelled_execution_cost(C) - observed_execution_cost  <=  cost_tolerance
+
+       over this exact strategy version's recorded trade population and the evaluated
+       window, under the declared participation limit, execution horizon and
+       market-impact function
+```
+
+**`observed_execution_cost` is the version's realized `slippage.aggregate` over the same window**,
+on the same named reference price and the same side convention §12.3.1 fixes. **§12.4's
+costs-already-in-the-fill rule holds**: the observed leg comes from actual fills and is never
+re-charged, and the modelled leg is a **hypothetical** that states its assumptions and is never
+placed in a series with realized results.
+
+**The model must declare `modelled_execution_cost` monotone non-decreasing in `C`, or declare the
+search rule that resolves a non-monotone cost function.** Without one of the two, *the greatest `C`*
+is ambiguous, and an ambiguous maximum is not a definition. **Where the function is monotone the
+search may stop at the first infeasible point; where it is not, the declared rule evaluates the whole
+declared domain and returns the greatest feasible point in it** — stopping early on a non-monotone
+function returns a different, smaller answer than a full sweep, so the model states which rule it
+used.
+
+**The search domain is declared, and the result is a grid maximum.** The model declares the grid's
+**lower endpoint**, **upper endpoint**, **granularity** and **stopping rule**, and the value carries
+all four. `C*` is **the greatest feasible point the model actually evaluated**, resolved no more
+finely than the granularity and bounded by the endpoints. **No interpolation between evaluated points
+and no extrapolation beyond the upper endpoint is evaluated evidence.** **The declared grid includes
+`C = 0` as its lower endpoint**, with `modelled_execution_cost(0)` equal to zero, because deploying
+nothing incurs no modelled execution cost.
+
+**How capital becomes a schedule is declared, or the modelled leg is not determined.** The model
+declares the mapping from a capital level `C` to the **order and trade schedule** it evaluates — how
+`C` becomes per-security order sizes across the recorded trade population, spread over the declared
+execution horizon and capped by the declared participation limit. **Without that mapping
+`modelled_execution_cost(C)` is not a function of `C`**, and a capacity computed without one is
+**refused**.
+
+**Both cost legs are BPS, and they must share a basis.** `C` is **USD**; the modelled cost, the
+observed cost and the tolerance are **all BPS** on the §12.3.1 reference price, side convention,
+aggregation method and weighting, so the comparison is dimensionally consistent. **Two legs on
+different references, side conventions, aggregation methods or weightings are not comparable**, and
+the value is **refused rather than computed across an incomparable basis**.
+
+**The nine required inputs, each carrying its own `DataProvenance` and `as_of`.**
+
+| # | Required input | State today |
+|---|---|---|
+| 1 | per-security **traded volume history** over the window, at the declared frequency and calendar | **absent — G1 is OPEN and no provider is selected** |
+| 2 | per-security **price history** over the same window, frequency and calendar | **absent — G1 is OPEN** |
+| 3 | the recorded **order and fill history** of this exact version over the window | no execution runtime exists |
+| 4 | a **declared participation limit** — the maximum share of a security's traded volume assumed takeable in one session | no model exists to declare one |
+| 5 | a **declared execution horizon** — sessions over which one position may be built or unwound | no model exists to declare one |
+| 6 | a **market-impact function**, with a declared functional form and a declared calibration identity | **no model and no calibration exists** |
+| 7 | a **declared cost tolerance**, in BPS on the §12.3.1 reference and side convention | no model exists to declare one |
+| 8 | **borrow availability history** for any short-side limb, from a **record** and **never inferred from price** | **absent — G5 is OPEN** |
+| 9 | the **portfolio-overlap set** — other versions holding the same securities over the same window | no strategy runtime exists |
+
+**Two versions competing for one security's liquidity do not each receive all of it**, which is why
+the ninth input is required rather than optional.
+
+**Applicability is part of the requirement, and two of the nine are conditional.** **Input 8 is
+required only where the evaluated trade population carries short exposure**: a purely long population
+has no short-side limb, so borrow history is **`NOT_APPLICABLE` to the request** and **its absence
+does not block admission**. **Input 9 is satisfied by a *determined* set, and a determined set may be
+empty** — *no other version held these securities over this window* is an answer, and it is not the
+same fact as *nobody looked*. **An undetermined overlap set is a missing input; an empty determined
+one is not.**
+
+**The fill record is whatever produced it, and it is never relabelled.** A **`ResearchRun` consumer
+supplies input 3 from an authorized research run**, whose fills are **`BACKTEST_SIMULATED` —
+hypothetical, never realized, and never broker fills**. That **satisfies the interface without
+implying a broker execution**: the provenance travels with the value, and a capacity resting on
+simulated fills is **labelled as resting on them** and **never presented as measured from real
+executions**.
+
+**Alignment, provenance and admissibility.** Every input is aligned to **exactly** the window
+boundaries and calendar the trade population used — two inputs on two calendars are not aligned by
+rounding. §3.1 freshness governs, and the value reports the **oldest** required input's age against
+**that input's own** contract. The information-set profile is **declared, never inferred**:
+`PROVIDER_REALISTIC_PIT` wherever an input is provider-derived, and **`PUBLIC_PIT` is not reachable
+from provider-derived price data**.
+
+**Model qualification is a recorded fact, and no model qualifies itself.** The model carries a
+**model identity, a calibration identity, the locked evaluation set it was assessed on, the
+assessment date, and the human governance decision that admitted it.** A model without that record
+is **`UNEVALUATED`**, not merely missing an input. **A qualification is a recorded *positive*
+decision, and the existence of an assessment record is not one**: a record that **refused** the model,
+one that has **expired** under its own stated validity, and one **granted for a different model
+identity, calibration identity, evaluation set or window scope** are each **not a qualification for
+this request**. **Nothing is qualified by having been looked at.**
+
+**The admission gate.**
+
+| Input and model state | `availability` | `reason` |
+|---|---|---|
+| any required input absent — **the state today** | `NOT_YET_AVAILABLE` | `UPSTREAM_INPUT_MISSING` |
+| no capacity model exists | `NOT_IMPLEMENTED` | `PRODUCER_NOT_IMPLEMENTED` |
+| a model exists and its qualification is not recorded | `UNEVALUATED` | `NOT_YET_ASSESSED` |
+| a model exists and may not run | `NOT_AUTHORIZED` | `PRODUCER_NOT_AUTHORIZED` |
+| a qualification record that **refuses** the model | `NOT_AUTHORIZED` | `PRODUCER_NOT_AUTHORIZED` — **a refused model is not an unassessed one** |
+| a qualification that has **expired**, or was granted for a different model, calibration, evaluation set or window scope | `UNEVALUATED` | `NOT_YET_ASSESSED` — **assessed elsewhere is not assessed here** |
+| an input older than its freshness contract | `STALE` | `UPSTREAM_INPUT_STALE` |
+| the window only partly covered | `PARTIAL` | `EXTENT_PARTIALLY_COVERED` |
+| volume history not covering the window for every security | `INSUFFICIENT_OBSERVATIONS` | `BELOW_MINIMUM_OBSERVATIONS` |
+| every input present and the model qualified | `AVAILABLE` | `NONE` |
+
+**An unqualified model is `UNEVALUATED`, not `NOT_YET_AVAILABLE`.** The inputs may be complete and
+the model may exist; what is missing is an **assessment**, and §2.1 gives that its own word.
+Collapsing the two would send a reader to look for absent data when nobody has judged the model.
+
+**More than one gate condition can hold at once, so the gate is evaluated in a declared order and
+the first unmet condition is the answer**: producer existence, then authorization, then every
+**applicable** input, then model qualification, then freshness, then extent. A missing producer is
+never reported as a missing input, and a stale input is never reported over an unqualified model.
+**This is one metric's own admission order, not a precedence rule over availability states
+generally.**
+
+**The search outcomes, and the one zero that is a measurement.** The gate decides whether a value may
+be produced; these decide what a produced value **means**.
+
+| Search outcome | What it establishes | `availability` | `reason` |
+|---|---|---|---|
+| the greatest feasible point sits strictly inside the declared grid | a **grid maximum at the declared granularity** — resolved no finer, with nothing claimed between evaluated points | `AVAILABLE` | `NONE` |
+| **no positive evaluated point is feasible, and `C = 0` is** | a **computed zero**: no positive capital level the model evaluated stayed within tolerance. A **measurement over a qualified calculation**, carrying the value zero, read **at the grid's resolution** | `AVAILABLE` | `NONE` |
+| **the highest evaluated point is still feasible** | a **lower bound, not a maximum** — the search did not resolve an upper boundary, so the value means *at least this much* and is **never reported as the greatest capital the version could deploy** | `PARTIAL` | `EXTENT_PARTIALLY_COVERED` |
+| **the feasible set is empty — even `C = 0` fails** | **no capacity exists under this configuration**, which arises only where `observed_execution_cost + cost_tolerance < 0`. **The greatest admissible `C` names nothing**, the value is **absent**, and it is **never rendered as zero** | `NOT_APPLICABLE` | `NOT_DEFINED_FOR_SUBJECT` |
+
+**A returned maximum is a maximum within the evaluated grid and never more.** An infeasible search is
+not automatically a zero, a feasible upper endpoint is not a resolved maximum, and neither gap is
+closed by interpolating or extrapolating after the fact.
+
+**No absence on this row is ever rendered as zero.** §4.1.2 holds: a missing input, a missing
+producer, an unqualified model, a stale or partial input and an empty feasible set each carry **no
+value at all**, because a zero standing in for a missing capacity renders identically to a real one.
+**A computed zero is a different thing entirely** — a producer that ran and measured zero has
+answered the question — so **the forbidden zero is a substituted one, never an arithmetic one**.
+
+**What a capacity value must carry when one finally exists.**
+
+| | |
+|---|---|
+| **cost treatment** | `NET_ALL_COSTS` — a capacity gross of costs answers nothing |
+| **its parameters** | model identity, calibration identity, qualification record, participation limit, execution horizon, cost tolerance, the **capital-to-schedule mapping**, and the **search domain, granularity and stopping rule** |
+| **its baseline** | that it is measured against **this version's own observed execution cost**, so it is **not comparable across versions of differing execution quality** |
+| **declared precision is not claimed resolution** | a value rendered at two decimal places from a coarse search grid states a display scale, **never that resolution** |
+| **it is backward-looking** | it states what the evaluated window's liquidity would have absorbed. **It is not a forecast** |
+| **it carries no confidence claim** | unless the qualified model supplies a declared uncertainty, which is then displayed |
+| **a synthetic capacity is labelled synthetic** | and is never presented as a measured capacity |
+
+**Per-version capacities are never summed into a portfolio capacity.** Overlapping holdings mean the
+sum overstates what the market would absorb. A portfolio-level capacity is a different metric, is
+**not defined here**, and **constructing one by addition is refused**.
+
+**Defining capacity does not make one obtainable.** **G1 and G5 are OPEN**, no provider is selected,
+no volume, price or borrow history is held, no impact model exists, no calibration exists and no
+model qualification exists. **No capacity number for any security, strategy or portfolio is asserted
+anywhere in this document**, and a capacity value is neither an allocation, an authorization nor a
+scaling permission.
+
 ### 12.4 The hard cases, decided rather than left open
 
 | | |
@@ -2952,6 +3279,19 @@ changed here**.
 **Where this document proposes a presentation definition that does not already exist, it is an
 explicit proposal and is labelled as one.** A presentation definition **never silently changes a
 strategy or risk policy**, and adopting one for a screen does not adopt it for the risk engine.
+
+**Two definitions are proposed by ADR-0032 and labelled as proposals, exactly as this section
+requires.** `strategy.tail_loss` and `strategy.capacity` each had a **registered unit and no
+definition**, and a registered unit fixes how a number renders while fixing nothing about what was
+measured. Their §12.3 rows, §12.3.2 and §12.3.3 are **proposed with ADR-0032 and carry no authority
+while the pull request introducing it is open**.
+
+**Their parameters are proposed measurement decisions and nothing more.** The tail fraction, the
+thirty-observation window, the reused minimum, and every capacity parameter a qualified model must
+declare are **not** existing requirements, **not** production qualifications, and **never** trading
+thresholds, promotion criteria, health-state transition rules, risk limits or capital
+authorizations. **Adopting a presentation definition for a screen adopts it nowhere else**, and
+neither measure is implemented by defining it.
 
 **No performance figure is invented anywhere in this document, and no strategy is described as
 validated.**
