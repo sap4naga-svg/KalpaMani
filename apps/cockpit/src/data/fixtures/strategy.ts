@@ -26,6 +26,7 @@ import type {
 
 import type { BookTrade } from "./book";
 import { BOOK, STRATEGY_VERSIONS, securityOf, strategyVersionOf } from "./book";
+import { capacityFor } from "./capacity";
 import {
   count,
   demoRef,
@@ -96,8 +97,26 @@ function sliceBucket(trade: BookTrade, axis: (typeof SLICE_AXES)[number]): strin
  * path is incomplete, the excursion figures are `PARTIAL` rather than optimistic — the same
  * rule the individual trade obeys, applied to the aggregate that contains it.
  */
-function moduleMetrics(trades: readonly BookTrade[], asOf: string) {
+function moduleMetrics(
+  trades: readonly BookTrade[],
+  asOf: string,
+  strategyVersion: string,
+  windowScope: string,
+) {
   const closed = trades.filter((trade) => trade.status === "CLOSED");
+  /*
+   * BORROW HISTORY IS REQUIRED ONLY WHERE THE EVALUATED POPULATION CARRIES SHORT EXPOSURE.
+   *
+   * It is read off the population rather than off the version's declared direction, because
+   * §D2.7 conditions the requirement on the TRADES the capacity would be evaluated over.
+   */
+  const capacity = capacityFor({
+    strategyVersion,
+    windowScope,
+    evaluationMs: Date.parse(asOf),
+    shortExposurePresent: trades.some((trade) => trade.direction === "SHORT"),
+    asOf,
+  });
   const anyPartial = trades.some((trade) => trade.dataCompleteness === "PARTIAL");
   const realized = trades.reduce((total, trade) => total + trade.realizedCents, 0);
   const unrealized = trades.reduce((total, trade) => total + trade.unrealizedCents, 0);
@@ -135,16 +154,18 @@ function moduleMetrics(trades: readonly BookTrade[], asOf: string) {
       asOf,
     ),
     /**
-     * Capacity needs a liquidity and market-impact model over qualified provider data. None
-     * exists, **no provider is selected and G1 is OPEN**, so it is unavailable rather than
-     * estimated from a fixture.
+     * THE ADMISSION GATE'S OWN ANSWER — ADR-0032 §D2.11, §12.3.3.
+     *
+     * It is not asserted here. `capacityGate` evaluates producer existence, authorization and
+     * every applicable required input in the declared order, and today the first unmet
+     * condition is the required-input stage: **G1 is OPEN** and no provider is selected, so
+     * there is no traded-volume and no price history; no model declares a participation
+     * limit, an execution horizon, an impact function or a cost tolerance; **G5 is OPEN**;
+     * and no strategy runtime has determined a portfolio-overlap set. **No capacity is
+     * estimated, and no absence is filled with zero.**
      */
-    capacity: unavailable(
-      "strategy.capacity",
-      "USD",
-      "NOT_YET_AVAILABLE",
-      "UPSTREAM_INPUT_MISSING",
-    ),
+    capacity: capacity.value,
+    capacity_declaration: capacity.declaration,
     mfe: anyPartial
       ? partialPath("mfe", "USD", (mfe / 100).toFixed(2), asOf)
       : usd("mfe", mfe, asOf),
@@ -314,7 +335,19 @@ export function syntheticStrategyPerformance(
       }),
       slices,
       trade_population: demoReason("CLOSED_TRADES_OF_THIS_EXACT_VERSION"),
-      module_metrics: moduleMetrics(trades, asOf),
+      module_metrics: moduleMetrics(
+        trades,
+        asOf,
+        version.versionId,
+        /*
+         * THE WINDOW SCOPE A QUALIFICATION WOULD HAVE TO MATCH.
+         *
+         * It is the evaluated window of the `PerformanceSummary` this row sits beside
+         * (§D2.2), named so an assessment granted for a different scope cannot be read as a
+         * qualification for this request.
+         */
+        `${days[0]}/${days[days.length - 1]}`,
+      ),
       health_context: healthContext(version.versionId, asOf),
       rolling_expectancy: rollingExpectancyOf(closed, days, asOf),
     };

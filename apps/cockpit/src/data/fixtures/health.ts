@@ -20,6 +20,7 @@ import { STRATEGY_HEALTH_STATES, type MaturityStage } from "@/contracts/vocabula
 import type { StrategyHealthState } from "@/contracts/vocabularies";
 
 import { BOOK, STRATEGY_VERSIONS, strategyVersionOf } from "./book";
+import { capacityFor } from "./capacity";
 import {
   count,
   demoRef,
@@ -39,6 +40,7 @@ import {
   openTradesByVersion,
 } from "./lineage";
 import { buildPerformanceSummary } from "./summary";
+import { buildRollingTailLoss } from "./tail-loss";
 
 /**
  * The minimum observations the health contract declares.
@@ -75,7 +77,14 @@ interface HealthRecord {
   /** Hundredths. A recorded drift score, never a computed one. */
   readonly factorDriftHundredths: number | null;
   readonly correlationHundredths: number | null;
-  readonly tailLossHundredths: number | null;
+  /*
+   * THERE IS NO RECORDED TAIL-LOSS FIELD ANY MORE, AND THAT IS THE POINT.
+   *
+   * This record used to carry `tailLossHundredths` — four hand-written literals that were not
+   * computed under any declared rule, which ADR-0032 §5.3 names in as many words. The rolling
+   * tail loss is now CALCULATED from the same demonstration book every other figure on this
+   * screen is projected from, so nothing is left here for a literal to contradict.
+   */
 }
 
 /**
@@ -98,7 +107,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     clusters: [],
     factorDriftHundredths: 12,
     correlationHundredths: 31,
-    tailLossHundredths: -140,
   },
   {
     versionId: "breakout-long-v2",
@@ -127,7 +135,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     clusters: [],
     factorDriftHundredths: null,
     correlationHundredths: null,
-    tailLossHundredths: null,
   },
   {
     versionId: "pullback-long-v2",
@@ -166,7 +173,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     ],
     factorDriftHundredths: 47,
     correlationHundredths: 58,
-    tailLossHundredths: -210,
   },
   {
     versionId: "pead-long-v1",
@@ -180,7 +186,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     /** Below the declared minimum, so every drift measure reports its rule and no number. */
     factorDriftHundredths: null,
     correlationHundredths: null,
-    tailLossHundredths: null,
   },
   {
     versionId: "pead-short-v1",
@@ -243,7 +248,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     ],
     factorDriftHundredths: 63,
     correlationHundredths: 44,
-    tailLossHundredths: -320,
   },
   {
     versionId: "deterioration-short-v1",
@@ -256,7 +260,6 @@ const HEALTH_RECORDS: readonly HealthRecord[] = [
     clusters: [],
     factorDriftHundredths: 22,
     correlationHundredths: 39,
-    tailLossHundredths: -180,
   },
 ];
 
@@ -307,6 +310,31 @@ export function syntheticStrategyHealth(
       : 0;
     const met = observed >= HEALTH_MINIMUM_OBSERVATIONS;
 
+    /*
+     * THE ROLLING TAIL LOSS, COMPUTED FROM THIS VERSION'S OWN CLOSED TRADES — ADR-0032 §D1.
+     *
+     * The book is read, not written: no trade is added, removed, reordered or re-priced, and
+     * **the population is not enlarged to make a window full**. A version whose eligible
+     * closed-trade count is short of thirty reports `INSUFFICIENT_OBSERVATIONS` and carries
+     * no value at all, which is the honest answer rather than a smaller window quietly used.
+     */
+    const tailLoss = buildRollingTailLoss(closed, days, asOf);
+
+    /*
+     * THE CAPACITY ADMISSION GATE, read here exactly as Area 4 reads it (§12.3.3).
+     *
+     * Area 5 lists capacity among the ADR-0026 §13 health inputs, so it answers through the
+     * same gate rather than through a second literal that could disagree with the strategy
+     * screen about one `metric_id`.
+     */
+    const capacity = capacityFor({
+      strategyVersion: record.versionId,
+      windowScope: `${days[0]}/${days[days.length - 1]}`,
+      evaluationMs: Date.parse(asOf),
+      shortExposurePresent: trades.some((trade) => trade.direction === "SHORT"),
+      asOf,
+    });
+
     const drift: { measure: ReturnType<typeof demoReason>; value: MetricValue }[] = [
       {
         measure: demoReason("FACTOR_EXPOSURE_DRIFT"),
@@ -328,11 +356,14 @@ export function syntheticStrategyHealth(
             : scaled("strategy.correlation", "RATIO", record.correlationHundredths, asOf),
       },
       {
+        /*
+         * THE COMPUTED STATISTIC, AND THE SAME OBJECT THE `tail_loss` FIELD CARRIES.
+         *
+         * The drift entry, the `TAIL_LOSSES` health input and the disclosure panel are one
+         * value read three times rather than three computations of one name (§12.2).
+         */
         measure: demoReason("TAIL_LOSS_R_MULTIPLE"),
-        value:
-          record.tailLossHundredths === null
-            ? insufficient("strategy.tail_loss", "R_MULTIPLE")
-            : scaled("strategy.tail_loss", "R_MULTIPLE", record.tailLossHundredths, asOf),
+        value: tailLoss.value,
       },
     ];
 
@@ -382,15 +413,16 @@ export function syntheticStrategyHealth(
             ),
           };
         case "CAPACITY":
-          return {
-            input: demoReason(input),
-            value: unavailable(
-              "strategy.capacity",
-              "USD",
-              "NOT_YET_AVAILABLE",
-              "UPSTREAM_INPUT_MISSING",
-            ),
-          };
+          /*
+           * THE GATE'S ANSWER, NOT A SECOND OPINION OF IT (§12.2).
+           *
+           * `slippage.aggregate` above is `NOT_IMPLEMENTED` because **no producer exists** for
+           * it at all. Capacity is a different state and the distinction is load-bearing: a
+           * producer DOES exist — the §12.3.3 admission gate — it ran, and it refused at the
+           * required-input stage. Reporting a missing producer here would send a reader to
+           * look for broken code rather than at nine dependencies that do not exist.
+           */
+          return { input: demoReason(input), value: capacity.value };
         case "REGIME_BEHAVIOUR":
           return {
             input: demoReason(input),
@@ -468,6 +500,7 @@ export function syntheticStrategyHealth(
         ),
       })),
       drift,
+      tail_loss: tailLoss,
       failure_clusters: record.clusters.map((cluster) => ({
         cluster: demoReason(cluster.cluster),
         count: count("strategy.failure_count", cluster.count, asOf),

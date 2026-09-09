@@ -10,6 +10,7 @@ import { MULTI_EXIT_TRADE } from "@/data/fixtures/book";
 import { CANDIDATE_RECORDS } from "@/data/fixtures/signals";
 import { fixedClock } from "@/lib/clock";
 import { DEFAULT_SCOPE } from "@/lib/scope";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 
 /**
  * What the C6 surfaces actually SHOW.
@@ -62,7 +63,7 @@ describe("an unavailable signals figure renders as a state", () => {
           reason: "PRICE_PATH_INCOMPLETE",
           as_of: AS_OF,
           metric_id: "miss.counterfactual",
-          metric_definition_version: "metrics.v1",
+          metric_definition_version: METRIC_DEFINITION_VERSION,
         }}
       />,
     );

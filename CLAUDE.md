@@ -5147,8 +5147,8 @@ unavailable is not implementing it**, and this table never treats the two as equ
 | **rolling expectancy** | the recorded C6 omission; §12.3 `expectancy.currency` supplies the definition **and its thirty-trade minimum** | **IMPLEMENTED AT SYNTHETIC SCOPE** — `expectancy.rolling`, per exact strategy version, over trailing **closed trades** |
 | **portfolio benchmark comparison** | Area 2 — "a comparison shows separately labelled series with their comparability limits stated **on the chart**"; §12.4 benchmark alignment | **IMPLEMENTED AT SYNTHETIC SCOPE** — common-extent alignment, rebasing, matched movements, limits on the chart, and a **refused** difference |
 | **named benchmarks SPY, QQQ and IWM** | Area 2 — "benchmark comparison against SPY, QQQ and IWM" | **UNAVAILABLE PENDING QUALIFIED INPUTS** — the three references still resolve to nothing, **G1 is OPEN**, and the screen states the requirement is **not** satisfied by the synthetic comparison |
-| **strategy capacity** | Area 4 — "…turnover, **capacity**, MFE, MAE…" | **UNAVAILABLE PENDING QUALIFIED INPUTS AND A RUNTIME**, and **BLOCKED BY A CONTRACT DECISION** — the metric stays unavailable and its four missing dependencies are now named on the screen |
-| **rolling tail losses** | named **once**, in **Area 5**, which is **C7**-owned | **BLOCKED BY A CONTRACT DECISION** — §12.3 carries no tail-loss row at all |
+| **strategy capacity** | Area 4 — "…turnover, **capacity**, MFE, MAE…" | **UNAVAILABLE PENDING QUALIFIED INPUTS AND A RUNTIME** — the contract block is **resolved**: ADR-0032 is accepted and its admission gate is now enforced on the read path, which is what names the missing inputs. **No capacity value is obtainable**, and the gate refuses at its required-input stage |
+| **rolling tail losses** | named **once**, in **Area 5**, which is **C7**-owned | **IMPLEMENTED AT SYNTHETIC SCOPE** — the contract block is **resolved**: §12.3 now carries the accepted row, and `strategy.tail_loss` is computed from the synthetic trade book per exact strategy version. **Computing it establishes nothing about any strategy** |
 
 #### What was implemented, and the separations it holds
 
@@ -5162,7 +5162,7 @@ unavailable is not implementing it**, and this table never treats the two as equ
 | **one economic source** | every figure is the same chain-linked, cash-flow-adjusted index and the same closed-trade population the existing screens read. **No ledger economics, entry fact, add-stage fact, risk denominator or strategy version was altered**, and no second portfolio or strategy engine exists |
 | **the comparison is a comparison** | both arms aligned to the instants **both** observed, rebased to 100 at the first of them, each arm's own movement measured over **exactly** those boundaries, and every comparability limit rendered **above** the chart rather than under a disclosure |
 | **the difference is refused, and that is the correct answer** | the portfolio arm is `NET_ALL_COSTS` and the invented index is `GROSS`, and §12.3 holds that "two values with different cost treatments are never compared, summed or placed in one series". The refusal is shown with its reason, on the merged `MissedOpportunity` precedent. **Nothing is called alpha** |
-| **capacity is named, not estimated** | the metric is **unchanged and still unavailable**. What is new is the disclosure beside it: **no liquidity or market-impact model**, **no volume history** (**G1 OPEN**), **no borrow history** (**G5 OPEN**) and **no accepted definition to compute one against**. It also states that capacity is **not** strategy capital, available cash, buying power or a position limit |
+| **capacity is named, not estimated** | the metric is **unchanged and still unavailable**. What that cycle added was the disclosure beside it: **no liquidity or market-impact model**, **no volume history** (**G1 OPEN**), **no borrow history** (**G5 OPEN**) and, on those days, **no accepted definition to compute one against**. It also states that capacity is **not** strategy capital, available cash, buying power or a position limit. **The definition half is HISTORICAL** — ADR-0032 accepted one, and the disclosure is now produced by the admission gate rather than written as a literal |
 | **two schema versions moved, and only two** | `PerformanceSeries` and `StrategyPerformance` are at **`v3`** because their payload contracts changed; §5.2 versions a schema per read model, so **every other read model stays exactly where it was** and the coordinated guard now names the two exceptions rather than losing its force |
 
 #### What it does not claim
@@ -5171,21 +5171,32 @@ unavailable is not implementing it**, and this table never treats the two as equ
 repository-owned deterministic fixture, the benchmark is an **invented curve with no market behind
 it**, and **comparing against it establishes nothing about any strategy**.
 
-**C5 is not complete.** Three of the seven requirements above remain outstanding — two need
-qualified data and a producing runtime, and two need a decision accepted authority has not taken.
-**Naming a gap precisely is not closing it.**
+**C5 is not complete.** Two of the seven requirements above remain outstanding, and both need
+**qualified data and a producing runtime** that do not exist: the named benchmarks and strategy
+capacity. **The two contract decisions that also blocked them have since been taken** — ADR-0032 is
+accepted — and **taking a decision is not delivering the capability it defines**. **Naming a gap
+precisely is not closing it, and enforcing a contract over absent evidence is not obtaining the
+evidence.**
 
-**Two contract gaps are reported and neither is filled.** A **tail-loss measure has no definition
-anywhere** — no formula, unit, denominator, sample convention or minimum-observation rule — and
-choosing a percentile here would be inventing a policy on a screen. **Capacity has a registered
-unit and no computable rule**, and is additionally blocked on data. Both need a §12.6 presentation
-definition or an ADR, and **this cycle takes neither decision**.
+**Two contract gaps were reported by that cycle and neither was filled by it.** A **tail-loss
+measure had no definition anywhere** — no formula, unit, denominator, sample convention or
+minimum-observation rule — and choosing a percentile on a screen would have been inventing a policy.
+**Capacity had a registered unit and no computable rule**, and was additionally blocked on data.
+Both needed a §12.6 presentation definition or an ADR, and **that cycle took neither decision**.
 
-**Both are now the subject of a later, separate proposal.**
-[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) proposes
-a measurement contract for each, and **it is PROPOSED and carries no authority while its pull
-request is open**. **A proposed contract fills neither gap yet, implements neither measure, and
-makes no capacity obtainable** — see *The capacity and tail-loss measurement contracts* below.
+> **HISTORICAL.** Both contract gaps have since been closed *as contract gaps* by ADR-0032, which is
+> now **ACCEPTED / IN FORCE**. That is a statement about the days of the follow-up cycle, it stays
+> true of them, and closing a contract gap did not by itself implement either measure.
+
+**Both were then the subject of a later, separate decision, and it has since been accepted.**
+[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) defines a
+measurement contract for each, and **PR #85 was independently reviewed and merged, so it is ACCEPTED
+/ IN FORCE**. **Accepting a contract fills the contract gap and implements no measure by itself**; a
+later, separately authorized cycle implemented the tail loss and enforced the capacity gate, and
+**capacity is still not obtainable** — see *The capacity and tail-loss measurement contracts* below.
+
+> **HISTORICAL.** While PR #85 was open, ADR-0032 was **PROPOSED and carried no authority**, and the
+> two gaps above were open contract gaps. That was true of those days and is not rewritten.
 
 **The three carried-forward observations are unchanged and still open** — the C8 fill-scoped count
 under an order-labelled code, the C8 contract comment that overstates its body, and
@@ -5214,16 +5225,17 @@ post-merge WINDOWS_VALIDATION:                    PASS - PER ITS OWN REPORT
 ORIGINAL_EVIDENCE_PRESERVATION:                   UNAVAILABLE
 original Linux review evidence:                   UNAVAILABLE
 pre-merge process deviation:                      RECORDED - MERGED WITH REPORTED FAILED GATES
-strategy capacity - MEASUREMENT CONTRACT:         PROPOSED BY ADR-0032 / NOT IN FORCE
-rolling tail losses - MEASUREMENT CONTRACT:       PROPOSED BY ADR-0032 / NOT IN FORCE
-strategy capacity - IMPLEMENTATION:               NOT AUTHORIZED / NOT IMPLEMENTED
-rolling tail losses - IMPLEMENTATION:             NOT AUTHORIZED / NOT IMPLEMENTED
+strategy capacity - MEASUREMENT CONTRACT:         ACCEPTED BY ADR-0032 / IN FORCE
+rolling tail losses - MEASUREMENT CONTRACT:       ACCEPTED BY ADR-0032 / IN FORCE
+strategy capacity - IMPLEMENTATION:               CONTRACT ENFORCED / NO VALUE OBTAINABLE
+rolling tail losses - IMPLEMENTATION:             IMPLEMENTED AT SYNTHETIC SCOPE
 portfolio rolling return and drawdown:            IMPLEMENTED AT SYNTHETIC SCOPE
 rolling expectancy:                               IMPLEMENTED AT SYNTHETIC SCOPE
 portfolio benchmark comparison:                   IMPLEMENTED AT SYNTHETIC SCOPE
 named benchmarks SPY / QQQ / IWM:                 UNAVAILABLE - NO PROVIDER IS SELECTED
-strategy capacity:                                UNAVAILABLE - DEPENDENCIES NAMED, DEFINITION ABSENT
-rolling tail losses:                              BLOCKED - NO ACCEPTED DEFINITION EXISTS
+strategy capacity:                                UNAVAILABLE - DEFINITION ACCEPTED, GATE ENFORCED,
+                                                  REQUIRED INPUTS ABSENT
+rolling tail losses:                              IMPLEMENTED AT SYNTHETIC SCOPE
 C5 overall:                                       NOT COMPLETE
 read models whose schema version moved:           2, EACH TO ITS OWN v3
 every other read model:                           UNCHANGED
@@ -5259,127 +5271,141 @@ live trading:                                     HARD-DISABLED
 **Completing part of a cycle completes the cycle no more than merging one completes the product.**
 **Specification, implementation, research, deployment and execution stay five separate gates.**
 
-### The capacity and tail-loss measurement contracts — PROPOSED, and neither is implemented
+### The capacity and tail-loss measurement contracts — ACCEPTED, one measured and one still unobtainable
 
 **Two accepted Cockpit requirements named a quantity that nothing in tracked authority defined.**
-[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) proposes
-a measurement contract for each. **It is PROPOSED and carries no authority while its pull request is
-open**, and so are the deltas it makes to the Cockpit specifications in the same pull request. That
-is a statement about the present, it stays true of these days after any later merge, and it is
-**not** to be rewritten as though the decision had authority before it was accepted.
+[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) defines a
+measurement contract for each. **PR #85 was independently reviewed and merged, so ADR-0032 is
+ACCEPTED / IN FORCE**, and so are the deltas it made to the Cockpit read-model contracts and the
+traceability matrix.
 
-**On independent review and merge it would accept measurement contracts, area ownership and
-governance — and nothing else.** **It implements neither measure**, **computes no tail loss**,
-**computes no capacity**, **creates no module under `src/`**, **adds no read-model field**, **changes
-no read-model schema version**, **changes no `metric_definition_version`**, **extends no closed
-vocabulary**, **changes no fixture, component or runtime**, **selects no provider**, **acquires no
-market data**, **calibrates no model**, **qualifies no model** and **runs no backtest**.
+```text
+PR #85:                                           MERGED
+PR #85 merge commit:                              d8cb12729abf89e17ba4466e5e8b9af333cf7ea9
+PR #85 merged at:                                 2026-09-09T14:18:52Z
+PR #85 ordered parent 1:                          58636f53335eb9d48a4533c8a7f282ea4be8f154
+PR #85 final reviewed head:                       8d1eaa9c1b89285e58da74c0953e10b7ffcfb31c
+PR #85 merge tree:                                IDENTICAL TO THE REVIEWED HEAD TREE
+```
 
-#### The gap, and who owns each half
+> **HISTORICAL.** While PR #85 was open, ADR-0032 was **PROPOSED and carried no authority**, and so
+> did those deltas. That was true of those days, it stays true of them, and it is **not** rewritten
+> as though the decision had authority before it was accepted. **The ADR's own conditional status
+> line is preserved as history rather than edited**, on the rule every accepted decision here
+> follows.
 
-| Requirement | Owning area | Read-model owner | Cycle | The actual gap |
-|---|---|---|---|---|
-| **rolling tail losses** | **Area 5 — Strategy Health** | `StrategyHealth` | **C7** | `strategy.tail_loss` has a **registered unit and no definition** — §12.3 carries no row, so no formula, population, window, statistic, sign, minimum or unavailable outcome exists |
-| **strategy capacity** | **Area 4 — Strategy Performance** | `StrategyPerformance` | **C5** | `strategy.capacity` has a **registered unit and no computable rule** — §12.3 carries no row — **and** every input it would need is absent |
+**The merge accepted measurement contracts, area ownership and governance — and nothing else.** It
+implemented neither measure. **This pull request implements them**, under its own separate
+authorization, and the two are different events.
 
-**Rolling tail losses are named exactly once in the specification, and it is in Area 5**, so they
-are a **C7** surface. **The requirement is not moved into C5**: the C5 completion follow-up reported
-the gap, and reporting a gap is not owning it. **A registered unit is not a definition**, and **a
-missing table row alone is not the proof** — the gap is established from §12.1's eight requirements,
-§12.3's role in meeting them, and the absence of any other tracked authority that supplies them.
-
-#### What is recommended
+#### What this pull request implements, and what it does not
 
 | | |
 |---|---|
-| **the tail loss** | the **mean of the `k` most adverse eligible observations**, with `k` equal to `ceil(q * n)` — **an integer count of order statistics, so no quantile interpolation rule exists to diverge over**. Over **closed trades of one exact strategy version** carrying a recorded initial planned risk, on a **closed-trade count window**, in **R against each trade's own retained denominator** — a **mean of ratios, never a ratio of sums** |
-| **its population** | **every eligible observation, and never losses only.** The tail is selected by **ordering**, so a **positive value is a measured result** rather than a failure. A losses-only population would move with the win rate and be undefined for a version that never lost |
-| **its sign** | §12.1's, unchanged — **profit positive, loss negative**, for long and short alike. This **matches the values the merged implementation already produces**, so no fixture is contradicted |
+| **the rolling tail loss** | **IMPLEMENTED AT SYNTHETIC SCOPE.** `strategy.tail_loss` is now **calculated** from the existing repository-owned synthetic trade book under the accepted §D1 statistic, for every exact strategy version, and rendered on Area 5 with its window, population, R basis, tail fraction, eligible and contributing counts, exclusion count, tail members and one point per closed trade |
+| **the four unsupported literals** | **REMOVED.** The health fixture carried four hand-written tail-loss values computed under no declared rule. They are gone, and no consumer presents an old arbitrary number as a result of the accepted formula |
+| **the capacity contract** | **ENFORCED ON THE READ PATH.** The §12.3.3 admission gate is applied by the actual producer every capacity consumer reads — Area 4's `StrategyPerformance`, Area 14's `ResearchRun` and Area 5's capacity health input — rather than by a helper only tests reach |
+| **a capacity value** | **STILL NOT OBTAINABLE, AND NOT PRODUCED.** The gate evaluates today's actual facts, refuses at its **required-input** stage, and renders `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`. **That is the same state the screen rendered before, reached by the rule instead of asserted by a literal** |
+| **what is emphatically not implemented** | **no capacity model, no calibration, no qualification, no search executor, no capital-to-schedule mapping and no market-impact function.** No capacity input was acquired, no model was built or calibrated, no model was qualified, no capacity estimate was produced, no research run or backtest was executed, and **C10 has not begun** |
+
+**Enforcing an admission gate is not obtaining the evidence it requires.** The gate can now say
+precisely which of the nine required inputs are missing and why; it cannot conjure one.
+
+#### The accepted definitions, as implemented
+
+| | |
+|---|---|
+| **the tail loss** | the **mean of the `k` most adverse eligible observations**, `k = ceil(q * n)` — **an integer count of order statistics, so no quantile interpolation exists anywhere in the implementation**. Over **closed trades of one exact strategy version** carrying a recorded initial planned risk, on a **closed-trade count window** of the trailing 30 eligible observations, in **R against each trade's own retained denominator** — a **mean of ratios, never a ratio of sums** |
+| **its population** | **every eligible observation, and never losses only.** The tail is selected by **ordering**, so a **positive value is a measured result** |
+| **its sign** | §12.1's, unchanged — **profit positive, loss negative**, long and short alike, so a more severe tail is more negative |
 | **its boundaries** | an observation enters at its **close instant**; **no observation after a point's cutoff contributes to that point**; and in the strong form, **replacing every later observation changes nothing at or before a point** |
-| **its degenerate cases** | below the minimum — **an empty population included** — `INSUFFICIENT_OBSERVATIONS` with **no value**, **whether or not trades were also excluded**; a computed **zero is `AVAILABLE`**; excluded trades are **counted** and the result is `PARTIAL` naming how many, on the accepted `slippage.aggregate` precedent, **only once the minimum is met** — the exclusion count is disclosed either way and **never turns an absent value into a valued `PARTIAL`** |
-| **capacity** | **the greatest deployable strategy capital whose modelled execution cost stays within a declared tolerance of the version's own realized execution cost** — specified as a **qualified-model interface with an admission gate**, because it is **not computable from any record this repository holds**. It is a **maximum among the points a declared search grid actually evaluated**, never over the continuum |
-| **capacity's nine required inputs** | volume history · price history · the order and fill record · a declared participation limit · a declared execution horizon · a market-impact function with a declared calibration identity · a declared cost tolerance · borrow history from a record · the portfolio-overlap set |
-| **what capacity is not** | **not strategy capital, not buying power, not available cash, not gross exposure and not any limit.** Each is already displayed under its own name, and none would move when liquidity moved. **A capacity field is never filled from one of them, and no absent capacity is ever filled with zero** — a **computed** zero, meaning no positive evaluated capital level stayed within tolerance, is a **measurement** and renders `AVAILABLE`. Because the ceiling is the version's **own** realized cost plus the tolerance, **poor observed execution mechanically raises the reported number**, so it is a **cost-degradation-tolerance capacity relative to that version's own execution** — **not a profitability capacity, not a liquidity ceiling, not a risk or allocation limit, and not comparable across versions of differing execution quality** |
-| **capacity when it cannot be produced** | **`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` today**; `NOT_IMPLEMENTED` with no model; **`UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded, has expired or was granted for a different model, calibration, evaluation set or window scope** — a missing assessment is not a missing input, and **an assessment that refused the model is `NOT_AUTHORIZED`, not an unassessed one**. A still-feasible upper grid endpoint is **`PARTIAL` — a lower bound, not a maximum** — and an **empty feasible set is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`, never zero** |
+| **its degenerate cases** | below the minimum — **an empty population included** — `INSUFFICIENT_OBSERVATIONS` with **no value**, **whether or not trades were also excluded**; a computed **zero is `AVAILABLE`**; excluded trades are **counted** and the result is `PARTIAL` naming how many, **only once the minimum is met**, with the exclusion count disclosed either way and **never turning an absent value into a valued `PARTIAL`** |
+| **what it is not** | **not `expectancy.r`**, **not `drawdown.max`** and **not the worst single observation**. Where the most adverse observations are tied its value may **coincide** with the worst single trade, and **coincidence of two values is not identity of two definitions** |
+| **capacity** | **the greatest deployable strategy capital whose modelled execution cost stays within a declared tolerance of the version's own realized execution cost** — a **qualified-model interface with an admission gate**, because it is **not computable from any record this repository holds**. It is a **maximum among the points a declared search grid actually evaluated**, never over the continuum, with **no interpolation and no extrapolation** |
+| **capacity's nine required inputs** | volume history · price history · the order and fill record · a declared participation limit · a declared execution horizon · a market-impact function with a declared calibration identity · a declared cost tolerance · borrow history from a record · the portfolio-overlap set. **Borrow history is required only where the evaluated population carries short exposure**, and a **determined but empty** overlap set satisfies its input while an **undetermined** one does not |
+| **what capacity is not** | **not strategy capital, not buying power, not available cash, not gross exposure and not any limit.** **A capacity field is never filled from one of them, and no absent capacity is ever filled with zero** — a **computed** zero is a **measurement** and renders `AVAILABLE`. Because the ceiling is the version's **own** realized cost plus the tolerance, **poor observed execution mechanically raises the reported number**, so it is a **cost-degradation-tolerance capacity relative to that version's own execution** — **not a profitability capacity, not a liquidity ceiling, not a risk or allocation limit, not permission to scale, and not comparable across versions of differing execution quality** |
+| **capacity when it cannot be produced** | **`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` today**; `NOT_IMPLEMENTED` with no producer; **`UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded, has expired or was granted for a different model, calibration, evaluation set or window scope**; **`NOT_AUTHORIZED` when a record refused the model** — a refused model is not an unassessed one. A still-feasible upper grid endpoint is **`PARTIAL` — a lower bound, not a maximum** — and an **empty feasible set is `NOT_APPLICABLE` with `NOT_DEFINED_FOR_SUBJECT`, never zero** |
 | **capacity per version** | **per-version capacities are never summed into a portfolio capacity** — overlapping holdings mean the sum overstates |
 
-#### Proposed parameters, distinguished from accepted requirements
+#### The accepted parameters, distinguished from accepted requirements
 
-**Every parameter the proposal chooses is a PROPOSED MEASUREMENT DECISION**, offered for review.
-**None is an existing requirement, none is a production qualification, and none is a trading
-threshold, a promotion criterion, a health-state transition rule, a risk limit or a capital
-authorization.**
+**Every parameter ADR-0032 chose is a MEASUREMENT DECISION**, and **none is an existing requirement,
+a production qualification, a trading threshold, a promotion criterion, a health-state transition
+rule, a risk limit or a capital authorization.**
 
 ```text
-tail fraction q                    0.10                          PROPOSED
-tail-loss window N                 30 eligible closed trades     PROPOSED - REUSES THE DECLARED
+tail fraction q                    0.10                          ACCEPTED
+tail-loss window N                 30 eligible closed trades     ACCEPTED - REUSES THE DECLARED
                                                                  12.3 EXPECTANCY MINIMUM. A REUSED
                                                                  COUNT, NOT A SHARED WINDOW, AND NO
                                                                  EVIDENCE OF ADEQUACY FOR A
                                                                  THREE-OBSERVATION TAIL
-tail-loss minimum observations     30                            PROPOSED - THE SAME REUSED VALUE
+tail-loss minimum observations     30                            ACCEPTED - THE SAME REUSED VALUE
 derived tail count k               ceil(0.10 * 30), which is 3   DERIVED, NOT SEPARATELY CHOSEN
 capacity model parameters          DECLARED BY THE QUALIFIED MODEL AND DISPLAYED WITH THE VALUE
-                                   - THE PROPOSAL FIXES NO NUMERIC VALUE FOR ANY OF THEM
+                                   - THE CONTRACT FIXES NO NUMERIC VALUE FOR ANY OF THEM
 ```
 
 **Area 5's seven health states and every transition rule remain ADR-0026 §13's and are unchanged.**
-Defining a tail loss creates **no** threshold at which a transition occurs.
+**No health-state transition, strategy promotion, risk-limit change or operational action is caused
+by either measure**, and the screens that display them offer no control that could.
 
 **The tail statistic averages three observations, and its support is thin.** **One observation is a
 third of the estimate**, so the value is **descriptive of the window it measured** and carries **no
-predictive reliability, no production qualification and no threshold behind it**. **The mean of the
-three worst is not prevented from equalling the single worst** — when the three are tied the two
-values coincide — and **coincidence of values is not identity of definitions**.
+predictive reliability, no production qualification and no threshold behind it**.
 
-#### The synthetic and production boundary
+#### Versions, and the compatibility that actually changed
 
-**The proposal's worked examples are invented arithmetic.** They **calibrate no model, qualify no
-provider, establish no production capacity and are evidence about no strategy**. **No real security,
-fill, provider row or calibrated model appears in any of them.**
+**`metric_definition_version` advanced to `metrics.v2`**, because this is the cycle that first
+produces a `strategy.tail_loss` value under the accepted row and §5.3 places the obligation exactly
+there. **The dictionary is versioned as a whole**, so every value now carries `metrics.v2`; that is
+the §12 identity and **not** a claim that any other row's formula changed. **`metrics.v1` is now
+refused at the admission boundary rather than coerced.**
 
-**Defining capacity does not make one obtainable.** **G1 and G5 are OPEN**, no provider is selected,
-and no volume, price or borrow history, no market-impact model, no calibration and no model
-qualification exists.
-
-#### Compatibility
-
-**No read-model schema version changes.** Both metric identifiers already live on existing payload
-fields, so **no field is added, removed, renamed or retyped**. **`PerformanceSeries` and
-`StrategyPerformance` stay at `v3`**, where PR #84 placed them, and every other read model stays
-where it was. **No closed vocabulary is extended** — every state and reason used is an existing
-member under a pairing §4.1.1 already permits.
-
-**`metric_definition_version` stays `metrics.v1` and is not changed by this documentation-only
-cycle.** The obligation is **placed on the implementation cycle that first produces a value**:
-synthetic values already exist for `strategy.tail_loss` under `metrics.v1` that were computed under
-**no** declared rule, so that cycle **must advance the dictionary version**. **Fixture-byte equality
-is not a compatibility proof**, and none is offered.
+**Three read models moved and one deliberately did not.** A schema version is assessed from
+**semantic and payload changes**, never from fixture bytes: `StrategyHealth` gained a required
+`tail_loss` field **and** the meaning of `strategy.tail_loss` changed from a recorded literal to a
+computed statistic; `StrategyPerformance` and `ResearchRun` each gained a required
+`capacity_declaration`. **`PerformanceSeries` gained no field and changed no meaning, so it stays at
+`v3`** — a model is not bumped mechanically, and a changed model is not exempted because nothing was
+removed.
 
 ```text
-ADR-0032:                                         PROPOSED / NOT IN FORCE
-tail-loss measurement contract:                   PROPOSED / NOT IN FORCE
-capacity measurement contract:                    PROPOSED / NOT IN FORCE
-rolling tail losses - IMPLEMENTATION:             NOT AUTHORIZED / NOT IMPLEMENTED
-strategy capacity - IMPLEMENTATION:               NOT AUTHORIZED / NOT IMPLEMENTED
+ADR-0032:                                         ACCEPTED / IN FORCE
+tail-loss measurement contract:                   ACCEPTED / IN FORCE
+capacity measurement contract:                    ACCEPTED / IN FORCE
+rolling tail losses - IMPLEMENTATION:             IMPLEMENTED AT SYNTHETIC SCOPE
+rolling tail losses - SOURCE:                     THE EXISTING SYNTHETIC TRADE BOOK
+unsupported synthetic tail-loss literals:         REMOVED
+strategy capacity - CONTRACT ENFORCEMENT:         IMPLEMENTED ON THE READ PATH
+strategy capacity - VALUE:                        NOT OBTAINABLE / NOT PRODUCED
+strategy capacity - GATE OUTCOME TODAY:           NOT_YET_AVAILABLE / UPSTREAM_INPUT_MISSING
 strategy capacity - REQUIRED INPUTS:              DO NOT EXIST
 capacity model:                                   DOES NOT EXIST
+capacity calibration:                             DOES NOT EXIST
 capacity model qualification:                     DOES NOT EXIST
-new src/ modules created by this proposal:        NONE
-read-model fields added:                          NONE
-read-model schema versions changed:               NONE
-metric_definition_version:                        UNCHANGED - metrics.v1
+capacity search executor:                         DOES NOT EXIST
+capacity inputs acquired:                         NONE
+metric_definition_version:                        ADVANCED - metrics.v2
+read models whose schema version moved:           3 - StrategyHealth v2, StrategyPerformance v4,
+                                                  ResearchRun v2
+PerformanceSeries:                                UNCHANGED AT v3
 closed vocabularies extended:                     NONE
-fixtures, components or runtime changed:          NONE
-frontend changed:                                 NONE
-dependencies changed:                             NONE
+new API routes, handlers or server actions:       NONE
+new runtime dependencies:                         NONE
+ledger economics, entry facts or risk records:    UNCHANGED
+a second portfolio or strategy engine:            NONE
 provider data used:                               NONE
 market data downloaded or requested:              NONE
+named benchmarks SPY / QQQ / IWM:                 UNAVAILABLE - NO PROVIDER IS SELECTED
 private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
+research runs or backtests executed:              NONE
 backtesting:                                      NOT STARTED
+Brain runtime:                                    NOT IMPLEMENTED / NOT AUTHORIZED
 C5:                                               NOT COMPLETE
+C7:                                               NOT COMPLETE
 C10:                                              NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
@@ -5396,9 +5422,10 @@ CONTROL:                                          DEFERRED
 live trading:                                     HARD-DISABLED
 ```
 
-**Defining a measurement is not performing it.** **Acceptance of a measurement contract,
-authorization of an implementation, qualification of real inputs or a model, and any eventual
-operational use are four separate gates**, and they are never collapsed into one.
+**Implementing a measurement is not completing a cycle.** Rendering an unavailable state is not
+implementing the capability behind it, **C5 and C7 are both still incomplete**, and **acceptance of
+a measurement contract, authorization of an implementation, qualification of real inputs or a model,
+and any eventual operational use are four separate gates** that are never collapsed into one.
 
 
 

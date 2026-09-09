@@ -17,6 +17,7 @@ import { MetricTile } from "@/components/cockpit/metric-tile";
 import { ComparisonChart } from "@/components/cockpit/research";
 import { SEVERITY_RANK } from "@/contracts/operations-models";
 import type { ReasonCoded } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { fixedClock } from "@/lib/clock";
 import { humanizeCode } from "@/lib/format";
@@ -106,7 +107,7 @@ describe("a tile signs a direction and never a magnitude", () => {
           reason: "NONE",
           as_of: "2026-09-08T12:00:00.000Z",
           metric_id: "return.period",
-          metric_definition_version: "metrics.v1",
+          metric_definition_version: METRIC_DEFINITION_VERSION,
         }}
         provenance="SYNTHETIC"
       />,

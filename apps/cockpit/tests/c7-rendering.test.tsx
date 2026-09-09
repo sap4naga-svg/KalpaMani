@@ -13,6 +13,7 @@ import {
 } from "@/components/cockpit/research";
 import { ClockProvider } from "@/components/shell/clock-provider";
 import type { ReasonCoded } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION } from "@/contracts/values";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { QUEUE_ITEMS, REGISTRATIONS, RUNS } from "@/data/fixtures/lineage";
 import { fixedClock } from "@/lib/clock";
@@ -272,7 +273,7 @@ describe("a reference offers its two destinations as distinct controls", () => {
               reason: "NONE",
               as_of: "2026-09-08T12:00:00.000Z",
               metric_id: "reference.total",
-              metric_definition_version: "metrics.v1",
+              metric_definition_version: METRIC_DEFINITION_VERSION,
             },
           }}
           label="Shadow evidence"

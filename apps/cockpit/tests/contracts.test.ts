@@ -15,7 +15,7 @@ import {
   executiveOverviewEnvelope,
 } from "@/contracts/read-models";
 import { PERMITTED_REASONS, isValueBearing, validityFailure } from "@/contracts/validity";
-import { metricValue } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION, metricValue } from "@/contracts/values";
 import { AVAILABILITY_STATES } from "@/contracts/vocabularies";
 import { available, instantOf } from "@/contracts/factories";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
@@ -81,7 +81,7 @@ describe("a zero is a measurement, and never an availability state (ADR-0029 sec
       reason: "EMPTY_RESULT_VERIFIED" as const,
       as_of: AS_OF,
       metric_id: "trade.closed_count",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(metricValue.safeParse(emptyPopulation).success).toBe(true);
     // The same zero may NOT be relabelled as an empty population when it was measured.
@@ -95,7 +95,7 @@ describe("a zero is a measurement, and never an availability state (ADR-0029 sec
       availability: "NOT_IMPLEMENTED" as const,
       reason: "PRODUCER_NOT_IMPLEMENTED" as const,
       metric_id: "pnl.realized",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     const parsed = metricValue.safeParse(fabricated);
     expect(parsed.success).toBe(false);
@@ -111,7 +111,7 @@ describe("a zero is a measurement, and never an availability state (ADR-0029 sec
       reason: "UPSTREAM_INPUT_STALE" as const,
       as_of: AS_OF,
       metric_id: "pnl.realized",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(metricValue.safeParse(staleZero).success).toBe(true);
     expect(staleZero.availability).not.toBe("AVAILABLE");

@@ -19,8 +19,12 @@ introducing it, PR #72, is open**.
 acceptance criteria of Area 28. ADR-0031 is **PROPOSED and carries no authority while the pull
 request introducing it is open**.
 **Further amended by** [ADR-0032](../decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) —
-the acceptance criteria of **Areas 4 and 5 only**. ADR-0032 is **PROPOSED and carries no authority
-while the pull request introducing it is open**, and the criteria it adds are proposed with it.
+the acceptance criteria of **Areas 4 and 5 only**. **ADR-0032 is ACCEPTED / IN FORCE — the pull
+request introducing it was independently reviewed and merged** — and the criteria it adds are
+accepted with it.
+
+> **HISTORICAL.** While that pull request was open, ADR-0032 was **PROPOSED and carried no
+> authority**, and so did those criteria. That was true of those days and is not rewritten.
 
 ---
 

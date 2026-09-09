@@ -414,7 +414,7 @@ function RunDetail({
 
         <PanelSection
           title="Stress and capacity"
-          note="Modelled scenario impacts, and the capacity figure that needs a provider nobody has selected."
+          note="Modelled scenario impacts, and the capacity the admission gate refused for want of every input it requires."
           testId="run-stress"
         >
           <div className="space-y-3">
@@ -438,6 +438,64 @@ function RunDetail({
               operator={operator}
               columns={2}
             />
+            <div
+              className="space-y-1.5 rounded-sm border border-border-subtle bg-surface-sunken px-3 py-2"
+              data-testid="run-capacity-declaration"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-label-m font-semibold text-text-primary">Capacity</span>
+                <AvailabilityBadge
+                  state={run.capacity.availability}
+                  reason={run.capacity.reason}
+                />
+                <span
+                  className="font-mono text-label-s text-text-tertiary"
+                  data-testid="run-capacity-gate-stage"
+                >
+                  {humanizeCode(run.capacity_declaration.stage.code)}
+                </span>
+              </div>
+              <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+                Capacity here is a{" "}
+                <strong>
+                  cost-degradation tolerance measured against this version&rsquo;s own observed
+                  execution
+                </strong>{" "}
+                — not a profitability capacity, not a liquidity ceiling, and not a risk,
+                allocation or position limit. It is not strategy capital, available cash,
+                buying power or gross exposure, and it is{" "}
+                <strong>not permission to scale</strong>. Per-version capacities are never
+                summed into a portfolio capacity.
+              </p>
+              <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
+                A research run could satisfy the recorded fill history from its own fills, and
+                those fills would be <strong>BACKTEST_SIMULATED</strong> — hypothetical, never
+                realized and never broker fills. No run has produced any:{" "}
+                <strong>backtesting is NOT STARTED</strong>. The same admission gate the
+                strategy screen reads answered here, and it stopped at the first unmet
+                condition:
+              </p>
+              <ul
+                className="space-y-1 text-label-s text-text-secondary"
+                data-testid="run-capacity-missing-inputs"
+              >
+                {run.capacity_declaration.missing_inputs.map((entry) => (
+                  <li
+                    key={entry.input.code}
+                    className="flex gap-2"
+                    data-capacity-input={entry.input.code}
+                  >
+                    <span aria-hidden="true" className="text-text-tertiary">
+                      ·
+                    </span>
+                    <span>
+                      <strong>{humanizeCode(entry.input.code)}</strong> —{" "}
+                      {humanizeCode(entry.absence.code)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </PanelSection>
 

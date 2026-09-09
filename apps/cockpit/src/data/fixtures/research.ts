@@ -30,6 +30,7 @@ import type {
 import { EVALUATION_CLASSES, RESEARCH_QUEUE_STATES, RESEARCH_RUN_STATES } from "@/contracts/research-models";
 import type { MetricValue, ReasonCoded } from "@/contracts/values";
 
+import { capacityFor } from "./capacity";
 import {
   count,
   demoRef,
@@ -267,6 +268,26 @@ export function syntheticResearchRuns(
   const items: ResearchRun[] = RUN_SPECS.map((spec) => {
     const resolvedBaseline = spec.baseline !== null;
     const baselineId = spec.baseline ?? "pullback-long-v4-baseline";
+    /*
+     * THE SAME ADMISSION GATE THE STRATEGY SCREEN READS — one definition, two consumers.
+     *
+     * §D2.7 would let an authorized research run satisfy required input 3 from its own
+     * `BACKTEST_SIMULATED` fills. **No run has produced any**: backtesting is NOT STARTED, no
+     * research engine exists and no result in this fixture is an outcome of anything, so the
+     * fill history is absent here exactly as it is on the strategy screen.
+     */
+    const capacity = capacityFor({
+      strategyVersion: spec.challenger,
+      windowScope: `${days[0]}/${days[days.length - 1]}`,
+      evaluationMs: Date.parse(asOf),
+      /*
+       * A CHALLENGER'S SHORT EXPOSURE IS NOT DETERMINED, so borrow history is not declared
+       * inapplicable. Declaring an input `NOT_APPLICABLE` is a positive claim about the
+       * evaluated population, and no research run has one to make it about.
+       */
+      shortExposurePresent: true,
+      asOf,
+    });
     return {
       run_id: spec.runId,
       registration_ref: demoRef(spec.registration, "registration", "ENDPOINT"),
@@ -314,16 +335,15 @@ export function syntheticResearchRuns(
               },
             ],
       /**
-       * CAPACITY NEEDS A LIQUIDITY AND MARKET-IMPACT MODEL OVER QUALIFIED PROVIDER DATA.
-       * None exists, **no provider is selected and G1 is OPEN**, so it is unavailable rather
-       * than estimated from a fixture — the same answer the strategy screen gives.
+       * THE ADMISSION GATE'S OWN ANSWER — ADR-0032 §12.3.3, the same gate Area 4 reads.
+       *
+       * The first unmet condition is the required-input stage, and the declaration beside it
+       * names every dependency: **G1 is OPEN** and no provider is selected, no model declares
+       * a participation limit, an execution horizon, an impact function or a cost tolerance,
+       * **G5 is OPEN**, and no overlap set has been determined. **No capacity is estimated.**
        */
-      capacity: unavailable(
-        "strategy.capacity",
-        "USD",
-        "NOT_YET_AVAILABLE",
-        "UPSTREAM_INPUT_MISSING",
-      ),
+      capacity: capacity.value,
+      capacity_declaration: capacity.declaration,
       stress:
         spec.results === null
           ? []

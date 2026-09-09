@@ -14,7 +14,11 @@ import {
   sideSign,
   slippageHundredthBps,
 } from "@/contracts/execution-models";
-import { C3_METRIC_DICTIONARY, hundredths } from "@/contracts/values";
+import {
+  C3_METRIC_DICTIONARY,
+  METRIC_DEFINITION_VERSION,
+  hundredths,
+} from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 import { BRAIN_DECISION_STATES, DOWNSTREAM_STAGES } from "@/contracts/vocabularies";
 import { readModelKey } from "@/data/client/query-keys";
@@ -456,7 +460,7 @@ describe("a candidate carries no sizing and no execution authority", () => {
       availability: "AVAILABLE",
       reason: "NONE",
       metric_id: "pnl.combined",
-      metric_definition_version: "metrics.v1",
+      metric_definition_version: METRIC_DEFINITION_VERSION,
     };
     expect(forbiddenCandidateUnit(forged)).toBe("USD");
     const parsed = candidateDetailEnvelope.safeParse({ ...detail, payload: forged });

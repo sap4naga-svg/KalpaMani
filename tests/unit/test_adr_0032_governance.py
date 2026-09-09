@@ -1,7 +1,10 @@
 """ADR-0032 governance: the capacity and tail-loss measurement contracts, parsed and executed.
 
-**ADR-0032 is PROPOSED.** While the pull request introducing it is open it carries no authority,
-and the assertions below that say so are claims about a document rather than about the world.
+**ADR-0032 is ACCEPTED / IN FORCE.** PR #85 was independently reviewed and merged. **The ADR's own
+document is not edited** -- an accepted decision keeps the conditional status line it was written
+with, as history -- so the assertions that read it still find "PROPOSED", and they are claims about
+that document rather than about the world. **The documents it amended, and the status documents,
+say ACCEPTED**, and the assertions below hold them to it.
 
 The suite has five parts.
 
@@ -15,9 +18,10 @@ The suite has five parts.
   applied. The substitutions the contract forbids are exercised as refusals, not described.
 * **The product surface** -- the specification and traceability deltas that carry the same
   conditional authority.
-* **The status surface** -- PR #84's verified merge is recorded, the three post-merge dispositions
-  stay separate, the unavailable original evidence stays unavailable, and neither measure is
-  reported as accepted or implemented.
+* **The status surface** -- PR #84's and PR #85's verified merges are recorded, the three post-merge
+  dispositions stay separate, the unavailable original evidence stays unavailable, the contracts are
+  reported as accepted, the tail loss is reported as implemented **at synthetic scope**, and
+  **capacity is reported as an enforced gate with no obtainable value**.
 
 Every parser carries a self-test proving it can still see what it exists to catch: a scanner that
 sees nothing passes every document vacuously.
@@ -90,7 +94,13 @@ PARAMETER_SPAN: Final = section(ADR_TEXT, "**D1.12 PROPOSED MEASUREMENT DECISION
 # --------------------------------------------------------------------- governance
 
 
-def test_the_adr_declares_itself_proposed_and_not_in_force() -> None:
+def test_the_adr_document_is_not_rewritten_by_its_own_acceptance() -> None:
+    """An accepted decision keeps the status line it was written with, as history.
+
+    ADR-0032 is ACCEPTED / IN FORCE because PR #85 merged, and the merge is the acceptance
+    event the document itself names. Editing the document afterwards would destroy the record
+    of what was reviewed, which is the rule every accepted decision in this repository follows.
+    """
     assert "**Status: PROPOSED — NOT IN FORCE." in ADR_TEXT
     assert "ADR-0032 is ACCEPTED / IN FORCE" not in ADR_FLAT
 
@@ -142,19 +152,31 @@ def test_the_adr_keeps_acceptance_implementation_and_qualification_apart() -> No
     )
 
 
-def test_the_amended_documents_carry_the_conditional_authority() -> None:
+def test_the_amended_documents_record_the_acceptance_and_keep_the_history() -> None:
+    """The amended documents move to ACCEPTED; the days they were proposed stay recorded.
+
+    Both halves matter. A document still calling an accepted decision a proposal is stale, and
+    a document that erased the proposed period would claim the deltas had authority before the
+    review that gave it to them.
+    """
     for name, flat in (("read-model-contracts.md", CONTRACTS_FLAT), ("matrix", MATRIX_FLAT)):
         assert "ADR-0032" in flat, name
+        assert "**ADR-0032 is ACCEPTED / IN FORCE" in flat, name
         assert (
             "ADR-0032 is **PROPOSED and carries no authority while the pull request "
-            "introducing it is open**" in flat
+            "introducing it is open**" not in flat
         ), name
+        assert "HISTORICAL" in flat, name
+        assert "PROPOSED and carried no" in flat, name
 
 
-def test_the_two_new_subsections_declare_themselves_proposed() -> None:
+def test_the_two_new_subsections_name_their_provenance_and_their_acceptance() -> None:
+    """`PROPOSED by ADR-0032` is provenance and stays; `ACCEPTED with it` is the status."""
     for name, span in (("12.3.2", TAIL_SPAN), ("12.3.3", CAPACITY_SPAN)):
         assert span, f"{name} is missing from the contracts document"
         assert "PROPOSED by ADR-0032" in span, name
+        assert "ACCEPTED with it" in flatten(span), name
+        assert "IN FORCE" in flatten(span), name
 
 
 # ------------------------------------------------- the tail-loss parameters, parsed
@@ -1059,23 +1081,77 @@ def test_the_pre_merge_process_deviation_survives_the_merge(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
-def test_neither_measure_is_reported_as_accepted_or_implemented(name: str) -> None:
+def test_both_status_documents_record_the_verified_pr_85_merge(name: str) -> None:
     text = STATUS_DOCUMENTS[name]
-    assert "ADR-0032: PROPOSED / NOT IN FORCE" in text
-    assert "tail-loss measurement contract: PROPOSED / NOT IN FORCE" in text
-    assert "capacity measurement contract: PROPOSED / NOT IN FORCE" in text
-    assert "rolling tail losses - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED" in text
-    assert "strategy capacity - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED" in text
+    for statement in (
+        "PR #85: MERGED",
+        "PR #85 merge commit: d8cb12729abf89e17ba4466e5e8b9af333cf7ea9",
+        "PR #85 merged at: 2026-09-09T14:18:52Z",
+        "PR #85 final reviewed head: 8d1eaa9c1b89285e58da74c0953e10b7ffcfb31c",
+    ):
+        assert statement in text, statement
+
+
+@pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
+def test_the_contracts_are_accepted_and_the_proposed_period_stays_recorded(name: str) -> None:
+    text = STATUS_DOCUMENTS[name]
+    assert "ADR-0032: ACCEPTED / IN FORCE" in text
+    assert "tail-loss measurement contract: ACCEPTED / IN FORCE" in text
+    assert "capacity measurement contract: ACCEPTED / IN FORCE" in text
+    # The days it was proposed are not erased by the days it was accepted.
+    assert "While PR #85 was open, ADR-0032 was PROPOSED and carried no authority" in text
+    for stale in (
+        "ADR-0032: PROPOSED / NOT IN FORCE",
+        "tail-loss measurement contract: PROPOSED / NOT IN FORCE",
+        "capacity measurement contract: PROPOSED / NOT IN FORCE",
+    ):
+        assert stale not in text, stale
+
+
+@pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
+def test_the_two_measures_are_reported_apart_and_neither_is_overclaimed(name: str) -> None:
+    """One is computed over a synthetic book; the other has a gate and no value.
+
+    Collapsing them into one "implemented" line would report a capacity estimate that does not
+    exist, which is the exact claim the admission gate exists to refuse.
+    """
+    text = STATUS_DOCUMENTS[name]
+    assert "rolling tail losses - IMPLEMENTATION: IMPLEMENTED AT SYNTHETIC SCOPE" in text
+    assert "strategy capacity - IMPLEMENTATION: CONTRACT ENFORCED / NO VALUE OBTAINABLE" in text
+    assert "strategy capacity - VALUE: NOT OBTAINABLE / NOT PRODUCED" in text
+    assert (
+        "strategy capacity - GATE OUTCOME TODAY: NOT_YET_AVAILABLE / UPSTREAM_INPUT_MISSING" in text
+    )
     for over_claim in (
-        "ADR-0032: ACCEPTED / IN FORCE",
-        "tail-loss measurement contract: ACCEPTED",
-        "capacity measurement contract: ACCEPTED",
-        "rolling tail losses: IMPLEMENTED",
+        "strategy capacity - IMPLEMENTATION: IMPLEMENTED,",
+        # THE BARE OVER-CLAIM, RESTORED. This is a SUBSTRING test, so this one entry subsumes
+        # every longer spelling beside it. The tail-loss line genuinely had to go -- "rolling
+        # tail losses: IMPLEMENTED" is a prefix of the now-REQUIRED "... IMPLEMENTED AT
+        # SYNTHETIC SCOPE" -- but this one is a prefix of nothing required, and dropping it
+        # left the plainest over-claim of all permitted.
         "strategy capacity: IMPLEMENTED",
+        "strategy capacity: IMPLEMENTED,",
+        "strategy capacity: AVAILABLE",
+        "capacity model: EXISTS",
+        "capacity calibration: EXISTS",
+        "capacity model qualification: RECORDED",
+        "capacity inputs acquired: SOME",
         "C5 overall: COMPLETE",
+        "C7: COMPLETE",
         "full Cockpit V1: COMPLETE",
+        "backtesting: STARTED",
+        "research runs or backtests executed: SOME",
     ):
         assert over_claim not in text, over_claim
+
+
+@pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
+def test_the_dictionary_and_schema_versions_are_recorded(name: str) -> None:
+    """A version that moved and one that deliberately did not, both stated."""
+    text = STATUS_DOCUMENTS[name]
+    assert "metric_definition_version: ADVANCED - metrics.v2" in text
+    assert "PerformanceSeries: UNCHANGED AT v3" in text
+    assert "metric_definition_version: UNCHANGED - metrics.v1" not in text
 
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
@@ -1102,18 +1178,21 @@ def test_the_outstanding_requirements_and_standing_gates_are_unchanged(name: str
 
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))
-def test_the_proposal_claims_no_frontend_dependency_or_runtime_change(name: str) -> None:
+def test_the_implementation_claims_no_data_dependency_or_external_operation(name: str) -> None:
+    """Implementing a measurement over a fixture touches nothing outside the repository."""
     text = STATUS_DOCUMENTS[name]
     for statement in (
-        "new src/ modules created by this proposal: NONE",
-        "read-model fields added: NONE",
-        "read-model schema versions changed: NONE",
-        "metric_definition_version: UNCHANGED - metrics.v1",
         "closed vocabularies extended: NONE",
-        "fixtures, components or runtime changed: NONE",
-        "frontend changed: NONE",
-        "dependencies changed: NONE",
+        "new API routes, handlers or server actions: NONE",
+        "new runtime dependencies: NONE",
+        "ledger economics, entry facts or risk records: UNCHANGED",
+        "a second portfolio or strategy engine: NONE",
         "provider data used: NONE",
+        "market data downloaded or requested: NONE",
+        "private artifacts read: NONE",
+        "AWS / Terraform operations: NONE",
+        "broker activity: NONE",
+        "research runs or backtests executed: NONE",
         "backtesting: NOT STARTED",
     ):
         assert statement in text, statement

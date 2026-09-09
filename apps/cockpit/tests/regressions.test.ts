@@ -17,7 +17,7 @@ import {
   executiveOverviewEnvelope,
   qualificationStatusEnvelope,
 } from "@/contracts/read-models";
-import { metricValue } from "@/contracts/values";
+import { METRIC_DEFINITION_VERSION, metricValue } from "@/contracts/values";
 import { admit, ContractViolationError } from "@/data/client/read-client";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
 import { buildFreshness } from "@/data/fixtures/envelopes";
@@ -161,7 +161,7 @@ describe("finding B -- freshness refuses contradictory and unreal input", () => 
         reason: "NONE",
         as_of: unreal,
         metric_id: "freshness.source_age",
-        metric_definition_version: "metrics.v1",
+        metric_definition_version: METRIC_DEFINITION_VERSION,
       });
       expect(parsed.success, `${unreal} must be refused`).toBe(false);
     }
@@ -254,7 +254,7 @@ function envelopeWith(freshness: FreshnessReport): () => unknown {
     snapshot_version: "fixture",
     classification: "PUBLIC_SAFE",
     access_scope: "executive:read",
-    metric_definition_version: "metrics.v1",
+    metric_definition_version: METRIC_DEFINITION_VERSION,
     watermark: AS_OF,
     pins: pinsOf(),
     payload: { items: [] },
@@ -272,7 +272,7 @@ describe("finding C -- a metric payload is validated to its actual type", () => 
     reason: "NONE",
     as_of: AS_OF,
     metric_id: "portfolio.cash",
-    metric_definition_version: "metrics.v1",
+    metric_definition_version: METRIC_DEFINITION_VERSION,
     ...over,
   });
 
@@ -293,11 +293,24 @@ describe("finding C -- a metric payload is validated to its actual type", () => 
     expect(metricValue.safeParse(metric({ unit: "PERCENT" })).success).toBe(false);
   });
 
-  it("refuses an unregistered metric id and an unknown dictionary version", () => {
+  it("refuses an unregistered metric id and any dictionary version but the current one", () => {
     expect(metricValue.safeParse(metric({ metric_id: "risk.drawdown" })).success).toBe(false);
-    expect(metricValue.safeParse(metric({ metric_definition_version: "metrics.v2" })).success).toBe(
-      false,
-    );
+    /*
+     * BOTH DIRECTIONS, because ADR-0032 advanced the dictionary to `metrics.v2`. The retired
+     * version and a future one are each refused rather than coerced, which is the original
+     * property this case guards -- it is checked here against a version that is genuinely not
+     * the current one rather than against whichever string happened to be next.
+     */
+    for (const version of ["metrics.v1", "metrics.v3", "metrics.v0", "metrics"]) {
+      expect(
+        metricValue.safeParse(metric({ metric_definition_version: version })).success,
+        version,
+      ).toBe(false);
+    }
+    expect(
+      metricValue.safeParse(metric({ metric_definition_version: METRIC_DEFINITION_VERSION }))
+        .success,
+    ).toBe(true);
   });
 
   it("keeps a measured zero, and keeps a stale value with its qualification", () => {
@@ -314,7 +327,7 @@ describe("finding C -- a metric payload is validated to its actual type", () => 
         availability: "NOT_IMPLEMENTED",
         reason: "PRODUCER_NOT_IMPLEMENTED",
         metric_id: "portfolio.cash",
-        metric_definition_version: "metrics.v1",
+        metric_definition_version: METRIC_DEFINITION_VERSION,
       }).success,
     ).toBe(true);
   });
