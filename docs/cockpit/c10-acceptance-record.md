@@ -141,8 +141,8 @@ NOT STARTED and live trading is HARD-DISABLED**; none of that is affected by any
 | # | Criterion | Evidence | Disposition |
 |---|---|---|---|
 | **U1** | five ten-second answers in the first viewport at 1440 × 900, without scrolling | `e2e/u1-first-viewport.spec.ts` — the WHOLE tile is measured, the first ranked attention item is measured whole, the scroll offset is asserted zero | `IMPLEMENTED` |
-| **U2** | environment, source and freshness visible on every route, at all times | `e2e/c10-acceptance.spec.ts` asserts the context bar on **every registered route at all three viewports** | `IMPLEMENTED` |
-| **U3** | `SYNTHETIC` labelled at page level **and** component level | `e2e/cockpit.spec.ts`; `screenshots-c10/*-overview-demo-*.png` show the page banner and the per-component badges together | `IMPLEMENTED` |
+| **U2** | environment, source and freshness visible on every route, at all times | `e2e/c10-acceptance.spec.ts` and `e2e/cockpit.spec.ts` each assert the context bar on **every registered route at all three viewports** | `IMPLEMENTED` |
+| **U3** | `SYNTHETIC` labelled at page level **and** component level | `e2e/c10-acceptance.spec.ts` asserts the page-level label on **every route at all three viewports**; `e2e/cockpit.spec.ts` counts the component-level badges; `screenshots-c10/*-overview-demo-*.png` show both together | `IMPLEMENTED` |
 | **U4** | all eleven availability states render distinctly, none as zero or as healthy | `tests/rendering.test.tsx`, `e2e/c10-acceptance.spec.ts`, `screenshots-c10/*-availability-states.png` | `IMPLEMENTED` |
 | **U5** | `EMPTY_VERIFIED`, `NOT_YET_AVAILABLE`, `NOT_IMPLEMENTED`, `NOT_AUTHORIZED` and `STALE` visually distinguishable | `tests/rendering.test.tsx` compares the five rendered texts as a set | `IMPLEMENTED` |
 | **U6** | a failing widget leaves the page usable and the page reports `PARTIAL` | `e2e/c10-acceptance.spec.ts` — the ERROR state renders, the `h1` and context bar survive it, and no console error is logged | `IMPLEMENTED` |

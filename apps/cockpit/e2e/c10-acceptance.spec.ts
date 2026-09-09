@@ -114,6 +114,18 @@ test.describe("C10 — every route, at this viewport", () => {
         `${route} must not scroll horizontally`,
       ).toBeLessThanOrEqual(1);
 
+      /*
+       * U2 and U3 — the persistent context, and the page-level synthetic label, on EVERY route.
+       *
+       * A screenshot of one tile has to still say it is synthetic, because screenshots travel,
+       * and the environment, source and freshness indicators are required "at all times".
+       */
+      await expect(page.getByTestId("context-bar"), `${route} must carry the context bar`).toBeVisible();
+      await expect(
+        page.getByTestId("page-provenance-banner"),
+        `${route} must label the synthetic scenario at page level`,
+      ).toContainText("SYNTHETIC");
+
       /* Section 11 — one `h1`, a `main` landmark, and headings that do not skip a level. */
       await expect(page.locator("h1"), `${route} must have exactly one h1`).toHaveCount(1);
       await expect(page.locator("main#main-content")).toBeVisible();
