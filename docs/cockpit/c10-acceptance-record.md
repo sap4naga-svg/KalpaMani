@@ -1,10 +1,14 @@
 # Cockpit V1 — C10 acceptance record
 
 **Status: PROPOSED — carried by an open pull request, and carrying no authority until that pull
-request has been independently reviewed and merged.** Nothing here accepts a cycle, closes a gate,
-selects a provider or authorizes an operation. It is an **author's requirement-by-requirement
-assessment**, written so an independent reviewer can check each row rather than take a summary on
-trust.
+request is merged.** Nothing here accepts a cycle, closes a gate, selects a provider or authorizes
+an operation. It began as an **author's requirement-by-requirement assessment**, written so an
+independent reviewer could check each row rather than take a summary on trust.
+
+**It has since been independently reviewed, and the review corrected it.** Rows the review changed
+say so in place, and §11 records what the review ran, what it found and what it could not assess.
+**A reviewed record is still not an acceptance decision**: acceptance is a human act, and this
+document is an input to one.
 
 **It records what was found, not what was hoped for.** Where a requirement is unmet, partial,
 blocked or unassessed, it says so in those words and names what it waits on.
@@ -127,8 +131,8 @@ matrix traces**, and the rule is **one row per area**. Of those 36: **30 `IMPLEM
 presentation row**, and it is partial for the two §15 criteria §7 records as unmet rather than for
 anything a screen fails to render.
 
-**A count of areas is not a measure of project completion.** Thirty-one implemented areas are
-thirty-one screens over fixtures. **Phase 3 is NOT COMPLETE, no provider is selected, backtesting has
+**A count of areas is not a measure of project completion.** Thirty implemented areas are
+thirty screens over fixtures. **Phase 3 is NOT COMPLETE, no provider is selected, backtesting has
 NOT STARTED and live trading is HARD-DISABLED**; none of that is affected by anything in this table.
 
 ---
@@ -153,7 +157,7 @@ NOT STARTED and live trading is HARD-DISABLED**; none of that is affected by any
 | **U11** | no status conveyed by colour alone | `tests/rendering.test.tsx`; every availability state carries a glyph and a label, and every signed metric carries its sign | `IMPLEMENTED` |
 | **U12** | `prefers-reduced-motion` removes every non-essential transition | `e2e/responsive.spec.ts`, `e2e/c10-acceptance.spec.ts` — forty interactive elements are sampled and each transition duration is under a millisecond | `IMPLEMENTED` |
 | **U13** | filters, date range, mode and scoping survive a mode switch and are reproducible from the URL | `e2e/cockpit.spec.ts`, `e2e/c8-operations.spec.ts` | `IMPLEMENTED` |
-| **U14** | no page scrolls horizontally at any reference viewport; wide content scrolls in its own container | `e2e/c10-acceptance.spec.ts` measures document overflow on **every registered route at all three viewports**, and again at 200% zoom on three routes | `IMPLEMENTED` |
+| **U14** | no page scrolls horizontally at any reference viewport; wide content scrolls in its own container | `e2e/c10-acceptance.spec.ts` and `e2e/c10-reference-viewports.spec.ts` check **every registered route at all six reference viewports**, and again at 200% zoom on three routes. **Two independent checks, because the first one alone could not fail**: the document-overflow measurement, and `clippedBeyondViewport`, which reports any element extending past the viewport without a scroll container to extend into | `IMPLEMENTED` — **and only after a correction**. The document-overflow measurement is clamped by the `overflow-x: hidden` this application sets on `html` and `body`, so it read zero even with 2400-pixel content injected. The real check it was replaced with found **eleven routes clipping a badge's sentence at 390 × 844** and the landing page clipping an attention timestamp; **both are fixed in this cycle**, and the gate that found them fails when either fix is reverted. See §7.2 and §11 |
 | **U15** | mode switching preserves drill-down context and does not reset the view | `e2e/cockpit.spec.ts`, `e2e/c8-operations.spec.ts` | `IMPLEMENTED` |
 | **U16** | every future control on `/governance/controls` is inert, and **no control API route exists** | `e2e/cockpit.spec.ts` (no button, input or form in `main`), `tests/boundaries.test.ts` (no route handler or server action anywhere) | `IMPLEMENTED` |
 | **U17** | a What Changed item with an unavailable endpoint reports that state instead of a delta | `e2e/cockpit.spec.ts`, `tests/c4-review-corrections.test.tsx` | `IMPLEMENTED` |
@@ -166,7 +170,14 @@ specification numbers, and the counting rule is one row per criterion.
 
 **That is not the whole of area 32.** §11 of the UI specification states accessibility targets beyond
 U1–U20, §12 states responsive requirements at six reference viewports, and §15 states what a later
-cycle owes. Those are assessed in §7, and two of them are **not** satisfied.
+cycle owes. Those are assessed in §7. **Of §15's four criteria, one is satisfied and three are
+not**; §11's manual screen-reader pass is **unassessed**; and §12 is now swept at **all six**
+reference viewports with **one narrative requirement still unmet**. **Corrected in independent
+review** — this paragraph read *"two of them are not satisfied"*, which agreed with neither §7.4's
+table nor §10's own count.
+
+**U14's evidence was rebuilt by the review rather than taken on its wording**, and the rebuilt
+check found real defects. See §7.2 and §11.
 
 ---
 
@@ -239,7 +250,7 @@ capacity model and inventing a liquidity measure are each explicitly outside thi
 | **automated, every route, every reference viewport** | `e2e/c10-acceptance.spec.ts` runs axe-core over **all 30 registered sidebar routes at 1440 × 900, 1024 × 768 and 390 × 844** with the `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` tags, and asserts **no serious or critical violation** |
 | **the structural rules the tags do not carry** | the same spec runs `heading-order`, `empty-heading`, `landmark-one-main`, `page-has-heading-one` and `landmark-unique` **by name**, because axe tags `heading-order` as best-practice and every tagged run this repository had therefore never checked it |
 | **keyboard** | skip links to main content **and** to the primary table, palette open and close from a deep route with focus restored, the drawer's focus trap and release, and the sortable-header and disclosure controls exercised by the per-cycle specs |
-| **manual screen-reader pass** | **`NOT_ASSESSED`.** No screen reader was run. §15 asks for one, and an automated pass is not one — this is recorded as unassessed rather than covered by the axe result |
+| **manual screen-reader pass** | **`NOT_ASSESSED`.** No screen reader was run by the author, and **none was available to the independent review either** — this environment has no assistive technology a reviewer could drive, and neither session heard a single announcement. §15 asks for a manual pass, an automated pass is not one, and the honest disposition is unassessed rather than covered by the axe result |
 | **zoom** | usable at 200% — asserted by halving the CSS viewport on three routes and re-checking horizontal overflow, the context bar and the `h1` |
 
 **An automated pass is not an accessibility conformance claim, and none is made.** What is claimed is
@@ -247,43 +258,97 @@ exactly what was run.
 
 ### 7.2 Responsiveness
 
-**Three reference viewports are registered and swept**: 1440 × 900, 1024 × 768 and 390 × 844. Every
-registered route is checked at each for horizontal page overflow, a single `h1`, a `main` landmark,
-heading order, console errors and off-origin requests.
+**All six reference viewports are registered and swept.** `e2e/c10-acceptance.spec.ts` sweeps every
+registered route at **1440 × 900, 1024 × 768 and 390 × 844**, and
+`e2e/c10-reference-viewports.spec.ts` sweeps every registered route at **1920 × 1080, 1280 × 800 and
+768 × 1024**. Each route is checked at each width for page overflow, **content clipped outside a
+scroll container**, a single `h1`, a `main` landmark, heading order, the U2 context bar, the U3
+page-level `SYNTHETIC` label, console errors and off-origin requests.
 
-**Three of the specification's six reference viewports are not registered** — 1920 × 1080, 1280 × 800
-and 768 × 1024. `NOT_ASSESSED` at those three widths. The three that are registered are the three the
-task named, and adding viewports to the suite would change every existing spec's run count.
+**Corrected in independent review.** This section previously read *"three of the specification's six
+reference viewports are not registered … `NOT_ASSESSED` at those three widths"*, and gave as the
+reason that *"adding viewports to the suite would change every existing spec's run count"*. The three
+missing widths are now registered in **their own three projects, running one focused responsive
+spec**, so **no existing spec's run count moves** and the coverage the specification asks for exists.
+Each width additionally gets the requirement stated on **its own row** in §12: the first-viewport rule
+at 1920 × 1080, full persistent navigation at 1280 × 800, and a ledger scrolling inside its own
+container at 768 × 1024.
 
-**One narrative requirement is `PARTIAL`.** §12's mobile row reads *"executive summary only — tier 1,
-Attention Required and search"*; the mobile Executive Overview renders the full executive page
-stacked, including tier 2 and the performance overview. **It is not a scaled-down operator console** —
-operator tables stay on their own routes and are reachable — and no content is clipped or overflowing.
-**Narrowing what mobile renders is a product decision rather than polish**, so it is recorded and not
-made here.
+**The sweep found real defects at 390 × 844, and they are fixed.** §12 forbids a clipped control and
+a truncated value at every reference viewport, and the check that was supposed to catch that could
+not: `globals.css` sets `overflow-x: hidden` on `html` and `body`, so
+`documentElement.scrollWidth − clientWidth` is clamped and reads zero however wide the content is.
+Injecting a 2400-pixel element left every U14 assertion in this repository green. The replacement
+check found **a badge carrying a sentence overflowing the viewport on eleven routes** — *"The
+evidence rests on one confirmatory evaluation"* reached x = 608 in a 390-pixel viewport, clipped and
+unreachable — and **the attention item's metadata pair overflowing on the landing page**. Both are
+corrected: `badgeVariants` no longer forces `whitespace-nowrap`, and the attention metadata pairs
+wrap. **Reverting either fix fails the gate**, which is how it is known to be a gate.
+
+**One narrative requirement remains unmet, and the accepted text does not settle it.** §12's mobile
+row reads *"executive summary only — tier 1, Attention Required and search"*; the mobile Executive
+Overview renders the full executive page stacked, including What Changed, the performance overview
+and tier 2. **That much is confirmed.** What the accepted text does **not** settle is what becomes of
+the rest at that width: whether *"only"* requires those sections to be **omitted** at 390 × 844, or
+merely that they are **not part of the summary** and may follow it or sit behind a disclosure. The
+distinction is material because **no route owns What Changed or the tier-2 supporting-context
+tiles** — omitting them at mobile would remove specified executive information with no navigation to
+it, which §12's own tail (*"Operator tables are reachable"*) shows the section does not intend, while
+leaving them where they are does not deliver *"executive summary only"*.
+
+**The bounded decision needed is exactly that**: omit or defer, and if omit, which route surfaces
+What Changed and the tier-2 facts at 390 × 844. **It is recorded rather than invented here**, and the
+requirement stays **unmet** until it is taken. Nothing at that viewport is clipped or overflowing any
+more, and the page is not a scaled-down operator console — operator tables stay on their own routes.
 
 ### 7.3 Performance
 
 **Measured, with its conditions, and against no budget.** `e2e/c10-performance.spec.ts` records first
 answer, first contentful paint, DOM-content-loaded, load and transferred bytes for five routes, plus
-two interaction latencies, at each viewport, into `screenshots-c10/performance-<project>.json`.
+two interaction latencies, at each viewport, into
+`screenshots-c10/performance-<project>-<server>.json`.
 
 **No numeric performance budget exists anywhere in tracked authority**, so none is asserted. The
 assertions are that each measurement was obtained and is a real, finite, positive duration, and that
 each timed interaction completed.
 
-**The conditions are part of the measurement.** The suite drives `next dev` — a development server,
-compiled on demand and unminified — on one worker, on one machine, over the local fixture adapter.
-**These figures are an upper bound on a production build's and are not comparable to one.**
+**The conditions are part of the measurement, and they are recorded rather than reasoned from.** The
+suite drives `next dev` by default — a development server, compiled on demand and unminified — on one
+worker, on one machine, over the local fixture adapter. **Corrected in independent review**: this
+section previously read *"these figures are an upper bound on a production build's"*, which **these
+measurements do not establish**. A development and a production server differ in compilation,
+bundling, caching and rendering, in more than one direction, and nothing measured here orders them.
+The claim is withdrawn from this record, from the spec's own commentary and from the evidence file's
+`conditions` block.
 
-### 7.4 The two §15 criteria that are not met
+**A production build was measured instead of reasoned about.** The independent review ran
+`next build`, started `next start` on the suite's port and re-ran the measurement with
+`KM_COCKPIT_SERVER` naming that server, so the evidence file records the server it describes:
+
+```text
+server              next start - a production build, minified and precompiled
+project             desktop-1440 (1440 x 900), one worker, local loopback, local fixtures
+first answer        /  618 ms   ·  /portfolio/trades  462 ms  ·  /portfolio/performance  384 ms
+                    /governance/qualification  269 ms  ·  /system/alerts  311 ms
+DOMContentLoaded    32-166 ms       load event  137-329 ms
+transferred         399-537 KB per route
+interactions        command palette  51 ms   ·   Executive to Operator  211 ms
+first contentful paint   NOT OBTAINED - the paint entry was absent on every route in this run,
+                    and no figure is invented for it
+```
+
+**These figures describe that server on that machine and nothing else.** No ordering against the
+development server is claimed in either direction, no budget is asserted, and **a measurement is not
+a performance claim about a deployed Cockpit — none is deployed**.
+
+### 7.4 The §15 criteria, and the three that are not met
 
 | §15 item | Disposition |
 |---|---|
 | **synthetic end-to-end** | `IMPLEMENTED` — navigation across every route, every availability state rendered, drill-down paths traversed, mode switching with context preserved, palette open and close, and the failure states exercised deliberately |
-| **accessibility checks in the pipeline** | `PARTIAL` — the automated half is implemented and runs on every route at every registered viewport; **the manual keyboard pass is partly automated and the manual screen-reader pass is `NOT_ASSESSED`** |
-| **performance targets** | `PARTIAL` — measured and recorded with its conditions; **no target exists to measure against**, and this cycle does not invent one |
-| **screenshot and visual regression** | `PARTIAL` — the fixed fixture set, the fixed viewport list, deterministic rendering and per-route, per-state captures exist and are indexed in `screenshots-c10/INDEX.txt`. **No committed baseline image exists**: this repository keeps screenshots outside the tracked tree, so a baseline could not be committed for a reviewer to diff against, and §15 itself says a diff is a review item rather than an auto-accept. **The stable committed baseline half of the criterion is therefore not delivered** |
+| **accessibility checks in the pipeline** | `PARTIAL` — the automated half is implemented and runs on every route at every registered viewport; **the manual keyboard pass is partly automated and the manual screen-reader pass is `NOT_ASSESSED`**, by the author and by the independent review alike |
+| **performance targets** | `PARTIAL` — measured on both a development server and a production build, each recorded with the conditions it was taken under; **no target exists anywhere in tracked authority to measure against**, and neither this cycle nor its review invents one |
+| **screenshot and visual regression** | `PARTIAL` — **and materially closer than it was.** A **committed baseline now exists**: nine tracked images under `e2e/visual-baseline/`, three route-and-state captures at each of the three registered viewports, compared on every run by `e2e/c10-visual-regression.spec.ts`. **Corrected in independent review** — the earlier claim that *"this repository keeps screenshots outside the tracked tree, so a baseline could not be committed"* described a practice for review captures, not a rule: nothing in this repository's instructions prohibits a tracked test asset, and `.gitattributes` has declared `*.png binary` since long before this cycle. **It is still `PARTIAL`, and for a real reason**: §15 asks for a stable baseline **per route and per state**, and this one covers a **representative subset** — the Executive Overview populated, the same route with its producers absent, and the eleven availability states — not all thirty routes in every state |
 
 ---
 
@@ -305,9 +370,9 @@ compiled on demand and unminified — on one worker, on one machine, over the lo
 
 | | |
 |---|---|
-| **per-route document titles** | every route shares one `<title>`. A Next.js client component cannot export route metadata, and every screen here is a client component; an effect-set title is **overwritten by the framework on the next client navigation**, which is worse than one honest generic title. The correct fix is a segment layout per route — **thirty new files, a structural change rather than polish** — and it is recorded here as an improvement for a later cycle |
-| **narrowing the mobile Executive Overview** | §7.2 |
-| **the three unregistered reference viewports** | §7.2 |
+| **per-route document titles** | every route shares one `<title>`, and **no accepted requirement asks for a per-route one** — not U1–U20, not §11's enumerated accessibility targets, and not any area's criteria in the traceability matrix, none of which mentions the document title at all. It is therefore an **unrequired improvement, not an unmet criterion**, and it is **not blocked**: a per-route segment layout is ordinary framework-supported work that a later cycle can add. **Corrected in independent review** — the earlier wording here described the fix as structurally unavailable, which overstated the obstacle |
+| **narrowing the mobile Executive Overview** | §7.2 — **still not done**, and the precise unresolved choice is named there rather than decided |
+| **the three unregistered reference viewports** | **done in independent review** — all six are registered and swept. §7.2 |
 | **anything requiring a producer** | no capacity model, no search executor, no acquired data, no invented capacity estimate, no synthetic stand-in for a named benchmark |
 | **any change to economics** | **no book, trade population, entry or add fact, risk denominator, strategy version or accepted measurement formula was changed**, and **no fixture was edited to make a chart more interesting** |
 | **any new dependency** | none was added |
@@ -363,7 +428,7 @@ original Linux PR #84 review evidence                         UNAVAILABLE - the 
 
 ```text
 C10 polish and acceptance cycle:                  IMPLEMENTED IN AN OPEN PULL REQUEST
-independent review of the C10 implementation:     REQUIRED / NOT PERFORMED
+independent review of the C10 implementation:     PERFORMED
 areas in V1 scope:                                36
 areas assessed by the acceptance record:          36 OF 36
 areas IMPLEMENTED within accepted scope:          30
@@ -375,9 +440,11 @@ U1-U20 satisfied:                                 20
 section 15 criteria assessed:                     4 OF 4
 section 15 criteria satisfied:                    1 OF 4
 manual screen-reader pass:                        NOT ASSESSED
-committed visual-regression baseline:             NOT CREATED
+mobile executive summary - section 12:            NOT SATISFIED - AMBIGUITY RECORDED
+responsive defects found and fixed by review:     2 - BADGE CLIPPING, ATTENTION METADATA
+committed visual-regression baseline:             CREATED - 9 IMAGES, REPRESENTATIVE SUBSET
 accepted numeric performance budget:              NONE EXISTS - NONE INVENTED
-reference viewports registered and swept:         3 OF 6
+reference viewports registered and swept:         6 OF 6
 read models changed by this cycle:                NONE
 schema versions changed by this cycle:            NONE
 fixtures changed by this cycle:                   NONE
@@ -409,3 +476,81 @@ live trading:                                     HARD-DISABLED
 **Twenty satisfied UI criteria are twenty satisfied UI criteria.** They are not a measure of how much
 of this project is built, and they are not a step toward live trading. **Specification,
 implementation, research, deployment and execution stay five separate gates.**
+
+---
+
+## 11. The independent review
+
+**The review read the accepted clauses and re-derived each disposition, rather than checking the rows
+against each other.** It ran the full gate set on a clean worktree at `main` before touching
+anything, reproduced the corrections it could, and rebuilt one check that could not fail.
+
+### 11.1 What it confirmed
+
+| | |
+|---|---|
+| **the baseline** | pytest **7351**, Vitest **829**, Playwright **890**, docs audit **4599 checks**, ruff, ruff format, mypy, the test-integrity audit and `git diff --check` — every one clean at `main`, on a worktree never edited |
+| **the author's own baseline failure did not recur** | the author recorded one browser failure at `c8-operations.spec.ts:428`, mobile-390, `net::ERR_NO_BUFFER_SPACE`. **That observation is preserved as a fact about their run.** This review's baseline passed 890 of 890; **no cause is assigned to theirs**, and "did not recur" is not a claim that it did not happen |
+| **the six corrections** | each was traced to its consumers rather than to its own test. The heading control was reproduced exactly — reverting `ReadModelPanel`'s title to a `<span>` fails **3 of 8** tests in `tests/c10-polish.test.tsx`, as recorded |
+| **the counting rule** | 36 rows, 30 `IMPLEMENTED`, 6 `PARTIAL` — areas 2, 3, 4, 5, 14 and 32 — re-derived from the table itself |
+| **the Area 3 gap** | `PositionSnapshot` carries no earnings-proximity, liquidity or capacity field. **Confirmed against the contract**, and confirmed as **C5's dependency rather than C10 work** |
+| **the capacity dependency** | `read-model-contracts.md` §12.3 names **all nine required inputs** and states `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` is **"the state today"**. Areas 4, 5 and 14 are held `PARTIAL` rather than `ACCEPTED_UNAVAILABLE`, which is the **conservative** reading of the record's own vocabulary; the review leaves it conservative and does not round it up |
+
+### 11.2 What it corrected
+
+| | |
+|---|---|
+| **an arithmetic residue** | *"Thirty-one implemented areas"* survived the commit that corrected 31 to 30 |
+| **a §15 miscount** | *"two of them are not satisfied"* and the §7.4 heading disagreed with §7.4's own table and with §10 |
+| **an overstated obstacle** | per-route document titles were recorded as structurally blocked. **They are not required by any accepted clause at all** — not U1–U20, not §11's enumerated targets, not any area's criteria — and they are **not blocked** either |
+| **an unsupported claim** | *"an upper bound on a production build's"*, withdrawn, and a production build measured instead |
+| **an unsupported justification** | *"a baseline could not be committed"*, replaced by a committed baseline |
+| **an unassessed half of §12** | three reference viewports, now registered and swept |
+| **a check that could not fail** | U14's document-overflow measurement, replaced by one that does |
+
+### 11.3 What it found
+
+**Two real responsive defects, at a reference viewport, that no existing test could see.**
+
+```text
+badges carrying a sentence            11 routes, clipped past 390 x 844, unreachable
+attention metadata pairs              the landing page, clipped past 390 x 844
+cause                                 whitespace-nowrap on the badge primitive, and a
+                                      non-wrapping dt/dd group
+why nothing caught it                 html and body set overflow-x: hidden, so the root
+                                      scroll-width measurement is clamped and reads zero
+                                      however wide the content is -- proven by injecting a
+                                      2400-pixel element and watching every U14 assertion
+                                      in this repository stay green
+fixed                                 yes, in this cycle, in two lines
+gate                                  clippedBeyondViewport, on every route at all six
+                                      reference viewports; reverting either fix fails it
+```
+
+**Neither defect was introduced by this pull request** — both predate it, and the `overflow-x: hidden`
+that hid them is older than C10.
+
+### 11.4 What it could not assess
+
+| | |
+|---|---|
+| **the manual screen-reader pass** | **`NOT_ASSESSED`.** No assistive technology was available to this review, and none was driven. Nothing here is a screen-reader result |
+| **§12's mobile executive summary** | **unmet, and not decided.** §7.2 names the exact unresolved choice; inventing a mobile product design was outside what the accepted text supports |
+| **every route and every state, visually** | the committed baseline is a **representative subset**, and §15 asks for more |
+| **anything requiring a producer** | unchanged. No capacity model, no named benchmark, no acquired data |
+
+### 11.5 The review's own negative controls
+
+**A control that cannot fail is not a control, and one of these did not fail the first time it was
+run — which is recorded rather than quietly re-run.**
+
+| Control | Outcome |
+|---|---|
+| `ReadModelPanel`'s title back to a `<span>` | **3 of 8** `tests/c10-polish.test.tsx` tests failed, reproducing the author's result |
+| the badge fix reverted | `/governance/packets` failed at mobile-390, naming five clipped sentences up to x = 608 |
+| a design token shifted, against the **default** screenshot tolerance | **PASSED — the control was INERT.** Playwright's default per-pixel threshold of 0.2 absorbed a visible colour change, so the baseline was tightened to **zero tolerance** before it was trusted |
+| the same token shifted, against the **tightened** baseline | failed, with **13 489 to 17 472** differing pixels |
+| the baseline re-run twice on an unchanged tree | **byte-identical both times**, before and after the tightening |
+| a 2400-pixel element injected, against the **document-overflow** measurement | **PASSED — inert**, which is the finding in §11.3 |
+| a 2400-pixel element injected, against `clippedBeyondViewport` | failed, as designed |
+| one grep-scoped control | **matched no test and proved nothing.** Re-run with a correct pattern rather than counted |

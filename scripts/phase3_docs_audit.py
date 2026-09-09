@@ -13590,20 +13590,22 @@ COCKPIT_C10_HEADING: Final = (
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "C10 polish and acceptance cycle: IMPLEMENTED IN AN OPEN PULL REQUEST",
-    "independent review of the C10 implementation: REQUIRED / NOT PERFORMED",
+    "independent review of the C10 implementation: PERFORMED",
     "areas assessed by the acceptance record: 36 OF 36",
     "areas IMPLEMENTED within accepted scope: 30",
     "areas PARTIAL: 6",
     "U1-U20 assessed: 20",
     "U1-U20 satisfied: 20",
     "section 15 criteria satisfied: 1 OF 4",
-    # THE TWO CRITERIA THAT ARE NOT MET, EACH REQUIRED TO READ AS OUTSTANDING. An automated
-    # accessibility pass is not a screen-reader pass, and an indexed capture set is not a
-    # committed baseline anybody can diff.
+    # THE CRITERIA THAT ARE NOT MET, EACH REQUIRED TO READ AS OUTSTANDING. An automated
+    # accessibility pass is not a screen-reader pass; a representative baseline is not the
+    # every-route, every-state baseline section 15 asks for; and section 12's mobile row is
+    # unmet on an ambiguity nobody has resolved.
     "manual screen-reader pass: NOT ASSESSED",
-    "committed visual-regression baseline: NOT CREATED",
+    "committed visual-regression baseline: CREATED - 9 IMAGES, REPRESENTATIVE SUBSET",
+    "mobile executive summary - section 12: NOT SATISFIED - AMBIGUITY RECORDED",
     "accepted numeric performance budget: NONE EXISTS - NONE INVENTED",
-    "reference viewports registered and swept: 3 OF 6",
+    "reference viewports registered and swept: 6 OF 6",
     "new API routes, handlers or server actions: NONE",
     "new runtime dependencies: NONE",
     "ledger economics, entry facts or risk records: UNCHANGED",
@@ -13627,10 +13629,16 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C10 polish and acceptance cycle: MERGED",
     "C10 polish and acceptance cycle: COMPLETE",
     "C10 polish and acceptance cycle: ACCEPTED",
-    "independent review of the C10 implementation: PERFORMED",
+    # A REVIEW IS NOT AN ACCEPTANCE. The review has been performed and the required line above
+    # says so; what stays forbidden is reading that review as a decision, or reading a
+    # representative baseline as a complete one.
+    "independent review of the C10 implementation: NOT PERFORMED",
     "manual screen-reader pass: PERFORMED",
     "manual screen-reader pass: PASSED",
-    "committed visual-regression baseline: CREATED",
+    "committed visual-regression baseline: EVERY ROUTE AND STATE",
+    "committed visual-regression baseline: COMPLETE",
+    "mobile executive summary - section 12: SATISFIED",
+    "reference viewports registered and swept: 3 OF 6",
     "accessibility conformance: ACHIEVED",
     "accessibility conformance: CLAIMED",
     "WCAG 2.2 AA: CONFORMANT",

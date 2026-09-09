@@ -5125,9 +5125,10 @@ by it**, and no producing subsystem was created, connected or authorized.
 | **a drill-down screen has a place in the sidebar** | `aria-current` was decided by an exact path match, so **nothing** was current on `/portfolio/trades/<id>` or `/signals/candidates/<id>`. A deep destination now marks the entry that **owns** it, as a section rather than as the page, because the reader is not on the ledger |
 | **a skip link reaches the primary table** | section 10 asks for skip links to "the main content **and** the primary table"; only the first existed, so reaching a ledger by keyboard meant tabbing past the header and thirty sidebar links |
 | **six executive links are distinguishable** | the ten-second answers all read *"Open the area that owns this"*. The visible text is unchanged and each accessible name now carries its subject |
-| **the sweep** | every registered route is checked at **all three registered reference viewports** for horizontal overflow, a single `h1`, a `main` landmark, heading order, console errors, off-origin requests and axe violations — including the structural rules axe tags as best-practice, which every earlier run therefore skipped |
-| **measurement, not budgets** | first answer, first contentful paint and two interaction latencies are recorded per viewport with the exact conditions they were taken under. **No accepted numeric performance budget exists anywhere in tracked authority, and none is invented** |
-| **indexed review evidence** | a focused, indexed capture set with a provenance stamp. **It is not a committed visual-regression baseline** |
+| **the sweep** | every registered route is checked at **all six reference viewports** for page overflow, **content clipped outside a scroll container**, a single `h1`, a `main` landmark, heading order, the persistent context bar, the page-level `SYNTHETIC` label, console errors, off-origin requests and axe violations — including the structural rules axe tags as best-practice, which every earlier run therefore skipped |
+| **two responsive defects, found and fixed** | a badge carrying a sentence was clipped past the 390 × 844 viewport on **eleven routes**, and the attention item's metadata was clipped on the landing page. **Both predate this cycle**, and neither could be seen by the check meant to catch them, because `overflow-x: hidden` on `html` and `body` clamps the root scroll-width measurement to zero |
+| **measurement, not budgets** | first answer, first contentful paint and two interaction latencies are recorded per viewport with the exact conditions they were taken under, on a development server **and on a production build**. **No accepted numeric performance budget exists anywhere in tracked authority, and none is invented** |
+| **indexed review evidence, and a committed baseline** | a focused, indexed capture set with a provenance stamp — git-ignored, for a person to look at — **and, separately, nine tracked baseline images** under `apps/cockpit/e2e/visual-baseline/` that a later change is compared against at zero tolerance |
 
 #### What it audited, and what it did not close
 
@@ -5146,17 +5147,31 @@ thirty areas read as implemented while six read as partial.
 
 #### What it does not claim
 
-**Two accepted criteria are not met, and neither is rounded up.** The **manual screen-reader pass was
-not run at all**, and an automated axe pass is not one. **No committed visual-regression baseline
-exists**: this repository keeps screenshots outside the tracked tree, so a baseline could not be
-committed for a reviewer to diff against, and section 15 itself holds that a diff is a review item
-rather than an auto-accept.
+**Three of section 15's four criteria are not met, and none is rounded up.** The **manual
+screen-reader pass was not run at all** — not by the author and not by the independent review, which
+had no assistive technology available to it — and an automated axe pass is not one. **A committed
+visual-regression baseline now exists** — nine tracked images under `apps/cockpit/e2e/visual-baseline/`,
+compared at zero tolerance on every run — but it covers a **representative subset** rather than the
+every-route, every-state baseline section 15 asks for, so that criterion stays **partial**. **No
+numeric performance budget exists** in tracked authority, and none is invented.
 
-**Three of the specification's six reference viewports are not registered** — 1920 × 1080, 1280 × 800
-and 768 × 1024 — and nothing is claimed at those widths. **Per-route document titles were
-deliberately not added**: a Next.js client component cannot export route metadata, an effect-set
-title is overwritten by the framework on the next client navigation, and the correct fix is a segment
-layout per route, which is a structural change rather than polish.
+**All six reference viewports are now registered and swept** — the three the suite already ran, plus
+1920 × 1080, 1280 × 800 and 768 × 1024 in three projects of their own, so no existing spec's run
+count moved. **That sweep found and fixed two real responsive defects at 390 × 844**: a badge
+carrying a sentence was clipped past the viewport on eleven routes, and the attention item's metadata
+was clipped on the landing page. **Neither was introduced by this cycle**, and neither could be seen
+by the check that was supposed to catch it — `overflow-x: hidden` on `html` and `body` clamps the
+root scroll-width measurement, so it reads zero however wide the content is.
+
+**One narrative requirement is still unmet.** Section 12's mobile row asks for an *"executive summary
+only"* and the mobile Executive Overview renders the full stacked page. The accepted text names what
+the summary contains but does not settle whether the rest is **omitted** or **deferred**, and no
+route owns What Changed or the tier-2 tiles — so the choice is recorded rather than invented.
+
+**Per-route document titles were not added, and no accepted requirement asks for them** — not
+U1–U20, not section 11's enumerated accessibility targets, not any area's criteria in the
+traceability matrix. They are an unrequired improvement rather than an unmet criterion, and they are
+**not blocked**: a per-route segment layout is ordinary framework-supported work for a later cycle.
 
 **No alpha is claimed, no result is asserted and no threshold is established.** Every populated figure
 is a repository-owned deterministic fixture, and **twenty satisfied UI criteria are twenty satisfied
@@ -5165,7 +5180,7 @@ trading.
 
 ```text
 C10 polish and acceptance cycle:                  IMPLEMENTED IN AN OPEN PULL REQUEST
-independent review of the C10 implementation:     REQUIRED / NOT PERFORMED
+independent review of the C10 implementation:     PERFORMED
 acceptance record:                                docs/cockpit/c10-acceptance-record.md
 areas in V1 scope:                                36
 areas assessed by the acceptance record:          36 OF 36
@@ -5178,10 +5193,12 @@ U1-U20 satisfied:                                 20
 section 15 criteria assessed:                     4 OF 4
 section 15 criteria satisfied:                    1 OF 4
 manual screen-reader pass:                        NOT ASSESSED
-committed visual-regression baseline:             NOT CREATED
+mobile executive summary - section 12:            NOT SATISFIED - AMBIGUITY RECORDED
+responsive defects found and fixed by review:     2 - BADGE CLIPPING, ATTENTION METADATA
+committed visual-regression baseline:             CREATED - 9 IMAGES, REPRESENTATIVE SUBSET
 accepted numeric performance budget:              NONE EXISTS - NONE INVENTED
-reference viewports registered and swept:         3 OF 6
-per-route document titles:                        NOT ADDED - RECORDED FOR A LATER CYCLE
+reference viewports registered and swept:         6 OF 6
+per-route document titles:                        NOT ADDED - NOT REQUIRED BY ANY CLAUSE
 new API routes, handlers or server actions:       NONE
 new runtime dependencies:                         NONE
 read models changed by this cycle:                NONE

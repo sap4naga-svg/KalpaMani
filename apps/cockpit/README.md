@@ -51,15 +51,19 @@ economics, fixture, contract, read model, schema version, route or dependency wa
 | **a drill-down screen has a place in the sidebar** | `aria-current` was decided by an exact path match, so nothing was current on a trade or candidate detail screen. A deep destination now marks the entry that **owns** it, as a section rather than as the page |
 | **a skip link reaches the primary table** | section 10 of the UI specification asks for both, and only the skip to main content existed |
 | **six executive links are distinguishable** | they all read *"Open the area that owns this"*; the visible text is unchanged and each accessible name now carries its subject |
-| **the sweep** | `e2e/c10-acceptance.spec.ts` checks every registered route at **all three reference viewports** for horizontal overflow, a single `h1`, a `main` landmark, heading order, console errors, off-origin requests and axe violations — including the structural rules axe tags as best-practice and every earlier run therefore skipped |
-| **measurement, not budgets** | `e2e/c10-performance.spec.ts` records first answer, first contentful paint and two interaction latencies per viewport, with its conditions. **No accepted numeric performance budget exists, and none is invented** |
-| **indexed review evidence** | `e2e/c10-evidence.spec.ts` writes a focused, indexed capture set to `screenshots-c10/`, with a provenance stamp. **It is not a committed visual-regression baseline**, and this repository keeps screenshots out of the tracked tree |
+| **the sweep** | `e2e/c10-acceptance.spec.ts` checks every registered route at 1440 × 900, 1024 × 768 and 390 × 844, and `e2e/c10-reference-viewports.spec.ts` checks every registered route at 1920 × 1080, 1280 × 800 and 768 × 1024 — **all six reference viewports** — for page overflow, **content clipped outside a scroll container**, a single `h1`, a `main` landmark, heading order, the context bar, the page-level `SYNTHETIC` label, console errors, off-origin requests and axe violations, including the structural rules axe tags as best-practice and every earlier run therefore skipped |
+| **two responsive defects, found and fixed** | a badge carrying a sentence could not wrap, so it was clipped past the 390 × 844 viewport on **eleven routes**; the attention item's metadata pairs were clipped on the landing page. **Both predate this cycle.** Neither was visible to the old check: `overflow-x: hidden` on `html` and `body` clamps `documentElement.scrollWidth`, so it reads zero however wide the content is |
+| **measurement, not budgets** | `e2e/c10-performance.spec.ts` records first answer, first contentful paint and two interaction latencies per viewport, with its conditions. Set `KM_COCKPIT_SERVER` to name a different server — a production `next start` was measured that way — and the evidence file records which one. **No accepted numeric performance budget exists, and none is invented** |
+| **indexed review evidence** | `e2e/c10-evidence.spec.ts` writes a focused, indexed capture set to `screenshots-c10/`, with a provenance stamp. **It is review evidence, not the baseline**, and it stays out of the tracked tree |
+| **a committed visual baseline** | `e2e/c10-visual-regression.spec.ts` compares **nine tracked images** under `e2e/visual-baseline/` at **zero tolerance** on every run. Regenerate with `npx playwright test e2e/c10-visual-regression.spec.ts --update-snapshots`, and review the diff — a diff is a review item, not an auto-accept |
 
-**What C10 deliberately did not do**: per-route document titles — a Next.js client component cannot
-export route metadata and an effect-set title is overwritten by the framework on the next client
-navigation, so the correct fix is a segment layout per route and that is a structural change rather
-than polish. It also narrowed nothing on mobile, registered no additional reference viewport,
-acquired no data, and built no capacity model. Each is recorded in the acceptance record.
+**What C10 deliberately did not do**: it narrowed nothing on the mobile Executive Overview — section
+12 asks for an *"executive summary only"* and does not settle whether the rest is omitted or merely
+deferred, so the choice is recorded rather than invented. It acquired no data and built no capacity
+model. **Per-route document titles were not added, and no accepted requirement asks for them** —
+they are an unrequired improvement, not an unmet criterion, and a per-route segment layout is
+ordinary framework-supported work whenever a later cycle wants it. Each is recorded in the
+acceptance record.
 
 ---
 
@@ -134,8 +138,10 @@ npm run test:e2e       # Playwright, three viewports (needs: npx playwright inst
 npm run verify         # lint + typecheck + test + build
 ```
 
-`npm run test:e2e` starts its own dev server on port 3100 and writes review screenshots for the
-desktop (1440×900), tablet (1024×768) and mobile (390×844) viewports:
+`npm run test:e2e` starts its own dev server on port 3100. Six projects run: the three original
+viewports — desktop (1440×900), tablet (1024×768) and mobile (390×844) — which run the whole suite,
+and three that run only the focused responsive spec at the remaining reference widths, 1920×1080,
+1280×800 and 768×1024. Review screenshots are written for the original three:
 
 ```text
 screenshots/      the C3 author and reviewer captures, regenerated by the C3 specs
@@ -147,14 +153,19 @@ screenshots-c6/ · screenshots-c7/ · screenshots-c8/ · screenshots-c5-followup
 screenshots-adr0031/  the owning-area navigation captures
 screenshots-c10/  the C10 capture set -- a FOCUSED, INDEXED set at all three viewports,
                   with PROVENANCE.txt and INDEX.txt naming what each capture shows, plus
-                  performance-<viewport>.json carrying the measurements and the exact
-                  conditions they were taken under
+                  performance-<viewport>-<server>.json carrying the measurements and the
+                  exact conditions they were taken under
 ```
 
-Every one of them is git-ignored: they are **review evidence, not a visual-regression baseline**.
-**No committed baseline image exists**, so no image diff gates anything — this repository keeps
-screenshots outside the tracked tree, and `ui-ux-specification.md` section 15 itself holds that a
-diff is a review item rather than an auto-accept.
+Every one of them is git-ignored: they are **review evidence, for a person to look at**.
+
+**The committed baseline is a different artifact, and it is tracked**: `e2e/visual-baseline/`, nine
+images, three route-and-state captures at each of the three registered viewports, compared at **zero
+tolerance** on every run by `e2e/c10-visual-regression.spec.ts`. The file name carries the platform,
+because text rasterisation differs between operating systems — on a platform with no committed
+baseline the suite reports the snapshot as **missing and fails**, rather than accepting whatever it
+finds. Regenerate with `--update-snapshots` and review the diff: `ui-ux-specification.md` section 15
+holds that a diff is a review item rather than an auto-accept.
 
 **To review the screens by hand**, `npm run dev` and open:
 
