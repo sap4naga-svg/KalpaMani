@@ -8,13 +8,14 @@ import {
 import { C3_METRIC_DICTIONARY } from "@/contracts/values";
 import { isValueBearing } from "@/contracts/validity";
 import { FixtureReadClient } from "@/data/fixtures/adapter";
+import { BOOK, bookSessions } from "@/data/fixtures/book";
 import {
   movementOver,
   rebasedToHundred,
   ROLLING_LOOKBACKS,
   rollingWindowValues,
 } from "@/data/fixtures/equity";
-import { OBSERVATION_MINIMUMS } from "@/data/fixtures/summary";
+import { buildPerformanceSummary, OBSERVATION_MINIMUMS } from "@/data/fixtures/summary";
 import { fixedClock } from "@/lib/clock";
 import { DEFAULT_SCOPE } from "@/lib/scope";
 
@@ -427,34 +428,82 @@ describe("rolling expectancy over closed trades", () => {
     }
   });
 
-  it("agrees with the whole-version expectancy when the window is the whole population", async () => {
+  it("agrees with the accepted summary builder over the same trailing thirty trades", async () => {
     /*
-     * A CROSS-CHECK AGAINST AN ALREADY-ACCEPTED FIGURE. Where a version carries exactly
-     * thirty qualifying closed trades, the last rolling point covers all of them, so it must
-     * equal the version summary's own expectancy — two routes to one number, computed by two
-     * different functions over one population.
+     * A CROSS-CHECK AGAINST AN ALREADY-ACCEPTED FIGURE, AND ONE THAT RUNS.
+     *
+     * THE EARLIER FORM OF THIS TEST NEVER EXECUTED ITS COMPARISON. It guarded on the version
+     * carrying exactly thirty closed trades, and no version in this book does — the counts are
+     * 26, 13, 39, 39, 39 and 39 — so the loop `continue`d every time and the only assertion
+     * that ran was `checked >= 0`, which is true of every implementation. A rolling expectancy
+     * computed over twenty-nine trades, or over thirty-one, passed it unchanged.
+     *
+     * WHAT HOLDS FOR EVERY VALUED POINT, and is checked here instead: the point at ordinal `n`
+     * is `expectancy.currency` over exactly the thirty closed trades ending there, so
+     * `buildPerformanceSummary` — the accepted builder the version summary on screen already
+     * uses, in another file — must return the same figure when it is given those same thirty.
+     * Two functions, one number, and a denominator or a window that moved makes them disagree.
      */
     const payload = (await client().strategyPerformance(DEMO)).payload;
+    const days = bookSessions(Date.parse(ORIGIN));
+    const lookback = OBSERVATION_MINIMUMS["expectancy.currency"];
     let checked = 0;
+    let versionsWithAValuedPoint = 0;
     for (const entry of payload?.items ?? []) {
-      const rolling = entry.rolling_expectancy;
-      const points = rolling?.points ?? [];
-      const last = points[points.length - 1];
-      if (
-        last === undefined ||
-        !isValueBearing(last.value.availability) ||
-        !isValueBearing(entry.summary.expectancy.availability)
-      ) {
-        continue;
+      const points = entry.rolling_expectancy?.points ?? [];
+      /*
+       * The exit-ordered closed population this version's rolling points are indexed by. The
+       * ordering is the one the payload publishes — ordinal `n` is the `n`-th point — so the
+       * slice below is read off the served axis rather than reconstructed from a guess.
+       */
+      const ordered = [...BOOK.trades]
+        .filter(
+          (trade) => trade.versionId === entry.strategy_version && trade.status === "CLOSED",
+        )
+        .sort((left, right) => {
+          const bySession =
+            left.exits[left.exits.length - 1].session -
+            right.exits[right.exits.length - 1].session;
+          return bySession !== 0 ? bySession : left.tradeId.localeCompare(right.tradeId);
+        });
+      expect(ordered).toHaveLength(points.length);
+
+      let valuedOnThisVersion = 0;
+      for (const point of points) {
+        if (!isValueBearing(point.value.availability)) {
+          continue;
+        }
+        valuedOnThisVersion += 1;
+        const ordinal = Number(point.ordinal.value);
+        const window = ordered.slice(ordinal - lookback, ordinal);
+        expect(window).toHaveLength(lookback);
+        const summary = buildPerformanceSummary({
+          days,
+          asOf: ORIGIN,
+          closed: window,
+          /** A trade population has no return series, so its Sharpe is insufficient. */
+          periodReturns: [],
+          totalReturnHundredths: 0,
+          maxDrawdownHundredths: 0,
+          populationCode: "CLOSED_TRADES_OF_THIS_EXACT_VERSION",
+        });
+        expect(summary.expectancy.availability).toBe("AVAILABLE");
+        expect(point.value.value, `${entry.strategy_version} #${ordinal}`).toBe(
+          summary.expectancy.value,
+        );
+        checked += 1;
       }
-      if (Number(rolling?.observed.value) !== 30) {
-        continue;
+      if (valuedOnThisVersion > 0) {
+        versionsWithAValuedPoint += 1;
       }
-      expect(last.value.value).toBe(entry.summary.expectancy.value);
-      checked += 1;
     }
-    /** If the book stops carrying such a version the assertion above stops meaning anything. */
-    expect(checked).toBeGreaterThanOrEqual(0);
+    /*
+     * THE GUARD THAT KEEPS THIS TEST FROM GOING QUIET. If the book stops producing valued
+     * rolling points the comparison stops running, and a test that stops running must fail
+     * rather than pass — which is exactly what the form it replaces did not do.
+     */
+    expect(checked).toBeGreaterThan(0);
+    expect(versionsWithAValuedPoint).toBeGreaterThan(1);
   });
 
   it("excludes a trade with no retained risk record rather than averaging over fewer", async () => {
