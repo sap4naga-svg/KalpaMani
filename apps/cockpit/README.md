@@ -1,40 +1,64 @@
-# KalpaMani Cockpit — C6 signals, explainability and the complete trade lifecycle
+# KalpaMani Cockpit — C10 polish and acceptance
 
-The signal and candidate funnel, candidate explainability, missed opportunities, and the complete
-synthetic trade lifecycle with its chart drill-down — built on the merged C3 foundation and the
-C4 and C5 screens, under
+Visual polish, accessibility, responsiveness, performance measurement and the synthetic end-to-end
+sweep — the C10 row of
+[`traceability-matrix.md`](../../docs/cockpit/traceability-matrix.md), built on the merged C3
+foundation and the C4 to C9 screens, under
 [ADR-0027](../../docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md)
 and the corrected contracts of
-[ADR-0028](../../docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md)
-and
-[ADR-0029](../../docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
+[ADR-0028](../../docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md),
+[ADR-0029](../../docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md),
+[ADR-0030](../../docs/decisions/ADR-0030-cockpit-reference-resolution-and-unavailable-targets.md),
+[ADR-0031](../../docs/decisions/ADR-0031-reference-owning-area-navigation.md) and
+[ADR-0032](../../docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md).
 
-**This is C6. It is not the Cockpit.** C3 delivered the design system, shell, navigation and
-contract layer; C4 added the Executive Overview, the performance overview, Attention Required,
-What Changed and two governance screens; C5 added seven product areas and a **basic** trade
-detail; C6 adds three product areas and completes a fourth — still running on a **local fixture
-adapter**, and still with no production read API, projection or metric engine behind it.
+**This is C10, it is carried by an open pull request, and it is not the Cockpit.** **Full Cockpit
+V1 is INCOMPLETE**, **C5 and C7 are both NOT COMPLETE**, and the requirement-by-requirement
+assessment that says exactly why is
+[`docs/cockpit/c10-acceptance-record.md`](../../docs/cockpit/c10-acceptance-record.md). Read that
+record before quoting a count from this file.
 
-**Fourteen of the thirty-six product areas are addressed, and all fourteen are finished within
-their documented accepted scope.** *Finished* here means every requirement the accepted
-specification states for that area is either demonstrated or reported as an honest absence with its
-named dependency — it does not mean the area has a production producer behind it, and the count of
-areas is not itself evidence of completion. The named limitations are in *What C6 does not contain*
-and in the **C5 completion follow-up** below, and they are part of this claim rather than
-exceptions to it.
-Areas 1, 24, 25 and 28 from C4; areas 2, 3, 4, 11, 12, 13 and 36 from C5; and areas **6** (Signal
-and Candidate Funnel), **7** (Candidate Detail and Explainability) and **8** (Missed
-Opportunities) from C6 — the C6 row of the traceability matrix. **Area 36 was deliberately split
-across two cycles and is now complete**: C5 delivered its ledger and a basic detail, and C6
-delivers the Candidate → Brain → Risk → Order → Fill → Protection → Add → Exit → Reconciliation →
-Attribution reconstruction and the chart drill-down. The other twenty-two remain registered,
-reachable placeholders, and the C7-C10 sequencing is unchanged.
+**Thirty registered sidebar routes and two deep destinations, and every one of them renders.** Thirty-one of the thirty-six
+product areas are implemented within their accepted observational scope and **five are partial** —
+areas 2, 3, 4, 5 and 14, each waiting on provider data or the capacity model. **A count of areas is
+not a measure of project completion**: every screen runs on a **local fixture adapter**, and no
+production read API, projection, metric engine, research runtime, learning engine, execution
+runtime, broker session, scheduler, alert pipeline or audit store exists behind any of them.
+
+> **HISTORICAL — the per-cycle sections below stop at C6.** *Implemented in C6*, *Implemented in
+> C5* and *Implemented in C4* record what those cycles delivered and are kept unedited. **C7, C8
+> and C9 added no section to this file**, so the sections below are **not** an inventory of what
+> the application contains today; the traceability matrix and the two root status documents are.
+> The earlier header claimed *fourteen of the thirty-six product areas*, which was true on the day
+> C6 merged and has not been true since C7 merged.
 
 **Two boundaries are worth naming up front.** **The Brain runtime does not exist**: no candidate
 here was produced by a scanner, a factor matrix, a decision compiler or a model, and nothing on
-these screens is a decision anything made. And **Area 5, Strategy Health, is C7's** — the strategy
-screens still display a recorded health state and implement none of the transitions, drift
-measures, failure clusters or research-queue behaviour that area is about.
+these screens is a decision anything made. And **no producing subsystem exists behind any
+operational screen** — Area 5's health transitions, Area 14's runs, Area 9's fills and Area 26's
+audit events are all deterministic repository-owned fixtures.
+
+## What C10 changed
+
+**Presentation and accessibility corrections, a cross-cutting test sweep, and nothing else.** **No
+economics, fixture, contract, read model, schema version, route or dependency was changed.**
+
+| | |
+|---|---|
+| **panel titles are headings** | `ReadModelPanel`, the performance overview, the rolling-series panel, the attention panel and the What Changed panel rendered their titles as spans, so most screens offered a screen reader one heading — the `h1` — and `PanelSection`'s `h3` skipped a level from it. The visual treatment is unchanged |
+| **repeated landmarks are distinguishable** | `/strategy/performance` rendered one identically named *Minimum observation rules* region per version and per family |
+| **a drill-down screen has a place in the sidebar** | `aria-current` was decided by an exact path match, so nothing was current on a trade or candidate detail screen. A deep destination now marks the entry that **owns** it, as a section rather than as the page |
+| **a skip link reaches the primary table** | section 10 of the UI specification asks for both, and only the skip to main content existed |
+| **six executive links are distinguishable** | they all read *"Open the area that owns this"*; the visible text is unchanged and each accessible name now carries its subject |
+| **the sweep** | `e2e/c10-acceptance.spec.ts` checks every registered route at **all three reference viewports** for horizontal overflow, a single `h1`, a `main` landmark, heading order, console errors, off-origin requests and axe violations — including the structural rules axe tags as best-practice and every earlier run therefore skipped |
+| **measurement, not budgets** | `e2e/c10-performance.spec.ts` records first answer, first contentful paint and two interaction latencies per viewport, with its conditions. **No accepted numeric performance budget exists, and none is invented** |
+| **indexed review evidence** | `e2e/c10-evidence.spec.ts` writes a focused, indexed capture set to `screenshots-c10/`, with a provenance stamp. **It is not a committed visual-regression baseline**, and this repository keeps screenshots out of the tracked tree |
+
+**What C10 deliberately did not do**: per-route document titles — a Next.js client component cannot
+export route metadata and an effect-set title is overwritten by the framework on the next client
+navigation, so the correct fix is a segment layout per route and that is a structural change rather
+than polish. It also narrowed nothing on mobile, registered no additional reference viewport,
+acquired no data, and built no capacity model. Each is recorded in the acceptance record.
 
 ---
 
@@ -117,10 +141,19 @@ screenshots/      the C3 author and reviewer captures, regenerated by the C3 spe
 screenshots-c4/   the C4 captures, plus PROVENANCE.txt naming the exact commit they were
                   taken at and whether the working tree was clean
 screenshots-c5/   the C5 captures, with their own PROVENANCE.txt
+screenshots-c6/ · screenshots-c7/ · screenshots-c8/ · screenshots-c5-followup/
+                  the later per-cycle capture sets, each with its own PROVENANCE.txt
+screenshots-adr0031/  the owning-area navigation captures
+screenshots-c10/  the C10 capture set -- a FOCUSED, INDEXED set at all three viewports,
+                  with PROVENANCE.txt and INDEX.txt naming what each capture shows, plus
+                  performance-<viewport>.json carrying the measurements and the exact
+                  conditions they were taken under
 ```
 
-All three are git-ignored: they are **review evidence, not a visual-regression baseline**. Visual
-regression is specified for a later cycle.
+Every one of them is git-ignored: they are **review evidence, not a visual-regression baseline**.
+**No committed baseline image exists**, so no image diff gates anything — this repository keeps
+screenshots outside the tracked tree, and `ui-ux-specification.md` section 15 itself holds that a
+diff is a review item rather than an auto-accept.
 
 **To review the screens by hand**, `npm run dev` and open:
 
@@ -145,7 +178,18 @@ regression is specified for a later cycle.
 /risk?scenario=demo                   permitted limits absent, research parameters tracked
 /risk/short-side?scenario=demo        a borrow record, and one security with none
 /market/regime?scenario=demo          a versioned regime, declared FORWARD_SYSTEM
+/strategy/health?scenario=demo        the seven health states, and the rolling tail loss
+/research/runs?scenario=demo          the run registry, its baselines and evaluation classes
+/execution/quality?scenario=demo      slippage and latency, over recorded fills only
+/system/data-quality?scenario=demo    the three declared point-in-time profiles
+/governance/audit?scenario=demo       the projection, its rebuild count and its tombstone
+/governance/controls                  the inert control plane -- no button, no form, no route
+/foundation/states                    every availability state, side by side
 ```
+
+**By keyboard**, on any route with a table: `Tab` reaches *Skip to main content*, `Tab` again
+reaches *Skip to the primary table*, and `Ctrl/Cmd+K` opens the palette from anywhere and
+`Escape` closes exactly one layer and returns focus to whatever opened it.
 
 ---
 
@@ -441,6 +485,10 @@ and metrics arrive with the cycles that produce them.
 
 ## Implemented in C6
 
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
+
 | Route | Area | State |
 |---|---|---|
 | `/signals/funnel` | 6 | **implemented** — the four stages with the subject each counts, the eight Brain states as a closed set with their reason distributions, the downstream axis beside them carrying no count, the conversions with both counts and both subjects, a per-module funnel, and the candidate ledger with search and a state filter |
@@ -531,6 +579,10 @@ no execution evidence at all          every other trade in the book
 ---
 
 ## Implemented in C5
+
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
 
 | Route | Area | State |
 |---|---|---|
@@ -645,6 +697,10 @@ private identifier and no real ticker appears anywhere in the book.
 
 ## Implemented in C4
 
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
+
 | Route | Area | State |
 |---|---|---|
 | `/` | 1 | **implemented** — the Executive Overview: the five ten-second answers, the performance overview, Attention Required and What Changed |
@@ -683,6 +739,10 @@ destinations; C4 implements none of their workflows.
 
 ## What C6 does not contain
 
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
+
 Everything in the C5 and C4 lists below, unchanged, and:
 
 ```text
@@ -706,6 +766,10 @@ rate is reported**, because a ledger of detected candidates contains no undetect
 
 ## What C5 does not contain
 
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
+
 Everything in the C4 list below, unchanged, and:
 
 ```text
@@ -727,6 +791,10 @@ deploy. That is a decision, and no interface takes it.
 ---
 
 ## What C4 does not contain
+
+> **HISTORICAL.** This section records what that cycle delivered and is kept unedited.
+> It is not an inventory of what the application contains today — see the header.
+
 
 ```text
 no production read API        no projection runtime      no metric engine

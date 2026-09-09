@@ -13258,7 +13258,7 @@ COCKPIT_C7_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "promotions, approvals or releases recorded: NONE",
     "backtesting: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
-    "C10: NOT STARTED / NOT AUTHORIZED",
+    "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13326,7 +13326,7 @@ COCKPIT_C8_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "backtesting: NOT STARTED",
     "C5 completion follow-up: STILL PENDING / NOT AUTHORIZED",
     "C9: IMPLEMENTED IN AN OPEN PULL REQUEST",
-    "C10: NOT STARTED / NOT AUTHORIZED",
+    "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13388,7 +13388,7 @@ COCKPIT_C9_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "provider data used: NONE",
     "private artifacts read: NONE",
     "backtesting: NOT STARTED",
-    "C10: NOT STARTED / NOT AUTHORIZED",
+    "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13499,7 +13499,7 @@ COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
     "new runtime dependencies: NONE",
     "provider data used: NONE",
     "backtesting: NOT STARTED",
-    "C10: NOT STARTED / NOT AUTHORIZED",
+    "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
     "full Cockpit V1: INCOMPLETE",
     "G1 / G2: OPEN / OPEN",
 )
@@ -13564,6 +13564,85 @@ COCKPIT_C5_FOLLOWUP_FORBIDDEN: Final[tuple[str, ...]] = (
     "named benchmarks SPY / QQQ / IWM: AVAILABLE",
     "market data downloaded or requested: SOME",
     "provider selected: SHARADAR",
+)
+
+#: C10 is the polish and acceptance cycle, and its implementation is carried by a pull request
+#: that is OPEN. The guard holds the same three states apart every cycle guard above does: what
+#: merged, what is implemented but unmerged, and what has not been assessed at all.
+#:
+#: THE FAILURE THIS ONE EXISTS TO CATCH IS THE ONE A CYCLE NAMED "acceptance" INVITES. C10
+#: produces a requirement-by-requirement acceptance record, and a status document that reported
+#: it as an ACCEPTANCE would tell the next session that thirty-six areas had been signed off by a
+#: human when what exists is an author's assessment awaiting an independent review. Two criteria
+#: are not met -- the manual screen-reader pass was NOT ASSESSED and no committed
+#: visual-regression baseline exists -- and both are required to READ as outstanding, because
+#: twenty satisfied UI criteria beside two unmet ones is a different claim from twenty out of
+#: twenty.
+#:
+#: THE STALE UNDER-CLAIM MOVES THE OTHER WAY, on the precedent C9 set. "C10: NOT STARTED / NOT
+#: AUTHORIZED" was required while nothing had been written and is FALSE now, so it is forbidden
+#: and the four cycle blocks above require the open-pull-request line instead.
+COCKPIT_C10_HEADING: Final = (
+    "### The C10 Cockpit polish and acceptance cycle — IMPLEMENTED, and carried by an open "
+    "pull request"
+)
+
+#: Read with ``**`` stripped, so emphasis is not part of the contract.
+COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
+    "C10 polish and acceptance cycle: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "independent review of the C10 implementation: REQUIRED / NOT PERFORMED",
+    "areas assessed by the acceptance record: 36 OF 36",
+    "areas IMPLEMENTED within accepted scope: 31",
+    "areas PARTIAL: 5",
+    "U1-U20 assessed: 20",
+    "U1-U20 satisfied: 20",
+    "section 15 criteria satisfied: 1 OF 4",
+    # THE TWO CRITERIA THAT ARE NOT MET, EACH REQUIRED TO READ AS OUTSTANDING. An automated
+    # accessibility pass is not a screen-reader pass, and an indexed capture set is not a
+    # committed baseline anybody can diff.
+    "manual screen-reader pass: NOT ASSESSED",
+    "committed visual-regression baseline: NOT CREATED",
+    "accepted numeric performance budget: NONE EXISTS - NONE INVENTED",
+    "reference viewports registered and swept: 3 OF 6",
+    "new API routes, handlers or server actions: NONE",
+    "new runtime dependencies: NONE",
+    "ledger economics, entry facts or risk records: UNCHANGED",
+    "read models changed by this cycle: NONE",
+    "schema versions changed by this cycle: NONE",
+    "fixtures changed by this cycle: NONE",
+    # AND THE TWO CYCLES THIS ONE AUDITED RATHER THAN CLOSED.
+    "C5: NOT COMPLETE",
+    "C7: NOT COMPLETE",
+    "full Cockpit V1: INCOMPLETE",
+    "backtesting: NOT STARTED",
+    "provider data used: NONE",
+    "G1 / G2: OPEN / OPEN",
+)
+
+#: Claims no status document may make about C10. An acceptance record is not an acceptance, an
+#: automated axe pass is not accessibility conformance, and polishing thirty-two screens over
+#: fixtures completes neither C5, nor C7, nor the Cockpit.
+COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
+    "C10: NOT STARTED / NOT AUTHORIZED",
+    "C10 polish and acceptance cycle: MERGED",
+    "C10 polish and acceptance cycle: COMPLETE",
+    "C10 polish and acceptance cycle: ACCEPTED",
+    "independent review of the C10 implementation: PERFORMED",
+    "manual screen-reader pass: PERFORMED",
+    "manual screen-reader pass: PASSED",
+    "committed visual-regression baseline: CREATED",
+    "accessibility conformance: ACHIEVED",
+    "accessibility conformance: CLAIMED",
+    "WCAG 2.2 AA: CONFORMANT",
+    "C5: COMPLETE",
+    "C7: COMPLETE",
+    "full Cockpit V1: COMPLETE",
+    "full Cockpit V1: ACCEPTED",
+    # THE PROSE FORMS OF THE STALE UNDER-CLAIM, on the precedent C9 set when the machine-readable
+    # line was corrected and the sentence three paragraphs above it was not.
+    "C10 is not started",
+    "C10 is not begun",
+    "C10 has not begun",
 )
 
 #: ADR-0030 was ACCEPTED on the merge of PR #78, BEFORE ADR-0031 was. The guard below is the
@@ -24687,6 +24766,45 @@ def main() -> int:
             "no status document records C5 or its follow-up as complete",
             not overclaiming_followup,
             "; ".join(overclaiming_followup),
+        )
+
+        # -- C10: implemented, unmerged, unreviewed, and not an acceptance -----
+        #
+        # The last of the cycle guards, for the one whose name is the hazard. C10 produces
+        # an acceptance RECORD; a status document that reported an acceptance DECISION
+        # would retire thirty-six areas on an author's own assessment. The two unmet
+        # criteria are required to read as outstanding for the same reason.
+        stale_c10 = [label for label, text in status_documents if COCKPIT_C10_HEADING not in text]
+        f.check(
+            "both status documents carry the C10 implementation status section",
+            not stale_c10,
+            ", ".join(stale_c10),
+        )
+        divergent_c10 = sorted(
+            {
+                label
+                for label, text in status_documents
+                for statement in COCKPIT_C10_STATUS_REQUIRED
+                if statement not in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "both status documents record C10 implemented, unreviewed and unmerged",
+            not divergent_c10,
+            ", ".join(divergent_c10),
+        )
+        overclaiming_c10 = sorted(
+            {
+                f"{label}: {claim}"
+                for label, text in status_documents
+                for claim in COCKPIT_C10_STATUS_FORBIDDEN
+                if claim in " ".join(text.replace("**", "").split())
+            }
+        )
+        f.check(
+            "no status document records C10 as merged, reviewed, accepted or conformant",
+            not overclaiming_c10,
+            "; ".join(overclaiming_c10),
         )
 
         # -- ADR-0030: accepted, and both status documents must say so ---------
