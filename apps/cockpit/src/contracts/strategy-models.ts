@@ -19,7 +19,8 @@ import {
   analysisWindow,
   performanceSummaryPayload,
 } from "./portfolio-models";
-import { instant, metricOf, metricValue, reasonCoded, safeId, versionPins } from "./values";
+import { countValue, instant, metricOf, metricValue, reasonCoded, safeId, versionPins } from "./values";
+import { ROLLING_OBSERVATION_UNITS } from "./read-models";
 import {
   availabilityState,
   fieldReasonCode,
@@ -82,6 +83,82 @@ export const strategyModuleMetrics = z.object({
 });
 export type StrategyModuleMetrics = z.infer<typeof strategyModuleMetrics>;
 
+/**
+ * Rolling expectancy over one strategy version's trailing closed trades.
+ *
+ * A DIFFERENT OBSERVATION UNIT FROM A PERFORMANCE SERIES' ROLLING WINDOW. That one counts
+ * series periods; this one counts CLOSED TRADES, and the two never substitute. The unit is
+ * carried rather than assumed, so "30" can never be read as thirty sessions.
+ *
+ * THE LOOKBACK IS §12.3'S OWN DECLARED MINIMUM FOR `expectancy.currency` -- thirty trades --
+ * rather than a number invented here. A window shorter than the metric's minimum would
+ * report `INSUFFICIENT_OBSERVATIONS` at every point by construction, which is not a window.
+ *
+ * THE POPULATION IS THE SUMMARY'S. Closed trades of this exact version that carry a
+ * recorded initial planned risk record: the same definition `buildPerformanceSummary`
+ * applies, so a rolling point and the whole-window figure cannot be computed over two
+ * different populations.
+ */
+export const rollingExpectancy = z
+  .object({
+    lookback: countValue,
+    minimum_observations: countValue,
+    observation_unit: z.enum(ROLLING_OBSERVATION_UNITS),
+    population: reasonCoded,
+    /** How many closed trades the version carries in total. The axis' own denominator. */
+    observed: countValue,
+    /**
+     * One point per closed trade, in exit order.
+     *
+     * IT IS NOT A `Series`, AND THAT IS DELIBERATE. A `Series` is indexed by a strictly
+     * increasing instant, and two trades of one version routinely close on the same session
+     * — so a time-indexed shape would have to drop one of them or invent an ordering between
+     * them. The axis here is the TRADE ORDINAL, which is what an observation unit of
+     * `CLOSED_TRADE` actually means, and the exit instant rides alongside it as a fact about
+     * the trade rather than as the key.
+     */
+    points: z.array(
+      z.object({
+        /** 1-based position in the exit-ordered population. */
+        ordinal: countValue,
+        /** The exit this point was taken at, under the `DATE_ONLY` precedent. */
+        at: metricValue,
+        /** `expectancy.rolling`, or the reason there is none at this point. */
+        value: metricValue,
+      }),
+    ),
+  })
+  .superRefine((candidate, ctx) => {
+    if (candidate.observation_unit !== "CLOSED_TRADE") {
+      ctx.addIssue({
+        code: "custom",
+        message: "a rolling expectancy counts CLOSED_TRADE observations",
+      });
+    }
+    if (candidate.lookback.value !== candidate.minimum_observations.value) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a rolling window's declared minimum is its own lookback",
+      });
+    }
+    if (candidate.points.length !== candidate.observed.value) {
+      ctx.addIssue({
+        code: "custom",
+        message: "one point per closed trade the version carries",
+      });
+    }
+    for (let index = 0; index < candidate.points.length; index += 1) {
+      if (candidate.points[index].ordinal.value !== index + 1) {
+        ctx.addIssue({
+          code: "custom",
+          message: "the ordinals are consecutive from one, in exit order",
+        });
+        return;
+      }
+    }
+  });
+export type RollingExpectancy = z.infer<typeof rollingExpectancy>;
+
 export const strategyPerformance = z.object({
   strategy_module: reasonCoded,
   alpha_family: reasonCoded,
@@ -100,6 +177,13 @@ export const strategyPerformance = z.object({
   trade_population: reasonCoded,
   module_metrics: strategyModuleMetrics,
   health_context: strategyHealthContext,
+  /**
+   * ADDED BY THE C5 COMPLETION FOLLOW-UP -- rolling expectancy over this exact version.
+   *
+   * OPTIONAL, because a producer that cannot derive it must be able to omit it rather than
+   * serve an empty shell. When it is present it is held to `rollingExpectancy` below.
+   */
+  rolling_expectancy: rollingExpectancy.optional(),
 });
 export type StrategyPerformance = z.infer<typeof strategyPerformance>;
 
@@ -130,7 +214,8 @@ export const strategyPerformancePayload = collectionPayload(strategyPerformance,
 });
 export type StrategyPerformancePayload = z.infer<typeof strategyPerformancePayload>;
 
-export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v2";
+/** v3: each row gained `rolling_expectancy`, so a v2 consumer reads a different contract. */
+export const STRATEGY_PERFORMANCE_SCHEMA = "cockpit.strategy_performance.v3";
 export const strategyPerformanceEnvelope = envelope(
   strategyPerformancePayload,
   STRATEGY_PERFORMANCE_SCHEMA,

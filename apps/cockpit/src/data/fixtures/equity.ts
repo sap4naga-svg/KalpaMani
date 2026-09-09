@@ -148,3 +148,137 @@ function isoWeekKey(day: string): string {
     1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
+
+/* ------------------------------------------- added by the C5 completion follow-up */
+
+/**
+ * The lookbacks a rolling window is offered over.
+ *
+ * NO NUMBER IS INVENTED HERE. These are the trading-day counts `PERIOD_TRADING_DAYS`
+ * already carries for one month, three months and six months — repository-owned constants
+ * that were reviewed when the period selector was accepted. What changes is what they COUNT:
+ * a lookback counts PERIODS OF THE SERVED GRANULARITY, so twenty-one periods of a monthly
+ * series are twenty-one months, and the interface says so rather than calling it "1M".
+ */
+export const ROLLING_LOOKBACKS = [21, 63, 126] as const;
+export type RollingLookback = (typeof ROLLING_LOOKBACKS)[number];
+
+/** What one rolling point is: a value, or the exact reason there is none. */
+export type RollingOutcome =
+  | { readonly kind: "VALUE"; readonly hundredths: number }
+  /** Fewer than `lookback` earlier observations exist in the served extent. */
+  | { readonly kind: "BELOW_MINIMUM" }
+  /** The trailing window's requested extent has a session that carries no observation. */
+  | { readonly kind: "EXTENT_GAPPED" };
+
+export interface RollingWindowValues {
+  readonly lookback: number;
+  readonly returns: readonly RollingOutcome[];
+  readonly drawdowns: readonly RollingOutcome[];
+}
+
+/**
+ * The rolling return and rolling maximum drawdown at every carried point.
+ *
+ * THREE RULES, AND EACH ONE IS A THING THIS MUST NOT DO.
+ *
+ *   NO POINT LOOKS FORWARD          the window ending at ordinal `i` reads `i - lookback`
+ *                                   through `i` and nothing later. Appending an observation
+ *                                   changes no earlier point, which is asserted rather than
+ *                                   asserted about
+ *   A SHORT WINDOW IS NOT A WINDOW  fewer than `lookback` earlier observations reports
+ *                                   `BELOW_MINIMUM` — never a shorter window quietly
+ *                                   substituted, and never a zero
+ *   A GAP IS NOT AN OBSERVATION     if the trailing window's requested sessions include one
+ *                                   that carries no observation, the metric over that window
+ *                                   is UNAVAILABLE. It is not computed from the surviving
+ *                                   points, because that would be a different window wearing
+ *                                   this one's label
+ *
+ * `carried` holds, for each carried point, its ordinal in the REQUESTED sample list — which
+ * is how a gap is detected at all: consecutive carried points whose requested ordinals differ
+ * by more than one have a missing observation between them.
+ */
+export function rollingWindowValues(
+  indexReadings: readonly number[],
+  carriedOrdinals: readonly number[],
+  lookback: number,
+): RollingWindowValues {
+  const returns: RollingOutcome[] = [];
+  const drawdowns: RollingOutcome[] = [];
+
+  for (let position = 0; position < indexReadings.length; position += 1) {
+    const start = position - lookback;
+    if (start < 0) {
+      returns.push({ kind: "BELOW_MINIMUM" });
+      drawdowns.push({ kind: "BELOW_MINIMUM" });
+      continue;
+    }
+    /*
+     * The window spans `lookback` steps of the REQUESTED extent, so it is intact only when
+     * the carried ordinals across it advance by exactly one each time.
+     */
+    const spanned = carriedOrdinals[position] - carriedOrdinals[start];
+    if (spanned !== lookback) {
+      returns.push({ kind: "EXTENT_GAPPED" });
+      drawdowns.push({ kind: "EXTENT_GAPPED" });
+      continue;
+    }
+    /*
+     * `(1 + r_now) / (1 + r_then) - 1`, in hundredths of a percent, from the two index
+     * readings — the SAME chain-link `return.time_weighted` is defined by, applied to one
+     * trailing sub-window instead of to the whole one.
+     */
+    const now = 10_000 + indexReadings[position];
+    const then = 10_000 + indexReadings[start];
+    returns.push({
+      kind: "VALUE",
+      hundredths: Math.round((now * 10_000) / then - 10_000),
+    });
+    /*
+     * The maximum drawdown INSIDE the trailing window: the peak is the running peak of the
+     * window's own readings, never the whole series' peak. That is what makes this a
+     * different metric from `drawdown.max`, and why it carries a different identifier.
+     */
+    let peak = 10_000 + indexReadings[start];
+    let worst = 0;
+    for (let step = start; step <= position; step += 1) {
+      const reading = 10_000 + indexReadings[step];
+      peak = Math.max(peak, reading);
+      worst = Math.min(worst, Math.round((reading * 10_000) / peak - 10_000));
+    }
+    drawdowns.push({ kind: "VALUE", hundredths: worst });
+  }
+
+  return { lookback, returns, drawdowns };
+}
+
+/**
+ * A series rebased to 100 at its first point, in hundredths.
+ *
+ * A NORMALIZATION, NOT A RETURN. `10_000` is 100.00, and a reading of `10_150` is an arm
+ * that has moved 1.5% since the common start. Both arms go through this one function, so
+ * neither can be rebased on a basis the other was not.
+ */
+export function rebasedToHundred(cumulativeHundredths: readonly number[]): number[] {
+  const base = 10_000 + (cumulativeHundredths[0] ?? 0);
+  return cumulativeHundredths.map((reading) =>
+    Math.round(((10_000 + reading) * 1_000_000) / base / 100),
+  );
+}
+
+/**
+ * The movement of a cumulative-return arm between its first and last common observations.
+ *
+ * `(1 + r_last) / (1 + r_first) - 1`, in hundredths — the arm's own return over EXACTLY the
+ * common boundaries, which is what §12.4 requires of a benchmark and what makes the two arms
+ * measurable over one window rather than over two.
+ */
+export function movementOver(cumulativeHundredths: readonly number[]): number | null {
+  if (cumulativeHundredths.length < 2) {
+    return null;
+  }
+  const first = 10_000 + cumulativeHundredths[0];
+  const last = 10_000 + cumulativeHundredths[cumulativeHundredths.length - 1];
+  return Math.round((last * 10_000) / first - 10_000);
+}

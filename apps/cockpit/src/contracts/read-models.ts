@@ -397,6 +397,207 @@ export const cashFlow = z
 
 export const COST_TREATMENTS = ["GROSS", "NET_COMMISSIONS", "NET_ALL_COSTS"] as const;
 export const DRAWDOWN_BASES = ["CLOSE_ONLY", "INTRADAY"] as const;
+/**
+ * The return basis a benchmark or a portfolio arm is measured on.
+ *
+ * DEFINED ONCE, HERE, because two consumers now need it: `TradeDetail`, which compares one
+ * trade against a benchmark over its own holding period, and `PerformanceSeries`, which
+ * compares the portfolio against one over the served window. §4.2 asks for "one definition
+ * each, used everywhere, redefined nowhere", and `portfolio-models.ts` re-exports this one
+ * rather than declaring a second.
+ */
+export const BENCHMARK_RETURN_BASES = ["PRICE_RETURN", "TOTAL_RETURN"] as const;
+
+/* ------------------------------------------- added by the C5 completion follow-up */
+
+/**
+ * The unit a rolling window counts its observations in.
+ *
+ * IT IS CARRIED, NOT ASSUMED. A window of "63" means nothing until it says 63 of what, and
+ * the two units below are not interchangeable: a series period is an observation of the
+ * portfolio's value, a closed trade is an observation of an outcome, and a rolling metric
+ * over one is not the same metric over the other (§12.1, §12.2).
+ */
+export const ROLLING_OBSERVATION_UNITS = ["SERIES_PERIOD", "CLOSED_TRADE"] as const;
+export type RollingObservationUnit = (typeof ROLLING_OBSERVATION_UNITS)[number];
+
+/**
+ * One rolling window over a `PerformanceSeries`.
+ *
+ * A ROLLING LOOKBACK IS NOT THE REQUESTED PERIOD, and this shape exists so a reader can
+ * never confuse them. The requested period is the extent the series covers; the lookback is
+ * how far back each individual point looks inside it. A one-month extent carrying a
+ * 63-period lookback is a well-formed request whose every point is
+ * `INSUFFICIENT_OBSERVATIONS`, and saying so is the correct answer rather than a defect.
+ *
+ * THE LOOKBACK COUNTS PERIODS OF THE SERIES' OWN GRANULARITY. It is never restated as a
+ * calendar duration, because a monthly series' 21 periods are twenty-one months and a daily
+ * series' 21 periods are twenty-one sessions.
+ */
+export const rollingWindow = z
+  .object({
+    /** How many earlier observations each point looks back over. Never zero. */
+    lookback: countValue,
+    /** The declared minimum, which for a rolling window IS its lookback. */
+    minimum_observations: countValue,
+    observation_unit: z.enum(ROLLING_OBSERVATION_UNITS),
+    /** The population each point was computed over, named rather than implied. */
+    population: reasonCoded,
+    /** `return.rolling` -- the trailing-window time-weighted return at each point. */
+    return_series: series,
+    /** `drawdown.rolling_max` -- the trailing-window maximum drawdown at each point. */
+    drawdown_series: series,
+  })
+  .superRefine((candidate, ctx) => {
+    if (candidate.observation_unit !== "SERIES_PERIOD") {
+      ctx.addIssue({
+        code: "custom",
+        message: "a performance-series rolling window counts SERIES_PERIOD observations",
+      });
+    }
+    if (
+      typeof candidate.lookback.value !== "number" ||
+      candidate.lookback.value !== candidate.minimum_observations.value
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a rolling window's declared minimum is its own lookback",
+      });
+    }
+    if (
+      candidate.return_series.points.length !== candidate.drawdown_series.points.length ||
+      candidate.return_series.granularity !== candidate.drawdown_series.granularity
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "the rolling return and drawdown series cover the same points",
+      });
+    }
+    for (const point of candidate.drawdown_series.points) {
+      if (typeof point.v.value !== "string") {
+        continue;
+      }
+      if (!point.v.value.startsWith("-") && /[1-9]/.test(point.v.value)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a rolling drawdown is equity/window peak - 1, which is never positive",
+        });
+        return;
+      }
+    }
+  });
+export type RollingWindow = z.infer<typeof rollingWindow>;
+
+/**
+ * The portfolio-level benchmark comparison.
+ *
+ * WHAT AREA 2 ASKS FOR IS A COMPARISON WITH ITS LIMITS ON THE CHART, not a single number:
+ * "a comparison shows separately labelled series with their comparability limits stated on
+ * the chart, not in a footnote nobody reads". §12.4 aligns a benchmark "to the **exact**
+ * boundaries the subject used".
+ *
+ * THE DIFFERENCE IS A SEPARATE QUESTION FROM THE COMPARISON, and it is refused whenever the
+ * arms are not comparable -- §12.3: "two values with different cost treatments are never
+ * compared, summed or placed in one series". The refused case follows the merged precedent
+ * of `MissedOpportunity.comparisons`: `comparable: false`, a named `refusal`, and a
+ * difference carrying `NOT_APPLICABLE` rather than a number nobody may act on.
+ *
+ * IT IS NEVER CALLED ALPHA. A difference of two returns is a difference of two returns; no
+ * metric in this dictionary defines alpha, and naming one here would invent it.
+ */
+export const benchmarkComparison = z
+  .object({
+    /** The benchmark arm's own name. A drawn curve is always named (§4.5). */
+    benchmark_label: reasonCoded,
+    /** The half-open extent BOTH arms carry an observation over, and nothing wider. */
+    common_window: z.object({
+      from: instant,
+      to: instant,
+      calendar: reasonCoded,
+      timezone: z.literal("UTC"),
+    }),
+    /** How many observations the two arms actually share. The comparison's denominator. */
+    common_observations: countValue,
+    /** `return.time_weighted` over the common window -- the portfolio arm's own movement. */
+    portfolio_movement: metricValue,
+    /** `benchmark.movement` over exactly the same boundaries (§12.4). */
+    benchmark_movement: metricValue,
+    /** PRICE_RETURN or TOTAL_RETURN, stated for each arm and never assumed equal. */
+    portfolio_basis: z.enum(BENCHMARK_RETURN_BASES),
+    benchmark_basis: z.enum(BENCHMARK_RETURN_BASES),
+    portfolio_cost_treatment: z.enum(COST_TREATMENTS),
+    benchmark_cost_treatment: z.enum(COST_TREATMENTS),
+    /** Both arms rebased to 100 at the first common observation. Two lines, never spliced. */
+    portfolio_series: series,
+    benchmark_series: series,
+    /** Every stated limit on reading these two arms against each other. Never empty. */
+    comparability_limits: z.array(reasonCoded),
+    comparable: z.boolean(),
+    /** Present exactly when `comparable` is false, and it names the incompatibility. */
+    refusal: reasonCoded.optional(),
+    /** The arithmetic difference, or its refusal. NEVER labelled alpha. */
+    difference: metricValue,
+  })
+  .superRefine((candidate, ctx) => {
+    if (candidate.comparability_limits.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a comparison states its limits on the chart, so it carries at least one",
+      });
+    }
+    if (candidate.comparable && candidate.refusal !== undefined) {
+      ctx.addIssue({ code: "custom", message: "a comparable pair carries no refusal" });
+    }
+    if (!candidate.comparable && candidate.refusal === undefined) {
+      ctx.addIssue({ code: "custom", message: "a refused comparison names its incompatibility" });
+    }
+    if (!candidate.comparable && candidate.difference.value !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a refused comparison carries no difference value",
+      });
+    }
+    if (
+      candidate.comparable &&
+      candidate.portfolio_cost_treatment !== candidate.benchmark_cost_treatment
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "two values with different cost treatments are never compared as one figure",
+      });
+    }
+    if (candidate.comparable && candidate.portfolio_basis !== candidate.benchmark_basis) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a price-return benchmark is never compared against a total-return portfolio",
+      });
+    }
+    const left = candidate.portfolio_series.points;
+    const right = candidate.benchmark_series.points;
+    if (left.length !== right.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "both rebased arms carry the same common observations",
+      });
+      return;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index].t !== right[index].t) {
+        ctx.addIssue({
+          code: "custom",
+          message: "the two arms are aligned to the same instants, and nothing else",
+        });
+        return;
+      }
+    }
+    if (left.length !== candidate.common_observations.value) {
+      ctx.addIssue({
+        code: "custom",
+        message: "common_observations counts the observations the arms actually share",
+      });
+    }
+  });
+export type BenchmarkComparison = z.infer<typeof benchmarkComparison>;
 
 /**
  * §4.5 `PerformanceSeries` — the read model the executive performance overview draws.
@@ -460,6 +661,18 @@ export const performanceSeriesPayload = z
     /** The benchmark actually drawn, when one is resolvable. ABSENT is the ordinary case. */
     benchmark_series: series.optional(),
     benchmark_label: reasonCoded.optional(),
+    /*
+     * ADDED BY THE C5 COMPLETION FOLLOW-UP.
+     *
+     * Both are OPTIONAL because a producer that cannot derive them must be able to say so by
+     * omitting them rather than by serving an empty shell. When they are present they are
+     * held to the invariants below, which is the whole reason they are read models rather
+     * than chart props.
+     */
+    /** Area 2's rolling windows. One entry per declared lookback, aligned to `equity`. */
+    rolling_windows: z.array(rollingWindow).optional(),
+    /** Area 2's portfolio benchmark comparison, over the common extent only. */
+    benchmark_comparison: benchmarkComparison.optional(),
   })
   .superRefine((candidate, ctx) => {
     const aligned = [candidate.equity, candidate.return_series, candidate.drawdown_series];
@@ -524,10 +737,86 @@ export const performanceSeriesPayload = z
         message: "a drawn benchmark is named, so a reader knows what it is being compared with",
       });
     }
+    /*
+     * A ROLLING SERIES IS ALIGNED TO THE SERIES IT ROLLS OVER.
+     *
+     * One point per observed period, at the same instants, so a reader comparing a rolling
+     * value against the equity at that point is comparing the same period. A rolling series
+     * with its own instants would be a second answer to the same question.
+     */
+    for (const window of candidate.rolling_windows ?? []) {
+      if (window.return_series.points.length !== candidate.equity.points.length) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a rolling window carries one point per observed period of its series",
+        });
+        return;
+      }
+      for (let index = 0; index < candidate.equity.points.length; index += 1) {
+        if (
+          window.return_series.points[index].t !== candidate.equity.points[index].t ||
+          window.drawdown_series.points[index].t !== candidate.equity.points[index].t
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            message: "a rolling window is aligned to the instants of the series it rolls over",
+          });
+          return;
+        }
+      }
+      if (window.return_series.granularity !== candidate.granularity) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a rolling lookback counts periods of the granularity actually served",
+        });
+        return;
+      }
+    }
+    /** Two lookbacks of the same length are one window served twice. */
+    const lookbacks = (candidate.rolling_windows ?? []).map((window) => window.lookback.value);
+    if (new Set(lookbacks).size !== lookbacks.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "each rolling lookback appears once",
+      });
+    }
+    /*
+     * THE COMPARISON MAY NOT REACH OUTSIDE THE SERIES IT COMPARES.
+     *
+     * Its common extent is a subset of the observed instants, never a wider window a reader
+     * would take for the portfolio's own.
+     */
+    const comparison = candidate.benchmark_comparison;
+    if (comparison !== undefined) {
+      const observed = new Set(candidate.equity.points.map((point) => point.t));
+      for (const point of comparison.portfolio_series.points) {
+        if (!observed.has(point.t)) {
+          ctx.addIssue({
+            code: "custom",
+            message: "a comparison observation is one the compared series actually carries",
+          });
+          return;
+        }
+      }
+      if (comparison.portfolio_cost_treatment !== candidate.cost_treatment) {
+        ctx.addIssue({
+          code: "custom",
+          message: "the comparison states the cost treatment this series was computed under",
+        });
+      }
+    }
   });
 export type PerformanceSeriesPayload = z.infer<typeof performanceSeriesPayload>;
 
-export const PERFORMANCE_SERIES_SCHEMA = "cockpit.performance_series.v2";
+/*
+ * v3: the payload gained `rolling_windows` and `benchmark_comparison`.
+ *
+ * A CONSUMER COMPILED AGAINST v2 KNOWS NEITHER FIELD, and a v2 producer serves neither, so
+ * the two are different contracts and carry different versions. §3: "unknown version is
+ * rejected, never coerced" — which only protects a reader if the version actually moves
+ * when the contract does.
+ */
+export const PERFORMANCE_SERIES_SCHEMA = "cockpit.performance_series.v3";
 export const performanceSeriesEnvelope = envelope(
   performanceSeriesPayload,
   PERFORMANCE_SERIES_SCHEMA,

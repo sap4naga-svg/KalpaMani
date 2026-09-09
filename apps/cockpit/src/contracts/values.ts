@@ -936,6 +936,87 @@ export const C3_METRIC_DICTIONARY: Readonly<Record<string, MetricSpec>> = {
   "reconciliation.result": { unit: "DIMENSIONLESS", shape: "TOKEN" },
   /** A candidate's journaled Brain decision state, carried as the record states it. */
   "candidate.brain_state": { unit: "DIMENSIONLESS", shape: "TOKEN" },
+
+  /* ------------------------------------------ added by the C5 completion follow-up */
+
+  /*
+   * ROLLING WINDOWS AND A PORTFOLIO BENCHMARK COMPARISON.
+   *
+   * EVERY ONE OF THESE IS A PRESENTATION DEFINITION PROPOSED BY THIS FOLLOW-UP (12.6),
+   * and each names the payload field it serves. None of them is a new financial rule:
+   * each applies a metric 12.3 ALREADY DEFINES over a declared trailing window, and the
+   * window is stated on the value rather than assumed by the reader. A presentation
+   * definition changes no strategy, risk or sizing rule, and adopting one for a screen
+   * adopts it nowhere else.
+   *
+   * A ROLLING METRIC IS NOT THE SAME METRIC AS ITS WHOLE-WINDOW FORM, so each carries its
+   * OWN identifier. 12.2 forbids two values sharing a `metric_id` and meaning different
+   * things, and "return since the window opened" and "return over the trailing 63
+   * periods" are exactly that pair.
+   */
+
+  /**
+   * 4.5 `PerformanceSeries.rolling_windows[].return_series` -- the chain-linked
+   * time-weighted return over the trailing N periods ENDING AT THIS POINT.
+   *
+   * The arithmetic is `return.time_weighted` applied to one trailing sub-window: the ratio
+   * of the chain-linked index at this point to its reading N periods earlier, minus one.
+   * A point with fewer than N earlier observations is `INSUFFICIENT_OBSERVATIONS` with
+   * `BELOW_MINIMUM_OBSERVATIONS` -- NEVER a zero, and never a shorter window silently
+   * substituted for the declared one.
+   */
+  "return.rolling": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * 4.5 `PerformanceSeries.rolling_windows[].drawdown_series` -- the maximum drawdown over
+   * the trailing N periods ending at this point, measured against the running peak INSIDE
+   * that window.
+   *
+   * SEPARATE FROM `drawdown.max`, whose peak is the running peak of the WHOLE window. The
+   * two answer different questions and frequently agree, which is exactly why they may not
+   * share an identifier. Never positive, on the same definition 12.3 gives `drawdown.max`.
+   */
+  "drawdown.rolling_max": { unit: "PERCENT", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * 4.5 `StrategyPerformance.rolling_expectancy.series` -- `expectancy.currency` over the
+   * trailing N CLOSED TRADES of one strategy version.
+   *
+   * A DIFFERENT OBSERVATION UNIT FROM THE TWO ABOVE. Those count series periods; this
+   * counts closed trades, and the two never substitute for one another. The declared
+   * minimum is 12.3's own 30-trade minimum for `expectancy.currency`, so the window is the
+   * minimum rather than a number invented here.
+   */
+  "expectancy.rolling": { unit: "USD", shape: "DECIMAL_STRING", fractionDigits: 2 },
+  /**
+   * How many observations a rolling window looks back over.
+   *
+   * SEPARATE FROM `performance.minimum_observations`, which they numerically equal here: one
+   * says how far the window reaches, the other says what the metric refuses below. They
+   * agree by construction and they are two facts, and 12.2 forbids one identifier for two.
+   */
+  "performance.rolling_lookback": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * A point's 1-based position on an observation axis that is not time.
+   *
+   * A ROLLING EXPECTANCY IS INDEXED BY TRADE, not by session, because its observation unit
+   * is the closed trade. An ordinal counts nothing -- it is a position -- so it carries no
+   * economic unit, and the population it was taken over is a COUNT carried separately.
+   */
+  "performance.observation_ordinal": { unit: "COUNT", shape: "INTEGER" },
+  /**
+   * 4.5 `PerformanceSeries.benchmark_comparison.portfolio_series` and
+   * `.benchmark_series` -- each arm REBASED TO 100 at the first common observation.
+   *
+   * A NORMALIZATION, NOT A RETURN. Rebasing places two arms on one axis without changing
+   * either one's measured return; the returns themselves stay on `return.time_weighted`
+   * and `benchmark.movement`, which is where a reader should read them. Both arms carry
+   * this one identifier because it is one quantity asked of two subjects, and the subject
+   * is carried by the field rather than by the name.
+   */
+  "comparison.rebased_index": {
+    unit: "DIMENSIONLESS",
+    shape: "DECIMAL_STRING",
+    fractionDigits: 2,
+  },
 } as const;
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;

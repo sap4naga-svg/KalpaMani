@@ -22,7 +22,7 @@ import { z } from "zod";
 import { collectionPayload } from "./pagination";
 import { checkEmbeddedTruth, refListFieldOf, refOf } from "./references";
 import { envelope } from "./envelope";
-import { COST_TREATMENTS, signedMoney } from "./read-models";
+import { BENCHMARK_RETURN_BASES, COST_TREATMENTS, signedMoney } from "./read-models";
 import {
   currentOpenPlannedRisk,
   gapEventRisk,
@@ -727,7 +727,8 @@ export const tradeSummaryEnvelope = envelope(tradeSummaryPayload, TRADE_SUMMARY_
 
 /* ===================================================================== TradeDetail */
 
-export const BENCHMARK_RETURN_BASES = ["PRICE_RETURN", "TOTAL_RETURN"] as const;
+/** Defined once in `read-models.ts` and re-exported here, so its import path is stable. */
+export { BENCHMARK_RETURN_BASES };
 
 /**
  * §4.5 `TradeDetail` — one trade's story, joined **by reference**.
