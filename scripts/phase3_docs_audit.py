@@ -13428,12 +13428,40 @@ COCKPIT_C9_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
 #: anywhere -- so every one of them is required to READ as outstanding, and the completion claim
 #: is forbidden by name. Labelling an absence is not implementing the capability behind it.
 COCKPIT_C5_FOLLOWUP_HEADING: Final = (
-    "### The C5 completion follow-up — IMPLEMENTED IN PART, and C5 is still not complete"
+    "### The C5 completion follow-up — MERGED, IMPLEMENTED IN PART, and C5 is still not complete"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
-    "C5 completion follow-up: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "C5 completion follow-up: MERGED / IMPLEMENTED IN PART",
+    # THE MERGE, READ FROM COMMIT OBJECTS RATHER THAN FROM DIFF STATISTICS. The parents
+    # are ordered and the merge tree equals the reviewed head tree, which is what makes
+    # "the thing that merged is the thing that was reviewed" a checkable claim rather
+    # than an assurance.
+    "PR #84: MERGED",
+    "PR #84 merge commit: 58636f53335eb9d48a4533c8a7f282ea4be8f154",
+    "PR #84 merged at: 2026-09-09T06:13:46Z",
+    "PR #84 final reviewed head: bf32ff6343ba3df6b65fe20843ce16a8f1724f30",
+    # THREE DISPOSITIONS, AND THEY ARE NOT INTERCHANGEABLE. Two later Windows reports
+    # passed; neither is the original Linux review evidence, which is UNAVAILABLE. A
+    # status document that carried only the two passes would read as though the missing
+    # evidence had been recovered, and it has not been.
+    "post-merge MERGE_INTEGRITY: PASS - PER ITS OWN REPORT",
+    "post-merge WINDOWS_VALIDATION: PASS - PER ITS OWN REPORT",
+    "ORIGINAL_EVIDENCE_PRESERVATION: UNAVAILABLE",
+    "original Linux review evidence: UNAVAILABLE",
+    # THE PROCESS DEVIATION SURVIVES THE MERGE. A later passing verification on a
+    # different platform did not re-run the gates that failed, so it cannot retire the
+    # fact that the merge proceeded with reported failures.
+    "pre-merge process deviation: RECORDED - MERGED WITH REPORTED FAILED GATES",
+    # A PROPOSED CONTRACT IS NOT AN IMPLEMENTATION, AND THE TWO LINES SAY DIFFERENT
+    # THINGS. ADR-0032 proposes a measurement contract for each quantity; neither
+    # measure is built, and neither definition is accepted while its pull request
+    # is open.
+    "strategy capacity - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
+    "rolling tail losses - MEASUREMENT CONTRACT: PROPOSED BY ADR-0032 / NOT IN FORCE",
+    "strategy capacity - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED",
+    "rolling tail losses - IMPLEMENTATION: NOT AUTHORIZED / NOT IMPLEMENTED",
     # THE REVIEW IS A FACT ABOUT THE WORK, AND IT IS RECORDED LIKE ONE. Every recent cycle
     # carries this line -- C4, C7, C8 and C9 each do -- so a cycle that carried none would be
     # the only one whose status could not say whether anybody had read it. It says a review
@@ -13467,8 +13495,31 @@ COCKPIT_C5_FOLLOWUP_REQUIRED: Final[tuple[str, ...]] = (
 #: nothing about any strategy.
 COCKPIT_C5_FOLLOWUP_FORBIDDEN: Final[tuple[str, ...]] = (
     "C5 completion follow-up: COMPLETE",
-    "C5 completion follow-up: MERGED",
+    # THE STALE UNDER-CLAIM IS NOW FORBIDDEN, on the precedent C9 set when its own merge
+    # claim moved. "IMPLEMENTED IN AN OPEN PULL REQUEST" was required while PR #84 was
+    # open and is FALSE now, and the merge claim it used to guard is now REQUIRED above.
+    "C5 completion follow-up: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    # AND THE OVER-CLAIM A MERGE INVITES. Merging the follow-up delivered four of seven
+    # requirements; it delivered neither capacity nor the named benchmarks, and it
+    # accepted no definition for either outstanding measure.
+    "C5 completion follow-up: MERGED / COMPLETE",
     "C5 overall: COMPLETE",
+    # THE THREE POST-MERGE DISPOSITIONS ARE NOT INTERCHANGEABLE, AND THE ONE THAT MATTERS
+    # IS THE ABSENCE. A Windows verification that passed is not the original Linux review
+    # evidence, and no status document may report that evidence as recovered, preserved
+    # or reconstructed.
+    "ORIGINAL_EVIDENCE_PRESERVATION: PASS",
+    "ORIGINAL_EVIDENCE_PRESERVATION: RECOVERED",
+    "original Linux review evidence: RECOVERED",
+    "original Linux review evidence: PRESERVED",
+    "pre-merge process deviation: RESOLVED",
+    "pre-merge process deviation: RETIRED",
+    # A PROPOSED CONTRACT IS NOT AN ACCEPTED ONE, AND NEITHER IS AN IMPLEMENTATION.
+    "ADR-0032: ACCEPTED / IN FORCE",
+    "tail-loss measurement contract: ACCEPTED",
+    "capacity measurement contract: ACCEPTED",
+    "strategy capacity - IMPLEMENTATION: IMPLEMENTED",
+    "rolling tail losses - IMPLEMENTATION: IMPLEMENTED",
     "strategy capacity: IMPLEMENTED",
     "named benchmarks SPY / QQQ / IWM: IMPLEMENTED",
     "named benchmarks SPY / QQQ / IWM: AVAILABLE",

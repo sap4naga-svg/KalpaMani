@@ -5306,7 +5306,7 @@ private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
-C5 completion follow-up:                          IMPLEMENTED IN AN OPEN PULL REQUEST
+C5 completion follow-up:                          MERGED / IMPLEMENTED IN PART
 C10:                                              NOT STARTED / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
@@ -5328,15 +5328,30 @@ unauthorized**, and **specification, implementation, research, deployment and ex
 separate gates**.
 
 
-### The C5 completion follow-up — IMPLEMENTED IN PART, and C5 is still not complete
+### The C5 completion follow-up — MERGED, IMPLEMENTED IN PART, and C5 is still not complete
 
 **The rolling series and the portfolio benchmark comparison are built. Capacity and the named
 benchmarks are not, and this section says exactly why.** Those are four facts, and collapsing any
 of them into *the follow-up is done* is the thing this section exists to prevent.
 
-**It is carried by an open pull request of its own. While that pull request is open it is a
-candidate**: nothing recorded here is authority for anything beyond itself, and **no merge SHA and
-no merge timestamp is predicted**.
+**PR #84 is merged, and the merge is independently verified from commit objects rather than from
+diff statistics.** Merge commit **`58636f53335eb9d48a4533c8a7f282ea4be8f154`**, ordered parents
+**`cbf419876f758090fb5409b2ef636a6540568c9f`** then
+**`bf32ff6343ba3df6b65fe20843ce16a8f1724f30`**, merged **2026-09-09T06:13:46Z**, with a **merge tree
+identical to the reviewed head tree**, **`3ceebca364e2c6ee94577f11a0645727ebf0bc3c`**.
+
+**While PR #84 was open it was a candidate, and nothing recorded then was authority for anything
+beyond itself** — a historical fact about those days that stays true and is **not** rewritten as
+though the work had authority before it merged. **A merge is not a completion**: three of the seven
+requirements below stay outstanding and the disposition table is unchanged by it.
+
+**Three post-merge dispositions are recorded, they are not interchangeable, and they are attributed
+to the reports that produced them rather than re-derived here** — **MERGE_INTEGRITY: PASS**,
+**WINDOWS_VALIDATION: PASS**, and **ORIGINAL_EVIDENCE_PRESERVATION: UNAVAILABLE**. **Neither Windows
+evidence set is the original Linux review evidence**, and that original evidence stays
+**UNAVAILABLE**. **The original merge proceeded with reported failed gates, and that process
+deviation remains recorded** — a later passing verification on a different platform does not erase
+it, and did not re-run the gates that failed.
 
 **The residue this cycle owns was recorded by the C6 independent review**, which named it and gave
 it an owner rather than leaving it unassigned:
@@ -5396,6 +5411,12 @@ choosing a percentile here would be inventing a policy on a screen. **Capacity h
 unit and no computable rule**, and is additionally blocked on data. Both need a §12.6 presentation
 definition or an ADR, and **this cycle takes neither decision**.
 
+**Both are now the subject of a later, separate proposal.**
+[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) proposes
+a measurement contract for each, and **it is PROPOSED and carries no authority while its pull
+request is open**. **A proposed contract fills neither gap yet, implements neither measure, and
+makes no capacity obtainable** — see *The capacity and tail-loss measurement contracts* below.
+
 **The three carried-forward observations are unchanged and still open** — the C8 fill-scoped count
 under an order-labelled code, the C8 contract comment that overstates its body, and
 `SearchResultPage`'s unexercised governance-provenance permission. **None is resolved by omission**,
@@ -5411,8 +5432,22 @@ and refuses to go quiet.** No production behaviour, contract, fixture or accepte
 changed by that correction.
 
 ```text
-C5 completion follow-up:                          IMPLEMENTED IN AN OPEN PULL REQUEST
+C5 completion follow-up:                          MERGED / IMPLEMENTED IN PART
+PR #84:                                           MERGED
+PR #84 merge commit:                              58636f53335eb9d48a4533c8a7f282ea4be8f154
+PR #84 merged at:                                 2026-09-09T06:13:46Z
+PR #84 final reviewed head:                       bf32ff6343ba3df6b65fe20843ce16a8f1724f30
+PR #84 merge tree:                                IDENTICAL TO THE REVIEWED HEAD TREE
 independent review of the follow-up:              PERFORMED
+post-merge MERGE_INTEGRITY:                       PASS - PER ITS OWN REPORT
+post-merge WINDOWS_VALIDATION:                    PASS - PER ITS OWN REPORT
+ORIGINAL_EVIDENCE_PRESERVATION:                   UNAVAILABLE
+original Linux review evidence:                   UNAVAILABLE
+pre-merge process deviation:                      RECORDED - MERGED WITH REPORTED FAILED GATES
+strategy capacity - MEASUREMENT CONTRACT:         PROPOSED BY ADR-0032 / NOT IN FORCE
+rolling tail losses - MEASUREMENT CONTRACT:       PROPOSED BY ADR-0032 / NOT IN FORCE
+strategy capacity - IMPLEMENTATION:               NOT AUTHORIZED / NOT IMPLEMENTED
+rolling tail losses - IMPLEMENTATION:             NOT AUTHORIZED / NOT IMPLEMENTED
 portfolio rolling return and drawdown:            IMPLEMENTED AT SYNTHETIC SCOPE
 rolling expectancy:                               IMPLEMENTED AT SYNTHETIC SCOPE
 portfolio benchmark comparison:                   IMPLEMENTED AT SYNTHETIC SCOPE
@@ -5453,3 +5488,135 @@ live trading:                                     HARD-DISABLED
 
 **Completing part of a cycle completes the cycle no more than merging one completes the product.**
 **Specification, implementation, research, deployment and execution stay five separate gates.**
+
+### The capacity and tail-loss measurement contracts — PROPOSED, and neither is implemented
+
+**Two accepted Cockpit requirements named a quantity that nothing in tracked authority defined.**
+[ADR-0032](docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md) proposes
+a measurement contract for each. **It is PROPOSED and carries no authority while its pull request is
+open**, and so are the deltas it makes to the Cockpit specifications in the same pull request. That
+is a statement about the present, it stays true of these days after any later merge, and it is
+**not** to be rewritten as though the decision had authority before it was accepted.
+
+**On independent review and merge it would accept measurement contracts, area ownership and
+governance — and nothing else.** **It implements neither measure**, **computes no tail loss**,
+**computes no capacity**, **creates no module under `src/`**, **adds no read-model field**, **changes
+no read-model schema version**, **changes no `metric_definition_version`**, **extends no closed
+vocabulary**, **changes no fixture, component or runtime**, **selects no provider**, **acquires no
+market data**, **calibrates no model**, **qualifies no model** and **runs no backtest**.
+
+#### The gap, and who owns each half
+
+| Requirement | Owning area | Read-model owner | Cycle | The actual gap |
+|---|---|---|---|---|
+| **rolling tail losses** | **Area 5 — Strategy Health** | `StrategyHealth` | **C7** | `strategy.tail_loss` has a **registered unit and no definition** — §12.3 carries no row, so no formula, population, window, statistic, sign, minimum or unavailable outcome exists |
+| **strategy capacity** | **Area 4 — Strategy Performance** | `StrategyPerformance` | **C5** | `strategy.capacity` has a **registered unit and no computable rule** — §12.3 carries no row — **and** every input it would need is absent |
+
+**Rolling tail losses are named exactly once in the specification, and it is in Area 5**, so they
+are a **C7** surface. **The requirement is not moved into C5**: the C5 completion follow-up reported
+the gap, and reporting a gap is not owning it. **A registered unit is not a definition**, and **a
+missing table row alone is not the proof** — the gap is established from §12.1's eight requirements,
+§12.3's role in meeting them, and the absence of any other tracked authority that supplies them.
+
+#### What is recommended
+
+| | |
+|---|---|
+| **the tail loss** | the **mean of the `k` most adverse eligible observations**, with `k` equal to `ceil(q * n)` — **an integer count of order statistics, so no quantile interpolation rule exists to diverge over**. Over **closed trades of one exact strategy version** carrying a recorded initial planned risk, on a **closed-trade count window**, in **R against each trade's own retained denominator** — a **mean of ratios, never a ratio of sums** |
+| **its population** | **every eligible observation, and never losses only.** The tail is selected by **ordering**, so a **positive value is a measured result** rather than a failure. A losses-only population would move with the win rate and be undefined for a version that never lost |
+| **its sign** | §12.1's, unchanged — **profit positive, loss negative**, for long and short alike. This **matches the values the merged implementation already produces**, so no fixture is contradicted |
+| **its boundaries** | an observation enters at its **close instant**; **no observation after a point's cutoff contributes to that point**; and in the strong form, **replacing every later observation changes nothing at or before a point** |
+| **its degenerate cases** | below the minimum — **an empty population included** — `INSUFFICIENT_OBSERVATIONS` with **no value**; a computed **zero is `AVAILABLE`**; excluded trades are **counted** and the result is `PARTIAL` naming how many, on the accepted `slippage.aggregate` precedent |
+| **capacity** | **the greatest deployable strategy capital whose modelled execution cost stays within a declared tolerance of the version's own realized execution cost** — specified as a **qualified-model interface with an admission gate**, because it is **not computable from any record this repository holds** |
+| **capacity's nine required inputs** | volume history · price history · the order and fill record · a declared participation limit · a declared execution horizon · a market-impact function with a declared calibration identity · a declared cost tolerance · borrow history from a record · the portfolio-overlap set |
+| **what capacity is not** | **not strategy capital, not buying power, not available cash, not gross exposure and not any limit.** Each is already displayed under its own name, and none would move when liquidity moved. **A capacity field is never filled from one of them, and never filled with zero** |
+| **capacity when it cannot be produced** | **`NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING` today**; `NOT_IMPLEMENTED` with no model; **`UNEVALUATED` with `NOT_YET_ASSESSED` when a model exists and its qualification is not recorded** — a missing assessment is not a missing input |
+| **capacity per version** | **per-version capacities are never summed into a portfolio capacity** — overlapping holdings mean the sum overstates |
+
+#### Proposed parameters, distinguished from accepted requirements
+
+**Every parameter the proposal chooses is a PROPOSED MEASUREMENT DECISION**, offered for review.
+**None is an existing requirement, none is a production qualification, and none is a trading
+threshold, a promotion criterion, a health-state transition rule, a risk limit or a capital
+authorization.**
+
+```text
+tail fraction q                    0.10                          PROPOSED
+tail-loss window N                 30 eligible closed trades     PROPOSED - REUSES THE DECLARED
+                                                                 12.3 EXPECTANCY MINIMUM
+tail-loss minimum observations     30                            PROPOSED - THE SAME REUSED VALUE
+derived tail count k               ceil(0.10 * 30), which is 3   DERIVED, NOT SEPARATELY CHOSEN
+capacity model parameters          DECLARED BY THE QUALIFIED MODEL AND DISPLAYED WITH THE VALUE
+                                   - THE PROPOSAL FIXES NO NUMERIC VALUE FOR ANY OF THEM
+```
+
+**Area 5's seven health states and every transition rule remain ADR-0026 §13's and are unchanged.**
+Defining a tail loss creates **no** threshold at which a transition occurs.
+
+#### The synthetic and production boundary
+
+**The proposal's worked examples are invented arithmetic.** They **calibrate no model, qualify no
+provider, establish no production capacity and are evidence about no strategy**. **No real security,
+fill, provider row or calibrated model appears in any of them.**
+
+**Defining capacity does not make one obtainable.** **G1 and G5 are OPEN**, no provider is selected,
+and no volume, price or borrow history, no market-impact model, no calibration and no model
+qualification exists.
+
+#### Compatibility
+
+**No read-model schema version changes.** Both metric identifiers already live on existing payload
+fields, so **no field is added, removed, renamed or retyped**. **`PerformanceSeries` and
+`StrategyPerformance` stay at `v3`**, where PR #84 placed them, and every other read model stays
+where it was. **No closed vocabulary is extended** — every state and reason used is an existing
+member under a pairing §4.1.1 already permits.
+
+**`metric_definition_version` stays `metrics.v1` and is not changed by this documentation-only
+cycle.** The obligation is **placed on the implementation cycle that first produces a value**:
+synthetic values already exist for `strategy.tail_loss` under `metrics.v1` that were computed under
+**no** declared rule, so that cycle **must advance the dictionary version**. **Fixture-byte equality
+is not a compatibility proof**, and none is offered.
+
+```text
+ADR-0032:                                         PROPOSED / NOT IN FORCE
+tail-loss measurement contract:                   PROPOSED / NOT IN FORCE
+capacity measurement contract:                    PROPOSED / NOT IN FORCE
+rolling tail losses - IMPLEMENTATION:             NOT AUTHORIZED / NOT IMPLEMENTED
+strategy capacity - IMPLEMENTATION:               NOT AUTHORIZED / NOT IMPLEMENTED
+strategy capacity - REQUIRED INPUTS:              DO NOT EXIST
+capacity model:                                   DOES NOT EXIST
+capacity model qualification:                     DOES NOT EXIST
+new src/ modules created by this proposal:        NONE
+read-model fields added:                          NONE
+read-model schema versions changed:               NONE
+metric_definition_version:                        UNCHANGED - metrics.v1
+closed vocabularies extended:                     NONE
+fixtures, components or runtime changed:          NONE
+frontend changed:                                 NONE
+dependencies changed:                             NONE
+provider data used:                               NONE
+market data downloaded or requested:              NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+backtesting:                                      NOT STARTED
+C5:                                               NOT COMPLETE
+C10:                                              NOT STARTED / NOT AUTHORIZED
+full Cockpit V1:                                  INCOMPLETE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+G5:                                               OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**Defining a measurement is not performing it.** **Acceptance of a measurement contract,
+authorization of an implementation, qualification of real inputs or a model, and any eventual
+operational use are four separate gates**, and they are never collapsed into one.
