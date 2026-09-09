@@ -337,9 +337,18 @@ first contentful paint   NOT OBTAINED - the paint entry was absent on every rout
                     and no figure is invented for it
 ```
 
-**These figures describe that server on that machine and nothing else.** No ordering against the
-development server is claimed in either direction, no budget is asserted, and **a measurement is not
-a performance claim about a deployed Cockpit — none is deployed**.
+**The development server was measured on the same machine, in the same run, and both sets are
+retained.** At 1440 x 900 its first-answer figures were 779 to 2164 ms against the production
+build's 269 to 618 ms, and it recorded a first contentful paint of 184 to 656 ms where the
+production run recorded none at all.
+
+**That is one paired sample, and it establishes no general ordering.** It is reported because
+withholding it would be the same withholding the retracted claim was: on this machine, in this run,
+the production build answered sooner on every measured route. **One paired run is not a rule about
+development and production servers**, and this record asserts none.
+
+**These figures describe those servers on that machine and nothing else.** No budget is asserted,
+and **a measurement is not a performance claim about a deployed Cockpit — none is deployed**.
 
 ### 7.4 The §15 criteria, and the three that are not met
 
