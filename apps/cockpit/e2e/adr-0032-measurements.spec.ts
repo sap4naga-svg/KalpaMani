@@ -65,18 +65,48 @@ test.describe("the rolling tail loss on strategy health", () => {
      * closed trades. Its panel must say so, and must show no number at all.
      */
     const rows = page.getByTestId("health-rows").locator("tbody tr");
+    /*
+     * WAIT FOR THE TABLE BEFORE COUNTING IT. `locator.count()` does not retry, and the read
+     * model loads after the heading does — so a count taken at `ready` is zero and the loop
+     * below never runs.
+     */
+    await expect(rows.first()).toBeVisible();
     const count = await rows.count();
     expect(count).toBeGreaterThan(0);
     let sawInsufficient = false;
     for (let index = 0; index < count; index += 1) {
+      const version = await rows.nth(index).getAttribute("data-health-version");
       await rows.nth(index).getByRole("button", { name: "History" }).click();
+      /*
+       * WAIT FOR THE DETAIL CARD TO BE THIS ROW'S BEFORE READING IT.
+       *
+       * `textContent` does not retry, and the previous version's panel is still mounted for
+       * an instant after the click — so a read taken immediately reports the row before this
+       * one, and the last row's answer is never observed at all.
+       */
+      await expect(page.getByTestId("health-detail")).toHaveAttribute(
+        "data-health-version",
+        version ?? "",
+      );
       const panel = page.getByTestId("health-tail-loss");
       await expect(panel).toBeVisible();
-      const text = (await panel.textContent()) ?? "";
-      if (text.includes("Insufficient observations")) {
+      /*
+       * THE VERSION'S OWN ANSWER, read from the panel's own attribute.
+       *
+       * Not from a state found anywhere inside the panel: the series table carries one badge
+       * per point, and the early points of a value-bearing version are legitimately
+       * INSUFFICIENT_OBSERVATIONS. A search over the whole panel would find a point's answer
+       * and report it as the version's.
+       */
+      const state = await panel
+        .locator("[data-tail-loss-availability]")
+        .first()
+        .getAttribute("data-tail-loss-availability");
+      if (state === "INSUFFICIENT_OBSERVATIONS") {
         sawInsufficient = true;
         await expect(panel.getByTestId("tail-loss-none-computed")).toBeVisible();
         await expect(panel).toContainText("neither a shorter window nor a zero is substituted");
+        await expect(panel).toContainText("Insufficient observations");
       }
     }
     /* A SUITE THAT NEVER REACHED THE BRANCH WOULD PASS VACUOUSLY. */

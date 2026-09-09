@@ -656,9 +656,10 @@ function CapacityDependencies({
       <p className="max-w-3xl text-label-s leading-relaxed text-text-tertiary">
         It is <strong>not</strong> a profitability capacity, not the capital at which the
         strategy stops making money, not a liquidity ceiling, and not a risk, allocation or
-        position limit. It is not strategy capital, available cash, buying power or gross
-        exposure — those are four other quantities this application already displays under
-        their own names, and substituting any of them would answer a different question here.
+        position limit. It is <strong>not strategy capital</strong>, <strong>not available
+        cash</strong>, <strong>not buying power</strong> and <strong>not gross exposure</strong>
+        — those are four other quantities this application already displays under their own
+        names, and substituting any of them would answer a different question here.
         It is <strong>not permission to scale</strong>: capital scaling is a human governance
         decision. <strong>Per-version capacities are never summed into a portfolio capacity</strong>,
         because overlapping holdings mean the sum overstates what the market would absorb.

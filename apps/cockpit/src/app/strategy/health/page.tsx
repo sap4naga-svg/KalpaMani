@@ -618,7 +618,20 @@ function TailLossView({
   const excluded = Number(tailLoss.excluded_observations.value ?? 0);
   const eligible = Number(tailLoss.eligible_observations.value ?? 0);
   return (
-    <div className="space-y-2" data-testid={`tail-loss-${versionId}`}>
+    <div
+      className="space-y-2"
+      data-testid={`tail-loss-${versionId}`}
+      /*
+       * THE PANEL'S OWN ANSWER, on the panel itself.
+       *
+       * The series table below carries a badge per point, and the early points of a
+       * value-bearing version are legitimately INSUFFICIENT_OBSERVATIONS — so a reader, or a
+       * test, that looked for a state anywhere inside this panel would find a point's answer
+       * and read it as the version's.
+       */
+      data-tail-loss-availability={tailLoss.value.availability}
+      data-tail-loss-reason={tailLoss.value.reason}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-label-m font-semibold text-text-primary">
           Tail loss (R multiple)
