@@ -1191,13 +1191,41 @@ describe("the coordinated schema bump", () => {
     "DecisionRecord",
   ];
 
+  /**
+   * The two the C5 completion follow-up moved past the coordinated version, and why.
+   *
+   * §5.2 versions a schema PER READ MODEL precisely so one view can evolve without a global
+   * bump — so a LATER, INDEPENDENT contract change is expected to move one model past `v2`
+   * while every other stays where the coordinated replacement left it. That is the rule
+   * working, not an exception to it, and naming the two here keeps the guard exact: a third
+   * model drifting off `v2` still fails.
+   *
+   * `PerformanceSeries` gained `rolling_windows` and `benchmark_comparison`;
+   * `StrategyPerformance` gained `rolling_expectancy`. A consumer compiled against either
+   * `v2` knows none of those fields.
+   */
+  const FOLLOW_UP_V3: Readonly<Record<string, string>> = {
+    PerformanceSeries: "cockpit.performance_series.v3",
+    StrategyPerformance: "cockpit.strategy_performance.v3",
+  };
+
   it("keeps the coordinated nineteen at v2 and gives each new read model its own v1", () => {
     const firstVersion = [...C7_FIRST_VERSION, ...C8_FIRST_VERSION, ...C9_FIRST_VERSION];
     const coordinated = READ_MODEL_IDENTITIES.filter(
       (identity) => !firstVersion.includes(identity.readModel),
     );
     for (const identity of coordinated) {
+      const moved = FOLLOW_UP_V3[identity.readModel];
+      if (moved !== undefined) {
+        /* Exactly the later version this follow-up gave it, and no other. */
+        expect(identity.schemaVersion, identity.readModel).toBe(moved);
+        continue;
+      }
       expect(identity.schemaVersion, identity.readModel).toMatch(/\.v2$/);
+    }
+    /* Every model the follow-up names is one of the coordinated nineteen, not a new one. */
+    for (const readModel of Object.keys(FOLLOW_UP_V3)) {
+      expect(coordinated.map((identity) => identity.readModel)).toContain(readModel);
     }
     expect(coordinated.length).toBe(COORDINATED_V2);
 
