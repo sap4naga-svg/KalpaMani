@@ -38,9 +38,19 @@ test.describe("the ten-second answers", () => {
   test("links each answer to the area that owns it", async ({ page }) => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
-    const links = page.getByRole("link", { name: /Open the area that owns this/ });
-    // Every answer tile that names an owning area carries one.
-    expect(await links.count()).toBeGreaterThanOrEqual(5);
+    // Every answer tile carries a destination link, named as the registry names the area.
+    const links = page.locator('[data-tile-part="destination"]');
+    expect(await links.count()).toBe(6);
+    for (const label of [
+      "Project & Qualification",
+      "Portfolio Performance",
+      "Risk Dashboard",
+      "System Operations",
+      "Audit Trail",
+      "Attention Required",
+    ]) {
+      await expect(links.getByText(`${label} →`, { exact: true })).toBeVisible();
+    }
   });
 });
 

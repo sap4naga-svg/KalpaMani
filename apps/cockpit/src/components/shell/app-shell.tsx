@@ -150,6 +150,15 @@ function ContextBar() {
 /**
  * A synthetic deployment is labelled at PAGE level as well as at component level, because
  * screenshots travel (U3).
+ *
+ * THE PAGE-LEVEL SENTENCE DESCRIBES THE MIXED SOURCES, NOT ONE OF THEM. It used to read
+ * "every figure on this page is a repository-owned deterministic fixture", directly above
+ * the Executive Overview's strategy-capital tile, which is badged TRACKED FACT and is a real
+ * governance fact read from the repository. A page carrying both kinds badges each component
+ * individually rather than choosing one badge for the whole page (section 5), and the banner
+ * is a page-level statement, so it says what is synthetic -- every OPERATIONAL figure -- and
+ * what a TRACKED FACT badge means. The lead phrase is unchanged: it is what the browser suite
+ * pins, and it is still the first thing a screenshot shows.
  */
 function ScenarioBanner() {
   const { scope } = useScope();
@@ -160,9 +169,11 @@ function ScenarioBanner() {
         data-testid="page-provenance-banner"
         className="border-b border-warning/50 bg-warning/12 px-4 py-2 text-label-m text-warning"
       >
-        <strong className="font-semibold">SYNTHETIC DEMONSTRATION DATA.</strong> Every figure
-        on this page is a repository-owned deterministic fixture. It is not a result, not a
-        measurement and not evidence of anything.
+        <strong className="font-semibold">SYNTHETIC DEMONSTRATION DATA.</strong> Every
+        operational figure on this page is a repository-owned deterministic fixture — not a
+        result, not a measurement and not evidence of anything. A figure badged{" "}
+        <strong className="font-semibold">TRACKED FACT</strong> is a real governance fact, not a
+        fixture.
       </div>
     );
   }

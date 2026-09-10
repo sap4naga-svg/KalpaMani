@@ -91,3 +91,26 @@ export function decimalSign(value: string): -1 | 0 | 1 {
   }
   return sign === "-" ? -1 : 1;
 }
+
+const INSTANT_PARTS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?Z$/;
+
+/**
+ * Renders a UTC instant for a reader, to the minute, with its timezone stated.
+ *
+ * `2026-09-09T19:54:43.232Z` is the record's own identity and stays exactly that wherever a
+ * record is quoted -- the What Changed endpoints, the Operator evidence fields. As the ONE
+ * line of context under a ten-second answer it is a string of digits a reader has to parse,
+ * so the executive tiles show `2026-09-09 19:54 UTC` instead: the same instant, the same
+ * calendar basis and timezone (section 8), and nothing recomputed -- the characters are
+ * taken from the ISO string, never from a `Date`, so no local timezone can shift it.
+ *
+ * A value that is not a `Z`-suffixed ISO instant is returned unchanged rather than guessed at.
+ */
+export function formatInstant(instant: string): string {
+  const parts = INSTANT_PARTS.exec(instant);
+  if (parts === null) {
+    return instant;
+  }
+  const [, date, time] = parts;
+  return `${date} ${time} UTC`;
+}

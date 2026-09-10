@@ -34,7 +34,7 @@ import type { DataProvenance } from "@/contracts/vocabularies";
 import { METRIC_DEFINITION_VERSION, notImplemented } from "@/contracts/factories";
 import { isValueBearing } from "@/contracts/validity";
 import { prepareAttention } from "@/lib/attention";
-import { formatDecimal, humanizeCode } from "@/lib/format";
+import { formatDecimal, formatInstant, humanizeCode } from "@/lib/format";
 import {
   disclosureAvailabilityStates,
   disclosureProvenances,
@@ -45,6 +45,7 @@ import {
   type WidgetRead,
 } from "@/lib/mobile-summary";
 import { withScope, type PerformancePeriod } from "@/lib/scope";
+import { ROUTES_BY_HREF } from "@/nav/registry";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,6 +80,18 @@ import { cn } from "@/lib/utils";
  * NO EQUITY, PERFORMANCE, EXPOSURE, INCIDENT, SYSTEM-HEALTH OR TRADE STATISTIC IS
  * FABRICATED. In the default project scope every operational read model reports that its
  * producing subsystem does not exist; the synthetic scenario is labelled unmissably.
+ *
+ * THREE DEPTHS OF READING, after the owner found the first cut slow to digest:
+ *
+ *   AT A GLANCE       the six answers -- a large figure, its unit, its availability, its
+ *                     provenance, one line of context, and the area it belongs to
+ *   ONE STEP DEEPER   Attention Required, What Changed, the performance overview with its
+ *                     stated window, the supporting context
+ *   ON DEMAND         each tile's "About …" disclosure with the contract explanation, the
+ *                     chart's table alternative, and Operator mode's response evidence
+ *
+ * Nothing the reader must not miss is on demand: availability, provenance, freshness, the
+ * page-level PARTIAL state, the health state and the no-baseline explanation stay visible.
  */
 
 /**
@@ -86,12 +99,35 @@ import { cn } from "@/lib/utils";
  *
  * The QUESTION is the label. A tile headed "Return" answers a question the reader has to
  * infer; a tile headed "How are we doing?" answers the one §2 actually asks.
+ *
+ * THE READING ORDER IS THE HIERARCHY (§4.4: one primary number per tile, its comparison
+ * secondary, its metadata tertiary). The owner found the first cut of this page "clumsy,
+ * text-heavy and slow to digest", and each of the following was measured in the rendered
+ * page rather than assumed: the figure was set at `numeric-l` under an uppercase subject of
+ * near-equal weight, so nothing on a tile was the largest thing on it; every tile carried a
+ * one-or-two-sentence caveat in the first viewport; six links read "Open the area that owns
+ * this"; and the What Changed footer quoted a millisecond ISO instant. So now:
+ *
+ *   question        small, accent            what is being asked
+ *   subject         secondary, sentence case what the figure is
+ *   FIGURE          numeric-xl, primary      the answer, with its unit and its availability
+ *   context         tertiary, one line       the comparison, the as-of, the basis
+ *   link            the registered AREA      where to go next, named as the area is named
+ *   details         collapsed by default     the contract explanations -- supporting prose,
+ *                                            and never an availability state, a provenance,
+ *                                            a warning or an action-blocking reason
+ *
+ * WHAT NEVER MOVES INTO THE DETAILS: the availability badge, the provenance badge, the
+ * page-level PARTIAL state, the health state, the no-baseline explanation. A collapsed
+ * disclosure may hide an explanation; it may never hide that something is wrong (ADR-0033 M4).
  */
 function AnswerTile({
   question,
   subject,
   children,
-  footer,
+  context,
+  details,
+  detailsLabel,
   href,
   provenance,
   testId,
@@ -99,59 +135,90 @@ function AnswerTile({
   question: string;
   subject: string;
   children: React.ReactNode;
-  footer?: React.ReactNode;
+  /** The one-line comparison or basis under the figure. Tertiary, and always visible. */
+  context?: React.ReactNode;
+  /** The contract explanation. Supporting prose, behind an accessible disclosure. */
+  details?: React.ReactNode;
+  /** The disclosure's own name -- distinct per tile, so six controls are six names. */
+  detailsLabel?: string;
   href?: string;
   provenance?: React.ReactNode;
   testId: string;
 }) {
+  /*
+   * THE LINK NAMES THE AREA, AND THE REGISTRY NAMES THE AREA. `ui-ux-specification.md` §3:
+   * "Executive tile -> the area that owns the number", and an area control names the area
+   * (ADR-0031). The label is read from the typed registry rather than typed here, so a tile
+   * cannot name a destination that does not exist, and cannot name a record -- these are area
+   * destinations, never a specific authorized target. A destination absent from the registry
+   * is a defect, not a fallback: the tile renders no link rather than an unnamed one.
+   */
+  const destination = href === undefined ? undefined : ROUTES_BY_HREF.get(pathOf(href));
   return (
     <Card className="flex h-full flex-col" data-testid={testId}>
-      <CardBody className="flex flex-1 flex-col gap-1 pt-3">
+      <CardBody className="flex flex-1 flex-col gap-1.5 pt-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-label-s font-medium uppercase tracking-[0.09em] text-accent">
               {question}
             </p>
-            <Label className="mt-0.5 block min-w-0 break-words">{subject}</Label>
+            <p className="mt-0.5 min-w-0 break-words text-label-m text-text-secondary">
+              {subject}
+            </p>
           </div>
           {provenance}
         </div>
-        <div className="flex flex-1 flex-col justify-center py-0.5">{children}</div>
-        {footer !== undefined && (
-          <div className="text-label-s leading-relaxed text-text-tertiary">{footer}</div>
+        <div className="flex flex-1 flex-col justify-center py-1">{children}</div>
+        {context !== undefined && (
+          <div className="text-label-s leading-relaxed text-text-tertiary" data-tile-part="context">
+            {context}
+          </div>
         )}
-        {href !== undefined && (
-          /*
-           * THE ACCESSIBLE NAME NAMES THE DESTINATION, AND THE VISIBLE ONE DOES NOT REPEAT IT.
-           *
-           * Six tiles carried the identical link text, so a reader listing this page's links by
-           * screen reader heard "Open the area that owns this" six times with nothing to tell
-           * them apart. The visible text stays as it is — in context, beside its own question,
-           * it reads correctly — and the tile's subject is appended to the ACCESSIBLE name, so
-           * the link is distinguishable out of context as well as in it.
-           */
+        {href !== undefined && destination !== undefined && (
           <Link
             href={href}
-            aria-label={`Open the area that owns this: ${subject}`}
-            className="text-label-s text-accent underline underline-offset-2"
+            className="text-label-m font-medium text-accent underline underline-offset-2"
+            data-tile-part="destination"
           >
-            Open the area that owns this →
+            {destination.label} →
           </Link>
+        )}
+        {details !== undefined && (
+          <details className="group text-label-s text-text-tertiary" data-tile-part="details">
+            <summary className="cursor-pointer select-none text-text-tertiary hover:text-text-secondary">
+              {detailsLabel ?? `About ${subject.charAt(0).toLowerCase()}${subject.slice(1)}`}
+            </summary>
+            <div className="mt-1 leading-relaxed">{details}</div>
+          </details>
         )}
       </CardBody>
     </Card>
   );
 }
 
-/** A large figure, or the availability state standing in place of one. Never both, never zero. */
+/** The path of a scoped href, so a registry lookup ignores the query the scope appended. */
+function pathOf(href: string): string {
+  const cut = href.indexOf("?");
+  return cut === -1 ? href : href.slice(0, cut);
+}
+
+/**
+ * A large figure, or the availability state standing in place of one. Never both, never zero.
+ *
+ * `neutral` MARKS A MAGNITUDE, on the rule `MetricTile` already applies: a leading plus is a
+ * claim about direction and green is the colour of a GAIN (§4.3 `--positive`: "gains and
+ * healthy states"). Open planned risk is neither -- it is money at risk -- so `+757.15 USD`
+ * in green read as a profit, which is the confusion the owner named. A neutral figure keeps a
+ * minus where one belongs and is otherwise the primary text colour.
+ */
 function Figure({
   metric,
   dependency,
-  denominator,
+  neutral = false,
 }: {
   metric: MetricValue;
   dependency: string;
-  denominator?: string;
+  neutral?: boolean;
 }) {
   if (!isValueBearing(metric.availability)) {
     return (
@@ -162,7 +229,7 @@ function Figure({
       />
     );
   }
-  const signed = metric.unit === "USD" || metric.unit === "PERCENT";
+  const signed = !neutral && (metric.unit === "USD" || metric.unit === "PERCENT");
   const decimal =
     typeof metric.value === "string"
       ? formatDecimal(metric.value, { minimumFractionDigits: 2, signed })
@@ -170,10 +237,10 @@ function Figure({
   const negative = typeof metric.value === "string" && metric.value.startsWith("-");
   const nonZero = /[1-9]/.test(String(metric.value));
   return (
-    <div className="space-y-1">
-      <div className="flex items-baseline gap-1.5">
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-baseline gap-x-2">
         <Numeric
-          size="l"
+          size="xl"
           className={cn(
             signed && nonZero
               ? negative
@@ -194,9 +261,6 @@ function Figure({
           reason={metric.reason}
           className="self-start"
         />
-      )}
-      {denominator !== undefined && (
-        <p className="text-label-s text-text-tertiary">per {denominator}</p>
       )}
     </div>
   );
@@ -366,10 +430,14 @@ export default function ExecutiveOverviewPage() {
             testId="tile-strategy-capital"
             provenance={<ProvenanceBadge provenance="REPOSITORY_TRACKED" className="shrink-0" />}
             href={withScope("/governance/qualification", scope)}
-            footer={
+            context="Authoritative. Not broker-reported equity."
+            detailsLabel="About strategy capital"
+            details={
               <>
-                Authoritative. Broker-reported equity is <strong>observed</strong> and never
-                substituted for it.
+                A tracked governance fact, read from the repository&apos;s enumerated governance
+                record. Broker-reported equity is <strong>observed</strong> for reconciliation
+                and is never substituted for it: the broker may report USD 1,000,000 while the
+                capital every risk figure is measured against stays this number.
               </>
             }
           >
@@ -382,8 +450,8 @@ export default function ExecutiveOverviewPage() {
             ) : strategyCapital === undefined ? (
               <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
             ) : (
-              <div className="flex items-baseline gap-1.5">
-                <Numeric size="l" className="text-text-primary">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <Numeric size="xl" className="text-text-primary">
                   {formatDecimal(strategyCapital, { minimumFractionDigits: 2 })}
                 </Numeric>
                 <span className="text-label-m text-text-tertiary">USD</span>
@@ -391,6 +459,15 @@ export default function ExecutiveOverviewPage() {
             )}
           </AnswerTile>
 
+          {/*
+            * THE HEADLINE RETURN STATES ITS AS-OF AND SAYS ITS WINDOW IS NOT STATED. The
+            * overview read model carries `return_pct` with its method and its as-of and NO
+            * window (read-model-contracts, "Executive"); the performance overview below
+            * carries a declared window and the period the reader selects. Labelling this
+            * figure with the chart's period would assert that two metrics share a window
+            * their contracts never established, and computing one to reconcile them would
+            * be a period-adjusted figure nobody produced. So each says what it is.
+            */}
           <AnswerTile
             question="How are we doing?"
             subject="Total return, time-weighted"
@@ -401,24 +478,40 @@ export default function ExecutiveOverviewPage() {
               ) : undefined
             }
             href={withScope("/portfolio/performance", scope)}
-            footer={
-              payload === undefined ? undefined : (
+            context={
+              payload === undefined || envelope === undefined ? undefined : (
                 <>
-                  Day realized{" "}
-                  <span className="font-mono">
-                    {(() => {
-                      const day = payload.pnl.find((entry) => entry.window === "DAY")?.realized;
-                      return day !== undefined && isValueBearing(day.availability)
-                        ? `${formatDecimal(String(day.value), {
-                            minimumFractionDigits: 2,
-                            signed: true,
-                          })} USD`
-                        : "unavailable";
-                    })()}
-                  </span>{" "}
-                  · realized and unrealized are never summed into one figure.
+                  <span data-tile-part="day-realized">
+                    Day realized{" "}
+                    <span className="font-mono text-text-secondary">
+                      {(() => {
+                        const day = payload.pnl.find((entry) => entry.window === "DAY")?.realized;
+                        return day !== undefined && isValueBearing(day.availability)
+                          ? `${formatDecimal(String(day.value), {
+                              minimumFractionDigits: 2,
+                              signed: true,
+                            })} USD`
+                          : "unavailable";
+                      })()}
+                    </span>
+                  </span>
+                  <br />
+                  <span data-tile-part="window-note">
+                    As of {formatInstant(payload.return_pct.as_of ?? envelope.as_of_time)}.
+                    Window: not stated by this read model — the chart below states its own.
+                  </span>
                 </>
               )
+            }
+            detailsLabel="About the return figure"
+            details={
+              <>
+                Chain-linked across every external cash flow, so a deposit is never a profit.
+                Realized and unrealized are separate figures and are never summed into one.
+                This figure and the performance chart are two separate measurements: the
+                chart is drawn over the period you select and says so; this one carries its
+                own as-of and no declared window.
+              </>
             }
           >
             {overview.isPending ? (
@@ -427,7 +520,6 @@ export default function ExecutiveOverviewPage() {
               <Figure
                 metric={payload?.return_pct ?? notImplemented("return.time_weighted", "PERCENT")}
                 dependency="the portfolio valuation projection"
-                denominator="time-weighted, cash-flow adjusted"
               />
             )}
           </AnswerTile>
@@ -442,10 +534,36 @@ export default function ExecutiveOverviewPage() {
               ) : undefined
             }
             href={withScope("/risk", scope)}
-            footer={
+            context={
+              payload?.open_planned_risk.record === undefined ? undefined : (
+                <>
+                  {isValueBearing(
+                    payload.open_planned_risk.record.risk_pct_of_capital.availability,
+                  ) &&
+                  typeof payload.open_planned_risk.record.risk_pct_of_capital.value ===
+                    "string" ? (
+                    <span data-tile-part="risk-pct">
+                      <span className="font-mono text-text-secondary">
+                        {formatDecimal(
+                          payload.open_planned_risk.record.risk_pct_of_capital.value,
+                          { minimumFractionDigits: 2 },
+                        )}
+                        {" %"}
+                      </span>{" "}
+                      of strategy capital ·{" "}
+                    </span>
+                  ) : null}
+                  assessed {formatInstant(payload.open_planned_risk.record.as_of)}
+                </>
+              )
+            }
+            detailsLabel="About open planned risk"
+            details={
               <>
-                Permitted open risk is a <strong>separate fact</strong>, and drawdown a third.
-                Neither is derived from this one.
+                The risk engine&apos;s assessment of the remaining planned exposure, as of the
+                instant shown. It is a magnitude, not a gain. Permitted open risk is a{" "}
+                <strong>separate</strong> policy fact, and drawdown a third; neither is derived
+                from this one.
               </>
             }
           >
@@ -453,6 +571,7 @@ export default function ExecutiveOverviewPage() {
               <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
             ) : (
               <Figure
+                neutral
                 metric={
                   payload?.open_planned_risk.record !== undefined
                     ? {
@@ -483,7 +602,8 @@ export default function ExecutiveOverviewPage() {
             subject="System health and open incidents"
             testId="answer-health"
             href={withScope("/system/operations", scope)}
-            footer="Health is a recorded state, never inferred from the absence of an alert."
+            detailsLabel="About system health"
+            details="Health is a recorded state, never inferred from the absence of an alert. An open-incident count is a completed query, and an empty one is a verified empty answer rather than a measured zero."
           >
             {overview.isPending ? (
               <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
@@ -521,18 +641,31 @@ export default function ExecutiveOverviewPage() {
             )}
           </AnswerTile>
 
+          {/*
+            * THE BASELINE IS NAMED AND DATED, READABLY. The read model's own `baseline_label`
+            * is the subject where one exists; the baseline instant renders to the minute with
+            * its timezone, and its full-precision form stays in the What Changed panel below.
+            * The no-baseline explanation is never deferred: it is what the count would
+            * otherwise be misread as.
+            */}
           <AnswerTile
             question="What changed?"
-            subject="Since the stated baseline"
+            subject={changesPayload?.baseline_label ?? "Since the stated baseline"}
             testId="answer-changed"
             href={withScope("/governance/audit", scope)}
-            footer={
+            context={
               changesPayload === undefined
                 ? undefined
                 : noBaseline
                   ? "No prior endpoint exists, so no change is listed and none is inferred."
-                  : `Baseline as-of ${changesPayload.baseline_as_of ?? "absent"}.`
+                  : `Baseline ${
+                      changesPayload.baseline_as_of === undefined
+                        ? "absent"
+                        : formatInstant(changesPayload.baseline_as_of)
+                    }.`
             }
+            detailsLabel="About this comparison"
+            details="A comparison needs a stated baseline, and this one says it on the screen: both endpoints carry their as-of, an appearance or a disappearance is a change, and an unavailable endpoint reports its state instead of a delta. The audit trail is where the recorded events live; it does not own this comparison."
           >
             {whatChanged.data === undefined ? (
               <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
@@ -549,14 +682,14 @@ export default function ExecutiveOverviewPage() {
               />
             ) : changesPayload.entries.length === 0 ? (
               <div className="space-y-1.5">
-                <Numeric size="l" className="text-text-primary">
+                <Numeric size="xl" className="text-text-primary">
                   0
                 </Numeric>
                 <AvailabilityBadge state="EMPTY_VERIFIED" reason="EMPTY_RESULT_VERIFIED" />
               </div>
             ) : (
-              <div className="flex items-baseline gap-1.5">
-                <Numeric size="l" className="text-text-primary">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <Numeric size="xl" className="text-text-primary">
                   {changesPayload.entries.length}
                 </Numeric>
                 <span className="text-label-m text-text-tertiary">
@@ -568,14 +701,16 @@ export default function ExecutiveOverviewPage() {
 
           <AnswerTile
             question="What requires attention?"
-            subject="Ranked and deduplicated"
+            subject="Open items, ranked"
             testId="answer-attention"
             href={withScope("/attention", scope)}
-            footer={
+            context={
               topAttention === undefined
                 ? undefined
                 : `Highest: ${humanizeCode(topAttention.what_happened.code)}.`
             }
+            detailsLabel="About the attention list"
+            details="Ranked by materiality then severity, and deduplicated against the alert feed. Every item shows what happened, why it matters, its impact, its evidence and a permitted governance action for a person; the Cockpit performs none of them."
           >
             {attention.data === undefined ? (
               <div className="skeleton-shape h-9 w-2/3" data-testid="skeleton" />
@@ -587,14 +722,14 @@ export default function ExecutiveOverviewPage() {
               />
             ) : rankedAttention !== undefined && rankedAttention.rankedTotal === 0 ? (
               <div className="space-y-1.5">
-                <Numeric size="l" className="text-text-primary">
+                <Numeric size="xl" className="text-text-primary">
                   0
                 </Numeric>
                 <AvailabilityBadge state="EMPTY_VERIFIED" reason="EMPTY_RESULT_VERIFIED" />
               </div>
             ) : (
-              <div className="flex flex-wrap items-baseline gap-1.5">
-                <Numeric size="l" className="text-text-primary">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <Numeric size="xl" className="text-text-primary">
                   {rankedAttention?.rankedTotal ?? 0}
                 </Numeric>
                 <span className="text-label-m text-text-tertiary">
@@ -700,6 +835,8 @@ export default function ExecutiveOverviewPage() {
             operator={operator}
             onPeriodChange={onPeriodChange}
             titleElement={panelTitle}
+            summary="Equity, return and drawdown over the period selected here. An overview, not the full portfolio performance analysis."
+            statedWindow
           />
         </SummaryDisclosure>
       </section>
@@ -755,6 +892,12 @@ export default function ExecutiveOverviewPage() {
             </>
           ) : (
             <>
+              {/*
+                * OBSERVED BALANCES AND POLICY LIMITS ARE MAGNITUDES. A broker balance of
+                * +1,000,000.00 in green read as a gain; it is an observed, informational
+                * figure that never participates in sizing. Permitted open risk is what policy
+                * allows, not a profit. Drawdown stays directional: it measures a loss.
+                */}
               <MetricTile
                 label="Broker-reported equity"
                 metric={brokerEquityMetric}
@@ -762,6 +905,7 @@ export default function ExecutiveOverviewPage() {
                 dependency="an authorized brokerage session"
                 operator={operator}
                 size="m"
+                neutral
               />
               <MetricTile
                 label="Drawdown"
@@ -779,6 +923,7 @@ export default function ExecutiveOverviewPage() {
                 dependency="a versioned risk-policy reference"
                 operator={operator}
                 size="m"
+                neutral
               />
             </>
           )}

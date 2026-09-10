@@ -368,20 +368,37 @@ test.describe("C10 — keyboard reach", () => {
     await expect(trigger).toBeFocused();
   });
 
-  test("gives the six executive answers distinguishable link names", async ({ page }) => {
+  test("names each executive answer's destination as the registry names the area", async ({
+    page,
+  }) => {
     await page.goto("/?scenario=demo&mode=executive");
     await waitForHydration(page);
-    const links = page.getByRole("link", { name: /Open the area that owns this/ });
+    /*
+     * THE LINK TEXT IS THE AREA'S OWN NAME. Six links reading "Open the area that owns this"
+     * were indirect on the screen and, before the aria-label suffix, indistinguishable in a
+     * screen-reader link list. Each tile's destination now reads the registered label of the
+     * area it goes to — "Risk Dashboard", "Portfolio Performance" — and the accessible name
+     * IS the visible text, so the list is distinguishable without a hidden suffix.
+     */
+    const links = page.locator('[data-tile-part="destination"]');
     const count = await links.count();
-    expect(count).toBeGreaterThanOrEqual(5);
+    expect(count).toBe(6);
     const names: string[] = [];
     for (let index = 0; index < count; index += 1) {
-      names.push((await links.nth(index).getAttribute("aria-label")) ?? "");
+      const link = links.nth(index);
+      const href = new URL((await link.getAttribute("href")) ?? "", page.url()).pathname;
+      const route = NAV_ROUTES.find((candidate) => candidate.href === href);
+      expect(route, `${href} must be a registered area`).toBeDefined();
+      const name = ((await link.textContent()) ?? "").trim();
+      expect(name).toBe(`${route!.label} →`);
+      expect(await link.getAttribute("aria-label")).toBeNull();
+      names.push(name);
     }
     /* Six identical link names is a list a screen-reader reader cannot choose from. */
     expect(new Set(names).size, `link names were ${names.join(" | ")}`).toBe(count);
+    /* An area destination never reads as opening a record or retrieving evidence. */
     for (const name of names) {
-      expect(name.length).toBeGreaterThan("Open the area that owns this: ".length);
+      expect(name).not.toMatch(/(open|view|show|retrieve|evidence|record)/i);
     }
   });
 });
