@@ -401,12 +401,12 @@ portfolio sizing or order routing exists, and **none is authorized**. **Specific
 implementation, research, deployment and execution are five separate gates** — see *The Strategy
 Brain specification* below.
 
-**The Cockpit is SPECIFIED. Its C3 to C9 cycles are MERGED, its C10 polish and acceptance cycle is
-IMPLEMENTED AND CARRIED BY AN OPEN PULL REQUEST, and the Cockpit is not complete.** Those are
-separate facts. The specification package below is unchanged; each cycle is a local, read-only
-frontend running on a repository-owned fixture adapter, implemented under its own separate written
-authorization. **C10 carries no authority while its pull request is open**, exactly as every cycle
-before it did until its own merge. **The full Cockpit V1 does not exist**: **C5 and C7 are both NOT
+**The Cockpit is SPECIFIED. Its C3 to C10 cycles are MERGED, and the Cockpit is not complete.**
+Those are separate facts. The specification package below is unchanged; each cycle is a local,
+read-only frontend running on a repository-owned fixture adapter, implemented under its own separate
+written authorization. **C10 merged as PR #87 and merging it accepted nothing**: its acceptance
+record leaves §15 at one of four, and the four decisions it left open are **PROPOSED by ADR-0033 and
+NOT IN FORCE while that pull request is open**. **The full Cockpit V1 does not exist**: **C5 and C7 are both NOT
 COMPLETE**, and no production read API, projection runtime, metric engine, feedback automation,
 database, migration, scheduler or deployment exists, and **none is authorized** — see *The C3
 Cockpit application foundation*, *The C4 Executive Overview and governance*, *The C5 portfolio,
@@ -489,8 +489,9 @@ observational**, and **every future control is inert with no handler and no cont
 | **[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) — Cockpit and Feedback architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #71**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md) and the five documents under [`docs/cockpit/`](docs/cockpit/cockpit-v1-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Cockpit application implementation NOT AUTHORIZED · read-model, projection and API implementation NOT AUTHORIZED · feedback and learning-engine implementation NOT AUTHORIZED · database, migration, scheduler and deployment NOT AUTHORIZED · dependency installation NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED · capital, risk and strategy change NOT AUTHORIZED**. **V1 is observational** — no order, stop, risk, capital, strategy, provider, Run B, assessment, CONTROL or authoritative governance mutation, and **every future control is inert with no handler and no control API route**. It **amends and supersedes no ADR**, consumes ADR-0026 unchanged, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, **no `src/` module is created by it**, and **no Blueprint PDF is edited** |
 | **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Cockpit contract completion and boundary corrections** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the specification corrections that ship with it. It corrects four issues in the specifications ADR-0027 adopted — **A** the §4.1 field-level deferral, replaced by declarative contracts for every catalogued read model, a resolution for every reference, a per-endpoint contract and a completed metric dictionary; **B** out-of-sample reuse, now recorded against the **locked set** and read across research lineage so a new registration or Challenger identity clears nothing and unknown exposure history fails closed; **C** licensed-data admission, separating an absolute ban on credentials and infrastructure identifiers from classification of payload content, making **classification a label and publication a separate recorded authorization**, and adding the `REPOSITORY_TRACKED` provenance so a real tracked governance fact is never relabelled `SYNTHETIC`; **D** the single phrase *planned risk*, now four contracts — immutable **initial** planned risk as the only R denominator, **current open** planned risk as a risk-engine assessment with its as-of, **permitted** risk with its policy reference, and separately modelled gap and event risk. It **amends and supersedes no ADR** and does not edit ADR-0027. **All 36 areas, the C1–C10 sequence, the four trade concepts, the `CandidateIntent` boundary, the runtime `Environment` enum and every risk, capital and stop policy are unchanged** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md) — Valid zero values and cache freshness deadlines** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the two specification corrections that ship with it. It corrects two rules ADR-0028 introduced into `read-model-contracts.md`, and **nothing else** — **A** §4.1.1 named `EMPTY_VERIFIED` the *only* state in which a zero is correct, which is false of every measurement that legitimately evaluates to zero; a measured zero is now `AVAILABLE` with `NONE`, `EMPTY_VERIFIED` describes an **empty population** rather than the number, a zero never removes a `STALE` or `PARTIAL` qualification, and an absent producer still **never substitutes zero**; **B** §3.1 and §7 bounded a cache entry by the whole `contract_max_age`, returning age the fact had already spent — freshness now expires at an **absolute per-input deadline**, `input_deadline = source_effective_time + contract_max_age`, a composite expires at the **earliest** required deadline, a configured TTL may **shorten and never extend** it, and a rebuild, refetch or re-cache renews nothing. It **amends and supersedes no ADR** and edits neither ADR-0027 nor ADR-0028. **No availability state or reason code is added, and no missing-data safeguard is relaxed** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
+| **[ADR-0033](docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) — the remaining C10 acceptance decisions** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the five subsections it adds to `ui-ux-specification.md` — §12.1 and §15.1–§15.4. It defines, for the four items the merged C10 acceptance record left open, **M** the mobile executive summary — deferred behind labelled, accessible disclosures on `/` below 640 CSS px, **nothing omitted and no route invented**; **PB** five measurable performance budgets with units, marks, conditions and aggregation under a production build, with **`NOT OBTAINED` never zero and never passing** and **no budget for a deployed Cockpit because none exists**; **VC** a per-route-and-state visual coverage inventory of 401 nominal snapshots over 32 route identifiers with cited applicability rules and **zero tolerance on every image**; and **SR** a manual screen-reader protocol — NVDA + Chrome primary, ten journeys, severity and closure rules — with **the assessor assignment OUTSTANDING**. It **amends and supersedes no ADR**, edits no U1–U20 criterion, and **implements, measures, captures and assesses nothing**: acceptance would establish what done means for those four items and make none of them done — **C10's §15 assessment stays at one of four**, **C5, C7 and full Cockpit V1 stay INCOMPLETE**, and **G1 OPEN · G2 OPEN · G4-G7 OPEN** |
 | **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under ADR-0026, accepted effective on merge of PR #70, and **not implemented**; a specification is not an implementation |
-| **Cockpit / read models / feedback engine** | **C3 TO C9 MERGED · C10 IMPLEMENTED IN AN OPEN PULL REQUEST · EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, ADR-0030, ADR-0031 and ADR-0032, and seven cycles are merged — **C3** the foundation, **C4** the Executive Overview and governance, **C5** portfolio, strategy and risk, **C6** signals and the trade lifecycle, **C7** research, feedback and self-maturation, **C8** execution, operations, audit and alerts, and **C9** Ask KalpaMani and record search — each under its own separate written authorization and each **EFFECTIVE ON ITS OWN MERGE**, together with the **C5 completion follow-up**, which merged **implemented in part**. **C10 — visual polish, accessibility, responsiveness, performance measurement and the synthetic end-to-end sweep — is implemented and carried by an open pull request, and carries no such status until that merge.** **Merged cycles are not the Cockpit**: **C5 and C7 are both NOT COMPLETE**, **full Cockpit V1 is INCOMPLETE**, no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. It adds **one frontend charting dependency across all eight cycles, no `src/kalpamani` module, no Python dependency and no Blueprint change**, and **it closes no gate**. **No Brain runtime, scanner, factor matrix, decision compiler, AI agent or model call exists in it**, and every populated figure is repository-owned fixture data rather than evidence that any of those has run. The requirement-by-requirement assessment is [`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md) |
+| **Cockpit / read models / feedback engine** | **C3 TO C10 MERGED · EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, ADR-0030, ADR-0031 and ADR-0032, and seven cycles are merged — **C3** the foundation, **C4** the Executive Overview and governance, **C5** portfolio, strategy and risk, **C6** signals and the trade lifecycle, **C7** research, feedback and self-maturation, **C8** execution, operations, audit and alerts, and **C9** Ask KalpaMani and record search — each under its own separate written authorization and each **EFFECTIVE ON ITS OWN MERGE**, together with the **C5 completion follow-up**, which merged **implemented in part**. **C10 — visual polish, accessibility, responsiveness, performance measurement and the synthetic end-to-end sweep — merged as PR #87, and merging it accepted nothing: its §15 assessment is one of four, and the remaining acceptance decisions are PROPOSED by ADR-0033 and NOT IN FORCE.** **Merged cycles are not the Cockpit**: **C5 and C7 are both NOT COMPLETE**, **full Cockpit V1 is INCOMPLETE**, no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. It adds **one frontend charting dependency across all eight cycles, no `src/kalpamani` module, no Python dependency and no Blueprint change**, and **it closes no gate**. **No Brain runtime, scanner, factor matrix, decision compiler, AI agent or model call exists in it**, and every populated figure is repository-owned fixture data rather than evidence that any of those has run. The requirement-by-requirement assessment is [`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md) |
 | **Live trading** | **HARD-DISABLED** |
 
 The planning package is accepted and lives in
@@ -4768,8 +4769,8 @@ broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 C8:                                               MERGED
-C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
-C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
+C9:                                               MERGED
+C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -4786,8 +4787,8 @@ live trading:                                     HARD-DISABLED
 
 **A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
 validated, independently reviewed and **merged**; **C9 has since merged too**, and the C5
-completion follow-up has **merged too**; C10 is **implemented and carried by an open pull
-request**; **full Cockpit V1 is incomplete**; and **specification, implementation, research,
+completion follow-up has **merged too**; **C10 has since merged too, and is not an acceptance**;
+**full Cockpit V1 is incomplete**; and **specification, implementation, research,
 deployment and execution stay five separate gates**.
 
 **The clauses above were written on the day C7 merged, and three of them have moved since.** On
@@ -4912,8 +4913,8 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
-C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
+C9:                                               MERGED
+C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -4962,9 +4963,9 @@ merged before they were.
 Cockpit V1 stays INCOMPLETE**, and the merge authorized no cycle beyond itself.
 
 > **HISTORICAL.** On the day C9 merged this paragraph also stated that C10 had not begun, which
-> was true of that day. C10 has since been written and is carried by an open pull request; that
-> earlier statement is recorded here as a fact about those days rather than rewritten as though the
-> cycle had always existed.
+> was true of that day. C10 has since been written, independently reviewed and **merged as PR #87**;
+> that earlier statement is recorded here as a fact about those days rather than rewritten as though
+> the cycle had always existed.
 
 | Area | Surface |
 |---|---|
@@ -5076,7 +5077,7 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          MERGED / IMPLEMENTED IN PART
-C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
+C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -5097,20 +5098,29 @@ unauthorized**, and **specification, implementation, research, deployment and ex
 separate gates**.
 
 
-### The C10 Cockpit polish and acceptance cycle — IMPLEMENTED, and carried by an open pull request
+### The C10 Cockpit polish and acceptance cycle — MERGED, and not an acceptance
 
-**C10 is implemented and unmerged, it has not been independently reviewed, and it is not an
-acceptance.** Those are four facts, and this section keeps them apart. The cycle the traceability
-matrix describes as *"visual polish · accessibility · responsiveness · performance · synthetic
-end-to-end and visual regression"* is written; **an author's requirement-by-requirement assessment
-now exists at
-[`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md)**; and **an
-acceptance record is not an acceptance decision**, which is a human act on an independently reviewed
-pull request.
+**C10 is merged, it was independently reviewed before it merged, and it is not an acceptance.**
+Those are three facts, and this section keeps them apart. **PR #87 is merged** — merge commit
+**`28e27a99b6dcf9d947c209e47fe319f914bf243b`**, final reviewed head **`34be5a4a2b9c29fbc7ac19f754273733035bd67d`**, merged
+**2026-09-10T02:49:20Z**, with exactly two ordered parents — **`71247b8519c036eb2428107183431087e9ea9710`** then
+that reviewed head — and a **merge tree identical to the reviewed head's tree**,
+`ad64f3723cf0b8406461539513189596cb653a56`. Each of those was **read from the commit objects and from the
+live repository**, not predicted. The cycle the traceability matrix describes as *"visual polish ·
+accessibility · responsiveness · performance · synthetic end-to-end and visual regression"* is on
+`main`; **the independently reviewed requirement-by-requirement assessment is at
+[`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md)**; and **a merged
+acceptance record is still not an acceptance decision**, which is a human act — **the record's own
+dispositions are unchanged by the merge, and §15 stays at one of four**.
 
-**While this pull request is open the cycle carries no authority beyond itself**, exactly as C7, C8
-and C9 did before their own merges. That is a historical fact about these days and will stay true of
-them.
+> **HISTORICAL.** While PR #87 was open this section read *IMPLEMENTED, and carried by an open pull
+> request*, said the cycle was unmerged and unreviewed, and carried no merge SHA and no merge
+> timestamp. That was true on those days, it stays true of them, and it is **not** rewritten as
+> though the cycle had merged before it did. **Merging it opened no other gate**: the three unmet
+> §15 criteria and the unmet §12 mobile row are exactly as the record left them, and **the decisions
+> they wait on are now PROPOSED by
+> [ADR-0033](docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) — NOT IN FORCE while its
+> pull request is open** — see *The remaining C10 acceptance decisions, and ADR-0033* below.
 
 #### What it is, exactly
 
@@ -5179,9 +5189,15 @@ UI criteria** — not a measure of how much of this project is built, and not a 
 trading.
 
 ```text
-C10 polish and acceptance cycle:                  IMPLEMENTED IN AN OPEN PULL REQUEST
+C10 polish and acceptance cycle:                  MERGED / NOT AN ACCEPTANCE
+PR #87:                                           MERGED
+PR #87 merge commit:                              28e27a99b6dcf9d947c209e47fe319f914bf243b
+PR #87 merged at:                                 2026-09-10T02:49:20Z
+PR #87 final reviewed head:                       34be5a4a2b9c29fbc7ac19f754273733035bd67d
 independent review of the C10 implementation:     PERFORMED
 acceptance record:                                docs/cockpit/c10-acceptance-record.md
+remaining acceptance decisions:                   PROPOSED BY ADR-0033 / NOT IN FORCE
+ADR-0033:                                         PROPOSED / NOT IN FORCE
 areas in V1 scope:                                36
 areas assessed by the acceptance record:          36 OF 36
 areas IMPLEMENTED within accepted scope:          30
@@ -5193,10 +5209,12 @@ U1-U20 satisfied:                                 20
 section 15 criteria assessed:                     4 OF 4
 section 15 criteria satisfied:                    1 OF 4
 manual screen-reader pass:                        NOT ASSESSED
-mobile executive summary - section 12:            NOT SATISFIED - AMBIGUITY RECORDED
+manual screen-reader protocol:                    PROPOSED BY ADR-0033 / NOT IN FORCE - ASSESSOR OUTSTANDING
+mobile executive summary - section 12:            NOT SATISFIED - RESOLUTION PROPOSED BY ADR-0033, NOT IN FORCE
 responsive defects found and fixed by review:     2 - BADGE CLIPPING, ATTENTION METADATA
 committed visual-regression baseline:             CREATED - 9 IMAGES, REPRESENTATIVE SUBSET
-accepted numeric performance budget:              NONE EXISTS - NONE INVENTED
+visual coverage inventory:                        PROPOSED BY ADR-0033 / NOT IN FORCE - 9 OF 401 NOMINAL EXIST
+accepted numeric performance budget:              NONE EXISTS - PROPOSED BY ADR-0033, NOT IN FORCE
 reference viewports registered and swept:         6 OF 6
 per-route document titles:                        NOT ADDED - NOT REQUIRED BY ANY CLAUSE
 new API routes, handlers or server actions:       NONE
@@ -5234,7 +5252,85 @@ live trading:                                     HARD-DISABLED
 
 **A polished interface over deterministic fixtures is a polished interface over deterministic
 fixtures.** **Specification, implementation, research, deployment and execution stay five separate
-gates**, and merging this cycle would open none of the others.
+gates**, and merging this cycle opened none of the others.
+
+### The remaining C10 acceptance decisions, and ADR-0033 — PROPOSED, and nothing is implemented
+
+**Four things the C10 acceptance record left open now have a proposed definition, and none has
+moved.** [ADR-0033](docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is **PROPOSED —
+NOT IN FORCE while its pull request is open**, and so are the five subsections it adds to
+[`docs/cockpit/ui-ux-specification.md`](docs/cockpit/ui-ux-specification.md) — §12.1 and
+§15.1–§15.4. On independent review and merge it becomes **ACCEPTED / IN FORCE** as **acceptance
+criteria, measurement conditions, coverage rules and an assessment protocol**, and nothing else. **It
+amends and supersedes no ADR**, edits no U1–U20 criterion, no read-model contract and no
+traceability-matrix row, and **it implements nothing**: no user interface changed, no browser suite
+ran, no screenshot was created or regenerated, no measurement was taken, no software was installed,
+no CI was configured, and **no human accessibility assessment occurred**.
+
+| Decision | What it defines | What it does not do |
+|---|---|---|
+| **M — mobile executive summary** | below 640 CSS px on `/` only, in both modes and both scenarios, the accepted summary — shell, page header with its state badge, the six tier-1 tiles, Attention Required, and in the project scenario the unavailable-state explanation — renders first, and **every other section stays on the same page behind a labelled, accessible disclosure**: *What changed — details*, *Performance overview*, *Supporting context*, and in Operator mode *Response evidence*. **Deferred, not omitted; no route invented**, because none owns What Changed or tier 2. The page-level `PARTIAL`/`ERROR` badge, freshness, the *Is anything wrong?* tile, the two top attention items and the What Changed tile's state stay visible; **each disclosure carries its section's worst availability badge**; focus stays on the control; state lives for the page instance only. A content-to-location table accounts for every existing section, and eight test obligations say how hidden content is told apart from missing data | build it. **The §12 row stays NOT SATISFIED** until an implementation meets M8 |
+| **PB — performance budgets** | five budgets with units, start and end marks, conditions and aggregation: **PB1** first answer to read-model readiness p50 ≤ 1 000 ms, none > 1 500 ms; **PB2** first contentful paint p50 ≤ 800 ms, none > 1 200 ms, **evaluable only when obtained**; **PB3** palette open p50 ≤ 100 ms, none > 200 ms; **PB4** mode switch p50 ≤ 300 ms, none > 500 ms; **PB5** ≤ 750 KB transferred per route. **Condition L** — production build, loopback, one worker, 1440 × 900, no throttling, five cold samples after a discarded warm-up, seven named routes in `demo`. Condition M (390 × 844, 4× CPU) at 2× the figures, **unmeasured**; Condition F (deployed) **no budget** — **local timings establish no production service performance**. **`NOT OBTAINED` is never zero, never passing, never dropped from the denominator**; a navigation that never reaches its end mark is a failure. Bounded query time **DEFERRED** to a read-model boundary | establish compliance. **No retained run meets the sampling protocol, the production run's first contentful paint is `NOT OBTAINED`, and the §15 row stays `PARTIAL`.** Every figure is a **proposed engineering target**, chosen to bound growth rather than to make today's numbers pass |
+| **VC — visual coverage** | *route*, *state*, *fixed viewport list* and *inapplicable* each defined as a **proposed interpretation** (VC-I1–I4): every registry route and deep destination; every state the scope selectors reproduce from a URL — scenario, mode, declared variants; three original widths for every route and **all six** for `/`; inapplicability **only under a cited rule** VC-R1–R5, an uncited one being a gap that reads `PARTIAL`. **401 nominal snapshots over 32 route identifiers**, nine of which exist; the existing recipe unchanged — frozen clock, no masking, **zero tolerance on every image**; state from the URL only; provenance recorded per baseline; **a diff is a review item**, `--update-snapshots` never run to pass a failing comparison, **no masking, tolerance increase or automatic regeneration** | capture anything. **Nine of 401 exist, the nine are byte-identical, and the §15 row stays `PARTIAL`.** A full Cartesian product is neither required nor silently waived: the interpretation is stated so accepting it is a decision |
+| **SR — manual screen-reader protocol** | one named human assessor who did not author C10 — **assignment OUTSTANDING**; **NVDA + Chrome on Windows 11** primary, versions recorded at execution; VoiceOver + Safari secondary **if available**; ten journeys plus a structural pass over every registered route, each traced to its clause; headings, landmarks, names, tables, dialogs, disclosures, live regions, loading, errors and focus restoration checked; the keyboard-only pass a **separate** session and evidence; S1/S2 fail, S3/S4 recorded; sanitized sheets under `docs/cockpit/accessibility/`; **`ASSESSED — PASSED` only with zero S1/S2 across every journey on the primary combination** | run it. **An axe pass is not a screen-reader assessment**, no assistive technology is claimed available, and the pass stays **`NOT_ASSESSED`** |
+
+**The acceptance accounting is four columns — contract defined, implemented, tested, accepted — and
+every one of these rows is in the first at most**, and, while the pull request is open, not even
+there. **Carried forward, unabsorbed:** rejected reads render like pending reads; `reuseExistingServer`
+describes the server and cannot prove it; the intermittent client-render failure's cause is **NOT
+ESTABLISHED**; the capacity declaration-to-input mapping and its nine absent inputs; **the original
+PR #84 Linux review evidence is UNAVAILABLE** and the two Windows sets are separate evidence; **C5
+and C7 NOT COMPLETE**.
+
+```text
+ADR-0033:                                         PROPOSED / NOT IN FORCE
+ADR-0033 acceptance event:                        INDEPENDENT REVIEW AND MERGE OF ITS PULL REQUEST - NOT PREDICTED
+ui-ux-specification.md 12.1 and 15.1-15.4:        PROPOSED / NOT IN FORCE
+decision M - mobile executive summary:            PROPOSED - DEFERRED BEHIND DISCLOSURES, NOT OMITTED
+decision M implementation:                        NOT STARTED / NOT AUTHORIZED
+mobile executive summary - section 12:            NOT SATISFIED - RESOLUTION PROPOSED BY ADR-0033, NOT IN FORCE
+decision PB - performance budgets:                PROPOSED - FIVE BUDGETS, CONDITION L
+accepted numeric performance budget:              NONE EXISTS - PROPOSED BY ADR-0033, NOT IN FORCE
+performance compliance:                           NOT ESTABLISHED - NO RUN MEETS THE SAMPLING PROTOCOL
+first contentful paint, production run:           NOT OBTAINED - NEVER ZERO, NEVER PASSING
+decision VC - visual coverage inventory:          PROPOSED - 401 NOMINAL SNAPSHOTS, 32 ROUTE IDENTIFIERS
+visual coverage inventory:                        PROPOSED BY ADR-0033 / NOT IN FORCE - 9 OF 401 NOMINAL EXIST
+existing zero-tolerance comparisons:              9 - UNCHANGED
+new screenshot baselines created:                 NONE
+decision SR - manual screen-reader protocol:      PROPOSED - NVDA + CHROME PRIMARY, TEN JOURNEYS
+manual screen-reader protocol:                    PROPOSED BY ADR-0033 / NOT IN FORCE - ASSESSOR OUTSTANDING
+manual screen-reader pass:                        NOT ASSESSED
+assessor assigned:                                NONE - OUTSTANDING
+assistive technology available to this session:   NONE CLAIMED
+section 15 criteria satisfied:                    1 OF 4
+C10 polish and acceptance cycle:                  MERGED / NOT AN ACCEPTANCE
+user interface changed by ADR-0033:               NONE
+browser suites run for ADR-0033:                  NONE
+dependencies installed or CI configured:          NONE
+C5:                                               NOT COMPLETE
+C7:                                               NOT COMPLETE
+full Cockpit V1:                                  INCOMPLETE
+Brain runtime:                                    NOT IMPLEMENTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**Accepting a definition of done is not doing it.** **Specification, implementation, research,
+deployment and execution stay five separate gates**, and this decision sits entirely within the first.
 
 ### The C5 completion follow-up — MERGED, IMPLEMENTED IN PART, and C5 is still not complete
 
@@ -5391,7 +5487,7 @@ broker activity:                                  NONE
 orders placed by this cycle:                      NONE
 backtesting:                                      NOT STARTED
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
-C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
+C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -5544,7 +5640,7 @@ backtesting:                                      NOT STARTED
 Brain runtime:                                    NOT IMPLEMENTED / NOT AUTHORIZED
 C5:                                               NOT COMPLETE
 C7:                                               NOT COMPLETE
-C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
+C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
