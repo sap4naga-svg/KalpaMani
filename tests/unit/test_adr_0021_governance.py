@@ -767,6 +767,43 @@ def test_placeholders_and_negative_statements_pass_the_scanner(sample: str) -> N
     assert not GUARD.adr_0021_identifier_leaks(sample)
 
 
+def test_a_digit_run_inside_a_commit_sha_is_not_an_account_id() -> None:
+    """The status documents record merges by SHA, and a SHA can carry twelve digits.
+
+    PR #87's reviewed head does. Refusing it would force a status document to drop the
+    very hash that makes "the thing that merged is the thing that was reviewed" checkable;
+    admitting a BARE twelve-digit run would let a real account id through. Both halves
+    are asserted.
+    """
+    sha_with_twelve_digits = "PR #87 final reviewed head: 34be5a4a2b9c29fbc7ac19f754273733035bd67d"
+    assert not GUARD.adr_0021_identifier_leaks(sha_with_twelve_digits)
+    sha256_with_twelve_digits = (
+        "digest 2726b96dd69c8982788b1c2bd646ce7a52879c649994318588cd41666761996d"
+    )
+    assert not GUARD.adr_0021_identifier_leaks(sha256_with_twelve_digits)
+    assert GUARD.adr_0021_identifier_leaks("account 754273733035 is real")
+    assert GUARD.adr_0021_identifier_leaks("arn:aws:iam::754273733035:role/x")
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        # A real id beside a hex letter is still a real id. The proposal's first cut of the
+        # SHA exemption -- "neither neighbour is a hex letter" -- admitted every one of these.
+        "bucket-754273733035eu-west-1",
+        "id=a754273733035",
+        "ssoins-754273733035abcd",
+        "token 754273733035abcd",
+        "754273733035d",
+        # A digest word that is not a full SHA-1 or SHA-256 excuses nothing.
+        "prefix 754273733035abcdef0123456789abcdef01",
+    ],
+)
+def test_a_twelve_digit_run_beside_a_hex_letter_still_leaks(sample: str) -> None:
+    """Only a run INSIDE a full forty- or sixty-four-character digest word is excused."""
+    assert GUARD.adr_0021_identifier_leaks(sample), sample
+
+
 # ---------------------------------------------------------------------------
 # Both status documents, independently and section-locally
 # ---------------------------------------------------------------------------

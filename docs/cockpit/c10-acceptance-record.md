@@ -1,5 +1,20 @@
 # Cockpit V1 — C10 acceptance record
 
+> **HISTORICAL — the status line below was written while PR #87 was open, and it is kept as the
+> record of those days.** **PR #87 has since MERGED** — merged **2026-09-10T02:49:20Z**, merge commit
+> `28e27a99b6dcf9d947c209e47fe319f914bf243b`, final reviewed head
+> `34be5a4a2b9c29fbc7ac19f754273733035bd67d`, with exactly two ordered parents —
+> `71247b8519c036eb2428107183431087e9ea9710` then that reviewed head — and a **merge tree identical
+> to the reviewed head's tree**, `ad64f3723cf0b8406461539513189596cb653a56`. Each of those was read
+> from the commit objects and from the live repository, not predicted. **The merge changes what this
+> document is — a merged, independently reviewed record — and changes none of its dispositions**:
+> §15 stays at **one of four**, the manual screen-reader pass stays **`NOT_ASSESSED`**, the mobile
+> executive summary stays **NOT SATISFIED — AMBIGUITY RECORDED**, and **a merged record is still not
+> an acceptance decision**. **The four decisions the record left open are now proposed, not taken**,
+> by [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) — **PROPOSED, NOT IN
+> FORCE while its pull request is open**; see §12 below. **No historical failure in this record is
+> rewritten into a pass by the merge.**
+
 **Status: PROPOSED — carried by an open pull request, and carrying no authority until that pull
 request is merged.** Nothing here accepts a cycle, closes a gate, selects a provider or authorizes
 an operation. It began as an **author's requirement-by-requirement assessment**, written so an
@@ -594,8 +609,9 @@ client render** — a chunk request issued during hydration, hydration itself, o
 it. Tracing was off in both runs, so which of the three it was **was not recorded**, and the review's
 later isolated probes overwrote the only artifact the failures left.
 
-**Three causes that were offered are unsupported or contradicted, and are withdrawn from this
-record and from the spec's commentary.**
+**Four causes that were offered are unsupported or contradicted, and are withdrawn from this
+record and from the spec's commentary.** *Corrected after the merge*: this sentence read *"Three
+causes"* above a table of four rows; the table was right and the sentence was not.
 
 | Offered cause | Standing |
 |---|---|
@@ -622,3 +638,34 @@ limitation of the application and was not changed in this cycle, because no reje
 **The definitive run for the merge decision is recorded in the pull request**, at the exact final
 commit, with every gate's raw exit code. **A passing browser suite is a passing gate, not a diagnosis,
 and not an acceptance**: C10 stays at one of four §15 criteria, and full Cockpit V1 stays INCOMPLETE.
+
+---
+
+## 12. After the merge — what is decided, what is proposed, and what is still not done
+
+**PR #87 merged, and merging it moved nothing in §4–§11.** The dispositions above are the reviewed
+record's, and they are read here rather than revised: **§15 at one of four**, the mobile summary
+**NOT SATISFIED**, the performance and visual rows **`PARTIAL`**, the manual screen-reader pass
+**`NOT_ASSESSED`**.
+
+**The four decisions §7 left open are proposed by
+[ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md), and it is PROPOSED — NOT IN
+FORCE while its pull request is open.** It takes each as a definition, and it is careful to take
+nothing else:
+
+| Open item in this record | ADR-0033 decision | What acceptance of the ADR would establish | What it would not |
+|---|---|---|---|
+| §7.2 — omit or defer at 390 × 844 | **M** — deferred behind labelled disclosures on the same page; nothing omitted, no route invented | what *"executive summary only"* requires | that the row is satisfied — it stays **NOT SATISFIED** until M is implemented and M8 passes |
+| §7.3 — no budget exists | **PB** — five budgets with units, marks, conditions and aggregation; `NOT OBTAINED` never a pass; bounded query time `DEFERRED`, which caps the row at `PARTIAL` | the budgets | compliance — no retained run meets the sampling protocol, the retained first-answer figures were taken to the shell mark rather than PB1's, and PB2 is `NOT OBTAINED` |
+| §7.4 — a representative baseline | **VC** — a 439-snapshot nominal inventory with cited applicability rules, route-level `ERROR` recorded `NOT YET CONSTRUCTIBLE`, zero tolerance preserved | what *"per route and per state"* means | any new image — nine of 439 exist |
+| §7.1 — no screen reader run | **SR** — a named-assessor protocol, NVDA + Chrome primary, ten journeys of which the mobile one is `BLOCKED` on M and never skipped, severity and closure rules; **assessor OUTSTANDING** | the protocol | that anyone ran it — **`NOT_ASSESSED`** |
+
+**Contract defined, implemented, tested and accepted are four columns**, and every row is in the
+first at most — and, while ADR-0033's pull request is open, not even there.
+
+**Carried forward from §9 and §11, unchanged by the merge and by the proposal:** rejected reads render
+like pending reads; the suite's `reuseExistingServer` describes the server and cannot prove it; the
+intermittent client-render failure's cause is **NOT ESTABLISHED**; the capacity declaration-to-input
+mapping stays unresolved and its nine inputs absent; the original PR #84 Linux review evidence is
+**UNAVAILABLE** and the two Windows sets are separate evidence; **C5 and C7 are NOT COMPLETE** and
+**full Cockpit V1 is INCOMPLETE**.
