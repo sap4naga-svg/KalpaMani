@@ -29,6 +29,19 @@
 > §13 below records what it delivers and what it does not. The statement above that ADR-0033 is
 > *PROPOSED, NOT IN FORCE while its pull request is open* was true of those days and is not rewritten.
 
+> **PR #89 has since MERGED, and the §12 mobile executive summary row is SATISFIED effective on that
+> merge.** Merged **2026-09-10T19:36:19Z**, merge commit `893a33d4f129d91fbdc630b89dc445d503302105`,
+> final reviewed head `eb348dcb76163ce2e58dbc2a4ff6af6dd18c6101`, with exactly two ordered parents —
+> `948dcf4e6c9a8606134adbfde067047bdb170d6e` then that reviewed head — and a **merge tree identical to
+> the reviewed head's tree**, `9ecf721763cabc43dea62dcb20056099b7718827`. Each of those was read from
+> the commit objects and from the live repository, not predicted. **The independent review made no
+> correction and recorded its disposition on the §12 row as SATISFIED, effective on merge, to be read
+> into this record by the post-merge synchronization**; §14 below reads it. **One row moved and no
+> other**: §15 stays at **one of four**, the manual screen-reader pass stays **`NOT_ASSESSED`** with
+> J8's blocker removed and the journey unrun, the performance and visual rows stay **`PARTIAL`**, and
+> C10, C5, C7 and full Cockpit V1 stay incomplete. The statement above that the implementation is
+> *in an open pull request, pending independent review* was true of those days and is not rewritten.
+
 **Status: PROPOSED — carried by an open pull request, and carrying no authority until that pull
 request is merged.** Nothing here accepts a cycle, closes a gate, selects a provider or authorizes
 an operation. It began as an **author's requirement-by-requirement assessment**, written so an
@@ -776,6 +789,10 @@ PR #84 Linux review evidence is **UNAVAILABLE**.
 
 ### 13.5 Status
 
+> **HISTORICAL — the state as of the open pull request.** PR #89 has since merged and its review's
+> disposition has been read into §14; the lines below record what was true while the pull request
+> was open, they stay true of those days, and they **no longer govern**.
+
 ```text
 ADR-0033:                                         ACCEPTED / IN FORCE
 PR #88:                                           MERGED
@@ -800,3 +817,137 @@ full Cockpit V1:                                  INCOMPLETE
 
 **Implemented is not accepted, and an open pull request is not merged.** **Specification,
 implementation, research, deployment and execution stay five separate gates.**
+
+## 14. After PR #89 — the §12 mobile row read SATISFIED, and the Executive Overview readability refinement
+
+**PR #89 merged, its independent review found the Decision M evidence sufficient, and this section
+reads that disposition into the record — one row, and no other.**
+
+### 14.1 The merge event, and the review that preceded it
+
+**PR #89 is merged** — merge commit `893a33d4f129d91fbdc630b89dc445d503302105`, final reviewed head
+`eb348dcb76163ce2e58dbc2a4ff6af6dd18c6101`, merged **2026-09-10T19:36:19Z**, ordered parents
+`948dcf4e6c9a8606134adbfde067047bdb170d6e` then that reviewed head, merge tree
+`9ecf721763cabc43dea62dcb20056099b7718827` — **identical to the reviewed head's tree**. Each was read
+from the commit objects, from a single `git fetch`, and from the live repository by API.
+
+**The independent review** (retained at `C:\Trading\km-pr89-review-evidence`, report
+`07-review-record-final-as-posted.md`, and posted to the pull request) tested twelve coordinator
+hypotheses against the source and the rendered page, refuted eleven and confirmed one as a process gap
+rather than a defect, traced M1–M7 and M8.1–M8.10 to real tests with independent expectations, ran the
+complete six-project browser suite on exact `main` (1238 passed) and twice on the exact head — run 1:
+1414 passed and 2 failed on `net::ERR_NO_BUFFER_SPACE` chunk requests, retained and analysed; run 2,
+instrumented: 1416 passed — with every repository gate exit 0, verified the nine original baselines
+byte-identical **and** passing at zero tolerance on its own runs, made **no correction**, and merged
+under its instruction's pre-merge conditions with `--match-head-commit` pinned to the validated SHA.
+
+### 14.2 The §12 mobile row — SATISFIED, effective on the merge of PR #89
+
+`ui-ux-specification.md` §12.1 states the convention: *the row is satisfied only by an implementation
+that meets the M8 test obligations, read into the acceptance record after independent review.* The
+review is that independent reading. Its Disposition B: **"the supported disposition of the §12 mobile
+row is SATISFIED, effective on merge, to be read into the acceptance record by the post-merge status
+synchronization."** This section is that synchronization.
+
+| Row | Was | Is | Basis |
+|---|---|---|---|
+| **§12 — mobile executive summary (390 × 844, "executive summary only")** | NOT SATISFIED — AMBIGUITY RECORDED (§7.2); then NOT SATISFIED — IMPLEMENTATION AND M8 TESTS IN AN OPEN PULL REQUEST (§13) | **SATISFIED — effective on the merge of PR #89** | Decision M (ADR-0033 §2) accepted the definition; PR #89 implemented M1–M7 and established M8.1–M8.10 in all six browser projects; the independent review re-established them on its own complete runs at the exact head and read the evidence against §12.1 |
+
+**Every earlier disposition of this row stays in this record as the truth of its day** — §7.2's
+ambiguity, §12's *defined, not delivered*, §13's *in an open pull request* — and none is rewritten.
+
+### 14.3 What did not move
+
+| | |
+|---|---|
+| **§15 — one of four** | unchanged. The synthetic end-to-end row is satisfied; the other three are not |
+| **J8 — the mobile screen-reader journey** | its implementation blocker (`BLOCKED — M NOT IMPLEMENTED`) is **removed** by the merge; the journey is **unrun**, no assessor is assigned, no assistive technology was used, and the manual pass stays **`NOT_ASSESSED`** |
+| **§15 performance** | **`PARTIAL`** — PB-Q stays `DEFERRED`, which caps the row however PB1–PB5 report, and **no PB run has been taken** under the accepted protocol |
+| **§15 visual regression** | **`PARTIAL`** — thirteen of 439 nominal snapshots exist on `main`; route-level `ERROR` stays `NOT YET CONSTRUCTIBLE` |
+| **C10, C5, C7, full Cockpit V1** | **incomplete**, exactly as before |
+
+**Carried forward, unabsorbed:** the browser chunk-failure cause is **NOT ESTABLISHED** — the review's
+head/`main` asymmetry stands recorded, and its 60-second socket sampling neither confirmed nor ruled out
+a transient socket condition; the author's and the reviewer's failed-run ledgers are retained as they
+were reported; rejected reads render like pending reads; `reuseExistingServer` describes the server
+and cannot prove it; the capacity declaration-to-input mapping and its nine absent inputs; **the
+original PR #84 Linux review evidence is UNAVAILABLE**.
+
+### 14.4 The Executive Overview readability refinement — in an open pull request, and not an acceptance
+
+**After the merge the owner assessed the cockpit and found the Executive Overview clumsy, text-heavy
+and slow to digest.** A bounded presentation refinement is in an open pull request, pending the
+owner's assessment and independent review. It is recorded here because it re-captures every committed
+visual baseline and because a reader of this record must not mistake it for a change in any
+disposition.
+
+**Findings, each verified in the rendered page before it was changed** (evidence:
+`C:\Trading\km-post89-exec-usability-evidence`, `findings.md`):
+
+| # | Confirmed | Bounded correction | Contract |
+|---|---|---|---|
+| F1 | tier-1 figures at `numeric-l` under an uppercase subject of near-equal weight | figure → `numeric-xl`; subject demoted to sentence-case secondary text | §1, §4.4 |
+| F2 | a caveat sentence on every tile in the first viewport | contract explanations behind a per-tile accessible `<details>`; badges, PARTIAL, health, no-baseline explanation stay visible | §4.4; ADR-0033 M2, M4 |
+| F3 | six links reading *Open the area that owns this* | link text is the registered area label of the destination, never a record | §3; ADR-0031 |
+| F4 | 33 sidebar links in ten groups, ~1,370 px tall | **not changed** — collapsible groups would conflict with §12 *full navigation* at 1280 × 800 and its accepted reachability test; recorded as a limitation | §3, §12 |
+| F5 | a millisecond ISO instant and technical subjects on tier 1 | `YYYY-MM-DD HH:MM UTC` on the tile, full instant kept in the panel; plain-language subjects | §8 |
+| F6 | headline return with no window beside a chart over the URL period; the overview contract declares no window for `return_pct` | tile states its as-of and that its window is not stated; chart states period, granularity and declared window; **no shared period implied, no period-adjusted figure invented** | read-model-contracts "Executive"; `PerformanceSeries.window` |
+| F7 | banner *every figure on this page is a fixture* above a `TRACKED FACT` tile | banner describes the mixed sources; lead phrase preserved | §5, §9.4 |
+| F8 | open planned risk `+757.15 USD` in the gain colour; broker equity `+1,000,000.00` in green | magnitudes on the accepted `neutral` convention; drawdown stays directional | §4.3, §4.4 |
+
+**A shared-primitive defect, measured and corrected.** On exact `main` every tier-1 figure, tile
+subject, badge, tier-2 figure and panel heading computed to 16 px — the body size — because `cn()`'s
+tailwind-merge did not know the theme's `text-numeric-*` / `text-label-*` size tokens, read them as
+text colours and dropped each one behind the colour that followed it. The accepted numeric hierarchy
+(§4.4) had never reached the screen on any route. `src/lib/utils.ts` now registers the six tokens as
+the font-size class group; every route renders at its specified sizes, and the full six-project sweep
+re-established overflow, clipping, headings and axe at every reference viewport. This is a correction
+of a shared primitive and not a redesign of any route; its effect on the other routes is a change in
+rendered size only, and it is recorded here so that a reader of the thirteen baseline diffs knows why
+the `availability-states` images changed too.
+
+**Visual baselines.** All thirteen committed images are re-captured under the unchanged recipe —
+frozen clock, reduced motion, seeded fixtures, nothing masked, zero tolerance — because the size-token
+correction touches the shell on every route, the tier-1 tiles are on every overview image and the
+banner is on every route. **The nine C10 images were
+byte-identical from their creation through the merge of PR #89**, which is the historical fact the
+digest pin recorded; the pin now covers all thirteen images at their re-captured digests, so any later
+change to any of them stays a review item by construction. The nominal inventory is not expanded and
+stays at thirteen of 439.
+
+**What the refinement is not.** It is not owner-accepted — the owner's ten-second assessment is
+pending; it is not independently reviewed; it moves no row of this record; it changes no read model,
+schema version, metric definition, fixture, trade fact, risk denominator, reference kind,
+authorization or route ownership; it measures no performance budget and performs no screen-reader
+assessment.
+
+### 14.5 Status
+
+```text
+PR #89:                                           MERGED
+PR #89 merge commit:                              893a33d4f129d91fbdc630b89dc445d503302105
+PR #89 merged at:                                 2026-09-10T19:36:19Z
+PR #89 final reviewed head:                       eb348dcb76163ce2e58dbc2a4ff6af6dd18c6101
+PR #89 merge tree:                                9ecf721763cabc43dea62dcb20056099b7718827
+independent review of PR #89:                     PERFORMED - NO CORRECTION
+decision M implementation:                        MERGED AS PR #89 - INDEPENDENTLY REVIEWED BEFORE MERGE
+mobile executive summary - section 12:            SATISFIED - EFFECTIVE ON THE MERGE OF PR #89, READ INTO THE RECORD FROM ITS INDEPENDENT REVIEW
+M8 obligations traced to tests:                   10 OF 10 - ON MAIN, ESTABLISHED ON THE REVIEW'S OWN COMPLETE RUNS
+J8 - mobile summary journey:                      IMPLEMENTATION BLOCKER REMOVED BY PR #89 - NOT ASSESSED
+manual screen-reader pass:                        NOT ASSESSED
+section 15 criteria satisfied:                    1 OF 4
+performance row:                                  PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN
+visual coverage inventory:                        ACCEPTED BY ADR-0033 / IN FORCE - 13 OF 439 NOMINAL ON MAIN
+existing zero-tolerance comparisons:              9 - BYTE-IDENTICAL THROUGH PR #89; RE-CAPTURED BY THE READABILITY REFINEMENT WITH REVIEWED DIFFS, DIGESTS RE-PINNED
+new screenshot baselines created:                 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, MERGED AS PR #89
+Executive Overview readability refinement:        IN AN OPEN PULL REQUEST - PENDING OWNER ASSESSMENT AND INDEPENDENT REVIEW
+screenshot baselines re-captured by it:           13 OF 13 - INTENTIONAL, REVIEWED DIFFS, REASONS RECORDED IN THE ACCEPTANCE RECORD
+browser chunk-failure cause:                      NOT ESTABLISHED
+C10 polish and acceptance cycle:                  MERGED / NOT AN ACCEPTANCE
+C5:                                               NOT COMPLETE
+C7:                                               NOT COMPLETE
+full Cockpit V1:                                  INCOMPLETE
+```
+
+**One satisfied row is one satisfied row.** **Specification, implementation, research, deployment and
+execution stay five separate gates.**
