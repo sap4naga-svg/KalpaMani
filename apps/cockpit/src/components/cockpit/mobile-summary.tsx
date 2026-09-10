@@ -150,19 +150,20 @@ export function SummaryDisclosure({
     if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocusWithin(false);
   }, []);
 
-  const open = layout !== "summary" || expanded || focusWithin;
-
   /*
-   * A section held open by focus across a downward crossing STAYS expanded afterwards, as a
-   * section the reader expanded would: the reader is inside it, and moving focus out again
-   * must not snap it shut under them. The crossing is detected from the previous render's
-   * layout, which is the pattern for adjusting state when an input changes.
+   * A section holding focus when the viewport crosses downward is EXPANDED by that crossing,
+   * as a section the reader expanded would be: the reader is inside it, and it must neither
+   * close under them nor snap shut when focus later moves out. The crossing is detected from
+   * the previous render's layout -- the pattern for adjusting state when an input changes --
+   * and the adjustment lands in the same render, before the `<details>` could close.
    */
   const [previousLayout, setPreviousLayout] = React.useState(layout);
   if (previousLayout !== layout) {
     setPreviousLayout(layout);
     if (layout === "summary" && focusWithin && !expanded) setExpanded(true);
   }
+
+  const open = layout !== "summary" || expanded;
 
   /*
    * ONLY THE READER EXPANDS A SECTION. The `toggle` event also fires when a breakpoint
@@ -178,7 +179,7 @@ export function SummaryDisclosure({
     [layout],
   );
 
-  const collapsedControl = layout !== "full" && !expanded && !focusWithin;
+  const collapsedControl = layout !== "full" && !expanded;
 
   /*
    * BEFORE THE BREAKPOINT IS KNOWN the markup carries a CSS fallback instead of a guess:
