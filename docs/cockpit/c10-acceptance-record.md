@@ -560,7 +560,65 @@ run — which is recorded rather than quietly re-run.**
 | a design token shifted, against the **default** screenshot tolerance | **PASSED — the control was INERT.** Playwright's default per-pixel threshold of 0.2 absorbed a visible colour change, so the baseline was tightened to **zero tolerance** before it was trusted |
 | the same token shifted, against the **tightened** baseline | failed, with **13 489 to 17 472** differing pixels |
 | the baseline re-run twice on an unchanged tree | **byte-identical both times**, before and after the tightening |
-| the baseline inside a full six-project run | **ONE FLAKE, and it is recorded rather than re-run away.** The availability-state screen's *precondition* wait — the 5-second default, waiting for the page to render at all — expired before any screenshot was taken, in a 33-minute run, on the heaviest page a development server compiles on demand. The same test passed **four of four** in isolation and at **every other viewport in the same run**. The precondition waits are now explicit at 30 seconds; **the comparison itself is untouched and still fails on one differing pixel** |
+| the baseline inside a full six-project run | **ONE FLAKE, and it is recorded rather than re-run away.** The availability-state screen's *precondition* wait — the 5-second default, waiting for the page to render at all — expired before any screenshot was taken, in a 33-minute run. The same test passed **four of four** in isolation and at **every other viewport in the same run**. **Corrected in the browser-gate diagnosis (§11.6)**: this row previously attributed the wait to *"the heaviest page a development server compiles on demand"*, which the run's own log contradicts — the same server had loaded that route 55 tests earlier. The precondition waits are now explicit at 30 seconds; **the comparison itself is untouched and still fails on one differing pixel** |
 | a 2400-pixel element injected, against the **document-overflow** measurement | **PASSED — inert**, which is the finding in §11.3 |
 | a 2400-pixel element injected, against `clippedBeyondViewport` | failed, as designed |
 | one grep-scoped control | **matched no test and proved nothing.** Re-run with a correct pattern rather than counted |
+
+### 11.6 The full browser suite — the two failures, and what their cause is not
+
+**The browser gate did not pass literally on this branch's first two full runs at its final content,
+and the record keeps every run rather than the best one.** The suite has **1238 tests across six
+projects**, on one worker, against a `next dev` server. Four full six-project runs have been made on
+trees whose application and end-to-end content is identical apart from the visual spec's precondition
+wait and this record; each is listed with its result, and none is omitted.
+
+| Run | Tree | Result | The one failure |
+|---|---|---|---|
+| review run 1 | `4199de7` — inferred from the review worktree's reflog and the log's timing; the log itself records no commit | **1238 passed**, exit 0, 38.4 min | none |
+| review run 2 | `c19b0ab` — inferred the same way, and consistent with the failure: it ran the 5-second precondition that `e385b41` later replaced | 1237 passed, **1 failed**, exit 1, 33.3 min | `c10-visual-regression.spec.ts:116`, desktop-1440, the **5-second default precondition** — the freshness indicator had not appeared; no screenshot was taken |
+| review run 3 | `e385b41` — the review's recorded final head, and the run its ledger reports | 1237 passed, **1 failed**, exit 1, 33.4 min | `c7-research.spec.ts:342`, desktop-1440, its own **20-second precondition** — one skeleton stayed on `/research/hypotheses` for the whole wait |
+| diagnosis run, instrumented | `e385b41`, task-owned server with its log retained, `--trace retain-on-failure`, a socket sampler every 5 s, nothing else running | **1238 passed**, exit 0, 37.9 min | none — **the failure did not reproduce** |
+
+**The review's earlier text tabulated two of its three six-project runs.** The passing first run was
+real, is retained, and is listed above; omitting it understated the evidence rather than overstating it,
+and a ledger that lists only the failures is as incomplete as one that lists only the passes.
+
+**What the two failures establish, read from the retained logs rather than from a theory.** In each,
+`page.goto` had returned — the document was served and the server-rendered context bar was visible —
+and the client-rendered content had not appeared within the wait. In run 3 the very next test loaded
+its page in 1.3 seconds against the same server, and `/research/hypotheses` carries exactly one read
+panel, so *one skeleton for 20 seconds* is *nothing client-rendered for 20 seconds*, not one slow read
+among several. The failing operation is therefore **after the document response and before the first
+client render** — a chunk request issued during hydration, hydration itself, or the read that follows
+it. Tracing was off in both runs, so which of the three it was **was not recorded**, and the review's
+later isolated probes overwrote the only artifact the failures left.
+
+**Three causes that were offered are unsupported or contradicted, and are withdrawn from this
+record and from the spec's commentary.**
+
+| Offered cause | Standing |
+|---|---|
+| *"compiled on demand by the development server"* | **contradicted** — run 2's own log shows `/foundation/states` loaded at 1.1 s, 55 tests earlier, on the same server |
+| *"the machine intermittently stalls a `next dev` page load"* | **not supported as stated** — in both failures the page load completed; what did not complete came after it. The diagnosis run's server log shows all 2,292 document requests answered, the slowest in 1.8 s, with one compile and no error — though the development server does not log chunk requests, so a stalled chunk is not excluded by it |
+| the author's `net::ERR_NO_BUFFER_SPACE` observation generalized to socket pressure | **unsupported by measurement** — the socket sampler peaked at 620 `TIME_WAIT` connections against a 16 384-port dynamic range |
+| a fixture-backed read rejecting, which `ReadModelPanel` would show as a skeleton | **unsupported** — 86 400 reads over 7 200 distinct session instants, the two reads that route issues, zero rejections |
+
+**The cause is NOT ESTABLISHED.** *Environmental* and *unrelated to this branch* are hypotheses here,
+not findings: the added coverage raises the number of page loads from 890 to 1238, and a per-load
+failure whose mechanism is unknown cannot be declared independent of the workload that exposed it.
+
+**One bounded correction, and why it is the right one.** The runner recorded `trace: "off"`, so a
+failing test left only an ARIA snapshot. It now retains the trace of a **failing** test only —
+network, console and DOM timeline — and discards a passing test's, so no tracked artifact is produced
+and no assertion, timeout, project, tolerance or coverage changes. The control: a deliberately failing
+test under the old setting left **zero** trace archives; the same test under the new setting left
+**one**, holding a network log; a passing test under the new setting left **none**. A recurrence will
+carry its own evidence. No pre-existing timeout was inflated, no retry was added, nothing was skipped,
+and no isolated pass is substituted for the full suite. **A `ReadModelPanel` cannot distinguish a
+rejected read from a pending one** — both render the skeleton — which is recorded as an observability
+limitation of the application and was not changed in this cycle, because no rejection was found.
+
+**The definitive run for the merge decision is recorded in the pull request**, at the exact final
+commit, with every gate's raw exit code. **A passing browser suite is a passing gate, not a diagnosis,
+and not an acceptance**: C10 stays at one of four §15 criteria, and full Cockpit V1 stays INCOMPLETE.

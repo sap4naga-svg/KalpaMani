@@ -78,14 +78,20 @@ test.use({ reducedMotion: "reduce" });
  * zero. This only waits for the page to have rendered before anything is compared.
  *
  * IT IS EXPLICIT BECAUSE THE DEFAULT WAS NOT ENOUGH, ONCE. In a full six-project run the
- * availability-state reference screen -- the heaviest page here, compiled on demand by the
- * development server -- had not yet shown its freshness indicator when the 5-second default
- * expired, and the test failed WITHOUT EVER TAKING A SCREENSHOT. The same test passed four
- * times out of four in isolation, and at every other viewport in the same run: a
- * compile-and-load flake, not a rendering difference.
+ * availability-state reference screen had not yet shown its freshness indicator when the
+ * 5-second default expired, and the test failed WITHOUT EVER TAKING A SCREENSHOT. The same
+ * test passed four times out of four in isolation, and at every other viewport in the same
+ * run. What is known about that failure is narrower than a cause: the document had been
+ * served and the server-rendered context bar was visible, and the client-rendered freshness
+ * indicator -- which appears only after hydration and the first read -- had not appeared
+ * within 5 seconds. The route was NOT being compiled on demand: the same run had loaded it
+ * 55 tests earlier on the same server. Tracing was off, so which step had not completed --
+ * a chunk request during hydration, hydration itself, or the read -- was not recorded, and
+ * the failure did not reproduce under an instrumented full run. Its cause is NOT ESTABLISHED.
  *
- * A longer precondition wait removes that flake without weakening anything that is being
- * checked. A real rendering change still fails, at zero tolerance, exactly as before.
+ * A longer precondition wait separates a slow render from a rendering difference without
+ * weakening anything that is being checked: a real rendering change still fails, at zero
+ * tolerance, exactly as before, and a render that never completes still fails here.
  */
 const SETTLE_TIMEOUT_MS = 30_000;
 
