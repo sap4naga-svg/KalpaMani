@@ -15,6 +15,20 @@
 > FORCE while its pull request is open**; see §12 below. **No historical failure in this record is
 > rewritten into a pass by the merge.**
 
+> **PR #88 has since MERGED, and ADR-0033 is ACCEPTED / IN FORCE.** Merged **2026-09-10T11:55:50Z**,
+> merge commit `948dcf4e6c9a8606134adbfde067047bdb170d6e`, final reviewed head
+> `44d90a1f57b12d7590f20d69c5ba55a4ee54c502`, with exactly two ordered parents —
+> `28e27a99b6dcf9d947c209e47fe319f914bf243b` then that reviewed head — and a **merge tree identical
+> to the reviewed head's tree**, `ed1e4c54d7ac670d6eab21133a960cef7af71fc5`. Each of those was read
+> from the commit objects and from the live repository, not predicted. **The acceptance gave the
+> four open items their definitions and moved none of them**: §15 stays at **one of four**, the
+> manual screen-reader pass stays **`NOT_ASSESSED`**, the performance and visual rows stay
+> **`PARTIAL`**, and the mobile executive summary stays **NOT SATISFIED** — no longer for an
+> ambiguity, which Decision M resolved, but for the absence of an accepted implementation.
+> **An implementation of Decision M now exists in an open pull request, pending independent review**;
+> §13 below records what it delivers and what it does not. The statement above that ADR-0033 is
+> *PROPOSED, NOT IN FORCE while its pull request is open* was true of those days and is not rewritten.
+
 **Status: PROPOSED — carried by an open pull request, and carrying no authority until that pull
 request is merged.** Nothing here accepts a cycle, closes a gate, selects a provider or authorizes
 an operation. It began as an **author's requirement-by-requirement assessment**, written so an
@@ -643,6 +657,11 @@ and not an acceptance**: C10 stays at one of four §15 criteria, and full Cockpi
 
 ## 12. After the merge — what is decided, what is proposed, and what is still not done
 
+> **HISTORICAL — written while PR #88 was open.** This section records the days on which ADR-0033
+> was proposed and carried no authority. **PR #88 has since merged and ADR-0033 is ACCEPTED / IN
+> FORCE**; §13 records what followed. Nothing below is rewritten as though the decision had authority
+> before it was accepted, and nothing below is rewritten as though its acceptance had satisfied a row.
+
 **PR #87 merged, and merging it moved nothing in §4–§11.** The dispositions above are the reviewed
 record's, and they are read here rather than revised: **§15 at one of four**, the mobile summary
 **NOT SATISFIED**, the performance and visual rows **`PARTIAL`**, the manual screen-reader pass
@@ -669,3 +688,115 @@ intermittent client-render failure's cause is **NOT ESTABLISHED**; the capacity 
 mapping stays unresolved and its nine inputs absent; the original PR #84 Linux review evidence is
 **UNAVAILABLE** and the two Windows sets are separate evidence; **C5 and C7 are NOT COMPLETE** and
 **full Cockpit V1 is INCOMPLETE**.
+
+---
+
+## 13. After ADR-0033's acceptance — the Decision M implementation, in an open pull request
+
+**ADR-0033 merged as PR #88 on 2026-09-10, and Decision M has since been implemented, in a pull
+request that is open and pending independent review.** This section records that implementation
+against the accepted definition, and it is careful about what a delivered implementation is: **code
+and tests in a reviewable pull request**, not a merged cycle, not an acceptance, and not a satisfied
+row. **The dispositions in §4–§11 are unchanged by it.**
+
+### 13.1 What the implementation delivers, against M1–M7
+
+| Accepted clause | What was built |
+|---|---|
+| **M1 — the breakpoint** | a viewport rule, detected by `matchMedia("(width < 640px)")` through `useSyncExternalStore`, applied on `/` only, in both modes and both scenarios. At 640 pixels and above nothing changes |
+| **M2 — the summary set** | the shell, the page header with its state badge, the six tier-1 tiles, the attention panel with its two ranked items and its full-list link, the project scenario's *Why these tiles are empty* explanation and the closing `NOT_IMPLEMENTED` note render first, in document order |
+| **M3 — every other section deferred** | four `SummaryDisclosure` controls — *What changed — details* around the panel's card, *Performance overview*, *Supporting context* and, in Operator mode, *Response evidence* — each a native `<details>`/`<summary>` whose summary contains the section's `h2`. **No section is omitted, none moves, no route is invented, no reference kind changes** |
+| **M4 — the exceptions** | the page-level `PARTIAL` badge, the freshness indicator, the *Is anything wrong?* tile, the two top attention items and the What Changed tile's state stay visible without expansion; each control carries its section's availability badges |
+| **M5 — labels, keyboard, badges, provenance** | fixed labels with no digit; the control's `h2` is the section's one listing in heading navigation, and the deferred panels' own titles render as visually identical spans at that width so the section is listed exactly once; `Enter` and `Space` toggle natively and focus stays on the control; **one `AvailabilityBadge` per distinct settled non-`AVAILABLE` state, in `AVAILABILITY_STATES` order, under no invented precedence**; every distinct provenance the section's widgets display; no value, delta, count or skeleton on any control |
+| **M6 — content behind a disclosure** | the existing skeletons, `UnavailableBody`, empty, stale, partial and error renderings are untouched inside; a pending read contributes nothing to the control |
+| **M7 — resize, orientation, persistence** | the `<details>` is the permanent wrapper at every width, so the same DOM nodes persist across a crossing; expansion is component state — not in the URL, not in storage — surviving a mode switch and a crossing and resetting on reload or navigation; a section holding focus is never collapsed by a resize, and a crossing's own `toggle` event is never recorded as the reader's choice |
+
+**The same DOM content exists at every width.** Above the breakpoint the summary carries the
+`hidden` attribute and the `<details>` is simply open, so the desktop and tablet layouts are the
+layouts they were — which is what keeps the nine committed zero-tolerance comparisons byte-identical.
+
+### 13.2 The M8 obligations, each traced to a test
+
+| Obligation | Where it is established |
+|---|---|
+| **M8.1** the summary set | `e2e/adr-0033-mobile-summary.spec.ts`, *M8.1*, four scopes: the visible set in document order, every other control present and collapsed |
+| **M8.2** presence, not absence | *M8.2*, four scopes: each control collapsed, expanded by keyboard, the existing test ids revealed, and the revealed content — text with the charts' SVG excluded, and every test id — **equal to what the same page instance rendered at 1024 × 768** |
+| **M8.3** the exceptions | *M8.3*: the demo scenario's degraded permitted-risk tile puts `NOT_YET_AVAILABLE` on the collapsed *Supporting context* control and `Page partial` at page level |
+| **M8.4** no value on a control | *M8.4*, four scopes: no digit, currency symbol, percent sign or `R` figure on any control, and no skeleton |
+| **M8.5** focus | *M8.5*: `Enter` opens and focus stays; `Escape` changes nothing; `Space` closes and focus stays; the controls sit in the tab order in document order |
+| **M8.6** above the breakpoint | *M8.6* and every other test's wide branch, in all six projects: no control renders at 640, 768, 1024, 1280, 1440 or 1920 pixels, every section is visible, and 639 pixels renders the summary |
+| **M8.7** U14, expanded | *M8.7*, four scopes: `clippedBeyondViewport` and the overflow check pass collapsed **and** with every disclosure expanded |
+| **M8.8** provenance and freshness | *M8.8*: U2 and U3 hold collapsed and expanded; *Supporting context* carries `SYNTHETIC` and `REPOSITORY_TRACKED` in `demo` and `REPOSITORY_TRACKED` alone in `project` |
+| **M8.9** mixed states and pending reads | *M8.9*: two widgets in two different states — `NOT_YET_AVAILABLE` beside `NOT_IMPLEMENTED` — carry both badges in vocabulary order; each What Changed variant's state is on the control and no count is; and the **pending-read half** is established in `tests/adr-0033-mobile-summary.test.tsx` by rendering the page with a read client whose qualification read never settles, so the control carries the settled states' badges and no skeleton |
+| **M8.10** focus across a resize | *M8.10*: focus inside an expanded section survives 390 → 1024 → 390 with the section still expanded, and focus inside a never-expanded section survives a downward crossing without the section collapsing |
+
+**The unit suite additionally holds** the badge rule to `AVAILABILITY_STATES`, the provenance rule to
+`DATA_PROVENANCES`, the What Changed derivation to what `WhatChangedPanel` itself renders for every
+variant, and the component to the same-node guarantee across a crossing in each direction.
+
+### 13.3 The visual inventory rows this implementation adds, and the nine it leaves alone
+
+**Four rows, and exactly the four ADR-0033 §4.2 names for Decision M**, each at 390 × 844, at the
+default `changes` variant (VC-R6), expanded by keyboard activation (the one stated exception of §4.5),
+captured in full so the expanded layout below the first viewport is what the image records, at zero
+tolerance, with nothing masked:
+
+```text
+VC-root-demo-executive-expanded       /?scenario=demo&mode=executive       mobile-390
+VC-root-demo-operator-expanded        /?scenario=demo&mode=operator        mobile-390
+VC-root-project-executive-expanded    /?scenario=project&mode=executive    mobile-390
+VC-root-project-operator-expanded     /?scenario=project&mode=operator     mobile-390
+```
+
+**Provenance, recorded as §4.5 requires**: captured from tree `4c367f2cd18fca092ced874a7fc3a8394ddb3b3b`
+(commit `4005fe14a4aa4869c3a66f9f7128f80f9abe8f28`) on Microsoft Windows 11 Home 10.0.26200,
+Node v22.21.0, Playwright 1.63.0 Chromium, against the suite's own `next dev` server on loopback,
+with `npx playwright test e2e/c10-visual-regression-mobile-expanded.spec.ts --project=mobile-390
+--update-snapshots`; two independent captures were byte-identical and a third run compared them
+at zero tolerance and passed. **The nine existing images are byte-identical**, and a governance
+test now pins their SHA-256 digests so a later change to any of them is a review item by
+construction. **Thirteen of 439
+nominal snapshots exist in this tree, nine on `main`**; every other row stays `NOT CAPTURED`, and
+route-level `ERROR` stays `NOT YET CONSTRUCTIBLE`. **The visual-regression row stays `PARTIAL`.**
+
+### 13.4 What the implementation does not do
+
+| | |
+|---|---|
+| **it does not satisfy the §12 row** | the row reads **NOT SATISFIED** until the pull request is independently reviewed and merged and its M8 evidence is read against §12.1 by a person. An open pull request is neither |
+| **it does not perform J8** | the manual screen-reader journey J8 was `BLOCKED — M NOT IMPLEMENTED`; **its implementation prerequisite is addressed by this pull request and not before its merge**, and the journey stays **`NOT_ASSESSED`**: no assessor is assigned, no assistive technology was used, and nothing was heard |
+| **it does not move the performance row** | no PB measurement was taken; PB-Q stays `DEFERRED`, which caps the row at `PARTIAL` however a later run reports |
+| **it does not complete C10, C5, C7 or Cockpit V1** | §15 stays at one of four |
+| **it changes no read model, schema, fixture, metric definition, trade fact or route** | the tier-2 metrics were hoisted into named constants so the tiles and the control read the same values; nothing they read changed |
+
+**Carried forward, unabsorbed:** rejected reads render like pending reads; `reuseExistingServer`
+describes the server and cannot prove it; the intermittent client-render failure's cause is **NOT
+ESTABLISHED**; the capacity declaration-to-input mapping and its nine absent inputs; the original
+PR #84 Linux review evidence is **UNAVAILABLE**.
+
+### 13.5 Status
+
+```text
+ADR-0033:                                         ACCEPTED / IN FORCE
+PR #88:                                           MERGED
+PR #88 merge commit:                              948dcf4e6c9a8606134adbfde067047bdb170d6e
+PR #88 merged at:                                 2026-09-10T11:55:50Z
+PR #88 final reviewed head:                       44d90a1f57b12d7590f20d69c5ba55a4ee54c502
+decision M implementation:                        IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT REVIEW
+mobile executive summary - section 12:            NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN OPEN PULL REQUEST
+M8 obligations traced to tests:                   10 OF 10
+new screenshot baselines created:                 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, IN AN OPEN PULL REQUEST
+existing zero-tolerance comparisons:              9 - UNCHANGED, BYTE-IDENTICAL, DIGESTS PINNED
+visual coverage inventory:                        ACCEPTED BY ADR-0033 / IN FORCE - 13 OF 439 NOMINAL IN THIS TREE, 9 ON MAIN
+J8 - mobile summary journey:                      IMPLEMENTATION PREREQUISITE ADDRESSED IN AN OPEN PULL REQUEST - NOT ASSESSED
+manual screen-reader pass:                        NOT ASSESSED
+section 15 criteria satisfied:                    1 OF 4
+performance row:                                  PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN
+C10 polish and acceptance cycle:                  MERGED / NOT AN ACCEPTANCE
+C5:                                               NOT COMPLETE
+C7:                                               NOT COMPLETE
+full Cockpit V1:                                  INCOMPLETE
+```
+
+**Implemented is not accepted, and an open pull request is not merged.** **Specification,
+implementation, research, deployment and execution stay five separate gates.**

@@ -11,10 +11,12 @@ import {
   Label,
   Numeric,
   ScrollRegion,
+  type LabelElement,
 } from "@/components/ui/primitives";
 import { AvailabilityBadge, UnavailableBody } from "@/components/cockpit/availability";
 import { AttentionPanel } from "@/components/cockpit/attention";
 import { MetricTile, MetricTileSkeleton } from "@/components/cockpit/metric-tile";
+import { SummaryDisclosure, useSummaryLayout } from "@/components/cockpit/mobile-summary";
 import { PageHeader } from "@/components/cockpit/page-header";
 import { PerformanceOverview } from "@/components/cockpit/performance-chart";
 import { ProvenanceBadge } from "@/components/cockpit/provenance";
@@ -28,10 +30,20 @@ import {
   useWhatChanged,
 } from "@/data/client/hooks";
 import type { MetricValue } from "@/contracts/values";
+import type { DataProvenance } from "@/contracts/vocabularies";
 import { METRIC_DEFINITION_VERSION, notImplemented } from "@/contracts/factories";
 import { isValueBearing } from "@/contracts/validity";
 import { prepareAttention } from "@/lib/attention";
 import { formatDecimal, humanizeCode } from "@/lib/format";
+import {
+  disclosureAvailabilityStates,
+  disclosureProvenances,
+  pendingWidget,
+  performancePresentedStates,
+  settledWidget,
+  whatChangedPresentedStates,
+  type WidgetRead,
+} from "@/lib/mobile-summary";
 import { withScope, type PerformancePeriod } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +66,15 @@ import { cn } from "@/lib/utils";
  *
  * Attention sits directly under tier 1 rather than after tier 2, because §6 also requires it
  * in the first viewport: "an attention list below the fold is a list nobody reads".
+ *
+ * BELOW 640 CSS PIXELS THE PAGE IS THE EXECUTIVE SUMMARY, AND NOTHING IS OMITTED (ADR-0033
+ * §2, Decision M; `ui-ux-specification.md` §12.1). The shell, the header with its page-level
+ * state badge, the six tier-1 tiles, Attention Required and — in the project scenario — the
+ * explanation of the unavailable state render first; What Changed's detail, the performance
+ * overview, the tier-2 supporting context and, in Operator mode, the response evidence stay
+ * on this page behind labelled disclosures (`SummaryDisclosure`). No section moves to another
+ * route, because no route owns What Changed or the tier-2 tiles. At 640 pixels and above
+ * every section renders exactly as it always has, with no disclosure control.
  *
  * NO EQUITY, PERFORMANCE, EXPOSURE, INCIDENT, SYSTEM-HEALTH OR TRADE STATISTIC IS
  * FABRICATED. In the default project scope every operational read model reports that its
@@ -189,6 +210,13 @@ export default function ExecutiveOverviewPage() {
   const qualification = useQualificationStatus(scope);
   const performance = usePerformanceSeries(scope);
   const operator = scope.mode === "operator";
+  /*
+   * Below the breakpoint each deferred panel's title renders as a span: the disclosure
+   * control's `h2` is the section's one listing in heading navigation (ADR-0033 M5), and a
+   * second heading with the same or a near-identical name inside the revealed content would
+   * list it twice. The visual treatment is identical either way.
+   */
+  const panelTitle: LabelElement = useSummaryLayout() === "summary" ? "span" : "h2";
 
   const envelope = overview.data;
   const payload = envelope?.payload;
@@ -230,6 +258,88 @@ export default function ExecutiveOverviewPage() {
     (period: PerformancePeriod) => setScope({ period }),
     [setScope],
   );
+
+  /*
+   * THE TIER-2 METRICS, stated once so the tiles and the mobile disclosure that defers them
+   * read the same values: a control's badge that disagreed with the tile behind it would
+   * report one state on the outside and another within.
+   */
+  const brokerEquityMetric: MetricValue =
+    payload?.broker_reported_equity ?? notImplemented("portfolio.broker_reported_equity", "USD");
+  const drawdownMetric: MetricValue =
+    payload?.drawdown ?? notImplemented("drawdown.current", "PERCENT");
+  const permittedRiskMetric: MetricValue = {
+    value: payload?.permitted_open_risk.record?.limit_money.value,
+    unit: "USD",
+    availability: payload?.permitted_open_risk.availability ?? "NOT_IMPLEMENTED",
+    reason: payload?.permitted_open_risk.reason ?? "PRODUCER_NOT_IMPLEMENTED",
+    as_of: payload?.permitted_open_risk.as_of,
+    metric_id: "risk.permitted",
+    metric_definition_version: METRIC_DEFINITION_VERSION,
+  };
+  const tileProvenance: DataProvenance = envelope?.provenance ?? "SYNTHETIC";
+
+  /*
+   * WHAT EACH DEFERRED SECTION'S CONTROL CARRIES BELOW THE BREAKPOINT (ADR-0033 M5, M6).
+   *
+   * Every widget inside a deferred section is listed with the states it PRESENTS and the
+   * provenance it DISPLAYS, from the same values it renders from. A pending read is listed
+   * as pending and contributes nothing; a settled widget contributes every state it shows
+   * as its own -- the last-runs tile shows two absent records, so it contributes both. The
+   * rule that turns these into badges is the vocabulary's own order, and it is local to the
+   * disclosure: every widget inside keeps its own badge exactly as before.
+   */
+  const metricWidget = (metric: MetricValue): WidgetRead =>
+    settledWidget(
+      metric.availability,
+      isValueBearing(metric.availability) ? tileProvenance : undefined,
+    );
+  const whatChangedWidgets: readonly WidgetRead[] = [
+    whatChanged.data === undefined
+      ? pendingWidget()
+      : settledWidget(
+          whatChangedPresentedStates(whatChanged.data),
+          changesPayload === undefined ? undefined : whatChanged.data.provenance,
+        ),
+  ];
+  const performanceWidgets: readonly WidgetRead[] = [
+    performance.data === undefined
+      ? pendingWidget()
+      : settledWidget(
+          performancePresentedStates(performance.data),
+          performance.data.payload === undefined ? undefined : performance.data.provenance,
+        ),
+  ];
+  const supportingContextWidgets: readonly WidgetRead[] = [
+    // The gates tile: a tracked governance fact, so its provenance is known before its value.
+    qualificationEnvelope === undefined
+      ? pendingWidget("REPOSITORY_TRACKED")
+      : qualificationAbsent
+        ? settledWidget(qualificationEnvelope.availability, "REPOSITORY_TRACKED")
+        : settledWidget("AVAILABLE", "REPOSITORY_TRACKED"),
+    ...(envelope === undefined
+      ? [pendingWidget(), pendingWidget(), pendingWidget(), pendingWidget(), pendingWidget()]
+      : [
+          metricWidget(brokerEquityMetric),
+          metricWidget(drawdownMetric),
+          metricWidget(permittedRiskMetric),
+          // Exposure: the payload's own figures, or the envelope's state standing in for them.
+          payload === undefined
+            ? settledWidget(envelope.availability)
+            : settledWidget("AVAILABLE", envelope.provenance),
+          // Regime and the two last-run records: each record's own state, both reported.
+          payload === undefined
+            ? settledWidget(envelope.availability)
+            : settledWidget([
+                payload.last_decision.at.availability,
+                payload.last_scout_run.at.availability,
+              ]),
+        ]),
+  ];
+  const responseEvidenceWidgets: readonly WidgetRead[] =
+    envelope === undefined
+      ? [pendingWidget()]
+      : [settledWidget(envelope.availability, envelope.provenance)];
 
   return (
     <>
@@ -540,43 +650,69 @@ export default function ExecutiveOverviewPage() {
           />
         )}
 
-        {whatChanged.data === undefined ? (
-          <Card>
-            <CardHeader>
-              <Label as="h2">What changed</Label>
-            </CardHeader>
-            <CardBody>
-              <div className="skeleton-shape h-16 w-full" data-testid="skeleton" />
-            </CardBody>
-          </Card>
-        ) : (
-          <WhatChangedPanel
-            envelope={whatChanged.data}
-            scope={scope}
-            operator={operator}
-            withVariants={scope.scenario === "demo"}
-          />
-        )}
+        {/*
+          * THE PANEL'S DETAIL IS DEFERRED BELOW THE BREAKPOINT; THE TILE ABOVE IT IS NOT. The
+          * disclosure wraps the panel's card and not this section, which the attention panel
+          * shares and which stays visible. Its label is the panel's heading with a suffix, so
+          * the deferred detail is never confused with the tier-1 "What changed?" answer.
+          */}
+        <SummaryDisclosure
+          id="what-changed"
+          headingId="what-changed-details"
+          fullWidthHeading={null}
+          availability={disclosureAvailabilityStates(whatChangedWidgets)}
+          provenance={disclosureProvenances(whatChangedWidgets)}
+        >
+          {whatChanged.data === undefined ? (
+            <Card className="h-full">
+              <CardHeader>
+                <Label as={panelTitle}>What changed</Label>
+              </CardHeader>
+              <CardBody>
+                <div className="skeleton-shape h-16 w-full" data-testid="skeleton" />
+              </CardBody>
+            </Card>
+          ) : (
+            <WhatChangedPanel
+              envelope={whatChanged.data}
+              scope={scope}
+              operator={operator}
+              withVariants={scope.scenario === "demo"}
+              className="h-full"
+              titleElement={panelTitle}
+            />
+          )}
+        </SummaryDisclosure>
       </section>
 
       {/* The performance overview. Below the ten-second answers, and above the detail. */}
       <section aria-labelledby="performance" className="mb-6">
-        <h2 id="performance" className="sr-only">
-          Performance overview
-        </h2>
-        <PerformanceOverview
-          envelope={performance.data}
-          scope={scope}
-          operator={operator}
-          onPeriodChange={onPeriodChange}
-        />
+        <SummaryDisclosure
+          id="performance-overview"
+          headingId="performance"
+          fullWidthHeading={{ className: "sr-only" }}
+          availability={disclosureAvailabilityStates(performanceWidgets)}
+          provenance={disclosureProvenances(performanceWidgets)}
+        >
+          <PerformanceOverview
+            envelope={performance.data}
+            scope={scope}
+            operator={operator}
+            onPeriodChange={onPeriodChange}
+            titleElement={panelTitle}
+          />
+        </SummaryDisclosure>
       </section>
 
       {/* TIER 2 -- supporting context. */}
       <section aria-labelledby="tier-two" className="mb-6">
-        <h2 id="tier-two" className="mb-2 text-label-m font-semibold text-text-secondary">
-          Supporting context
-        </h2>
+        <SummaryDisclosure
+          id="supporting-context"
+          headingId="tier-two"
+          fullWidthHeading={{ className: "mb-2 text-label-m font-semibold text-text-secondary" }}
+          availability={disclosureAvailabilityStates(supportingContextWidgets)}
+          provenance={disclosureProvenances(supportingContextWidgets)}
+        >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Card data-testid="tile-open-gates">
             <CardBody className="space-y-2 pt-4">
@@ -621,19 +757,16 @@ export default function ExecutiveOverviewPage() {
             <>
               <MetricTile
                 label="Broker-reported equity"
-                metric={
-                  payload?.broker_reported_equity ??
-                  notImplemented("portfolio.broker_reported_equity", "USD")
-                }
-                provenance={envelope?.provenance ?? "SYNTHETIC"}
+                metric={brokerEquityMetric}
+                provenance={tileProvenance}
                 dependency="an authorized brokerage session"
                 operator={operator}
                 size="m"
               />
               <MetricTile
                 label="Drawdown"
-                metric={payload?.drawdown ?? notImplemented("drawdown.current", "PERCENT")}
-                provenance={envelope?.provenance ?? "SYNTHETIC"}
+                metric={drawdownMetric}
+                provenance={tileProvenance}
                 dependency="the portfolio valuation projection"
                 operator={operator}
                 size="m"
@@ -641,16 +774,8 @@ export default function ExecutiveOverviewPage() {
               />
               <MetricTile
                 label="Permitted open risk"
-                metric={{
-                  value: payload?.permitted_open_risk.record?.limit_money.value,
-                  unit: "USD",
-                  availability: payload?.permitted_open_risk.availability ?? "NOT_IMPLEMENTED",
-                  reason: payload?.permitted_open_risk.reason ?? "PRODUCER_NOT_IMPLEMENTED",
-                  as_of: payload?.permitted_open_risk.as_of,
-                  metric_id: "risk.permitted",
-                  metric_definition_version: METRIC_DEFINITION_VERSION,
-                }}
-                provenance={envelope?.provenance ?? "SYNTHETIC"}
+                metric={permittedRiskMetric}
+                provenance={tileProvenance}
                 dependency="a versioned risk-policy reference"
                 operator={operator}
                 size="m"
@@ -756,16 +881,18 @@ export default function ExecutiveOverviewPage() {
             </CardBody>
           </Card>
         </div>
+        </SummaryDisclosure>
       </section>
 
       {operator && envelope !== undefined && (
         <section aria-labelledby="operator-evidence" className="mt-6">
-          <h2
-            id="operator-evidence"
-            className="mb-2 text-label-m font-semibold text-text-secondary"
-          >
-            Response evidence
-          </h2>
+        <SummaryDisclosure
+          id="response-evidence"
+          headingId="operator-evidence"
+          fullWidthHeading={{ className: "mb-2 text-label-m font-semibold text-text-secondary" }}
+          availability={disclosureAvailabilityStates(responseEvidenceWidgets)}
+          provenance={disclosureProvenances(responseEvidenceWidgets)}
+        >
           <Card>
             <CardBody className="space-y-4 pt-4">
               <ScrollRegion label="Response evidence fields">
@@ -907,6 +1034,7 @@ export default function ExecutiveOverviewPage() {
               )}
             </CardBody>
           </Card>
+        </SummaryDisclosure>
         </section>
       )}
 

@@ -1,4 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
+
+import { revealDeferredSections } from "./mobile-summary";
 import { expect, test, type Page, type Request } from "@playwright/test";
 
 /**
@@ -129,6 +131,7 @@ test.describe("mode, scope and deep links", () => {
     // `mode=operator` and `scenario=demo` are both NON-DEFAULT, and all three keys are
     // written by the same `withScope` call -- a scope key that was dropped would default.
     await page.goto("/?mode=operator&env=RESEARCH&scenario=demo");
+    await revealDeferredSections(page);
     await page.getByRole("link", { name: /Each gate is read on its own/ }).click();
     await expect(page).toHaveURL(/\/governance\/qualification/);
     await expect(page).toHaveURL(/env=RESEARCH/);
@@ -149,6 +152,7 @@ test.describe("mode, scope and deep links", () => {
   }) => {
     for (const environment of ["PAPER", "LIVE"]) {
       await page.goto(`/?mode=operator&env=${environment}&scenario=demo`);
+      await revealDeferredSections(page);
       const gates = page.getByTestId("tile-open-gates");
       await expect(gates.getByTestId("unavailable-body")).toBeVisible();
       // No drill-down into facts that are not there, and no fabricated count.
@@ -169,6 +173,7 @@ test.describe("mode, scope and deep links", () => {
     await expect(page.getByText("Response evidence")).toHaveCount(0);
     await page.goto("/?scenario=demo&mode=operator");
     await expect(page.getByText("Response evidence")).toBeVisible();
+    await revealDeferredSections(page);
     await expect(page.getByText("metric_definition_version").first()).toBeVisible();
   });
 });
@@ -341,6 +346,7 @@ test.describe("availability, provenance and freshness", () => {
     page,
   }) => {
     await page.goto("/");
+    await revealDeferredSections(page);
     const panel = page.getByTestId("what-changed-panel");
     await expect(panel).toContainText("A comparison needs two valid");
     // The wrapper and its badge both carry the attribute; either proves the state.

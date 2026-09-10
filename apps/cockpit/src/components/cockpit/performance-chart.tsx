@@ -14,7 +14,16 @@ import {
   YAxis,
 } from "recharts";
 
-import { Badge, Button, Card, CardBody, CardHeader, Label, ScrollRegion } from "@/components/ui/primitives";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Label,
+  ScrollRegion,
+  type LabelElement,
+} from "@/components/ui/primitives";
 import { AvailabilityBadge, UnavailableBody } from "@/components/cockpit/availability";
 import { ProvenanceBadge } from "@/components/cockpit/provenance";
 import type { EnvelopeOf } from "@/contracts/envelope";
@@ -288,6 +297,12 @@ export interface PerformanceOverviewProps {
    */
   readonly onGranularityChange?: (next: ScopeGranularity) => void;
   readonly heading?: string;
+  /**
+   * The element the title renders as. A heading by default; the mobile executive summary
+   * passes `span` while the section's own `h2` sits in the disclosure control, so heading
+   * navigation lists the section exactly once (ADR-0033 M5). The visual treatment is the same.
+   */
+  readonly titleElement?: LabelElement;
   readonly summary?: string;
   readonly testId?: string;
 }
@@ -299,6 +314,7 @@ export function PerformanceOverview({
   onPeriodChange,
   onGranularityChange,
   heading = "Performance overview",
+  titleElement = "h2",
   summary = "Equity, return and drawdown over one stated window. An overview — not the full portfolio performance analysis.",
   testId = "performance-overview",
 }: PerformanceOverviewProps) {
@@ -326,7 +342,7 @@ export function PerformanceOverview({
     <Card data-testid={testId}>
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Label as="h2">{heading}</Label>
+          <Label as={titleElement}>{heading}</Label>
           <p className="mt-0.5 max-w-xl text-label-m text-text-secondary">{summary}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

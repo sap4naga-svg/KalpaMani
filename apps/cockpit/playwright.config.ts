@@ -21,6 +21,23 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
  */
 const REFERENCE_VIEWPORTS = /c10-reference-viewports\.spec\.ts/;
 
+/**
+ * The mobile executive summary (ADR-0033 §2, Decision M) is stated at ONE breakpoint and
+ * proven on BOTH sides of it. Its spec asserts the summary below 640 CSS pixels and the
+ * absence of any disclosure at and above it (M8.6, "at 768 × 1024 and at every wider
+ * reference viewport"), so it runs in all six projects: the original three by default, and
+ * the three reference-viewport projects by name here. Nothing else changes for them.
+ */
+const MOBILE_SUMMARY = /adr-0033-mobile-summary\.spec\.ts/;
+
+/**
+ * The four Decision VC expanded-state rows exist at 390 × 844 ONLY (ADR-0033 §4, VC-I3 and
+ * VC-R6): they record the expanded disclosure layout, which no wider viewport has. Their spec
+ * runs in the mobile project alone and is ignored by name everywhere else, so the tracked
+ * baseline gains exactly the four images the inventory names and no more.
+ */
+const MOBILE_EXPANDED_BASELINE = /c10-visual-regression-mobile-expanded\.spec\.ts/;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -50,7 +67,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop-1440",
-      testIgnore: REFERENCE_VIEWPORTS,
+      testIgnore: [REFERENCE_VIEWPORTS, MOBILE_EXPANDED_BASELINE],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     /*
@@ -63,7 +80,7 @@ export default defineConfig({
      */
     {
       name: "tablet-1024",
-      testIgnore: [/u1-first-viewport\.spec\.ts/, REFERENCE_VIEWPORTS],
+      testIgnore: [/u1-first-viewport\.spec\.ts/, REFERENCE_VIEWPORTS, MOBILE_EXPANDED_BASELINE],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 768 } },
     },
     {
@@ -78,17 +95,17 @@ export default defineConfig({
      */
     {
       name: "desktop-1920",
-      testMatch: REFERENCE_VIEWPORTS,
+      testMatch: [REFERENCE_VIEWPORTS, MOBILE_SUMMARY],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } },
     },
     {
       name: "desktop-1280",
-      testMatch: REFERENCE_VIEWPORTS,
+      testMatch: [REFERENCE_VIEWPORTS, MOBILE_SUMMARY],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
     {
       name: "tablet-768",
-      testMatch: REFERENCE_VIEWPORTS,
+      testMatch: [REFERENCE_VIEWPORTS, MOBILE_SUMMARY],
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
     },
   ],

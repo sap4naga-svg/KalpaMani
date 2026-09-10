@@ -1,10 +1,20 @@
 """ADR-0033 governance: the remaining C10 acceptance decisions, parsed and held to the code.
 
-**ADR-0033 is PROPOSED — NOT IN FORCE** while the pull request introducing it is open. These tests
-hold the proposal to four obligations that prose alone cannot keep:
+**ADR-0033 is ACCEPTED / IN FORCE.** PR #88 was independently reviewed and merged. **The ADR's own
+document is not edited** -- an accepted decision keeps the conditional status line it was written
+with, as history -- so the assertions that read it still find "PROPOSED", and they are claims about
+the document, not about the decision's authority. **The amended specification and the status
+documents DO say ACCEPTED**, and the assertions below hold them to it. **Decision M is now
+IMPLEMENTED, in an open pull request**, and the tests at the end hold that implementation to the
+page: every deferred section of the M3 table has a disclosure with the accepted label, the four
+Decision VC expanded rows exist at the mobile width only, and the nine pre-existing baselines are
+byte-identical by digest.
 
-* **Governance** -- the ADR declares itself proposed, predicts no merge, amends exactly the one
-  document it names, edits no other ADR, ran nothing, and moves no disposition.
+These tests hold the decision to four obligations that prose alone cannot keep:
+
+* **Governance** -- the ADR document declares itself proposed, predicts no merge, amends exactly
+  the one document it names, edits no other ADR, ran nothing, and moves no disposition; the
+  documents around it record the acceptance and keep the proposed period as history.
 * **Decision M, held to the page** -- the Executive Overview's section inventory is **parsed out of
   `page.tsx` and the components it composes**, and every section must appear in the ADR's
   content-to-location table with a location that is either VISIBLE or DEFERRED behind one of the
@@ -17,9 +27,9 @@ hold the proposal to four obligations that prose alone cannot keep:
 * **Decisions PB and SR, held to their own rules** -- every budget carries a unit; the not-obtained
   rule is stated; the performance spec still asserts no budget, so the proposal fails no accepted
   contract; an axe pass is stated not to be a screen-reader assessment; the assessor is outstanding.
-* **The status surface** -- PR #87's verified merge is recorded, the C10 section and the ADR-0033
-  section are byte-identical in both status documents, and the acceptance record still reads one
-  of four.
+* **The status surface** -- PR #87's and PR #88's verified merges are recorded, the C10 section
+  and the ADR-0033 section are byte-identical in both status documents, and the acceptance record
+  still reads one of four.
 
 Every parser carries a self-test proving it can still see what it exists to catch.
 """
@@ -101,6 +111,12 @@ SR_SPAN: Final = section(ADR_TEXT, "## 5. Decision SR", "## 6. Acceptance accoun
 
 
 def test_the_adr_declares_itself_proposed_and_not_in_force() -> None:
+    """An accepted decision keeps the status line it was written with, as history.
+
+    ADR-0033 is ACCEPTED / IN FORCE because PR #88 merged, and the merge is the acceptance
+    event the document itself names. The document is not rewritten after the fact: it records
+    what was reviewed, which is the rule every accepted decision in this repository follows.
+    """
     assert "**Status: PROPOSED — NOT IN FORCE." in ADR_TEXT
     assert "carries no authority" in ADR_FLAT
     assert "it is not to be rewritten as though this decision had authority" in ADR_FLAT
@@ -151,21 +167,35 @@ def test_acceptance_is_stated_to_establish_definitions_and_no_result() -> None:
     assert "every row below is at the first column at most" in ADR_FLAT.lower()
 
 
-def test_the_amended_specification_marks_every_new_subsection_proposed() -> None:
+def test_the_amended_specification_marks_every_new_subsection_accepted() -> None:
+    """`PROPOSED by ADR-0033` is provenance and stays; `ACCEPTED with it` is the status.
+
+    Both halves matter. A document still calling an accepted decision a proposal is stale, and
+    a document that erased the proposed period would claim the deltas had authority before the
+    review that gave it to them.
+    """
     for marker in (
-        "### 12.1 The mobile executive summary — PROPOSED by ADR-0033, NOT IN FORCE",
-        "### 15.1 Performance budgets — PROPOSED by ADR-0033, NOT IN FORCE",
-        "### 15.2 Visual regression coverage — PROPOSED by ADR-0033, NOT IN FORCE",
+        "### 12.1 The mobile executive summary — PROPOSED by ADR-0033, ACCEPTED with it",
+        "### 15.1 Performance budgets — PROPOSED by ADR-0033, ACCEPTED with it",
+        "### 15.2 Visual regression coverage — PROPOSED by ADR-0033, ACCEPTED with it",
         "### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, "
-        "NOT IN FORCE",
-        "### 15.4 What accepting §15.1–§15.3 establishes — PROPOSED, NOT IN FORCE",  # noqa: RUF001
+        "ACCEPTED with it",
+        "### 15.4 What accepting §15.1–§15.3 establishes — ACCEPTED with ADR-0033",  # noqa: RUF001
     ):
         assert marker in UIUX_TEXT, marker
     assert "Further amended by** [ADR-0033]" in UIUX_TEXT
+    assert "ADR-0033 is ACCEPTED / IN FORCE" in UIUX_FLAT
     assert (
         "ADR-0033 is PROPOSED — NOT IN FORCE while the pull request introducing it is open"
-        in UIUX_FLAT
+        not in UIUX_FLAT
     )
+    assert "HISTORICAL" in UIUX_FLAT
+    assert "ADR-0033 was PROPOSED and carried no authority" in UIUX_FLAT
+    # Accepting the definitions satisfied nothing, and the specification says so.
+    assert "Accepting the definition does not satisfy the row" in UIUX_FLAT
+    assert "acceptance of a budget establishes no compliance with it" in UIUX_FLAT
+    assert "no new baseline is created by it" in UIUX_FLAT
+    assert "No assessment has occurred, no assessor is assigned" in UIUX_FLAT
 
 
 def test_the_amended_subsections_carry_the_review_corrections() -> None:
@@ -458,7 +488,7 @@ def test_the_nine_existing_comparisons_stay_zero_tolerance_in_the_spec_and_in_th
     assert "`threshold: 0`, `maxDiffPixels: 0`, `maxDiffPixelRatio: 0` for every image" in ADR_TEXT
     assert "This ADR proposes no other tolerance for any image" in ADR_FLAT
     baseline_dir = APP / "e2e" / "visual-baseline"
-    assert len(list(baseline_dir.rglob("*.png"))) == 9
+    assert len(list(baseline_dir.rglob("*.png"))) == 9 + len(EXPANDED_ROWS)
 
 
 def test_the_interpretations_are_marked_as_requiring_acceptance() -> None:
@@ -670,9 +700,22 @@ def test_both_status_documents_record_the_verified_pr_87_merge(
         "ad64f3723cf0b8406461539513189596cb653a56",
         "section 15 criteria satisfied: 1 OF 4",
         "manual screen-reader pass: NOT ASSESSED",
-        "ADR-0033: PROPOSED / NOT IN FORCE",
+        "ADR-0033: ACCEPTED / IN FORCE",
+        "PR #88: MERGED",
+        "PR #88 merge commit: 948dcf4e6c9a8606134adbfde067047bdb170d6e",
+        "PR #88 merged at: 2026-09-10T11:55:50Z",
+        "PR #88 final reviewed head: 44d90a1f57b12d7590f20d69c5ba55a4ee54c502",
+        "ed1e4c54d7ac670d6eab21133a960cef7af71fc5",
         "assessor assigned: NONE - OUTSTANDING",
-        "new screenshot baselines created: NONE",
+        "new screenshot baselines created: 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, "
+        "IN AN OPEN PULL REQUEST",
+        "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT "
+        "REVIEW",
+        "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN "
+        "AN OPEN PULL REQUEST",
+        "J8 - mobile summary journey: IMPLEMENTATION PREREQUISITE ADDRESSED IN AN OPEN PULL "
+        "REQUEST - NOT ASSESSED",
+        "performance row: PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN",
         "C5: NOT COMPLETE",
         "C7: NOT COMPLETE",
         "full Cockpit V1: INCOMPLETE",
@@ -693,7 +736,14 @@ def test_no_status_document_still_calls_c10_an_open_pull_request(
     assert "C10 polish and acceptance cycle: IMPLEMENTED IN AN OPEN PULL REQUEST" not in flatten(
         text
     )
-    assert "ADR-0033: ACCEPTED" not in flatten(text)
+    # The stale under-claim, and the over-claims an implementation in an open pull request invites.
+    flat = flatten(text)
+    assert "ADR-0033: PROPOSED / NOT IN FORCE" not in flat
+    assert "decision M implementation: NOT STARTED" not in flat
+    assert "decision M implementation: MERGED" not in flat
+    assert "mobile executive summary - section 12: SATISFIED" not in flat
+    assert "section 15 criteria satisfied: 2 OF 4" not in flat
+    assert "J8 - mobile summary journey: ASSESSED" not in flat
 
 
 def test_the_c10_and_adr_0033_sections_are_identical_in_both_status_documents() -> None:
@@ -701,13 +751,15 @@ def test_the_c10_and_adr_0033_sections_are_identical_in_both_status_documents() 
     claude = (PROJECT_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     c10 = "### The C10 Cockpit polish and acceptance cycle — MERGED, and not an acceptance"
     adr33 = (
-        "### The remaining C10 acceptance decisions, and ADR-0033 — PROPOSED, and nothing is "
-        "implemented"
+        "### The remaining C10 acceptance decisions, and ADR-0033 — ACCEPTED, and Decision M "
+        "implemented in an open pull request"
     )
     followup = "### The C5 completion follow-up — MERGED"
     assert section(readme, c10, adr33) == section(claude, c10, adr33)
     assert section(readme, adr33, followup) == section(claude, adr33, followup)
-    assert section(readme, adr33, followup).count("PROPOSED") >= 5
+    assert section(readme, adr33, followup).count("ACCEPTED") >= 5
+    # The proposed period is kept as history, not erased.
+    assert "HISTORICAL" in section(readme, adr33, followup)
 
 
 def test_the_acceptance_record_records_the_merge_and_keeps_its_dispositions() -> None:
@@ -720,6 +772,14 @@ def test_the_acceptance_record_records_the_merge_and_keeps_its_dispositions() ->
         "No historical failure in this record is rewritten into a pass by the merge" in RECORD_FLAT
     )
     assert "## 12. After the merge" in RECORD_TEXT
+    # And PR #88's merge, recorded the same way, with the dispositions still unmoved.
+    assert "PR #88 has since MERGED, and ADR-0033 is ACCEPTED / IN FORCE" in RECORD_FLAT
+    assert "948dcf4e6c9a8606134adbfde067047bdb170d6e" in RECORD_TEXT
+    assert "## 13. After ADR-0033's acceptance" in RECORD_TEXT
+    thirteen = section(RECORD_TEXT, "## 13. After ADR-0033's acceptance", "\n**Implemented is not")
+    assert "IMPLEMENTED IN AN OPEN PULL REQUEST" in thirteen
+    assert "NOT SATISFIED" in thirteen and "NOT ASSESSED" in thirteen
+    assert "section 15 criteria satisfied:                    1 OF 4" in thirteen
 
 
 def test_the_three_causes_wording_is_corrected_to_match_its_four_rows() -> None:
@@ -775,7 +835,13 @@ AGREEING_LINES: Final[dict[str, str]] = {
     "section 15 criteria satisfied": "1 OF 4",
     "manual screen-reader pass": "NOT ASSESSED",
     "C10 polish and acceptance cycle": "MERGED / NOT AN ACCEPTANCE",
-    "ADR-0033": "PROPOSED / NOT IN FORCE",
+    "ADR-0033": "ACCEPTED / IN FORCE",
+    "decision M implementation": (
+        "IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT REVIEW"
+    ),
+    "mobile executive summary - section 12": (
+        "NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN OPEN PULL REQUEST"
+    ),
     "first contentful paint, production run": "NOT OBTAINED - NEVER ZERO, NEVER PASSING",
     "assessor assigned": "NONE - OUTSTANDING",
 }
@@ -797,3 +863,207 @@ def test_every_repeated_status_line_agrees_across_blocks(status_document: tuple[
         values = status_lines(text, key)
         assert values, f"{name}: no '{key}:' status line"
         assert all(value == expected for value in values), f"{name}: {key} -> {values}"
+
+
+# ------------------------------------------------- decision M, implemented and held to the page
+
+
+MOBILE_COMPONENT: Final = COMPONENTS / "mobile-summary.tsx"
+MOBILE_LIB: Final = APP / "src" / "lib" / "mobile-summary.ts"
+MOBILE_SPEC: Final = APP / "e2e" / "adr-0033-mobile-summary.spec.ts"
+EXPANDED_SPEC: Final = APP / "e2e" / "c10-visual-regression-mobile-expanded.spec.ts"
+PLAYWRIGHT_CONFIG: Final = APP / "playwright.config.ts"
+
+#: The four Decision VC rows the M implementation adds (ADR-0033 §4.2, the `root` row), at the
+#: mobile width only.
+EXPANDED_ROWS: Final[tuple[str, ...]] = (
+    "VC-root-demo-executive-expanded",
+    "VC-root-demo-operator-expanded",
+    "VC-root-project-executive-expanded",
+    "VC-root-project-operator-expanded",
+)
+
+#: The nine pre-existing comparisons, pinned by digest. ADR-0033 requires them "kept,
+#: byte-identical, under their existing names"; a count cannot see a regenerated image; a digest
+#: can.
+EXISTING_BASELINE_DIGESTS: Final[dict[str, str]] = {
+    "desktop-1440/availability-states-win32.png": (
+        "5fe89d50718f2d86a526d81c2af73657cc120b48440cde362aa28ea0d1b0a918"
+    ),
+    "desktop-1440/overview-demo-executive-win32.png": (
+        "c20899302c430b06d679fc318a7ab2a9c65e96e0d04a603cdfe968dfe984f47b"
+    ),
+    "desktop-1440/overview-project-win32.png": (
+        "d718b295704393ed0914f529e9646c475dad7517be1d610a501efb3a53c0aed8"
+    ),
+    "mobile-390/availability-states-win32.png": (
+        "9cc377846acd63b53f2e7594ae7f9db55cb3847fbb9a9a11ac9af236007d8bfb"
+    ),
+    "mobile-390/overview-demo-executive-win32.png": (
+        "84fba97cb3e6dfee425427ed77645029a0b61c33e3a60df5a865c94bda41f50b"
+    ),
+    "mobile-390/overview-project-win32.png": (
+        "32dd26ba4d0ea35a8e6ec27d076018479458cc87f1997dee07db1eeb889dc8e1"
+    ),
+    "tablet-1024/availability-states-win32.png": (
+        "0ea634fa385a2e73865c7b4f64cea98de1f81645d4fd501995de22c389b39b01"
+    ),
+    "tablet-1024/overview-demo-executive-win32.png": (
+        "aa147fb5edb7e92ce7638bb35b11b1af99b665712c4be6df1e80cfcba1999641"
+    ),
+    "tablet-1024/overview-project-win32.png": (
+        "c0bbee867e9a92f613e2f65b47e90171c0efd28724b43676b382c23c5be8c095"
+    ),
+}
+
+DISCLOSURE_TAG: Final = re.compile(r'<SummaryDisclosure\s+id="([a-z-]+)"')
+LABEL_ENTRY: Final = re.compile(r'"([a-z-]+)": "([^"]+)",')
+
+
+def test_every_deferred_section_of_the_m3_table_has_a_disclosure_with_its_accepted_label() -> None:
+    """The M3 table names four disclosures; the page composes exactly those four, by id."""
+    ids = DISCLOSURE_TAG.findall(PAGE_TEXT)
+    assert sorted(ids) == sorted(
+        ["what-changed", "performance-overview", "supporting-context", "response-evidence"]
+    ), ids
+    component = MOBILE_COMPONENT.read_text(encoding="utf-8")
+    labels = dict(LABEL_ENTRY.findall(section(component, "SUMMARY_DISCLOSURE_LABEL", "};")))
+    assert labels == {
+        "what-changed": "What changed — details",
+        "performance-overview": "Performance overview",
+        "supporting-context": "Supporting context",
+        "response-evidence": "Response evidence",
+    }
+    for label in labels.values():
+        assert f"`{label}`" in M5_SPAN, f"{label} is not the label M5 fixes"
+        assert re.search(r"[0-9]", label) is None, "a label is never a number"
+
+
+def test_the_deferred_ids_of_the_m3_table_are_inside_the_disclosures() -> None:
+    """Each id the M3 table defers sits inside the disclosure the table names, in the source."""
+    inside: dict[str, str] = {}
+    for match in re.finditer(
+        r"<SummaryDisclosure\s+id=\"([a-z-]+)\"(.*?)</SummaryDisclosure>", PAGE_TEXT, re.S
+    ):
+        inside[match.group(1)] = match.group(2)
+    assert set(inside) == {
+        "what-changed",
+        "performance-overview",
+        "supporting-context",
+        "response-evidence",
+    }
+    assert "<WhatChangedPanel" in inside["what-changed"]
+    assert "<PerformanceOverview" in inside["performance-overview"]
+    for identifier in ("tile-open-gates", "tile-exposure", "tile-last-runs"):
+        assert f'data-testid="{identifier}"' in inside["supporting-context"], identifier
+    assert "Response evidence fields" in inside["response-evidence"]
+    # And the summary set is NOT inside any disclosure.
+    for identifier in (
+        "tile-strategy-capital",
+        "answer-performance",
+        "answer-risk",
+        "answer-health",
+        "answer-changed",
+        "answer-attention",
+    ):
+        assert not any(f'testId="{identifier}"' in body for body in inside.values()), identifier
+    assert not any("<AttentionPanel" in body for body in inside.values())
+    assert not any("Why these tiles are empty" in body for body in inside.values())
+
+
+def test_the_breakpoint_is_a_viewport_rule_at_640_pixels_on_the_landing_page_only() -> None:
+    lib = MOBILE_LIB.read_text(encoding="utf-8")
+    assert "export const SUMMARY_BREAKPOINT_PX = 640;" in lib
+    assert "(width < ${SUMMARY_BREAKPOINT_PX}px)" in lib
+    component = MOBILE_COMPONENT.read_text(encoding="utf-8")
+    assert "window.matchMedia(SUMMARY_MEDIA_QUERY)" in component
+    assert "useSyncExternalStore" in component
+    # No other route composes the disclosure: `/` only (M1).
+    pages = [
+        path
+        for path in (APP / "src" / "app").rglob("page.tsx")
+        if "SummaryDisclosure" in path.read_text(encoding="utf-8")
+    ]
+    assert [path.relative_to(APP / "src" / "app").as_posix() for path in pages] == ["page.tsx"]
+
+
+def test_the_badge_rule_is_the_vocabulary_order_and_invents_no_precedence() -> None:
+    lib = MOBILE_LIB.read_text(encoding="utf-8")
+    assert "AVAILABILITY_STATES.filter((state) => present.has(state))" in lib
+    assert "DATA_PROVENANCES.filter((provenance) => present.has(provenance))" in lib
+    assert "not a precedence policy" in " ".join(lib.replace(" * ", " ").split())
+    for forbidden in ("worst", "severity", "priority", "rank"):
+        assert (
+            re.search(
+                rf"\b{forbidden}\b", lib.lower().replace("asserts nothing about severity", "")
+            )
+            is None
+        ), forbidden
+
+
+def test_the_m8_obligations_each_have_a_test_and_the_spec_runs_in_all_six_projects() -> None:
+    spec = MOBILE_SPEC.read_text(encoding="utf-8")
+    for obligation in (
+        "M8.1",
+        "M8.2",
+        "M8.3",
+        "M8.4",
+        "M8.5",
+        "M8.6",
+        "M8.7",
+        "M8.8",
+        "M8.9",
+        "M8.10",
+    ):
+        assert re.search(rf"test\(\s*[`\"]{re.escape(obligation)} —", spec), obligation
+    config = PLAYWRIGHT_CONFIG.read_text(encoding="utf-8")
+    assert "const MOBILE_SUMMARY = /adr-0033-mobile-summary\\.spec\\.ts/;" in config
+    assert config.count("testMatch: [REFERENCE_VIEWPORTS, MOBILE_SUMMARY]") == 3
+    # The original three projects run it by default: they ignore only the named files.
+    assert "testIgnore: [REFERENCE_VIEWPORTS, MOBILE_EXPANDED_BASELINE]" in config
+    assert "MOBILE_SUMMARY" not in section(config, 'name: "desktop-1440"', 'name: "desktop-1920"')
+    # No skip, no early return: the spec asserts the other half of the requirement instead.
+    assert "test.skip" not in spec and "test.fixme" not in spec and "test.fail" not in spec
+
+
+def test_the_four_expanded_rows_exist_at_mobile_only_and_the_nine_are_byte_identical() -> None:
+    import hashlib
+
+    baseline_dir = APP / "e2e" / "visual-baseline"
+    for name in EXPANDED_ROWS:
+        assert (baseline_dir / "mobile-390" / f"{name}-win32.png").is_file(), name
+        for other in ("desktop-1440", "tablet-1024"):
+            assert not (baseline_dir / other / f"{name}-win32.png").exists(), (name, other)
+    for relative, digest in EXISTING_BASELINE_DIGESTS.items():
+        actual = hashlib.sha256((baseline_dir / relative).read_bytes()).hexdigest()
+        assert actual == digest, f"{relative} changed: {actual}"
+    spec = EXPANDED_SPEC.read_text(encoding="utf-8")
+    assert (
+        "const STRICT = { threshold: 0, maxDiffPixels: 0, maxDiffPixelRatio: 0 } as const;" in spec
+    )
+    assert "fullPage: true" in spec
+    assert (
+        "mask"
+        not in spec.replace("nothing masked", "")
+        .replace("NOTHING MASKED", "")
+        .replace("No masking", "")
+        .lower()
+    )
+    for name in EXPANDED_ROWS:
+        assert f'"{name}"' in spec, name
+    config = PLAYWRIGHT_CONFIG.read_text(encoding="utf-8")
+    assert "MOBILE_EXPANDED_BASELINE" in section(
+        config, 'name: "desktop-1440"', 'name: "mobile-390"'
+    )
+    assert "MOBILE_EXPANDED_BASELINE" not in section(
+        config, 'name: "mobile-390"', 'name: "desktop-1920"'
+    )
+
+
+def test_the_digest_pin_would_see_a_regenerated_image() -> None:
+    """The negative control: a digest of different bytes is not the pinned digest."""
+    import hashlib
+
+    relative, digest = next(iter(EXISTING_BASELINE_DIGESTS.items()))
+    original = (APP / "e2e" / "visual-baseline" / relative).read_bytes()
+    assert hashlib.sha256(original + b"\x00").hexdigest() != digest
