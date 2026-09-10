@@ -17,6 +17,11 @@ introducing it, PR #72, is open**.
 **Further amended by** [ADR-0031](../decisions/ADR-0031-reference-owning-area-navigation.md) — §3's
 drill-down paths and §6. ADR-0031 is **PROPOSED and carries no authority while the pull request
 introducing it is open**.
+**Further amended by** [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) —
+a new §12.1 clarifying the mobile row, and new §15.1–§15.4 giving the four future criteria their
+acceptance definitions. **ADR-0033 is PROPOSED — NOT IN FORCE while the pull request introducing it
+is open**, and so are those five subsections; every other section of this document is unchanged by
+it.
 
 ---
 
@@ -426,6 +431,41 @@ nothing has been built to measure.
 without a full value available · charts remain legible or are replaced by their accessible
 alternative rather than shrunk into illegibility.
 
+### 12.1 The mobile executive summary — PROPOSED by ADR-0033, NOT IN FORCE
+
+> **PROPOSED — NOT IN FORCE.** This subsection is introduced by
+> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) §2 (Decision M) and
+> carries no authority while that pull request is open. **The 390 × 844 row above is unchanged**;
+> this subsection defines what *"executive summary only"* requires of the Executive Overview, which
+> the row left open — omit or defer — and which the C10 acceptance record §7.2 recorded as
+> **NOT SATISFIED — AMBIGUITY RECORDED**. **Accepting the definition does not satisfy the row.**
+
+**Deferred, not omitted.** Below **640 CSS pixels** of viewport width, on **`/` only**, in **both**
+modes and **both** scenarios, the Executive Overview renders the accepted summary first — the shell,
+the page header with its page-level state badge, the six tier-1 answer tiles, the Attention Required
+panel and, in the project scenario, the explanation of the unavailable state — and **every other
+section stays on the same page behind a labelled, accessible disclosure**: *What changed — details*,
+*Performance overview*, *Supporting context*, and in Operator mode *Response evidence*. **No section
+is omitted, none moves to another route, and no route is invented**, because no route owns What
+Changed or the tier-2 tiles.
+
+**A collapsed section may hide detail; it never hides that something is wrong.** The page-level
+`PARTIAL`/`ERROR` badge, the freshness indicator, the *Is anything wrong?* tile, the two highest-ranked
+attention items and the What Changed tile's state stay visible without expansion, and **each
+disclosure control carries its section's worst availability badge** — glyph and label, never a
+number, never a skeleton — when anything inside it is not `AVAILABLE`.
+
+**Disclosure semantics, exactly:** fixed labels; the section's `h2` as the visible summary text so
+heading navigation still lists it; expanded/collapsed state exposed to assistive technology; collapsed
+by default; `Enter` and `Space` toggle; **focus stays on the control**; expansion state lives for the
+page instance only — not in the URL, not in storage. At 640 pixels and above every section renders as
+today with no disclosure. **Hidden content is never read as missing data**: the tests ADR-0033 §2 M8
+lists must expand each disclosure and find the section's existing content, and must run the U14
+clipping check with every disclosure expanded.
+
+**The full content-to-location table, the state matrix and the eight test obligations are in
+ADR-0033 §2, and are not restated here.** No user interface is changed by this subsection.
+
 ---
 
 ## 13. Charts
@@ -481,6 +521,100 @@ never drawn as one line**.
 | **synthetic end-to-end** | navigation across every route, every availability state rendered at least once, drill-down paths traversed, mode switching with context preserved, palette open and close, and every failure state exercised deliberately |
 | **accessibility checks** | automated contrast, landmark, heading-order and label checks in the pipeline, with **manual keyboard and screen-reader passes**, because an automated pass is not an accessible interface |
 | **performance targets** | interaction responsiveness, first meaningful render and bounded query time — set as targets for the implementation cycle to measure. **This cycle measures nothing and claims nothing** |
+
+> **HISTORICAL.** The four rows above are the accepted criteria as written for the specification
+> cycle. The C10 cycle later measured, swept, baselined and assessed against them, and its acceptance
+> record found **one of the four satisfied** — the synthetic end-to-end — with the other three
+> `PARTIAL` or `NOT_ASSESSED` because the rows name a target without defining it. The subsections
+> below are the **proposed** definitions. **The rows themselves are unchanged.**
+
+### 15.1 Performance budgets — PROPOSED by ADR-0033, NOT IN FORCE
+
+> **PROPOSED — NOT IN FORCE** while the pull request introducing
+> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **No numeric
+> budget is accepted by this document today**, and **acceptance of a budget establishes no
+> compliance with it**.
+
+**Five budgets, each with a unit, a start mark, an end mark, a condition and an aggregation**
+(ADR-0033 §3): **PB1** first answer — navigation start to read-model readiness — p50 ≤ 1 000 ms and
+no sample above 1 500 ms; **PB2** first contentful paint p50 ≤ 800 ms and no sample above 1 200 ms,
+**evaluable only when the paint entry is obtained**; **PB3** command palette open p50 ≤ 100 ms and no
+sample above 200 ms; **PB4** Executive-to-Operator switch p50 ≤ 300 ms and no sample above 500 ms;
+**PB5** transferred bytes ≤ 750 KB compressed per route. **Bounded query time is `DEFERRED`** until a
+read-model boundary exists to measure.
+
+**They apply under Condition L** — a production build (`next build`, `next start`) on loopback, one
+worker, Desktop Chrome at 1440 × 900, no throttling, **five cold samples per route** after a discarded
+warm-up, median against the p50 figure and every sample against the ceiling, on seven named routes in
+the `demo` scenario. **Condition M** (390 × 844, 4× CPU slowdown) applies the timing budgets at twice
+the figure and is **unmeasured**; **Condition F** (deployed) has **no budget**, because nothing is
+deployed and **local timings establish no production service performance**. **No budget is evaluated
+against a development server.**
+
+**A measurement that was not obtained is `NOT OBTAINED` — never zero, never passing, never dropped
+from the denominator**; a navigation that never reaches its end mark is a **failed** navigation, not a
+missing sample. **The retained C10 production run obtained no first-contentful-paint entry**, so PB2
+reports `NOT OBTAINED` today and its measurement must be corrected before it reports anything else.
+
+### 15.2 Visual regression coverage — PROPOSED by ADR-0033, NOT IN FORCE
+
+> **PROPOSED — NOT IN FORCE** while the pull request introducing
+> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **The nine
+> committed images and their zero tolerance are unchanged by it**, and **no new baseline is created
+> by it**.
+
+**"Per route and per state" is defined, and the definition is a proposed interpretation** (ADR-0033
+§4, VC-I1 to VC-I4): a **route** is every registry entry and every deep destination at one fixed
+fixture identifier plus one absent identifier; a **state** is a rendering the accepted scope selectors
+reproduce deterministically from a URL — scenario, mode and any declared variant — with transient
+loading covered by U7 at component level and route-level `ERROR` by the eleven-state reference screen
+until a deterministic selector exists; the **fixed viewport list** is the three original widths for
+every route and **all six** reference viewports for `/`; and a combination is **inapplicable only
+under a cited rule** VC-R1 to VC-R5 — **an uncited inapplicability is a gap, and a gap reads
+`PARTIAL`**. **A full Cartesian product is neither required nor silently waived**: the interpretation
+is stated so that accepting it is a decision.
+
+**The inventory is 401 nominal snapshots over 32 route identifiers**, nine of which exist. Capture
+conditions are the existing recipe unchanged — frozen clock, reduced motion, disabled animations,
+seeded fixtures, **nothing masked**, **`threshold: 0`, `maxDiffPixels: 0`, `maxDiffPixelRatio: 0` for
+every image**. State is set up **from the URL only**. Every baseline records the tree, OS, browser
+build and command it was captured with. **A diff is a review item, not an auto-accept**: a baseline
+update lists each changed image with its reason, **`--update-snapshots` is never run to make a failing
+comparison pass**, and **no masking, tolerance increase or automatic regeneration is a permitted
+response to a failed comparison**.
+
+### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, NOT IN FORCE
+
+> **PROPOSED — NOT IN FORCE** while the pull request introducing
+> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **No assessment
+> has occurred, no assessor is assigned, and no assistive technology is claimed available.**
+
+**An automated axe pass is not a screen-reader assessment, and source inspection is not one**; the
+pass reads `NOT_ASSESSED` until a person runs the protocol (ADR-0033 §5). **One named human assessor
+who did not author C10 — assignment OUTSTANDING** — runs **NVDA + Chrome on Windows 11** as the primary
+combination, **recording the actual versions at execution**, against a production build; VoiceOver +
+Safari is secondary **if available**, and otherwise recorded `NOT AVAILABLE`. **Ten journeys** — the
+ten-second answers, attention to evidence, ledger to detail, the palette, the eleven states, What
+Changed, chart alternatives, the mobile summary once M exists, the inert control plane, and 200 % zoom
+— plus a structural pass over **every registered route** (one `h1`, `main` reachable, ordered headings,
+the context bar read), each traced to its accepted clause. Headings and landmarks, distinct control
+names, table headers, dialog focus trap and restoration, disclosure state, polite availability and
+freshness announcements, loading announced as busy and **never as a value**, and error announcements
+are each checked. **The keyboard-only pass is a separate session and separate evidence.**
+
+**Severity S1 blocker and S2 major fail the assessment; S3 and S4 are recorded.** Evidence is one
+sanitized protocol sheet per journey under `docs/cockpit/accessibility/`, with observed versions and
+announcement excerpts and no private identifier. **`ASSESSED — PASSED` requires every journey on the
+primary combination run by the named assessor with zero S1 and zero S2**; otherwise
+`ASSESSED — FAILED` with findings, and **`NOT_ASSESSED` until then**.
+
+### 15.4 What accepting §15.1–§15.3 establishes — PROPOSED, NOT IN FORCE
+
+**Definitions, and nothing else.** Acceptance of ADR-0033 gives the three rows a finish line; **it
+moves none of them**, and C10's §15 assessment stays at **one of four** — the synthetic end-to-end —
+until a later, separately authorized cycle produces evidence under these definitions and a human reads
+it against them. **Contract defined, implemented, tested and accepted are four columns**, and every
+one of these rows is in the first at most.
 
 ---
 

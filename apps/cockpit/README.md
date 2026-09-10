@@ -12,11 +12,19 @@ and the corrected contracts of
 [ADR-0031](../../docs/decisions/ADR-0031-reference-owning-area-navigation.md) and
 [ADR-0032](../../docs/decisions/ADR-0032-strategy-capacity-and-rolling-tail-loss-measurement.md).
 
-**This is C10, it is carried by an open pull request, and it is not the Cockpit.** **Full Cockpit
-V1 is INCOMPLETE**, **C5 and C7 are both NOT COMPLETE**, and the requirement-by-requirement
-assessment that says exactly why is
-[`docs/cockpit/c10-acceptance-record.md`](../../docs/cockpit/c10-acceptance-record.md). Read that
-record before quoting a count from this file.
+**This is C10, it is merged, and it is not the Cockpit.** **Full Cockpit V1 is INCOMPLETE**,
+**C5 and C7 are both NOT COMPLETE**, and the requirement-by-requirement assessment that says exactly
+why is [`docs/cockpit/c10-acceptance-record.md`](../../docs/cockpit/c10-acceptance-record.md). Read
+that record before quoting a count from this file. **Merging C10 accepted nothing**: the record leaves
+section 15 at one of four, and the four decisions it left open — the mobile executive summary,
+performance budgets, per-route-and-state visual coverage and the manual screen-reader protocol — are
+**PROPOSED by
+[ADR-0033](../../docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) and NOT IN FORCE**
+while that pull request is open. Nothing in this application changes because of that proposal.
+
+> **HISTORICAL.** While PR #87 was open this paragraph read *"it is carried by an open pull
+> request"*. That was true of those days and is not rewritten as though the cycle had merged before
+> it did.
 
 **Thirty registered sidebar routes and two deep destinations, and every one of them renders.** Thirty of the thirty-six product
 areas are implemented within their accepted observational scope and **six are partial** — areas 2,
