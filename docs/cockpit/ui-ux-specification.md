@@ -19,9 +19,16 @@ drill-down paths and §6. ADR-0031 is **PROPOSED and carries no authority while 
 introducing it is open**.
 **Further amended by** [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) —
 a new §12.1 clarifying the mobile row, and new §15.1–§15.4 giving the four future criteria their
-acceptance definitions. **ADR-0033 is PROPOSED — NOT IN FORCE while the pull request introducing it
-is open**, and so are those five subsections; every other section of this document is unchanged by
-it.
+acceptance definitions. **ADR-0033 is ACCEPTED / IN FORCE — the pull request introducing it, PR #88,
+was independently reviewed and merged** — and those five subsections are accepted with it; every
+other section of this document is unchanged by it.
+
+> **HISTORICAL.** While PR #88 was open, ADR-0033 was **PROPOSED and carried no authority**, and so
+> did those five subsections. That was true of those days, it stays true of them, and it is **not**
+> rewritten as though the decision had authority before it was accepted. **Accepting the five
+> definitions moved none of the rows they define**: the §12 mobile row and the three §15 rows stay
+> exactly where the C10 acceptance record left them until evidence under these definitions is read
+> against them.
 
 ---
 
@@ -431,14 +438,20 @@ nothing has been built to measure.
 without a full value available · charts remain legible or are replaced by their accessible
 alternative rather than shrunk into illegibility.
 
-### 12.1 The mobile executive summary — PROPOSED by ADR-0033, NOT IN FORCE
+### 12.1 The mobile executive summary — PROPOSED by ADR-0033, ACCEPTED with it
 
-> **PROPOSED — NOT IN FORCE.** This subsection is introduced by
-> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) §2 (Decision M) and
-> carries no authority while that pull request is open. **The 390 × 844 row above is unchanged**;
-> this subsection defines what *"executive summary only"* requires of the Executive Overview, which
-> the row left open — omit or defer — and which the C10 acceptance record §7.2 recorded as
-> **NOT SATISFIED — AMBIGUITY RECORDED**. **Accepting the definition does not satisfy the row.**
+> **ACCEPTED / IN FORCE.** This subsection was introduced by
+> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) §2 (Decision M), and
+> that ADR has been independently reviewed and merged, so the definition below is **IN FORCE**.
+> **The 390 × 844 row above is unchanged**; this subsection defines what *"executive summary
+> only"* requires of the Executive Overview, which the row left open — omit or defer — and which
+> the C10 acceptance record §7.2 recorded as **NOT SATISFIED — AMBIGUITY RECORDED**. **Accepting
+> the definition does not satisfy the row**: the row is satisfied only by an implementation that
+> meets the M8 test obligations, read into the acceptance record after independent review.
+
+> **HISTORICAL.** While that pull request, PR #88, was open, ADR-0033 was **PROPOSED and carried no
+> authority**, and so did this subsection. That was true of those days, it stays true of them, and
+> it is **not** rewritten as though the decision had authority before it was accepted.
 
 **Deferred, not omitted.** Below **640 CSS pixels** of viewport width, on **`/` only**, in **both**
 modes and **both** scenarios, the Executive Overview renders the accepted summary first — the shell,
@@ -528,14 +541,19 @@ never drawn as one line**.
 > cycle. The C10 cycle later measured, swept, baselined and assessed against them, and its acceptance
 > record found **one of the four satisfied** — the synthetic end-to-end — with the other three
 > `PARTIAL` or `NOT_ASSESSED` because the rows name a target without defining it. The subsections
-> below are the **proposed** definitions. **The rows themselves are unchanged.**
+> below are the definitions ADR-0033 gave them — **proposed while its pull request was open, and
+> accepted with it on merge**. **The rows themselves are unchanged**, and so are their dispositions.
 
-### 15.1 Performance budgets — PROPOSED by ADR-0033, NOT IN FORCE
+### 15.1 Performance budgets — PROPOSED by ADR-0033, ACCEPTED with it
 
-> **PROPOSED — NOT IN FORCE** while the pull request introducing
-> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **No numeric
-> budget is accepted by this document today**, and **acceptance of a budget establishes no
-> compliance with it**.
+> **ACCEPTED / IN FORCE.** [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md)
+> has been independently reviewed and merged, so **the five budgets below are accepted**, and
+> **acceptance of a budget establishes no compliance with it**: no retained run satisfies the
+> sampling protocol, and the §15 performance row stays `PARTIAL`.
+
+> **HISTORICAL.** While that pull request, PR #88, was open, ADR-0033 was **PROPOSED and carried no
+> authority**, and so did this subsection. That was true of those days, it stays true of them, and
+> it is **not** rewritten as though the decision had authority before it was accepted.
 
 **Five budgets, each with a unit, a start mark, an end mark, a condition and an aggregation**
 (ADR-0033 §3): **PB1** first answer — navigation start to **the route's own** read-model readiness,
@@ -563,12 +581,17 @@ reported, never a clean pass. The zero-is-invalid rule is a validity rule for th
 counts only, and changes no valid-zero semantics elsewhere in the Cockpit. **The retained C10 production run obtained no first-contentful-paint entry**, so PB2
 reports `NOT OBTAINED` today and its measurement must be corrected before it reports anything else.
 
-### 15.2 Visual regression coverage — PROPOSED by ADR-0033, NOT IN FORCE
+### 15.2 Visual regression coverage — PROPOSED by ADR-0033, ACCEPTED with it
 
-> **PROPOSED — NOT IN FORCE** while the pull request introducing
-> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **The nine
-> committed images and their zero tolerance are unchanged by it**, and **no new baseline is created
-> by it**.
+> **ACCEPTED / IN FORCE.** [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md)
+> has been independently reviewed and merged, so **the inventory and the rules below are
+> accepted**. **The nine committed images and their zero tolerance are unchanged by that
+> acceptance**, and **no new baseline is created by it**: a baseline is created only by a reviewed
+> capture whose provenance its pull request records.
+
+> **HISTORICAL.** While that pull request, PR #88, was open, ADR-0033 was **PROPOSED and carried no
+> authority**, and so did this subsection. That was true of those days, it stays true of them, and
+> it is **not** rewritten as though the decision had authority before it was accepted.
 
 **"Per route and per state" is defined, and the definition is a proposed interpretation** (ADR-0033
 §4, VC-I1 to VC-I4): a **route** is every registry entry and every deep destination at one fixed
@@ -594,11 +617,16 @@ update lists each changed image with its reason, **`--update-snapshots` is never
 comparison pass**, and **no masking, tolerance increase or automatic regeneration is a permitted
 response to a failed comparison**.
 
-### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, NOT IN FORCE
+### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, ACCEPTED with it
 
-> **PROPOSED — NOT IN FORCE** while the pull request introducing
-> [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md) is open. **No assessment
-> has occurred, no assessor is assigned, and no assistive technology is claimed available.**
+> **ACCEPTED / IN FORCE.** [ADR-0033](../decisions/ADR-0033-c10-remaining-acceptance-decisions.md)
+> has been independently reviewed and merged, so **the protocol below is accepted**. **No
+> assessment has occurred, no assessor is assigned, and no assistive technology is claimed
+> available**: an accepted protocol is run by a person, and none has run it.
+
+> **HISTORICAL.** While that pull request, PR #88, was open, ADR-0033 was **PROPOSED and carried no
+> authority**, and so did this subsection. That was true of those days, it stays true of them, and
+> it is **not** rewritten as though the decision had authority before it was accepted.
 
 **An automated axe pass is not a screen-reader assessment, and source inspection is not one**; the
 pass reads `NOT_ASSESSED` until a person runs the protocol (ADR-0033 §5). **One named human assessor
@@ -623,13 +651,16 @@ primary combination — the blocked mobile journey included — run by the named
 and zero S2**; with every other journey clean and the mobile journey still blocked it reads
 `ASSESSED — PARTIAL`; otherwise `ASSESSED — FAILED` with findings; and **`NOT_ASSESSED` until then**.
 
-### 15.4 What accepting §15.1–§15.3 establishes — PROPOSED, NOT IN FORCE
+### 15.4 What accepting §15.1–§15.3 establishes — ACCEPTED with ADR-0033
 
-**Definitions, and nothing else.** Acceptance of ADR-0033 gives the three rows a finish line; **it
-moves none of them**, and C10's §15 assessment stays at **one of four** — the synthetic end-to-end —
+**Definitions, and nothing else.** Acceptance of ADR-0033 gave the three rows a finish line; **it
+moved none of them**, and C10's §15 assessment stays at **one of four** — the synthetic end-to-end —
 until a later, separately authorized cycle produces evidence under these definitions and a human reads
 it against them. **Contract defined, implemented, tested and accepted are four columns**, and every
-one of these rows is in the first at most.
+one of these rows is in the first — now genuinely there, and no further.
+
+> **HISTORICAL.** While PR #88 was open this subsection read *PROPOSED, NOT IN FORCE*, and the
+> rows were not even in the first column. That was true of those days and is not rewritten.
 
 ---
 

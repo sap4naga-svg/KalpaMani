@@ -18,9 +18,16 @@ why is [`docs/cockpit/c10-acceptance-record.md`](../../docs/cockpit/c10-acceptan
 that record before quoting a count from this file. **Merging C10 accepted nothing**: the record leaves
 section 15 at one of four, and the four decisions it left open — the mobile executive summary,
 performance budgets, per-route-and-state visual coverage and the manual screen-reader protocol — are
-**PROPOSED by
-[ADR-0033](../../docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) and NOT IN FORCE**
-while that pull request is open. Nothing in this application changes because of that proposal.
+**defined by
+[ADR-0033](../../docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md), ACCEPTED / IN FORCE
+since PR #88 merged**, and none of the four is delivered by its acceptance. **One is now implemented,
+in an open pull request pending independent review**: Decision M, the mobile executive summary — see
+*The mobile executive summary* below. The other three are definitions with nothing yet measured,
+captured or assessed under them.
+
+> **HISTORICAL.** While PR #88 was open this paragraph read *PROPOSED by ADR-0033 and NOT IN FORCE*,
+> and said nothing in this application changed because of the proposal. Both were true of those days
+> and are not rewritten.
 
 > **HISTORICAL.** While PR #87 was open this paragraph read *"it is carried by an open pull
 > request"*. That was true of those days and is not rewritten as though the cycle had merged before
@@ -63,15 +70,42 @@ economics, fixture, contract, read model, schema version, route or dependency wa
 | **two responsive defects, found and fixed** | a badge carrying a sentence could not wrap, so it was clipped past the 390 × 844 viewport on **eleven routes**; the attention item's metadata pairs were clipped on the landing page. **Both predate this cycle.** Neither was visible to the old check: `overflow-x: hidden` on `html` and `body` clamps `documentElement.scrollWidth`, so it reads zero however wide the content is |
 | **measurement, not budgets** | `e2e/c10-performance.spec.ts` records first answer, first contentful paint and two interaction latencies per viewport, with its conditions. Set `KM_COCKPIT_SERVER` to name a different server — a production `next start` was measured that way — and the evidence file records which one. **No accepted numeric performance budget exists, and none is invented** |
 | **indexed review evidence** | `e2e/c10-evidence.spec.ts` writes a focused, indexed capture set to `screenshots-c10/`, with a provenance stamp. **It is review evidence, not the baseline**, and it stays out of the tracked tree |
-| **a committed visual baseline** | `e2e/c10-visual-regression.spec.ts` compares **nine tracked images** under `e2e/visual-baseline/` at **zero tolerance** on every run. Regenerate with `npx playwright test e2e/c10-visual-regression.spec.ts --update-snapshots`, and review the diff — a diff is a review item, not an auto-accept |
+| **a committed visual baseline** | `e2e/c10-visual-regression.spec.ts` compares **nine tracked images** under `e2e/visual-baseline/` at **zero tolerance** on every run. Regenerate with `npx playwright test e2e/c10-visual-regression.spec.ts --update-snapshots`, and review the diff — a diff is a review item, not an auto-accept. **The Decision M pull request adds four more** — the expanded-state rows at 390 × 844, compared by `e2e/c10-visual-regression-mobile-expanded.spec.ts` in the mobile project only, at the same zero tolerance — and leaves the nine byte-identical |
 
 **What C10 deliberately did not do**: it narrowed nothing on the mobile Executive Overview — section
-12 asks for an *"executive summary only"* and does not settle whether the rest is omitted or merely
-deferred, so the choice is recorded rather than invented. It acquired no data and built no capacity
+12 asks for an *"executive summary only"* and did not settle whether the rest is omitted or merely
+deferred, so the choice was recorded rather than invented; ADR-0033's Decision M has since settled it,
+and its implementation is described below. It acquired no data and built no capacity
 model. **Per-route document titles were not added, and no accepted requirement asks for them** —
 they are an unrequired improvement, not an unmet criterion, and a per-route segment layout is
 ordinary framework-supported work whenever a later cycle wants it. Each is recorded in the
 acceptance record.
+
+### The mobile executive summary — Decision M, implemented in an open pull request
+
+**Below 640 CSS pixels of viewport width, on `/` only, the Executive Overview is the accepted
+summary, and everything else is deferred — never omitted** (ADR-0033 §2, `ui-ux-specification.md`
+§12.1). The shell, the page header with its state badge, the six tier-1 tiles, Attention Required
+and — in the project scenario — the explanation of the unavailable state render first; *What
+changed — details*, *Performance overview*, *Supporting context* and, in Operator mode, *Response
+evidence* sit behind native `<details>` disclosures whose summaries contain the sections' `h2`s
+(`src/components/cockpit/mobile-summary.tsx`, `src/lib/mobile-summary.ts`). Each control carries
+its label, every distinct provenance its section displays, and **one availability badge per distinct
+settled non-`AVAILABLE` state in `AVAILABILITY_STATES` order** — never a value, a count or a
+skeleton. The `<details>` is the permanent wrapper at every width, so the same DOM nodes persist
+across a resize and focus inside a section survives it; expansion is page-instance state, in neither
+the URL nor storage. **At 640 pixels and above nothing changed.**
+
+```text
+below 640 px          the summary, then four labelled disclosures (three in Executive mode)
+640 px and above      every section visible, no disclosure control, the page as it was
+tests                 e2e/adr-0033-mobile-summary.spec.ts  -- M8.1 to M8.10, in all six projects
+                      tests/adr-0033-mobile-summary.test.tsx -- the badge rules, the component,
+                                                                 the page with a read held pending
+visual rows           four VC expanded-state captures at 390 x 844, mobile-390 only, zero tolerance
+status                IMPLEMENTED IN AN OPEN PULL REQUEST; the section 12 row stays NOT SATISFIED
+                      until it is independently reviewed, merged and read; J8 stays NOT ASSESSED
+```
 
 ---
 

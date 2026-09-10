@@ -13637,10 +13637,13 @@ COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "PR #87 merged at: 2026-09-10T02:49:20Z",
     "PR #87 final reviewed head: 34be5a4a2b9c29fbc7ac19f754273733035bd67d",
     "independent review of the C10 implementation: PERFORMED",
-    # THE FOUR OPEN DECISIONS HAVE A PROPOSAL, AND A PROPOSAL IS NOT IN FORCE. Both lines are
-    # required so that neither the existence of ADR-0033 nor its status can go unstated.
-    "remaining acceptance decisions: PROPOSED BY ADR-0033 / NOT IN FORCE",
-    "ADR-0033: PROPOSED / NOT IN FORCE",
+    # THE FOUR OPEN DECISIONS ARE ACCEPTED, AND AN ACCEPTED DEFINITION DELIVERS NOTHING. ADR-0033
+    # merged as PR #88, so the line moves from PROPOSED to ACCEPTED -- and it must still say
+    # that none of the four is delivered, because the one that is implemented sits in an OPEN
+    # pull request, unmerged and unreviewed.
+    "remaining acceptance decisions: ACCEPTED BY ADR-0033 / IN FORCE - NONE DELIVERED, "
+    "DECISION M IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "ADR-0033: ACCEPTED / IN FORCE",
     "areas assessed by the acceptance record: 36 OF 36",
     "areas IMPLEMENTED within accepted scope: 30",
     "areas PARTIAL: 6",
@@ -13652,18 +13655,23 @@ COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     # every-route, every-state baseline section 15 asks for; and section 12's mobile row is
     # unmet on an ambiguity nobody has resolved.
     "manual screen-reader pass: NOT ASSESSED",
-    "manual screen-reader protocol: PROPOSED BY ADR-0033 / NOT IN FORCE - ASSESSOR OUTSTANDING",
+    "manual screen-reader protocol: ACCEPTED BY ADR-0033 / IN FORCE - ASSESSOR OUTSTANDING",
     "committed visual-regression baseline: CREATED - 9 IMAGES, REPRESENTATIVE SUBSET",
-    "visual coverage inventory: PROPOSED BY ADR-0033 / NOT IN FORCE - 9 OF 439 NOMINAL EXIST",
-    # THE AMBIGUITY NOW HAS A PROPOSED RESOLUTION, AND THE ROW IS STILL NOT SATISFIED. Both
-    # halves are load-bearing: dropping the first would hide that a decision exists, dropping
-    # the second would report a definition as a delivery.
-    "mobile executive summary - section 12: NOT SATISFIED - RESOLUTION PROPOSED BY ADR-0033, "
-    "NOT IN FORCE",
-    # NO BUDGET IS ACCEPTED. ADR-0033 proposes five; until its merge the accepted count is none,
-    # and after its merge the line moves -- to ACCEPTED, never to MET, because accepting a
-    # budget establishes no compliance with it.
-    "accepted numeric performance budget: NONE EXISTS - PROPOSED BY ADR-0033, NOT IN FORCE",
+    # THIRTEEN IN THIS TREE, NINE ON MAIN. The Decision M pull request adds the four expanded
+    # rows the inventory names for it and no other; the line says both numbers so a reader
+    # can tell what merged from what is proposed.
+    "visual coverage inventory: ACCEPTED BY ADR-0033 / IN FORCE - 13 OF 439 NOMINAL IN THIS "
+    "TREE, 9 ON MAIN",
+    # THE AMBIGUITY IS RESOLVED, AN IMPLEMENTATION EXISTS, AND THE ROW IS STILL NOT SATISFIED.
+    # All three halves are load-bearing: the row is satisfied only when the implementation is
+    # independently reviewed, merged and its M8 evidence read against section 12.1 -- and an
+    # open pull request is none of those.
+    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN "
+    "OPEN PULL REQUEST",
+    # FIVE BUDGETS ARE ACCEPTED, AND NONE IS MET. Accepting a budget establishes no compliance
+    # with it, no run under the accepted protocol has been taken, and the line says so.
+    "accepted numeric performance budget: FIVE, ACCEPTED BY ADR-0033 - NONE MEASURED UNDER PB, "
+    "NONE MET",
     "reference viewports registered and swept: 6 OF 6",
     "new API routes, handlers or server actions: NONE",
     "new runtime dependencies: NONE",
@@ -13696,17 +13704,28 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C10 polish and acceptance cycle: MERGED / ACCEPTED",
     "C10 polish and acceptance cycle: COMPLETE",
     "C10 polish and acceptance cycle: ACCEPTED",
-    # A PROPOSED DEFINITION OF DONE IS NOT A DONE, AND IT IS NOT IN FORCE EITHER. Every spelling
-    # that would report ADR-0033 as accepted, or its four decisions as delivered, is refused.
-    "ADR-0033: ACCEPTED / IN FORCE",
-    "ADR-0033: ACCEPTED",
-    "remaining acceptance decisions: ACCEPTED",
-    "remaining acceptance decisions: IN FORCE",
+    # THE STALE UNDER-CLAIMS ARE NOW FORBIDDEN, on the ADR-0032 precedent: ADR-0033 merged as
+    # PR #88, so a status document still calling it proposed is stale rather than cautious.
+    "ADR-0033: PROPOSED / NOT IN FORCE",
+    "remaining acceptance decisions: PROPOSED BY ADR-0033",
+    "manual screen-reader protocol: PROPOSED BY ADR-0033",
+    "visual coverage inventory: PROPOSED BY ADR-0033",
+    "accepted numeric performance budget: NONE EXISTS",
+    "mobile executive summary - section 12: NOT SATISFIED - RESOLUTION PROPOSED BY ADR-0033",
+    "decision M implementation: NOT STARTED",
+    # AND THE OVER-CLAIMS AN ACCEPTED DEFINITION AND AN OPEN IMPLEMENTATION INVITE. Accepting
+    # the four definitions delivered none of them; implementing one in an open pull request
+    # merges nothing, satisfies nothing and assesses nothing.
     "remaining acceptance decisions: IMPLEMENTED",
-    "decision M implementation: IMPLEMENTED",
+    "remaining acceptance decisions: DELIVERED",
     "decision M implementation: MERGED",
-    "accepted numeric performance budget: ADR-0033",
-    "accepted numeric performance budget: FIVE",
+    "decision M implementation: ACCEPTED",
+    "decision M implementation: COMPLETE",
+    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTED AND MERGED",
+    "J8 - mobile summary journey: ASSESSED",
+    "J8 - mobile summary journey: PASSED",
+    "accepted numeric performance budget: FIVE, MET",
+    "accepted numeric performance budget: MET",
     "performance compliance: ESTABLISHED",
     "performance compliance: PASS",
     # A MEASUREMENT THAT WAS NOT TAKEN IS NEITHER A ZERO NOR A PASS.
@@ -13715,8 +13734,10 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "first contentful paint, production run: OBTAINED",
     "visual coverage inventory: CAPTURED",
     "visual coverage inventory: COMPLETE",
+    "visual coverage inventory: ACCEPTED BY ADR-0033 / IN FORCE - 439 OF 439",
     "new screenshot baselines created: 401",
     "new screenshot baselines created: 439",
+    "new screenshot baselines created: NONE",
     # THE COUNT THE PROPOSAL WAS SUBMITTED WITH, superseded in independent review when the
     # rows were re-derived from the scope module, the adapter and the page. A status
     # document that drifts back to it is reporting an inventory nobody holds.
@@ -13756,40 +13777,61 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "C10 has not begun",
 )
 
-#: ADR-0033 PROPOSES the four decisions the merged C10 acceptance record left open -- the
+#: ADR-0033 DEFINES the four decisions the merged C10 acceptance record left open -- the
 #: mobile executive summary, performance budgets, per-route-and-state visual coverage and the
-#: manual screen-reader protocol -- and it is PROPOSED while its pull request is open. The guard
-#: holds three things apart: that the proposal exists, that it is NOT IN FORCE, and that none of
-#: the four items has moved because of it.
+#: manual screen-reader protocol -- and it is ACCEPTED / IN FORCE: PR #88 was independently
+#: reviewed and merged. The guard holds three things apart: that the decision is accepted, that
+#: accepting a definition delivered none of the four items, and that the ONE item now implemented
+#: -- Decision M, the mobile executive summary -- sits in an OPEN pull request, unmerged,
+#: unreviewed, satisfying no row and assessing no journey.
 #:
-#: THE FAILURE THIS ONE EXISTS TO CATCH: a status document that read a proposed budget as an
-#: accepted one, a proposed inventory as a captured one, a proposed protocol as a performed one,
-#: or a proposed mobile behaviour as a satisfied row. Each of those is a definition being reported
-#: as a delivery, and the acceptance record's own vocabulary -- NOT_ASSESSED is never a pass --
-#: is the rule being guarded. The ADR's own document must say PROPOSED, and the specification
-#: subsections it adds must say so too, because a proposed amendment that sits beside accepted
-#: text without a marker is indistinguishable from accepted text.
+#: THE FAILURE THIS ONE EXISTS TO CATCH: a status document that read an accepted budget as a met
+#: one, an accepted inventory as a captured one, an accepted protocol as a performed one, or an
+#: implemented-but-unmerged mobile behaviour as a satisfied row. Each of those is a definition or
+#: an open pull request being reported as a delivery, and the acceptance record's own vocabulary
+#: -- NOT_ASSESSED is never a pass -- is the rule being guarded. The ADR's own document keeps the
+#: PROPOSED status line it was written with, as history, on the rule every accepted decision in
+#: this repository follows; the specification subsections it adds must say ACCEPTED with it, and
+#: must keep the days they were proposed as history rather than erase them.
 ADR_0033_ADR: Final = DECISIONS / "ADR-0033-c10-remaining-acceptance-decisions.md"
 ADR_0033_HEADING: Final = (
-    "### The remaining C10 acceptance decisions, and ADR-0033 — PROPOSED, and nothing is "
-    "implemented"
+    "### The remaining C10 acceptance decisions, and ADR-0033 — ACCEPTED, and Decision M "
+    "implemented in an open pull request"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
 ADR_0033_STATUS_REQUIRED: Final[tuple[str, ...]] = (
-    "ADR-0033: PROPOSED / NOT IN FORCE",
-    "ADR-0033 acceptance event: INDEPENDENT REVIEW AND MERGE OF ITS PULL REQUEST - NOT PREDICTED",
-    "ui-ux-specification.md 12.1 and 15.1-15.4: PROPOSED / NOT IN FORCE",
-    "decision M - mobile executive summary: PROPOSED - DEFERRED BEHIND DISCLOSURES, NOT OMITTED",
-    "decision M implementation: NOT STARTED / NOT AUTHORIZED",
-    "decision PB - performance budgets: PROPOSED - FIVE BUDGETS, CONDITION L",
+    "ADR-0033: ACCEPTED / IN FORCE",
+    # THE MERGE, READ FROM COMMIT OBJECTS RATHER THAN FROM DIFF STATISTICS, like every other.
+    "PR #88: MERGED",
+    "PR #88 merge commit: 948dcf4e6c9a8606134adbfde067047bdb170d6e",
+    "PR #88 merged at: 2026-09-10T11:55:50Z",
+    "PR #88 final reviewed head: 44d90a1f57b12d7590f20d69c5ba55a4ee54c502",
+    "ADR-0033 acceptance event: OCCURRED - INDEPENDENT REVIEW AND MERGE OF PR #88",
+    "ui-ux-specification.md 12.1 and 15.1-15.4: ACCEPTED / IN FORCE",
+    "decision M - mobile executive summary: ACCEPTED - DEFERRED BEHIND DISCLOSURES, NOT OMITTED",
+    # IMPLEMENTED IS NOT MERGED, AND AN OPEN PULL REQUEST IS NOT A SATISFIED ROW. Both lines
+    # are required so that neither the existence of the implementation nor its status can go
+    # unstated -- and the row it serves must still read NOT SATISFIED.
+    "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT REVIEW",
+    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN "
+    "OPEN PULL REQUEST",
+    # J8 WAS BLOCKED ON M. Its prerequisite is addressed by the open pull request and not
+    # before its merge, and the journey itself has not been run by anyone.
+    "J8 - mobile summary journey: IMPLEMENTATION PREREQUISITE ADDRESSED IN AN OPEN PULL "
+    "REQUEST - NOT ASSESSED",
+    "decision PB - performance budgets: ACCEPTED - FIVE BUDGETS, CONDITION L",
     "performance compliance: NOT ESTABLISHED - NO RUN MEETS THE SAMPLING PROTOCOL",
     "first contentful paint, production run: NOT OBTAINED - NEVER ZERO, NEVER PASSING",
-    "decision VC - visual coverage inventory: PROPOSED - 439 NOMINAL SNAPSHOTS, "
+    "performance row: PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN",
+    "decision VC - visual coverage inventory: ACCEPTED - 439 NOMINAL SNAPSHOTS, "
     "32 ROUTE IDENTIFIERS",
-    "existing zero-tolerance comparisons: 9 - UNCHANGED",
-    "new screenshot baselines created: NONE",
-    "decision SR - manual screen-reader protocol: PROPOSED - NVDA + CHROME PRIMARY, TEN JOURNEYS",
+    # THE NINE ARE UNCHANGED, AND FOUR ARE ADDED -- IN AN OPEN PULL REQUEST. A count of thirteen
+    # that did not say nine were on main would report the pull request as merged.
+    "existing zero-tolerance comparisons: 9 - UNCHANGED, BYTE-IDENTICAL, DIGESTS PINNED",
+    "new screenshot baselines created: 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, IN AN OPEN "
+    "PULL REQUEST",
+    "decision SR - manual screen-reader protocol: ACCEPTED - NVDA + CHROME PRIMARY, TEN JOURNEYS",
     "assessor assigned: NONE - OUTSTANDING",
     "assistive technology available to this session: NONE CLAIMED",
     "section 15 criteria satisfied: 1 OF 4",
@@ -13801,8 +13843,8 @@ ADR_0033_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "full Cockpit V1: INCOMPLETE",
 )
 
-#: Statements the ADR document itself must make while it is proposed. An accepted ADR is not
-#: edited, so these stay true of the document after any later merge as well.
+#: Statements the ADR document itself must make. It was written while proposed, and an accepted
+#: ADR is not edited, so these stay true of the document after its merge as well.
 ADR_0033_DOCUMENT_REQUIRED: Final[tuple[str, ...]] = (
     "Status: PROPOSED — NOT IN FORCE.",
     "carries no authority",
@@ -13836,14 +13878,23 @@ ADR_0033_DOCUMENT_FORBIDDEN: Final[tuple[str, ...]] = (
     "hear that none reads as a value",
 )
 
-#: The proposed markers each amended specification subsection must carry.
+#: The markers each amended specification subsection must carry now that ADR-0033 is accepted:
+#: `PROPOSED by ADR-0033` is provenance and stays; `ACCEPTED with it` is the status.
 ADR_0033_SPEC_MARKERS: Final[tuple[str, ...]] = (
-    "### 12.1 The mobile executive summary — PROPOSED by ADR-0033, NOT IN FORCE",
-    "### 15.1 Performance budgets — PROPOSED by ADR-0033, NOT IN FORCE",
-    "### 15.2 Visual regression coverage — PROPOSED by ADR-0033, NOT IN FORCE",
-    "### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, NOT IN FORCE",
-    "### 15.4 What accepting §15.1–§15.3 establishes — PROPOSED, NOT IN FORCE",  # noqa: RUF001
+    "### 12.1 The mobile executive summary — PROPOSED by ADR-0033, ACCEPTED with it",
+    "### 15.1 Performance budgets — PROPOSED by ADR-0033, ACCEPTED with it",
+    "### 15.2 Visual regression coverage — PROPOSED by ADR-0033, ACCEPTED with it",
+    "### 15.3 The manual screen-reader assessment protocol — PROPOSED by ADR-0033, "
+    "ACCEPTED with it",
+    "### 15.4 What accepting §15.1–§15.3 establishes — ACCEPTED with ADR-0033",  # noqa: RUF001
 )
+
+#: The stale conditional-authority sentence the amended specification must no longer carry, and
+#: the history it must keep instead.
+ADR_0033_SPEC_STALE: Final = (
+    "ADR-0033 is PROPOSED — NOT IN FORCE while the pull request introducing it is open"
+)
+ADR_0033_SPEC_HISTORY: Final = "ADR-0033 was PROPOSED and carried no authority"
 
 #: ADR-0030 was ACCEPTED on the merge of PR #78, BEFORE ADR-0031 was. The guard below is the
 #: one this audit did not have when the two status documents drifted apart over it: CLAUDE.md
@@ -25008,15 +25059,16 @@ def main() -> int:
             "; ".join(overclaiming_c10),
         )
 
-        # -- ADR-0033: proposed, and nothing has moved because of it -------------
+        # -- ADR-0033: accepted, and nothing has been delivered because of it ------
         #
-        # The four items C10 left open have a proposed definition. A definition is not a
+        # The four items C10 left open have an accepted definition. A definition is not a
         # delivery: the budgets are not met, the inventory is not captured, the protocol
-        # is not run and the mobile row is not satisfied. Both status documents, the ADR
-        # and the specification subsections it adds must say so, in those words.
+        # is not run and the mobile row is not satisfied -- its implementation sits in an
+        # open pull request. Both status documents and the specification subsections must
+        # say so, in those words; the ADR document keeps its own conditional status line.
         stale_33 = [label for label, text in status_documents if ADR_0033_HEADING not in text]
         f.check(
-            "both status documents carry the ADR-0033 proposed status section",
+            "both status documents carry the ADR-0033 accepted status section",
             not stale_33,
             ", ".join(stale_33),
         )
@@ -25029,7 +25081,7 @@ def main() -> int:
             }
         )
         f.check(
-            "both status documents record ADR-0033 proposed and none of its four items moved",
+            "both status documents record ADR-0033 accepted and none of its four items delivered",
             not divergent_33,
             ", ".join(divergent_33),
         )
@@ -25037,12 +25089,12 @@ def main() -> int:
         adr_33_flat = " ".join(adr_33_text.replace("**", "").split())
         missing_33 = [s for s in ADR_0033_DOCUMENT_REQUIRED if s not in adr_33_flat]
         f.check(
-            "ADR-0033 exists, declares itself proposed, predicts no merge and claims no result",
+            "ADR-0033 exists, keeps its status line, predicts no merge and claims no result",
             bool(adr_33_text) and not missing_33,
             ", ".join(missing_33) if adr_33_text else "ADR-0033 file missing",
         )
         f.check(
-            "ADR-0033 does not describe itself as accepted or in force",
+            "ADR-0033's own document is not rewritten as though it had always been accepted",
             bool(adr_33_text)
             and "ADR-0033 is ACCEPTED / IN FORCE" not in adr_33_flat
             and "Status: ACCEPTED" not in adr_33_flat,
@@ -25056,9 +25108,17 @@ def main() -> int:
         uiux_33 = read(COCKPIT_UIUX) if COCKPIT_UIUX.is_file() else ""
         missing_markers = [m for m in ADR_0033_SPEC_MARKERS if m not in uiux_33]
         f.check(
-            "every ADR-0033 specification subsection carries its PROPOSED / NOT IN FORCE marker",
+            "every ADR-0033 specification subsection carries its ACCEPTED with it marker",
             bool(uiux_33) and not missing_markers,
             ", ".join(missing_markers) if uiux_33 else "ui-ux-specification.md missing",
+        )
+        uiux_33_flat = " ".join(uiux_33.replace("**", "").split())
+        f.check(
+            "the amended specification records ADR-0033 accepted and keeps its history",
+            bool(uiux_33)
+            and "ADR-0033 is ACCEPTED / IN FORCE" in uiux_33_flat
+            and ADR_0033_SPEC_STALE not in uiux_33_flat
+            and ADR_0033_SPEC_HISTORY in uiux_33_flat,
         )
 
         # -- ADR-0030: accepted, and both status documents must say so ---------
