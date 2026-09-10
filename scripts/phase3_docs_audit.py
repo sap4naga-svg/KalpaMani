@@ -12843,13 +12843,39 @@ def acquisition_zero_operation_defects(text: str) -> list[str]:
 #: access-key id. Neither may appear in a proposal that says it carries no
 #: identifier, and a placeholder in angle brackets is not one.
 #:
-#: A DIGIT RUN INSIDE A HEXADECIMAL WORD IS NOT AN ACCOUNT ID. The status documents
-#: record every merge by its forty-character commit SHA, and PR #87's reviewed head
-#: happens to carry twelve consecutive decimal digits between hex letters. An account
-#: id is bounded by non-hex characters everywhere it legitimately appears -- a space,
-#: a colon in an ARN, a quote, a line end -- so the run is refused only when neither
-#: neighbour is a hexadecimal letter. A bare twelve-digit id still leaks.
-ADR_0021_ACCOUNT_ID: Final = re.compile(r"(?<![0-9A-Fa-f])\d{12}(?![0-9A-Fa-f])")
+#: A DIGIT RUN INSIDE A FULL COMMIT OR CONTENT DIGEST IS NOT AN ACCOUNT ID. The status
+#: documents record every merge by its forty-character commit SHA, and PR #87's reviewed
+#: head happens to carry twelve consecutive decimal digits between hex letters. The
+#: exemption is exactly that and no wider: a twelve-digit run is excused only when it
+#: sits INSIDE a forty- or sixty-four-character hexadecimal word bounded by
+#: non-alphanumerics -- a SHA-1 or a SHA-256. It is NOT excused merely for touching a
+#: hex letter, because ``bucket-123456789012eu``, ``ssoins-123456789012abcd`` and a
+#: sixteen-character token each put a real id beside a hex letter, and the corrected
+#: proposal's first cut (``(?<![0-9A-Fa-f])\d{12}(?![0-9A-Fa-f])``) admitted every one
+#: of them. Independent review replaced it with :func:`_inside_digest_word`.
+ADR_0021_ACCOUNT_ID: Final = re.compile(r"(?<!\d)\d{12}(?!\d)")
+#: A SHA-1 (40) or SHA-256 (64) hexadecimal word, bounded by non-alphanumerics.
+ADR_0021_DIGEST_WORD: Final = re.compile(
+    r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Za-z])"
+)
+
+
+def _inside_digest_word(text: str, start: int, end: int) -> bool:
+    """Whether ``text[start:end]`` lies wholly inside a full commit or content digest."""
+    return any(
+        digest.start() <= start and end <= digest.end()
+        for digest in ADR_0021_DIGEST_WORD.finditer(text)
+    )
+
+
+def _account_id_leak(text: str) -> re.Match[str] | None:
+    """The first twelve-digit run that is not part of a full digest word, or ``None``."""
+    for found in ADR_0021_ACCOUNT_ID.finditer(text):
+        if not _inside_digest_word(text, found.start(), found.end()):
+            return found
+    return None
+
+
 ADR_0021_ACCESS_KEY_ID: Final = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}\b")
 ADR_0021_SSO_START_URL: Final = re.compile(
     r"https://[A-Za-z0-9-]+\.awsapps\.com/start|https://ssoins-[0-9a-f]+\."
@@ -12871,8 +12897,10 @@ def adr_0021_identifier_leaks(text: str) -> list[str]:
     *types* and never values.
     """
     leaks: list[str] = []
+    account = _account_id_leak(text)
+    if account is not None:
+        leaks.append(f"account id: {account.group(0)[:12]}")
     for label, pattern in (
-        ("account id", ADR_0021_ACCOUNT_ID),
         ("access key id", ADR_0021_ACCESS_KEY_ID),
         ("sso start url", ADR_0021_SSO_START_URL),
         ("account-bearing arn", ADR_0021_CONCRETE_ARN),
@@ -13626,7 +13654,7 @@ COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "manual screen-reader pass: NOT ASSESSED",
     "manual screen-reader protocol: PROPOSED BY ADR-0033 / NOT IN FORCE - ASSESSOR OUTSTANDING",
     "committed visual-regression baseline: CREATED - 9 IMAGES, REPRESENTATIVE SUBSET",
-    "visual coverage inventory: PROPOSED BY ADR-0033 / NOT IN FORCE - 9 OF 401 NOMINAL EXIST",
+    "visual coverage inventory: PROPOSED BY ADR-0033 / NOT IN FORCE - 9 OF 439 NOMINAL EXIST",
     # THE AMBIGUITY NOW HAS A PROPOSED RESOLUTION, AND THE ROW IS STILL NOT SATISFIED. Both
     # halves are load-bearing: dropping the first would hide that a decision exists, dropping
     # the second would report a definition as a delivery.
@@ -13688,6 +13716,12 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "visual coverage inventory: CAPTURED",
     "visual coverage inventory: COMPLETE",
     "new screenshot baselines created: 401",
+    "new screenshot baselines created: 439",
+    # THE COUNT THE PROPOSAL WAS SUBMITTED WITH, superseded in independent review when the
+    # rows were re-derived from the scope module, the adapter and the page. A status
+    # document that drifts back to it is reporting an inventory nobody holds.
+    "9 OF 401 NOMINAL EXIST",
+    "401 NOMINAL SNAPSHOTS",
     # AN AXE PASS IS NOT A SCREEN-READER ASSESSMENT, AND NOBODY IS ASSIGNED TO RUN ONE.
     "manual screen-reader pass: ASSESSED",
     "manual screen-reader protocol: EXECUTED",
@@ -13751,7 +13785,7 @@ ADR_0033_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "decision PB - performance budgets: PROPOSED - FIVE BUDGETS, CONDITION L",
     "performance compliance: NOT ESTABLISHED - NO RUN MEETS THE SAMPLING PROTOCOL",
     "first contentful paint, production run: NOT OBTAINED - NEVER ZERO, NEVER PASSING",
-    "decision VC - visual coverage inventory: PROPOSED - 401 NOMINAL SNAPSHOTS, "
+    "decision VC - visual coverage inventory: PROPOSED - 439 NOMINAL SNAPSHOTS, "
     "32 ROUTE IDENTIFIERS",
     "existing zero-tolerance comparisons: 9 - UNCHANGED",
     "new screenshot baselines created: NONE",
@@ -13780,6 +13814,26 @@ ADR_0033_DOCUMENT_REQUIRED: Final[tuple[str, ...]] = (
     "assignment is OUTSTANDING",
     "deferred, not omitted",
     "one satisfied criterion of four",
+    # THE FOUR CORRECTIONS INDEPENDENT REVIEW MADE, each a rule the proposal must keep
+    # stating: a blocked journey is not an inapplicable one; an unconstructible state is
+    # not an exempt one; a passing re-run does not erase a failure; and the disclosure
+    # badge rule invents no precedence over availability states.
+    "BLOCKED — M NOT IMPLEMENTED",
+    "NOT YET CONSTRUCTIBLE",
+    "PASS — ON RE-RUN",
+    "not a precedence policy",
+    "ten journeys get the full protocol",
+    "can read at most `PARTIAL`",
+)
+
+#: Statements the ADR must NOT make -- each the wording the review corrected, kept out so a
+#: later edit cannot quietly restore it.
+ADR_0033_DOCUMENT_FORBIDDEN: Final[tuple[str, ...]] = (
+    "NOT APPLICABLE — M NOT IMPLEMENTED",
+    "eight journeys get the full protocol",
+    "the section's worst availability state",
+    "exact order is an implementation detail",
+    "hear that none reads as a value",
 )
 
 #: The proposed markers each amended specification subsection must carry.
@@ -24992,6 +25046,12 @@ def main() -> int:
             bool(adr_33_text)
             and "ADR-0033 is ACCEPTED / IN FORCE" not in adr_33_flat
             and "Status: ACCEPTED" not in adr_33_flat,
+        )
+        restored_33 = [s for s in ADR_0033_DOCUMENT_FORBIDDEN if s in adr_33_flat]
+        f.check(
+            "ADR-0033 keeps none of the wordings independent review corrected",
+            bool(adr_33_text) and not restored_33,
+            ", ".join(restored_33),
         )
         uiux_33 = read(COCKPIT_UIUX) if COCKPIT_UIUX.is_file() else ""
         missing_markers = [m for m in ADR_0033_SPEC_MARKERS if m not in uiux_33]
