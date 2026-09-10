@@ -656,9 +656,9 @@ nothing else:
 | Open item in this record | ADR-0033 decision | What acceptance of the ADR would establish | What it would not |
 |---|---|---|---|
 | §7.2 — omit or defer at 390 × 844 | **M** — deferred behind labelled disclosures on the same page; nothing omitted, no route invented | what *"executive summary only"* requires | that the row is satisfied — it stays **NOT SATISFIED** until M is implemented and M8 passes |
-| §7.3 — no budget exists | **PB** — five budgets with units, marks, conditions and aggregation; `NOT OBTAINED` never a pass | the budgets | compliance — no retained run meets the sampling protocol, and PB2 is `NOT OBTAINED` |
-| §7.4 — a representative baseline | **VC** — a 401-snapshot nominal inventory with cited applicability rules, zero tolerance preserved | what *"per route and per state"* means | any new image — nine of 401 exist |
-| §7.1 — no screen reader run | **SR** — a named-assessor protocol, NVDA + Chrome primary, ten journeys, severity and closure rules; **assessor OUTSTANDING** | the protocol | that anyone ran it — **`NOT_ASSESSED`** |
+| §7.3 — no budget exists | **PB** — five budgets with units, marks, conditions and aggregation; `NOT OBTAINED` never a pass; bounded query time `DEFERRED`, which caps the row at `PARTIAL` | the budgets | compliance — no retained run meets the sampling protocol, the retained first-answer figures were taken to the shell mark rather than PB1's, and PB2 is `NOT OBTAINED` |
+| §7.4 — a representative baseline | **VC** — a 439-snapshot nominal inventory with cited applicability rules, route-level `ERROR` recorded `NOT YET CONSTRUCTIBLE`, zero tolerance preserved | what *"per route and per state"* means | any new image — nine of 439 exist |
+| §7.1 — no screen reader run | **SR** — a named-assessor protocol, NVDA + Chrome primary, ten journeys of which the mobile one is `BLOCKED` on M and never skipped, severity and closure rules; **assessor OUTSTANDING** | the protocol | that anyone ran it — **`NOT_ASSESSED`** |
 
 **Contract defined, implemented, tested and accepted are four columns**, and every row is in the
 first at most — and, while ADR-0033's pull request is open, not even there.

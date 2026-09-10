@@ -168,6 +168,26 @@ def test_the_amended_specification_marks_every_new_subsection_proposed() -> None
     )
 
 
+def test_the_amended_subsections_carry_the_review_corrections() -> None:
+    """The specification deltas say what the corrected ADR says, in the same words."""
+    for phrase in (
+        "one availability badge per distinct non-`AVAILABLE` state",
+        "never a precedence the contract does not define",
+        "the route's own read-model readiness",
+        "this row reads at most `PARTIAL`, however PB1–PB5 report",  # noqa: RUF001
+        "`PASS — ON RE-RUN`",
+        "The inventory is 439 nominal snapshots over 32 route identifiers",
+        "`NOT YET CONSTRUCTIBLE`",
+        "VC-R1 to VC-R6",
+        "every registered route and both deep destinations",
+        "`BLOCKED` until §12.1 is implemented, never `NOT APPLICABLE`",
+        "the blocked mobile journey included",
+    ):
+        assert phrase in UIUX_FLAT, phrase
+    assert "401 nominal snapshots" not in UIUX_FLAT
+    assert "worst availability badge" not in UIUX_FLAT
+
+
 def test_the_accepted_section_12_row_and_section_15_rows_are_unchanged() -> None:
     """The proposal clarifies the accepted rows; it may not rewrite them."""
     assert (
@@ -341,7 +361,7 @@ def test_every_inapplicable_axis_cites_a_rule() -> None:
     rows = table_rows(VC_SPAN)
     assert len(rows) == 32
     rules = set(re.findall(r"\*\*(VC-R\d)\*\*", VC_RULES_SPAN))
-    assert rules == {"VC-R1", "VC-R2", "VC-R3", "VC-R4", "VC-R5"}
+    assert rules == {"VC-R1", "VC-R2", "VC-R3", "VC-R4", "VC-R5", "VC-R6"}
     for row in rows:
         for axis in (row[2], row[3]):
             if axis.startswith("**1"):
@@ -366,9 +386,61 @@ def test_the_nominal_total_is_the_sum_of_the_rows() -> None:
         counts = BOLD_INT.findall(row[6])
         assert counts, f"{row[0]} states no nominal count"
         total += int(counts[-1])
-    assert total == 401
-    assert "Nominal total: 50 + 28 × 12 + 2 × 6 + 3 = 401 snapshots" in ADR_FLAT  # noqa: RUF001
+    assert total == 439
+    assert "Nominal total: 76 + 26 × 12 + 2 × 18 + 2 × 6 + 3 = 439 snapshots" in ADR_FLAT  # noqa: RUF001
     assert "of which nine exist today" in ADR_FLAT
+
+
+def test_the_inventory_is_derived_from_the_axes_the_code_exposes() -> None:
+    """The review re-derived the rows from `scope.ts`, `adapter.ts` and `page.tsx`.
+
+    The `changes` variants follow the scenario and not the mode, so they exist in both modes;
+    a deep destination has three renderings under VC-I1; and the M expanded state has both
+    scenarios and both modes. Each is asserted against the code that makes it so.
+    """
+    scope = (APP / "src" / "lib" / "scope.ts").read_text(encoding="utf-8")
+    assert (
+        'export const CHANGE_VARIANTS = ["auto", "valid", "none", "no-baseline", "degraded"]'
+        in scope
+    )
+    assert 'withVariants={scope.scenario === "demo"}' in PAGE_TEXT
+    rows = {row[0]: row for row in table_rows(VC_SPAN)}
+    root = rows["`root`"]
+    assert "in both modes" in root[4] and "+8" in root[4]
+    assert root[6].endswith("= **76** |") or root[6].endswith("= **76**")
+    for detail in ("`portfolio-trades-detail`", "`signals-candidates-detail`"):
+        assert rows[detail][2].startswith("**3 — VC-I1**"), detail
+        assert "VC-R4" in rows[detail][2]
+        assert rows[detail][6] == "**18**"
+    adapter = (APP / "src" / "data" / "fixtures" / "adapter.ts").read_text(encoding="utf-8")
+    assert 'producer === "NOT_IMPLEMENTED_FOR_SCOPE" || trade === undefined' in adapter
+    assert "`demo-trade-arb-0001`" in ADR_TEXT and "`demo-candidate-0001`" in ADR_TEXT
+    assert "`vc-absent-identifier`" in ADR_TEXT
+
+
+def test_every_url_axis_of_the_scope_is_disposed_of() -> None:
+    """`scope.ts` carries six URL axes; VC-I2 must say what happens to each of them."""
+    scope = (APP / "src" / "lib" / "scope.ts").read_text(encoding="utf-8")
+    for key in ("mode", "env", "scenario", "period", "gran", "changes"):
+        assert f'read("{key}")' in scope, key
+    vc_i2 = next(
+        row for row in table_rows(section(ADR_TEXT, "### 4.1", "### 4.2")) if "VC-I2" in row[0]
+    )
+    for phrase in (
+        "`env`",
+        "`period`",
+        "`gran`",
+        "held at their defaults",
+        "NOT YET CONSTRUCTIBLE",
+    ):
+        assert phrase in vc_i2[2], phrase
+
+
+def test_a_cited_inapplicability_is_coverage_and_an_unconstructible_state_bars_completion() -> None:
+    closure = flatten(section(ADR_TEXT, "**What closes the row, exactly.**", "## 5."))
+    assert "a cited inapplicability is coverage" in closure
+    assert "no combination is `NOT YET CONSTRUCTIBLE`" in closure
+    assert "Only the first permits completion" in ADR_FLAT
 
 
 def test_no_rule_exempts_a_viewport_or_a_mode() -> None:
@@ -457,6 +529,46 @@ def test_the_proposal_makes_the_current_performance_spec_fail_no_accepted_contra
 
 def test_bounded_query_time_is_deferred_rather_than_invented() -> None:
     assert "PB-Q is recorded as `DEFERRED — requires a read-model boundary`" in ADR_FLAT
+    assert (
+        "While PB-Q reads `DEFERRED — requires a read-model boundary`, the §15 performance row "
+        "can read at most `PARTIAL`"
+    ) in ADR_FLAT
+
+
+def test_pb1_ends_at_the_route_and_not_at_the_shell() -> None:
+    """The shell's freshness indicator is fed by the executive-overview read on every route."""
+    shell = (APP / "src" / "components" / "shell" / "app-shell.tsx").read_text(encoding="utf-8")
+    assert "const overview = useExecutiveOverview(scope);" in shell
+    assert "<FreshnessIndicator" in shell
+    marks = table_rows(section(ADR_TEXT, "#### 3.3.1", "#### 3.3.2"))
+    assert [row[0].strip("`") for row in marks] == [
+        "/",
+        "/portfolio/trades",
+        "/portfolio/performance",
+        "/governance/qualification",
+        "/system/alerts",
+        "/strategy/performance",
+        "/portfolio/trades/demo-trade-arb-0001",
+    ]
+    for route, marker in (
+        ("/portfolio/trades", "trades-panel"),
+        ("/portfolio/performance", "performance-curves"),
+        ("/system/alerts", "alert-panel"),
+        ("/strategy/performance", "strategy-modules"),
+    ):
+        row = next(r for r in marks if r[0].strip("`") == route)
+        assert f"`{marker}`" in row[1], route
+        page = APP / "src" / "app" / route.lstrip("/") / "page.tsx"
+        assert f'testId="{marker}"' in page.read_text(encoding="utf-8"), marker
+    assert "Not the shell's freshness indicator" in ADR_FLAT
+    assert "does not exclude the runner's latency" in ADR_FLAT
+
+
+def test_a_passing_rerun_never_erases_a_failure_and_zero_stays_valid_elsewhere() -> None:
+    assert "PASS — ON RE-RUN" in ADR_FLAT
+    assert "never as a clean pass" in ADR_FLAT
+    assert "changes no contract semantics" in ADR_FLAT
+    assert "The read-model validity rules (`contracts/validity.ts`) are untouched" in ADR_FLAT
 
 
 # ------------------------------------------------------------- decision SR, held to its own rules
@@ -483,6 +595,47 @@ def test_the_protocol_records_versions_at_execution_and_separates_the_keyboard_p
     assert "Two sessions, two evidence sheets" in flatten(SR_SPAN)
     assert "A passing keyboard pass is not a screen-reader pass" in flatten(SR_SPAN)
     assert "zero S1 and zero S2" in flatten(SR_SPAN)
+
+
+def test_the_journey_count_is_ten_and_the_mobile_journey_is_blocked_not_inapplicable() -> None:
+    assert "ten journeys get the full protocol" in flatten(SR_SPAN)
+    assert "eight journeys" not in flatten(SR_SPAN).replace('read "eight journeys"', "")
+    j8 = next(row for row in table_rows(section(SR_SPAN, "### 5.3", "### 5.4")) if "J8" in row[0])
+    assert "BLOCKED — M NOT IMPLEMENTED" in j8[1]
+    assert "NOT APPLICABLE — M NOT IMPLEMENTED" not in ADR_TEXT
+    closure = next(
+        row for row in table_rows(section(SR_SPAN, "### 5.6", "### 5.7")) if "closure" in row[0]
+    )
+    assert "J8 included" in closure[1]
+    assert "ASSESSED — PARTIAL — J8 BLOCKED ON M" in closure[1]
+
+
+def test_the_state_journey_respects_value_bearing_states() -> None:
+    validity = (APP / "src" / "contracts" / "validity.ts").read_text(encoding="utf-8")
+    assert '"AVAILABLE",\n  "STALE",\n  "PARTIAL",\n  "EMPTY_VERIFIED",' in validity
+    j5 = next(row for row in table_rows(section(SR_SPAN, "### 5.3", "### 5.4")) if "J5" in row[0])
+    for state in ("`AVAILABLE`", "`STALE`", "`PARTIAL`", "`EMPTY_VERIFIED`"):
+        assert state in j5[1], state
+    assert "hear that none reads as a value" not in j5[1]
+
+
+def test_the_structural_pass_covers_the_deep_destinations_too() -> None:
+    sr_a = next(
+        row for row in table_rows(section(SR_SPAN, "### 5.3", "### 5.4")) if "SR-A" in row[0]
+    )
+    assert "each of the two deep destinations" in sr_a[1]
+    assert "thirty-two route identifiers" in sr_a[1]
+
+
+def test_the_disclosure_badge_rule_invents_no_precedence() -> None:
+    freshness = (APP / "src" / "contracts" / "freshness.ts").read_text(encoding="utf-8")
+    assert "NO PRECEDENCE POLICY IS INVENTED HERE" in freshness
+    m5 = flatten(M5_SPAN)
+    assert "not a precedence policy" in m5
+    assert "one existing `AvailabilityBadge`" in m5
+    assert "A pending read contributes nothing" in m5
+    assert "worst" not in m5
+    assert "every distinct provenance badge" in m5
 
 
 def test_the_journeys_are_traced_to_accepted_clauses() -> None:
