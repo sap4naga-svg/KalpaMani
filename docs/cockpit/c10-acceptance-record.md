@@ -560,6 +560,7 @@ run — which is recorded rather than quietly re-run.**
 | a design token shifted, against the **default** screenshot tolerance | **PASSED — the control was INERT.** Playwright's default per-pixel threshold of 0.2 absorbed a visible colour change, so the baseline was tightened to **zero tolerance** before it was trusted |
 | the same token shifted, against the **tightened** baseline | failed, with **13 489 to 17 472** differing pixels |
 | the baseline re-run twice on an unchanged tree | **byte-identical both times**, before and after the tightening |
+| the baseline inside a full six-project run | **ONE FLAKE, and it is recorded rather than re-run away.** The availability-state screen's *precondition* wait — the 5-second default, waiting for the page to render at all — expired before any screenshot was taken, in a 33-minute run, on the heaviest page a development server compiles on demand. The same test passed **four of four** in isolation and at **every other viewport in the same run**. The precondition waits are now explicit at 30 seconds; **the comparison itself is untouched and still fails on one differing pixel** |
 | a 2400-pixel element injected, against the **document-overflow** measurement | **PASSED — inert**, which is the finding in §11.3 |
 | a 2400-pixel element injected, against `clippedBeyondViewport` | failed, as designed |
 | one grep-scoped control | **matched no test and proved nothing.** Re-run with a correct pattern rather than counted |

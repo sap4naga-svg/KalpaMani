@@ -71,9 +71,29 @@ const STRICT = { threshold: 0, maxDiffPixels: 0, maxDiffPixelRatio: 0 } as const
 
 test.use({ reducedMotion: "reduce" });
 
+/**
+ * The PRECONDITION WAIT, and why it is given a longer one than the default.
+ *
+ * This is not the assertion under test -- that is `toHaveScreenshot`, and its tolerance stays
+ * zero. This only waits for the page to have rendered before anything is compared.
+ *
+ * IT IS EXPLICIT BECAUSE THE DEFAULT WAS NOT ENOUGH, ONCE. In a full six-project run the
+ * availability-state reference screen -- the heaviest page here, compiled on demand by the
+ * development server -- had not yet shown its freshness indicator when the 5-second default
+ * expired, and the test failed WITHOUT EVER TAKING A SCREENSHOT. The same test passed four
+ * times out of four in isolation, and at every other viewport in the same run: a
+ * compile-and-load flake, not a rendering difference.
+ *
+ * A longer precondition wait removes that flake without weakening anything that is being
+ * checked. A real rendering change still fails, at zero tolerance, exactly as before.
+ */
+const SETTLE_TIMEOUT_MS = 30_000;
+
 async function settle(page: Page): Promise<void> {
-  await expect(page.getByTestId("freshness-indicator")).toBeVisible();
-  await expect(page.getByTestId("context-bar")).toBeVisible();
+  await expect(page.getByTestId("freshness-indicator")).toBeVisible({
+    timeout: SETTLE_TIMEOUT_MS,
+  });
+  await expect(page.getByTestId("context-bar")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
 }
 
 test.describe("the committed visual baseline", () => {
@@ -81,8 +101,8 @@ test.describe("the committed visual baseline", () => {
     await page.clock.setFixedTime(FIXED_INSTANT);
     await page.goto("/?scenario=demo&mode=executive");
     await settle(page);
-    await expect(page.getByTestId("attention-panel")).toBeVisible();
-    await expect(page.getByTestId("what-changed-panel")).toBeVisible();
+    await expect(page.getByTestId("attention-panel")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
+    await expect(page.getByTestId("what-changed-panel")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
 
     await expect(page).toHaveScreenshot("overview-demo-executive.png", {
       animations: "disabled",
@@ -102,8 +122,8 @@ test.describe("the committed visual baseline", () => {
     await page.clock.setFixedTime(FIXED_INSTANT);
     await page.goto("/?scenario=project&mode=executive");
     await settle(page);
-    await expect(page.getByTestId("page-provenance-banner")).toContainText("PROJECT READINESS");
-    await expect(page.getByTestId("unavailable-body").first()).toBeVisible();
+    await expect(page.getByTestId("page-provenance-banner")).toContainText("PROJECT READINESS", { timeout: SETTLE_TIMEOUT_MS });
+    await expect(page.getByTestId("unavailable-body").first()).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
 
     await expect(page).toHaveScreenshot("overview-project.png", {
       animations: "disabled",
@@ -123,7 +143,7 @@ test.describe("the committed visual baseline", () => {
     await page.clock.setFixedTime(FIXED_INSTANT);
     await page.goto("/foundation/states?scenario=demo");
     await settle(page);
-    await expect(page.getByTestId("freshness-demo")).toBeVisible();
+    await expect(page.getByTestId("freshness-demo")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
 
     await expect(page).toHaveScreenshot("availability-states.png", {
       animations: "disabled",
