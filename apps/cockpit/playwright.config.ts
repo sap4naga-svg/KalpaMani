@@ -36,7 +36,16 @@ export default defineConfig({
   snapshotPathTemplate: "{testDir}/visual-baseline/{projectName}/{arg}-{platform}{ext}",
   use: {
     baseURL: BASE_URL,
-    trace: "off",
+    /*
+     * A FAILURE MUST LEAVE ITS OWN EVIDENCE. Two full-suite failures on PR #87 -- a 5-second
+     * precondition on the visual baseline and a 20-second precondition in `c7-research.spec.ts`
+     * -- each left only an ARIA snapshot, because tracing was off: which request, console
+     * message or hydration step had not completed could not be read afterwards, and the
+     * failures did not reproduce under instrumentation. Retaining the trace of a FAILING test
+     * keeps its network, console and DOM timeline; a passing test's trace is discarded, so no
+     * tracked artifact is produced and no assertion, timeout or coverage changes.
+     */
+    trace: "retain-on-failure",
   },
   projects: [
     {
