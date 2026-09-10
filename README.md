@@ -290,16 +290,16 @@ Nothing below exists yet, and none of it is authorized:
   and two further corrections — valid zero measurements, and absolute cache freshness deadlines —
   under [ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md).
 
-  **The C3 application foundation is implemented**, and the **C4 Executive Overview and
-  governance** cycle is implemented on top of it — **effective on its own merge, and carrying no
-  such status until then** — at [apps/cockpit/](apps/cockpit/README.md),
-  under its own separate written authorization and **effective on the merge of PR #74**. It is a
-  local, read-only frontend on a repository-owned fixture adapter: design system, shell,
-  navigation, the transcribed contract layer and two substantive screens. **A foundation is not
-  the Cockpit** — no production read API, projection runtime, metric engine, database, scheduler,
-  deployment or feedback automation exists, **no route handler, server action, API route or
-  control handler exists anywhere in it**, it makes **no network request of any kind**, and none
-  of the remainder is authorized
+  **The C3 to C9 cycles are merged** and the **C10 polish and acceptance cycle is implemented and
+  carried by an open pull request**, at [apps/cockpit/](apps/cockpit/README.md), each under its own
+  separate written authorization. It is a local, read-only frontend on a repository-owned fixture
+  adapter: the design system, the shell, the navigation, the transcribed contract layer and
+  thirty registered sidebar routes and two deep destinations. **Merged cycles are not the Cockpit** — **C5 and C7 are both NOT
+  COMPLETE**, **full Cockpit V1 is INCOMPLETE**, no production read API, projection runtime, metric
+  engine, database, scheduler, deployment or feedback automation exists, **no route handler, server
+  action, API route or control handler exists anywhere in it**, it makes **no network request of any
+  kind**, and none of the remainder is authorized. The requirement-by-requirement assessment is
+  [docs/cockpit/c10-acceptance-record.md](docs/cockpit/c10-acceptance-record.md)
 - Short-selling logic, borrow checks, SSR/squeeze controls
 - AI Research Agent and Challenger Agent
 - The portfolio and deterministic risk engine (only the *parameters* exist)
@@ -3550,9 +3550,14 @@ the value-bearing field an ordinary read actually reaches, and all nineteen read
 `v2` identity for the combined change. **Merging that pull request is a third gate again**, and the
 section below records it rather than this one.
 
-**C7 remains NOT STARTED**, the **C5 completion follow-up remains pending**, **full Cockpit V1
-remains INCOMPLETE**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is **NOT COMPLETE**,
-CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
+**Full Cockpit V1 remains INCOMPLETE**, **G1 and G2 stay OPEN**, no provider is selected, Phase 3 is
+**NOT COMPLETE**, CONTROL stays **DEFERRED**, and live trading stays **HARD-DISABLED**.
+
+> **HISTORICAL.** This paragraph also read *C7 remains NOT STARTED* and *the C5 completion follow-up
+> remains pending*, both of which were true when ADR-0030 was accepted. **C7 has since merged** and
+> **the C5 completion follow-up has since merged, implemented in part** — see the sections that
+> record each. The earlier statements are facts about those days and are not rewritten as though the
+> cycles had already landed.
 
 ### The owning-area navigation amendment, and ADR-0031 — PROPOSED, and nothing is implemented
 
@@ -3913,7 +3918,7 @@ Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 C8:                                               MERGED
 C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
-C10:                                              NOT STARTED / NOT AUTHORIZED
+C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -3930,14 +3935,14 @@ live trading:                                     HARD-DISABLED
 
 **A merged cycle is a merged cycle, and it is not a finished product.** C7's screens are written,
 validated, independently reviewed and **merged**; **C9 has since merged too**, and the C5
-completion follow-up is **carried by an open pull request**; C10 is **not started**; **full Cockpit
-V1 is incomplete**; and **specification, implementation, research, deployment and execution stay
-five separate gates**.
+completion follow-up has **merged too**; C10 is **implemented and carried by an open pull
+request**; **full Cockpit V1 is incomplete**; and **specification, implementation, research,
+deployment and execution stay five separate gates**.
 
-**The two clauses above were written on the day C7 merged, and two of them have moved since.** On
-that day C9 was an unmerged candidate and the C5 completion follow-up was unowned work nobody had
-started — historical facts about those days that stay true of them, recorded here rather than
-left reading as current.
+**The clauses above were written on the day C7 merged, and three of them have moved since.** On
+that day C9 was an unmerged candidate, the C5 completion follow-up was unowned work nobody had
+started, and **C10 was not started** — historical facts about those days that stay true of them,
+recorded here rather than left reading as current.
 
 
 ### The qualified operator access — MATERIALIZED, INDEPENDENTLY VERIFIED, and not authorized to use
@@ -5148,7 +5153,7 @@ broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 C9:                                               IMPLEMENTED IN AN OPEN PULL REQUEST
-C10:                                              NOT STARTED / NOT AUTHORIZED
+C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -5194,8 +5199,12 @@ those days, it stays true of them, and it is **not** rewritten as though the sur
 merged before they were.
 
 **A merge is not a completion.** C9 delivers two areas over repository-owned fixtures; **full
-Cockpit V1 stays INCOMPLETE**, **C10 is not begun**, and the merge authorized no cycle beyond
-itself.
+Cockpit V1 stays INCOMPLETE**, and the merge authorized no cycle beyond itself.
+
+> **HISTORICAL.** On the day C9 merged this paragraph also stated that C10 had not begun, which
+> was true of that day. C10 has since been written and is carried by an open pull request; that
+> earlier statement is recorded here as a fact about those days rather than rewritten as though the
+> cycle had always existed.
 
 | Area | Surface |
 |---|---|
@@ -5307,7 +5316,7 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
 C5 completion follow-up:                          MERGED / IMPLEMENTED IN PART
-C10:                                              NOT STARTED / NOT AUTHORIZED
+C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -5327,6 +5336,145 @@ Cockpit already renders; **every producing subsystem behind it is still absent a
 unauthorized**, and **specification, implementation, research, deployment and execution stay five
 separate gates**.
 
+
+### The C10 Cockpit polish and acceptance cycle — IMPLEMENTED, and carried by an open pull request
+
+**C10 is implemented and unmerged, it has not been independently reviewed, and it is not an
+acceptance.** Those are four facts, and this section keeps them apart. The cycle the traceability
+matrix describes as *"visual polish · accessibility · responsiveness · performance · synthetic
+end-to-end and visual regression"* is written; **an author's requirement-by-requirement assessment
+now exists at
+[`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md)**; and **an
+acceptance record is not an acceptance decision**, which is a human act on an independently reviewed
+pull request.
+
+**While this pull request is open the cycle carries no authority beyond itself**, exactly as C7, C8
+and C9 did before their own merges. That is a historical fact about these days and will stay true of
+them.
+
+#### What it is, exactly
+
+**Presentation and accessibility corrections, a cross-cutting test sweep, and a written assessment.**
+**No read model, schema version, contract, fixture, route, economic figure or dependency was changed
+by it**, and no producing subsystem was created, connected or authorized.
+
+| | |
+|---|---|
+| **panel titles are headings** | `ReadModelPanel`, the performance overview, the rolling-series panel, the attention panel and the What Changed panel rendered their titles as `<span>`, so most screens offered a screen reader exactly one heading — the `h1` — and the `h3` inside a panel section then **skipped a level from it**. Both halves of the UI specification's *"landmarks, one `h1` per page, ordered headings"* failed. The visual treatment is byte-identical: what changed is the accessibility tree |
+| **repeated landmarks are distinguishable** | `/strategy/performance` rendered one identically named *Minimum observation rules* region per strategy version and per family, so a landmark list offered several indistinguishable destinations |
+| **a drill-down screen has a place in the sidebar** | `aria-current` was decided by an exact path match, so **nothing** was current on `/portfolio/trades/<id>` or `/signals/candidates/<id>`. A deep destination now marks the entry that **owns** it, as a section rather than as the page, because the reader is not on the ledger |
+| **a skip link reaches the primary table** | section 10 asks for skip links to "the main content **and** the primary table"; only the first existed, so reaching a ledger by keyboard meant tabbing past the header and thirty sidebar links |
+| **six executive links are distinguishable** | the ten-second answers all read *"Open the area that owns this"*. The visible text is unchanged and each accessible name now carries its subject |
+| **the sweep** | every registered route is checked at **all six reference viewports** for page overflow, **content clipped outside a scroll container**, a single `h1`, a `main` landmark, heading order, the persistent context bar, the page-level `SYNTHETIC` label, console errors, off-origin requests and axe violations — including the structural rules axe tags as best-practice, which every earlier run therefore skipped |
+| **two responsive defects, found and fixed** | a badge carrying a sentence was clipped past the 390 × 844 viewport on **eleven routes**, and the attention item's metadata was clipped on the landing page. **Both predate this cycle**, and neither could be seen by the check meant to catch them, because `overflow-x: hidden` on `html` and `body` clamps the root scroll-width measurement to zero |
+| **measurement, not budgets** | first answer, first contentful paint and two interaction latencies are recorded per viewport with the exact conditions they were taken under, on a development server **and on a production build**. **No accepted numeric performance budget exists anywhere in tracked authority, and none is invented** |
+| **indexed review evidence, and a committed baseline** | a focused, indexed capture set with a provenance stamp — git-ignored, for a person to look at — **and, separately, nine tracked baseline images** under `apps/cockpit/e2e/visual-baseline/` that a later change is compared against at zero tolerance |
+
+#### What it audited, and what it did not close
+
+**C5 and C7 were audited against their requirements rather than against their previous reports, and
+both remain NOT COMPLETE.**
+
+| | |
+|---|---|
+| **C5** | **two requirements outstanding** — the **named benchmarks SPY, QQQ and IWM** resolve to nothing because **no provider is selected and G1 is OPEN**, and **strategy capacity is NOT OBTAINABLE** because the §12.3.3 admission gate refuses at its required-input stage with **nine required inputs absent** and **G1 and G5 OPEN** |
+| **C7** | **one requirement outstanding** — Area 5 reads capacity through the **same** gate Area 4 reads, deliberately, and it refuses for the same reason. Area 14's per-run capacity declaration is the same dependency |
+| **newly recorded** | `PositionSnapshot` carries **no earnings-proximity, liquidity or capacity field**, though Area 3's presented facts name all three. Area 3's *observable acceptance criteria* are met, so the row is partial on the narrative rather than failing on the criteria. **It belongs to C5's remaining dependency and is not C10 work** |
+
+**Rendering an unavailable state correctly is finished work; producing a value nobody can obtain is
+not.** That distinction is what the record's five dispositions exist to hold, and it is why
+thirty areas read as implemented while six read as partial.
+
+#### What it does not claim
+
+**Three of section 15's four criteria are not met, and none is rounded up.** The **manual
+screen-reader pass was not run at all** — not by the author and not by the independent review, which
+had no assistive technology available to it — and an automated axe pass is not one. **A committed
+visual-regression baseline now exists** — nine tracked images under `apps/cockpit/e2e/visual-baseline/`,
+compared at zero tolerance on every run — but it covers a **representative subset** rather than the
+every-route, every-state baseline section 15 asks for, so that criterion stays **partial**. **No
+numeric performance budget exists** in tracked authority, and none is invented.
+
+**All six reference viewports are now registered and swept** — the three the suite already ran, plus
+1920 × 1080, 1280 × 800 and 768 × 1024 in three projects of their own, so no existing spec's run
+count moved. **That sweep found and fixed two real responsive defects at 390 × 844**: a badge
+carrying a sentence was clipped past the viewport on eleven routes, and the attention item's metadata
+was clipped on the landing page. **Neither was introduced by this cycle**, and neither could be seen
+by the check that was supposed to catch it — `overflow-x: hidden` on `html` and `body` clamps the
+root scroll-width measurement, so it reads zero however wide the content is.
+
+**One narrative requirement is still unmet.** Section 12's mobile row asks for an *"executive summary
+only"* and the mobile Executive Overview renders the full stacked page. The accepted text names what
+the summary contains but does not settle whether the rest is **omitted** or **deferred**, and no
+route owns What Changed or the tier-2 tiles — so the choice is recorded rather than invented.
+
+**Per-route document titles were not added, and no accepted requirement asks for them** — not
+U1–U20, not section 11's enumerated accessibility targets, not any area's criteria in the
+traceability matrix. They are an unrequired improvement rather than an unmet criterion, and they are
+**not blocked**: a per-route segment layout is ordinary framework-supported work for a later cycle.
+
+**No alpha is claimed, no result is asserted and no threshold is established.** Every populated figure
+is a repository-owned deterministic fixture, and **twenty satisfied UI criteria are twenty satisfied
+UI criteria** — not a measure of how much of this project is built, and not a step toward live
+trading.
+
+```text
+C10 polish and acceptance cycle:                  IMPLEMENTED IN AN OPEN PULL REQUEST
+independent review of the C10 implementation:     PERFORMED
+acceptance record:                                docs/cockpit/c10-acceptance-record.md
+areas in V1 scope:                                36
+areas assessed by the acceptance record:          36 OF 36
+areas IMPLEMENTED within accepted scope:          30
+areas PARTIAL:                                    6
+areas BLOCKED by a contract decision:             0
+areas NOT ASSESSED:                               0
+U1-U20 assessed:                                  20
+U1-U20 satisfied:                                 20
+section 15 criteria assessed:                     4 OF 4
+section 15 criteria satisfied:                    1 OF 4
+manual screen-reader pass:                        NOT ASSESSED
+mobile executive summary - section 12:            NOT SATISFIED - AMBIGUITY RECORDED
+responsive defects found and fixed by review:     2 - BADGE CLIPPING, ATTENTION METADATA
+committed visual-regression baseline:             CREATED - 9 IMAGES, REPRESENTATIVE SUBSET
+accepted numeric performance budget:              NONE EXISTS - NONE INVENTED
+reference viewports registered and swept:         6 OF 6
+per-route document titles:                        NOT ADDED - NOT REQUIRED BY ANY CLAUSE
+new API routes, handlers or server actions:       NONE
+new runtime dependencies:                         NONE
+read models changed by this cycle:                NONE
+schema versions changed by this cycle:            NONE
+fixtures changed by this cycle:                   NONE
+ledger economics, entry facts or risk records:    UNCHANGED
+a second portfolio or strategy engine:            NONE
+mutation, execution or broker vocabulary:         NONE
+C5:                                               NOT COMPLETE
+C7:                                               NOT COMPLETE
+full Cockpit V1:                                  INCOMPLETE
+strategy capacity - VALUE:                        NOT OBTAINABLE / NOT PRODUCED
+named benchmarks SPY / QQQ / IWM:                 UNAVAILABLE - NO PROVIDER IS SELECTED
+Brain runtime:                                    NOT IMPLEMENTED / NOT AUTHORIZED
+backtesting:                                      NOT STARTED
+provider data used:                               NONE
+market data downloaded or requested:              NONE
+private artifacts read:                           NONE
+AWS / Terraform operations:                       NONE
+broker activity:                                  NONE
+Run A retry:                                      NOT AUTHORIZED / NOT RUN
+Run B:                                            NOT RUN / NOT AUTHORIZED
+Run B earliest approved target:                   12 SEPTEMBER 2026
+combined assessment:                              NOT RUN / NOT AUTHORIZED
+P1-P9:                                            UNEVALUATED
+data correctness and quality:                     NOT ESTABLISHED
+G1 / G2:                                          OPEN / OPEN
+provider selected:                                NONE
+Phase 3:                                          NOT COMPLETE
+CONTROL:                                          DEFERRED
+live trading:                                     HARD-DISABLED
+```
+
+**A polished interface over deterministic fixtures is a polished interface over deterministic
+fixtures.** **Specification, implementation, research, deployment and execution stay five separate
+gates**, and merging this cycle would open none of the others.
 
 ### The C5 completion follow-up — MERGED, IMPLEMENTED IN PART, and C5 is still not complete
 
@@ -5483,7 +5631,7 @@ broker activity:                                  NONE
 orders placed by this cycle:                      NONE
 backtesting:                                      NOT STARTED
 Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
-C10:                                              NOT STARTED / NOT AUTHORIZED
+C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED
@@ -5536,7 +5684,7 @@ authorization, and the two are different events.
 | **the four unsupported literals** | **REMOVED.** The health fixture carried four hand-written tail-loss values computed under no declared rule. They are gone, and no consumer presents an old arbitrary number as a result of the accepted formula |
 | **the capacity contract** | **ENFORCED ON THE READ PATH.** The §12.3.3 admission gate is applied by the actual producer every capacity consumer reads — Area 4's `StrategyPerformance`, Area 14's `ResearchRun` and Area 5's capacity health input — rather than by a helper only tests reach |
 | **a capacity value** | **STILL NOT OBTAINABLE, AND NOT PRODUCED.** The gate evaluates today's actual facts, refuses at its **required-input** stage, and renders `NOT_YET_AVAILABLE` with `UPSTREAM_INPUT_MISSING`. **That is the same state the screen rendered before, reached by the rule instead of asserted by a literal** |
-| **what is emphatically not implemented** | **no capacity model, no calibration, no qualification, no search executor, no capital-to-schedule mapping and no market-impact function.** No capacity input was acquired, no model was built or calibrated, no model was qualified, no capacity estimate was produced, no research run or backtest was executed, and **C10 has not begun** |
+| **what is emphatically not implemented** | **no capacity model, no calibration, no qualification, no search executor, no capital-to-schedule mapping and no market-impact function.** No capacity input was acquired, no model was built or calibrated, no model was qualified, no capacity estimate was produced, no research run or backtest was executed, and **C10 had not begun on the day this was written** |
 
 **Enforcing an admission gate is not obtaining the evidence it requires.** The gate can now say
 precisely which of the nine required inputs are missing and why; it cannot conjure one.
@@ -5636,7 +5784,7 @@ backtesting:                                      NOT STARTED
 Brain runtime:                                    NOT IMPLEMENTED / NOT AUTHORIZED
 C5:                                               NOT COMPLETE
 C7:                                               NOT COMPLETE
-C10:                                              NOT STARTED / NOT AUTHORIZED
+C10:                                              IMPLEMENTED IN AN OPEN PULL REQUEST
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
 Run B:                                            NOT RUN / NOT AUTHORIZED

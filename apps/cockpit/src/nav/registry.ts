@@ -552,10 +552,75 @@ export const DEEP_DESTINATIONS: readonly {
   readonly route: string;
   readonly status: RouteStatus;
   readonly cycle: string;
+  /** The screen's own name — a trade's detail is not the ledger it was opened from. */
+  readonly label: string;
+  /** The registered sidebar route this screen is reached from, and belongs to. */
+  readonly owner: string;
 }[] = [
-  { route: "/portfolio/trades/[tradeId]", status: "implemented", cycle: "C5 basic, C6 full" },
-  { route: "/signals/candidates/[candidateId]", status: "implemented", cycle: "C6" },
+  {
+    route: "/portfolio/trades/[tradeId]",
+    status: "implemented",
+    cycle: "C5 basic, C6 full",
+    label: "Trade Detail",
+    owner: "/portfolio/trades",
+  },
+  {
+    route: "/signals/candidates/[candidateId]",
+    status: "implemented",
+    cycle: "C6",
+    label: "Candidate Detail",
+    owner: "/signals/funnel",
+  },
 ];
+
+/**
+ * The path prefix a deep destination's template describes.
+ *
+ * `/portfolio/trades/[tradeId]` is reached at `/portfolio/trades/<id>`, so the prefix is
+ * everything before the first dynamic segment. It is DERIVED from the template rather than
+ * written out a second time, because a prefix copied beside a route is a second route.
+ */
+function deepPrefix(route: string): string {
+  const dynamic = route.indexOf("/[");
+  return dynamic === -1 ? route : route.slice(0, dynamic);
+}
+
+/**
+ * The registered destination a pathname belongs to, and what to call it.
+ *
+ * MATCHING A PATHNAME AGAINST `href` ALONE MARKED NO SIDEBAR ENTRY CURRENT ON A DETAIL SCREEN.
+ * A reader who had drilled into `/portfolio/trades/<id>` or `/signals/candidates/<id>` saw a
+ * sidebar with no position in it at all, so the navigation stopped saying where they were at
+ * exactly the point they had gone somewhere.
+ *
+ * A deep destination resolves to the SIDEBAR ROUTE THAT OWNS IT — Trade Detail belongs to Trade
+ * History — and carries its OWN name, because a detail screen is a different screen from the
+ * ledger it was opened from. An unregistered path resolves to `null`: **nothing is guessed**, and
+ * a caller marks nothing rather than marking a nearest match.
+ */
+export interface ResolvedRoute {
+  /** The sidebar entry that should read as current, or `null` for an unregistered path. */
+  readonly owner: NavRoute | null;
+  /** The screen's own name. */
+  readonly label: string;
+}
+
+export function resolveRoute(pathname: string): ResolvedRoute | null {
+  const exact = ROUTES_BY_HREF.get(pathname);
+  if (exact !== undefined) {
+    return { owner: exact, label: exact.label };
+  }
+  for (const destination of DEEP_DESTINATIONS) {
+    const prefix = deepPrefix(destination.route);
+    if (pathname.startsWith(`${prefix}/`)) {
+      return {
+        owner: ROUTES_BY_HREF.get(destination.owner) ?? null,
+        label: destination.label,
+      };
+    }
+  }
+  return null;
+}
 
 /** The routes with no page of their own, kept for the tests that assert their absence. */
 export const RESERVED_DESTINATIONS: readonly string[] = DEEP_DESTINATIONS.filter(

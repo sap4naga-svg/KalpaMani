@@ -36,10 +36,30 @@ export function CardBody({ className, ...props }: React.ComponentPropsWithoutRef
   return <div className={cn("px-5 pb-5", className)} {...props} />;
 }
 
-/** A section label. Uppercase, tertiary, and never competing with the number it labels. */
-export function Label({ className, ...props }: React.ComponentPropsWithoutRef<"span">) {
+/**
+ * A section label. Uppercase, tertiary, and never competing with the number it labels.
+ *
+ * `as` CHOOSES THE ELEMENT, AND IT EXISTS FOR THE HEADING STRUCTURE RATHER THAN FOR STYLE.
+ *
+ * A panel title rendered as a `<span>` is invisible to the heading structure, so a page whose
+ * sections were all panels offered a screen reader exactly one heading -- its `h1` -- and the
+ * `h3` inside a panel section then skipped a level from it. `ui-ux-specification.md` section 11
+ * asks for "landmarks, one `h1` per page, ordered headings", and both halves of that failed.
+ *
+ * The visual treatment is IDENTICAL whichever element is chosen: the same class string is
+ * applied, so making a title a heading changes the accessibility tree and changes nothing a
+ * reader sees.
+ */
+export type LabelElement = "span" | "h2" | "h3";
+
+export function Label({
+  className,
+  as: element = "span",
+  ...props
+}: React.ComponentPropsWithoutRef<"span"> & { as?: LabelElement }) {
+  const Component = element;
   return (
-    <span
+    <Component
       className={cn(
         "text-label-s font-medium uppercase tracking-[0.09em] text-text-tertiary",
         className,
@@ -49,9 +69,25 @@ export function Label({ className, ...props }: React.ComponentPropsWithoutRef<"s
   );
 }
 
+/*
+ * `max-w-full` REPLACED `whitespace-nowrap`, AND THE REASON IS A MEASURED DEFECT.
+ *
+ * Several screens use a badge to carry a whole sentence -- a failure mode, a criterion, an
+ * authorization note. With `whitespace-nowrap` such a badge could not wrap, so at the 390 x 844
+ * reference viewport it ran past the page and was CLIPPED by the `overflow-x: hidden` on `html`
+ * and `body`: "The evidence rests on one confirmatory evaluation" reached x = 608 in a 390-pixel
+ * viewport, and the rest of the sentence was unreachable. `ui-ux-specification.md` section 12
+ * forbids exactly that -- "no clipped critical control * no truncated number without a full value
+ * available" -- and U14 asks wide content to scroll inside its own container rather than off the
+ * page.
+ *
+ * A SHORT BADGE IS UNAFFECTED. `max-w-full` caps a badge at its container and lets text wrap only
+ * when it would otherwise exceed it; a two-word status badge is narrower than its container, so
+ * its intrinsic width still puts it on one line. What changes is only the case that was broken.
+ */
 const badgeVariants = cva(
   "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-label-s " +
-    "font-medium whitespace-nowrap",
+    "font-medium max-w-full",
   {
     variants: {
       tone: {

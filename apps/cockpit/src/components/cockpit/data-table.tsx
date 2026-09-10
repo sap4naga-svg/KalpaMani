@@ -144,7 +144,17 @@ export function DataTable<TRow extends RowData>({
   const visibleRows = table.getRowModel().rows;
 
   return (
-    <ScrollRegion label={caption} className="rounded-sm border border-border-subtle">
+    <ScrollRegion
+      label={caption}
+      className="rounded-sm border border-border-subtle"
+      /*
+       * The shell's second skip link targets the FIRST of these inside `main`.
+       * `ui-ux-specification.md` section 10 asks skip links to reach "the main content AND the
+       * primary table", and a table is exactly the content a keyboard reader most needs to
+       * reach without tabbing the whole sidebar and header first.
+       */
+      data-table-region=""
+    >
       <table
         className="w-full min-w-[46rem] border-collapse text-label-m"
         data-testid={testId}
