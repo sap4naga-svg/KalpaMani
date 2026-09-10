@@ -928,40 +928,40 @@ EXISTING_BASELINE_DIGESTS: Final[dict[str, str]] = {
         "7104097270f5ae19db6969f0fb5b85a4f694427f3577bace487d50d3926b1045"
     ),
     "desktop-1440/overview-demo-executive-win32.png": (
-        "5ab0219335d99f5c308979c33b12c8971c27069f4ee45d9ab46e5383b7d413d2"
+        "413c22bf34777baa49928cd27d170f6f879690ef8732c93262076d2dff813729"
     ),
     "desktop-1440/overview-project-win32.png": (
-        "96a345fe895e75fb1d7ee3ea17f9b0514ffc387e766f40b472dd3e83f0e05afc"
+        "3fa31d498912982c0bafca343c609a3da846f9b9933aac67031bc314c79470c9"
     ),
     "mobile-390/VC-root-demo-executive-expanded-win32.png": (
-        "126b8510f2242dee4f1138b74d0d4213ef6ec0e517555b793d18edddcd024983"
+        "8bc81438954781088109224e553ad56955ade270309b1801f97058ba17c3223a"
     ),
     "mobile-390/VC-root-demo-operator-expanded-win32.png": (
-        "f46c55a6e9b0eb4a5f873595896d70973a78f62235c6d61a3aedc6d9254c99d0"
+        "7d1f0a6086bc203272a9099992c9f052031e5be4446087df8c4c5400888c28a1"
     ),
     "mobile-390/VC-root-project-executive-expanded-win32.png": (
-        "945b40b7331306cff4b1a031d4b41d3e6699627b0e1eac17c46312c9ce2d20f6"
+        "9ae7c9e4ec650c3eee15bedbadcf2c86edd03700c5b252b6a3880d610a4d2312"
     ),
     "mobile-390/VC-root-project-operator-expanded-win32.png": (
-        "4eace0c59a23b96671be4f5cb6de8fedeef5100d34fd8a034e5668f15cc5dab3"
+        "f77801fdc3c4f50b8c7e5bc2f82ba011a27398f5f991fec10af3eaaa0acbef75"
     ),
     "mobile-390/availability-states-win32.png": (
         "e9bb2149cb67f2d5e81282986b0b93a04a2d321b8be81ca9ee5bb6e06d84865c"
     ),
     "mobile-390/overview-demo-executive-win32.png": (
-        "7010a6ade19882a3118deb14f2b9a17e12a8c0fbcf7cff7d480619b0e64c0787"
+        "782e2e47325994d4f3cc049960b8f6fce2344c465963fedfe11b8d874400f485"
     ),
     "mobile-390/overview-project-win32.png": (
-        "eb89fc1b524178ed4746e666928443bc6f29dd57755dfb144b0f2159d604b879"
+        "208b230ee3a87c3cb138b2681898924a2e2d67e479c2156433b2ae3a203102a5"
     ),
     "tablet-1024/availability-states-win32.png": (
         "2cf89b10dfa9e66fc9279ce10af95f10114b366da724c86daa2157f08e89ea88"
     ),
     "tablet-1024/overview-demo-executive-win32.png": (
-        "4aaf8079f2233ec3a4ce7962901767ee28363956fed739ad44c3fb84280de0ff"
+        "572fb98b6efb947eb4add83e517b7f5e3088ed2786fd26f570c08d9e35d50cdf"
     ),
     "tablet-1024/overview-project-win32.png": (
-        "bf5eac222e7f99091167dc5b144abb083739fb404dac5aefb24f60cfad97646b"
+        "73bf62e1857b3c676d45c5a8abeeb6f1a343a1f93d7110c089c80b4c13f3da04"
     ),
 }
 

@@ -174,10 +174,16 @@ function AnswerTile({
             {context}
           </div>
         )}
+        {/*
+          * BOTH CONTROLS ARE AT LEAST 24 CSS PIXELS TALL. The first cut set the link at
+          * `label-m` and the summary at `label-s`, stacked 6 px apart, and the axe sweep failed
+          * WCAG 2.2 `target-size` on `/` at every width: two adjacent pointer targets of 18 and
+          * 16 px. The text sizes stay; the boxes meet the minimum (§11, "target size").
+          */}
         {href !== undefined && destination !== undefined && (
           <Link
             href={href}
-            className="text-label-m font-medium text-accent underline underline-offset-2"
+            className="inline-flex min-h-6 items-center self-start text-label-m font-medium text-accent underline underline-offset-2"
             data-tile-part="destination"
           >
             {destination.label} →
@@ -185,7 +191,7 @@ function AnswerTile({
         )}
         {details !== undefined && (
           <details className="group text-label-s text-text-tertiary" data-tile-part="details">
-            <summary className="cursor-pointer select-none text-text-tertiary hover:text-text-secondary">
+            <summary className="flex min-h-6 cursor-pointer select-none items-center text-text-tertiary hover:text-text-secondary">
               {detailsLabel ?? `About ${subject.charAt(0).toLowerCase()}${subject.slice(1)}`}
             </summary>
             <div className="mt-1 leading-relaxed">{details}</div>
