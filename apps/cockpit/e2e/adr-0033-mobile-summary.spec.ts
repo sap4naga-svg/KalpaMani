@@ -365,6 +365,16 @@ test("M8.6 — no disclosure renders at or above 640 px, and every section is vi
     }
     await expect(page.locator('section[aria-labelledby="operator-evidence"]')).toBeVisible();
     /*
+     * No duplicate text across layouts: the hidden control carries no label, so a text
+     * locator finds each visible heading exactly once -- as the pre-existing specs expect.
+     */
+    await expect(page.getByText("Response evidence", { exact: true })).toHaveCount(1);
+    await expect(page.getByText("Supporting context", { exact: true })).toHaveCount(1);
+    await expect(page.getByText("What changed — details")).toHaveCount(0);
+    for (const id of DISCLOSURE_IDS) {
+      expect(await control(page, id).evaluate((el) => el.textContent)).toBe("");
+    }
+    /*
      * The headings stand where they always did: outside any control. The performance section
      * has carried two -- its `sr-only` section heading and the card's own title -- since
      * before this decision, and the count is stated so a change to it is a review item.

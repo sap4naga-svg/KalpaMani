@@ -290,6 +290,9 @@ describe("the disclosure component (M5, M7)", () => {
     expect(heading).toHaveClass("full-heading");
     expect(control.contains(heading)).toBe(false);
     expect(screen.getByTestId("probe-content")).toBeVisible();
+    // The hidden control is EMPTY: no duplicate label or badge text sits in the document.
+    expect(control.textContent).toBe("");
+    expect(screen.getAllByText("Supporting context")).toHaveLength(1);
   });
 
   it("renders the control collapsed by default below the breakpoint, with the h2 inside it", () => {

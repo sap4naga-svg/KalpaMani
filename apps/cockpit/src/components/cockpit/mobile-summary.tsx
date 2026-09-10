@@ -204,7 +204,9 @@ export function SummaryDisclosure({
       {/*
         * THE CONTROL, BELOW THE BREAKPOINT ONLY. At and above it the summary carries the
         * `hidden` attribute — not rendered, not focusable, not in the accessibility tree —
-        * and the `<details>` is simply open, so the section is the section it always was.
+        * AND IS EMPTY: a label left inside a hidden control is duplicate text that a text
+        * locator or a find-in-page still reaches. The `<details>` is simply open, so the
+        * section is the section it always was.
         */}
       <summary
         hidden={layout === "full"}
@@ -220,38 +222,42 @@ export function SummaryDisclosure({
           unknown && "sm:hidden",
         )}
       >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "inline-flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary transition-transform",
-            !collapsedControl && "rotate-90",
-          )}
-        >
-          ▸
-        </span>
-        {layout === "summary" ? (
-          <h2 id={headingId} className={CONTROL_HEADING}>
-            {label}
-          </h2>
-        ) : (
-          <span className={CONTROL_HEADING}>{label}</span>
+        {layout !== "full" && (
+          <>
+            <span
+              aria-hidden="true"
+              className={cn(
+                "inline-flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary transition-transform",
+                !collapsedControl && "rotate-90",
+              )}
+            >
+              ▸
+            </span>
+            {layout === "summary" ? (
+              <h2 id={headingId} className={CONTROL_HEADING}>
+                {label}
+              </h2>
+            ) : (
+              <span className={CONTROL_HEADING}>{label}</span>
+            )}
+            {/*
+              * THE SECTION'S PROVENANCE, EVERY DISTINCT ONE (M5, U3): a collapsed synthetic
+              * section is still labelled SYNTHETIC, and a section mixing a tracked fact with
+              * synthetic tiles carries both rather than choosing one.
+              */}
+            {provenance.map((source) => (
+              <ProvenanceBadge key={source} provenance={source} className="shrink-0" />
+            ))}
+            {/*
+              * ONE BADGE PER DISTINCT SETTLED NON-AVAILABLE STATE, IN VOCABULARY ORDER (M4,
+              * M5): glyph and label, never colour alone, never a number, never a skeleton,
+              * and never a precedence the contract does not define.
+              */}
+            {availability.map((state) => (
+              <AvailabilityBadge key={state} state={state} className="shrink-0" />
+            ))}
+          </>
         )}
-        {/*
-          * THE SECTION'S PROVENANCE, EVERY DISTINCT ONE (M5, U3): a collapsed synthetic
-          * section is still labelled SYNTHETIC, and a section mixing a tracked fact with
-          * synthetic tiles carries both rather than choosing one.
-          */}
-        {provenance.map((source) => (
-          <ProvenanceBadge key={source} provenance={source} className="shrink-0" />
-        ))}
-        {/*
-          * ONE BADGE PER DISTINCT SETTLED NON-AVAILABLE STATE, IN VOCABULARY ORDER (M4, M5):
-          * glyph and label, never colour alone, never a number, never a skeleton, and never
-          * a precedence the contract does not define.
-          */}
-        {availability.map((state) => (
-          <AvailabilityBadge key={state} state={state} className="shrink-0" />
-        ))}
       </summary>
       {layout !== "summary" && fullWidthHeading !== null && (
         <h2
