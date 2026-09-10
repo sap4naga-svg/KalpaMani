@@ -12842,7 +12842,14 @@ def acquisition_zero_operation_defects(text: str) -> list[str]:
 #: A twelve-digit run is an AWS account id, and an ``AKIA``/``ASIA`` prefix is an
 #: access-key id. Neither may appear in a proposal that says it carries no
 #: identifier, and a placeholder in angle brackets is not one.
-ADR_0021_ACCOUNT_ID: Final = re.compile(r"(?<!\d)\d{12}(?!\d)")
+#:
+#: A DIGIT RUN INSIDE A HEXADECIMAL WORD IS NOT AN ACCOUNT ID. The status documents
+#: record every merge by its forty-character commit SHA, and PR #87's reviewed head
+#: happens to carry twelve consecutive decimal digits between hex letters. An account
+#: id is bounded by non-hex characters everywhere it legitimately appears -- a space,
+#: a colon in an ARN, a quote, a line end -- so the run is refused only when neither
+#: neighbour is a hexadecimal letter. A bare twelve-digit id still leaks.
+ADR_0021_ACCOUNT_ID: Final = re.compile(r"(?<![0-9A-Fa-f])\d{12}(?![0-9A-Fa-f])")
 ADR_0021_ACCESS_KEY_ID: Final = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}\b")
 ADR_0021_SSO_START_URL: Final = re.compile(
     r"https://[A-Za-z0-9-]+\.awsapps\.com/start|https://ssoins-[0-9a-f]+\."

@@ -1171,7 +1171,9 @@ def test_the_outstanding_requirements_and_standing_gates_are_unchanged(name: str
     for statement in (
         "C5 overall: NOT COMPLETE",
         "full Cockpit V1: INCOMPLETE",
-        "C10: IMPLEMENTED IN AN OPEN PULL REQUEST",
+        # PR #87 MERGED, so the C10 line moved from the open-pull-request spelling on the
+        # same precedent every earlier cycle line followed; a merge is not an acceptance.
+        "C10: MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE",
         "strategy capacity - REQUIRED INPUTS: DO NOT EXIST",
         "capacity model: DOES NOT EXIST",
         "capacity model qualification: DOES NOT EXIST",
@@ -1186,8 +1188,9 @@ def test_the_outstanding_requirements_and_standing_gates_are_unchanged(name: str
         "live trading: HARD-DISABLED",
     ):
         assert statement in text, statement
-    # The stale under-claim, refused by name. It was true, and it is not any more.
+    # The stale under-claims, refused by name. Each was true, and neither is any more.
     assert "C10: NOT STARTED / NOT AUTHORIZED" not in text
+    assert "C10: IMPLEMENTED IN AN OPEN PULL REQUEST" not in text
 
 
 @pytest.mark.parametrize("name", sorted(STATUS_DOCUMENTS))

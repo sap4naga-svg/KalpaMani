@@ -767,6 +767,20 @@ def test_placeholders_and_negative_statements_pass_the_scanner(sample: str) -> N
     assert not GUARD.adr_0021_identifier_leaks(sample)
 
 
+def test_a_digit_run_inside_a_commit_sha_is_not_an_account_id() -> None:
+    """The status documents record merges by SHA, and a SHA can carry twelve digits.
+
+    PR #87's reviewed head does. Refusing it would force a status document to drop the
+    very hash that makes "the thing that merged is the thing that was reviewed" checkable;
+    admitting a BARE twelve-digit run would let a real account id through. Both halves
+    are asserted.
+    """
+    sha_with_twelve_digits = "PR #87 final reviewed head: 34be5a4a2b9c29fbc7ac19f754273733035bd67d"
+    assert not GUARD.adr_0021_identifier_leaks(sha_with_twelve_digits)
+    assert GUARD.adr_0021_identifier_leaks("account 754273733035 is real")
+    assert GUARD.adr_0021_identifier_leaks("arn:aws:iam::754273733035:role/x")
+
+
 # ---------------------------------------------------------------------------
 # Both status documents, independently and section-locally
 # ---------------------------------------------------------------------------
