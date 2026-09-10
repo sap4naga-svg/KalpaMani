@@ -108,7 +108,24 @@ test.describe("the committed visual baseline", () => {
     await page.goto("/?scenario=demo&mode=executive");
     await settle(page);
     await expect(page.getByTestId("attention-panel")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
-    await expect(page.getByTestId("what-changed-panel")).toBeVisible({ timeout: SETTLE_TIMEOUT_MS });
+    /*
+     * The populated marker for the What Changed panel. Below 640 px the panel is deferred
+     * behind a collapsed disclosure (ADR-0033 M), so it is present and its control is visible;
+     * at and above it, the panel itself is. The capture is the viewport, which the disclosure
+     * sits below, and the comparison stays exactly as it was.
+     */
+    if ((page.viewportSize()?.width ?? 0) < 640) {
+      await expect(page.getByTestId("disclosure-what-changed-control")).toBeVisible({
+        timeout: SETTLE_TIMEOUT_MS,
+      });
+      await expect(page.getByTestId("what-changed-panel")).toBeAttached({
+        timeout: SETTLE_TIMEOUT_MS,
+      });
+    } else {
+      await expect(page.getByTestId("what-changed-panel")).toBeVisible({
+        timeout: SETTLE_TIMEOUT_MS,
+      });
+    }
 
     await expect(page).toHaveScreenshot("overview-demo-executive.png", {
       animations: "disabled",

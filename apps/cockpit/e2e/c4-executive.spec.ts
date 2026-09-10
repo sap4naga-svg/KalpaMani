@@ -1,4 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
+
+import { revealDeferredSections } from "./mobile-summary";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -47,6 +49,7 @@ test.describe("the performance overview", () => {
     const problems = guardConsole(page);
     await page.goto(`/${DEMO}&period=3M`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
 
     const overview = page.getByTestId("performance-overview");
     await expect(overview).toBeVisible();
@@ -63,6 +66,7 @@ test.describe("the performance overview", () => {
     await expect(page).toHaveURL(/period=1Y/);
     await page.reload();
     await waitForHydration(page);
+    await revealDeferredSections(page);
     await expect(
       page.getByTestId("performance-overview").getByRole("button", { name: "1Y", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
@@ -73,6 +77,7 @@ test.describe("the performance overview", () => {
   test("states its window, calendar, timezone, costs and coverage (U19)", async ({ page }) => {
     await page.goto(`/${DEMO}&period=3M`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     const overview = page.getByTestId("performance-overview");
     for (const basis of ["Window", "Calendar", "Timezone", "Costs", "Sessions"]) {
       await expect(overview.getByText(basis, { exact: true })).toBeVisible();
@@ -83,6 +88,7 @@ test.describe("the performance overview", () => {
   test("reports a gapped extent as PARTIAL rather than drawing through it", async ({ page }) => {
     await page.goto(`/${DEMO}&period=ALL`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     const partial = page.getByTestId("series-partial");
     await expect(partial).toBeVisible();
     await expect(partial).toContainText("carry no observation");
@@ -92,6 +98,7 @@ test.describe("the performance overview", () => {
   test("offers a keyboard-reachable, readable table alternative (U10)", async ({ page }) => {
     await page.goto(`/${DEMO}&period=1M`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     const disclosure = page.getByTestId("series-table-disclosure");
     await expect(disclosure).toBeVisible();
 
@@ -110,6 +117,7 @@ test.describe("the performance overview", () => {
   test("shows no curve at all in project scope, and says why", async ({ page }) => {
     await page.goto("/?scenario=project&mode=executive");
     await waitForHydration(page);
+    await revealDeferredSections(page);
     const overview = page.getByTestId("performance-overview");
     await expect(overview.getByTestId("unavailable-body")).toBeVisible();
     await expect(overview).toContainText("No equity history exists");
@@ -256,6 +264,7 @@ test.describe("what changed", () => {
     test(`renders the ${scenario.variant} comparison deterministically`, async ({ page }) => {
       await page.goto(`/?scenario=demo&mode=executive&changes=${scenario.variant}`);
       await waitForHydration(page);
+      await revealDeferredSections(page);
       await scenario.expect(page);
     });
   }
@@ -263,9 +272,11 @@ test.describe("what changed", () => {
   test("carries the comparison variant in the URL, so a link reproduces it", async ({ page }) => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     await page.getByTestId("change-variant-selector").getByRole("link", { name: "Missing baseline" }).click();
     await expect(page).toHaveURL(/changes=no-baseline/);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     await expect(page.getByTestId("what-changed-panel")).toContainText("fabricated change");
   });
 });
@@ -454,6 +465,8 @@ test.describe("the C4 surfaces stay within the boundary", () => {
     await waitForHydration(page);
     // The permitted-risk tile is unavailable while the rest of the page renders values.
     await expect(page.getByTestId("page-state")).toBeVisible();
+    // Below 640 px the tier-2 tiles and the overview are deferred (ADR-0033 M); reveal them.
+    await revealDeferredSections(page);
     await expect(page.getByTestId("tile-risk.permitted").getByTestId("unavailable-body")).toBeVisible();
     /*
      * The long exposure of the demonstration book, which C5 rebuilt from a coherent ledger:

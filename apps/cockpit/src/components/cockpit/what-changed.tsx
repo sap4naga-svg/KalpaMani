@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 
-import { Badge, Card, CardBody, CardHeader, Label } from "@/components/ui/primitives";
+import {
+  Badge,
+  Card,
+  CardBody,
+  CardHeader,
+  Label,
+  type LabelElement,
+} from "@/components/ui/primitives";
 import { formatDecimal, humanizeCode } from "@/lib/format";
 import { ReferenceDestinations } from "@/components/cockpit/reference-links";
 import { cn } from "@/lib/utils";
@@ -404,11 +411,21 @@ export function WhatChangedPanel({
   scope,
   operator,
   withVariants = false,
+  className,
+  titleElement = "h2",
 }: {
   envelope: EnvelopeOf<WhatChangedPayload>;
   scope: ViewScope;
   operator: boolean;
   withVariants?: boolean;
+  /** Layout only -- the mobile disclosure that wraps this card keeps it filling its row. */
+  className?: string;
+  /**
+   * The element the title renders as. A heading by default; the mobile executive summary
+   * passes `span` because the disclosure control's own `h2` -- this title with a suffix --
+   * is the section's listing (ADR-0033 M5). The visual treatment is the same.
+   */
+  titleElement?: LabelElement;
 }) {
   const payload = envelope.payload;
   const noBaseline = payload !== undefined && payload.baseline_state !== undefined;
@@ -434,10 +451,10 @@ export function WhatChangedPanel({
   const comparisonSound = populationComplete && envelope.availability === "AVAILABLE";
 
   return (
-    <Card data-testid="what-changed-panel">
+    <Card data-testid="what-changed-panel" className={className}>
       <CardHeader className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <Label as="h2">What changed</Label>
+          <Label as={titleElement}>What changed</Label>
           {payload !== undefined && (
             <p className="mt-0.5 text-label-m text-text-secondary">{payload.baseline_label}</p>
           )}

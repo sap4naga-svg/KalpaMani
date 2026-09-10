@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+
+import { revealDeferredSections } from "./mobile-summary";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
@@ -74,12 +76,14 @@ test("captures the C4 executive, governance and chart surfaces", async ({ page }
   // The chart's three views, its gapped extent and its table alternative.
   await page.goto("/?scenario=demo&mode=executive&period=1Y");
   await settle(page);
+  await revealDeferredSections(page);
   await page.getByTestId("performance-overview").getByRole("button", { name: "Return" }).click();
   await expect(page.getByTestId("chart-return")).toBeVisible();
   await shot("performance-return");
 
   await page.goto("/?scenario=demo&mode=executive&period=ALL");
   await settle(page);
+  await revealDeferredSections(page);
   await page
     .getByTestId("performance-overview")
     .getByRole("button", { name: "Drawdown" })
@@ -90,6 +94,7 @@ test("captures the C4 executive, governance and chart surfaces", async ({ page }
 
   await page.goto("/?scenario=demo&mode=executive&period=1M");
   await settle(page);
+  await revealDeferredSections(page);
   await page.getByTestId("series-table-disclosure").locator("summary").click();
   await expect(page.getByTestId("series-table-disclosure").getByRole("table")).toBeVisible();
   await shot("performance-table-alternative");
@@ -106,6 +111,7 @@ test("captures the C4 executive, governance and chart surfaces", async ({ page }
   for (const variant of ["valid", "none", "no-baseline", "degraded"] as const) {
     await page.goto(`/?scenario=demo&mode=executive&changes=${variant}`);
     await settle(page);
+    await revealDeferredSections(page);
     await expect(page.getByTestId("what-changed-panel")).toBeVisible();
     await shot(`what-changed-${variant}`);
   }

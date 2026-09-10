@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+
+import { revealDeferredSections } from "./mobile-summary";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -184,6 +186,7 @@ test.describe("the restored owning-area affordance", () => {
   test("keeps What Changed's endpoint qualification and its evidence filters", async ({ page }) => {
     await page.goto(`/${DEMO}`);
     await waitForHydration(page);
+    await revealDeferredSections(page);
     for (const summary of await page
       .getByTestId("what-changed-item")
       .locator("summary")
@@ -251,6 +254,8 @@ test.describe("the restored owning-area affordance", () => {
     await waitForHydration(page);
     await page.screenshot({ path: `${SHOTS}/${project}-first-viewport.png`, fullPage: false });
 
+    // Below 640 px the What Changed detail is deferred (ADR-0033 M); reveal it by keyboard.
+    await revealDeferredSections(page);
     for (const summary of await page
       .getByTestId("what-changed-item")
       .locator("summary")
