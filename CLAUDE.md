@@ -5372,7 +5372,7 @@ tile carried a caveat sentence in the first viewport; six links read *Open the a
 the What Changed tile quoted a millisecond ISO instant; the headline return carried no window while
 the chart plotted the URL-selected period; the page-level banner said *every figure on this page* is
 a fixture directly above a `TRACKED FACT` strategy-capital tile; and open planned risk rendered
-`+757.15 USD` in the gain colour. **Each is confirmed and corrected within the accepted contracts,
+`+757.15 USD` in the gain colour. **Each of those seven is confirmed and corrected within the accepted contracts,
 and nothing accepted is reinterpreted**: the six questions, test ids, provenance and availability
 badges, the page-level `PARTIAL` state, freshness, the no-baseline explanation and *Why these tiles
 are empty* stay visible; the contract explanations move behind a per-tile accessible `<details>`;
@@ -5383,7 +5383,7 @@ planned risk, permitted open risk and broker-reported equity render as magnitude
 window it draws — **no shared period is implied and no period-adjusted figure is invented**; the
 banner now says every *operational* figure is a fixture and a `TRACKED FACT` badge is a real fact, not a fixture;
 and the baseline instant reads `YYYY-MM-DD HH:MM UTC` on the tile while the panel keeps the full
-record. **The sidebar is unchanged**: collapsible groups would conflict with §12's *full navigation*
+record. **The eighth observation — the sidebar's density — is confirmed and the sidebar is unchanged**: collapsible groups would conflict with §12's *full navigation*
 at 1280 × 800 and its accepted reachability test, and the density is recorded as a limitation for a
 separately authorized navigation cycle.
 

@@ -866,9 +866,14 @@ ambiguity, §12's *defined, not delivered*, §13's *in an open pull request* —
 | **§15 visual regression** | **`PARTIAL`** — thirteen of 439 nominal snapshots exist on `main`; route-level `ERROR` stays `NOT YET CONSTRUCTIBLE` |
 | **C10, C5, C7, full Cockpit V1** | **incomplete**, exactly as before |
 
-**Carried forward, unabsorbed:** the browser chunk-failure cause is **NOT ESTABLISHED** — the review's
-head/`main` asymmetry stands recorded, and its 60-second socket sampling neither confirmed nor ruled out
-a transient socket condition; the author's and the reviewer's failed-run ledgers are retained as they
+**Carried forward, unabsorbed:** the browser chunk-failure cause is **NOT ESTABLISHED** — the PR #89
+review's head/`main` asymmetry stands recorded as the historical observation of that review's own runs,
+and it is **no longer supported as a current conclusion**: the readability refinement's baseline run on
+exact `main` (`893a33d4…`, a clean, unedited worktree) observed the same class once —
+`VC-root-demo-executive-expanded` at 390 × 844, one `react-dom` chunk request refused with
+`net::ERR_NO_BUFFER_SPACE` before any response, 1415 passed and 1 failed, trace retained — so the class
+occurs on `main` as well as on heads, and nothing about it is attributed to any head; the review's
+60-second socket sampling neither confirmed nor ruled out a transient socket condition; the author's and the reviewer's failed-run ledgers are retained as they
 were reported; rejected reads render like pending reads; `reuseExistingServer` describes the server
 and cannot prove it; the capacity declaration-to-input mapping and its nine absent inputs; **the
 original PR #84 Linux review evidence is UNAVAILABLE**.
@@ -943,6 +948,7 @@ new screenshot baselines created:                 4 - THE DECISION M EXPANDED RO
 Executive Overview readability refinement:        IN AN OPEN PULL REQUEST - PENDING OWNER ASSESSMENT AND INDEPENDENT REVIEW
 screenshot baselines re-captured by it:           13 OF 13 - INTENTIONAL, REVIEWED DIFFS, REASONS RECORDED IN THE ACCEPTANCE RECORD
 browser chunk-failure cause:                      NOT ESTABLISHED
+browser chunk-failure class on exact main:        OBSERVED ONCE - READABILITY BASELINE RUN, TRACE RETAINED
 C10 polish and acceptance cycle:                  MERGED / NOT AN ACCEPTANCE
 C5:                                               NOT COMPLETE
 C7:                                               NOT COMPLETE
