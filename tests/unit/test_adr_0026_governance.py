@@ -527,14 +527,20 @@ def test_adr_0005_is_still_reported_as_proposed() -> None:
     assert "ADR-0005 **PROPOSED**" in ADR_TEXT
 
 
-# -- nothing was implemented, and the guard is repository state --------------------------
+# -- the specification created nothing; a later authorization implemented an offline slice --
 
 
-#: The packages a Brain would eventually live in. Each must still hold exactly its
-#: ``__init__.py``: scaffolding is not progress, and an empty package is an invitation for
-#: a later session to fill it without an authorization.
+#: The packages that must still hold exactly their ``__init__.py``. ADR-0026 itself
+#: created no source module, and that remains true of the decision. A **later, separate**
+#: authorization then implemented an offline equity Brain foundation -- the Brain kernel
+#: under ``strategies/brain`` and the research-stage Breakout Long module under
+#: ``strategies/breakout`` -- so those two are no longer required to be empty, and their
+#: exact authorized surface is asserted by ``test_brain_implementation_boundary.py``. The
+#: packages below stay empty: scaffolding is not progress, and an empty package is an
+#: invitation for a later session to fill it without an authorization.
 EMPTY_PACKAGES: Final[tuple[str, ...]] = (
-    "src/kalpamani/strategies",
+    "src/kalpamani/strategies/pullback",
+    "src/kalpamani/strategies/pead",
     "src/kalpamani/research",
     "src/kalpamani/portfolio",
     "src/kalpamani/risk",
@@ -559,19 +565,34 @@ def _tracked(prefix: str) -> list[str]:
 
 
 @pytest.mark.parametrize("package", EMPTY_PACKAGES)
-def test_the_specification_left_its_future_package_empty(package: str) -> None:
+def test_the_still_gated_package_stays_empty(package: str) -> None:
     modules = [path for path in _tracked(package) if not path.endswith("__init__.py")]
     assert modules == [], package
 
 
-def test_no_brain_runtime_module_exists_under_src() -> None:
-    """A specification read as a permission is the one failure this decision guards."""
-    brain_modules = [
+def test_the_brain_runtime_is_confined_to_the_authorized_packages() -> None:
+    """The offline authorization is bounded: the Brain runtime lives only under the two
+    packages it authorized, and nowhere else under ``src/kalpamani``.
+
+    A monolithic ``brain.py``/``candidate_intent.py``/``strategy_spec.py`` at any other
+    location, or a strategy module outside ``strategies/brain`` and
+    ``strategies/breakout``, would be an implementation the authorization did not cover.
+    """
+    strategy_modules = [
+        path for path in _tracked("src/kalpamani/strategies") if not path.endswith("__init__.py")
+    ]
+    allowed_prefixes = (
+        "src/kalpamani/strategies/brain/",
+        "src/kalpamani/strategies/breakout/",
+    )
+    stray_strategy = [path for path in strategy_modules if not path.startswith(allowed_prefixes)]
+    assert stray_strategy == [], stray_strategy
+    misnamed = [
         path
         for path in _tracked("src/kalpamani")
         if Path(path).name in {"brain.py", "candidate_intent.py", "strategy_spec.py"}
     ]
-    assert brain_modules == []
+    assert misnamed == []
 
 
 def test_the_adr_records_that_it_creates_no_source_module() -> None:

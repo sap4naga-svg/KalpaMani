@@ -377,7 +377,9 @@ edited, the correction is indexed in `docs/architecture/BLUEPRINT_ERRATA.md`.
 
 ### Still not implemented, and not authorized
 
-Breakout / Pullback / PEAD / Deterioration Short strategy logic; the Strategy Brain runtime;
+Pullback / PEAD / Deterioration Short strategy logic; the **production** Strategy Brain runtime
+(an offline, synthetic-only Brain foundation and a research-stage Breakout Long module now exist —
+see *The offline equity Brain foundation*);
 short-selling logic; AI Research or Challenger agents; the portfolio/risk engine; the scanner and factor pipeline; **any point-in-time data
 platform beyond the vendor-neutral A1 kernel and the code-only Sharadar integration slice** —
 **no ingestion from a real provider**, no filings, fundamentals, earnings, estimates or borrow;
@@ -392,14 +394,18 @@ The licensed S3 object store authorized by
 [ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) is **code
 that has never run against AWS** — see *The licensed S3 object store* below.
 
-**The Strategy Brain is SPECIFIED and NOT IMPLEMENTED.** A reviewable specification exists at
+**The Strategy Brain is SPECIFIED, and an OFFLINE FOUNDATION is IMPLEMENTED.** The reviewable
+specification exists at
 [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) under
 **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — ACCEPTED EFFECTIVE ON
-MERGE OF PR #70, and PROPOSED and carrying no authority until that merge**. **A specification is not an
-implementation**: no Brain runtime module, strategy module, factor calculation, scanner, AI agent,
-portfolio sizing or order routing exists, and **none is authorized**. **Specification,
-implementation, research, deployment and execution are five separate gates** — see *The Strategy
-Brain specification* below.
+MERGE OF PR #70, and PROPOSED and carrying no authority until that merge**. A **later, separate
+authorization** (this cycle) then implemented an **offline, synthetic-only** Brain foundation — the
+Brain kernel and a research-stage Breakout Long module, `CandidateIntent`-only, using no provider,
+broker, model, database or cloud. **What stays NOT IMPLEMENTED / NOT AUTHORIZED**: the production
+Brain runtime, the scanner, AI Research and Challenger agents, the portfolio and risk engines, order
+routing, backtesting, provider-data use and any options runtime. **Specification, implementation,
+research, deployment and execution are five separate gates**, and this cycle opened only offline
+implementation — see *The offline equity Brain foundation* below.
 
 **The Cockpit is SPECIFIED. Its C3 to C10 cycles are MERGED, and the Cockpit is not complete.**
 Those are separate facts. The specification package below is unchanged; each cycle is a local,
@@ -491,7 +497,7 @@ observational**, and **every future control is inert with no handler and no cont
 | **[ADR-0028](docs/decisions/ADR-0028-cockpit-contract-completion-and-boundary-corrections.md) — Cockpit contract completion and boundary corrections** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the specification corrections that ship with it. It corrects four issues in the specifications ADR-0027 adopted — **A** the §4.1 field-level deferral, replaced by declarative contracts for every catalogued read model, a resolution for every reference, a per-endpoint contract and a completed metric dictionary; **B** out-of-sample reuse, now recorded against the **locked set** and read across research lineage so a new registration or Challenger identity clears nothing and unknown exposure history fails closed; **C** licensed-data admission, separating an absolute ban on credentials and infrastructure identifiers from classification of payload content, making **classification a label and publication a separate recorded authorization**, and adding the `REPOSITORY_TRACKED` provenance so a real tracked governance fact is never relabelled `SYNTHETIC`; **D** the single phrase *planned risk*, now four contracts — immutable **initial** planned risk as the only R denominator, **current open** planned risk as a risk-engine assessment with its as-of, **permitted** risk with its policy reference, and separately modelled gap and event risk. It **amends and supersedes no ADR** and does not edit ADR-0027. **All 36 areas, the C1–C10 sequence, the four trade concepts, the `CandidateIntent` boundary, the runtime `Environment` enum and every risk, capital and stop policy are unchanged** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0029](docs/decisions/ADR-0029-valid-zero-values-and-cache-freshness-deadlines.md) — Valid zero values and cache freshness deadlines** | **PROPOSED — NOT IN FORCE** while its pull request is open, and so are the two specification corrections that ship with it. It corrects two rules ADR-0028 introduced into `read-model-contracts.md`, and **nothing else** — **A** §4.1.1 named `EMPTY_VERIFIED` the *only* state in which a zero is correct, which is false of every measurement that legitimately evaluates to zero; a measured zero is now `AVAILABLE` with `NONE`, `EMPTY_VERIFIED` describes an **empty population** rather than the number, a zero never removes a `STALE` or `PARTIAL` qualification, and an absent producer still **never substitutes zero**; **B** §3.1 and §7 bounded a cache entry by the whole `contract_max_age`, returning age the fact had already spent — freshness now expires at an **absolute per-input deadline**, `input_deadline = source_effective_time + contract_max_age`, a composite expires at the **earliest** required deadline, a configured TTL may **shorten and never extend** it, and a rebuild, refetch or re-cache renews nothing. It **amends and supersedes no ADR** and edits neither ADR-0027 nor ADR-0028. **No availability state or reason code is added, and no missing-data safeguard is relaxed** — **implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED**, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0033](docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md) — the remaining C10 acceptance decisions** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #88** (2026-09-10T11:55:50Z, merge commit `948dcf4e6c9a8606134adbfde067047bdb170d6e`), and **PROPOSED — NOT IN FORCE** until that merge, as were the five subsections it adds to `ui-ux-specification.md` — §12.1 and §15.1–§15.4. It defines, for the four items the merged C10 acceptance record left open, **M** the mobile executive summary — deferred behind labelled, accessible disclosures on `/` below 640 CSS px, **nothing omitted and no route invented**; **PB** five measurable performance budgets with units, marks, conditions and aggregation under a production build, with **`NOT OBTAINED` never zero and never passing** and **no budget for a deployed Cockpit because none exists**; **VC** a per-route-and-state visual coverage inventory of 439 nominal snapshots over 32 route identifiers with cited applicability rules and **zero tolerance on every image**; and **SR** a manual screen-reader protocol — NVDA + Chrome primary, ten journeys, severity and closure rules — with **the assessor assignment OUTSTANDING**. It **amends and supersedes no ADR**, edits no U1–U20 criterion, and **implements, measures, captures and assesses nothing**: acceptance established what done means for those four items and made none of them done — **Decision M's implementation has since been independently reviewed and merged as PR #89, and the §12 row is SATISFIED effective on that merge**; **C10's §15 assessment stays at one of four**, **C5, C7 and full Cockpit V1 stay INCOMPLETE**, and **G1 OPEN · G2 OPEN · G4-G7 OPEN** |
-| **Strategies / Brain / AI / portfolio / risk** | **NOT IMPLEMENTED / NOT AUTHORIZED** — the Brain is **specified** under ADR-0026, accepted effective on merge of PR #70, and **not implemented**; a specification is not an implementation |
+| **Strategies / Brain / AI / portfolio / risk** | **OFFLINE BRAIN FOUNDATION IMPLEMENTED (synthetic-only) — INDEPENDENTLY REVIEWED AND CORRECTED, EFFECTIVE ON MERGE OF PR #91 · PRODUCTION BRAIN, SCANNER, AI AGENTS, PORTFOLIO AND RISK NOT IMPLEMENTED / NOT AUTHORIZED** — the offline foundation is the Brain kernel plus the research-stage Breakout Long module, `CandidateIntent`-only, with no provider, broker, model or data; empirical performance is **NOT ESTABLISHED** and no alpha is claimed |
 | **Cockpit / read models / feedback engine** | **C3 TO C10 MERGED · EVERYTHING ELSE NOT IMPLEMENTED / NOT AUTHORIZED.** The Cockpit is **specified** under ADR-0027 and ADR-0028, corrected by ADR-0029, ADR-0030, ADR-0031 and ADR-0032, and seven cycles are merged — **C3** the foundation, **C4** the Executive Overview and governance, **C5** portfolio, strategy and risk, **C6** signals and the trade lifecycle, **C7** research, feedback and self-maturation, **C8** execution, operations, audit and alerts, and **C9** Ask KalpaMani and record search — each under its own separate written authorization and each **EFFECTIVE ON ITS OWN MERGE**, together with the **C5 completion follow-up**, which merged **implemented in part**. **C10 — visual polish, accessibility, responsiveness, performance measurement and the synthetic end-to-end sweep — merged as PR #87, and merging it accepted nothing: its §15 assessment is one of four, and the remaining acceptance decisions are ACCEPTED by ADR-0033 — defined; Decision M delivered and merged as PR #89 with its §12 row SATISFIED, and PB, VC and SR not delivered.** **Merged cycles are not the Cockpit**: **C5 and C7 are both NOT COMPLETE**, **full Cockpit V1 is INCOMPLETE**, no production read API, projection runtime, metric engine, feedback automation, database, migration, scheduler or deployment exists, **no route handler, server action, API route or control handler exists anywhere in it**, and it reaches **no provider, broker, AWS, GitHub or model endpoint** at runtime or at build time. It adds **one frontend charting dependency across all eight cycles, no `src/kalpamani` module, no Python dependency and no Blueprint change**, and **it closes no gate**. **No Brain runtime, scanner, factor matrix, decision compiler, AI agent or model call exists in it**, and every populated figure is repository-owned fixture data rather than evidence that any of those has run. The requirement-by-requirement assessment is [`docs/cockpit/c10-acceptance-record.md`](docs/cockpit/c10-acceptance-record.md) |
 | **Live trading** | **HARD-DISABLED** |
 
@@ -3298,13 +3304,17 @@ private-binding preflight, further infrastructure mutation and production ingest
 separate written authorization, and **acceptance, implementation, deployment, access and execution
 stay distinct gates that are never collapsed into one**.
 
-### The Strategy Brain specification — ACCEPTED ON MERGE, and nothing is implemented
+### The Strategy Brain specification — ACCEPTED ON MERGE, and an offline foundation implemented
 
-**The Brain is specified. The Brain does not exist.** Those are two facts, and they are kept apart:
-a reviewable specification now sits in the repository at
-[`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md), and
-**no Brain runtime module, strategy module, factor calculation, scanner, AI agent, portfolio sizing
-or order routing has been written or authorized**.
+**The Brain is specified, and an offline foundation is now implemented.** Those are two facts,
+kept apart: the reviewable specification sits at
+[`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md), and a
+**later, separate authorization** (this cycle) added an **offline, synthetic-only** equity Brain
+foundation — the Brain kernel under `src/kalpamani/strategies/brain/` and the research-stage Breakout
+Long module under `src/kalpamani/strategies/breakout/`. **It is not production, it uses no provider,
+broker, model, database or cloud, and its only output is a `CandidateIntent`** — see
+*The offline equity Brain foundation* below. **No production Brain runtime, scanner, AI agent, or
+portfolio or risk engine exists, and none is authorized.**
 
 **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) is ACCEPTED — EFFECTIVE
 ONLY ON THE INDEPENDENT REVIEW AND MERGE OF PR #70, and until that merge it is PROPOSED and
@@ -3355,9 +3365,9 @@ run**.
 
 ```text
 Brain specification:                              ACCEPTED EFFECTIVE ON MERGE OF PR #70
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
-core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED
-factor, scanner and AI-agent implementation:      NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
+core strategy runtime implementation:             BREAKOUT LONG OFFLINE / RESEARCH-STAGE / SYNTHETIC
+factor, scanner and AI-agent implementation:      FACTOR COMPUTATIONS OFFLINE; SCANNER, AI AGENTS NOT STARTED
 portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
 new src/ modules created by this specification:   NONE
 backtesting:                                      NOT STARTED
@@ -3380,6 +3390,84 @@ live trading:                                     HARD-DISABLED
 
 **"Brain started" does not mean runtime coding started.** **Specification, implementation, research,
 deployment and execution are five separate gates**, and they are never collapsed into one.
+
+### The offline equity Brain foundation — IMPLEMENTED (offline, synthetic-only), independently reviewed, effective on merge of PR #91
+
+**A later, separate authorization (this cycle) narrowed the blanket "Brain runtime NOT
+AUTHORIZED" restriction to authorize an offline equity Brain foundation on synthetic inputs,
+with `CandidateIntent` as its only output.** That work is implemented in PR #91, was
+independently reviewed and corrected there, and is **effective on that merge** — and **PROPOSED
+and unmerged until it**. **It authorizes and establishes nothing operational**: no
+provider data, no empirical backtest, no provider/broker/model call, no production integration,
+no orders, no deployment, no scheduled execution, no automated research, and **no options
+runtime**.
+
+**Independently reviewed and corrected before merge.** The review integrated current `main`
+(the PR #90 merge) into the branch, resolved the one status-register conflict as a row-wise
+union, and corrected six demonstrated defects through ordinary commits, each pinned by a negative
+control that fails on the submitted head and passes after the correction: the identifier grammar
+admitted a trailing newline; an unschematized AI `challenger_verdict` was read as *not falsified*
+and a naive `produced_at` crashed the compiler instead of journaling `BLOCKED_AI`; a benchmark
+shorter than the factor window raised instead of returning `BLOCKED_DATA`, and a benchmark on a
+different session grid was compared as if it were the same; a peer attributed twice was counted
+twice and attribution ranks depended on caller order; the Breakout Long ratio thresholds accepted
+a `float`; and the audit journal omitted the Research and Challenger output references, the
+resolved profile and the risk-context tags. The integration test now asserts its exact outcome
+and drives the refusal branches over genuine `PointInTimeReader` output. **A review is offline
+verification of contract behaviour on synthetic inputs; it establishes no empirical performance,
+selects no provider and authorizes no operation.**
+
+**What exists.** The Brain kernel under `src/kalpamani/strategies/brain/` — closed vocabularies,
+the `CandidateIntent` and `StrategySpec` contracts, deterministic `Decimal` factor computations,
+the point-in-time reality gate, the thirteen-stage deterministic decision compiler, candidate
+consolidation, the AI-evidence contract, the audit journal and the strategy-health machine — and
+the **research-stage Breakout Long** module under `src/kalpamani/strategies/breakout/`. All of it
+runs offline against repository-owned **synthetic** fixtures.
+
+| | |
+|---|---|
+| **the output boundary is structural** | `CandidateIntent` has **no field** whose meaning is a share count, a dollar amount, a position size, an order type, a route, a client or broker order id, a credential or an account number, and no free-text field an instruction could arrive through. The technical stop is a **level reference**, never an order (ADR-0026 §2.2, ADR-0004) |
+| **the decision vocabulary is closed** | eight states; `MAYBE`, `BUY`, `SELL`, `EXECUTE` and `APPROVED_ORDER` are **refused by name**. `READY_FOR_RISK_REVIEW` is the absence of a deterministic objection, **not an approval to trade** |
+| **AI cannot rescue a deterministic failure** | the AI stage runs after the deterministic stages, so it can only **remove** a candidate, never **restore** one — enforced by stage order, not by comment |
+| **point-in-time or refuse** | the gate requires an explicit `as_of`, a point-in-time profile, an in-order finite series ending on the evaluation session, and resolved required evidence; missing evidence **blocks**, it never defaults to zero, neutral or "latest" |
+| **research-stage, `RESEARCH`-only** | Breakout Long's every threshold is a **proposed research parameter**, and its `StrategySpec` authorizes the `RESEARCH` environment only — the spec contract refuses a research-stage version that authorizes Paper or live |
+| **no network, no clock** | nothing under `strategies/` imports a socket, HTTP, cloud SDK, database, provider, broker or model, and nothing reads a wall clock — the decision instant is injected. A static test asserts each |
+| **short asymmetry preserved** | `BLOCKED_BORROW` is first-class, borrow is never inferred from price, and Breakout Long is long-only; no short module is implemented |
+
+**What it is not.** Not production, not a scanner (it evaluates supplied candidates; it does not
+choose what to look at), not an AI agent, not a portfolio or risk engine, not an order path, not a
+backtest and not connected to anything. **No alpha is claimed**, and **empirical performance is NOT
+ESTABLISHED** — the numbers in Breakout Long are placeholders for the offline path to exercise, and
+the evaluation protocol that would test them is
+[`docs/phase4/equity-evaluation-protocol.md`](docs/phase4/equity-evaluation-protocol.md).
+
+**Options are researched, not built.** A separate PROPOSED / RESEARCH-ONLY brief,
+[`docs/phase4/options-research-and-architecture-brief.md`](docs/phase4/options-research-and-architecture-brief.md),
+studies future options support from public primary sources. **No options runtime, contract-selection
+code or options schema exists or is authorized**, and the first equity release does not depend on it.
+
+```text
+offline Brain foundation:                         IMPLEMENTED / SYNTHETIC ONLY / INDEPENDENTLY REVIEWED - EFFECTIVE ON MERGE OF PR #91
+Brain kernel + Breakout Long:                      IMPLEMENTED (offline, research-stage)
+CandidateIntent output boundary:                   STRUCTURAL — no size, order, route or credential
+empirical performance:                             NOT ESTABLISHED — no alpha claimed
+production Brain runtime / scanner / AI agents:    NOT IMPLEMENTED / NOT AUTHORIZED
+portfolio and risk engine:                         NOT IMPLEMENTED / NOT AUTHORIZED
+options runtime / contract selection / schema:     NOT IMPLEMENTED / NOT AUTHORIZED
+provider / broker / model / database / cloud:      NONE — offline, synthetic only
+backtesting:                                       NOT STARTED
+Run A retry / Run B / combined assessment:         NOT AUTHORIZED / NOT RUN
+P1-P9:                                             UNEVALUATED
+G1 / G2:                                           OPEN / OPEN
+provider selected:                                 NONE
+Phase 3:                                           NOT COMPLETE
+CONTROL:                                           DEFERRED
+live trading:                                      HARD-DISABLED
+```
+
+**Merging this implements an offline foundation; it authorizes no operation.** Production Brain
+implementation, research against qualified data, deployment and execution each remain separate
+written authorizations, and every standing gate above is unchanged.
 
 ### The C3 Cockpit application foundation — IMPLEMENTED, and it is not the Cockpit
 
@@ -3422,7 +3510,7 @@ C3 Cockpit application foundation:                IMPLEMENTED - EFFECTIVE ON MER
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
 database, migration, scheduler, deployment:       NOT IMPLEMENTED / NOT AUTHORIZED
 real-source and provider wiring:                  NOT AUTHORIZED
@@ -3541,7 +3629,7 @@ Cockpit product areas implemented:                4 of 36
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
 database, migration, scheduler, deployment:       NOT IMPLEMENTED / NOT AUTHORIZED
 real-source and provider wiring:                  NOT AUTHORIZED
@@ -3658,7 +3746,7 @@ strategy health:                                  RECORDED STATE ONLY - C7 OWNS 
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
 database, migration, scheduler, deployment:       NOT IMPLEMENTED / NOT AUTHORIZED
 real-source and provider wiring:                  NOT AUTHORIZED
@@ -3808,7 +3896,7 @@ downstream counts:                                SYNTHETIC DEMONSTRATION - REAL
 full Cockpit V1:                                  NOT COMPLETE
 production read API, projections, metric engine:  NOT IMPLEMENTED / NOT AUTHORIZED
 feedback and self-maturation automation:          NOT IMPLEMENTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 scanner, factor matrix, decision compiler:        NOT STARTED / NOT AUTHORIZED
 AI research and challenger agents:                NOT STARTED / NOT AUTHORIZED
 model, SDK or endpoint calls of any kind:         NONE
@@ -3952,7 +4040,7 @@ Cockpit specification:                            ACCEPTED EFFECTIVE ON MERGE OF
 Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
 read-model, projection and API implementation:    NOT STARTED / NOT AUTHORIZED
 feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 portfolio and risk engine implementation:         NOT STARTED / NOT AUTHORIZED
 database, migration, scheduler and deployment:    NOT STARTED / NOT AUTHORIZED
 new src/ modules created by this specification:   NONE
@@ -4071,7 +4159,7 @@ ADR-0026:                                         ACCEPTED / IN FORCE
 Cockpit application implementation:               NOT STARTED / NOT AUTHORIZED
 read-model, projection, metric-engine and API:    NOT STARTED / NOT AUTHORIZED
 feedback and learning-engine implementation:      NOT STARTED / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 new src/ modules created by this correction:      NONE
 dependency or manifest changes:                   NONE
 Blueprint PDF changes:                            NONE
@@ -4180,7 +4268,7 @@ dependency or manifest changes:                   NONE
 Blueprint PDF changes:                            NONE
 C7 research and feedback interfaces:              NOT STARTED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 backtesting:                                      NOT STARTED
 provider data used:                               NONE
 private artifacts read:                           NONE
@@ -4387,7 +4475,7 @@ Blueprint PDF changes:                            NONE
 CI or branch-protection changes:                  NONE
 C7 research and feedback interfaces:              NOT STARTED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 production API, projections, databases:           NOT IMPLEMENTED / NOT AUTHORIZED
 backtesting:                                      NOT STARTED
 provider data used:                               NONE
@@ -4507,7 +4595,7 @@ Blueprint PDF changes:                            NONE
 C7 research and feedback interfaces:              NOT STARTED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 backtesting:                                      NOT STARTED
 provider data used:                               NONE
 private artifacts read:                           NONE
@@ -4639,7 +4727,7 @@ Blueprint PDF changes:                            NONE
 C7 research and feedback interfaces:              NOT STARTED
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 full Cockpit V1:                                  INCOMPLETE
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 backtesting:                                      NOT STARTED
 provider data used:                               NONE
 private artifacts read:                           NONE
@@ -4767,7 +4855,7 @@ provider data used:                               NONE
 private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 C8:                                               MERGED
 C9:                                               MERGED
@@ -4912,7 +5000,7 @@ provider data used:                               NONE
 private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 C5 completion follow-up:                          STILL PENDING / NOT AUTHORIZED
 C9:                                               MERGED
 C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
@@ -5076,7 +5164,7 @@ provider data used:                               NONE
 private artifacts read:                           NONE
 AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 C5 completion follow-up:                          MERGED / IMPLEMENTED IN PART
 C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
@@ -5635,7 +5723,7 @@ AWS / Terraform operations:                       NONE
 broker activity:                                  NONE
 orders placed by this cycle:                      NONE
 backtesting:                                      NOT STARTED
-Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED
+Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION
 C10:                                              MERGED / SECTION 15 AT 1 OF 4 - NOT AN ACCEPTANCE
 full Cockpit V1:                                  INCOMPLETE
 Run A retry:                                      NOT AUTHORIZED / NOT RUN
