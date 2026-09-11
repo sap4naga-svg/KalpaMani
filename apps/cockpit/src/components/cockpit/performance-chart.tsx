@@ -305,6 +305,16 @@ export interface PerformanceOverviewProps {
   readonly titleElement?: LabelElement;
   readonly summary?: string;
   readonly testId?: string;
+  /**
+   * State the drawn window in the header, in words, beside the title.
+   *
+   * The executive overview passes this because the tier-1 headline return carries an as-of
+   * and no window, and a reader asking "over what period?" should find the answer on the
+   * chart that has one: the selected period, the granularity, and the declared `window`
+   * the series was served over. The portfolio performance page owns a granularity control
+   * and its own framing, so it keeps the header it has.
+   */
+  readonly statedWindow?: boolean;
 }
 
 export function PerformanceOverview({
@@ -317,6 +327,7 @@ export function PerformanceOverview({
   titleElement = "h2",
   summary = "Equity, return and drawdown over one stated window. An overview — not the full portfolio performance analysis.",
   testId = "performance-overview",
+  statedWindow = false,
 }: PerformanceOverviewProps) {
   const [view, setView] = React.useState<ChartView>("equity");
   const [showBenchmark, setShowBenchmark] = React.useState(false);
@@ -344,6 +355,20 @@ export function PerformanceOverview({
         <div className="min-w-0">
           <Label as={titleElement}>{heading}</Label>
           <p className="mt-0.5 max-w-xl text-label-m text-text-secondary">{summary}</p>
+          {statedWindow && payload !== undefined && (
+            <p
+              className="mt-1 text-label-m text-text-primary"
+              data-testid="performance-stated-window"
+            >
+              {scope.period === "ALL"
+                ? PERIOD_LABEL[scope.period]
+                : `Over ${PERIOD_LABEL[scope.period]}`}{" "}
+              · {GRANULARITY_LABEL[scope.granularity].toLowerCase()} ·{" "}
+              <span className="font-mono">
+                {payload.window.from.slice(0, 10)} → {payload.window.to.slice(0, 10)}
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {envelope !== undefined && payload !== undefined && (

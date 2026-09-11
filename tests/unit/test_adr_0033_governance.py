@@ -707,14 +707,20 @@ def test_both_status_documents_record_the_verified_pr_87_merge(
         "PR #88 final reviewed head: 44d90a1f57b12d7590f20d69c5ba55a4ee54c502",
         "ed1e4c54d7ac670d6eab21133a960cef7af71fc5",
         "assessor assigned: NONE - OUTSTANDING",
+        # PR #89 MERGED, read from the commit objects and the live repository like every other.
+        "PR #89: MERGED",
+        "PR #89 merge commit: 893a33d4f129d91fbdc630b89dc445d503302105",
+        "PR #89 merged at: 2026-09-10T19:36:19Z",
+        "PR #89 final reviewed head: eb348dcb76163ce2e58dbc2a4ff6af6dd18c6101",
+        "9ecf721763cabc43dea62dcb20056099b7718827",
         "new screenshot baselines created: 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, "
-        "IN AN OPEN PULL REQUEST",
-        "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT "
-        "REVIEW",
-        "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN "
-        "AN OPEN PULL REQUEST",
-        "J8 - mobile summary journey: IMPLEMENTATION PREREQUISITE ADDRESSED IN AN OPEN PULL "
-        "REQUEST - NOT ASSESSED",
+        "MERGED AS PR #89",
+        "decision M implementation: MERGED AS PR #89 - INDEPENDENTLY REVIEWED BEFORE MERGE",
+        # ONE ROW MOVED. The review read the M8 evidence against section 12.1 and found it
+        # sufficient; the synchronization reads that disposition into the record, and no other.
+        "mobile executive summary - section 12: SATISFIED - EFFECTIVE ON THE MERGE OF PR #89, "
+        "READ INTO THE RECORD FROM ITS INDEPENDENT REVIEW",
+        "J8 - mobile summary journey: IMPLEMENTATION BLOCKER REMOVED BY PR #89 - NOT ASSESSED",
         "performance row: PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN",
         "C5: NOT COMPLETE",
         "C7: NOT COMPLETE",
@@ -736,14 +742,18 @@ def test_no_status_document_still_calls_c10_an_open_pull_request(
     assert "C10 polish and acceptance cycle: IMPLEMENTED IN AN OPEN PULL REQUEST" not in flatten(
         text
     )
-    # The stale under-claim, and the over-claims an implementation in an open pull request invites.
+    # The stale under-claims, and the over-claims one satisfied row invites. PR #89 merged, so
+    # "in an open pull request" is stale for Decision M and "MERGED" is its truth -- and a merged
+    # mobile summary still satisfies exactly one row, assesses no journey and completes nothing.
     flat = flatten(text)
     assert "ADR-0033: PROPOSED / NOT IN FORCE" not in flat
     assert "decision M implementation: NOT STARTED" not in flat
-    assert "decision M implementation: MERGED" not in flat
-    assert "mobile executive summary - section 12: SATISFIED" not in flat
+    assert "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST" not in flat
+    assert "mobile executive summary - section 12: NOT SATISFIED" not in flat
+    assert "mobile executive summary - section 12: SATISFIED - C10 ACCEPTED" not in flat
     assert "section 15 criteria satisfied: 2 OF 4" not in flat
     assert "J8 - mobile summary journey: ASSESSED" not in flat
+    assert "J8 - mobile summary journey: PASSED" not in flat
 
 
 def test_the_c10_and_adr_0033_sections_are_identical_in_both_status_documents() -> None:
@@ -752,7 +762,7 @@ def test_the_c10_and_adr_0033_sections_are_identical_in_both_status_documents() 
     c10 = "### The C10 Cockpit polish and acceptance cycle — MERGED, and not an acceptance"
     adr33 = (
         "### The remaining C10 acceptance decisions, and ADR-0033 — ACCEPTED, and Decision M "
-        "implemented in an open pull request"
+        "MERGED as PR #89"
     )
     followup = "### The C5 completion follow-up — MERGED"
     assert section(readme, c10, adr33) == section(claude, c10, adr33)
@@ -780,6 +790,24 @@ def test_the_acceptance_record_records_the_merge_and_keeps_its_dispositions() ->
     assert "IMPLEMENTED IN AN OPEN PULL REQUEST" in thirteen
     assert "NOT SATISFIED" in thirteen and "NOT ASSESSED" in thirteen
     assert "section 15 criteria satisfied:                    1 OF 4" in thirteen
+    # Section 13 is history now, marked as such, and section 14 reads PR #89's review in.
+    assert "HISTORICAL — the state as of the open pull request" in thirteen
+    assert "PR #89 has since MERGED" in RECORD_FLAT
+    assert "893a33d4f129d91fbdc630b89dc445d503302105" in RECORD_TEXT
+    fourteen = section(
+        RECORD_TEXT, "## 14. After PR #89", "\n**One satisfied row is one satisfied row"
+    )
+    assert "SATISFIED — effective on the merge of PR #89" in fourteen
+    assert "the supported disposition of the §12 mobile row is SATISFIED" in flatten(fourteen)
+    assert "section 15 criteria satisfied:                    1 OF 4" in fourteen
+    assert "manual screen-reader pass:                        NOT ASSESSED" in fourteen
+    assert "IMPLEMENTATION BLOCKER REMOVED BY PR #89 - NOT ASSESSED" in fourteen
+    assert "PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN" in status_lines(fourteen, "performance row")
+    assert "browser chunk-failure cause:                      NOT ESTABLISHED" in fourteen
+    assert "original PR #84 Linux review evidence is UNAVAILABLE" in flatten(fourteen)
+    # The refinement is recorded as an open pull request, not as a change to any disposition.
+    assert "IN AN OPEN PULL REQUEST - PENDING OWNER ASSESSMENT AND INDEPENDENT REVIEW" in fourteen
+    assert "moves no row of this record" in flatten(fourteen)
 
 
 def test_the_three_causes_wording_is_corrected_to_match_its_four_rows() -> None:
@@ -836,12 +864,13 @@ AGREEING_LINES: Final[dict[str, str]] = {
     "manual screen-reader pass": "NOT ASSESSED",
     "C10 polish and acceptance cycle": "MERGED / NOT AN ACCEPTANCE",
     "ADR-0033": "ACCEPTED / IN FORCE",
-    "decision M implementation": (
-        "IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT REVIEW"
-    ),
+    "decision M implementation": "MERGED AS PR #89 - INDEPENDENTLY REVIEWED BEFORE MERGE",
     "mobile executive summary - section 12": (
-        "NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN OPEN PULL REQUEST"
+        "SATISFIED - EFFECTIVE ON THE MERGE OF PR #89, READ INTO THE RECORD FROM ITS "
+        "INDEPENDENT REVIEW"
     ),
+    "J8 - mobile summary journey": "IMPLEMENTATION BLOCKER REMOVED BY PR #89 - NOT ASSESSED",
+    "performance row": "PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN",
     "first contentful paint, production run": "NOT OBTAINED - NEVER ZERO, NEVER PASSING",
     "assessor assigned": "NONE - OUTSTANDING",
 }
@@ -883,36 +912,56 @@ EXPANDED_ROWS: Final[tuple[str, ...]] = (
     "VC-root-project-operator-expanded",
 )
 
-#: The nine pre-existing comparisons, pinned by digest. ADR-0033 requires them "kept,
-#: byte-identical, under their existing names"; a count cannot see a regenerated image; a digest
-#: can.
+#: EVERY committed comparison, pinned by digest.
+#:
+#: TWO FACTS, KEPT APART. The nine C10 images were byte-identical from their creation through the
+#: merge of PR #89 -- ADR-0033 required them "kept, byte-identical, under their existing names" for
+#: the Decision M implementation, and this pin is how that was proved: a count cannot see a
+#: regenerated image; a digest can. The Executive Overview readability refinement then re-captured
+#: all thirteen deliberately, with each diff reviewed and its reason recorded in the acceptance
+#: record section 14.4, and re-pinned them here -- the nine AND the four Decision M rows -- so the
+#: continuing constraint is the same as it always was: a later change to any committed baseline is
+#: a review item by construction, never a silent regeneration. The historical byte-identity proof
+#: is recorded in the acceptance record; it is not a property of the current images.
 EXISTING_BASELINE_DIGESTS: Final[dict[str, str]] = {
     "desktop-1440/availability-states-win32.png": (
-        "5fe89d50718f2d86a526d81c2af73657cc120b48440cde362aa28ea0d1b0a918"
+        "7104097270f5ae19db6969f0fb5b85a4f694427f3577bace487d50d3926b1045"
     ),
     "desktop-1440/overview-demo-executive-win32.png": (
-        "c20899302c430b06d679fc318a7ab2a9c65e96e0d04a603cdfe968dfe984f47b"
+        "a3a51d9451e6d262f554683995a61663e0eef0d37ffd83e5b954cbffb062106e"
     ),
     "desktop-1440/overview-project-win32.png": (
-        "d718b295704393ed0914f529e9646c475dad7517be1d610a501efb3a53c0aed8"
+        "d08608c28a049571b848483a1de6c35f4211307200109a8983cb4e5db6974be4"
+    ),
+    "mobile-390/VC-root-demo-executive-expanded-win32.png": (
+        "2e23d15a4529f4c71d7f82f8a8db0d005bdaae4c10646d20a9b5ccbdf30de7c5"
+    ),
+    "mobile-390/VC-root-demo-operator-expanded-win32.png": (
+        "e099b887345c488ea01e94862579a8791ae94efa1d5666a10a7fc929f8f164f5"
+    ),
+    "mobile-390/VC-root-project-executive-expanded-win32.png": (
+        "20397d7af0464eafb1ce8b7762b7545ac45e989190195de98eb88793e8ce617a"
+    ),
+    "mobile-390/VC-root-project-operator-expanded-win32.png": (
+        "903cd9023b315615520e222d8bab9f150f699bac98a6340a2c00af6233f0f56b"
     ),
     "mobile-390/availability-states-win32.png": (
-        "9cc377846acd63b53f2e7594ae7f9db55cb3847fbb9a9a11ac9af236007d8bfb"
+        "e9bb2149cb67f2d5e81282986b0b93a04a2d321b8be81ca9ee5bb6e06d84865c"
     ),
     "mobile-390/overview-demo-executive-win32.png": (
-        "84fba97cb3e6dfee425427ed77645029a0b61c33e3a60df5a865c94bda41f50b"
+        "c06a63fa9092255c336a0681145177829939522c6a5db90e0030d5978b338fa8"
     ),
     "mobile-390/overview-project-win32.png": (
-        "32dd26ba4d0ea35a8e6ec27d076018479458cc87f1997dee07db1eeb889dc8e1"
+        "0690760d7c9909b35bc96ff27a487de45eaf9634899f9e2a5cf9c298a2459622"
     ),
     "tablet-1024/availability-states-win32.png": (
-        "0ea634fa385a2e73865c7b4f64cea98de1f81645d4fd501995de22c389b39b01"
+        "2cf89b10dfa9e66fc9279ce10af95f10114b366da724c86daa2157f08e89ea88"
     ),
     "tablet-1024/overview-demo-executive-win32.png": (
-        "aa147fb5edb7e92ce7638bb35b11b1af99b665712c4be6df1e80cfcba1999641"
+        "a808f501237cc34aa773237a6be7c7bae6f61e1b28e1f00915c73247c50c370c"
     ),
     "tablet-1024/overview-project-win32.png": (
-        "c0bbee867e9a92f613e2f65b47e90171c0efd28724b43676b382c23c5be8c095"
+        "eca6e4cc999d011bef73338c9f112b113aed440cc67f6ff145a246eebd12e531"
     ),
 }
 
@@ -1026,7 +1075,7 @@ def test_the_m8_obligations_each_have_a_test_and_the_spec_runs_in_all_six_projec
     assert "test.skip" not in spec and "test.fixme" not in spec and "test.fail" not in spec
 
 
-def test_the_four_expanded_rows_exist_at_mobile_only_and_the_nine_are_byte_identical() -> None:
+def test_the_four_expanded_rows_exist_at_mobile_only_and_every_baseline_is_digest_pinned() -> None:
     import hashlib
 
     baseline_dir = APP / "e2e" / "visual-baseline"

@@ -20,14 +20,17 @@ section 15 at one of four, and the four decisions it left open — the mobile ex
 performance budgets, per-route-and-state visual coverage and the manual screen-reader protocol — are
 **defined by
 [ADR-0033](../../docs/decisions/ADR-0033-c10-remaining-acceptance-decisions.md), ACCEPTED / IN FORCE
-since PR #88 merged**, and none of the four is delivered by its acceptance. **One is now implemented,
-in an open pull request pending independent review**: Decision M, the mobile executive summary — see
-*The mobile executive summary* below. The other three are definitions with nothing yet measured,
-captured or assessed under them.
+since PR #88 merged**, and none of the four is delivered by its acceptance. **One has since been
+delivered: Decision M, the mobile executive summary, independently reviewed and merged as PR #89, with
+the §12 row read SATISFIED effective on that merge** — see *The mobile executive summary* below. The
+other three are definitions with nothing yet measured, captured or assessed under them. **The
+Executive Overview readability refinement is in an open pull request, pending the owner's assessment
+and independent review** — see *The Executive Overview's reading hierarchy* below.
 
 > **HISTORICAL.** While PR #88 was open this paragraph read *PROPOSED by ADR-0033 and NOT IN FORCE*,
-> and said nothing in this application changed because of the proposal. Both were true of those days
-> and are not rewritten.
+> and said nothing in this application changed because of the proposal. While PR #89 was open it said
+> Decision M was *implemented, in an open pull request pending independent review*. Each was true of
+> those days and is not rewritten.
 
 > **HISTORICAL.** While PR #87 was open this paragraph read *"it is carried by an open pull
 > request"*. That was true of those days and is not rewritten as though the cycle had merged before
@@ -65,12 +68,12 @@ economics, fixture, contract, read model, schema version, route or dependency wa
 | **repeated landmarks are distinguishable** | `/strategy/performance` rendered one identically named *Minimum observation rules* region per version and per family |
 | **a drill-down screen has a place in the sidebar** | `aria-current` was decided by an exact path match, so nothing was current on a trade or candidate detail screen. A deep destination now marks the entry that **owns** it, as a section rather than as the page |
 | **a skip link reaches the primary table** | section 10 of the UI specification asks for both, and only the skip to main content existed |
-| **six executive links are distinguishable** | they all read *"Open the area that owns this"*; the visible text is unchanged and each accessible name now carries its subject |
+| **six executive links are distinguishable** | they all read *"Open the area that owns this"*; the visible text was unchanged by C10 and each accessible name carried its subject. **The readability refinement has since replaced the six with the registered label of each destination area** — *Risk Dashboard →*, *Portfolio Performance →* — so the visible text and the accessible name are one and the same, and distinguishable without a hidden suffix |
 | **the sweep** | `e2e/c10-acceptance.spec.ts` checks every registered route at 1440 × 900, 1024 × 768 and 390 × 844, and `e2e/c10-reference-viewports.spec.ts` checks every registered route at 1920 × 1080, 1280 × 800 and 768 × 1024 — **all six reference viewports** — for page overflow, **content clipped outside a scroll container**, a single `h1`, a `main` landmark, heading order, the context bar, the page-level `SYNTHETIC` label, console errors, off-origin requests and axe violations, including the structural rules axe tags as best-practice and every earlier run therefore skipped |
 | **two responsive defects, found and fixed** | a badge carrying a sentence could not wrap, so it was clipped past the 390 × 844 viewport on **eleven routes**; the attention item's metadata pairs were clipped on the landing page. **Both predate this cycle.** Neither was visible to the old check: `overflow-x: hidden` on `html` and `body` clamps `documentElement.scrollWidth`, so it reads zero however wide the content is |
 | **measurement, not budgets** | `e2e/c10-performance.spec.ts` records first answer, first contentful paint and two interaction latencies per viewport, with its conditions. Set `KM_COCKPIT_SERVER` to name a different server — a production `next start` was measured that way — and the evidence file records which one. **No accepted numeric performance budget exists, and none is invented** |
 | **indexed review evidence** | `e2e/c10-evidence.spec.ts` writes a focused, indexed capture set to `screenshots-c10/`, with a provenance stamp. **It is review evidence, not the baseline**, and it stays out of the tracked tree |
-| **a committed visual baseline** | `e2e/c10-visual-regression.spec.ts` compares **nine tracked images** under `e2e/visual-baseline/` at **zero tolerance** on every run. Regenerate with `npx playwright test e2e/c10-visual-regression.spec.ts --update-snapshots`, and review the diff — a diff is a review item, not an auto-accept. **The Decision M pull request adds four more** — the expanded-state rows at 390 × 844, compared by `e2e/c10-visual-regression-mobile-expanded.spec.ts` in the mobile project only, at the same zero tolerance — and leaves the nine byte-identical |
+| **a committed visual baseline** | `e2e/c10-visual-regression.spec.ts` compares **nine tracked images** under `e2e/visual-baseline/` at **zero tolerance** on every run. Regenerate with `npx playwright test e2e/c10-visual-regression.spec.ts --update-snapshots`, and review the diff — a diff is a review item, not an auto-accept. **PR #89 added four more** — the expanded-state rows at 390 × 844, compared by `e2e/c10-visual-regression-mobile-expanded.spec.ts` in the mobile project only, at the same zero tolerance — and left the nine byte-identical. **The readability refinement re-captures all thirteen**, deliberately, because the tier-1 tiles are on every overview image and the page-level banner is on every route; each diff is a review item with its reason recorded, the recipe and the zero tolerance are unchanged, and `tests/unit/test_adr_0033_governance.py` pins every committed image by digest |
 
 **What C10 deliberately did not do**: it narrowed nothing on the mobile Executive Overview — section
 12 asks for an *"executive summary only"* and did not settle whether the rest is omitted or merely
@@ -81,7 +84,46 @@ they are an unrequired improvement, not an unmet criterion, and a per-route segm
 ordinary framework-supported work whenever a later cycle wants it. Each is recorded in the
 acceptance record.
 
-### The mobile executive summary — Decision M, implemented in an open pull request
+### The Executive Overview's reading hierarchy — the readability refinement, in an open pull request
+
+**The owner found the merged Executive Overview clumsy, text-heavy and slow to digest, and each
+observation was verified in the rendered page before anything changed** (`src/app/page.tsx`,
+`AnswerTile` and `Figure`). The page now reads at three depths:
+
+```text
+AT A GLANCE        the six answers -- question, a numeric-xl figure with its unit, its availability
+                   badge, its provenance badge, one line of context, and the destination area named
+                   as the registry names it ("Risk Dashboard ->")
+ONE STEP DEEPER    Attention Required, What Changed, the performance overview with its stated window
+                   ("Over 6 months · daily · from -> to"), the supporting context
+ON DEMAND          each tile's "About ..." <details> holding the contract explanation, the chart's
+                   table alternative, Operator mode's response evidence
+```
+
+**The sizes now reach the screen.** On exact `main` every figure, subject, badge, label and button
+that passed a colour through `cn()` computed to the 16 px body size: tailwind-merge did not know the
+theme's `text-numeric-*` / `text-label-*` tokens, read them as colours, and dropped the size. `src/lib/utils.ts`
+registers the six tokens as the font-size group, so every route renders at the §4.4 sizes — this is
+why all thirteen committed baselines were re-captured, `availability-states` included.
+
+**What stays visible, always**: every availability badge, every provenance badge, the page-level
+`PARTIAL` state, freshness, the health state, the no-baseline explanation and *Why these tiles are
+empty*. Only supporting prose moved behind a disclosure. **Magnitudes are not profits**: open planned
+risk, permitted open risk and broker-reported equity render with no leading plus and no gain colour on
+the accepted `neutral` convention; drawdown stays directional. **The headline return states its as-of
+and that its read model states no window**, and the chart states the period, granularity and declared
+window it draws — two figures, and no shared period implied. **The page-level banner describes the
+mixed sources**: every operational figure is a fixture, and a `TRACKED FACT` badge is a real fact.
+**The sidebar is unchanged**: collapsible groups would conflict with `ui-ux-specification.md` §12's
+*full navigation* at 1280 × 800 and the accepted reachability test, and the density is recorded as a
+limitation. Decision M, U1–U20 and every Operator workflow are preserved and re-established in the
+browser; the tests are `tests/executive-readability.test.tsx` and `e2e/executive-readability.spec.ts`.
+
+### The mobile executive summary — Decision M, merged as PR #89
+
+> **HISTORICAL.** While PR #89 was open this heading read *implemented in an open pull request*.
+> The implementation was independently reviewed, merged on 2026-09-10, and the §12 row is read
+> SATISFIED effective on that merge in the acceptance record §14. Nothing below changed.
 
 **Below 640 CSS pixels of viewport width, on `/` only, the Executive Overview is the accepted
 summary, and everything else is deferred — never omitted** (ADR-0033 §2, `ui-ux-specification.md`
@@ -201,9 +243,10 @@ screenshots-c10/  the C10 capture set -- a FOCUSED, INDEXED set at all three vie
 
 Every one of them is git-ignored: they are **review evidence, for a person to look at**.
 
-**The committed baseline is a different artifact, and it is tracked**: `e2e/visual-baseline/`, nine
-images, three route-and-state captures at each of the three registered viewports, compared at **zero
-tolerance** on every run by `e2e/c10-visual-regression.spec.ts`. The file name carries the platform,
+**The committed baseline is a different artifact, and it is tracked**: `e2e/visual-baseline/`,
+thirteen images — three route-and-state captures at each of the three registered viewports, compared
+at **zero tolerance** on every run by `e2e/c10-visual-regression.spec.ts`, and the four Decision M
+expanded rows at 390 × 844 compared by `e2e/c10-visual-regression-mobile-expanded.spec.ts`. The file name carries the platform,
 because text rasterisation differs between operating systems — on a platform with no committed
 baseline the suite reports the snapshot as **missing and fails**, rather than accepting whatever it
 finds. Regenerate with `--update-snapshots` and review the diff: `ui-ux-specification.md` section 15
