@@ -49,8 +49,9 @@ from kalpamani.data.contracts.vocabulary import (
     RevisionView,
 )
 from kalpamani.strategies.brain import factors
+from kalpamani.strategies.brain.errors import BrainContractError
 from kalpamani.strategies.brain.factors import FactorDefinition, FactorValue
-from kalpamani.strategies.brain.identity import require_identifier
+from kalpamani.strategies.brain.identity import require_finite_decimal, require_identifier
 from kalpamani.strategies.brain.module import ModuleEvaluation, TemplateTrigger
 from kalpamani.strategies.brain.spec import (
     DataRequirements,
@@ -121,7 +122,22 @@ class BreakoutLongParameters:
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
-                raise ValueError(f"{name} must be a positive integer of sessions.")
+                raise BrainContractError(f"{name} must be a positive integer of sessions.")
+        # The ratios are compared against ``Decimal`` factor values, so they are
+        # finite ``Decimal`` too: a float here would be the one float the Brain
+        # promises never enters, and it would also change the parameters hash.
+        for name in (
+            "max_base_compactness",
+            "min_relative_volume",
+            "min_relative_strength",
+            "max_entry_gap",
+            "min_average_dollar_volume",
+        ):
+            require_finite_decimal(getattr(self, name), field=name)
+        if self.max_base_compactness < 0 or self.max_entry_gap < 0:
+            raise BrainContractError("Absolute-fraction bounds cannot be negative.")
+        if self.min_relative_volume <= 0 or self.min_average_dollar_volume < 0:
+            raise BrainContractError("Volume and liquidity floors must be non-negative ratios.")
 
     @property
     def required_history_sessions(self) -> int:

@@ -13,16 +13,39 @@ synthetic peer attributions in the tests.
 
 A peer is a *record of another module's conclusion*, not a second evaluation
 run here: consolidation combines conclusions, it does not re-decide them.
+
+**Attribution order is canonical, not caller order.** The primary module is
+always rank 1; peers follow in ``(strategy_id, strategy_version)`` order, so two
+calls that supply the same peers in a different sequence produce the same
+attribution. A module attributed twice is refused, because one module counted
+twice is the double-counting consolidation exists to remove.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import TypeVar
 
+from kalpamani.strategies.brain.errors import BrainContractError
 from kalpamani.strategies.brain.identity import require_identifier
 from kalpamani.strategies.brain.intent import ModuleAttribution, StrategyAttribution
 from kalpamani.strategies.brain.spec import StrategySpec
-from kalpamani.strategies.brain.vocabulary import AlphaFamily, Direction, ModuleVerdict
+from kalpamani.strategies.brain.vocabulary import (
+    AlphaFamily,
+    Direction,
+    ModuleVerdict,
+    closed_member,
+)
+
+Member = TypeVar("Member", bound=StrEnum)
+
+
+def _member(vocabulary: type[Member], value: object, *, field: str) -> Member:
+    member = closed_member(vocabulary, value)
+    if member is None:
+        raise BrainContractError(f"Field {field!r} must be a {vocabulary.__name__} member.")
+    return member
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -42,10 +65,36 @@ class PeerConclusion:
     verdict: ModuleVerdict
 
     def __post_init__(self) -> None:
+        set_ = object.__setattr__
         require_identifier(self.strategy_id, field="strategy_id")
         require_identifier(self.strategy_version, field="strategy_version")
         require_identifier(self.strategy_module, field="strategy_module")
         require_identifier(self.trade_template, field="trade_template")
+        # Closed members, normalised at construction: a bare string that happened
+        # to spell a direction compared unequal by identity below and was read as
+        # a contradiction, or not, by accident rather than by rule.
+        set_(self, "alpha_family", _member(AlphaFamily, self.alpha_family, field="alpha_family"))
+        set_(self, "direction", _member(Direction, self.direction, field="direction"))
+        set_(self, "verdict", _member(ModuleVerdict, self.verdict, field="verdict"))
+
+
+def require_peers(peers: object, *, primary_strategy_id: str) -> tuple[PeerConclusion, ...]:
+    """``peers`` as a canonically ordered tuple of distinct :class:`PeerConclusion`.
+
+    Raises:
+        BrainContractError: if ``peers`` is not a tuple of exact ``PeerConclusion``
+            records, if a strategy id appears twice, or if a peer carries the
+            primary module's own id -- each is one module counted twice.
+    """
+    if not isinstance(peers, tuple) or any(type(peer) is not PeerConclusion for peer in peers):
+        raise BrainContractError("peers must be a tuple of PeerConclusion records.")
+    ids = [peer.strategy_id for peer in peers]
+    if len(set(ids)) != len(ids) or primary_strategy_id in ids:
+        raise BrainContractError(
+            "Each module contributes at most one conclusion to a consolidation; a module "
+            "attributed twice is the double-counting consolidation exists to remove."
+        )
+    return tuple(sorted(peers, key=lambda peer: (peer.strategy_id, peer.strategy_version)))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -71,7 +120,11 @@ def consolidate(
     direction raise a direction contradiction; the result records them and the
     compiler returns ``BLOCKED_CONTRADICTION``. Peers that agree in direction are
     kept as further ranked attributions so their contribution stays measurable.
+
+    Peers are validated and canonically ordered here as well as at the compiler's
+    entry, so a direct caller gets the same refusals and the same ranks.
     """
+    peers = require_peers(peers, primary_strategy_id=spec.strategy_id)
     contradictions: list[str] = []
     contributing = [
         ModuleAttribution(
@@ -113,4 +166,4 @@ def consolidate(
     )
 
 
-__all__ = ["ConsolidationResult", "PeerConclusion", "consolidate"]
+__all__ = ["ConsolidationResult", "PeerConclusion", "consolidate", "require_peers"]

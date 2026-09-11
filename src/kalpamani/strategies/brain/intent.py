@@ -579,7 +579,7 @@ class CandidateIntent:
         set_ = object.__setattr__
         if (
             type(self.candidate_id) is not str
-            or CANDIDATE_ID_PATTERN.match(self.candidate_id) is None
+            or CANDIDATE_ID_PATTERN.fullmatch(self.candidate_id) is None
         ):
             raise BrainContractError("candidate_id must be a derived 'ci-<16 hex>' identifier.")
         require_identifier(self.security_id, field="security_id")

@@ -31,6 +31,7 @@ from kalpamani.strategies.brain.consolidation import (
     ConsolidationResult,
     PeerConclusion,
     consolidate,
+    require_peers,
 )
 from kalpamani.strategies.brain.evidence import AiEvidenceRecord, EvaluationInputs
 from kalpamani.strategies.brain.gate import (
@@ -38,7 +39,7 @@ from kalpamani.strategies.brain.gate import (
     market_permission_for,
     run_reality_gate,
 )
-from kalpamani.strategies.brain.identity import candidate_id
+from kalpamani.strategies.brain.identity import candidate_id, require_instant
 from kalpamani.strategies.brain.intent import (
     AiEvidenceReference,
     CandidateIntent,
@@ -56,6 +57,7 @@ from kalpamani.strategies.brain.vocabulary import (
     COMPILER_STAGE_ORDER,
     ChallengerVerdict,
     CompilerStage,
+    DataDomain,
     DecisionState,
     Direction,
     EarningsCarryPermission,
@@ -65,6 +67,7 @@ from kalpamani.strategies.brain.vocabulary import (
     ReasonCode,
     Requirement,
     SectorClusterState,
+    closed_member,
 )
 
 #: The window, in sessions before the evaluation bar, over which the risk context's
@@ -102,6 +105,10 @@ def compile_candidate(
     refused outright).
     """
     spec = module.spec
+    # Peers are caller-supplied records, validated before any stage runs: a peer of
+    # the wrong type or a module attributed twice is a contract refusal, not a
+    # decision, and it must not be able to reach consolidation at stage seven.
+    peers = require_peers(peers, primary_strategy_id=spec.strategy_id)
     evidence_reference = _evidence_reference(inputs)
     cid = candidate_id(
         security_id=inputs.security_id,
@@ -152,9 +159,16 @@ def compile_candidate(
             )
         )
 
-    # 4 -- required data coverage
-    available = len(gate.bars)
-    if available < spec.data.required_history_sessions:
+    # 4 -- required data coverage: the security's history, and the benchmark's where
+    # the version requires one. A benchmark shorter than the factor window used to
+    # surface as a raised contract error from inside the module's factor computation
+    # -- a crash where the specification requires a journaled BLOCKED_DATA.
+    required_sessions = spec.data.required_history_sessions
+    insufficient = len(gate.bars) < required_sessions or (
+        DataDomain.BENCHMARK_BARS in spec.data.required_domains
+        and len(gate.benchmark_bars) < required_sessions
+    )
+    if insufficient:
         return builder.refuse(
             _StageRefusal(
                 state=DecisionState.BLOCKED_DATA,
@@ -475,8 +489,12 @@ class _IntentBuilder:
                 reasons=(stale,),
                 stage=CompilerStage.AI_SCHEMA_AND_PROVENANCE,
             )
-        if record.challenger_verdict is ChallengerVerdict.FALSIFIED:
-            # AI removing a candidate. Never a rescue -- it can only refuse.
+        if closed_member(ChallengerVerdict, record.challenger_verdict) is (
+            ChallengerVerdict.FALSIFIED
+        ):
+            # AI removing a candidate. Never a rescue -- it can only refuse. The
+            # verdict is read through the closed vocabulary: the schema stage above
+            # has already refused anything that is not a member.
             self._ai_reference = _ai_reference_from(record)
             return _StageRefusal(
                 state=DecisionState.REJECTED,
@@ -697,7 +715,16 @@ def _ai_schema_defect(record: AiEvidenceRecord) -> ReasonCode | None:
         return ReasonCode.AI_EVIDENCE_MALFORMED
     try:
         _ai_reference_from(record)
+        # The two fields the reference does not carry but the compiler reads: the
+        # production instant must be a real aware instant, and the verdict must be a
+        # member of the closed vocabulary. Before this check a naive or non-datetime
+        # ``produced_at`` raised ``TypeError`` from the staleness comparison, and an
+        # unrecognised verdict -- a bare string, or nonsense -- was silently read as
+        # "not falsified": an unschematized AI output passing as an acceptance.
+        require_instant(record.produced_at, field="produced_at")
     except Exception:
+        return ReasonCode.AI_EVIDENCE_MALFORMED
+    if closed_member(ChallengerVerdict, record.challenger_verdict) is None:
         return ReasonCode.AI_EVIDENCE_MALFORMED
     return None
 
@@ -705,9 +732,10 @@ def _ai_schema_defect(record: AiEvidenceRecord) -> ReasonCode | None:
 def _ai_staleness_defect(
     record: AiEvidenceRecord, *, as_of: datetime, max_ai_staleness: timedelta | None
 ) -> ReasonCode | None:
-    publish = record.source_publish_time
-    produced = record.produced_at
-    assert publish is not None and produced is not None  # schema stage ran first
+    assert record.source_publish_time is not None and record.produced_at is not None
+    # The schema stage has already admitted both as aware instants.
+    publish = require_instant(record.source_publish_time, field="source_publish_time")
+    produced = require_instant(record.produced_at, field="produced_at")
     if publish > as_of or produced > as_of:
         # Evidence dated after the decision instant is not knowable at it.
         return ReasonCode.AI_EVIDENCE_STALE

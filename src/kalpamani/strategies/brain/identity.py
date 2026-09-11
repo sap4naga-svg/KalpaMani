@@ -25,7 +25,11 @@ from kalpamani.strategies.brain.errors import BrainContractError
 
 #: One identifier grammar for every string field. No whitespace, no quotes, no
 #: control characters; a bounded length so a field cannot become a document.
-IDENTIFIER_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
+#: Matched with ``fullmatch`` and anchored with ``\A``/``\Z``, never ``$``: in a
+#: Python pattern ``$`` also matches before a trailing newline, so a value ending
+#: in a newline satisfied the earlier ``^...$`` form -- one control character the grammar
+#: promised to exclude, admitted at the end of every field.
+IDENTIFIER_PATTERN: Final = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}\Z")
 
 #: Bumped only if the derivation rule changes, so a rule change produces visibly
 #: different ids rather than silent collisions with ids minted under the old one.
@@ -33,7 +37,7 @@ CANDIDATE_ID_SCHEME_VERSION: Final = "v1"
 _CANDIDATE_PREFIX: Final = "ci"
 _CANDIDATE_DIGEST_LEN: Final = 16
 
-CANDIDATE_ID_PATTERN: Final = re.compile(r"^ci-[0-9a-f]{16}$")
+CANDIDATE_ID_PATTERN: Final = re.compile(r"\Aci-[0-9a-f]{16}\Z")
 
 
 def require_identifier(value: object, *, field: str) -> str:
@@ -45,7 +49,7 @@ def require_identifier(value: object, *, field: str) -> str:
             the message: a value refused for being free text is exactly the
             value that must not be copied into an error.
     """
-    if type(value) is not str or IDENTIFIER_PATTERN.match(value) is None:
+    if type(value) is not str or IDENTIFIER_PATTERN.fullmatch(value) is None:
         raise BrainContractError(
             f"Field {field!r} must be an identifier: non-empty, no whitespace, at most 200 "
             "characters from [A-Za-z0-9._:/+-]. Prose has no field to arrive through."

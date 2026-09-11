@@ -17,6 +17,8 @@ What it checks over the kernel results a caller supplies:
   after the decision instant;
 * the series ends on the evaluation session -- a series that stops earlier is
   stale, not "the most recent available";
+* where a benchmark is required, its session grid matches the security's over
+  their overlap -- a relative comparison over two different windows is not one;
 * every declared-required context (universe, event, market permission, AI,
   short) resolved, with the universe snapshot taken for the evaluation session
   and the event coverage reaching the holding horizon;
@@ -267,6 +269,8 @@ def run_reality_gate(inputs: EvaluationInputs, spec: StrategySpec) -> GateOutcom
         )
         if benchmark_bar_reason is not None:
             return GateOutcome.blocked(benchmark_bar_reason, DecisionState.BLOCKED_DATA)
+        if _session_grids_differ(bars, benchmark_bars):
+            return GateOutcome.blocked(ReasonCode.SESSION_GRID_MISMATCH, DecisionState.BLOCKED_DATA)
 
     universe_block = _blocked_universe(
         inputs.universe,
@@ -300,6 +304,23 @@ def run_reality_gate(inputs: EvaluationInputs, spec: StrategySpec) -> GateOutcom
         benchmark_bars=benchmark_bars,
         resolved_profile=price_series.provenance.resolved_profile,
     )
+
+
+def _session_grids_differ(
+    bars: tuple[PriceBarValues, ...], benchmark_bars: tuple[PriceBarValues, ...]
+) -> bool:
+    """Whether the two series disagree about which sessions they cover, where they overlap.
+
+    A relative-strength comparison is a comparison of the same sessions. The
+    trailing overlap of the two grids -- both already end on the evaluation
+    session -- must be session-for-session identical; a benchmark that skips a
+    session the security traded, or vice versa, would make a trailing-return
+    comparison a comparison of two different windows.
+    """
+    overlap = min(len(bars), len(benchmark_bars))
+    security_grid = tuple(bar.session_date for bar in bars[-overlap:])
+    benchmark_grid = tuple(bar.session_date for bar in benchmark_bars[-overlap:])
+    return security_grid != benchmark_grid
 
 
 def forward_horizon_session(evaluation_session: date, maximum_holding_sessions: int) -> date:
