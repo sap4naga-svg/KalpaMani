@@ -72,7 +72,8 @@ ADJUSTMENT = AdjustmentMode.adjusted(
 #: The synthetic calendar is available under PUBLIC_PIT from this instant; the dense
 #: 2019 session cluster is the one long enough for even a tiny research window.
 AS_OF = phase3a.utc(2019, 6, 28, 21, 0)
-START, END = date(2019, 6, 24), date(2019, 6, 28)
+START = date(2019, 6, 24)
+END = date(2019, 6, 28)
 
 #: A tiny research window, so the dense five-session cluster suffices. Stated as a
 #: fixture convenience; the module's production default window is unchanged.
