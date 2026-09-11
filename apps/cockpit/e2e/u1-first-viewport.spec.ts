@@ -97,8 +97,11 @@ test.describe("U1 — the five answers and the attention list in the first viewp
       }
 
       // Every answer links to the area that owns it, and the link is reachable, not clipped.
-      const links = page.getByRole("link", { name: /Open the area that owns this/ });
-      expect(await links.count()).toBeGreaterThanOrEqual(5);
+      const links = page.locator('[data-tile-part="destination"]');
+      expect(await links.count()).toBe(6);
+      for (let index = 0; index < 6; index += 1) {
+        await expectWithinFold(links.nth(index), fold, `destination link ${index}`);
+      }
 
       // NOTHING WAS SCROLLED to achieve any of that.
       expect(await page.evaluate(() => window.scrollY)).toBe(0);

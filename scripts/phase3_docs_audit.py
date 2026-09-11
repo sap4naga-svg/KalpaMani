@@ -13638,12 +13638,12 @@ COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "PR #87 merged at: 2026-09-10T02:49:20Z",
     "PR #87 final reviewed head: 34be5a4a2b9c29fbc7ac19f754273733035bd67d",
     "independent review of the C10 implementation: PERFORMED",
-    # THE FOUR OPEN DECISIONS ARE ACCEPTED, AND AN ACCEPTED DEFINITION DELIVERS NOTHING. ADR-0033
-    # merged as PR #88, so the line moves from PROPOSED to ACCEPTED -- and it must still say
-    # that none of the four is delivered, because the one that is implemented sits in an OPEN
-    # pull request, unmerged and unreviewed.
-    "remaining acceptance decisions: ACCEPTED BY ADR-0033 / IN FORCE - NONE DELIVERED, "
-    "DECISION M IMPLEMENTED IN AN OPEN PULL REQUEST",
+    # THE FOUR OPEN DECISIONS ARE ACCEPTED, ONE IS DELIVERED, AND THREE ARE NOT. ADR-0033 merged
+    # as PR #88, so the line moved from PROPOSED to ACCEPTED; Decision M's implementation then
+    # merged as PR #89 after independent review, so the line moves again -- and it must still
+    # say that PB, VC and SR are not delivered, because a definition is not a delivery.
+    "remaining acceptance decisions: ACCEPTED BY ADR-0033 / IN FORCE - DECISION M DELIVERED AND "
+    "MERGED AS PR #89; PB, VC AND SR NOT DELIVERED",
     "ADR-0033: ACCEPTED / IN FORCE",
     "areas assessed by the acceptance record: 36 OF 36",
     "areas IMPLEMENTED within accepted scope: 30",
@@ -13658,17 +13658,15 @@ COCKPIT_C10_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "manual screen-reader pass: NOT ASSESSED",
     "manual screen-reader protocol: ACCEPTED BY ADR-0033 / IN FORCE - ASSESSOR OUTSTANDING",
     "committed visual-regression baseline: CREATED - 9 IMAGES, REPRESENTATIVE SUBSET",
-    # THIRTEEN IN THIS TREE, NINE ON MAIN. The Decision M pull request adds the four expanded
-    # rows the inventory names for it and no other; the line says both numbers so a reader
-    # can tell what merged from what is proposed.
-    "visual coverage inventory: ACCEPTED BY ADR-0033 / IN FORCE - 13 OF 439 NOMINAL IN THIS "
-    "TREE, 9 ON MAIN",
-    # THE AMBIGUITY IS RESOLVED, AN IMPLEMENTATION EXISTS, AND THE ROW IS STILL NOT SATISFIED.
-    # All three halves are load-bearing: the row is satisfied only when the implementation is
-    # independently reviewed, merged and its M8 evidence read against section 12.1 -- and an
-    # open pull request is none of those.
-    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN "
-    "OPEN PULL REQUEST",
+    # THIRTEEN ON MAIN. PR #89 merged the four Decision M expanded rows beside the nine C10
+    # images, and no other row; the inventory is still 439 nominal and the row still PARTIAL.
+    "visual coverage inventory: ACCEPTED BY ADR-0033 / IN FORCE - 13 OF 439 NOMINAL ON MAIN",
+    # THE ROW IS SATISFIED, AND THE LINE SAYS BY WHAT. Section 12.1's own convention: an
+    # implementation meeting the M8 obligations, read into the acceptance record after
+    # independent review. PR #89's review read it and its post-merge synchronization recorded
+    # it; a merge alone would not have satisfied anything, so the line names the reading.
+    "mobile executive summary - section 12: SATISFIED - EFFECTIVE ON THE MERGE OF PR #89, READ "
+    "INTO THE RECORD FROM ITS INDEPENDENT REVIEW",
     # FIVE BUDGETS ARE ACCEPTED, AND NONE IS MET. Accepting a budget establishes no compliance
     # with it, no run under the accepted protocol has been taken, and the line says so.
     "accepted numeric performance budget: FIVE, ACCEPTED BY ADR-0033 - NONE MEASURED UNDER PB, "
@@ -13714,15 +13712,23 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "accepted numeric performance budget: NONE EXISTS",
     "mobile executive summary - section 12: NOT SATISFIED - RESOLUTION PROPOSED BY ADR-0033",
     "decision M implementation: NOT STARTED",
-    # AND THE OVER-CLAIMS AN ACCEPTED DEFINITION AND AN OPEN IMPLEMENTATION INVITE. Accepting
-    # the four definitions delivered none of them; implementing one in an open pull request
-    # merges nothing, satisfies nothing and assesses nothing.
+    # THE STALE UNDER-CLAIMS OF THE PR #89 DAYS ARE NOW FORBIDDEN, on the same precedent: the
+    # implementation merged, the review read its evidence, and a status document that still
+    # calls it an open pull request or the row unsatisfied sends the next session to redo both.
+    "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST",
+    "mobile executive summary - section 12: NOT SATISFIED",
+    "remaining acceptance decisions: ACCEPTED BY ADR-0033 / IN FORCE - NONE DELIVERED",
+    "13 OF 439 NOMINAL IN THIS TREE, 9 ON MAIN",
+    # AND THE OVER-CLAIMS ONE SATISFIED ROW INVITES. Accepting the four definitions delivered
+    # none of them and merging Decision M delivered exactly one; a satisfied section-12 row
+    # merges no other decision, assesses no journey, meets no budget and completes nothing.
     "remaining acceptance decisions: IMPLEMENTED",
     "remaining acceptance decisions: DELIVERED",
-    "decision M implementation: MERGED",
+    "remaining acceptance decisions: ACCEPTED BY ADR-0033 / IN FORCE - ALL DELIVERED",
     "decision M implementation: ACCEPTED",
     "decision M implementation: COMPLETE",
-    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTED AND MERGED",
+    "mobile executive summary - section 12: SATISFIED - C10 ACCEPTED",
+    "mobile executive summary - section 12: SATISFIED - COCKPIT V1 COMPLETE",
     "J8 - mobile summary journey: ASSESSED",
     "J8 - mobile summary journey: PASSED",
     "accepted numeric performance budget: FIVE, MET",
@@ -13761,7 +13767,6 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "manual screen-reader pass: PASSED",
     "committed visual-regression baseline: EVERY ROUTE AND STATE",
     "committed visual-regression baseline: COMPLETE",
-    "mobile executive summary - section 12: SATISFIED",
     "mobile executive summary - section 12: NOT SATISFIED - AMBIGUITY RECORDED",
     "reference viewports registered and swept: 3 OF 6",
     "accessibility conformance: ACHIEVED",
@@ -13797,7 +13802,7 @@ COCKPIT_C10_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
 ADR_0033_ADR: Final = DECISIONS / "ADR-0033-c10-remaining-acceptance-decisions.md"
 ADR_0033_HEADING: Final = (
     "### The remaining C10 acceptance decisions, and ADR-0033 — ACCEPTED, and Decision M "
-    "implemented in an open pull request"
+    "MERGED as PR #89"
 )
 
 #: Read with ``**`` stripped, so emphasis is not part of the contract.
@@ -13811,27 +13816,42 @@ ADR_0033_STATUS_REQUIRED: Final[tuple[str, ...]] = (
     "ADR-0033 acceptance event: OCCURRED - INDEPENDENT REVIEW AND MERGE OF PR #88",
     "ui-ux-specification.md 12.1 and 15.1-15.4: ACCEPTED / IN FORCE",
     "decision M - mobile executive summary: ACCEPTED - DEFERRED BEHIND DISCLOSURES, NOT OMITTED",
-    # IMPLEMENTED IS NOT MERGED, AND AN OPEN PULL REQUEST IS NOT A SATISFIED ROW. Both lines
-    # are required so that neither the existence of the implementation nor its status can go
-    # unstated -- and the row it serves must still read NOT SATISFIED.
-    "decision M implementation: IMPLEMENTED IN AN OPEN PULL REQUEST - PENDING INDEPENDENT REVIEW",
-    "mobile executive summary - section 12: NOT SATISFIED - IMPLEMENTATION AND M8 TESTS IN AN "
-    "OPEN PULL REQUEST",
-    # J8 WAS BLOCKED ON M. Its prerequisite is addressed by the open pull request and not
-    # before its merge, and the journey itself has not been run by anyone.
-    "J8 - mobile summary journey: IMPLEMENTATION PREREQUISITE ADDRESSED IN AN OPEN PULL "
-    "REQUEST - NOT ASSESSED",
+    # PR #89 MERGED, READ FROM COMMIT OBJECTS RATHER THAN FROM DIFF STATISTICS, like every other.
+    "PR #89: MERGED",
+    "PR #89 merge commit: 893a33d4f129d91fbdc630b89dc445d503302105",
+    "PR #89 merged at: 2026-09-10T19:36:19Z",
+    "PR #89 final reviewed head: eb348dcb76163ce2e58dbc2a4ff6af6dd18c6101",
+    "PR #89 merge tree: 9ecf721763cabc43dea62dcb20056099b7718827",
+    # MERGED AFTER INDEPENDENT REVIEW, AND THE ROW READ SATISFIED BY THAT REVIEW. Both lines are
+    # required so that neither the merge nor what satisfied the row can go unstated: section
+    # 12.1's convention is an independent reading of the M8 evidence, and the line names it.
+    "decision M implementation: MERGED AS PR #89 - INDEPENDENTLY REVIEWED BEFORE MERGE",
+    "mobile executive summary - section 12: SATISFIED - EFFECTIVE ON THE MERGE OF PR #89, READ "
+    "INTO THE RECORD FROM ITS INDEPENDENT REVIEW",
+    # J8 WAS BLOCKED ON M. The merge removed the blocker and only the blocker: the journey
+    # itself has not been run by anyone, and the pass stays NOT ASSESSED.
+    "J8 - mobile summary journey: IMPLEMENTATION BLOCKER REMOVED BY PR #89 - NOT ASSESSED",
     "decision PB - performance budgets: ACCEPTED - FIVE BUDGETS, CONDITION L",
     "performance compliance: NOT ESTABLISHED - NO RUN MEETS THE SAMPLING PROTOCOL",
     "first contentful paint, production run: NOT OBTAINED - NEVER ZERO, NEVER PASSING",
     "performance row: PARTIAL - PB-Q DEFERRED, NO PB RUN TAKEN",
     "decision VC - visual coverage inventory: ACCEPTED - 439 NOMINAL SNAPSHOTS, "
     "32 ROUTE IDENTIFIERS",
-    # THE NINE ARE UNCHANGED, AND FOUR ARE ADDED -- IN AN OPEN PULL REQUEST. A count of thirteen
-    # that did not say nine were on main would report the pull request as merged.
-    "existing zero-tolerance comparisons: 9 - UNCHANGED, BYTE-IDENTICAL, DIGESTS PINNED",
-    "new screenshot baselines created: 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, IN AN OPEN "
-    "PULL REQUEST",
+    # THE NINE WERE BYTE-IDENTICAL THROUGH PR #89, AND ARE RE-CAPTURED BY THE READABILITY
+    # REFINEMENT. Two facts, kept apart on the line itself: the historical byte-identity proof
+    # the Decision M merge required, and the reviewed re-capture that followed it with every
+    # diff listed and its reason recorded. The four Decision M rows merged with PR #89.
+    "existing zero-tolerance comparisons: 9 - BYTE-IDENTICAL THROUGH PR #89; RE-CAPTURED BY THE "
+    "READABILITY REFINEMENT WITH REVIEWED DIFFS, DIGESTS RE-PINNED",
+    "new screenshot baselines created: 4 - THE DECISION M EXPANDED ROWS AT 390 X 844, MERGED AS "
+    "PR #89",
+    # THE REFINEMENT IS IN AN OPEN PULL REQUEST, and the line says so on the precedent every
+    # cycle guard above sets: what merged, what is implemented but unmerged, and what nobody
+    # has assessed are three states, and the owner's ten-second assessment is pending.
+    "Executive Overview readability refinement: IN AN OPEN PULL REQUEST - PENDING OWNER "
+    "ASSESSMENT AND INDEPENDENT REVIEW",
+    "screenshot baselines re-captured by it: 13 OF 13 - INTENTIONAL, REVIEWED DIFFS, REASONS "
+    "RECORDED IN THE ACCEPTANCE RECORD",
     "decision SR - manual screen-reader protocol: ACCEPTED - NVDA + CHROME PRIMARY, TEN JOURNEYS",
     "assessor assigned: NONE - OUTSTANDING",
     "assistive technology available to this session: NONE CLAIMED",
