@@ -28,12 +28,17 @@ PACKAGE_ROOT = PROJECT_ROOT / "src" / "kalpamani"
 #: ``kalpamani.data`` holds exactly the authorized A1 surface and nothing wider,
 #: which is a tighter constraint than "empty" was -- it names what may be there
 #: rather than only forbidding everything.
+#:
+#: ``strategies/breakout`` left this list when the offline equity Brain foundation
+#: was authorized (the Breakout Long research-stage module). It is not unguarded
+#: either: ``test_brain_implementation_boundary.py`` names the exact authorized
+#: Brain and Breakout Long surface and asserts nothing wider, and the remaining
+#: strategy packages stay empty below.
 EMPTY_BY_DESIGN = (
     "risk",
     "portfolio",
     "research",
     "monitoring",
-    "strategies/breakout",
     "strategies/pullback",
     "strategies/pead",
 )

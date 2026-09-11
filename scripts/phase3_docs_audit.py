@@ -13112,8 +13112,8 @@ BRAIN_ALPHA_CLAIMS: Final[tuple[tuple[str, str], ...]] = (
 #: status document that drops the blocker reads as though the blocker is gone.
 BRAIN_STATUS_LINES: Final[tuple[str, ...]] = (
     "Brain specification:                              ACCEPTED EFFECTIVE ON MERGE OF PR #70",
-    "Brain runtime implementation:                     NOT STARTED / NOT AUTHORIZED",
-    "core strategy runtime implementation:             NOT STARTED / NOT AUTHORIZED",
+    "Brain runtime implementation:                     OFFLINE FOUNDATION / SYNTHETIC ONLY / NOT PRODUCTION",  # noqa: E501
+    "core strategy runtime implementation:             BREAKOUT LONG OFFLINE / RESEARCH-STAGE / SYNTHETIC",  # noqa: E501
     "new src/ modules created by this specification:   NONE",
     "backtesting:                                      NOT STARTED",
     "Run B:                                            NOT RUN / NOT AUTHORIZED",
@@ -13129,7 +13129,8 @@ BRAIN_STATUS_LINES: Final[tuple[str, ...]] = (
 #: an empty package invites a later session to fill it without an authorization -- so the
 #: guard is that each still holds exactly its ``__init__.py``.
 BRAIN_EMPTY_PACKAGES: Final[tuple[str, ...]] = (
-    "src/kalpamani/strategies",
+    "src/kalpamani/strategies/pullback",
+    "src/kalpamani/strategies/pead",
     "src/kalpamani/research",
     "src/kalpamani/portfolio",
     "src/kalpamani/risk",
