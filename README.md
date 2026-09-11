@@ -391,7 +391,7 @@ live brokerage execution, real-money operation.
 | ADR-0018 empirical acquisition — Run A | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | Real external-data acquisition | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | Short research | **NOT AUTHORIZED** |
-| Strategies / Brain / AI / portfolio / risk | **OFFLINE BRAIN FOUNDATION IMPLEMENTED (synthetic-only, this cycle, pending review); PRODUCTION BRAIN, SCANNER, AI AGENTS, PORTFOLIO AND RISK NOT IMPLEMENTED / NOT AUTHORIZED — no alpha claimed, empirical performance NOT ESTABLISHED** |
+| Strategies / Brain / AI / portfolio / risk | **OFFLINE BRAIN FOUNDATION IMPLEMENTED (synthetic-only) — INDEPENDENTLY REVIEWED AND CORRECTED, EFFECTIVE ON MERGE OF PR #91; PRODUCTION BRAIN, SCANNER, AI AGENTS, PORTFOLIO AND RISK NOT IMPLEMENTED / NOT AUTHORIZED — no alpha claimed, empirical performance NOT ESTABLISHED** |
 | Live trading | **HARD-DISABLED** |
 
 The plan lives in [docs/phase3/](docs/phase3/phase3-pit-data-foundation-charter.md), with
@@ -3230,14 +3230,30 @@ live trading:                                     HARD-DISABLED
 deployment and execution are five separate gates**, and this document opens only the first — subject
 to independent review and merge.
 
-### The offline equity Brain foundation — IMPLEMENTED (offline, synthetic-only), pending review
+### The offline equity Brain foundation — IMPLEMENTED (offline, synthetic-only), independently reviewed, effective on merge of PR #91
 
 **A later, separate authorization (this cycle) narrowed the blanket "Brain runtime NOT AUTHORIZED"
 restriction to authorize an offline equity Brain foundation on synthetic inputs, with
-`CandidateIntent` as its only output.** The work is implemented and is in an open pull request,
-pending independent review. **It establishes nothing operational**: no provider data, no empirical
+`CandidateIntent` as its only output.** The work is implemented in PR #91, was independently
+reviewed and corrected there, and is **effective on that merge** — and **PROPOSED and unmerged
+until it**. **It establishes nothing operational**: no provider data, no empirical
 backtest, no provider/broker/model call, no production integration, no orders, no deployment, no
 automated research, and **no options runtime**.
+
+**Independently reviewed and corrected before merge.** The review integrated current `main`
+(the PR #90 merge) into the branch, resolved the one status-register conflict as a row-wise
+union, and corrected six demonstrated defects through ordinary commits, each pinned by a negative
+control that fails on the submitted head and passes after the correction: the identifier grammar
+admitted a trailing newline; an unschematized AI `challenger_verdict` was read as *not falsified*
+and a naive `produced_at` crashed the compiler instead of journaling `BLOCKED_AI`; a benchmark
+shorter than the factor window raised instead of returning `BLOCKED_DATA`, and a benchmark on a
+different session grid was compared as if it were the same; a peer attributed twice was counted
+twice and attribution ranks depended on caller order; the Breakout Long ratio thresholds accepted
+a `float`; and the audit journal omitted the Research and Challenger output references, the
+resolved profile and the risk-context tags. The integration test now asserts its exact outcome
+and drives the refusal branches over genuine `PointInTimeReader` output. **A review is offline
+verification of contract behaviour on synthetic inputs; it establishes no empirical performance,
+selects no provider and authorizes no operation.**
 
 **What exists** — the Brain kernel under `src/kalpamani/strategies/brain/` (closed vocabularies, the
 `CandidateIntent` and `StrategySpec` contracts, deterministic `Decimal` factor computations, the
