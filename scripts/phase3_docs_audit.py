@@ -812,6 +812,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # ADR-0025 merged on 2026-09-04 as PR #69; its status rows stayed unsynchronized until
     # the Run B / assessment synchronization, which is when it entered this registry.
     ("ADR-0025", "PR #69 merged"),
+    # ADR-0034 and ADR-0035 merged together as PR #92 on 2026-09-12; ADR-0035 depends on ADR-0034.
+    ("ADR-0034", "PR #92 merged"),
+    ("ADR-0035", "PR #92 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull

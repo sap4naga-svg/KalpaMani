@@ -8,6 +8,17 @@ That is a statement about the present, it will remain true of these days after a
 is not to be rewritten as though this decision had authority before it was accepted. On merge, this ADR
 becomes **ACCEPTED / IN FORCE** as **architecture, contracts and acceptance criteria only**.
 
+**The condition above has since been satisfied.** **PR #92 merged** — merged **2026-09-12T03:45:17Z**, merge
+commit **`aa2ca41176e954bdebd4ded3e55347324a8f3215`**, ordered parents **`a8e23cfe8b97e9f683c40c429137019f1cbb0cd0`** then
+**`ced38e5fbe21d5bd03bcd5ac214de6127a35cd3a`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`56ac0a3ad49f7159c32c908c8ad457bd5b25ddb9`). ADR-0035 is therefore **ACCEPTED / IN FORCE** as architecture, contracts and
+acceptance criteria, dependent on and effective together with
+[ADR-0034](ADR-0034-select-sharadar-for-initial-equity-research-domains.md). While the pull request was
+open it was proposed and carried no authority — true then, and not rewritten. **Acceptance implemented
+nothing**: every gate this document names stays where §6 and §8 left it, and the production principals it
+named in §3.10 are designed by [ADR-0036](ADR-0036-production-data-plane-principals-and-trust-model.md),
+itself proposed and not in force.
+
 **Nothing was run to produce this design.** No AWS CLI or SDK call, no STS, SSO or Secrets Manager
 call, no S3 operation, no Terraform command, no provider request, no acquisition, no assessment, no
 private-report retrieval, no ingestion, no backtest and no broker activity. Every fact about the provider

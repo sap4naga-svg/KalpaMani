@@ -254,6 +254,10 @@ def test_the_adr_carries_no_evaluative_finding_or_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_pr_92(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search(r"ADR-0035[^\n]{0,400}PROPOSED", text) is not None
+    assert (
+        re.search(r"ADR-0035[^\n]{0,400}ACCEPTED / IN FORCE[^\n]{0,80}PR #92 merged", text)
+        is not None
+    )
+    assert "dependent on ADR-0034" in text or "dependent on it" in text
