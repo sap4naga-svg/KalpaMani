@@ -36,7 +36,8 @@ DESIGNED_NAMES: Final = (
     "kalpamani-research-build",
     "KalpaManiProductionAcquire",
     "KalpaManiResearchBuild",
-    "KalpaManiTaskLauncher",
+    "KalpaManiAcquireLauncher",
+    "KalpaManiBuildLauncher",
     "kalpamani-production-acquire-task",
     "kalpamani-research-build-task",
 )
@@ -172,7 +173,17 @@ def test_bindings_are_validated_by_one_loader_and_delivered_two_ways() -> None:
     assert "Identity proof is unchanged in kind and extended in shape" in ADR_FLAT
     # Finding 3: bootstrap permissions separate from the data plane; no parameter-policy grant;
     # KMS scoped by encryption context; ordering without circularity.
-    assert "**Two policy layers per principal, kept apart on purpose.**" in ADR_FLAT
+    assert (
+        "**Three policy layers per actor, kept apart on purpose, and no layer contradicts"
+        " another.**" in ADR_FLAT
+    )
+    assert "**Complete effective permissions, per principal.**" in ADR_FLAT
+    # the shared data-plane policy carries no ssm/kms statement, so it cannot block the human writer
+    assert "no ssm:* or kms:* statement of either effect lives here" in ADR_FLAT
+    assert (
+        "ssm:PutParameter, ssm:DeleteParameter, kms:Encrypt, kms:GenerateDataKey"
+        not in " ".join(line for line in ADR_TEXT.splitlines() if line.startswith("DENY   iam:*"))
+    )
     assert "**The task-only bootstrap policy**" in ADR_FLAT
     assert "kms:EncryptionContext:PARAMETER_ARN" in ADR_TEXT
     assert "kms:ViaService = ssm.<region>.amazonaws.com" in ADR_TEXT
@@ -182,6 +193,72 @@ def test_bindings_are_validated_by_one_loader_and_delivered_two_ways() -> None:
     assert "**Ordering, without a circular dependency.**" in ADR_FLAT
     assert "a constant in the image, not a field of the binding" in ADR_FLAT
     assert "parameter policy naming that role" not in ADR_FLAT
+
+
+def test_advanced_securestring_writers_hold_generate_data_key_and_a_key_policy_statement() -> None:
+    # Finding 2 (this cycle): advanced-tier inputs are envelope-encrypted, so the writer needs
+    # GenerateDataKey, scoped to its own input parameter; tasks decrypt only; cleanup is one delete.
+    assert "**The human bootstrap policy**" in ADR_FLAT
+    assert (
+        "ALLOW  kms:GenerateDataKey                on exactly ONE key ARN: kalpamani-task-bindings"
+        in ADR_TEXT
+    )
+    assert "Bool ssm:Overwrite = false" in ADR_TEXT
+    assert "DENY   kms:Decrypt, kms:Encrypt           (a human writes an input" in ADR_TEXT
+    assert (
+        "DENY   ssm:PutParameter, ssm:DeleteParameter, kms:Encrypt, kms:GenerateDataKey"
+        "   (a task never writes" in ADR_TEXT
+    )
+    assert "| human input materialization |" in ADR_TEXT
+    assert "`aws:PrincipalArn` `StringLike`" in ADR_FLAT
+    assert "the writer needs `GenerateDataKey`, not `Encrypt`" in ADR_FLAT
+    assert "**The cleanup procedure is therefore exactly one permitted operation**" in ADR_FLAT
+    assert "created fresh for each run and never overwritten" in ADR_FLAT
+    assert "tombstone" not in ADR_FLAT
+
+
+def test_actor_role_matching_and_placement_verification_are_documented_mechanisms() -> None:
+    # Finding 3 (this cycle).
+    assert "**Where actor-to-role matching is enforced — three places, each named.**" in ADR_FLAT
+    for layer in ("| **IAM** |", "| **task definition** |", "| **runner (application)** |"):
+        assert layer in ADR_TEXT, layer
+    assert "**Placement verification — a documented mechanism, on the launcher side.**" in ADR_FLAT
+    assert "the earlier claim that it exposes a subnet CIDR or a public IP is withdrawn" in ADR_FLAT
+    assert "`ecs:DescribeTasks` on the task ARN" in ADR_FLAT
+    assert "`ec2:DescribeNetworkInterfaces` on that interface ID" in ADR_FLAT
+    assert "`Association.PublicIp`" in ADR_TEXT
+    assert "over the public ECS and EC2 endpoints (no VPC dependency)" in ADR_FLAT
+    assert "This is a **detective** control on the launcher side" in ADR_FLAT
+    assert "documented fields only: ImageID == compiled digest" in ADR_FLAT
+    assert "subnet CIDR == bound actor subnet" not in ADR_FLAT
+
+
+def test_the_acceptance_procedure_is_executable_and_attributes_the_refusal() -> None:
+    # Finding 4 (this cycle): no resource-policy simulation for roles; R-3 has a control
+    # principal, a fresh positive control, attribution, counts, staging and cleanup.
+    assert "simulation of resource-based policies isn't supported" in ADR_FLAT
+    assert "**no bucket-policy simulation is part of this design**" in ADR_FLAT
+    assert "with the bucket policy as resource policy" not in ADR_FLAT
+    assert "**The R-3 procedure — executable, staged, counted.**" in ADR_FLAT
+    assert "**Staging.**" in ADR_FLAT and "Stage B (assignments) is applied only after" in ADR_FLAT
+    assert "**The control principal.**" in ADR_FLAT
+    assert "`with an explicit deny in a resource-based policy`" in ADR_FLAT
+    assert "records **only the classification** of the error context" in ADR_FLAT
+    assert (
+        "**the positive control, fresh in this session; historical qualification writes are"
+        " not it**" in ADR_FLAT
+    )
+    assert "one `GetCallerIdentity` first; nine S3 operations" in ADR_FLAT
+    for row in (
+        "| 1 | `PutObject`",
+        "| 3 | `HeadObject`",
+        "| 6 | `CreateMultipartUpload`",
+        "| 8 | `DeleteObject`",
+        "| 9 | `HeadObject`",
+    ):
+        assert row in ADR_TEXT, row
+    assert "`licensed/_verification/`" in ADR_TEXT
+    assert "a `403` without the resource-based context" in ADR_FLAT
 
 
 def test_network_dependencies_are_a_per_actor_matrix_with_named_mechanisms() -> None:
@@ -290,7 +367,15 @@ def test_launch_is_gated_and_overrides_are_assigned_to_the_layer_that_controls_t
     assert "NO     ssm:*, secretsmanager:*, kms:*" in ADR_TEXT
     assert "do not use the container `secrets` field" in ADR_FLAT
     assert "image pinned **by digest**" in ADR_FLAT
-    assert "`KalpaManiTaskLauncher`, 21 characters" in ADR_FLAT
+    assert "`KalpaManiAcquireLauncher`, 24 characters" in ADR_FLAT
+    assert "`KalpaManiBuildLauncher`, 22" in ADR_FLAT
+    assert "an **allowlist, not a binding**" in ADR_FLAT
+    assert "DENY   iam:PassRole       NotResource those two role ARNs" in ADR_TEXT
+    assert (
+        "no other iam:* statement of either effect exists, so the PassRole grant is never"
+        " overridden" in ADR_FLAT
+    )
+    assert "KalpaManiTaskLauncher" not in ADR_TEXT
     assert "ArnEquals ecs:cluster" in ADR_TEXT
     assert "iam:PassedToService = ecs-tasks.amazonaws.com" in ADR_TEXT
     assert "**IAM has no condition key for container overrides" in ADR_FLAT
