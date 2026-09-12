@@ -23,14 +23,25 @@ What the sequence guarantees, each with a test behind it:
   launcher profile, one on the input under the human profile -- whose failures are
   reported **beside** the primary outcome, never in place of it.
 
-Every count reported is observed, never planned.
+**Every count reported is the count of requests the adapters actually issued**,
+read from the adapters' own counters at the end, never planned and never
+incremented ahead of a request: a mismatch that returns before the EC2 lookup
+reports zero ``DescribeNetworkInterfaces`` calls, and a request an adapter
+refuses locally is not counted as issued.
+
+**An identity proof that raises is a closed outcome, not an escaping
+exception.** Before the input exists it is ``REFUSED_IDENTITY_UNAVAILABLE``;
+during cleanup it is a cleanup failure for that stage alone, and the other
+stage's own proof is still attempted. Cleanup runs in a ``finally`` block, so
+nothing raised after the input was created can bypass it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Final
 
 from kalpamani.data.production.sharadar.compute import (
@@ -43,6 +54,8 @@ from kalpamani.data.production.sharadar.compute import (
 from kalpamani.data.production.sharadar.inputs import MAX_INPUT_VALIDITY, input_digest
 from kalpamani.data.production.sharadar.keys import RUN_ID_RE
 from kalpamani.data.production.sharadar.outcomes import (
+    CLEANUP_IDENTITY_REFUSED,
+    CLEANUP_IDENTITY_UNAVAILABLE,
     CleanupFailure,
     CleanupStage,
     LaunchOutcome,
@@ -182,6 +195,58 @@ class _AbortedError(Exception):
         self.incident = incident
 
 
+class _ProofVerdict(StrEnum):
+    """What one identity-proof invocation came back with. Closed; carries no text."""
+
+    PASSED = "PASSED"
+    REFUSED = "REFUSED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+def _proof_verdict(
+    identity_proof: Callable[[IdentityPath], str | None], path: IdentityPath
+) -> _ProofVerdict:
+    """Invoke the injected proof once and reduce whatever it does to a closed verdict.
+
+    A proof that raises -- an STS failure, a profile that will not resolve, a bug in
+    the injected callable -- is ``UNAVAILABLE``. **Nothing it raised survives**: the
+    exception is neither stored nor rendered, so its text cannot reach a report.
+    """
+    try:
+        reason = identity_proof(path)
+    except Exception:
+        return _ProofVerdict.UNAVAILABLE
+    return _ProofVerdict.PASSED if reason is None else _ProofVerdict.REFUSED
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _AdapterCounts:
+    """A snapshot of the adapters' own request counters."""
+
+    run_task: int
+    describe_tasks: int
+    describe_network_interfaces: int
+    stop_task: int
+    parameter_creates: int
+    parameter_deletes: int
+    parameter_reads: int
+
+    @classmethod
+    def of(cls, adapters: LaunchAdapters) -> _AdapterCounts:
+        return cls(
+            run_task=adapters.ecs.run_count,
+            describe_tasks=adapters.ecs.describe_count,
+            describe_network_interfaces=adapters.ec2.describe_count,
+            stop_task=adapters.ecs.stop_count,
+            parameter_creates=adapters.human_parameters.put_count
+            + adapters.launcher_parameters.put_count,
+            parameter_deletes=adapters.human_parameters.delete_count
+            + adapters.launcher_parameters.delete_count,
+            parameter_reads=adapters.human_parameters.get_count
+            + adapters.launcher_parameters.get_count,
+        )
+
+
 def _placement_incident(
     compiled: CompiledLaunch, task: TaskDescription, adapters: LaunchAdapters
 ) -> PlacementIncident | None:
@@ -221,15 +286,17 @@ def launch_authorized_run(
     ``identity_proof`` is invoked with ``HUMAN`` before the input is materialized and
     before it is deleted, and with ``LAUNCHER`` before the launch and before the
     release is deleted -- the before-and-after check each profile carries. A
-    refusal at any proof stops the sequence with ``REFUSED_IDENTITY``; a refusal at
-    a cleanup proof is a cleanup failure and the primary outcome stands.
+    refusal at any proof stops the sequence with ``REFUSED_IDENTITY`` and a proof
+    that raises stops it with ``REFUSED_IDENTITY_UNAVAILABLE``; at a cleanup proof
+    either is a cleanup failure for that stage alone, and the primary outcome stands.
     """
     if type(compiled) is not CompiledLaunch or type(adapters) is not LaunchAdapters:
         raise TypeError("compiled and adapters must be exact values")
     if type(authorization) is not LaunchAuthorization:
         raise TypeError("authorization must be an exact LaunchAuthorization")
     constants = constants_for(compiled.actor)
-    counts = OperationCounts()
+    before = _AdapterCounts.of(adapters)
+    identity_calls = 0
     incident: PlacementIncident | None = None
     handle: LaunchHandle | None = None
     exit_codes: tuple[int | None, ...] = ()
@@ -238,19 +305,20 @@ def launch_authorized_run(
     release_written = False
 
     def prove(path: IdentityPath) -> None:
-        nonlocal counts
-        counts = replace(counts, identity_calls=counts.identity_calls + 1)
-        if identity_proof(path) is not None:
+        nonlocal identity_calls
+        identity_calls += 1
+        verdict = _proof_verdict(identity_proof, path)
+        if verdict is _ProofVerdict.REFUSED:
             raise _AbortedError(LaunchOutcome.REFUSED_IDENTITY)
+        if verdict is _ProofVerdict.UNAVAILABLE:
+            raise _AbortedError(LaunchOutcome.REFUSED_IDENTITY_UNAVAILABLE)
 
     def elapsed_since(start: float) -> float:
         return max(0.0, monotonic() - start)
 
     def stop_own_task(reason: str) -> None:
         """``StopTask`` on the task this sequence started, and on no other."""
-        nonlocal counts
         assert handle is not None
-        counts = replace(counts, stop_task=counts.stop_task + 1)
         try:
             adapters.ecs.stop_task(handle.task_arn, reason=reason)
         except ComputeError as error:
@@ -258,11 +326,46 @@ def launch_authorized_run(
                 CleanupFailure(stage=CleanupStage.STOP_TASK, failure=error.failure.value)
             )
 
+    def cleanup_stage(stage: CleanupStage, path: IdentityPath, delete: Callable[[], None]) -> None:
+        """One prescribed cleanup: its own identity proof, then one delete.
+
+        Independent of every other stage. A proof that refuses or raises, and a
+        delete that refuses, each become one recorded failure for **this** stage
+        and nothing else; the next stage still runs its own proof.
+        """
+        nonlocal identity_calls
+        identity_calls += 1
+        verdict = _proof_verdict(identity_proof, path)
+        if verdict is _ProofVerdict.REFUSED:
+            cleanup.append(CleanupFailure(stage=stage, failure=CLEANUP_IDENTITY_REFUSED))
+            return
+        if verdict is _ProofVerdict.UNAVAILABLE:
+            cleanup.append(CleanupFailure(stage=stage, failure=CLEANUP_IDENTITY_UNAVAILABLE))
+            return
+        try:
+            delete()
+        except ParameterError as error:
+            cleanup.append(CleanupFailure(stage=stage, failure=error.failure))
+
+    def prescribed_cleanup() -> None:
+        """Step 10, always: each stage attempted on its own, in the prescribed order."""
+        if release_written:
+            cleanup_stage(
+                CleanupStage.DELETE_RELEASE,
+                IdentityPath.LAUNCHER,
+                lambda: adapters.launcher_parameters.delete_parameter(constants.release_parameter),
+            )
+        if input_materialized:
+            cleanup_stage(
+                CleanupStage.DELETE_INPUT,
+                IdentityPath.HUMAN,
+                lambda: adapters.human_parameters.delete_parameter(constants.input_parameter),
+            )
+
     outcome: LaunchOutcome
     try:
         # Step 0: the human profile materializes the input, create-only.
         prove(IdentityPath.HUMAN)
-        counts = replace(counts, parameter_creates=counts.parameter_creates + 1)
         try:
             adapters.human_parameters.create_parameter(
                 constants.input_parameter,
@@ -279,7 +382,6 @@ def launch_authorized_run(
 
         # Step 1: the launcher profile starts exactly one task.
         prove(IdentityPath.LAUNCHER)
-        counts = replace(counts, run_task=counts.run_task + 1)
         try:
             task_arn = adapters.ecs.run_task()
         except ComputeError:
@@ -290,7 +392,6 @@ def launch_authorized_run(
         started = monotonic()
         task: TaskDescription | None = None
         while True:
-            counts = replace(counts, describe_tasks=counts.describe_tasks + 1)
             try:
                 task = adapters.ecs.describe_task(task_arn)
             except ComputeError:
@@ -306,7 +407,6 @@ def launch_authorized_run(
             # Stopped before an interface was ever attached: nothing to verify.
             exit_codes = task.exit_codes
             raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED)
-        counts = replace(counts, describe_network_interfaces=counts.describe_network_interfaces + 1)
         found = _placement_incident(compiled, task, adapters)
         if found is not None:
             # Misplaced: stop this task, write no release, record the incident. The
@@ -337,7 +437,6 @@ def launch_authorized_run(
         except ReleaseError:
             stop_own_task(STOP_REASON_MISPLACED)
             raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
-        counts = replace(counts, parameter_creates=counts.parameter_creates + 1)
         try:
             adapters.launcher_parameters.create_parameter(
                 constants.release_parameter,
@@ -356,7 +455,6 @@ def launch_authorized_run(
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
         while True:
-            counts = replace(counts, describe_tasks=counts.describe_tasks + 1)
             try:
                 task = adapters.ecs.describe_task(task_arn)
             except ComputeError:
@@ -374,37 +472,25 @@ def launch_authorized_run(
     except _AbortedError as aborted:
         outcome = aborted.outcome
         incident = aborted.incident
+    finally:
+        # Step 10: prescribed cleanup, whatever stopped the sequence -- a closed
+        # outcome or an exception nothing above classified. Each stage records its
+        # own failure; the outcome, when there is one, stands.
+        prescribed_cleanup()
 
-    # Step 10: prescribed cleanup. Each failure is recorded; the outcome stands.
-    if release_written:
-        counts = replace(counts, identity_calls=counts.identity_calls + 1)
-        if identity_proof(IdentityPath.LAUNCHER) is not None:
-            cleanup.append(
-                CleanupFailure(stage=CleanupStage.DELETE_RELEASE, failure="IDENTITY_REFUSED")
-            )
-        else:
-            counts = replace(counts, parameter_deletes=counts.parameter_deletes + 1)
-            try:
-                adapters.launcher_parameters.delete_parameter(constants.release_parameter)
-            except ParameterError as error:
-                cleanup.append(
-                    CleanupFailure(stage=CleanupStage.DELETE_RELEASE, failure=error.failure)
-                )
-    if input_materialized:
-        counts = replace(counts, identity_calls=counts.identity_calls + 1)
-        if identity_proof(IdentityPath.HUMAN) is not None:
-            cleanup.append(
-                CleanupFailure(stage=CleanupStage.DELETE_INPUT, failure="IDENTITY_REFUSED")
-            )
-        else:
-            counts = replace(counts, parameter_deletes=counts.parameter_deletes + 1)
-            try:
-                adapters.human_parameters.delete_parameter(constants.input_parameter)
-            except ParameterError as error:
-                cleanup.append(
-                    CleanupFailure(stage=CleanupStage.DELETE_INPUT, failure=error.failure)
-                )
-
+    after = _AdapterCounts.of(adapters)
+    counts = OperationCounts(
+        parameter_reads=after.parameter_reads - before.parameter_reads,
+        parameter_creates=after.parameter_creates - before.parameter_creates,
+        parameter_deletes=after.parameter_deletes - before.parameter_deletes,
+        run_task=after.run_task - before.run_task,
+        describe_tasks=after.describe_tasks - before.describe_tasks,
+        describe_network_interfaces=(
+            after.describe_network_interfaces - before.describe_network_interfaces
+        ),
+        stop_task=after.stop_task - before.stop_task,
+        identity_calls=identity_calls,
+    )
     return LaunchReport(
         outcome=outcome,
         counts=counts,

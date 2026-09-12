@@ -585,6 +585,64 @@ class TestBarrier:
             _await(FakeSsm(values=dict(values), get_failures=dict(failures)), FakeClock())
         assert plane.calls == 0
 
+    @pytest.mark.parametrize(
+        ("read_seconds", "outcome"),
+        [
+            (400.0, pbar.BarrierOutcome.REFUSED_NO_RELEASE),  # the read crosses the deadline
+            (300.0, pbar.BarrierOutcome.REFUSED_NO_RELEASE),  # the read lands exactly on it
+            (299.0, pbar.BarrierOutcome.RELEASED),  # the read completes within it
+        ],
+        ids=["crossing", "exactly", "within"],
+    )
+    def test_a_valid_release_read_at_or_beyond_the_deadline_is_refused(
+        self, read_seconds: float, outcome: pbar.BarrierOutcome
+    ) -> None:
+        """The clock advances *during* the read; the deadline is rechecked before acceptance."""
+        ssm = FakeSsm()
+        clock = FakeClock()
+        name = constants_for(ACQ).release_parameter
+
+        def slow_read(_: str) -> None:
+            clock.seconds += read_seconds
+            ssm.values[name] = _release_bytes(verified_at=clock.now())
+
+        ssm.before_get = slow_read
+        result = _await(ssm, clock)
+        assert result.outcome is outcome
+        assert result.reads == 1 and clock.sleeps == []
+        assert result.elapsed_seconds == read_seconds
+        if outcome is pbar.BarrierOutcome.RELEASED:
+            assert result.release is not None
+        else:
+            assert result.release is None and result.defect is None and result.read_failure is None
+
+    def test_the_read_ceiling_and_the_no_retry_rules_survive_the_deadline_recheck(self) -> None:
+        """A slow but released poll keeps 60 reads and 5 s, and refuses at once on error."""
+        ssm = FakeSsm()
+        clock = FakeClock()
+        name = constants_for(ACQ).release_parameter
+
+        def arrive_late(_: str) -> None:
+            clock.seconds += 1.0  # every read takes a second
+            if clock.seconds >= 290.0 and name not in ssm.values:
+                ssm.values[name] = _release_bytes(verified_at=clock.now())
+
+        ssm.before_get = arrive_late
+        result = _await(ssm, clock)
+        # 6 s per iteration (1 s read + 5 s sleep): read k ends at 6(k-1) + 1 s, so the
+        # first read ending at or after 290 s is the 50th, at 295 s -- inside the
+        # deadline and inside the read ceiling.
+        assert result.outcome is pbar.BarrierOutcome.RELEASED
+        assert result.reads == 50 and result.reads <= pbar.MAX_RELEASE_READS
+        assert result.elapsed_seconds == 295.0
+        assert all(duration == pbar.POLL_INTERVAL_SECONDS for duration in clock.sleeps)
+        assert result.elapsed_seconds < pbar.RELEASE_CEILING_SECONDS
+        ssm.get_failures[name] = "ThrottlingException"
+        throttled = _await(ssm, FakeClock())
+        assert (
+            throttled.outcome is pbar.BarrierOutcome.REFUSED_RELEASE_READ and throttled.reads == 1
+        )
+
     def test_the_other_actors_release_parameter_is_never_read(self) -> None:
         ssm = FakeSsm(
             values={constants_for(BLD).release_parameter: _release_bytes(BLD, verified_at=NOW)}

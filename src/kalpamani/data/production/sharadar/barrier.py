@@ -95,8 +95,10 @@ def await_placement_release(
 
     Each read is counted before it is attempted, so the count reported is the
     count of reads issued, and never fewer. The ceiling is checked before every
-    read and before every sleep, so no read starts after 300 s and no sleep is
-    started that would end past it.
+    read, **again after every read and before any release is accepted**, and
+    before every sleep -- so no read starts after 300 s, a response that arrives at
+    or beyond 300 s is refused however valid it is, and no sleep is started that
+    would end past the ceiling.
     """
     if type(expectation) is not ReleaseExpectation:
         raise TypeError("expectation must be an exact ReleaseExpectation")
@@ -149,6 +151,19 @@ def await_placement_release(
                 release=None,
                 defect=None,
                 read_failure=ParameterFailure.UNKNOWN,
+            )
+
+        # The read itself took time. A response that arrives at or beyond the
+        # ceiling is refused before it is looked at: the deadline bounds when the
+        # task may *proceed*, not merely when it may ask.
+        if elapsed() >= RELEASE_CEILING_SECONDS:
+            return BarrierResult(
+                outcome=BarrierOutcome.REFUSED_NO_RELEASE,
+                reads=reads,
+                elapsed_seconds=elapsed(),
+                release=None,
+                defect=None,
+                read_failure=None,
             )
 
         try:

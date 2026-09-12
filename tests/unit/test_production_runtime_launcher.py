@@ -46,7 +46,11 @@ from kalpamani.data.production.sharadar.outcomes import (
     PlacementIncident,
     launch_sentence,
 )
-from kalpamani.data.production.sharadar.parameters import ParameterFailure, SsmParameterAdapter
+from kalpamani.data.production.sharadar.parameters import (
+    ParameterError,
+    ParameterFailure,
+    SsmParameterAdapter,
+)
 from kalpamani.data.production.sharadar.release import (
     ReleaseExpectation,
     decode_release,
@@ -60,6 +64,9 @@ from kalpamani.data.production.sharadar.vocabulary import (
 
 ACQ: Final = ProductionActor.ACQUISITION
 BLD: Final = ProductionActor.BUILD
+
+#: Text an identity proof might raise with. It must never reach a report.
+SECRET_TEXT: Final = "000000000000 arn:aws:sts::000000000000:assumed-role/synthetic/leak"  # noqa: S105 - a canary, not a secret
 
 
 class _Scenario:
@@ -96,6 +103,7 @@ class _Scenario:
         self.proofs: list[IdentityPath] = []
         self.refuse: set[IdentityPath] = set()
         self.refuse_after: int | None = None
+        self.raise_on: set[int] = set()
         document = acquisition_input_document() if actor is ACQ else build_input_document()
         self.authorization = pl.LaunchAuthorization(
             identity=RUN_ID if actor is ACQ else BUILD_ID, input_bytes=encode(document)
@@ -111,9 +119,32 @@ class _Scenario:
 
     def proof(self, path: IdentityPath) -> str | None:
         self.proofs.append(path)
+        if len(self.proofs) in self.raise_on:
+            raise RuntimeError(f"sts backend text {SECRET_TEXT}")
         if self.refuse_after is not None and len(self.proofs) > self.refuse_after:
             return "refused"
         return "refused" if path in self.refuse else None
+
+    def issued(self) -> dict[str, int]:
+        """What the fakes were actually asked, by operation, from their call logs."""
+        ecs = [name for name, _ in self.ecs.calls]
+        return {
+            "run_task": ecs.count("run_task"),
+            "describe_tasks": ecs.count("describe_tasks"),
+            "stop_task": ecs.count("stop_task"),
+            "describe_network_interfaces": len(self.ec2.calls),
+            "parameter_creates": len(self.human_ssm.names("put_parameter"))
+            + len(self.launcher_ssm.names("put_parameter")),
+            "parameter_deletes": len(self.human_ssm.names("delete_parameter"))
+            + len(self.launcher_ssm.names("delete_parameter")),
+            "parameter_reads": len(self.human_ssm.names("get_parameter"))
+            + len(self.launcher_ssm.names("get_parameter")),
+        }
+
+    def assert_counts_match_call_logs(self, report: pl.LaunchReport) -> None:
+        for name, actual in self.issued().items():
+            assert getattr(report.counts, name) == actual, (name, actual, report.counts)
+        assert report.counts.identity_calls == len(self.proofs)
 
     def run(self) -> pl.LaunchReport:
         return pl.launch_authorized_run(
@@ -565,6 +596,242 @@ class TestCleanupFailures:
             scenario.launcher_ssm.names("delete_parameter") == []
             and scenario.human_ssm.names("delete_parameter") == []
         )
+
+
+class TestIdentityExceptions:
+    """An identity proof that raises is a closed outcome, and cleanup still runs."""
+
+    @staticmethod
+    def _no_text(report: pl.LaunchReport) -> None:
+        rendered = repr(report) + repr(report.cleanup_failures) + launch_sentence(report.outcome)
+        assert "sts backend text" not in rendered and "leak" not in rendered
+        for failure in report.cleanup_failures:
+            assert failure.failure in {"IDENTITY_UNAVAILABLE", "IDENTITY_REFUSED"} or isinstance(
+                failure.failure, ParameterFailure
+            )
+
+    def test_an_exception_before_input_creation_is_a_closed_refusal(self) -> None:
+        scenario = _Scenario()
+        scenario.raise_on = {1}
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.REFUSED_IDENTITY_UNAVAILABLE
+        assert (
+            not report.task_started and scenario.human_ssm.calls == [] and scenario.ecs.calls == []
+        )
+        assert report.cleanup_failures == ()
+        self._no_text(report)
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_an_exception_after_input_creation_cannot_bypass_cleanup(self) -> None:
+        scenario = _Scenario()
+        scenario.raise_on = {2}  # the launcher proof, after the input exists
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.REFUSED_IDENTITY_UNAVAILABLE
+        assert scenario.ecs.calls == []
+        assert scenario.human_ssm.names("delete_parameter") == [scenario.constants.input_parameter]
+        assert scenario.human_ssm.values == {}
+        assert report.cleanup_failures == ()
+        self._no_text(report)
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_an_exception_during_the_release_cleanup_proof_does_not_stop_the_input_cleanup(
+        self,
+    ) -> None:
+        scenario = _Scenario()
+        scenario.raise_on = {3}  # proofs: human, launcher, [launcher cleanup], human cleanup
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL
+        assert report.cleanup_failures == (
+            CleanupFailure(stage=CleanupStage.DELETE_RELEASE, failure="IDENTITY_UNAVAILABLE"),
+        )
+        # The release stayed (its stage's proof failed); the input's own proof passed
+        # and its delete ran.
+        assert scenario.launcher_ssm.names("delete_parameter") == []
+        assert scenario.constants.release_parameter in scenario.launcher_ssm.values
+        assert scenario.human_ssm.names("delete_parameter") == [scenario.constants.input_parameter]
+        assert scenario.proofs[-2:] == [IdentityPath.LAUNCHER, IdentityPath.HUMAN]
+        self._no_text(report)
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_an_exception_during_the_input_cleanup_proof_is_that_stage_alone(self) -> None:
+        scenario = _Scenario()
+        scenario.raise_on = {4}
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL
+        assert report.cleanup_failures == (
+            CleanupFailure(stage=CleanupStage.DELETE_INPUT, failure="IDENTITY_UNAVAILABLE"),
+        )
+        assert scenario.launcher_ssm.names("delete_parameter") == [
+            scenario.constants.release_parameter
+        ]
+        assert scenario.human_ssm.names("delete_parameter") == []
+        assert scenario.constants.input_parameter in scenario.human_ssm.values
+        self._no_text(report)
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_a_refused_release_cleanup_proof_still_attempts_the_input_cleanup(self) -> None:
+        scenario = _Scenario()
+        scenario.refuse_after = 2
+        scenario.refuse = set()
+        report = scenario.run()
+        assert [failure.stage for failure in report.cleanup_failures] == [
+            CleanupStage.DELETE_RELEASE,
+            CleanupStage.DELETE_INPUT,
+        ]
+        assert scenario.proofs == [
+            IdentityPath.HUMAN,
+            IdentityPath.LAUNCHER,
+            IdentityPath.LAUNCHER,
+            IdentityPath.HUMAN,
+        ]
+        self._no_text(report)
+
+    def test_every_delete_still_requires_its_own_passing_proof(self) -> None:
+        scenario = _Scenario()
+        scenario.raise_on = {3, 4}
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL
+        assert scenario.launcher_ssm.names("delete_parameter") == []
+        assert scenario.human_ssm.names("delete_parameter") == []
+        assert {failure.stage for failure in report.cleanup_failures} == {
+            CleanupStage.DELETE_RELEASE,
+            CleanupStage.DELETE_INPUT,
+        }
+        assert report.counts.parameter_deletes == 0
+        scenario.assert_counts_match_call_logs(report)
+
+
+def _stop_fails_while_misplaced(s: _Scenario) -> None:
+    s.ecs.stop_failure = "ServerException"
+    s.ec2.interface = interface_entry(public_ip=None)
+
+
+class TestOperationAccounting:
+    """Every reported count is what the fakes were actually asked, on every path."""
+
+    def test_the_success_path_counts_match_the_call_logs(self) -> None:
+        scenario = _Scenario()
+        report = scenario.run()
+        scenario.assert_counts_match_call_logs(report)
+
+    @pytest.mark.parametrize(
+        ("mutate", "ec2_calls"),
+        [
+            (
+                lambda s: s.ecs.descriptions.__setitem__(
+                    0, task_entry(ACQ, status="PENDING", revision=8)
+                ),
+                0,
+            ),
+            (
+                lambda s: s.ecs.descriptions.__setitem__(
+                    0, task_entry(ACQ, status="PENDING", subnet_id=OTHER_SUBNET_ID)
+                ),
+                0,
+            ),
+            (
+                lambda s: s.ecs.descriptions.__setitem__(
+                    0, task_entry(ACQ, status="PENDING", interface_id=None)
+                ),
+                0,
+            ),
+            (lambda s: setattr(s.ec2, "interface", interface_entry(public_ip=None)), 1),
+            (lambda s: setattr(s.ec2, "failure", "InvalidNetworkInterfaceID.NotFound"), 1),
+        ],
+        ids=["revision", "attachment-subnet", "eni-missing", "public-ip", "eni-lookup"],
+    )
+    def test_a_mismatch_before_the_ec2_lookup_reports_zero_interface_describes(
+        self, mutate: Any, ec2_calls: int
+    ) -> None:
+        scenario = _Scenario()
+        mutate(scenario)
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.MISPLACED
+        assert report.counts.describe_network_interfaces == ec2_calls == len(scenario.ec2.calls)
+        scenario.assert_counts_match_call_logs(report)
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda s: s.human_ssm.values.__setitem__(s.constants.input_parameter, b"x"),
+            lambda s: s.launcher_ssm.values.__setitem__(s.constants.release_parameter, b"x"),
+            lambda s: setattr(s.ecs, "run_failure", "AccessDeniedException"),
+            _stop_fails_while_misplaced,
+            lambda s: s.launcher_ssm.delete_failures.__setitem__(
+                s.constants.release_parameter, "AccessDeniedException"
+            ),
+            lambda s: setattr(s, "refuse", {IdentityPath.LAUNCHER}),
+            lambda s: s.ecs.descriptions.__setitem__(
+                slice(None), [task_entry(ACQ, status="RUNNING", attachment_status="ATTACHED")]
+            ),
+            lambda s: s.ecs.descriptions.__setitem__(
+                slice(None),
+                [
+                    task_entry(
+                        ACQ,
+                        status="PENDING",
+                        attachment_status="ATTACHING",
+                        interface_id=None,
+                        subnet_id=None,
+                    )
+                ],
+            ),
+        ],
+        ids=[
+            "input-exists",
+            "release-exists",
+            "launch-refused",
+            "stop-fails",
+            "release-delete-fails",
+            "launcher-refused",
+            "observe-timeout",
+            "never-attaches",
+        ],
+    )
+    def test_every_failure_path_counts_match_the_call_logs(self, mutate: Any) -> None:
+        scenario = _Scenario()
+        mutate(scenario)
+        report = scenario.run()
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_a_locally_rejected_request_is_not_counted_as_issued(self) -> None:
+        """An adapter that refuses before the client is asked has issued nothing."""
+        ec2 = FakeEc2(interface=interface_entry())
+        adapter = pc.Ec2InterfaceAdapter(ec2=ec2)
+        with pytest.raises(pc.ComputeError) as info:
+            adapter.describe_interface("not-an-interface")
+        assert info.value.failure is pc.ComputeFailure.INVALID_REQUEST
+        assert adapter.describe_count == 0 and ec2.calls == []
+        ssm = FakeSsm()
+        channel = SsmParameterAdapter(ssm=ssm)
+        with pytest.raises(ParameterError):
+            channel.create_parameter("/x", "not bytes", key_id="k", expires_at_iso="t")  # type: ignore[arg-type]
+        assert channel.put_count == 0 and ssm.calls == []
+
+    def test_reused_adapters_report_only_this_launch(self) -> None:
+        """Counts are deltas over the adapters' counters: a second launch starts at zero."""
+        scenario = _Scenario()
+        adapters = scenario.adapters()
+
+        def run() -> pl.LaunchReport:
+            return pl.launch_authorized_run(
+                compiled=scenario.compiled,
+                adapters=adapters,
+                authorization=scenario.authorization,
+                identity_proof=scenario.proof,
+                now=scenario.clock.now,
+                monotonic=scenario.clock.monotonic,
+                sleep=scenario.clock.sleep,
+            )
+
+        first = run()
+        scenario.ecs.descriptions = [
+            task_entry(ACQ, status="PENDING", attachment_status="ATTACHED"),
+            task_entry(ACQ, status="STOPPED", attachment_status="ATTACHED", exit_code=0),
+        ]
+        second = run()
+        assert first.counts.run_task == second.counts.run_task == 1
+        assert second.counts.describe_tasks == 2 and second.counts.parameter_creates == 2
 
 
 class TestOwnTaskOnly:

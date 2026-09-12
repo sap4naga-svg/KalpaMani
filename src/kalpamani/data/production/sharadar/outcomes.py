@@ -41,6 +41,7 @@ class LaunchOutcome(StrEnum):
     """The launch tool's one verdict per authorized run. Closed."""
 
     REFUSED_IDENTITY = "REFUSED_IDENTITY"
+    REFUSED_IDENTITY_UNAVAILABLE = "REFUSED_IDENTITY_UNAVAILABLE"
     REFUSED_INPUT_EXISTS = "REFUSED_INPUT_EXISTS"
     REFUSED_INPUT_WRITE = "REFUSED_INPUT_WRITE"
     REFUSED_LAUNCH = "REFUSED_LAUNCH"
@@ -69,6 +70,12 @@ class CleanupStage(StrEnum):
     DELETE_RELEASE = "DELETE_RELEASE"
     DELETE_INPUT = "DELETE_INPUT"
     STOP_TASK = "STOP_TASK"
+
+
+#: The two closed tokens a cleanup stage reports when its own identity proof did
+#: not pass: refused by the proof, or the proof itself raised. Neither carries text.
+CLEANUP_IDENTITY_REFUSED: Final = "IDENTITY_REFUSED"
+CLEANUP_IDENTITY_UNAVAILABLE: Final = "IDENTITY_UNAVAILABLE"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -141,6 +148,9 @@ RUNNER_SENTENCES: Final[dict[RunnerOutcome, str]] = {
 
 LAUNCH_SENTENCES: Final[dict[LaunchOutcome, str]] = {
     LaunchOutcome.REFUSED_IDENTITY: "production launch refused: the identity proof did not pass",
+    LaunchOutcome.REFUSED_IDENTITY_UNAVAILABLE: (
+        "production launch refused: the identity proof could not be obtained"
+    ),
     LaunchOutcome.REFUSED_INPUT_EXISTS: (
         "production launch refused: an input parameter already exists"
     ),
@@ -188,6 +198,8 @@ def count_lines(counts: OperationCounts) -> tuple[str, ...]:
 
 
 __all__ = [
+    "CLEANUP_IDENTITY_REFUSED",
+    "CLEANUP_IDENTITY_UNAVAILABLE",
     "LAUNCH_SENTENCES",
     "RUNNER_SENTENCES",
     "CleanupFailure",
