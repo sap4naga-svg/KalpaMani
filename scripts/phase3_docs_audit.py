@@ -809,6 +809,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0020", "PR #49 merged"),
     ("ADR-0021", "PR #54 merged"),
     ("ADR-0022", "PR #57 merged"),
+    # ADR-0025 merged on 2026-09-04 as PR #69; its status rows stayed unsynchronized until
+    # the Run B / assessment synchronization, which is when it entered this registry.
+    ("ADR-0025", "PR #69 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -6884,10 +6887,21 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # refusing those spellings would refuse the fact the status documents now have
     # to state. What replaces them is the mirror image -- everything a completed
     # acquisition still did not buy -- which is the treatment the pre-apply
-    # infrastructure bans were given when the apply happened. "run b completed" and
-    # "the combined assessment was executed" stay: neither has happened.
-    "run b completed",
-    "empirical qualification executed",
+    # infrastructure bans were given when the apply happened. "run b completed" is now
+    # retired for the same reason: Run B ran once, on 2026-09-12, and the combined
+    # assessment ran once the same day (after one refusal). What is refused instead is
+    # the next step nobody authorized -- a retry, a reuse, a verdict, a disclosure.
+    "run b: retried",
+    "a run b retry: authorized",
+    "the run b execution identifier was reused",
+    "combined assessment: retried",
+    "the assessment identifier was reused",
+    # Not "qualification passed": the documents say "NOT qualification passed" wherever
+    # they explain what COMPLETED means, and a denylist entry a correct document
+    # contains is an entry that gets deleted rather than fixed.
+    "the provider passed qualification",
+    "p1-p9: disclosed",
+    "the private report is disclosed",
     # The superseded HeadObject arithmetic, in both spellings the status
     # documents use -- the en-dashed status row and the ASCII code block.
     "conditional `headobject` 0–147",  # noqa: RUF001
@@ -9171,10 +9185,14 @@ QUALIFICATION_IAM_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # Run A completed once and the status documents say so. A retry is what stays
     # unauthorized, so that is what is refused instead.
     "a run a retry: authorized",
-    "run b: authorized",
-    "run b: completed",
-    "combined assessment: authorized",
-    "combined assessment: completed",
+    # "run b: authorized", "run b: completed", "combined assessment: authorized" and
+    # "combined assessment: completed" are retired here: each happened once, under its
+    # own written authorization, on 2026-09-12, and the status documents now say so.
+    # What stays refused is what a completed run still did not buy.
+    "a run b retry: authorized",
+    "run b: retried",
+    "combined assessment: retried",
+    "a third acquisition: authorized",
     "g1: closed",
     "g2: closed",
     "a production provider is selected",
@@ -12489,10 +12507,21 @@ RUN_A_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "a run a retry: authorized",
     "a run a retry: performed",
     "the run a execution identifier was reused",
-    "run b: completed",
-    "combined assessment: completed",
-    "p1-p9: evaluated",
-    "p1–p9: evaluated",  # noqa: RUF001
+    # "run b: completed", "combined assessment: completed" and "p1-p9: evaluated" are
+    # retired: all three became true on 2026-09-12 and the documents are required to
+    # say so. The mirror image replaces them -- the report stays private, no gate
+    # closes by itself, and nothing is rerun.
+    "the run b execution identifier was reused",
+    "run b: retried",
+    "combined assessment: retried",
+    "p1-p9: disclosed",
+    "p1–p9: disclosed",  # noqa: RUF001
+    "p1-p9: passed",
+    "p1–p9: passed",  # noqa: RUF001
+    "the private report is disclosed",
+    "the combined assessment closed g1",
+    "the combined assessment closed g2",
+    "the combined assessment is a provider verdict",
     "the empirical qualification is complete",
 )
 

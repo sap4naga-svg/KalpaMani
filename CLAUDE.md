@@ -295,7 +295,7 @@ version**. AI influence stays bounded and auditable. The kill switch must remain
 **PHASE 3A — LICENSED S3 RESEARCH OBJECT STORE: IMPLEMENTED / ACCEPTED — PR #16 MERGED — CODE ONLY, NEVER RUN AGAINST AWS.**
 **PHASE 3A — SHARADAR QUALIFICATION RUNTIME CORE: IMPLEMENTED — ACCEPTED EFFECTIVE ON MERGE OF PR #17 — CODE ONLY, NEVER RUN AGAINST SHARADAR OR AWS.**
 **PHASE 3A — BOUNDED AUTHENTICATED ACQUISITION QUALIFICATION: IMPLEMENTED — PR #35 MERGED — ATTEMPTED TWICE UNDER SEPARATE AUTHORIZATIONS. ATTEMPT ONE REFUSED AT THE AWS IDENTITY GATE (`REFUSED_IDENTITY`, EXIT CODE 6), WITH NO PROVIDER REQUEST, NO CREDENTIAL RETRIEVAL AND NO PUBLICATION. ATTEMPT TWO COMPLETED (`COMPLETED`, EXIT CODE 0), REACHED THE QUALIFICATION RUNTIME AND MADE ONE PROVIDER REQUEST; ITS S3 QUALIFICATION OPERATIONS ARE BOUNDED AT THREE TO SIX — EXACTLY THREE PUTOBJECT AND ZERO TO THREE CONDITIONAL HEADOBJECT — WITH A COMPLETE RETAINED ACQUISITION RECORD, AND HOW MANY OBJECTS WERE NEWLY WRITTEN NOT ESTABLISHED. COMPLETION IS A COMMAND STATUS — NOT QUALIFICATION PASSED, NOT PROVIDER ACCEPTANCE AND NOT PROVIDER SELECTION; EXACT-REQUEST AUTHENTICATION ESTABLISHED, PROVIDER-WIDE AUTHENTICATION UNKNOWN. A THIRD ATTEMPT NOT AUTHORIZED.**
-**PHASE 3A — BOUNDED PRIVATE EMPIRICAL QUALIFICATION: RUN A COMPLETED ONCE (2026-09-04) — ONE ENTRY-POINT INVOCATION, EXIT CODE 0, 48 PROVIDER REQUESTS, ZERO PROVIDER RETRIES, 145 APPEND-ONLY LICENSED-S3 WRITES, ZERO OBJECT-BYTE READS, ZERO LISTINGS, ZERO CONTROL OPERATIONS, ONE CREDENTIAL RETRIEVAL, ZERO TERRAFORM OPERATIONS, LOCATOR PUBLISHED LAST AND ADDRESSABLE, EXECUTION IDENTIFIER PERMANENTLY RETIRED. A COMMAND OUTCOME, NOT A PROVIDER VERDICT: P1–P9 UNEVALUATED, A RUN A RETRY NOT AUTHORIZED, RUN B NOT AUTHORIZED AND AT LEAST EIGHT CALENDAR DAYS LATER WITH AN EARLIEST APPROVED TARGET OF 2026-09-12, COMBINED ASSESSMENT NOT AUTHORIZED, NO PROVIDER SELECTED.**
+**PHASE 3A — BOUNDED PRIVATE EMPIRICAL QUALIFICATION: RUN A COMPLETED ONCE (2026-09-04) — ONE ENTRY-POINT INVOCATION, EXIT CODE 0, 48 PROVIDER REQUESTS, ZERO PROVIDER RETRIES, 145 APPEND-ONLY LICENSED-S3 WRITES, ZERO OBJECT-BYTE READS, ZERO LISTINGS, ZERO CONTROL OPERATIONS, ONE CREDENTIAL RETRIEVAL, ZERO TERRAFORM OPERATIONS, LOCATOR PUBLISHED LAST AND ADDRESSABLE, EXECUTION IDENTIFIER PERMANENTLY RETIRED. RUN B COMPLETED ONCE (2026-09-12 UTC) UNDER THE SAME LIMITS — 48 PROVIDER REQUESTS, ZERO RETRIES, 145 APPEND-ONLY WRITES, ZERO READS, ZERO LISTINGS, ZERO CONTROL OPERATIONS, IDENTIFIER PERMANENTLY RETIRED — AND THE TWO-RUN PROVIDER BUDGET IS 96 OF 96 CONSUMED. THE COMBINED RUN A / RUN B ASSESSMENT WAS REFUSED ONCE (EXIT 9, BEFORE ANY EVIDENCE READ, ZERO WRITES — A WRONG RUN B IDENTITY, ESTABLISHED OFFLINE) AND THEN COMPLETED ONCE (2026-09-12 UTC, 194 GETOBJECT, ONE REPORT PUTOBJECT, ZERO HEADOBJECT, 195 OPERATIONS, ONE OWNER-ONLY PRIVATE REPORT). COMMAND OUTCOMES, NOT PROVIDER VERDICTS: P1–P9 EVALUATED IN THE PRIVATE REPORT ONLY AND NOT DISCLOSED, NO RETRY OF EITHER RUN AUTHORIZED, A PARTIAL G1 SELECTION PROPOSED IN ADR-0034 WITH NO AUTHORITY UNTIL MERGE, G2 OPEN, NO PRODUCTION INGESTION AUTHORIZED.**
 **PHASE 3 OVERALL: NOT COMPLETE.**
 
 ### Phase 1 — accepted
@@ -464,7 +464,7 @@ observational**, and **every future control is inert with no handler and no cont
 | **[ADR-0011](docs/decisions/ADR-0011-implement-the-licensed-s3-research-object-store.md) — licensed S3 research object store** | **ACCEPTED / IN FORCE** — PR #16 merged |
 | **[ADR-0012](docs/decisions/ADR-0012-implement-the-dormant-sharadar-qualification-runtime-core.md) — dormant Sharadar qualification runtime core** | **ACCEPTED / IN FORCE** — PR #17 merged |
 | **[ADR-0013](docs/decisions/ADR-0013-introduce-acquisition-mode-and-retire-is-backfill.md) — acquisition mode, `is_backfill` retired** | **ACCEPTED / IN FORCE** — PR #18 merged |
-| **G1** provider selection · **G2** production information-set profile | **OPEN** |
+| **G1** provider selection · **G2** production information-set profile | **OPEN** — a partial G1 selection is PROPOSED in ADR-0034 and carries no authority until its merge; G2 OPEN with `PROVIDER_REALISTIC_PIT` the target profile and its acceptance criteria proposed in ADR-0035 |
 | **G3** vendor licensing — Sharadar personal use | **CLOSED (2026-08-27, ADR-0008)** |
 | **G4** analyst revisions · **G5** historical borrow | **OPEN** |
 | **G6 options overlay · G7 strategy-taxonomy evidence** | **OPEN (added by V3.0)** |
@@ -485,12 +485,17 @@ observational**, and **every future control is inert with no handler and no cont
 | **Applied qualification infrastructure — PR #60, controlled saved-plan apply** | **APPLIED / INDEPENDENTLY VERIFIED** — the **controlled saved-plan apply COMPLETED** and an **independent post-apply verification PASSED**: **live customer-managed IAM policies 2 VERIFIED · live Identity Center permission sets 2 VERIFIED · live customer-managed-policy references 2 VERIFIED · live account assignments 2 VERIFIED · generated Identity Center runtime roles 2 VERIFIED**. **Infrastructure existence is not qualification success**, and **materialized access is not authority to use it** — the operator and profile state recorded on the day of the apply has since been superseded, and the governing record is *The qualified operator access*: **operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED**, **operator membership MATERIALIZED / INDEPENDENTLY VERIFIED**, **governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED**, **profile crossover NONE**, **AWS config ACL EFFECTIVE ACCESS PRESERVED**, **membership/profile gate COMPLETED**, **sixth private-binding preflight NOT AUTHORIZED / NOT RUN**, **provider credential retrieval NONE**, **S3/provider activity NONE**, **further infrastructure mutation NOT AUTHORIZED**, **qualification and binding-preflight execution NOT AUTHORIZED / NOT RUN**, **third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN**, **Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN**, **provider acquisition NOT AUTHORIZED / NOT RUN**, **backtesting NOT STARTED**, **G1 OPEN · G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
 | **Qualified operator access — membership and governed profiles** | **MATERIALIZED / INDEPENDENTLY VERIFIED** — one owner-approved human operator was added to the governed Identity Center group, both governed AWS profiles were materialized, and an **independent review read the result rather than producing it**: **operator selection OWNER-APPROVED · operator group EXACTLY 1 OWNER-APPROVED HUMAN MEMBER / ASSIGNED · operator membership MATERIALIZED / INDEPENDENTLY VERIFIED · governed acquisition profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · governed assessment profile MATERIALIZED / IDENTITY PREFLIGHT PASSED · profile crossover NONE · AWS config ACL EFFECTIVE ACCESS PRESERVED · membership/profile gate COMPLETED**. **Who the operator is stays out of this repository** — the count is recorded and the person is not. **Materialized access is not authority to use it**: **sixth private-binding preflight NOT AUTHORIZED / NOT RUN · provider credential retrieval NONE · S3/provider activity NONE · qualification execution NOT AUTHORIZED / NOT RUN · third ADR-0017 acquisition NOT AUTHORIZED / NOT RUN · Run A / Run B / combined assessment NOT AUTHORIZED / NOT RUN · further infrastructure mutation NOT AUTHORIZED · backtesting NOT STARTED · G1 OPEN · G2 OPEN · provider selected NONE · Phase 3 NOT COMPLETE · CONTROL DEFERRED · live trading HARD-DISABLED** |
 | **Ingestion runner · ECS task or image · a third authenticated qualification attempt** | **NOT AUTHORIZED** — two attempts occurred, the first refusing at the AWS identity gate and the second completing, and neither authorizes anything further |
-| **ADR-0018 implementation execution · qualification infrastructure deployment · the two new IAM roles · Run A · Run B · the combined assessment run** | **NOT AUTHORIZED** — ADR-0018 is **ACCEPTED / IN FORCE**, and **the merge approved architecture only**. **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED.** **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one.** **The ADR-0018 offline implementation is MERGED and DORMANT — PR #41 merged**, merge commit **`3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`**, approved implementation head **`96daac7963d936f231b37847579c5f28bb313760`**; and **the fixed 48-request assessment-boundary correction is MERGED — PR #44 merged**, merge commit **`c945970613b80bfd4f42acc4f3acb4814895eb42`**, approved correction head **`78b4425077e65eeb12dfd24b35825741370e0e0f`**. It was built, and then corrected, under **later, separate written authorizations for offline construction, offline correction and offline validation only**: **synthetic fixtures and offline tests only**, **zero** AWS, credential, Secrets Manager, provider, S3, Terraform and IAM operations, and **neither entry point has ever been run**. **The offline implementation is merged, dormant and never executed**, and **merging an implementation authorized no execution, no infrastructure deployment and no run**. **The clarification amendment is EFFECTIVE — PR #42 merged**, its **conditional effectiveness event has occurred**, and it **authorizes none of the later gates**. **SUPERSEDED IN PART — Run A has since COMPLETED once, on 2026-09-04, under its own separate written authorization; the completed Run A empirical acquisition section governs, and a Run A retry, Run B and the combined assessment stay NOT AUTHORIZED / NOT RUN.** |
+| **ADR-0018 implementation execution · qualification infrastructure deployment · the two new IAM roles · Run A · Run B · the combined assessment run** | **NOT AUTHORIZED** — ADR-0018 is **ACCEPTED / IN FORCE**, and **the merge approved architecture only**. **ADR-0018 implementation execution: NOT AUTHORIZED · infrastructure mutation: NOT AUTHORIZED · Run A: NOT AUTHORIZED · Run B: NOT AUTHORIZED · assessment: NOT AUTHORIZED.** **Implementation, infrastructure mutation and execution stay three separate gates and are never collapsed into one.** **The ADR-0018 offline implementation is MERGED and DORMANT — PR #41 merged**, merge commit **`3ddd7d40741bb9a50ae4fc5452324ddbfb5e1ec0`**, approved implementation head **`96daac7963d936f231b37847579c5f28bb313760`**; and **the fixed 48-request assessment-boundary correction is MERGED — PR #44 merged**, merge commit **`c945970613b80bfd4f42acc4f3acb4814895eb42`**, approved correction head **`78b4425077e65eeb12dfd24b35825741370e0e0f`**. It was built, and then corrected, under **later, separate written authorizations for offline construction, offline correction and offline validation only**: **synthetic fixtures and offline tests only**, **zero** AWS, credential, Secrets Manager, provider, S3, Terraform and IAM operations, and **neither entry point has ever been run**. **The offline implementation is merged, dormant and never executed**, and **merging an implementation authorized no execution, no infrastructure deployment and no run**. **The clarification amendment is EFFECTIVE — PR #42 merged**, its **conditional effectiveness event has occurred**, and it **authorizes none of the later gates**. **SUPERSEDED IN PART — Run A COMPLETED once on 2026-09-04, Run B COMPLETED once on 2026-09-12, and the combined assessment was REFUSED once and then COMPLETED once on 2026-09-12, each under its own separate written authorization; *The completed Run B acquisition and the completed combined assessment* governs, and a retry of any of them stays NOT AUTHORIZED / NOT RUN.** |
 | **CONTROL-classification publication** | **DEFERRED / NOT AUTHORIZED** |
 | **Provider purchase — qualification subscription** | **PURCHASED / ACTIVE (2026-08-28, ADR-0010)** |
 | **Provider credential state · repository consumption · provider API access · Services Data** | Provider credential state **OWNER API KEY EXISTS / OWNER-ATTESTED / RETRIEVED ONCE BY THE ENTRY POINT AND STRUCTURALLY ACCEPTED / NOT VERIFIED AGAINST SHARADAR**; repository/application credential retrieval **ONE, on the fifth authorized binding-preflight attempt**, consumption **offline composition only**, and **any additional retrieval NOT AUTHORIZED**; provider API access **NOT AUTHORIZED**; Services Data access and ingestion **NOT AUTHORIZED**; a **third** authenticated qualification attempt **NOT AUTHORIZED** — the first refused at the AWS identity gate and retrieved no credential, and the second completed with **one provider request** and **provider-wide authentication still UNKNOWN** — an owner-held key is not repository access, a subscription existing is not permission to use it, and a structurally accepted secret is not a credential proven to authenticate against Sharadar, which stays **UNKNOWN** |
-| **ADR-0018 empirical acquisition — Run A** | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** |
-| **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
+| **ADR-0018 empirical acquisition — Run A** | **COMPLETED ONCE (2026-09-04)** — one entry-point invocation, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable**, **145 objects newly written**, and the execution identifier **permanently retired**. **A command outcome, not a provider verdict** — **P1–P9 UNEVALUATED**, **a Run A retry NOT AUTHORIZED / NOT RUN**, **Run B NOT AUTHORIZED / NOT RUN** and at least **eight calendar days** after Run A with an earliest approved target of **2026-09-12**, **combined assessment NOT AUTHORIZED / NOT RUN**, **G1 / G2 OPEN**, **provider selected NONE**, **Phase 3 NOT COMPLETE**, **CONTROL DEFERRED**, **live trading HARD-DISABLED** **SUPERSEDED IN PART — Run B and the combined assessment have since COMPLETED on 2026-09-12; the rows below and *The completed Run B acquisition and the completed combined assessment* govern** |
+| **ADR-0018 empirical acquisition — Run B** | **COMPLETED ONCE (2026-09-12 UTC)** — one owner-console entry-point invocation at 2026-09-12T00:37:58Z on a detached checkout of `main` at `a8e23cfe8b97e9f683c40c429137019f1cbb0cd0`, exit code **0**, closed public outcome **`empirical acquisition completed`**, **48 provider requests**, **zero provider retries**, **145 append-only licensed-S3 writes**, **zero conditional HeadObject**, **zero object-byte GetObject**, **zero listing operations**, **zero CONTROL operations**, **one `GetSecretValue`**, **zero Terraform operations**, **two `sts:GetCallerIdentity` invocations**, the locator **published last and addressable** (since retrieved and validated by the combined assessment), the execution identifier **permanently retired**, the private inputs **unchanged**, and **eight calendar days** after Run A. **Two-run provider total 96 of 96 — the ADR-0018 budget is spent.** A command outcome, not a provider verdict; **a Run A or Run B retry NOT AUTHORIZED / NOT RUN**. See *The completed Run B acquisition and the completed combined assessment* |
+| **[ADR-0025](docs/decisions/ADR-0025-private-runtime-binding-for-the-combined-assessment.md) — private runtime binding for the combined assessment** | **ACCEPTED / IN FORCE** — PR #69 merged **2026-09-04T17:48:38Z**, merge commit **`7084d8e04320e3c9ee6a5735f57334a6b3b8379d`**, approved head **`931f85700fa882389722d39ea696711735704202`**, merge tree **`22fa11f44ed4d3136308d23763850a96efe4c245`**. **While PR #69 was open it was proposed and carried no authority** — true then, and not rewritten. The merge accepted architecture plus the offline implementation it carried, and nothing else. **The real assessment runtime binding was MATERIALIZED once, on 2026-09-05T02:57Z**, under its own written authorization: one invocation of `scripts/qualification_assessment_binding_materialize.py`, exit `0`, output exactly `assessment binding materialization completed`, zero AWS, STS, SSO, S3, Terraform and provider calls, one private artifact created with an owner-only ACL, and the production loader accepted it; provenance names the accepted implementation commit **`f19608a024a33383bb271f0f6df54045fd3b6f2e`** and tree **`5b786da9f95000d355f5f1902d85d06cd1978985`**, unchanged on `main`. **That binding was then used by the combined assessment on 2026-09-12.** Materialization was not a run, and the assessment's own authorization was separate. Arithmetic unchanged — assessment **194 `GetObject`, 1 report `PutObject`, 0–1 `HeadObject`, 195–196 operations** |
+| **ADR-0018 combined Run A / Run B assessment** | **REFUSED ONCE, THEN COMPLETED ONCE (2026-09-12 UTC)** — two owner-console entry-point invocations under two separate written authorizations. **Invocation one** (01:31:38Z → 01:31:50Z): exit code **9**, closed outcome **`qualification assessment refused: the locator was refused`**, raised after stages 1–6 and **before any acquisition record or payload read and before any write**; no counts printed, none invented. An offline verdict-only reconciliation established the cause — **the Run B identity supplied to that invocation was not the identity Run B was launched with**, so the requested locator name had never been published; Run A's identity, the bucket binding and the key derivations were correct; no S3 diagnostic read was performed. **Invocation two** (02:35:40Z → 02:36:03Z), with the corrected Run B identity and a newly allocated single-use assessment identity: exit code **0**, closed outcome **`qualification assessment completed; the private report was published`**, **194 object-byte `GetObject`** (two locators, 96 records, 96 payloads, zero claims), **1 report `PutObject`**, **0 conditional `HeadObject`**, **0 provider requests**, **0 credential retrievals**, **0 listing**, **0 CONTROL**, **195 S3 operations** — the pair admitted before any payload read, every object verified by SHA-256 and byte count before parsing, one owner-only private report published. **Whole empirical package 485 S3 operations** (envelope 485–490). **`COMPLETED` is a command status, not a verdict**: **P1–P9 are evaluated in the private report only and are NOT DISCLOSED**; the report carries no aggregate verdict, provider-selection or readiness value; **G1 OPEN · G2 OPEN**, provider selected **NONE** in force, Phase 3 **NOT COMPLETE**, CONTROL **DEFERRED**, live trading **HARD-DISABLED** |
+| **[ADR-0034](docs/decisions/ADR-0034-select-sharadar-for-initial-equity-research-domains.md) — partial provider selection (G1)** | **PROPOSED — NOT IN FORCE** while its pull request is open. In decision language only, it would record the owner's G1 decision taken after the private review of the combined report: **Sharadar selected for `tickers` and `stocks` for initial equity research; `actions` selected with restricted use — announcement-based signals and spinoff treatment stay gated; G2 OPEN with `PROVIDER_REALISTIC_PIT` the target profile subject to documented availability rules and owner acceptance.** It records **no evaluative finding, no measurement, no identifier and no report content**, and it **authorizes no ingestion, no backtest and no data use**. **G1 stays OPEN for every other domain**, and in force for these until the merge |
+| **[ADR-0035](docs/decisions/ADR-0035-initial-breakout-long-research-dataset-ingestion-design.md) — initial Breakout Long research dataset ingestion design** | **PROPOSED — NOT IN FORCE** while its pull request is open. Design only: immutable source snapshots, versioning, availability timestamps, historical-universe construction, identifier changes, corporate-action handling, quality checks and reproducibility for the first bounded production ingestion of the selected domains, plus the **acceptance criteria for closing G2 and for authorizing that ingestion**, separating controls implementable now from historical evidence that needs additional sources. **It implements nothing, deploys nothing and authorizes nothing** — production ingestion, backfill and update stay **NOT AUTHORIZED / NOT RUN** |
+| **Real external-data acquisition** | **ONE PROVIDER REQUEST** by the second authenticated qualification attempt, with **one complete retained acquisition record** — attempt-two S3 qualification operations are **THREE TO SIX**, and how many objects were newly written is **NOT ESTABLISHED**. **Run A has since COMPLETED once, on 2026-09-04 — 48 provider requests, zero provider retries, 145 append-only licensed-S3 writes, zero object-byte reads, zero listings and zero CONTROL operations — and it is a command outcome, not a provider verdict.** **Run B has likewise COMPLETED once, on 2026-09-12 — 48 provider requests, 145 writes — and the combined assessment has COMPLETED once the same day, reading 194 objects and publishing one private report.** Production ingestion, backfill and update **NOT STARTED / NOT AUTHORIZED** |
 | **Short research** | **NOT AUTHORIZED** |
 | **[ADR-0026](docs/decisions/ADR-0026-strategy-brain-architecture-and-governance.md) — Strategy Brain architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #70**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/phase4/strategy-brain-specification.md`](docs/phase4/strategy-brain-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Brain runtime implementation NOT AUTHORIZED · strategy, factor, scanner and AI-agent implementation NOT AUTHORIZED · portfolio and risk engine implementation NOT AUTHORIZED · backtesting NOT AUTHORIZED · provider data usage NOT AUTHORIZED · broker activity NOT AUTHORIZED · capital change NOT AUTHORIZED**. It **amends and supersedes no ADR**, refining ADR-0006 §D and §E into checkable contracts, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, and **no `src/` module is created by it** |
 | **[ADR-0027](docs/decisions/ADR-0027-cockpit-and-feedback-architecture-and-governance.md) — Cockpit and Feedback architecture and governance** | **ACCEPTED — EFFECTIVE ON MERGE OF PR #71**, and **PROPOSED — NOT IN FORCE** until that merge. It introduces [`docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md`](docs/architecture/COCKPIT_FEEDBACK_EXTENSION.md) and the five documents under [`docs/cockpit/`](docs/cockpit/cockpit-v1-specification.md) as **specification only**. On that merge it accepts **architecture, contracts, governance and future implementation boundaries** and **nothing else** — **Cockpit application implementation NOT AUTHORIZED · read-model, projection and API implementation NOT AUTHORIZED · feedback and learning-engine implementation NOT AUTHORIZED · database, migration, scheduler and deployment NOT AUTHORIZED · dependency installation NOT AUTHORIZED · provider, AWS and broker activity NOT AUTHORIZED · capital, risk and strategy change NOT AUTHORIZED**. **V1 is observational** — no order, stop, risk, capital, strategy, provider, Run B, assessment, CONTROL or authoritative governance mutation, and **every future control is inert with no handler and no control API route**. It **amends and supersedes no ADR**, consumes ADR-0026 unchanged, and it **closes no gate** — **G1 OPEN · G2 OPEN · G4-G7 OPEN**. **No alpha is claimed**, **no `src/` module is created by it**, and **no Blueprint PDF is edited** |
@@ -620,8 +625,8 @@ The termination procedure exists in advance and has **never been run**:
 
 | Gate | Subject | Status |
 |---|---|---|
-| **G1** | provider selection / qualification | **OPEN** |
-| **G2** | production information-set profile | **OPEN** |
+| **G1** | provider selection / qualification | **OPEN** — a partial selection (Sharadar `tickers`, `stocks`; `actions` restricted) is PROPOSED in [ADR-0034](docs/decisions/ADR-0034-select-sharadar-for-initial-equity-research-domains.md) and carries no authority until its merge; OPEN for every other domain regardless |
+| **G2** | production information-set profile | **OPEN** — target `PROVIDER_REALISTIC_PIT`, subject to documented availability rules and owner acceptance; closing criteria proposed in [ADR-0035](docs/decisions/ADR-0035-initial-breakout-long-research-dataset-ingestion-design.md) |
 | **G3** | vendor licensing — Sharadar personal use | **CLOSED (2026-08-27)** |
 | **G4** | analyst estimates and revisions | **OPEN** |
 | **G5** | historical borrow | **OPEN** |
@@ -3254,6 +3259,11 @@ must fall **at least eight calendar days after Run A**, and the **earliest appro
 target is 12 September 2026**. **The combined assessment runs only after Run B, under another
 authorization.**
 
+> **HISTORICAL — the state as of Run A, superseded by *The completed Run B acquisition and the
+> completed combined assessment* below.** Run B and the combined assessment have since been run under
+> separate authorizations, so every Run B, assessment and P1–P9 line below records 4 September 2026 and
+> **no longer governs**. Its forward authorization boundaries are unchanged.
+
 #### Run A status
 
 ```text
@@ -3303,6 +3313,163 @@ gates**: a Run A retry, Run B, the combined assessment, a third ADR-0017 acquisi
 private-binding preflight, further infrastructure mutation and production ingestion each remain a
 separate written authorization, and **acceptance, implementation, deployment, access and execution
 stay distinct gates that are never collapsed into one**.
+
+### The completed Run B acquisition and the completed combined assessment — COMPLETED, and what they do and do not establish
+
+**Run B ran once, on 12 September 2026 UTC, and it finished. The combined Run A / Run B assessment ran
+once the same day, was refused once, and then completed.** Each was a separately authorized owner-console
+operation; each is recorded here as a command outcome, and none of them is a provider verdict.
+
+**This section governs the current state of the empirical package.** The Run A section above records the
+day of Run A, and its forward lines — a Run B not yet run, an assessment not yet run, P1–P9 unevaluated —
+now carry a historical banner; the ADR-0025 lines elsewhere in this document that read "NOT MATERIALIZED"
+and "NEVER RUN" recorded the day PR #69 merged and are superseded below. **No ADR document is rewritten.**
+
+#### Run B
+
+Under its own written authorization, the owner launched `scripts/sharadar_empirical_qualification.py` once
+from an owner console at **2026-09-12T00:37:58Z** (2026-09-11 19:37:58 CDT), on a detached checkout of `main`
+at `a8e23cfe8b97e9f683c40c429137019f1cbb0cd0` (tree `049bbd071b261ff7165299c53113d3182446a60a`), whose
+acquisition path is byte-identical to the code Run A ran. It **exited `0`** at 00:38:56Z with the closed
+public outcome `empirical acquisition completed`. Immediately before it, a separately authorized
+acquisition-actor SSO login (exit 0) and one sanitized identity precheck (`IDENTITY_PRECHECK: PASS`,
+00:32:56Z) were performed; an earlier authorized precheck that evening (PASS at 00:12:26Z) lapsed unused
+and was repeated under a new authorization rather than reused.
+
+| | |
+|---|---|
+| **the provider** | **exactly 48 sequential provider requests**, **zero provider retries**; two-run provider total **96 of 96** — the ADR-0018 budget is exhausted |
+| **the writes** | **exactly 145 append-only licensed-S3 writes** — inside ADR-0019's 145-to-147 band |
+| **the reads** | **zero conditional `HeadObject`**, **zero object-byte `GetObject`**, **zero listing operations** |
+| **CONTROL** | **zero** |
+| **the credential** | **one** `GetSecretValue` |
+| **Terraform** | **zero** |
+| **identity** | **two** `sts:GetCallerIdentity` — one external precheck and the entry point's own stage-5 gate |
+| **the locator** | **published last and addressable** — inferred at the time from the closed `COMPLETED` outcome, which the entry point emits only for a published locator, and **since confirmed by the combined assessment, which retrieved and validated it** |
+| **the execution identity** | allocated by the owner under its own authorization, confirmed distinct from Run A's, and **permanently retired** on completion; an owner-only private allocation receipt exists |
+| **the private inputs** | the private inventory, the ADR-0023 acquisition runtime binding (the same file Run A was launched with — re-selected after a first selection was found not to match) and the secret identifier each **unchanged** |
+| **separation** | Run B's UTC `run_date` is 2026-09-12 and Run A's is 2026-09-04 — **eight calendar days**, the accepted minimum, **verified by the combined assessment from both locators' `run_started_at` fields** |
+| **the repository** | **no repository mutation**; the owner's checkout was restored afterwards |
+
+**Two sanitized incidents are recorded.** The owner's console pastes carried a `Read-Host` echo line twice,
+so the acquisition binding's private path and, later, the Run B execution identifier each entered an AI
+session transcript once. Neither is repeated anywhere; the identifier is spent and retired; disposition is
+the owner's.
+
+#### The ADR-0025 assessment binding — materialized on 5 September 2026
+
+[ADR-0025](docs/decisions/ADR-0025-private-runtime-binding-for-the-combined-assessment.md) is **ACCEPTED
+/ IN FORCE** — PR #69 merged 2026-09-04T17:48:38Z, merge commit
+`7084d8e04320e3c9ee6a5735f57334a6b3b8379d`, approved head `931f85700fa882389722d39ea696711735704202`,
+merge tree `22fa11f44ed4d3136308d23763850a96efe4c245`. **While PR #69 was open it was proposed and carried
+no authority** — true then, and not rewritten. The merge accepted architecture plus the offline
+implementation the same pull request carried, and nothing else.
+
+**The real assessment runtime binding was then MATERIALIZED, once, on 2026-09-05T02:57Z** (2026-09-04
+evening CDT), under its own separate written authorization: one invocation of
+`scripts/qualification_assessment_binding_materialize.py` against the PR #69 merged tree, exit `0`, public
+output exactly `assessment binding materialization completed`, zero AWS, STS, SSO, S3, Terraform and
+provider calls, one plain local read of the governed account binding, the ADR-0024 environment binding
+consumed read-only and left byte-identical, exactly one private artifact created under the private root
+with an owner-only ACL, and **the production loader accepted it**. Its provenance names the accepted
+implementation commit `f19608a024a33383bb271f0f6df54045fd3b6f2e` and tree
+`5b786da9f95000d355f5f1902d85d06cd1978985`, which `main` still carries unchanged. **The tracked
+"NOT MATERIALIZED / NEVER RUN" lines recorded the state at the merge, nine hours earlier, and are
+superseded by this paragraph** — a status document that was never resynchronized after the
+materialization is what the 2026-09-11 readiness work inherited, and is why this section exists.
+
+#### The combined assessment — refused once, then completed
+
+**Two assessment entry-point invocations occurred on 2026-09-12, under two separate written
+authorizations, and both are part of the audit history.**
+
+**The first invocation was REFUSED.** Launched directly from the owner's console at
+**2026-09-12T01:31:38Z**, five minutes after a separately authorized assessment-actor SSO login and
+identity precheck (`IDENTITY_PRECHECK: PASS`, 01:26:00Z), it ended at 01:31:50Z with exit code **9** and
+the closed outcome `qualification assessment refused: the locator was refused`. Exit 9 is raised after
+stages 1–6 — flag, context, profile pin, assessment binding loaded and accepted, identity gate passed, three
+identifiers present — and **before any acquisition record or payload is read and before any write**; it
+prints no counts, and none is invented. An offline, verdict-only reconciliation (exact field and declaration
+equality against the owner's allocation receipts and the launch record; no S3 read; no value displayed)
+established the cause: **the Run B identity supplied to that invocation was not the identity Run B was
+launched with**, so the assessment derived and requested a locator name that had never been published —
+which, for an actor without `s3:ListBucket`, surfaces as an access refusal at the read. Run A's identity,
+the licensed-bucket binding, and the key derivations were all correct. **The bounded locator diagnostic
+that was prepared was never executed**; the correction did not need it.
+
+**The second invocation COMPLETED.** After a new assessment-actor SSO login and identity precheck
+(`IDENTITY_PRECHECK: PASS`, 02:33:26Z owner clock), the owner launched
+`scripts/sharadar_qualification_assessment.py` once at **2026-09-12T02:35:40Z** from the prepared console,
+at the same detached `a8e23cf…` checkout, under the governed assessment profile with the ADR-0025
+assessment binding, naming the two retained execution identities and one newly allocated single-use
+assessment identity. It **exited `0`** at 02:36:03Z with the closed public outcome
+`qualification assessment completed; the private report was published`.
+
+| | |
+|---|---|
+| **the reads** | **exactly 194 object-byte `GetObject`** — two locators by exact name, 96 acquisition records, 96 payloads, **zero claims** — each verified by full-object SHA-256 and byte count before parsing |
+| **the writes** | **one conditional report `PutObject`**, **zero conditional `HeadObject`** — **195** S3 operations, inside the accepted 195-to-196 envelope |
+| **provider / credential** | **zero provider requests, zero credential retrievals** — structural |
+| **listing / CONTROL** | **zero / zero** |
+| **the pair** | admitted by `validate_locator_pair` — distinct identities, both `COMPLETE`, the same plan, inventory and schema digests, 48/48 each, identical request inventories, Run A before Run B, at least eight calendar days apart — **before any payload read** |
+| **the report** | **one owner-only private combined report**, LICENSED, published conditionally under the reports prefix, addressed by both execution identities and the assessment identity; **no local copy** |
+| **the identities** | the Run A and Run B execution identities remain retired; the assessment identity is **spent**; the identity used by the refused invocation was never written under |
+| **the repository** | **no repository mutation** |
+| **the whole package** | **145 + 145 + 195 = 485** S3 operations — the floor of the accepted 485-to-490 envelope |
+
+**`COMPLETED` is a command status, and it is not a verdict.** The P1–P9 results exist **only inside the
+private report** and are disclosed nowhere — not here, not in Git, not in a pull request, not to any AI
+session. The report carries **no aggregate verdict, no provider-selection value and no readiness value**,
+by design. The owner's private review of that report (ADR-0018 §14.1 gate 12) is an owner-only act whose
+contents are likewise never recorded here.
+
+#### The G1 decision — PROPOSED in ADR-0034; G2 stays OPEN
+
+Having reviewed the private report, **the owner has taken a partial provider-selection decision, recorded
+in decision language in [ADR-0034](docs/decisions/ADR-0034-select-sharadar-for-initial-equity-research-domains.md)
+— PROPOSED, and carrying no authority while its pull request is open.** On independent review and merge it
+would record: **Sharadar selected for the `tickers` and `stocks` domains for initial equity research;
+`actions` selected with restricted use — announcement-based signals and spinoff treatment stay gated; G2
+OPEN, with `PROVIDER_REALISTIC_PIT` the target profile subject to documented availability rules and owner
+acceptance.** It records **no evaluative finding, no measurement and no identifier**, and it authorizes no
+ingestion. **G1 stays OPEN for every other domain**, and it stays open in force for these until the merge.
+[ADR-0035](docs/decisions/ADR-0035-initial-breakout-long-research-dataset-ingestion-design.md) — likewise
+PROPOSED — designs the first bounded production ingestion for a Breakout Long research dataset and states
+the acceptance criteria for closing G2 and for authorizing that ingestion; **it implements nothing and
+authorizes nothing**.
+
+```text
+Run B:                                            COMPLETED / 12 SEPTEMBER 2026 (UTC)
+Run B entry-point invocations:                    1         exit code: 0
+provider requests:                                48        provider retries: 0
+licensed-S3 PutObject:                            145       HeadObject 0 · GetObject 0 · listing 0 · CONTROL 0
+two-run provider total:                           96 of 96
+Run A / Run B separation (UTC run dates):         8 calendar days — verified by the assessment
+ADR-0025:                                         ACCEPTED / IN FORCE — PR #69 merged 2026-09-04
+assessment-binding materialization gate:          RUN ONCE — 2026-09-05, exit 0
+real assessment runtime binding:                  MATERIALIZED / LOCALLY OFFLINE-VALIDATED / USED BY THE ASSESSMENT
+combined assessment entry-point invocations:      2 — one REFUSED_LOCATOR (exit 9, zero reads of evidence, zero writes),
+                                                  one COMPLETED (exit 0)
+combined assessment:                              COMPLETED ONCE / 12 SEPTEMBER 2026 (UTC)
+object-byte GetObject:                            194       report PutObject: 1       conditional HeadObject: 0
+total assessment S3 operations:                   195       provider requests: 0      credential retrievals: 0
+whole empirical package S3 operations:            485       (accepted envelope 485-490)
+private combined report:                          PUBLISHED / OWNER-ONLY / NOT DISCLOSED
+P1-P9:                                            EVALUATED IN THE PRIVATE REPORT ONLY — NOT DISCLOSED
+private owner review (gate 12):                   OWNER-ONLY — contents never recorded here
+G1:                                               OPEN — partial selection PROPOSED in ADR-0034, no authority until merge
+G2:                                               OPEN — target profile PROVIDER_REALISTIC_PIT, acceptance criteria in ADR-0035
+ADR-0034 / ADR-0035:                              PROPOSED — NOT IN FORCE
+production ingestion/backfill/update:             NOT AUTHORIZED / NOT RUN
+a Run A or Run B retry, a third acquisition:      NOT AUTHORIZED / NOT RUN — the provider budget is spent
+backtesting:                                      NOT STARTED
+Phase 3:                                          NOT COMPLETE       CONTROL: DEFERRED       live trading: HARD-DISABLED
+```
+
+**A completed assessment authorizes no further run and closes no gate by itself.** Provider selection is a
+written owner decision that takes effect only when its ADR merges; the information-set profile is a second
+decision that cannot precede it; and the first bounded ingestion is a third gate behind both. **Acceptance,
+implementation, deployment, access and execution stay distinct gates that are never collapsed into one.**
 
 ### The Strategy Brain specification — ACCEPTED ON MERGE, and an offline foundation implemented
 

@@ -1980,11 +1980,19 @@ class TestForwardDriftMutations:
                 "a run a retry: authorized",
                 "a run a retry: authorized",
             ),
-            ("run b: not authorized / not run", "run b: completed", "run b: completed"),
+            # "run b: completed" and "combined assessment: completed" were retired from
+            # the denylist when both were run on 2026-09-12; as with Run A, the mutation
+            # now drives the retry that stays unauthorized. The targets are taken from the
+            # governing Run B / assessment section, where both retries are stated as such.
             (
-                "combined assessment: not authorized / not run",
-                "combined assessment: completed",
-                "combined assessment: completed",
+                "a run a or run b retry, a third acquisition: not authorized / not run",
+                "a run a or run b retry, a third acquisition: a run b retry: authorized",
+                "a run b retry: authorized",
+            ),
+            (
+                "combined assessment: completed once / 12 september 2026 (utc)",
+                "combined assessment: retried",
+                "combined assessment: retried",
             ),
         ],
         ids=lambda value: value.split(":")[0] if isinstance(value, str) else "",
